@@ -225,3 +225,51 @@ describe('scout seam', () => {
     assert.deepEqual(bot.lines, [])
   })
 })
+
+describe('paused stop', () => {
+  let origLog
+  let lines
+  // silence per-tick decision logs but record them for the no-follow assertion
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('stop parks across ticks with a player nearby; follow me resumes', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'jev' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setMovements({ allowSprinting: false })
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(brain.calls, 1)
+    // chat 'stop': clear the follow lock and park
+    ticker.setFollow('')
+    ticker.stop()
+    lines.length = 0
+    const brainBefore = brain.calls
+    const goalsBefore = bot.calls.setGoal
+    const stopsBefore = bot.calls.stop
+    const r1 = await ticker.tick()
+    const r2 = await ticker.tick()
+    const r3 = await ticker.tick()
+    assert.equal(r1.calledBrain, false)
+    assert.equal(r2.calledBrain, false)
+    assert.equal(r3.calledBrain, false)
+    assert.equal(brain.calls, brainBefore)
+    assert.equal(bot.calls.setGoal, goalsBefore)
+    // idle dispatched once: the park stopped already, paused ticks add no more stops
+    assert.equal(bot.calls.stop, stopsBefore)
+    assert.deepEqual(r3.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision while parked')
+    // chat 'follow me': resume
+    ticker.setFollow('Steve')
+    lines.length = 0
+    await ticker.tick()
+    assert.ok(bot.calls.setGoal > goalsBefore)
+  })
+
+})
