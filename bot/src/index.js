@@ -48,21 +48,22 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     let calledBrain = false
     try {
       if (ctx.paused) {
-        // 'stop' parks the bot: perception + scout keep running, but the
-        // brain is skipped and idle is dispatched (stop once) — same cost
-        // guard as 'no player online'.
+        // 'stop' parks the bot: perception + scout keep running while a
+        // player is visible, but the brain is skipped and idle is dispatched
+        // (stop once) — same cost guard as 'no player online', including no
+        // scans with nobody online.
         const target = findTarget(bot, followName)
         lastVisible = !!target
         if (target) {
           const state = buildState(bot, target, lastTargetPos)
           lastTargetPos = state._lastTargetPos
+          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+          if (ctx.scout) ctx.scout.tick()
         } else {
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
         }
-        if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
-        if (ctx.scout) ctx.scout.tick()
         if (ctx.lastGoalKey !== 'idle') {
           bot.pathfinder.stop()
           ctx.lastGoalKey = 'idle'
