@@ -7,6 +7,17 @@
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
 
+// Remote-brain source name: the JEV hostname stays 'jev', anything else
+// (e.g. the compose service laya) is addressed by its own hostname.
+function sourceForUrl(url) {
+  try {
+    const host = new URL(url).hostname
+    return host === 'api.typesafe.ai' ? 'jev' : host
+  } catch {
+    return 'jev'
+  }
+}
+
 const stubBrain = {
   name: 'stub',
   decide(state) {
@@ -22,8 +33,8 @@ function parseAction(answer) {
   return choice === 'follow' || choice === 'idle' ? choice : null
 }
 
-// Noul answers are documented as {"type":"noul","noul":0..1} (probability,
-// no confidence field): https://docs.typesafe.ai/primitives/noul.md
+// Noul answers are documented as {"type":"noul","noul":0..1} (0..1
+// probability, no confidence field).
 function parseNoul(answer) {
   return typeof answer?.noul === 'number' ? answer.noul >= 0.5 : false
 }
@@ -39,22 +50,22 @@ function stateToText(state) {
     `nearby_hostiles=${state.nearby_hostiles}`
 }
 
-function jevBrain(apiKey, fetchFn, timeoutMs = 1000) {
+function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   const doFetch = fetchFn || fetch
+  const source = sourceForUrl(url)
   return {
-    name: 'jev',
+    name: source,
     async decide(state) {
       // ponytail: one call per tick, no batching/caching — upgrade path is
       // batching states if JEV cost ever matters ($0.042/M tokens; ~200
       // tokens/tick -> pennies/day).
       try {
-        const res = await doFetch(JEV_ENDPOINT, {
+        const headers = { 'Content-Type': 'application/json' }
+        if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+        const res = await doFetch(url, {
           method: 'POST',
           signal: AbortSignal.timeout(timeoutMs),
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`
-          },
+          headers,
           body: JSON.stringify({
             model: JEV_MODEL,
             state: stateToText(state),
@@ -79,7 +90,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000) {
         const action = parseAction(data && data.answers && data.answers.action)
         if (!action) throw new Error('jev missing action answer')
         const sprint = parseNoul(data.answers.sprint)
-        return { action, sprint, source: 'jev' }
+        return { action, sprint, source }
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
         // retries naturally. Never crash the bot because of the brain.
@@ -93,14 +104,18 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000) {
 }
 
 function makeBrain(env) {
+  const customUrl = env && env.BRAIN_URL
   const key = env && env.TYPESAFE_API_KEY
-  if (key) {
-    console.log('brain=jev')
-    const tickMs = parseInt((env && env.BRAIN_TICK_MS) || '1000', 10)
-    return jevBrain(key, undefined, Number.isFinite(tickMs) ? tickMs : 1000)
+  if (customUrl || key) {
+    const url = customUrl || JEV_ENDPOINT
+    const source = sourceForUrl(url)
+    console.log(`brain=${source}`)
+    const rawTimeout = (env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000'
+    const timeoutMs = parseInt(rawTimeout, 10)
+    return jevBrain(key, undefined, Number.isFinite(timeoutMs) ? timeoutMs : 1000, url)
   }
   console.log('brain=stub')
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, stateToText, JEV_ENDPOINT, JEV_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, stateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }

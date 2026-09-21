@@ -31,6 +31,8 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BOT_FOLLOW` | `` (nearest player) | Player name to follow |
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
 | `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; bogus key still joins, logs `stub-fallback` |
+| `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); set to the sidecar to run without a key, decisions then log `source=laya` |
+| `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 
 In-game chat: `follow me` locks onto the speaker, `stop` clears the lock.
 
