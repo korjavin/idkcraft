@@ -1,8 +1,11 @@
 FROM python:3.12-slim
 
+# PYTHONUNBUFFERED=1 so a killed process still leaves its log lines.
+# MALLOC_ARENA_MAX=2 cuts glibc arena bloat under 4 OMP threads.
 ENV HF_HOME=/models \
     HF_HUB_OFFLINE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2
 
 WORKDIR /app
 

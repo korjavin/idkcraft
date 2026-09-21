@@ -97,7 +97,9 @@ services:
     image: ghcr.io/korjavin/idkcraft-laya:latest
     container_name: ${LAYA_CONTAINER_NAME:-idkcraft-laya}
     restart: unless-stopped
-    mem_limit: ${LAYA_MEM_LIMIT:-2g}
+    # 2g contract replaced by 3g (2026-09-21: prod OOM-killed the sidecar
+    # under 2g at load; host budget still fits: mc 6g + laya 3g + ~5.2g other).
+    mem_limit: ${LAYA_MEM_LIMIT:-3g}
     environment:
       OMP_NUM_THREADS: ${LAYA_THREADS:-4}
       MKL_NUM_THREADS: ${LAYA_THREADS:-4}
