@@ -32,7 +32,11 @@ services:
       MEMORY: ${MC_MEMORY:-4G}
       ONLINE_MODE: "false"
       ENFORCE_WHITELIST: "TRUE"
-      WHITELIST: ${WHITELIST:-IdkBot}
+      # Offline UUID of IdkBot (server runs ONLINE_MODE=false, so Paper matches
+      # the whitelist by UUID; a name would resolve to an online UUID and the
+      # bot would be rejected). If BOT_USERNAME changes, recompute:
+      # python3 -c 'import uuid,hashlib;print(uuid.UUID(bytes=hashlib.md5(b"OfflinePlayer:IdkBot").digest(),version=3))'
+      WHITELIST: ${WHITELIST:-3d1f4b94-9298-3ba3-af2d-3f73ce56138f}
       OPS: ${OPS:-}
       DIFFICULTY: ${MC_DIFFICULTY:-easy}
       MOTD: idkcraft
