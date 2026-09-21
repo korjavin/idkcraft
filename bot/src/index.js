@@ -28,9 +28,12 @@ const bot = mineflayer.createBot({
 })
 bot.loadPlugin(pathfinder)
 
+let movements = null
 bot.once('spawn', () => {
-  bot.pathfinder.setMovements(new Movements(bot))
+  movements = new Movements(bot)
+  bot.pathfinder.setMovements(movements)
   console.log(`spawned as ${BOT_USERNAME} on ${MC_HOST}:${MC_PORT}`)
+  setInterval(tick, BRAIN_TICK_MS)
 })
 
 let inFlight = false
@@ -67,7 +70,7 @@ function buildState(target) {
   }
   let nearbyHostiles = 0
   for (const entity of Object.values(bot.entities)) {
-    if (entity.type !== 'mob' || !entity.position) continue
+    if (entity.type === 'player' || !entity.position) continue
     const name = entity.name || entity.mobType || ''
     if (!HOSTILE_NAMES.has(name)) continue
     if (entity.position.distanceTo(bot.entity.position) < 16) nearbyHostiles++
@@ -102,7 +105,7 @@ async function tick() {
       if (lastGoalKey !== 'idle') bot.pathfinder.stop()
       lastGoalKey = 'idle'
     }
-    bot.setControlState('sprint', !!decision.sprint)
+    if (movements) movements.allowSprinting = !!decision.sprint
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist}`)
   } catch (err) {
@@ -111,10 +114,6 @@ async function tick() {
     inFlight = false
   }
 }
-
-bot.on('spawn', () => {
-  setInterval(tick, BRAIN_TICK_MS)
-})
 
 bot.on('chat', (username, message) => {
   if (username === bot.username) return

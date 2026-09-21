@@ -22,23 +22,24 @@ function parseAction(answer) {
   return choice === 'follow' || choice === 'idle' ? choice : null
 }
 
-// Noul answers are boolean hypotheses; accept the likely wire shapes and
-// threshold calibrated probabilities at 0.5. Unknown shape -> false (no sprint).
+// Noul answers are documented as {"type":"noul","noul":0..1} (probability,
+// no confidence field): https://docs.typesafe.ai/primitives/noul.md
 function parseNoul(answer) {
-  if (typeof answer === 'boolean') return answer
-  if (!answer || typeof answer !== 'object') return false
-  for (const key of ['value', 'answer', 'result']) {
-    if (typeof answer[key] === 'boolean') return answer[key]
-  }
-  if (answer.choice === true || answer.choice === 'true' || answer.choice === 'yes') return true
-  if (answer.choice === false || answer.choice === 'false' || answer.choice === 'no') return false
-  for (const key of ['probability', 'p', 'confidence']) {
-    if (typeof answer[key] === 'number') return answer[key] >= 0.5
-  }
-  return false
+  return typeof answer?.noul === 'number' ? answer.noul >= 0.5 : false
 }
 
-function jevBrain(apiKey, fetchFn) {
+// JEV `state` is documented as a string; send one compact text line.
+function stateToText(state) {
+  if (typeof state === 'string') return state
+  const d = state.distance_to_player
+  return `distance_to_player=${typeof d === 'number' ? d.toFixed(1) : 'none'} ` +
+    `player_visible=${!!state.player_visible} ` +
+    `player_moving=${!!state.player_moving} ` +
+    `bot_health=${state.bot_health} bot_food=${state.bot_food} ` +
+    `nearby_hostiles=${state.nearby_hostiles}`
+}
+
+function jevBrain(apiKey, fetchFn, timeoutMs = 1000) {
   const doFetch = fetchFn || fetch
   return {
     name: 'jev',
@@ -49,13 +50,14 @@ function jevBrain(apiKey, fetchFn) {
       try {
         const res = await doFetch(JEV_ENDPOINT, {
           method: 'POST',
+          signal: AbortSignal.timeout(timeoutMs),
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({
             model: JEV_MODEL,
-            state,
+            state: stateToText(state),
             questions: {
               action: {
                 type: 'choice',
@@ -94,10 +96,11 @@ function makeBrain(env) {
   const key = env && env.TYPESAFE_API_KEY
   if (key) {
     console.log('brain=jev')
-    return jevBrain(key)
+    const tickMs = parseInt((env && env.BRAIN_TICK_MS) || '1000', 10)
+    return jevBrain(key, undefined, Number.isFinite(tickMs) ? tickMs : 1000)
   }
   console.log('brain=stub')
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, JEV_ENDPOINT, JEV_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, stateToText, JEV_ENDPOINT, JEV_MODEL }
