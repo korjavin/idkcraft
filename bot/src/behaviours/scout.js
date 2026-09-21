@@ -60,17 +60,15 @@ function resolveIds(bot, names) {
 }
 
 // Name -> ore ids for the 'find me <block>' chat command: the exact
-// name plus the ore variants a player would mean ('coal' -> coal_ore +
-// deepslate_coal_ore; 'diamond_ore' -> itself + deepslate_diamond_ore).
-// Registry names that are missing are skipped, not fatal.
+// name, plus every registry block containing <base>_ore (covers
+// deepslate_* and nether_* variants). Registry names that are missing
+// are skipped, not fatal.
 function resolveBlockIds(bot, blockName) {
   const byName = (bot.registry && bot.registry.blocksByName) || {}
   const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
   const ids = []
-  for (const n of [blockName, `${base}_ore`, `deepslate_${base}_ore`]) {
-    const entry = byName[n]
-    if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
-  }
+  const exact = byName[blockName]
+  if (exact && typeof exact.id === 'number') ids.push(exact.id)
   const pattern = `${base}_ore`
   for (const name of Object.keys(byName)) {
     if (name.includes(pattern)) {

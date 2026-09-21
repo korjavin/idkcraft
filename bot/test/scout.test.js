@@ -374,4 +374,27 @@ describe("chat command 'find me <block>'", () => {
     handleChat(bot, null, 'Steve', 'hello bot')
     assert.deepEqual(bot.lines, [])
   })
+
+  it("handles 'follow me' command by setting follow target on ticker and chatting confirmation", () => {
+    const bot = mockBot({ registry: REG })
+    const calls = []
+    const ticker = {
+      setFollow(name) { calls.push(['setFollow', name]) },
+      stop() { calls.push(['stop']) },
+    }
+    handleChat(bot, ticker, 'Steve', 'follow me')
+    assert.deepEqual(calls, [['setFollow', 'Steve']])
+    assert.deepEqual(bot.lines, ['Following Steve'])
+  })
+
+  it("handles 'stop' command by clearing follow target and stopping ticker", () => {
+    const bot = mockBot({ registry: REG })
+    const calls = []
+    const ticker = {
+      setFollow(name) { calls.push(['setFollow', name]) },
+      stop() { calls.push(['stop']) },
+    }
+    handleChat(bot, ticker, 'Steve', 'stop')
+    assert.deepEqual(calls, [['setFollow', ''], ['stop']])
+  })
 })
