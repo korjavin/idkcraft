@@ -104,7 +104,10 @@ services:
       OMP_NUM_THREADS: ${LAYA_THREADS:-4}
       MKL_NUM_THREADS: ${LAYA_THREADS:-4}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)"]
+      # CMD-SHELL (not CMD list): Portainer word-splits CMD lists, so -c
+      # received only "import" (SyntaxError). CMD-SHELL re-joins the words
+      # into one shell string, which survives the split.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
       interval: 15s
       timeout: 5s
       start_period: 120s
