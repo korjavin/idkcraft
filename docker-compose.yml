@@ -52,6 +52,16 @@ services:
     volumes:
       - ${MC_DATA_PATH:-./data}:/data
     mem_limit: ${MC_MEM_LIMIT:-6g}
+    # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
+    # Portainer refuses service_healthy dependents without one. Uses the
+    # image's bundled mc-health script; start_period covers first boot
+    # (Paper + plugin downloads).
+    healthcheck:
+      test: ["CMD", "mc-health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 180s
+      retries: 40
 
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
