@@ -1,11 +1,12 @@
 {
   "model": "jev-latest",
-  "state": "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0",
+  "state": "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false",
   "questions": {
     "action": {
       "type": "choice",
-      "instructions": "The companion bot must decide whether to follow the player or wait. Follow whenever the player is more than 3 blocks away.",
+      "instructions": "Decide what the companion bot does this second. Fight when a hostile mob is within 8 blocks of the bot or near the player and the bot has at least 6 health. Otherwise follow when the player is more than 3 blocks away. Otherwise wait.",
       "criteria": {
+        "fight": "A hostile mob is within 8 blocks (or near the player) and bot_health is 6 or more: attack the mob.",
         "follow": "The player is far away (more than 3 blocks): the bot should walk toward the player and stay close.",
         "idle": "The player is already within 3 blocks: the bot should stand still and wait."
       }
