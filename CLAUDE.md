@@ -72,7 +72,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Architecture Overview
 
-Two containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
+Three containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
 
 ```
 +-------------------------------------------------------------+
@@ -85,11 +85,17 @@ Two containers in a single Docker Compose stack, deployed without Traefik (Minec
 |  | 25565/tcp (Java + Bot)  |     | Node 22 + mineflayer  |  |
 |  | 19132/udp (Bedrock)     |     | JEV System-1 loop     |  |
 |  +-------------------------+     +-----------------------+  |
+|                                                             |
+|  +-----------------------------------------------------+    |
+|  | laya                                                |    |
+|  | CPU System-1 brain, JEV REST shape, port 8000       |    |
+|  | (internal only, no published ports)                 |    |
+|  +-----------------------------------------------------+    |
 +-------------------------------------------------------------+
 ```
 
 ### Shared Contract (do not rename)
-- **Services:** `mc`, `bot`
+- **Services:** `mc`, `bot`, `laya`
 - **Compose file:** `docker-compose.yml` at repository root
 - **Bot build context:** `./bot`, `bot/Dockerfile`
 - **Image:** `ghcr.io/korjavin/idkcraft:latest` (CI rewrites the tag to the commit SHA on the `deploy` branch)
@@ -104,7 +110,10 @@ Two containers in a single Docker Compose stack, deployed without Traefik (Minec
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = nearest player)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
-  - `TYPESAFE_API_KEY`: Secret; empty/absent triggers stub brain fallback
+  - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); the sidecar needs no key
+  - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
+  - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
+  - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
 
 ## Conventions
 
