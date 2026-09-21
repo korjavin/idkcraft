@@ -76,7 +76,7 @@ Two containers in a single Docker Compose stack, deployed without Traefik (Minec
 
 ```
 +-------------------------------------------------------------+
-| Compose Stack (idk.wandergeek.org)                          |
+| Compose Stack (<server-address>)                            |
 |                                                             |
 |  +-------------------------+     +-----------------------+  |
 |  | mc                      |     | bot                   |  |
@@ -108,6 +108,8 @@ Two containers in a single Docker Compose stack, deployed without Traefik (Minec
 
 ## Conventions
 
+- **Privacy:**
+  - Never commit hostnames, domain names or IPs; use placeholders, real values live in Portainer env vars.
 - **House GitOps:**
   - Pushing to `master` triggers GitHub Actions CI.
   - CI builds `ghcr.io/korjavin/idkcraft:<sha>`, force-pushes to the `deploy` branch, and triggers the Portainer webhook.

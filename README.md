@@ -19,10 +19,8 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
    - From the HOME menu, open **System Settings** > **Internet** > **Internet Settings**.
    - Select your Wi-Fi network and select **Change Settings**.
    - Set **DNS Settings** to **Manual**.
-   - **Primary DNS:** Enter a public BedrockConnect IP (current as of September 21, 2026 from the [BedrockConnect repository](https://github.com/BedrockConnect/BedrockConnect); public IPs may rotate, so consult their README if unreachable):
-     - **US:** `104.238.130.180` (Alternative US: `45.55.68.52`)
-     - **EU:** `134.255.231.119`
-   - **Secondary DNS:** Enter `1.1.1.1` (or `8.8.8.8`).
+   - **Primary DNS:** Enter a public BedrockConnect IP (consult the [BedrockConnect repository](https://github.com/BedrockConnect/BedrockConnect) README for the current list of public DNS addresses).
+   - **Secondary DNS:** Enter a public DNS provider (such as Cloudflare or Google DNS).
    - Save the settings and connect to the network.
 2. **Open the Server Picker:**
    - Launch Minecraft and select **Play** > **Servers**.
@@ -30,7 +28,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
    - The BedrockConnect custom menu will open instead of the featured server.
 3. **Add & Join Server:**
    - Select **Add Server**.
-   - Server Address: `idk.wandergeek.org`
+   - Server Address: `<server-address>` (ask the server owner for the address)
    - Server Port: `19132`
    - Select the server from your list and connect.
 
@@ -44,7 +42,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 
 1. Launch Minecraft Java Edition.
 2. Navigate to **Multiplayer** > **Direct Connection** (or **Add Server**).
-3. Server Address: `idk.wandergeek.org` (default port `25565`).
+3. Server Address: `<server-address>` (default port `25565`; ask the server owner for the address).
 4. **Note:** The server operates in offline mode with a strict whitelist (`ONLINE_MODE=false`, `ENFORCE_WHITELIST=TRUE`). Ask the server owner to add your Minecraft username to the whitelist before connecting.
 
 ---
