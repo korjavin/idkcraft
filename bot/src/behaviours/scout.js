@@ -71,6 +71,13 @@ function resolveBlockIds(bot, blockName) {
     const entry = byName[n]
     if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
   }
+  const pattern = `${base}_ore`
+  for (const name of Object.keys(byName)) {
+    if (name.includes(pattern)) {
+      const entry = byName[name]
+      if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
+    }
+  }
   return ids
 }
 

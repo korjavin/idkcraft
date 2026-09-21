@@ -248,8 +248,8 @@ describe('findNearest', () => {
     assert.equal(res.distance, 10)
   })
 
-  it('rounds non-integral Euclidean distance to nearest integer', () => {
-    // distance from (0, 64, 0) to (3, 64, 5) is sqrt(34) ≈ 5.83 -> rounds to 6
+  it('rounds non-integral Euclidean distance to nearest integer (guards against Math.floor)', () => {
+    // distance from (0, 64, 0) to (3, 64, 5) is sqrt(34) ≈ 5.83 -> rounds up to 6
     const p = pos(3, 64, 5)
     const bot = mockBot({
       registry: NAMES,
@@ -258,6 +258,30 @@ describe('findNearest', () => {
     })
     const res = findNearest(bot, 'coal')
     assert.equal(res.distance, 6)
+  })
+
+  it('rounds non-integral Euclidean distance to nearest integer (guards against Math.ceil)', () => {
+    // distance from (0, 64, 0) to (5, 64, 1) is sqrt(26) ≈ 5.10 -> rounds down to 5
+    const p = pos(5, 64, 1)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [p],
+      names: { '5,64,1': 'coal_ore' },
+    })
+    const res = findNearest(bot, 'coal')
+    assert.equal(res.distance, 5)
+  })
+
+  it('resolves nether ore variants such as nether_quartz_ore for "quartz"', () => {
+    const p = pos(2, 64, 0)
+    const bot = mockBot({
+      registry: { ...NAMES, nether_quartz_ore: 153 },
+      spots: [p],
+      names: { '2,64,0': 'nether_quartz_ore' },
+    })
+    const res = findNearest(bot, 'quartz')
+    assert.equal(res.name, 'nether_quartz_ore')
+    assert.equal(res.distance, 2)
   })
 
   it('uses default radius 48 and count 64 in findBlocks scan', () => {
