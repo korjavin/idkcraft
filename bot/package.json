@@ -1,0 +1,17 @@
+{
+  "name": "idkcraft-bot",
+  "version": "0.1.0",
+  "description": "IdkCraft companion bot: joins the Paper server, follows the player, reflex decisions via JEV with stub fallback",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/brain.test.js"
+  },
+  "dependencies": {
+    "mineflayer": "4.39.0",
+    "mineflayer-pathfinder": "2.4.5"
+  }
+}
