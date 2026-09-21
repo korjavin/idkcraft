@@ -149,4 +149,42 @@ describe('dispatch table', () => {
     assert.equal(idleBot.calls.setGoal, 0)
     assert.equal(idleBot.calls.stop, 1)
   })
+
+  it('dispatches registered actions through the table, not a hardcoded name', async () => {
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'jev' }), tickMs: 10, idleTickMs: 10 })
+      await ticker.tick()
+      assert.equal(fightRan, 1)
+      assert.equal(bot.calls.stop, 0)
+    } finally {
+      delete BEHAVIOURS.fight
+    }
+  })
+})
+
+describe('target threading', () => {
+  it('reports player_moving=true on tick 2 when the target moved', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const seen = []
+    const brain = {
+      calls: 0,
+      async decide(state) {
+        this.calls++
+        seen.push({ player_moving: state.player_moving, distance_to_player: state.distance_to_player })
+        return { action: 'follow', sprint: false, source: 'jev' }
+      }
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    bot.players.Steve.entity.position = pos(14, 64, 0)
+    await ticker.tick()
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0].player_moving, false)
+    assert.equal(seen[1].player_moving, true)
+  })
 })

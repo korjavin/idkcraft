@@ -25,8 +25,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
-    if (decision.action === 'follow' && target && typeof handler === 'function') {
-      handler(bot, ctx, target)
+    if (typeof handler === 'function') {
+      handler(bot, ctx, target, state)
     } else {
       if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
       ctx.lastGoalKey = 'idle'
