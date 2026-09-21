@@ -74,16 +74,16 @@ function resolveBlockIds(bot, blockName) {
   return ids
 }
 
-// Scan helper, exported for the future 'find me <block>' chat command:
+// Scan helper, exported for the 'find me <block>' chat command:
 // block name -> nearest loaded position; null when the name resolves but
 // nothing is nearby; 'unknown' when the name matches no block at all so the
-// caller can answer 'unknown block'. That bead adds a caller, not a copy.
-function findNearestBlock(bot, blockName, radius = 16) {
+// caller can answer 'unknown block'.
+function findNearestBlock(bot, blockName, radius = 48) {
   const ids = resolveBlockIds(bot, blockName)
   if (ids.length === 0) return 'unknown'
   let found = null
   try {
-    found = bot.findBlocks({ matching: ids, maxDistance: radius, count: 16 })
+    found = bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 })
   } catch {
     return null
   }
@@ -96,6 +96,22 @@ function findNearestBlock(bot, blockName, radius = 16) {
     }
   }
   return best
+}
+
+function findNearest(bot, blockName, radius = 48) {
+  const p = findNearestBlock(bot, blockName, radius)
+  if (p === 'unknown') return 'unknown'
+  if (!p) return null
+  const origin = bot.entity && bot.entity.position
+  const distance = origin ? Math.round(dist(p, origin)) : 0
+  let name = blockName
+  try {
+    const block = bot.blockAt && bot.blockAt(p)
+    if (block && block.name) name = block.name
+  } catch {
+    name = blockName
+  }
+  return { name, position: p, distance }
 }
 
 function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000 } = {}) {
@@ -151,4 +167,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, resolveBlockIds, ORE_NAMES }
+module.exports = { makeScout, findNearestBlock, findNearest, resolveBlockIds, ORE_NAMES }

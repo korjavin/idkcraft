@@ -2,7 +2,8 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { makeScout, findNearestBlock, ORE_NAMES } = require('../src/behaviours/scout')
+const { makeScout, findNearestBlock, findNearest, ORE_NAMES } = require('../src/behaviours/scout')
+const { handleChat } = require('../src/index')
 
 function pos(x, y, z) {
   const p = {
@@ -228,5 +229,113 @@ describe('findNearestBlock', () => {
     const bot = mockBot({ registry: NAMES })
     bot.findBlocks = () => { throw new Error('no chunks') }
     assert.equal(findNearestBlock(bot, 'coal'), null)
+  })
+})
+
+describe('findNearest', () => {
+  const NAMES = { coal_ore: 10, deepslate_coal_ore: 11, diamond_ore: 179, deepslate_diamond_ore: 180, iron_ore: 15 }
+
+  it('resolves block name, calculates distance, and returns position', () => {
+    const p = pos(6, 64, 8)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [p],
+      names: { '6,64,8': 'coal_ore' },
+    })
+    const res = findNearest(bot, 'coal')
+    assert.equal(res.name, 'coal_ore')
+    assert.deepEqual([res.position.x, res.position.y, res.position.z], [6, 64, 8])
+    assert.equal(res.distance, 10)
+  })
+
+  it('uses default radius 48 and count 64 in findBlocks scan', () => {
+    const bot = mockBot({ registry: NAMES })
+    let opts = null
+    bot.findBlocks = (o) => { opts = o; return [] }
+    findNearest(bot, 'coal')
+    assert.equal(opts.maxDistance, 48)
+    assert.equal(opts.count, 64)
+  })
+
+  it('returns null when no matching blocks are within range', () => {
+    const bot = mockBot({ registry: NAMES, spots: [] })
+    assert.equal(findNearest(bot, 'diamond'), null)
+  })
+
+  it("returns 'unknown' when block is not in registry", () => {
+    const bot = mockBot({ registry: NAMES })
+    assert.equal(findNearest(bot, 'xyzzy'), 'unknown')
+  })
+})
+
+describe("chat command 'find me <block>'", () => {
+  const REG = {
+    coal_ore: 10,
+    deepslate_coal_ore: 11,
+    diamond_ore: 179,
+    deepslate_diamond_ore: 180,
+    iron_ore: 15,
+  }
+
+  it("replies with '<name> at x y z (N blocks)' when block is found", () => {
+    const coalPos = pos(6, 64, 8)
+    const bot = mockBot({
+      registry: REG,
+      spots: [coalPos],
+      names: { '6,64,8': 'coal_ore' },
+    })
+    handleChat(bot, null, 'Steve', 'find me coal')
+    assert.deepEqual(bot.lines, ['coal_ore at 6 64 8 (10 blocks)'])
+  })
+
+  it("replies with 'no <name> within 48 blocks' when none are in range", () => {
+    const bot = mockBot({ registry: REG, spots: [] })
+    handleChat(bot, null, 'Steve', 'find me diamond')
+    assert.deepEqual(bot.lines, ['no diamond within 48 blocks'])
+  })
+
+  it("replies with 'unknown block: <name>' when block name is unrecognized", () => {
+    const bot = mockBot({ registry: REG })
+    handleChat(bot, null, 'Steve', 'find me xyzzy')
+    assert.deepEqual(bot.lines, ['unknown block: xyzzy'])
+  })
+
+  it('is case-insensitive and trims input', () => {
+    const coalPos = pos(6, 64, 8)
+    const bot = mockBot({
+      registry: REG,
+      spots: [coalPos],
+      names: { '6,64,8': 'coal_ore' },
+    })
+    handleChat(bot, null, 'Steve', '  FIND ME COAL  ')
+    assert.deepEqual(bot.lines, ['coal_ore at 6 64 8 (10 blocks)'])
+  })
+
+  it('does not move the bot when answering the command', () => {
+    const coalPos = pos(6, 64, 8)
+    const bot = mockBot({
+      registry: REG,
+      spots: [coalPos],
+      names: { '6,64,8': 'coal_ore' },
+    })
+    const before = [bot.entity.position.x, bot.entity.position.y, bot.entity.position.z]
+    handleChat(bot, null, 'Steve', 'find me coal')
+    const after = [bot.entity.position.x, bot.entity.position.y, bot.entity.position.z]
+    assert.deepEqual(after, before)
+  })
+
+  it('ignores messages sent by the bot itself', () => {
+    const bot = mockBot({ registry: REG })
+    bot.username = 'IdkBot'
+    handleChat(bot, null, 'IdkBot', 'find me coal')
+    assert.deepEqual(bot.lines, [])
+  })
+
+  it('ignores non-matching or multi-word messages', () => {
+    const bot = mockBot({ registry: REG })
+    handleChat(bot, null, 'Steve', 'find me coal ore')
+    handleChat(bot, null, 'Steve', 'find me')
+    handleChat(bot, null, 'Steve', 'hello bot')
+    assert.deepEqual(bot.lines, [])
   })
 })
