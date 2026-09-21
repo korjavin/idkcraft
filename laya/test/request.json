@@ -1,0 +1,22 @@
+{
+  "model": "jev-latest",
+  "state": "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0",
+  "questions": {
+    "action": {
+      "type": "choice",
+      "instructions": "The companion bot must decide whether to follow the player or wait. Follow whenever the player is more than 3 blocks away.",
+      "criteria": {
+        "follow": "The player is far away (more than 3 blocks): the bot should walk toward the player and stay close.",
+        "idle": "The player is already within 3 blocks: the bot should stand still and wait."
+      }
+    },
+    "sprint": {
+      "type": "noul",
+      "instructions": "The player is more than 8 blocks away and moving, so the bot should sprint to catch up.",
+      "criteria": {
+        "true": "sprint to catch up",
+        "false": "walking is enough"
+      }
+    }
+  }
+}
