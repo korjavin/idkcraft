@@ -1,8 +1,8 @@
 'use strict'
 
 // The one brain interface, two implementations. No classes needed.
-// decide(state) -> { action: 'follow' | 'idle', sprint: bool, source }
-// state = { distance_to_player, player_visible, player_moving, bot_health, bot_food, nearby_hostiles }
+// decide(state) -> { action: 'fight' | 'follow' | 'idle', sprint: bool, source }
+// state = { distance_to_player, player_visible, player_moving, bot_health, bot_food, nearby_hostiles, hostile_distance, hostile_near_player }
 
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
@@ -21,6 +21,12 @@ function sourceForUrl(url) {
 const stubBrain = {
   name: 'stub',
   decide(state) {
+    const hd = state.hostile_distance
+    const near = !!state.hostile_near_player
+    const health = typeof state.bot_health === 'number' ? state.bot_health : 20
+    if (((typeof hd === 'number' && hd <= 8) || near) && health >= 6) {
+      return { action: 'fight', sprint: false, source: 'stub' }
+    }
     const d = state.distance_to_player
     if (typeof d !== 'number') return { action: 'idle', sprint: false, source: 'stub' }
     if (d > 3) return { action: 'follow', sprint: d > 8, source: 'stub' }
@@ -30,7 +36,7 @@ const stubBrain = {
 
 function parseAction(answer) {
   const choice = answer && answer.choice
-  return choice === 'follow' || choice === 'idle' ? choice : null
+  return choice === 'fight' || choice === 'follow' || choice === 'idle' ? choice : null
 }
 
 // Noul answers are documented as {"type":"noul","noul":0..1} (0..1
@@ -43,11 +49,14 @@ function parseNoul(answer) {
 function stateToText(state) {
   if (typeof state === 'string') return state
   const d = state.distance_to_player
+  const hd = state.hostile_distance
   return `distance_to_player=${typeof d === 'number' ? d.toFixed(1) : 'none'} ` +
     `player_visible=${!!state.player_visible} ` +
     `player_moving=${!!state.player_moving} ` +
     `bot_health=${state.bot_health} bot_food=${state.bot_food} ` +
-    `nearby_hostiles=${state.nearby_hostiles}`
+    `nearby_hostiles=${state.nearby_hostiles} ` +
+    `hostile_distance=${typeof hd === 'number' ? hd.toFixed(1) : 'none'} ` +
+    `hostile_near_player=${!!state.hostile_near_player}`
 }
 
 function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
@@ -72,8 +81,9 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'The companion bot must decide whether to follow the player or wait. Follow whenever the player is more than 3 blocks away.',
+                instructions: 'Decide what the companion bot does this second. Fight when a hostile mob is within 8 blocks of the bot or near the player and the bot has at least 6 health. Otherwise follow when the player is more than 3 blocks away. Otherwise wait.',
                 criteria: {
+                  fight: 'A hostile mob is within 8 blocks (or near the player) and bot_health is 6 or more: attack the mob.',
                   follow: 'The player is far away (more than 3 blocks): the bot should walk toward the player and stay close.',
                   idle: 'The player is already within 3 blocks: the bot should stand still and wait.'
                 }
@@ -91,9 +101,17 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         })
         if (!res.ok) throw new Error(`jev http ${res.status}`)
         const data = await res.json()
-        const action = parseAction(data && data.answers && data.answers.action)
+        let action = parseAction(data && data.answers && data.answers.action)
         if (!action) throw new Error('jev missing action answer')
         const sprint = parseNoul(data.answers.sprint)
+        const ref = stubBrain.decide(state).action
+        if (ref !== action) {
+          console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${stateToText(state)}`)
+        }
+        // ponytail: remove once perception sends hostile_distance (idkcraft-3nt.3)
+        if (action === 'fight' && (!state || !('hostile_distance' in state))) {
+          action = ref
+        }
         return { action, sprint, source }
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
