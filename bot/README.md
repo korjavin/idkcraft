@@ -48,3 +48,7 @@ The server runs offline-mode, so the bot uses `auth: 'offline'` — no
 Microsoft account needed. If the server ever flips to online mode, the only
 bot change is `auth: 'microsoft'` in `src/index.js` plus a `profilesFolder`
 volume for the auth cache; nothing else changes.
+
+## Scouting
+
+The bot scouts for valuable ore (diamond, emerald, ancient debris, gold, iron, lapis, redstone — coal and copper excluded) every 5 s in a 16-block radius, reporting each new vein once in chat as `<ore> x<count> at <x> <y> <z>` (at most 3 lines per scan, highest value first). It sees through walls because the scan reads already-loaded chunks, not line of sight. To try it: stand next to the bot as op and run `/setblock ~2 ~ ~ diamond_ore` — within ~5 s it says `diamond_ore x1 at ...` once, with no repeats while you stand there.
