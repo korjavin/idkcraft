@@ -79,6 +79,49 @@ describe('jevBrain timeout', () => {
   })
 })
 
+describe('configurable brain endpoint (laya sidecar)', () => {
+  const LAYA = 'http://laya:8000/v1/systemone'
+  const state = { distance_to_player: 5, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 0 }
+
+  it('(a) empty key sends no Authorization, same body shape, source laya', async () => {
+    let seen = null
+    const fake = async (url, opts) => {
+      seen = { url, headers: opts.headers, body: JSON.parse(opts.body) }
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' }, sprint: { type: 'noul', noul: 0.9 } } }) }
+    }
+    const decision = await jevBrain('', fake, 1000, LAYA).decide(state)
+    assert.equal(seen.url, LAYA)
+    assert.ok(!('Authorization' in seen.headers))
+    assert.equal(seen.headers['Content-Type'], 'application/json')
+    assert.equal(seen.body.model, 'jev-latest')
+    assert.deepEqual(Object.keys(seen.body.questions).sort(), ['action', 'sprint'])
+    assert.equal(typeof seen.body.state, 'string')
+    assert.deepEqual(decision, { action: 'follow', sprint: true, source: 'laya' })
+  })
+
+  it('(b) makeBrain picks remote for BRAIN_URL, stub for empty env', () => {
+    assert.equal(makeBrain({ BRAIN_URL: LAYA }).name, 'laya')
+    assert.equal(makeBrain({}).name, 'stub')
+  })
+
+  it('(c) BRAIN_TIMEOUT_MS bounds a hanging call', async () => {
+    const hanging = (url, opts) => new Promise((resolve, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')))
+    })
+    const origFetch = global.fetch
+    global.fetch = hanging
+    try {
+      const brain = makeBrain({ BRAIN_URL: LAYA, BRAIN_TIMEOUT_MS: '50' })
+      const t0 = Date.now()
+      const decision = await brain.decide({ distance_to_player: 12 })
+      assert.ok(Date.now() - t0 < 1000, 'aborted near the 50 ms deadline')
+      assert.equal(decision.source, 'stub-fallback')
+    } finally {
+      global.fetch = origFetch
+    }
+  })
+})
+
 describe('makeBrain', () => {
   it('picks stub without a key and jev with a key', () => {
     assert.equal(makeBrain({}).name, 'stub')
