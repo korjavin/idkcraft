@@ -4,7 +4,7 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey } = require('./perception')
-const { makeScout } = require('./behaviours/scout')
+const { makeScout, findNearest } = require('./behaviours/scout')
 
 const BEHAVIOURS = {
   follow: require('./behaviours/follow'),
@@ -127,17 +127,7 @@ function main() {
     ticker.start()
   })
 
-  bot.on('chat', (username, message) => {
-    if (username === bot.username) return
-    const msg = message.toLowerCase().trim()
-    if (msg === 'follow me') {
-      ticker.setFollow(username)
-      bot.chat(`Following ${username}`)
-    } else if (msg === 'stop') {
-      ticker.setFollow('')
-      ticker.stop()
-    }
-  })
+  bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
@@ -148,6 +138,33 @@ function main() {
   bot.on('kicked', (reason) => fatal('kicked', reason))
 }
 
+function handleChat(bot, ticker, username, message) {
+  if (username === bot.username) return
+  const msg = message.toLowerCase().trim()
+  if (msg === 'follow me') {
+    if (ticker) ticker.setFollow(username)
+    bot.chat(`Following ${username}`)
+  } else if (msg === 'stop') {
+    if (ticker) {
+      ticker.setFollow('')
+      ticker.stop()
+    }
+  } else {
+    const m = msg.match(/^find me\s+(\S+)$/)
+    if (m) {
+      const name = m[1]
+      const res = findNearest(bot, name)
+      if (res === 'unknown') {
+        bot.chat(`unknown block: ${name}`)
+      } else if (!res) {
+        bot.chat(`no ${name} within 48 blocks`)
+      } else {
+        bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
+      }
+    }
+  }
+}
+
 if (require.main === module) main()
 
-module.exports = { createTicker, BEHAVIOURS }
+module.exports = { createTicker, BEHAVIOURS, handleChat }
