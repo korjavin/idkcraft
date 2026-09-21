@@ -101,12 +101,16 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         })
         if (!res.ok) throw new Error(`jev http ${res.status}`)
         const data = await res.json()
-        const action = parseAction(data && data.answers && data.answers.action)
+        let action = parseAction(data && data.answers && data.answers.action)
         if (!action) throw new Error('jev missing action answer')
         const sprint = parseNoul(data.answers.sprint)
         const ref = stubBrain.decide(state).action
         if (ref !== action) {
           console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${stateToText(state)}`)
+        }
+        // ponytail: remove once perception sends hostile_distance (idkcraft-3nt.3)
+        if (action === 'fight' && (!state || !('hostile_distance' in state))) {
+          action = ref
         }
         return { action, sprint, source }
       } catch (err) {
