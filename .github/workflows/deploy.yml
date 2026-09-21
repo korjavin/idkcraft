@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Validate compose config
         run: |
@@ -32,13 +30,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Tag each image by the last commit touching its directory, so pushes
-      # that change neither bot/ nor laya/ rebuild nothing (host disk filled
-      # up from one image per push; Portainer never prunes old tags).
+      # Tag each image by its directory TREE hash, so pushes that change
+      # neither bot/ nor laya/ rebuild nothing (host disk filled up from one
+      # image per push; Portainer never prunes old tags). Content-addressed:
+      # a revert or rebase reuses the existing image. A docs-only push still
+      # redeploys with the same tags — intended, no new image lands.
       - name: Resolve image tags
         run: |
-          echo "BOT_SHA=$(git log -1 --format=%H -- bot)" >> "$GITHUB_ENV"
-          echo "LAYA_SHA=$(git log -1 --format=%H -- laya)" >> "$GITHUB_ENV"
+          BOT_SHA=$(git rev-parse HEAD:bot)
+          LAYA_SHA=$(git rev-parse HEAD:laya)
+          [ -n "$BOT_SHA" ] && [ -n "$LAYA_SHA" ] || exit 1
+          echo "BOT_SHA=${BOT_SHA}" >> "$GITHUB_ENV"
+          echo "LAYA_SHA=${LAYA_SHA}" >> "$GITHUB_ENV"
 
       - name: Check bot image
         id: check-bot
@@ -72,12 +75,13 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and push laya image
+      - name: Build laya image
         if: steps.check-laya.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./laya
-          push: true
+          push: false
+          load: true
           tags: ghcr.io/korjavin/idkcraft-laya:${{ env.LAYA_SHA }}
           cache-from: type=gha,scope=laya
           cache-to: type=gha,mode=max,scope=laya
@@ -92,6 +96,14 @@ jobs:
           trap "docker logs laya-smoke; docker rm -f laya-smoke" EXIT
           python3 laya/smoke.py http://127.0.0.1:8000
 
+      - name: Push laya image
+        if: steps.check-laya.outputs.build == 'true'
+        env:
+          LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
+          LAYA_SHA: ${{ env.LAYA_SHA }}
+        run: |
+          docker push "${LAYA_IMAGE}:${LAYA_SHA}"
+
       - name: Update deploy branch
         env:
           IMAGE_BASE: ghcr.io/korjavin/idkcraft
@@ -105,12 +117,12 @@ jobs:
           git checkout -B deploy
           sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${BOT_SHA}|" docker-compose.yml
           sed -i "s|image: ${LAYA_IMAGE}:.*|image: ${LAYA_IMAGE}:${LAYA_SHA}|" docker-compose.yml
-          git add docker-compose.yml
-          if git diff --cached --quiet; then
-            echo "no compose changes to deploy"
-          else
-            git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
+          if ! grep -q "image: ${IMAGE_BASE}:${BOT_SHA}" docker-compose.yml || ! grep -q "image: ${LAYA_IMAGE}:${LAYA_SHA}" docker-compose.yml; then
+            echo "compose image line not rewritten"
+            exit 1
           fi
+          git add docker-compose.yml
+          git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
           git push origin deploy --force
 
       - name: Trigger Portainer webhook
