@@ -4,15 +4,19 @@
   "questions": {
     "action": {
       "type": "choice",
-      "instructions": "What should the companion bot do right now?",
+      "instructions": "The companion bot must decide whether to follow the player or wait. Follow whenever the player is more than 3 blocks away.",
       "criteria": {
-        "follow": "walk toward and stay near the player",
-        "idle": "stand still and wait"
+        "follow": "The player is far away (more than 3 blocks): the bot should walk toward the player and stay close.",
+        "idle": "The player is already within 3 blocks: the bot should stand still and wait."
       }
     },
     "sprint": {
       "type": "noul",
-      "instructions": "Should the bot sprint to keep up with the player?"
+      "instructions": "The player is more than 8 blocks away and moving, so the bot should sprint to catch up.",
+      "criteria": {
+        "true": "sprint to catch up",
+        "false": "walking is enough"
+      }
     }
   }
 }
