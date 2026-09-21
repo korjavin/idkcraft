@@ -44,7 +44,7 @@ async function main() {
   // never retry, which freezes both bots. Chunks are in when the block
   // below the feet is known.
   const chunkDeadline = Date.now() + 30000
-  while (fake.blockAt(fake.entity.position.offset(0, -1, 0)) === undefined) {
+  while (fake.blockAt(fake.entity.position.offset(0, -1, 0)) == null) {
     if (Date.now() > chunkDeadline) throw new Error('world never loaded for FakePlayer')
     await new Promise((r) => setTimeout(r, 1000))
   }
@@ -52,6 +52,7 @@ async function main() {
 
   // Walk ~10 blocks away from spawn.
   const p = fake.entity.position
+  const walkStart = p.clone()
   const goal = new goals.GoalNear(p.x + 10, p.y, p.z + 10, 2)
   fake.pathfinder.setGoal(goal)
   try {
@@ -62,7 +63,8 @@ async function main() {
   fake.pathfinder.stop()
   const awayDist = distanceToIdkBot()
   console.log(`after walk-away dist=${awayDist !== null ? awayDist.toFixed(1) : 'unknown'}`)
-  if (awayDist === null || awayDist <= 4) throw new Error('setup invalid: FakePlayer did not get clear of IdkBot')
+  const walked = walkStart.distanceTo(fake.entity.position)
+  if (walked < 6) throw new Error(`setup invalid: FakePlayer only walked ${walked.toFixed(1)} blocks`)
 
   // IdkBot (stub brain: follow when > 3) should close to < 4 within 30 s.
   const end = Date.now() + 30000
