@@ -5,3 +5,13 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Minecraft server world and runtime data
+data/
+
+# Bot dependencies
+bot/node_modules/
+
+# Environment configurations
+.env
+*.env

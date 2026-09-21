@@ -57,21 +57,65 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
-
 ## Build & Test
 
-_Add your build and test commands here_
-
-```bash
-# Example:
-# npm install
-# npm test
-```
+- **Bot tests:**
+  ```bash
+  cd bot && npm ci && npm test
+  ```
+  No Minecraft client is needed for tests — the bot test suite includes a fake-player end-to-end harness.
+- **Local stack:**
+  ```bash
+  docker compose up
+  ```
+  Requires Docker. Note: first Paper boot downloads ~100 MB of dependencies and plugins, taking 1–2 minutes.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Two containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
 
-## Conventions & Patterns
+```
++-------------------------------------------------------------+
+| Compose Stack (idk.wandergeek.org)                          |
+|                                                             |
+|  +-------------------------+     +-----------------------+  |
+|  | mc                      |     | bot                   |  |
+|  | itzg/minecraft-server   |<----+ ghcr.io/korjavin/     |  |
+|  | TYPE=PAPER + Geyser     |     |   idkcraft:<sha>      |  |
+|  | 25565/tcp (Java + Bot)  |     | Node 22 + mineflayer  |  |
+|  | 19132/udp (Bedrock)     |     | JEV System-1 loop     |  |
+|  +-------------------------+     +-----------------------+  |
++-------------------------------------------------------------+
+```
 
-_Add your project-specific conventions here_
+### Shared Contract (do not rename)
+- **Services:** `mc`, `bot`
+- **Compose file:** `docker-compose.yml` at repository root
+- **Bot build context:** `./bot`, `bot/Dockerfile`
+- **Image:** `ghcr.io/korjavin/idkcraft:latest` (CI rewrites the tag to the commit SHA on the `deploy` branch)
+- **Stack Environment Variables:**
+  - `MC_VERSION`: Paper version pin
+  - `MC_MEMORY`: RAM allocation (default `4G`)
+  - `MC_JAVA_PORT`: Java listening port (`25565`)
+  - `MC_BEDROCK_PORT`: Bedrock listening port (`19132`)
+  - `MC_DATA_PATH`: Host bind-mount path (default `./data`)
+  - `WHITELIST`: Comma-separated list (Bedrock players prefixed with `.`)
+  - `OPS`: Comma-separated operators
+  - `BOT_USERNAME`: Bot player name (default `IdkBot`)
+  - `BOT_FOLLOW`: Target player to follow (empty = nearest player)
+  - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
+  - `TYPESAFE_API_KEY`: Secret; empty/absent triggers stub brain fallback
+
+## Conventions
+
+- **House GitOps:**
+  - Pushing to `master` triggers GitHub Actions CI.
+  - CI builds `ghcr.io/korjavin/idkcraft:<sha>`, force-pushes to the `deploy` branch, and triggers the Portainer webhook.
+  - Portainer tracks the `deploy` branch, never `master`.
+- **Secrets:**
+  - Never commit API keys or credentials to the repository.
+  - The JEV API key is stored in stash at `secrets/jev-api-key` and passed to Portainer as `TYPESAFE_API_KEY`.
+  - The bot must run with the stub brain whenever the key is absent.
+- **Simplicity (Ponytail rules):**
+  - Smallest diff that meets acceptance criteria, no speculative abstractions beyond the single brain interface.
+  - Server runs `ONLINE_MODE=false` + `ENFORCE_WHITELIST=TRUE` in iteration 1 so the bot does not need a Microsoft account.

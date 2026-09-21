@@ -1,0 +1,67 @@
+# idkcraft
+
+`idkcraft` is a production Minecraft deployment designed for seamless cross-play and AI experimentation. It runs a high-performance [Paper](https://papermc.io) Java Minecraft server in Docker, bridged to Bedrock Edition (including Nintendo Switch) via [GeyserMC](https://geysermc.org) and [Floodgate](https://github.com/GeyserMC/Floodgate). An embodied companion bot built with [Mineflayer](https://github.com/PrismarineJS/mineflayer) connects to the server and follows players in real time, driven by sub-40ms reflex decisions powered by [TypeSafe AI JEV](https://typesafe.ai) (a non-autoregressive "System 1" decision engine; see background in the project research report).
+
+---
+
+## How to Join
+
+### Join from Nintendo Switch (Bedrock Edition)
+
+Because Nintendo Switch restricts direct IP entry and disables LAN broadcast discovery, connections route through the public [BedrockConnect](https://github.com/BedrockConnect/BedrockConnect) DNS redirect mechanism.
+
+#### Prerequisites
+1. An active **Nintendo Switch Online (NSO)** subscription.
+2. A **Microsoft / Xbox Live** account linked in your Nintendo Switch Minecraft client.
+
+#### Step-by-Step Connection Guide
+1. **Configure Switch DNS:**
+   - From the HOME menu, open **System Settings** > **Internet** > **Internet Settings**.
+   - Select your Wi-Fi network and select **Change Settings**.
+   - Set **DNS Settings** to **Manual**.
+   - **Primary DNS:** Enter a public BedrockConnect IP (current as of September 21, 2026 from the [BedrockConnect repository](https://github.com/BedrockConnect/BedrockConnect); public IPs may rotate, so consult their README if unreachable):
+     - **US:** `104.238.130.180` (Alternative US: `45.55.68.52`)
+     - **EU:** `134.255.231.119`
+   - **Secondary DNS:** Enter `1.1.1.1` (or `8.8.8.8`).
+   - Save the settings and connect to the network.
+2. **Open the Server Picker:**
+   - Launch Minecraft and select **Play** > **Servers**.
+   - Select any official **Featured Server** (e.g., *The Hive* or *CubeCraft*).
+   - The BedrockConnect custom menu will open instead of the featured server.
+3. **Add & Join Server:**
+   - Select **Add Server**.
+   - Server Address: `idk.wandergeek.org`
+   - Server Port: `19132`
+   - Select the server from your list and connect.
+
+#### Caveats
+- **Wi-Fi Profiles:** Switch DNS settings are stored per Wi-Fi network. You must configure these settings again when connecting to a different network, or revert to *Automatic* if required for other games.
+- **Whitelist Username Format:** Bedrock players authenticate through Floodgate, which prepends a dot `.` prefix to Gamertags (with spaces converted to underscores, e.g., `.PlayerName`). Provide this prefixed handle to the server owner for whitelisting.
+
+---
+
+### Join from Java Edition
+
+1. Launch Minecraft Java Edition.
+2. Navigate to **Multiplayer** > **Direct Connection** (or **Add Server**).
+3. Server Address: `idk.wandergeek.org` (default port `25565`).
+4. **Note:** The server operates in offline mode with a strict whitelist (`ONLINE_MODE=false`, `ENFORCE_WHITELIST=TRUE`). Ask the server owner to add your Minecraft username to the whitelist before connecting.
+
+---
+
+## Companion Bot (`IdkBot`)
+
+- **Automatic Presence:** The bot container joins the server automatically with the username `IdkBot`.
+- **Behavior:** Operates a ~1-second System-1 perception-decision loop. Evaluates distance, player velocity, and threat state to follow the nearest player (or a designated player set by `BOT_FOLLOW`).
+- **Commands:** Supports in-game chat instructions such as `follow me` and `stop` (see `bot/README.md` for full command documentation and brain options).
+
+---
+
+## Repository Layout
+
+- `docker-compose.yml`: Top-level Docker Compose stack running `mc` (Paper + Geyser) and `bot` (Mineflayer).
+- `bot/`: Mineflayer companion bot runtime, test harnesses, and JEV/stub brain interfaces.
+- `mc/`: Minecraft server configuration overrides and plugin assets.
+- `.github/workflows/deploy.yml`: GitOps workflow that builds `ghcr.io/korjavin/idkcraft:<sha>`, updates the `deploy` branch, and signals the Portainer webhook.
+
+*Note: Environment variable definitions and deployment configurations live in `.env.example` and the project epic contract. Refer to those files directly for configuration details.*
