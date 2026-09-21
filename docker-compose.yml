@@ -1,0 +1,71 @@
+# idkcraft iteration 1 — Paper+Geyser server (mc) + follow bot (bot).
+# No Traefik: Minecraft is raw TCP/UDP, host ports are published directly.
+# Service names (mc, bot) and bot env names are the shared contract with the
+# bot bead (bot/**) — do not rename.
+#
+# Geyser note (checked 2026-09-21 against Geyser master source): no
+# PATCH_DEFINITIONS and no vendored Geyser config.yml here. GeyserImpl
+# auto-detects Floodgate at startup ("Floodgate installed means that the
+# user wants Floodgate authentication" — GeyserImpl.startInstance sets
+# java.authType=FLOODGATE when the Floodgate plugin is present), and the
+# Floodgate key is picked up from the Floodgate plugin folder automatically.
+# First boot creates the config; Floodgate auth just works. Do not vendor a
+# full Geyser config.yml (drifts every Geyser release).
+
+services:
+  mc:
+    # Date tag pinned 2026-09-21; this tag ships Java 25 (Paper 26.x needs >= 25).
+    image: itzg/minecraft-server:${MC_IMAGE_TAG:-2026.9.1}
+    container_name: ${MC_CONTAINER_NAME:-idkcraft-mc}
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    ports:
+      - "${MC_JAVA_PORT:-25565}:25565"
+      - "${MC_BEDROCK_PORT:-19132}:19132/udp"
+    environment:
+      EULA: "TRUE"
+      TYPE: PAPER
+      # Pin rationale lives in .env.example (newest Paper both Geyser and
+      # mineflayer support as of 2026-09-21).
+      VERSION: ${MC_VERSION:-26.1.2}
+      MEMORY: ${MC_MEMORY:-4G}
+      ONLINE_MODE: "false"
+      ENFORCE_WHITELIST: "TRUE"
+      # Offline UUID of IdkBot (server runs ONLINE_MODE=false, so Paper matches
+      # the whitelist by UUID; a name would resolve to an online UUID and the
+      # bot would be rejected). If BOT_USERNAME changes, recompute:
+      # python3 -c 'import uuid,hashlib;print(uuid.UUID(bytes=hashlib.md5(b"OfflinePlayer:IdkBot").digest(),version=3))'
+      WHITELIST: ${WHITELIST:-3d1f4b94-9298-3ba3-af2d-3f73ce56138f}
+      OPS: ${OPS:-}
+      DIFFICULTY: ${MC_DIFFICULTY:-easy}
+      MOTD: idkcraft
+      # Geyser/Floodgate/ViaVersion track "latest" — drift risk accepted for
+      # iteration 1. ViaVersion is needed because Geyser emulates a 26.2 Java
+      # client, so a Paper server below 26.2 must accept newer clients
+      # (https://geysermc.org/wiki/geyser/supported-versions/); drop it once
+      # the server pin reaches a version mineflayer speaks natively.
+      PLUGINS: |
+        https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot
+        https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot
+        https://api.spiget.org/v2/resources/19254/download
+    volumes:
+      - ${MC_DATA_PATH:-./data}:/data
+    mem_limit: ${MC_MEM_LIMIT:-6g}
+
+  bot:
+    # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
+    # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
+    image: ghcr.io/korjavin/idkcraft:latest
+    container_name: ${BOT_CONTAINER_NAME:-idkcraft-bot}
+    restart: unless-stopped
+    depends_on:
+      mc:
+        condition: service_healthy # itzg image ships an mc-health healthcheck
+    environment:
+      MC_HOST: mc
+      MC_PORT: 25565
+      BOT_USERNAME: ${BOT_USERNAME:-IdkBot}
+      BOT_FOLLOW: ${BOT_FOLLOW:-}
+      BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
