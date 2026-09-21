@@ -4,6 +4,7 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey } = require('./perception')
+const { makeScout } = require('./behaviours/scout')
 
 const BEHAVIOURS = {
   fight: require('./behaviours/fight'),
@@ -69,6 +70,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const state = buildState(bot, target, lastTargetPos)
       lastTargetPos = state._lastTargetPos
       // every-tick hooks (no body cost) go here
+      if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+      if (ctx.scout) ctx.scout.tick()
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
