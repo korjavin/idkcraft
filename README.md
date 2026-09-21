@@ -63,3 +63,25 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 - `.github/workflows/deploy.yml`: GitOps workflow that builds `ghcr.io/korjavin/idkcraft:<sha>`, updates the `deploy` branch, and signals the Portainer webhook.
 
 *Note: Environment variable definitions and deployment configurations live in `.env.example` and the project epic contract. Refer to those files directly for configuration details.*
+
+---
+
+## Prod checklist
+
+1. **Portainer Stack:** Deploy as a Portainer Git stack named `idkcraft` tracking branch `deploy` with compose path `docker-compose.yml`. Commits pushed to `master` trigger CI to build the bot image, force-push `deploy`, and call the webhook in secret `PORTAINER_REDEPLOY_HOOK`.
+2. **Environment Variables:** Set in Portainer:
+   - `TYPESAFE_API_KEY`: Secret key for the JEV reflex brain.
+   - `MC_DATA_PATH`: Set to `/srv/idkcraft/data` (absolute host path so world data persists across redeploys).
+   - All other variables rely on defaults documented in `.env.example`.
+3. **Player Whitelisting:**
+   - **Java Edition:** Add the player's offline UUID to `WHITELIST` in stack env and redeploy, or run on the Portainer host:
+     ```bash
+     docker exec idkcraft-mc rcon-cli whitelist add <Name>
+     ```
+   - **Bedrock / Switch Edition:** Run on the Portainer host once the stack is running (spaces in Gamertags become underscores):
+     ```bash
+     docker exec idkcraft-mc rcon-cli whitelist add .<Gamertag>
+     ```
+4. **Verification & Logs:**
+   - Bot status: Run `docker logs idkcraft-bot` to verify `brain=jev` and `decision source=jev` log entries.
+   - Server status: Run `docker logs idkcraft-mc` to verify `Started Geyser on UDP port 19132`.
