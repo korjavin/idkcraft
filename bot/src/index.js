@@ -1,103 +1,37 @@
 'use strict'
 
 const mineflayer = require('mineflayer')
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
+const { findTarget, buildState, stateKey } = require('./perception')
 
-const HOSTILE_NAMES = new Set([
-  'zombie', 'skeleton', 'spider', 'creeper', 'enderman', 'witch',
-  'slime', 'husk', 'stray', 'drowned', 'pillager', 'phantom', 'blaze',
-  'ghast', 'piglin_brute', 'hoglin', 'zoglin', 'cave_spider', 'silverfish',
-  'endermite', 'vex', 'vindicator', 'evoker', 'ravager', 'warden', 'breeze',
-  'bogged', 'creaking'
-])
+const BEHAVIOURS = {
+  follow: require('./behaviours/follow'),
+}
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
 // up every 10 s just to re-scan the player list is plenty.
 const IDLE_TICK_MS = 10000
 const IDLE_LOG_MS = 60000
 
-// Dedup key: distance rounded to 1 block + same flags => reuse last decision,
-// skip the JEV call. Staleness is at most half a block of travel.
-function stateKey(state) {
-  const d = state.distance_to_player
-  return [
-    typeof d === 'number' ? Math.round(d) : 'none',
-    !!state.player_visible, !!state.player_moving,
-    state.bot_health, state.bot_food, state.nearby_hostiles
-  ].join('|')
-}
-
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  let movements = null
+  const ctx = { lastGoalKey: '', movements: null }
   let inFlight = false
   let lastTargetPos = null
-  let lastGoalKey = ''
   let lastVisible = true
   let lastIdleLog = 0
   let lastStateKey = null
   let lastDecision = null
 
-  function findTarget() {
-    if (followName) return (bot.players[followName] && bot.players[followName].entity) || null
-    let best = null
-    let bestDist = Infinity
-    for (const player of Object.values(bot.players)) {
-      if (!player.entity) continue
-      if (player.username === bot.username) continue
-      const d = bot.entity.position.distanceTo(player.entity.position)
-      if (d < bestDist) {
-        bestDist = d
-        best = player.entity
-      }
-    }
-    return best
-  }
-
-  function buildState(target) {
-    let distanceToPlayer = null
-    let playerMoving = false
-    if (target) {
-      distanceToPlayer = bot.entity.position.distanceTo(target.position)
-      if (lastTargetPos) {
-        playerMoving = target.position.distanceTo(lastTargetPos) > 0.1
-      }
-      lastTargetPos = target.position.clone()
-    } else {
-      lastTargetPos = null
-    }
-    let nearbyHostiles = 0
-    for (const entity of Object.values(bot.entities)) {
-      if (entity.type === 'player' || !entity.position) continue
-      const name = entity.name || entity.mobType || ''
-      if (!HOSTILE_NAMES.has(name)) continue
-      if (entity.position.distanceTo(bot.entity.position) < 16) nearbyHostiles++
-    }
-    return {
-      distance_to_player: distanceToPlayer,
-      player_visible: !!target,
-      player_moving: playerMoving,
-      bot_health: typeof bot.health === 'number' ? bot.health : 20,
-      bot_food: typeof bot.food === 'number' ? bot.food : 20,
-      nearby_hostiles: nearbyHostiles
-    }
-  }
-
   function applyDecision(decision, target, state) {
-    if (decision.action === 'follow' && target) {
-      const key = `follow:${target.username || target.id}`
-      // Re-issue while standing still: the first path can fail on an empty
-      // (not yet loaded) world, and a dynamic goal only re-paths when the
-      // target moves — so retry until the bot is actually moving.
-      if (key !== lastGoalKey || !bot.pathfinder.isMoving()) {
-        bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
-        lastGoalKey = key
-      }
+    const handler = BEHAVIOURS[decision.action]
+    if (typeof handler === 'function') {
+      handler(bot, ctx, target, state)
     } else {
-      if (lastGoalKey !== 'idle') bot.pathfinder.stop()
-      lastGoalKey = 'idle'
+      if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
+      ctx.lastGoalKey = 'idle'
     }
-    if (movements) movements.allowSprinting = !!decision.sprint
+    if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist}`)
   }
@@ -112,14 +46,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     inFlight = true
     let calledBrain = false
     try {
-      const target = findTarget()
+      const target = findTarget(bot, followName)
       lastVisible = !!target
       if (!target) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
-        if (lastGoalKey !== 'idle') {
+        if (ctx.lastGoalKey !== 'idle') {
           bot.pathfinder.stop()
-          lastGoalKey = 'idle'
+          ctx.lastGoalKey = 'idle'
         }
         lastTargetPos = null
         lastDecision = null
@@ -131,7 +65,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
       }
-      const state = buildState(target)
+      const state = buildState(bot, target, lastTargetPos)
+      lastTargetPos = state._lastTargetPos
+      // every-tick hooks (no body cost) go here
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
@@ -160,11 +96,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   return {
     tick,
     start: () => scheduleNext(true),
-    setMovements: (m) => { movements = m; bot.pathfinder.setMovements(m) },
-    setFollow: (name) => { followName = name; lastGoalKey = '' },
+    setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = '' },
     stop: () => {
-      if (lastGoalKey !== 'idle') bot.pathfinder.stop()
-      lastGoalKey = 'idle'
+      if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
+      ctx.lastGoalKey = 'idle'
     }
   }
 }
@@ -211,4 +147,4 @@ function main() {
 
 if (require.main === module) main()
 
-module.exports = { createTicker, stateKey }
+module.exports = { createTicker, BEHAVIOURS }
