@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "idkcraft",
+  "project_id": "67a2d1c4-9a95-48cc-8f7b-5f0fd36494a4"
+}
