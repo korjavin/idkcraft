@@ -1,6 +1,6 @@
 'use strict'
 
-const { describe, it } = require('node:test')
+const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, BEHAVIOURS } = require('../src/index')
 const { stateKey } = require('../src/perception')
@@ -186,5 +186,42 @@ describe('target threading', () => {
     assert.equal(seen.length, 2)
     assert.equal(seen[0].player_moving, false)
     assert.equal(seen[1].player_moving, true)
+  })
+})
+
+describe('scout seam', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function scoutBot() {
+    const bot = mockBot()
+    bot.registry = { blocksByName: { iron_ore: { id: 15 } } }
+    bot.findCalls = 0
+    bot.lines = []
+    bot.findBlocks = (opts) => { bot.findCalls++; bot.lastOpts = opts; return [pos(4, 60, 1)] }
+    bot.blockAt = () => ({ name: 'iron_ore' })
+    bot.chat = (line) => { bot.lines.push(line) }
+    return bot
+  }
+
+  it('creates and ticks the scout when a player is present', async () => {
+    const bot = scoutBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.findCalls, 1)
+    assert.deepEqual(bot.lines, ['iron_ore x1 at 4 60 1'])
+  })
+
+  it('never scans or chats when no player is online', async () => {
+    const bot = scoutBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.findCalls, 0)
+    assert.deepEqual(bot.lines, [])
   })
 })

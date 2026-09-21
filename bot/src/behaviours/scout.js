@@ -59,16 +59,31 @@ function resolveIds(bot, names) {
   return ids
 }
 
-// Scan helper, exported for the future 'find me <block>' chat command:
-// block name -> nearest loaded position, or null when unknown or absent.
-// That bead adds a caller, not a copy.
-function findNearestBlock(bot, blockName, radius = 16) {
+// Name -> ore ids for the future 'find me <block>' chat command: the exact
+// name plus the ore variants a player would mean ('coal' -> coal_ore +
+// deepslate_coal_ore; 'diamond_ore' -> itself + deepslate_diamond_ore).
+// Registry names that are missing are skipped, not fatal.
+function resolveBlockIds(bot, blockName) {
   const byName = (bot.registry && bot.registry.blocksByName) || {}
-  const entry = byName[blockName]
-  if (!entry || typeof entry.id !== 'number') return null
+  const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
+  const ids = []
+  for (const n of [blockName, `${base}_ore`, `deepslate_${base}_ore`]) {
+    const entry = byName[n]
+    if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
+  }
+  return ids
+}
+
+// Scan helper, exported for the future 'find me <block>' chat command:
+// block name -> nearest loaded position; null when the name resolves but
+// nothing is nearby; 'unknown' when the name matches no block at all so the
+// caller can answer 'unknown block'. That bead adds a caller, not a copy.
+function findNearestBlock(bot, blockName, radius = 16) {
+  const ids = resolveBlockIds(bot, blockName)
+  if (ids.length === 0) return 'unknown'
   let found = null
   try {
-    found = bot.findBlocks({ matching: entry.id, maxDistance: radius, count: 16 })
+    found = bot.findBlocks({ matching: ids, maxDistance: radius, count: 16 })
   } catch {
     return null
   }
@@ -136,4 +151,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, ORE_NAMES }
+module.exports = { makeScout, findNearestBlock, resolveBlockIds, ORE_NAMES }

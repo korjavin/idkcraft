@@ -200,17 +200,33 @@ describe('scout robustness', () => {
 })
 
 describe('findNearestBlock', () => {
-  it('returns the nearest position for a named block', () => {
-    const bot = mockBot({ registry: { iron_ore: 15 } })
-    bot.findBlocks = () => [pos(8, 64, 0), pos(2, 64, 0)]
-    const best = findNearestBlock(bot, 'iron_ore')
+  const NAMES = { coal_ore: 10, deepslate_coal_ore: 11, diamond_ore: 179, deepslate_diamond_ore: 180, iron_ore: 15 }
+
+  it("resolves a plain name to every variant id ('coal' -> both coal ores)", () => {
+    const bot = mockBot({ registry: NAMES })
+    let got = null
+    bot.findBlocks = (opts) => { got = opts; return [pos(8, 64, 0), pos(2, 64, 0)] }
+    const best = findNearestBlock(bot, 'coal')
+    assert.deepEqual(got.matching, [10, 11])
     assert.deepEqual([best.x, best.y, best.z], [2, 64, 0])
   })
 
-  it('returns null for unknown names and empty scans', () => {
-    const bot = mockBot({ registry: { iron_ore: 15 } })
-    assert.equal(findNearestBlock(bot, 'not_a_block'), null)
-    bot.findBlocks = () => []
-    assert.equal(findNearestBlock(bot, 'iron_ore'), null)
+  it("resolves an ore name to itself plus its deepslate variant", () => {
+    const bot = mockBot({ registry: NAMES })
+    let got = null
+    bot.findBlocks = (opts) => { got = opts; return [] }
+    assert.equal(findNearestBlock(bot, 'diamond_ore'), null)
+    assert.deepEqual(got.matching, [179, 180])
+  })
+
+  it("answers 'unknown' when the name matches no block at all", () => {
+    const bot = mockBot({ registry: NAMES })
+    assert.equal(findNearestBlock(bot, 'xyzzy'), 'unknown')
+  })
+
+  it('returns null when the scan throws', () => {
+    const bot = mockBot({ registry: NAMES })
+    bot.findBlocks = () => { throw new Error('no chunks') }
+    assert.equal(findNearestBlock(bot, 'coal'), null)
   })
 })
