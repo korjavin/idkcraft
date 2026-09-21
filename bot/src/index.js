@@ -6,6 +6,7 @@ const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey } = require('./perception')
 
 const BEHAVIOURS = {
+  fight: require('./behaviours/fight'),
   follow: require('./behaviours/follow'),
 }
 

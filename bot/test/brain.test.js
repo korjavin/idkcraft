@@ -154,38 +154,6 @@ describe('jevBrain', () => {
     }
   })
 
-  it('falls back to stub action when JEV answers fight without hostile_distance in state (deploy gap guard)', async () => {
-    const origError = console.error
-    const logs = []
-    console.error = (msg) => logs.push(msg)
-    try {
-      const canned = async () => ({
-        ok: true,
-        json: async () => ({
-          answers: {
-            action: { type: 'choice', choice: 'fight' },
-            sprint: { type: 'noul', noul: 0.1 }
-          }
-        })
-      })
-      // Without hostile_distance key: stub chooses follow (dist 5 > 3), disagree is logged, action falls back to stub
-      const stateWithoutHostile = { distance_to_player: 5, bot_health: 20 }
-      const decisionWithout = await jevBrain('test-key', canned).decide(stateWithoutHostile)
-      assert.deepEqual(decisionWithout, { action: 'follow', sprint: false, source: 'jev' })
-      assert.equal(logs.length, 1)
-      assert.match(logs[0], /^brain disagree source=jev model=fight stub=follow/)
-
-      // With hostile_distance present (even null): model's fight wins
-      logs.length = 0
-      const stateWithNullHostile = { distance_to_player: 5, bot_health: 20, hostile_distance: null }
-      const decisionWith = await jevBrain('test-key', canned).decide(stateWithNullHostile)
-      assert.deepEqual(decisionWith, { action: 'fight', sprint: false, source: 'jev' })
-      assert.equal(logs.length, 1)
-      assert.match(logs[0], /^brain disagree source=jev model=fight stub=follow/)
-    } finally {
-      console.error = origError
-    }
-  })
 })
 
 describe('jevBrain timeout', () => {

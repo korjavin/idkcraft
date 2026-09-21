@@ -1,0 +1,206 @@
+'use strict'
+
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const { createTicker, BEHAVIOURS } = require('../src/index')
+const { buildState, stateKey } = require('../src/perception')
+const { stubBrain } = require('../src/brain')
+const fight = require('../src/behaviours/fight')
+
+// Mock helpers use the same shape as tick.test.js.
+function pos(x, y, z) {
+  const p = {
+    x, y, z,
+    distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
+    clone() { return pos(p.x, p.y, p.z) }
+  }
+  return p
+}
+
+function mockBot() {
+  const calls = { setGoal: 0, stop: 0, attack: 0, lookAt: 0, equip: 0 }
+  const bot = {
+    calls,
+    username: 'IdkBot',
+    players: {},
+    entities: {},
+    health: 20,
+    food: 20,
+    _items: [],
+    _moving: false,
+    entity: { position: pos(0, 64, 0) },
+    inventory: { items: () => bot._items },
+    equip: (item, dest) => { calls.equip++; calls.equipArgs = [item, dest] },
+    lookAt: () => { calls.lookAt++ },
+    attack: () => { calls.attack++ },
+    pathfinder: {
+      setGoal: () => { calls.setGoal++ },
+      stop: () => { calls.stop++ },
+      isMoving: () => bot._moving,
+      setMovements: (m) => { calls.movements = m }
+    },
+    chat: () => {}
+  }
+  return bot
+}
+
+function playerEntity(x) {
+  return { id: 7, position: pos(x, 64, 0) }
+}
+
+function mobEntity(id, name, x, opts = {}) {
+  const p = pos(x, 64, 0)
+  p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+  return { id, name, type: 'mob', position: p, height: 1.95, ...opts }
+}
+
+describe('perception hostile facts', () => {
+  it('finds the nearest zombie: distance, entity, near-player flag', () => {
+    const bot = mockBot()
+    const zombie = mobEntity(1, 'zombie', 2)
+    bot.entities = { 1: zombie }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, 2)
+    assert.equal(state.hostile, zombie)
+    assert.equal(state.hostile_near_player, false) // zombie->player is 8 blocks
+  })
+
+  it('marks hostile_near_player when the mob is close to the player', () => {
+    const bot = mockBot()
+    bot.entities = { 1: mobEntity(1, 'zombie', 8) }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, 8)
+    assert.equal(state.hostile_near_player, true) // zombie->player is 2 blocks
+  })
+
+  it('ignores creepers for fight but still counts them as nearby', () => {
+    const bot = mockBot()
+    bot.entities = { 9: mobEntity(9, 'creeper', 2) }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, null)
+    assert.equal(state.hostile, null)
+    assert.equal(state.hostile_near_player, false)
+    assert.equal(state.nearby_hostiles, 1) // compatibility count kept
+  })
+
+  it('prefers the nearest non-creeper when a creeper is closer', () => {
+    const bot = mockBot()
+    const zombie = mobEntity(1, 'zombie', 5)
+    bot.entities = { 9: mobEntity(9, 'creeper', 2), 1: zombie }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, 5)
+    assert.equal(state.hostile, zombie)
+  })
+
+  it('yields null hostile when nothing is in range', () => {
+    const bot = mockBot()
+    bot.entities = { 2: mobEntity(2, 'skeleton', 20) }
+    const state = buildState(bot, playerEntity(30), null)
+    assert.equal(state.hostile_distance, null)
+    assert.equal(state.hostile, null)
+    assert.equal(state.hostile_near_player, false)
+  })
+
+  it('stateKey changes when a hostile approaches', () => {
+    const base = { distance_to_player: 10, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: null, hostile_near_player: false }
+    assert.notEqual(stateKey(base), stateKey({ ...base, hostile_distance: 4 }))
+    assert.notEqual(stateKey({ ...base, hostile_distance: 7.4 }), stateKey({ ...base, hostile_distance: 4.2 }))
+    assert.notEqual(stateKey({ ...base, hostile_distance: 4 }), stateKey({ ...base, hostile_distance: 4, hostile_near_player: true }))
+  })
+})
+
+describe('fight behaviour', () => {
+  it('swings once per call and sets the goal once at 2 blocks', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const state = { hostile: mobEntity(1, 'zombie', 2) }
+    fight(bot, ctx, playerEntity(10), state)
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.attack, 1)
+    assert.equal(bot.calls.lookAt, 1)
+    bot._moving = true
+    fight(bot, ctx, playerEntity(10), state)
+    assert.equal(bot.calls.setGoal, 1) // same target, already moving: no re-issue
+    assert.equal(bot.calls.attack, 2) // one swing per tick
+  })
+
+  it('walks but does not swing at 6 blocks', () => {
+    const bot = mockBot()
+    fight(bot, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 6) })
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.attack, 0)
+    assert.equal(bot.calls.lookAt, 0)
+  })
+
+  it('swing gate: attacks at exactly 3 blocks, not at 3.1', () => {
+    const near = mockBot()
+    fight(near, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 3) })
+    assert.equal(near.calls.attack, 1)
+    const far = mockBot()
+    fight(far, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 3.1) })
+    assert.equal(far.calls.attack, 0)
+    assert.equal(far.calls.setGoal, 1)
+  })
+
+  it('equips the first sword once per target', () => {
+    const bot = mockBot()
+    const sword = { name: 'iron_sword' }
+    bot._items = [{ name: 'dirt' }, sword]
+    const ctx = { lastGoalKey: '' }
+    const first = { hostile: mobEntity(1, 'zombie', 2) }
+    fight(bot, ctx, playerEntity(10), first)
+    assert.equal(bot.calls.equip, 1)
+    assert.deepEqual(bot.calls.equipArgs, [sword, 'hand'])
+    bot._moving = true
+    fight(bot, ctx, playerEntity(10), first)
+    assert.equal(bot.calls.equip, 1) // same target: no re-equip
+    bot._moving = false
+    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(2, 'zombie', 2) })
+    assert.equal(bot.calls.equip, 2) // new target: equip again
+  })
+
+  it('never equips without a sword in inventory', () => {
+    const bot = mockBot()
+    bot._items = [{ name: 'dirt' }]
+    fight(bot, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.equip, 0)
+    assert.equal(bot.calls.attack, 1) // fists are fine
+  })
+
+  it('stops once when the target is missing or dead', () => {
+    const missing = mockBot()
+    const ctx = { lastGoalKey: 'fight:1' }
+    fight(missing, ctx, playerEntity(10), { hostile: null })
+    assert.equal(missing.calls.stop, 1)
+    assert.equal(missing.calls.attack, 0)
+    assert.equal(missing.calls.setGoal, 0)
+    fight(missing, ctx, playerEntity(10), { hostile: null })
+    assert.equal(missing.calls.stop, 1) // already idle: no repeat stop
+    const dead = mockBot()
+    fight(dead, { lastGoalKey: 'fight:1' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
+    assert.equal(dead.calls.stop, 1)
+    assert.equal(dead.calls.attack, 0)
+  })
+})
+
+describe('stub fight end-to-end', () => {
+  it('zombie at 4 blocks -> fight; zombie gone -> follow', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 4) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    const r1 = await ticker.tick()
+    assert.equal(r1.decision.action, 'fight')
+    assert.equal(r1.decision.source, 'stub')
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.attack, 0) // 4 blocks: walking in, out of swing range
+    delete bot.entities[1] // zombie dies
+    const r2 = await ticker.tick()
+    assert.equal(r2.decision.action, 'follow')
+    assert.equal(r2.calledBrain, true) // hostile facts changed the state key
+  })
+
+  it('fight is wired in the dispatch table', () => {
+    assert.equal(BEHAVIOURS.fight, fight)
+  })
+})
