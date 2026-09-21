@@ -1,0 +1,53 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: |
+          docker compose --env-file .env.example config -q
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bot
+          push: true
+          tags: ghcr.io/korjavin/idkcraft:${{ github.sha }}
+
+      - name: Update deploy branch
+        env:
+          IMAGE_BASE: ghcr.io/korjavin/idkcraft
+          GITHUB_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B deploy
+          sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+          git add docker-compose.yml
+          git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
+          git push origin deploy --force
+
+      - name: Trigger Portainer webhook
+        uses: distributhor/workflow-webhook@2381f0e9c7b6bf061fb1405bd0804b8706116369 # v3.0.8
+        with:
+          webhook_url: ${{ secrets.PORTAINER_REDEPLOY_HOOK }}
