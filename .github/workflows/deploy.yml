@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate compose config
         run: |
@@ -30,28 +32,63 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Tag each image by the last commit touching its directory, so pushes
+      # that change neither bot/ nor laya/ rebuild nothing (host disk filled
+      # up from one image per push; Portainer never prunes old tags).
+      - name: Resolve image tags
+        run: |
+          echo "BOT_SHA=$(git log -1 --format=%H -- bot)" >> "$GITHUB_ENV"
+          echo "LAYA_SHA=$(git log -1 --format=%H -- laya)" >> "$GITHUB_ENV"
+
+      - name: Check bot image
+        id: check-bot
+        env:
+          IMAGE_BASE: ghcr.io/korjavin/idkcraft
+          BOT_SHA: ${{ env.BOT_SHA }}
+        run: |
+          if docker manifest inspect "${IMAGE_BASE}:${BOT_SHA}" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push Docker image
+        if: steps.check-bot.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./bot
           push: true
-          tags: ghcr.io/korjavin/idkcraft:${{ github.sha }}
+          tags: ghcr.io/korjavin/idkcraft:${{ env.BOT_SHA }}
+
+      - name: Check laya image
+        id: check-laya
+        env:
+          LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
+          LAYA_SHA: ${{ env.LAYA_SHA }}
+        run: |
+          if docker manifest inspect "${LAYA_IMAGE}:${LAYA_SHA}" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push laya image
+        if: steps.check-laya.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./laya
           push: true
-          tags: ghcr.io/korjavin/idkcraft-laya:${{ github.sha }}
+          tags: ghcr.io/korjavin/idkcraft-laya:${{ env.LAYA_SHA }}
           cache-from: type=gha,scope=laya
           cache-to: type=gha,mode=max,scope=laya
 
       - name: Smoke test laya image
+        if: steps.check-laya.outputs.build == 'true'
         env:
           LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
-          GITHUB_COMMIT_SHA: ${{ github.sha }}
+          LAYA_SHA: ${{ env.LAYA_SHA }}
         run: |
-          docker run -d --name laya-smoke --memory=3g -e OMP_NUM_THREADS=4 -p 8000:8000 "${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}"
+          docker run -d --name laya-smoke --memory=3g -e OMP_NUM_THREADS=4 -p 8000:8000 "${LAYA_IMAGE}:${LAYA_SHA}"
           trap "docker logs laya-smoke; docker rm -f laya-smoke" EXIT
           python3 laya/smoke.py http://127.0.0.1:8000
 
@@ -59,15 +96,21 @@ jobs:
         env:
           IMAGE_BASE: ghcr.io/korjavin/idkcraft
           LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
+          BOT_SHA: ${{ env.BOT_SHA }}
+          LAYA_SHA: ${{ env.LAYA_SHA }}
           GITHUB_COMMIT_SHA: ${{ github.sha }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B deploy
-          sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
-          sed -i "s|image: ${LAYA_IMAGE}:.*|image: ${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+          sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${BOT_SHA}|" docker-compose.yml
+          sed -i "s|image: ${LAYA_IMAGE}:.*|image: ${LAYA_IMAGE}:${LAYA_SHA}|" docker-compose.yml
           git add docker-compose.yml
-          git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
+          if git diff --cached --quiet; then
+            echo "no compose changes to deploy"
+          else
+            git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
+          fi
           git push origin deploy --force
 
       - name: Trigger Portainer webhook
