@@ -92,6 +92,22 @@ describe('perception hostile facts', () => {
     assert.equal(state.hostile, zombie)
   })
 
+  it('finds a hostile far from the bot but near the player', () => {
+    const bot = mockBot()
+    bot.entities = { 1: mobEntity(1, 'zombie', 12) }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, 12)
+    assert.equal(state.hostile_near_player, true) // zombie->player is 2 blocks
+  })
+
+  it('treats exactly 8 blocks as in range for the bot arm', () => {
+    const bot = mockBot()
+    bot.entities = { 1: mobEntity(1, 'zombie', 8) }
+    const state = buildState(bot, playerEntity(30), null)
+    assert.equal(state.hostile_distance, 8)
+    assert.equal(state.hostile_near_player, false)
+  })
+
   it('yields null hostile when nothing is in range', () => {
     const bot = mockBot()
     bot.entities = { 2: mobEntity(2, 'skeleton', 20) }
@@ -151,9 +167,12 @@ describe('fight behaviour', () => {
     fight(bot, ctx, playerEntity(10), first)
     assert.equal(bot.calls.equip, 1)
     assert.deepEqual(bot.calls.equipArgs, [sword, 'hand'])
-    bot._moving = true
+    // stationary at melee range: the steady state while swinging — still one equip
+    fight(bot, ctx, playerEntity(10), first)
     fight(bot, ctx, playerEntity(10), first)
     assert.equal(bot.calls.equip, 1) // same target: no re-equip
+    assert.equal(bot.calls.attack, 3)
+    assert.equal(bot.calls.setGoal, 1) // goal satisfied: no re-issue
     bot._moving = false
     fight(bot, ctx, playerEntity(10), { hostile: mobEntity(2, 'zombie', 2) })
     assert.equal(bot.calls.equip, 2) // new target: equip again
@@ -165,6 +184,29 @@ describe('fight behaviour', () => {
     fight(bot, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
     assert.equal(bot.calls.equip, 0)
     assert.equal(bot.calls.attack, 1) // fists are fine
+  })
+
+  it('gives up on an unreachable target instead of re-issuing every tick', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const state = { hostile: mobEntity(1, 'zombie', 6) }
+    for (let t = 0; t < 7; t++) fight(bot, ctx, playerEntity(10), state)
+    assert.equal(bot.calls.setGoal, 2) // initial + one spaced retry, not 7
+    for (let t = 0; t < 18; t++) fight(bot, ctx, playerEntity(10), state)
+    assert.equal(bot.calls.setGoal, 4) // initial + retries, then quiet
+    assert.equal(bot.calls.stop, 1) // pursuit abandoned once
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('swings if a given-up mob walks into range', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 6) })
+    for (let t = 0; t < 20; t++) fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 6) })
+    assert.equal(bot.calls.stop, 1) // given up
+    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 1) // re-engaged without a new pursuit
+    assert.equal(bot.calls.setGoal, 4) // still 4: the swing issued no new goal
   })
 
   it('stops once when the target is missing or dead', () => {
