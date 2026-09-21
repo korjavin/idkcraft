@@ -31,7 +31,8 @@ services:
       # Pin rationale lives in .env.example (newest Paper both Geyser and
       # mineflayer support as of 2026-09-21).
       VERSION: ${MC_VERSION:-26.1.2}
-      MEMORY: ${MC_MEMORY:-4G}
+      INIT_MEMORY: ${MC_INIT_MEMORY:-512M}
+      MAX_MEMORY: ${MC_MAX_MEMORY:-2G}
       ONLINE_MODE: "false"
       ENFORCE_WHITELIST: "TRUE"
       # Offline UUID of IdkBot (server runs ONLINE_MODE=false, so Paper matches
@@ -54,7 +55,7 @@ services:
         https://api.spiget.org/v2/resources/19254/download
     volumes:
       - ${MC_DATA_PATH:-./data}:/data
-    mem_limit: ${MC_MEM_LIMIT:-6g}
+    mem_limit: ${MC_MEM_LIMIT:-3g}
     # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
     # Portainer refuses service_healthy dependents without one. Uses the
     # image's bundled mc-health script; start_period covers first boot
