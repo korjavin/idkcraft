@@ -139,8 +139,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       } else {
         decision = await brain.decide(state)
         calledBrain = true
-        lastStateKey = key
-        lastDecision = decision
+        // A stub-fallback means JEV failed; don't cache it or JEV would
+        // never be retried while the player stands still.
+        if (decision.source !== 'stub-fallback') {
+          lastStateKey = key
+          lastDecision = decision
+        }
       }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
@@ -156,7 +160,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   return {
     tick,
     start: () => scheduleNext(true),
-    setMovements: (m) => { movements = m },
+    setMovements: (m) => { movements = m; bot.pathfinder.setMovements(m) },
     setFollow: (name) => { followName = name; lastGoalKey = '' },
     stop: () => {
       if (lastGoalKey !== 'idle') bot.pathfinder.stop()

@@ -26,7 +26,8 @@ function mockBot() {
     pathfinder: {
       setGoal: () => { calls.setGoal++ },
       stop: () => { calls.stop++ },
-      isMoving: () => false
+      isMoving: () => false,
+      setMovements: (m) => { calls.movements = m }
     },
     chat: () => {}
   }
@@ -61,6 +62,16 @@ describe('ticker with no target', () => {
   })
 })
 
+describe('ticker movements', () => {
+  it('registers movements with the pathfinder', async () => {
+    const bot = mockBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const m = { allowSprinting: false }
+    ticker.setMovements(m)
+    assert.equal(bot.calls.movements, m)
+  })
+})
+
 describe('ticker with a target', () => {
   it('calls the brain once per distinct state, reuses on identical state', async () => {
     const bot = mockBot()
@@ -78,6 +89,16 @@ describe('ticker with a target', () => {
     bot.players.Steve.entity.position = pos(25, 64, 0) // rounded distance 10 -> 25
     const r3 = await ticker.tick()
     assert.equal(r3.calledBrain, true)
+    assert.equal(brain.calls, 2)
+  })
+
+  it('retries the brain after a stub-fallback on identical state', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'stub-fallback' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await ticker.tick()
     assert.equal(brain.calls, 2)
   })
 
