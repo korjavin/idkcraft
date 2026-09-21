@@ -1,7 +1,7 @@
-# idkcraft iteration 1 — Paper+Geyser server (mc) + follow bot (bot).
+# idkcraft — Paper+Geyser server (mc) + follow bot (bot) + LAYA brain (laya).
 # No Traefik: Minecraft is raw TCP/UDP, host ports are published directly.
-# Service names (mc, bot) and bot env names are the shared contract with the
-# bot bead (bot/**) — do not rename.
+# Service names (mc, bot, laya) and bot env names are the shared contract
+# with the bot bead (bot/**) — do not rename.
 #
 # Geyser Floodgate auth is declarative (bring-up 2026-09-21 proved Geyser
 # 2.11 does NOT switch to Floodgate auth just because Floodgate is
@@ -78,13 +78,35 @@ services:
     depends_on:
       mc:
         condition: service_healthy # itzg image ships an mc-health healthcheck
+      laya:
+        condition: service_started # bot survives a dead brain via stub-fallback;
+          # a crash-looping laya must not keep the bot off the server
     environment:
       MC_HOST: mc
       MC_PORT: 25565
       BOT_USERNAME: ${BOT_USERNAME:-IdkBot}
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+      BRAIN_URL: ${BRAIN_URL:-http://laya:8000/v1/systemone}
+      BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+
+  laya:
+    # Built by CI from ./laya and pushed to GHCR.
+    # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
+    image: ghcr.io/korjavin/idkcraft-laya:latest
+    container_name: ${LAYA_CONTAINER_NAME:-idkcraft-laya}
+    restart: unless-stopped
+    mem_limit: ${LAYA_MEM_LIMIT:-2g}
+    environment:
+      OMP_NUM_THREADS: ${LAYA_THREADS:-4}
+      MKL_NUM_THREADS: ${LAYA_THREADS:-4}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 10
 configs:
   # Inline patch definition (no bind mount: Portainer git stacks resolve
   # binds on the host, where the repo path does not exist). Single source

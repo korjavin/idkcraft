@@ -1,0 +1,18 @@
+{
+  "model": "jev-latest",
+  "state": "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0",
+  "questions": {
+    "action": {
+      "type": "choice",
+      "instructions": "What should the companion bot do right now?",
+      "criteria": {
+        "follow": "walk toward and stay near the player",
+        "idle": "stand still and wait"
+      }
+    },
+    "sprint": {
+      "type": "noul",
+      "instructions": "Should the bot sprint to keep up with the player?"
+    }
+  }
+}
