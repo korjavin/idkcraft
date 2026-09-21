@@ -1,0 +1,11 @@
+{
+  "file": "/data/plugins/Geyser-Spigot/config.yml",
+  "ops": [
+    {
+      "$set": {
+        "path": "$.java['auth-type']",
+        "value": "floodgate"
+      }
+    }
+  ]
+}

@@ -3,14 +3,16 @@
 # Service names (mc, bot) and bot env names are the shared contract with the
 # bot bead (bot/**) — do not rename.
 #
-# Geyser note (checked 2026-09-21 against Geyser master source): no
-# PATCH_DEFINITIONS and no vendored Geyser config.yml here. GeyserImpl
-# auto-detects Floodgate at startup ("Floodgate installed means that the
-# user wants Floodgate authentication" — GeyserImpl.startInstance sets
-# java.authType=FLOODGATE when the Floodgate plugin is present), and the
-# Floodgate key is picked up from the Floodgate plugin folder automatically.
-# First boot creates the config; Floodgate auth just works. Do not vendor a
-# full Geyser config.yml (drifts every Geyser release).
+# Geyser Floodgate auth is declarative (bring-up 2026-09-21 proved Geyser
+# 2.11 does NOT switch to Floodgate auth just because Floodgate is
+# installed — a generated config stays auth-type: online, which blocks
+# Bedrock joins). mc/patches/geyser-floodgate.json (via PATCH_DEFINITIONS)
+# sets java.auth-type=floodgate in /data/plugins/Geyser-Spigot/config.yml.
+# Timing: the file only exists after Geyser's first run, so on a truly fresh
+# volume the first boot logs a patch skip warning and comes up online; the
+# next start (restart/redeploy) applies floodgate, and every start after
+# that keeps it. Do not vendor a full Geyser config.yml
+# (drifts every Geyser release).
 
 services:
   mc:
@@ -40,6 +42,7 @@ services:
       OPS: ${OPS:-}
       DIFFICULTY: ${MC_DIFFICULTY:-easy}
       MOTD: idkcraft
+      PATCH_DEFINITIONS: /patches
       # Geyser/Floodgate/ViaVersion track "latest" — drift risk accepted for
       # iteration 1. ViaVersion is needed because Geyser emulates a 26.2 Java
       # client, so a Paper server below 26.2 must accept newer clients
@@ -51,6 +54,7 @@ services:
         https://api.spiget.org/v2/resources/19254/download
     volumes:
       - ${MC_DATA_PATH:-./data}:/data
+      - ./mc/patches:/patches:ro
     mem_limit: ${MC_MEM_LIMIT:-6g}
     # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
     # Portainer refuses service_healthy dependents without one. Uses the
