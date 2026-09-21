@@ -18,7 +18,7 @@ function pos(x, y, z) {
 }
 
 function mockBot() {
-  const calls = { setGoal: 0, stop: 0, attack: 0, lookAt: 0, equip: 0 }
+  const calls = { setGoal: 0, stop: 0, attack: 0, lookAt: 0, equip: 0, goals: [] }
   const bot = {
     calls,
     username: 'IdkBot',
@@ -34,7 +34,7 @@ function mockBot() {
     lookAt: () => { calls.lookAt++ },
     attack: () => { calls.attack++ },
     pathfinder: {
-      setGoal: () => { calls.setGoal++ },
+      setGoal: (goal) => { calls.setGoal++; calls.goals.push(goal) },
       stop: () => { calls.stop++ },
       isMoving: () => bot._moving,
       setMovements: (m) => { calls.movements = m }
@@ -186,41 +186,70 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.attack, 1) // fists are fine
   })
 
-  it('gives up on an unreachable target instead of re-issuing every tick', () => {
+  it('gives up pursuit and shadows the player instead of freezing', () => {
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }
-    const state = { hostile: mobEntity(1, 'zombie', 6) }
-    for (let t = 0; t < 7; t++) fight(bot, ctx, playerEntity(10), state)
+    const player = playerEntity(10)
+    const zombie = mobEntity(1, 'zombie', 6)
+    const state = { hostile: zombie }
+    for (let t = 0; t < 7; t++) fight(bot, ctx, player, state)
     assert.equal(bot.calls.setGoal, 2) // initial + one spaced retry, not 7
-    for (let t = 0; t < 18; t++) fight(bot, ctx, playerEntity(10), state)
-    assert.equal(bot.calls.setGoal, 4) // initial + retries, then quiet
-    assert.equal(bot.calls.stop, 1) // pursuit abandoned once
+    for (let t = 0; t < 18; t++) fight(bot, ctx, player, state)
+    const mobGoals = bot.calls.goals.filter((g) => g.entity === zombie)
+    assert.equal(mobGoals.length, 4) // initial + retries, then quiet
+    assert.equal(bot.calls.stop, 0) // never stop an empty path
     assert.equal(bot.calls.attack, 0)
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.entity, player) // shadowing the player, not frozen
   })
 
   it('swings if a given-up mob walks into range', () => {
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }
-    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 6) })
-    for (let t = 0; t < 20; t++) fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 6) })
-    assert.equal(bot.calls.stop, 1) // given up
-    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    const player = playerEntity(10)
+    const near = { hostile: mobEntity(1, 'zombie', 6) }
+    fight(bot, ctx, player, near)
+    for (let t = 0; t < 20; t++) fight(bot, ctx, player, near)
+    const mobGoals = () => bot.calls.goals.filter((g) => g.entity && g.entity.name === 'zombie')
+    assert.equal(mobGoals().length, 4) // given up: mob goal retired
+    assert.equal(bot.calls.stop, 0)
+    fight(bot, ctx, player, { hostile: mobEntity(1, 'zombie', 2) })
     assert.equal(bot.calls.attack, 1) // re-engaged without a new pursuit
-    assert.equal(bot.calls.setGoal, 4) // still 4: the swing issued no new goal
+    assert.equal(mobGoals().length, 4) // the swing issued no new goal
   })
 
-  it('stops once when the target is missing or dead', () => {
+  it('stays on target when the nearest rank flip-flops', () => {
+    const bot = mockBot()
+    bot._items = [{ name: 'iron_sword' }]
+    const a = mobEntity(1, 'zombie', 5)
+    const b = mobEntity(2, 'zombie', 6)
+    bot.entities = { 1: a, 2: b }
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    fight(bot, ctx, player, { hostile: a })
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.equip, 1)
+    fight(bot, ctx, player, { hostile: b }) // perception re-ranked
+    assert.equal(bot.calls.setGoal, 1) // no crossover churn
+    assert.equal(bot.calls.equip, 1)
+    delete bot.entities[1] // A despawns: switch to B
+    fight(bot, ctx, player, { hostile: b })
+    assert.equal(bot.calls.setGoal, 2)
+    assert.equal(bot.calls.equip, 2)
+  })
+
+  it('stops only a moving bot when the target is missing or dead', () => {
     const missing = mockBot()
     const ctx = { lastGoalKey: 'fight:1' }
     fight(missing, ctx, playerEntity(10), { hostile: null })
-    assert.equal(missing.calls.stop, 1)
+    assert.equal(missing.calls.stop, 0) // stationary: nothing to halt
     assert.equal(missing.calls.attack, 0)
     assert.equal(missing.calls.setGoal, 0)
-    fight(missing, ctx, playerEntity(10), { hostile: null })
-    assert.equal(missing.calls.stop, 1) // already idle: no repeat stop
+    assert.equal(ctx.lastGoalKey, 'idle')
     const dead = mockBot()
+    dead._moving = true
     fight(dead, { lastGoalKey: 'fight:1' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
-    assert.equal(dead.calls.stop, 1)
+    assert.equal(dead.calls.stop, 1) // halt the chase to the corpse
     assert.equal(dead.calls.attack, 0)
   })
 })

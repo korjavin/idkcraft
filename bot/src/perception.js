@@ -16,6 +16,13 @@ const FIGHT_RANGE_PLAYER = 6
 // ponytail: creepers are excluded from fight targets, not fled from —
 // hitting one near the player makes it explode next to the player, and
 // fleeing is out of scope.
+function isFightTarget(entity, botPos, playerPos) {
+  if (!entity || entity.type === 'player' || !entity.position) return false
+  const name = entity.name || entity.mobType || ''
+  if (!HOSTILE_NAMES.has(name) || name === 'creeper') return false
+  if (entity.position.distanceTo(botPos) <= FIGHT_RANGE_BOT) return true
+  return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
+}
 
 // Dedup key: distance rounded to 1 block + same flags => reuse last decision,
 // skip the JEV call. Staleness is at most half a block of travel.
@@ -69,12 +76,9 @@ function buildState(bot, target, lastTargetPos) {
   let hostileDistance = null
   let hostilePlayerDistance = Infinity
   for (const entity of Object.values(bot.entities)) {
-    if (entity.type === 'player' || !entity.position) continue
-    const name = entity.name || entity.mobType || ''
-    if (!HOSTILE_NAMES.has(name) || name === 'creeper') continue
+    if (!isFightTarget(entity, bot.entity.position, target && target.position)) continue
     const dBot = entity.position.distanceTo(bot.entity.position)
     const dPlayer = target ? entity.position.distanceTo(target.position) : Infinity
-    if (dBot > FIGHT_RANGE_BOT && dPlayer > FIGHT_RANGE_PLAYER) continue
     if (hostileDistance === null || dBot < hostileDistance) {
       hostile = entity
       hostileDistance = dBot
@@ -96,4 +100,4 @@ function buildState(bot, target, lastTargetPos) {
   return state
 }
 
-module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES }
+module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget }

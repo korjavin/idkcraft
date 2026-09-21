@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const { isFightTarget } = require('../perception')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -9,9 +10,9 @@ const SWING_RANGE = 3
 // allowance would be torn down and restarted forever. So retries are spaced
 // wider than the search allowance, and pursuit is abandoned after
 // GIVE_UP_TICKS stationary ticks: an unreachable mob (cave, glass, ravine)
-// must not pin the tick and burn search on every physics tick. Swinging
-// still works if the mob walks into range; fight-vs-follow arbitration
-// stays with the brain.
+// must not pin the tick. After give-up the bot shadows the player instead
+// of freezing, and still swings if the mob walks into range; fight-vs-follow
+// arbitration stays with the brain.
 const RETRY_EVERY_TICKS = 6
 const GIVE_UP_TICKS = 18
 
@@ -19,21 +20,25 @@ const GIVE_UP_TICKS = 18
 // same shape as follow.js. One swing per tick (1/s); a 600 ms swing timer
 // would need a deactivate hook, which we deliberately do not have.
 function fight(bot, ctx, target, state) {
-  const hostile = state && state.hostile
+  let hostile = stickyTarget(bot, ctx, target, state && state.hostile)
   if (!hostile || hostile.isValid === false) {
-    if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
+    stopMoving(bot, ctx)
     ctx.lastGoalKey = 'idle'
+    ctx.fightId = null
+    ctx.fightGivenUpId = null
     return
   }
+  ctx.fightId = hostile.id
   const key = `fight:${hostile.id}`
-  const giveUpKey = `fight-giveup:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
-  if (ctx.lastGoalKey === giveUpKey) {
-    // Pursuit abandoned: stay quiet, but swing if it wandered into range.
+  if (ctx.fightGivenUpId === hostile.id) {
+    // Pursuit abandoned: shadow the player, swing if it wandered into range.
     if (inRange) {
-      ctx.lastGoalKey = key
+      ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
       swing(bot, hostile)
+    } else {
+      shadowPlayer(bot, ctx, target)
     }
     return
   }
@@ -41,6 +46,7 @@ function fight(bot, ctx, target, state) {
     bot.pathfinder.setGoal(new goals.GoalFollow(hostile, 2), true)
     ctx.lastGoalKey = key
     ctx.fightPursuit = 0
+    ctx.fightGivenUpId = null
     equipSword(bot)
   } else if (!inRange) {
     if (bot.pathfinder.isMoving()) {
@@ -48,8 +54,8 @@ function fight(bot, ctx, target, state) {
     } else {
       ctx.fightPursuit = (ctx.fightPursuit || 0) + 1
       if (ctx.fightPursuit > GIVE_UP_TICKS) {
-        bot.pathfinder.stop()
-        ctx.lastGoalKey = giveUpKey
+        ctx.fightGivenUpId = hostile.id
+        shadowPlayer(bot, ctx, target)
         return
       }
       if (ctx.fightPursuit % RETRY_EVERY_TICKS === 0) {
@@ -62,6 +68,32 @@ function fight(bot, ctx, target, state) {
   if (inRange) {
     swing(bot, hostile)
   }
+}
+
+// Stay on the current target while it is still a fight candidate: perception
+// re-ranks nearest every tick, and flip-flopping between two mobs would reset
+// the retry spacing and the give-up budget (and re-equip) on every crossover.
+function stickyTarget(bot, ctx, target, fresh) {
+  if (ctx.fightId != null && (!fresh || fresh.id !== ctx.fightId)) {
+    const prev = bot.entities ? bot.entities[ctx.fightId] : null
+    if (isFightTarget(prev, bot.entity.position, target && target.position)) return prev
+  }
+  return fresh
+}
+
+function shadowPlayer(bot, ctx, target) {
+  if (!target) return
+  const skey = `fight-shadow:${target.username || target.id}`
+  if (skey !== ctx.lastGoalKey || !bot.pathfinder.isMoving()) {
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
+    ctx.lastGoalKey = skey
+  }
+}
+
+// pathfinder.stop() only latches a flag the next setGoal would consume along
+// with the new goal — so never stop an empty path, there is nothing to halt.
+function stopMoving(bot, ctx) {
+  if (ctx.lastGoalKey !== 'idle' && bot.pathfinder.isMoving()) bot.pathfinder.stop()
 }
 
 function swing(bot, hostile) {
