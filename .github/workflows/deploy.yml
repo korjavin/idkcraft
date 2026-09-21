@@ -48,8 +48,8 @@ jobs:
           LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
           GITHUB_COMMIT_SHA: ${{ github.sha }}
         run: |
-          docker run -d --name laya-smoke -p 8000:8000 "${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}"
-          trap "docker rm -f laya-smoke" EXIT
+          docker run -d --name laya-smoke --memory=2g -e OMP_NUM_THREADS=4 -p 8000:8000 "${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}"
+          trap "docker logs laya-smoke; docker rm -f laya-smoke" EXIT
           python3 laya/smoke.py http://127.0.0.1:8000
 
       - name: Update deploy branch

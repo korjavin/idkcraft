@@ -21,5 +21,8 @@ RUN HF_HUB_OFFLINE=0 python -c "import laya; laya.load('convaiinnovations/laya',
 COPY shim.py smoke.py ./
 COPY test/request.json ./test/request.json
 
+# No ports published and nothing is written at runtime; run unprivileged.
+USER nobody
+
 EXPOSE 8000
 CMD ["uvicorn", "shim:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
