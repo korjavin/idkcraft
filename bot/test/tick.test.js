@@ -2,7 +2,9 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { createTicker, stateKey } = require('../src/index')
+const { createTicker, BEHAVIOURS } = require('../src/index')
+const { stateKey } = require('../src/perception')
+const follow = require('../src/behaviours/follow')
 
 function pos(x, y, z) {
   const p = {
@@ -128,5 +130,23 @@ describe('stateKey', () => {
     assert.notEqual(stateKey(base), stateKey({ ...base, player_moving: true }))
     assert.notEqual(stateKey(base), stateKey({ ...base, nearby_hostiles: 1 }))
     assert.equal(stateKey({ ...base, distance_to_player: null }), stateKey({ ...base, distance_to_player: undefined }))
+  })
+})
+
+describe('dispatch table', () => {
+  it('routes follow to the follow module and idle to stop', async () => {
+    assert.equal(BEHAVIOURS.follow, follow)
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const followTicker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'jev' }), tickMs: 10, idleTickMs: 10 })
+    await followTicker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.stop, 0)
+    const idleBot = mockBot()
+    idleBot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const idleTicker = createTicker({ bot: idleBot, brain: mockBrain({ action: 'idle', sprint: false, source: 'jev' }), tickMs: 10, idleTickMs: 10 })
+    await idleTicker.tick()
+    assert.equal(idleBot.calls.setGoal, 0)
+    assert.equal(idleBot.calls.stop, 1)
   })
 })
