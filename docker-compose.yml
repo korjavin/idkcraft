@@ -3,14 +3,16 @@
 # Service names (mc, bot) and bot env names are the shared contract with the
 # bot bead (bot/**) — do not rename.
 #
-# Geyser note (checked 2026-09-21 against Geyser master source): no
-# PATCH_DEFINITIONS and no vendored Geyser config.yml here. GeyserImpl
-# auto-detects Floodgate at startup ("Floodgate installed means that the
-# user wants Floodgate authentication" — GeyserImpl.startInstance sets
-# java.authType=FLOODGATE when the Floodgate plugin is present), and the
-# Floodgate key is picked up from the Floodgate plugin folder automatically.
-# First boot creates the config; Floodgate auth just works. Do not vendor a
-# full Geyser config.yml (drifts every Geyser release).
+# Geyser Floodgate auth is declarative (bring-up 2026-09-21 proved Geyser
+# 2.11 does NOT switch to Floodgate auth just because Floodgate is
+# installed — a generated config stays auth-type: online, which blocks
+# Bedrock joins). an inline configs entry (via PATCH_DEFINITIONS)
+# sets java.auth-type=floodgate in /data/plugins/Geyser-Spigot/config.yml.
+# Timing: the file only exists after Geyser's first run, so on a truly fresh
+# volume the first boot logs a patch skip warning and comes up online; the
+# next start (restart/redeploy) applies floodgate, and every start after
+# that keeps it. Do not vendor a full Geyser config.yml
+# (drifts every Geyser release).
 
 services:
   mc:
@@ -40,6 +42,7 @@ services:
       OPS: ${OPS:-}
       DIFFICULTY: ${MC_DIFFICULTY:-easy}
       MOTD: idkcraft
+      PATCH_DEFINITIONS: /patches
       # Geyser/Floodgate/ViaVersion track "latest" — drift risk accepted for
       # iteration 1. ViaVersion is needed because Geyser emulates a 26.2 Java
       # client, so a Paper server below 26.2 must accept newer clients
@@ -62,6 +65,9 @@ services:
       timeout: 10s
       start_period: 180s
       retries: 40
+    configs:
+      - source: geyser-floodgate
+        target: /patches/geyser-floodgate.json
 
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
@@ -79,3 +85,11 @@ services:
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+configs:
+  # Inline patch definition (no bind mount: Portainer git stacks resolve
+  # binds on the host, where the repo path does not exist). Single source
+  # of truth — there is no mc/patches/ file.
+  geyser-floodgate:
+    content: |
+      {"file": "/data/plugins/Geyser-Spigot/config.yml",
+       "ops": [{"$$set": {"path": "$$.java['auth-type']", "value": "floodgate"}}]}
