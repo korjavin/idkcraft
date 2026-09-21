@@ -34,6 +34,12 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 
 In-game chat: `follow me` locks onto the speaker, `stop` clears the lock.
 
+Cost guards: with no player online the bot makes no JEV calls at all (local
+idle decision, slow 10 s poll, at most one log line per minute). While a
+player is visible the tick stays at `BRAIN_TICK_MS`, but an unchanged
+perception state (distance rounded to 1 block, same flags) reuses the last
+decision instead of calling JEV again.
+
 ## Online-mode note
 
 The server runs offline-mode, so the bot uses `auth: 'offline'` — no
