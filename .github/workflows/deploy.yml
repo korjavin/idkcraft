@@ -34,15 +34,35 @@ jobs:
           push: true
           tags: ghcr.io/korjavin/idkcraft:${{ github.sha }}
 
+      - name: Build and push laya image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./laya
+          push: true
+          tags: ghcr.io/korjavin/idkcraft-laya:${{ github.sha }}
+          cache-from: type=gha,scope=laya
+          cache-to: type=gha,mode=max,scope=laya
+
+      - name: Smoke test laya image
+        env:
+          LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
+          GITHUB_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          docker run -d --name laya-smoke --memory=2g -e OMP_NUM_THREADS=4 -p 8000:8000 "${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}"
+          trap "docker logs laya-smoke; docker rm -f laya-smoke" EXIT
+          python3 laya/smoke.py http://127.0.0.1:8000
+
       - name: Update deploy branch
         env:
           IMAGE_BASE: ghcr.io/korjavin/idkcraft
+          LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
           GITHUB_COMMIT_SHA: ${{ github.sha }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B deploy
           sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+          sed -i "s|image: ${LAYA_IMAGE}:.*|image: ${LAYA_IMAGE}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
           git add docker-compose.yml
           git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
           git push origin deploy --force
