@@ -59,7 +59,7 @@ function resolveIds(bot, names) {
   return ids
 }
 
-// Name -> ore ids for the future 'find me <block>' chat command: the exact
+// Name -> ore ids for the 'find me <block>' chat command: the exact
 // name plus the ore variants a player would mean ('coal' -> coal_ore +
 // deepslate_coal_ore; 'diamond_ore' -> itself + deepslate_diamond_ore).
 // Registry names that are missing are skipped, not fatal.

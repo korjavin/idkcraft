@@ -248,6 +248,18 @@ describe('findNearest', () => {
     assert.equal(res.distance, 10)
   })
 
+  it('rounds non-integral Euclidean distance to nearest integer', () => {
+    // distance from (0, 64, 0) to (3, 64, 5) is sqrt(34) ≈ 5.83 -> rounds to 6
+    const p = pos(3, 64, 5)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [p],
+      names: { '3,64,5': 'coal_ore' },
+    })
+    const res = findNearest(bot, 'coal')
+    assert.equal(res.distance, 6)
+  })
+
   it('uses default radius 48 and count 64 in findBlocks scan', () => {
     const bot = mockBot({ registry: NAMES })
     let opts = null
