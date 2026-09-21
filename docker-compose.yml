@@ -6,7 +6,7 @@
 # Geyser Floodgate auth is declarative (bring-up 2026-09-21 proved Geyser
 # 2.11 does NOT switch to Floodgate auth just because Floodgate is
 # installed — a generated config stays auth-type: online, which blocks
-# Bedrock joins). mc/patches/geyser-floodgate.json (via PATCH_DEFINITIONS)
+# Bedrock joins). an inline configs entry (via PATCH_DEFINITIONS)
 # sets java.auth-type=floodgate in /data/plugins/Geyser-Spigot/config.yml.
 # Timing: the file only exists after Geyser's first run, so on a truly fresh
 # volume the first boot logs a patch skip warning and comes up online; the
@@ -54,7 +54,6 @@ services:
         https://api.spiget.org/v2/resources/19254/download
     volumes:
       - ${MC_DATA_PATH:-./data}:/data
-      - ./mc/patches:/patches:ro
     mem_limit: ${MC_MEM_LIMIT:-6g}
     # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
     # Portainer refuses service_healthy dependents without one. Uses the
@@ -66,6 +65,9 @@ services:
       timeout: 10s
       start_period: 180s
       retries: 40
+    configs:
+      - source: geyser-floodgate
+        target: /patches/geyser-floodgate.json
 
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
@@ -83,3 +85,11 @@ services:
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+configs:
+  # Inline patch definition (no bind mount: Portainer git stacks resolve
+  # binds on the host, where the repo path does not exist). Single source
+  # of truth — there is no mc/patches/ file.
+  geyser-floodgate:
+    content: |
+      {"file": "/data/plugins/Geyser-Spigot/config.yml",
+       "ops": [{"$$set": {"path": "$$.java['auth-type']", "value": "floodgate"}}]}
