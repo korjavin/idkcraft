@@ -72,13 +72,34 @@ describe('roam behaviour', () => {
     assert.equal(ctx.lastGoalKey, '')
   })
 
-  it('hands the body back with no goal when the bot is already > 6 away', () => {
+  it('walks back toward the player instead of freezing past 6 blocks', () => {
     const bot = mockBot() // bot at 0,64,0
+    const player = playerEntity(20)
     const ctx = { lastGoalKey: '' }
+    roam(bot, ctx, player, {})
+    assert.equal(bot.calls.setGoal, 1)
+    const goal = bot.calls.goals[0]
+    assert.equal(goal.constructor.name, 'GoalFollow')
+    assert.equal(goal.entity, player) // heading back to the player, not standing still
+    assert.equal(bot.calls.dynamic[0], true)
+    assert.match(ctx.lastGoalKey, /^roam-back:/)
+    assert.equal(bot.calls.stop, 0)
+  })
+
+  it('does not re-issue the walk-back while already walking it', () => {
+    const bot = mockBot()
+    bot._moving = true
+    const ctx = { lastGoalKey: 'roam-back:Steve' }
     roam(bot, ctx, playerEntity(20), {})
     assert.equal(bot.calls.setGoal, 0)
     assert.equal(bot.calls.stop, 0)
-    assert.equal(ctx.lastGoalKey, '') // untouched: the next tick answers follow
+  })
+
+  it('re-issues the walk-back when stopped past 6 blocks', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: 'roam-back:Steve' }
+    roam(bot, ctx, playerEntity(20), {})
+    assert.equal(bot.calls.setGoal, 1) // arrived nowhere: try the walk-back again
   })
 
   it('does nothing without a target', () => {
@@ -116,6 +137,37 @@ describe('roam stroll end to end (no follow yo-yo)', () => {
     r = await ticker.tick()
     assert.equal(r.decision.action, 'follow')
     assert.equal(bot.calls.setGoal, 2)
+  })
+})
+
+describe('roam hand-back never wedges the ticker', () => {
+  it('a stroll resting at 6.4 blocks recovers instead of replaying cached roam forever', async () => {
+    const { stubBrain } = require('../src/brain')
+    const bot = mockBot()
+    const playerPos = pos(0, 64, 0)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: playerPos } } }
+    // Stroll out: 5.6 rounds to key 6 and caches a roam decision.
+    bot.entity.position = pos(5.6, 64, 0)
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    let r = await ticker.tick()
+    assert.equal(r.decision.action, 'roam')
+    assert.equal(bot.calls.setGoal, 1)
+    // The stroll comes to rest at 6.4: same rounded key, so the cached roam
+    // is redispatched without a brain call — it must walk back, not freeze.
+    bot.entity.position = pos(6.4, 64, 0)
+    r = await ticker.tick()
+    assert.equal(r.calledBrain, false) // the wedge setup: stale roam, no fresh answer
+    assert.equal(bot.calls.setGoal, 2) // walk-back goal issued instead of freezing
+    // Walking back through 5.9 keeps the cached roam but stays silent while moving.
+    bot._moving = true
+    bot.entity.position = pos(5.9, 64, 0)
+    r = await ticker.tick()
+    assert.equal(bot.calls.setGoal, 2)
+    // Back inside at distance 3 the key changes, the brain answers fresh roam.
+    bot.entity.position = pos(3, 64, 0)
+    r = await ticker.tick()
+    assert.equal(r.decision.action, 'roam')
+    assert.equal(r.calledBrain, true)
   })
 })
 

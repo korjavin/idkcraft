@@ -18,9 +18,19 @@ function roam(bot, ctx, target, state) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const distToPlayer = Math.hypot(bp.x - pp.x, bp.y - pp.y, bp.z - pp.z)
-  // Too far out: hand the body back (set no goal) — the next tick's brain
-  // answer will be follow.
-  if (distToPlayer > HAND_BACK_DIST) return
+  if (distToPlayer > HAND_BACK_DIST) {
+    // Beyond the envelope: walk back toward the player instead of standing
+    // still. The ticker reuses a cached decision while the rounded state key
+    // is unchanged, so "set no goal and wait for follow" wedges the bot when
+    // a stroll comes to rest just past 6 blocks — motion changes the key and
+    // the brain re-evaluates on the next tick. Same guard as follow.js.
+    const backKey = `roam-back:${target.username || target.id}`
+    if (backKey !== ctx.lastGoalKey || !bot.pathfinder.isMoving()) {
+      bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
+      ctx.lastGoalKey = backKey
+    }
+    return
+  }
   // Already strolling: keep walking until the pathfinder stops.
   if (bot.pathfinder.isMoving()) return
   const angle = Math.random() * Math.PI * 2

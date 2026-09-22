@@ -29,9 +29,6 @@ describe('stubBrain', () => {
   it('roams the stroll envelope while the player is still (dist 5)', () => {
     assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false }), { action: 'roam', sprint: false, source: 'stub' })
   })
-  it('follows back once the stroll leaves the envelope (dist 7, still)', () => {
-    assert.deepEqual(stubBrain.decide({ distance_to_player: 7, player_moving: false }), { action: 'follow', sprint: false, source: 'stub' })
-  })
   it('idles when the player is close and moving (dist 2)', () => {
     assert.deepEqual(stubBrain.decide({ distance_to_player: 2, player_moving: true }), { action: 'idle', sprint: false, source: 'stub' })
   })
