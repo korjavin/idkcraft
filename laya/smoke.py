@@ -28,6 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # NOTE: "dist 1 still" repeats the "dist 1" state on purpose: posting the same
 # state twice probes whether the model answers deterministically. A split answer
 # across the two rows means model jitter, not a state difference.
+# Similarly, "prod 55.2 h0.7" and "prod 26.8 h0.7" collapse to the identical categorical
+# wire state (player=away ... hostile=adjacent), serving as a second consistency check.
 STATES = [
     ("dist 12 moving",
      "player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
