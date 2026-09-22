@@ -64,8 +64,37 @@ function parseNoul(answer) {
   return typeof answer?.noul === 'number' ? answer.noul >= 0.5 : false
 }
 
-// JEV `state` is documented as a string; send one compact text line.
+// JEV `state` is documented as a string; send one compact categorical text line.
 function stateToText(state) {
+  if (typeof state === 'string') return state
+  if (!state || typeof state !== 'object') {
+    return 'player=none player_moving=no hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok'
+  }
+  const d = state.distance_to_player
+  const hd = state.hostile_distance
+  const player = typeof d !== 'number' || Number.isNaN(d) ? 'none'
+    : d <= 3 ? 'near'
+    : d <= 6 ? 'far'
+    : 'away'
+  const playerMoving = state.player_moving ? 'yes' : 'no'
+  const hostile = typeof hd !== 'number' || Number.isNaN(hd) ? 'none'
+    : hd <= 3 ? 'adjacent'
+    : hd <= 8 ? 'near'
+    : hd < 16 ? 'far'
+    : 'none'
+  const hostileNearPlayer = state.hostile_near_player ? 'yes' : 'no'
+  const hostileReachable = state.hostile_reachable === false ? 'no' : 'yes'
+  const hp = typeof state.bot_health === 'number' ? state.bot_health : 20
+  const health = hp < 6 ? 'low' : 'ok'
+  const f = typeof state.bot_food === 'number' ? state.bot_food : 20
+  const food = f < 6 ? 'hungry' : 'ok'
+  return `player=${player} player_moving=${playerMoving} hostile=${hostile} ` +
+    `hostile_near_player=${hostileNearPlayer} hostile_reachable=${hostileReachable} ` +
+    `health=${health} food=${food}`
+}
+
+// Numeric state line preserved for the disagreement log and logstats.sh.
+function numericStateToText(state) {
   if (typeof state === 'string') return state
   const d = state.distance_to_player
   const hd = state.hostile_distance
@@ -101,17 +130,17 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'Decide what the companion bot does this second. Fight when a reachable hostile mob is within 8 blocks of the bot, or a hostile mob is near the player, and the bot has at least 6 health. A mob flagged hostile_reachable=false is unreachable: do not fight it unless it is near the player. Otherwise follow when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near. Otherwise roam when the player is within 6 blocks and is not moving and no hostile mob is near. Otherwise wait.',
+                instructions: 'Decide what the companion bot does this second. Fight when hostile is adjacent or near and hostile_reachable is yes and health is ok, or hostile_near_player is yes and health is ok. When hostile_reachable is no, do not fight unless hostile_near_player is yes. Otherwise follow when player is away, or player is far while player_moving is yes or hostile is not none. Otherwise roam when player is near or far, player_moving is no, and hostile is none. Otherwise wait.',
                 criteria: {
-                  fight: 'A hostile mob is within 8 blocks and hostile_reachable=true, or near the player, and bot_health is 6 or more: attack the mob. hostile_reachable=false means unreachable: do not fight unless near the player.',
-                  follow: 'Walk toward the player and stay close when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near.',
-                  idle: 'Stand still and wait: no target, the player is within 3 blocks and moving, or a hostile mob is near while bot_health is below 6 and the player is within 3 blocks.',
-                  roam: 'The player is within 6 blocks and is not moving, and no hostile mob is near: walk a few blocks around the player to look at the surroundings.'
+                  fight: 'hostile is adjacent or near and hostile_reachable is yes, or hostile_near_player is yes, and health is ok: attack the mob. When hostile_reachable is no, do not fight unless hostile_near_player is yes.',
+                  follow: 'Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none, or player is near while health is low and hostile is not none.',
+                  idle: 'Stand still and wait: player is none, player is near and player_moving is yes, or player is near while health is low and hostile is not none.',
+                  roam: 'player is near or far, player_moving is no, and hostile is none: walk a few blocks around the player to look at the surroundings.'
                 }
               },
               sprint: {
                 type: 'noul',
-                instructions: 'The player is more than 8 blocks away and moving, so the bot should sprint to catch up.',
+                instructions: 'player is away and player_moving is yes, so the bot should sprint to catch up.',
                 criteria: {
                   true: 'sprint to catch up',
                   false: 'walking is enough'
@@ -127,7 +156,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         const sprint = parseNoul(data.answers.sprint)
         const ref = stubBrain.decide(state).action
         if (ref !== action) {
-          console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${stateToText(state)}`)
+          console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${numericStateToText(state)}`)
         }
         return { action, sprint, source }
       } catch (err) {
@@ -157,4 +186,4 @@ function makeBrain(env) {
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, stateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }

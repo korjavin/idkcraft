@@ -1,20 +1,20 @@
 {
   "model": "jev-latest",
-  "state": "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true",
+  "state": "player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok",
   "questions": {
     "action": {
       "type": "choice",
-      "instructions": "Decide what the companion bot does this second. Fight when a reachable hostile mob is within 8 blocks of the bot, or a hostile mob is near the player, and the bot has at least 6 health. A mob flagged hostile_reachable=false is unreachable: do not fight it unless it is near the player. Otherwise follow when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near. Otherwise roam when the player is within 6 blocks and is not moving and no hostile mob is near. Otherwise wait.",
+      "instructions": "Decide what the companion bot does this second. Fight when hostile is adjacent or near and hostile_reachable is yes and health is ok, or hostile_near_player is yes and health is ok. When hostile_reachable is no, do not fight unless hostile_near_player is yes. Otherwise follow when player is away, or player is far while player_moving is yes or hostile is not none. Otherwise roam when player is near or far, player_moving is no, and hostile is none. Otherwise wait.",
       "criteria": {
-        "fight": "A hostile mob is within 8 blocks and hostile_reachable=true, or near the player, and bot_health is 6 or more: attack the mob. hostile_reachable=false means unreachable: do not fight unless near the player.",
-        "follow": "Walk toward the player and stay close when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near.",
-        "idle": "Stand still and wait: no target, the player is within 3 blocks and moving, or a hostile mob is near while bot_health is below 6 and the player is within 3 blocks.",
-        "roam": "The player is within 6 blocks and is not moving, and no hostile mob is near: walk a few blocks around the player to look at the surroundings."
+        "fight": "hostile is adjacent or near and hostile_reachable is yes, or hostile_near_player is yes, and health is ok: attack the mob. When hostile_reachable is no, do not fight unless hostile_near_player is yes.",
+        "follow": "Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none, or player is near while health is low and hostile is not none.",
+        "idle": "Stand still and wait: player is none, player is near and player_moving is yes, or player is near while health is low and hostile is not none.",
+        "roam": "player is near or far, player_moving is no, and hostile is none: walk a few blocks around the player to look at the surroundings."
       }
     },
     "sprint": {
       "type": "noul",
-      "instructions": "The player is more than 8 blocks away and moving, so the bot should sprint to catch up.",
+      "instructions": "player is away and player_moving is yes, so the bot should sprint to catch up.",
       "criteria": {
         "true": "sprint to catch up",
         "false": "walking is enough"

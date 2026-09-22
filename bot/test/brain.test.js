@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { stubBrain, jevBrain, makeBrain, stateToText } = require('../src/brain')
+const { stubBrain, jevBrain, makeBrain, stateToText, numericStateToText } = require('../src/brain')
 
 describe('stubBrain', () => {
   it('roams when the player is close and still with no hostile (dist 1)', () => {
@@ -67,13 +67,104 @@ describe('stubBrain', () => {
   })
 })
 
-describe('stateToText reachable flag', () => {
+describe('stateToText categorical buckets', () => {
   const base = { distance_to_player: 5, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 4, hostile_near_player: false }
-  it('defaults to hostile_reachable=true', () => {
-    assert.match(stateToText(base), /hostile_reachable=true/)
+
+  it('classifies player boundary 3: <= 3 is near, > 3 is far', () => {
+    assert.match(stateToText({ ...base, distance_to_player: 3 }), /\bplayer=near\b/)
+    assert.match(stateToText({ ...base, distance_to_player: 3.1 }), /\bplayer=far\b/)
   })
+
+  it('classifies player boundary 6: <= 6 is far, > 6 is away', () => {
+    assert.match(stateToText({ ...base, distance_to_player: 6 }), /\bplayer=far\b/)
+    assert.match(stateToText({ ...base, distance_to_player: 6.1 }), /\bplayer=away\b/)
+  })
+
+  it('classifies player null/undefined/NaN as none', () => {
+    assert.match(stateToText({ ...base, distance_to_player: null }), /\bplayer=none\b/)
+    assert.match(stateToText({ ...base, distance_to_player: undefined }), /\bplayer=none\b/)
+    assert.match(stateToText({ ...base, distance_to_player: NaN }), /\bplayer=none\b/)
+  })
+
+  it('classifies hostile boundary 3: <= 3 is adjacent, > 3 is near', () => {
+    assert.match(stateToText({ ...base, hostile_distance: 3 }), /\bhostile=adjacent\b/)
+    assert.match(stateToText({ ...base, hostile_distance: 3.1 }), /\bhostile=near\b/)
+  })
+
+  it('classifies hostile boundary 8: <= 8 is near, > 8 is far', () => {
+    assert.match(stateToText({ ...base, hostile_distance: 8 }), /\bhostile=near\b/)
+    assert.match(stateToText({ ...base, hostile_distance: 8.1 }), /\bhostile=far\b/)
+  })
+
+  it('classifies hostile boundary 16: < 16 is far, >= 16 is none', () => {
+    assert.match(stateToText({ ...base, hostile_distance: 15.9 }), /\bhostile=far\b/)
+    assert.match(stateToText({ ...base, hostile_distance: 16 }), /\bhostile=none\b/)
+  })
+
+  it('classifies hostile null/undefined/NaN as none', () => {
+    assert.match(stateToText({ ...base, hostile_distance: null }), /\bhostile=none\b/)
+    assert.match(stateToText({ ...base, hostile_distance: undefined }), /\bhostile=none\b/)
+    assert.match(stateToText({ ...base, hostile_distance: NaN }), /\bhostile=none\b/)
+  })
+
+  it('classifies health boundary 6: < 6 is low, >= 6 is ok', () => {
+    assert.match(stateToText({ ...base, bot_health: 5.9 }), /\bhealth=low\b/)
+    assert.match(stateToText({ ...base, bot_health: 5 }), /\bhealth=low\b/)
+    assert.match(stateToText({ ...base, bot_health: 6 }), /\bhealth=ok\b/)
+    assert.match(stateToText({ ...base, bot_health: 20 }), /\bhealth=ok\b/)
+  })
+
+  it('classifies food boundary: < 6 is hungry, >= 6 is ok', () => {
+    assert.match(stateToText({ ...base, bot_food: 5 }), /\bfood=hungry\b/)
+    assert.match(stateToText({ ...base, bot_food: 6 }), /\bfood=ok\b/)
+    assert.match(stateToText({ ...base, bot_food: 20 }), /\bfood=ok\b/)
+  })
+
+  it('classifies boolean flags correctly', () => {
+    assert.match(stateToText({ ...base, player_moving: true }), /\bplayer_moving=yes\b/)
+    assert.match(stateToText({ ...base, player_moving: false }), /\bplayer_moving=no\b/)
+    assert.match(stateToText({ ...base, hostile_near_player: true }), /\bhostile_near_player=yes\b/)
+    assert.match(stateToText({ ...base, hostile_near_player: false }), /\bhostile_near_player=no\b/)
+  })
+
+  it('classifies hostile_reachable latch: false is no, true/missing is yes', () => {
+    assert.match(stateToText(base), /\bhostile_reachable=yes\b/)
+    assert.match(stateToText({ ...base, hostile_reachable: true }), /\bhostile_reachable=yes\b/)
+    assert.match(stateToText({ ...base, hostile_reachable: false }), /\bhostile_reachable=no\b/)
+  })
+
+  it('passes string state through unmodified', () => {
+    assert.equal(stateToText('custom state text'), 'custom state text')
+  })
+
+  it('handles non-object states gracefully', () => {
+    assert.match(stateToText(null), /\bplayer=none\b/)
+    assert.match(stateToText(undefined), /\bplayer=none\b/)
+  })
+})
+
+describe('numericStateToText format', () => {
+  const base = { distance_to_player: 5, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 4, hostile_near_player: false }
+
+  it('preserves numeric format for logging', () => {
+    const text = numericStateToText(base)
+    assert.match(text, /distance_to_player=5\.0/)
+    assert.match(text, /player_visible=true/)
+    assert.match(text, /player_moving=false/)
+    assert.match(text, /bot_health=20/)
+    assert.match(text, /bot_food=20/)
+    assert.match(text, /nearby_hostiles=1/)
+    assert.match(text, /hostile_distance=4\.0/)
+    assert.match(text, /hostile_near_player=false/)
+    assert.match(text, /hostile_reachable=true/)
+  })
+
   it('renders hostile_reachable=false from the give-up latch', () => {
-    assert.match(stateToText({ ...base, hostile_reachable: false }), /hostile_reachable=false/)
+    assert.match(numericStateToText({ ...base, hostile_reachable: false }), /hostile_reachable=false/)
+  })
+
+  it('passes string state through unmodified', () => {
+    assert.equal(numericStateToText('already numeric string'), 'already numeric string')
   })
 })
 
@@ -138,7 +229,7 @@ describe('jevBrain', () => {
     assert.deepEqual(Object.keys(seen.opts.body.questions).sort(), ['action', 'sprint'])
     assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow', 'idle', 'roam'])
     assert.equal(typeof seen.opts.body.state, 'string')
-    assert.match(seen.opts.body.state, /distance_to_player=12\.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true/)
+    assert.match(seen.opts.body.state, /player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok/)
   })
 
   it('maps a canned remote answer to roam with source jev', async () => {

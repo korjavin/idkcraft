@@ -53,6 +53,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - `roam`: Player is within 6 blocks and not moving, no hostile mob near (strolls within 6 blocks of player, walks back past 6, never > 8).
   - `idle`: Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked.
   The brain also decides whether to `sprint` when the player is > 8 blocks away (the remote model also checks that the player is moving, while the stub triggers on distance alone). Fight wins over both follow and roam; follow preempts roam when the player walks away.
+  To help small classifier models discriminate state, the wire state sent to the remote brain uses categorical words rather than numbers: `player=near|far|away|none` (<=3 / <=6 / >6 / no target), `player_moving=yes|no`, `hostile=adjacent|near|far|none` (<=3 / <=8 / <16 / none), `hostile_near_player=yes|no`, `hostile_reachable=yes|no`, `health=low|ok` (<6 / >=6), and `food=hungry|ok`.
 - **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
 
 ### Behaviours Table
@@ -110,7 +111,7 @@ When running with a remote classifier (`source=laya` or `source=jev`), each deci
 ```
 brain disagree source=<source> model=<action> stub=<ref> state=<state-line>
 ```
-Logged to stderr whenever the model output diverges from the reference rules. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
+Logged to stderr whenever the model output diverges from the reference rules. Note that the disagree log line deliberately retains the numeric `state=` representation (via `numericStateToText`) so downstream tools like `logstats.sh` can parse exact distances and metrics even though the remote model receives categorical words. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
 
 ## Online-mode note
 
