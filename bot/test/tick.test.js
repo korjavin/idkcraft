@@ -187,6 +187,36 @@ describe('ticker with a target', () => {
   })
 })
 
+describe('pathfinder status on the decision line', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('appends moving/path/reset; a fed noPath shows on the next line; reset clears after one log', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: true, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.ok(lines.length > 0)
+    assert.match(lines[lines.length - 1], /decision source=laya action=follow sprint=true dist=10\.0 moving=false path=none reset=none/)
+    ticker.setPathStatus('noPath')
+    ticker.setPathReset('stuck')
+    // fresh state so the brain re-decides and the line re-logs
+    bot.players.Steve.entity.position = pos(25, 64, 0)
+    await ticker.tick()
+    assert.match(lines[lines.length - 1], /moving=false path=noPath reset=stuck/)
+    bot.players.Steve.entity.position = pos(40, 64, 0)
+    await ticker.tick()
+    // reset= logged once: stale reason does not repeat, path= persists
+    assert.match(lines[lines.length - 1], /moving=false path=noPath reset=none/)
+  })
+})
+
 describe('stateKey', () => {
   const base = { distance_to_player: 12.4, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 0 }
   it('rounds distance to 1 block and covers the flags', () => {
