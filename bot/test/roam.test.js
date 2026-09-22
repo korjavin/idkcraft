@@ -91,6 +91,34 @@ describe('roam behaviour', () => {
   })
 })
 
+describe('roam stroll end to end (no follow yo-yo)', () => {
+  it('sustains roam past 3 blocks and follows back past 6', async () => {
+    const { stubBrain } = require('../src/brain')
+    const bot = mockBot()
+    const playerPos = pos(0, 64, 0)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: playerPos } } }
+    bot.entity.position = pos(1, 64, 0)
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    // Close and still: roam sets the stroll goal, the bot starts walking.
+    let r = await ticker.tick()
+    assert.equal(r.decision.action, 'roam')
+    assert.equal(bot.calls.setGoal, 1)
+    bot._moving = true
+    // Walking out through 4 and 5.5 blocks: still roam, goal untouched.
+    for (const d of [4, 5.5]) {
+      bot.entity.position = pos(d, 64, 0)
+      r = await ticker.tick()
+      assert.equal(r.decision.action, 'roam')
+      assert.equal(bot.calls.setGoal, 1) // no preemption mid-stroll
+    }
+    // Past the envelope: follow reclaims the body.
+    bot.entity.position = pos(7, 64, 0)
+    r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(bot.calls.setGoal, 2)
+  })
+})
+
 describe('roam dispatch', () => {
   it('roam is wired in the dispatch table and drives a goal through the ticker', async () => {
     assert.equal(BEHAVIOURS.roam, roam)

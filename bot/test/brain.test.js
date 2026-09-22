@@ -20,11 +20,23 @@ describe('stubBrain', () => {
   it('fight wins over roam on hostile_near_player alone (dist 1, still)', () => {
     assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: false, hostile_near_player: true, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
   })
-  it('follow wins over roam when the player is far even if still (dist 5)', () => {
-    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false }), { action: 'follow', sprint: false, source: 'stub' })
+  it('follow wins over roam once the player is beyond the envelope (dist 7, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 7, player_moving: false }), { action: 'follow', sprint: false, source: 'stub' })
   })
-  it('follows without sprint at mid range (dist 5)', () => {
-    assert.deepEqual(stubBrain.decide({ distance_to_player: 5 }), { action: 'follow', sprint: false, source: 'stub' })
+  it('follows without sprint at mid range while the player moves (dist 5)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: true }), { action: 'follow', sprint: false, source: 'stub' })
+  })
+  it('roams the stroll envelope while the player is still (dist 5)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false }), { action: 'roam', sprint: false, source: 'stub' })
+  })
+  it('follows back once the stroll leaves the envelope (dist 7, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 7, player_moving: false }), { action: 'follow', sprint: false, source: 'stub' })
+  })
+  it('idles when the player is close and moving (dist 2)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 2, player_moving: true }), { action: 'idle', sprint: false, source: 'stub' })
+  })
+  it('falls back to the legacy rule on hostile facts at low health (dist 5, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false, hostile_distance: 4, bot_health: 5 }), { action: 'follow', sprint: false, source: 'stub' })
   })
   it('follows with sprint when far (dist 12)', () => {
     assert.deepEqual(stubBrain.decide({ distance_to_player: 12 }), { action: 'follow', sprint: true, source: 'stub' })
@@ -207,7 +219,7 @@ describe('jevBrain', () => {
           }
         })
       })
-      const agreeState = { distance_to_player: 5, bot_health: 20 }
+      const agreeState = { distance_to_player: 5, player_moving: true, bot_health: 20 }
       const decision = await jevBrain('test-key', canned).decide(agreeState)
       assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'jev' })
       assert.equal(logs.length, 0)

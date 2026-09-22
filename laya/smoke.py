@@ -8,7 +8,7 @@ sends (model, state text, questions) -- it is the exact JEV-shaped body.
 
 Waits for /health (up to 120 s), POSTs request.json 20x asserting
 answers.action.choice in {fight, follow, roam, idle} and answers.sprint.noul is a float
-in [0,1], then prints p50/p95 ms plus the answers for 5 canned states as a
+in [0,1], then prints p50/p95 ms plus the answers for 7 canned states as a
 table for the human quality check. Exit non-zero on any shape failure.
 Latency is printed, not asserted.
 """
@@ -36,6 +36,10 @@ STATES = [
      "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false"),
     ("dist 1 still",
      "distance_to_player=1.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
+    ("dist 1 moving",
+     "distance_to_player=1.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
+    ("dist 5 still",
+     "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
 ]
 
 
