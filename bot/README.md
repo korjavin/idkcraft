@@ -38,16 +38,21 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
-idle decision, slow 10 s poll, at most one log line per minute) and performs no
-scout scans — and after `BOT_LEAVE_AFTER_MS` (default 60 s) with nobody online
+Cost guards: with no player online the bot makes no brain calls at all (local
+idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
+hostile in reach, still no brain calls — at most one log line per minute) and
+performs no scout scans (the nobody-online tick only scans entities for the
+reflex) — and after `BOT_LEAVE_AFTER_MS` (default 60 s) with nobody online
 it re-checks the server ping and, if still nobody is online, quits
-(`leaving: nobody online`) and polls the server ping every 5 s until a
-player appears (`waiting for players`, at most one line per minute). A player
+(`leaving: nobody online`) and polls the server ping every 2 s until a
+player appears (`waiting for players`, at most one line per minute), then
+waits 4.5 s so Paper's 4 s connection throttle expires before joining. A player
 online-but-far keeps it idling instead of flapping join/leave. Off the
 server nothing can kill it and no chunks stay loaded for it. `BOT_LEAVE_AFTER_MS=0`
 keeps the old always-on behaviour. While a player is visible the tick stays at
 `BRAIN_TICK_MS`, but an unchanged perception state (distance rounded to 1 block,
 same flags) reuses the last decision instead of calling the brain again.
+
 
 ## Behaviours & Arbitration
 
@@ -72,6 +77,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
+| `melee reflex` | Hostile within 3 blocks of the bot under any brain answer, even with nobody online | Local reflex (no brain cost; the arm, not the body) | Summon a zombie next to the bot while the brain answers `follow`; bot swings within 1-2 ticks with no `action=fight` decision |
 
 ### Reflex Mechanics & Implementation Details
 
@@ -109,7 +115,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | Command | Action | Implementation |
 | --- | --- | --- |
 | `follow me` | Locks onto speaker, resumes movement if parked | Sets `followName` to speaker, unparks ticker, replies `Following <username>` |
-| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible |
+| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks; replies with `<block> at <x> <y> <z> (<N> blocks)`, `no <block> within 48 blocks`, or `unknown block: <block>` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
@@ -121,6 +127,36 @@ When running with a remote classifier (`source=laya` or `source=jev`), each deci
 brain disagree source=<source> model=<action> stub=<ref> state=<state-line>
 ```
 Logged to stderr whenever the model output diverges from the reference rules. Note that the disagree log line deliberately retains the numeric `state=` representation (via `numericStateToText`) so downstream tools like `logstats.sh` can parse exact distances and metrics even though the remote model receives categorical words. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
+
+## Ops: gearing the bot
+
+The bot fights with what it carries. An op hands it an iron kit once;
+`keepInventory` keeps the kit through death.
+
+```sh
+/gamerule keepInventory true
+/give IdkBot iron_sword
+/give IdkBot iron_helmet
+/give IdkBot iron_chestplate
+/give IdkBot iron_leggings
+/give IdkBot iron_boots
+/give IdkBot cobblestone 64
+/give IdkBot iron_pickaxe
+```
+
+- Run `/gamerule keepInventory true` once as op; the flag persists in
+  `level.dat`. (Already enabled on the prod world; kept here as a note.)
+  It also spares every player inventory on death — revert if unwanted.
+- Then `/give` the iron set above; the bot equips the sword to hand and
+  armor to head/torso/legs/feet on the next spawn and whenever it engages
+  a hostile or the melee reflex fires.
+- Then `/give IdkBot cobblestone 64`: the pathfinder only pillars and
+  bridges when dirt/cobblestone is in inventory — 64 covers dozens of
+  climbs, top up when the log shows `kit scaffold=0`.
+- Then `/give IdkBot iron_pickaxe`: the pathfinder equips it via
+  bestHarvestTool, so stone dig time drops from 7.5 s to 0.4 s and
+  dig-through paths become cheap enough for A* to pick.
+- To op yourself, add your name to the `OPS` env list on the stack and restart.
 
 ## Reading the logs
 
@@ -158,6 +194,7 @@ Line types:
 | `decision source=<s> action=<a> ...` | One per tick while a player is visible (at most one per minute when idle). Compare `source=laya` against the stub to judge the model. |
 | `brain disagree source=<s> model=<a> stub=<r> ...` | The remote brain answered differently from the local reference policy. A high rate means the prompt criteria and the rules drifted apart. |
 | `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
+| `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results; triggers jump + 2-block sidestep nudge. |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
 | `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). Coords are the respawn destination (world spawn — the bot sets no bed), because the position field still holds the death coords at that instant. Strictly one per death: `respawn` packets from dimension changes are not logged. A death with no respawn after it means the bot never came back. |
 | `tick error: ...` | The tick threw instead of deciding; the bot retried on the next tick. Frequent lines here point at perception or brain bugs, not at the model. |

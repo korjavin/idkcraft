@@ -6,8 +6,9 @@ const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 
+const fightMod = require('./behaviours/fight')
 const BEHAVIOURS = {
-  fight: require('./behaviours/fight'),
+  fight: fightMod,
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
@@ -34,9 +35,10 @@ const LEAVE_AFTER_MS_DEFAULT = 60000
 // answers follow for an unreachable mob, fight stops being dispatched and
 // its own counter would never advance.
 const FIGHT_REPROBE_TICKS = 30
+const TARGET_GONE_TICKS = 10
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0 }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -112,6 +114,30 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
 
+// Melee reflex (3nt.13): the arm is not the body. A hostile already
+// within swing reach is hit every tick regardless of the brain answer —
+// the same every-tick seam as scout. Runs on every tick path that has (or
+// can cheaply build) hostile facts, including parked and nobody-online
+// ticks. Logs at most one line per target; fight.js skips its own swing
+// via ctx.reflexSwung so the rate stays one swing per tick.
+function meleeReflex(bot, ctx, state) {
+  const hostile = state && state.hostile
+  if (!hostile || hostile.isValid === false) return false
+  let d
+  try {
+    d = bot.entity.position.distanceTo(hostile.position)
+  } catch (_) { return false }
+  if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
+  if (ctx.reflexTargetId !== hostile.id) {
+    ctx.reflexTargetId = hostile.id
+    try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
+    console.log(`reflex swing ${hostile.name || 'mob'}`)
+  }
+  try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
+  ctx.reflexSwung = true // any target: the arm swung once this tick
+  return true
+}
+
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
@@ -136,13 +162,17 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   async function tick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
+    ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
+    // Fast cadence while the reflex swings with nobody online: those ticks
+    // make no brain call, so speeding them up costs nothing.
+    let reflexFast = false
     try {
       if (ctx.paused) {
         // 'stop' parks the bot: perception + scout keep running while a
         // player is visible, but the brain is skipped and idle is dispatched
-        // (stop once) — same cost guard as 'no player online', including no
-        // scans with nobody online.
+        // (stop once) — same cost guard as 'no player online'. The only scan
+        // with nobody online is the melee reflex hostile check below.
         const target = findTarget(bot, followName)
         lastVisible = !!target
         if (target) noteSeen()
@@ -152,7 +182,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           lastTargetPos = state._lastTargetPos
           if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
           if (ctx.scout) ctx.scout.tick()
+          meleeReflex(bot, ctx, state)
         } else {
+          try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
@@ -173,6 +205,17 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
         stopOnce()
+        // Melee reflex at spawn: the brain never runs here, but a hostile
+        // standing on the bot still gets swung at every slow tick.
+        try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+        if (ctx.lead) {
+          ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
+          if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
+            ctx.lead = null
+            ctx.leadStuck = 0
+            ctx.leadTargetGone = 0
+          }
+        }
         lastTargetPos = null
         lastDecision = null
         lastStateKey = null
@@ -182,6 +225,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+      }
+      ctx.leadTargetGone = 0
+      if (typeof bot.health === 'number' && bot.health <= 0) {
+        ctx.lead = null
+        ctx.leadStuck = 0
       }
       const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
       lastTargetPos = state._lastTargetPos
@@ -218,6 +266,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // every-tick hooks (no body cost) go here
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
       if (ctx.scout) ctx.scout.tick()
+      meleeReflex(bot, ctx, state)
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
@@ -260,7 +309,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible)
+      scheduleNext(lastVisible || reflexFast)
     }
   }
 
@@ -272,14 +321,23 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; if (name) ctx.paused = false },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
       ctx.lead = null
       ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false }
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false },
+    clearLead: (player) => {
+      const targetName = followName || (ctx.lead && ctx.lead.by)
+      if (player && targetName && player.username && player.username !== targetName) return
+      ctx.lead = null
+      ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
+    },
+    getLead: () => ctx.lead
   }
 }
 
@@ -367,6 +425,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       console.log(`spawned as ${bot.username}`)
       ticker.start()
     })
+    bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
     bot.on('chat', (chatUsername, message) => handleChat(bot, ticker, chatUsername, message))
 
@@ -377,9 +436,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
-    const life = createLifecycle()
+    const life = createLifecycle(ticker)
     bot.on('death', () => life.onDeath(bot))
     bot.on('respawn', () => life.onRespawn(bot))
+    bot.on('playerLeft', (player) => handlePlayerLeft(bot, ticker, player))
 
     // Our own quit() resolves back into the join loop; anything else is fatal
     // and the container restart reconnects. Late errors on the intentionally
@@ -435,7 +495,7 @@ function handleChat(bot, ticker, username, message) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
         bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
-        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position })
+        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username })
       }
     }
   }
@@ -471,24 +531,59 @@ function respawnLine(bot) {
   return `respawn at ${at}`
 }
 
-function handleDeath(bot) {
+function handleDeath(bot, ticker) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(deathLine(bot))
 }
 
-function handleRespawn(bot) {
+function handleRespawn(bot, ticker) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+}
+
+function handlePlayerLeft(bot, ticker, player) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead(player)
 }
 
 // Death/respawn pair: mineflayer also emits 'respawn' on dimension change
 // (portal transit), which is not a reappearance after death. The flag keeps
 // the log strictly paired — one respawn line per observed death — so the
 // death/respawn counts stay meaningful.
-function createLifecycle() {
+function createLifecycle(ticker) {
   let died = false
   return {
-    onDeath(bot) { died = true; handleDeath(bot) },
-    onRespawn(bot) { if (!died) return; died = false; handleRespawn(bot) },
+    onDeath(bot, t = ticker) { died = true; handleDeath(bot, t) },
+    onRespawn(bot, t = ticker) {
+      if (!died) return
+      died = false
+      handleRespawn(bot, t)
+    },
   }
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce }
+// Kit line (3nt.20): mineflayer-pathfinder only pillars/bridges when
+// dirt/cobblestone is in inventory (remainingBlocks>0) and digs cheaply
+// with a pickaxe (bestHarvestTool). Logged on every spawn so the next
+// stuck report shows whether the bot could have climbed at all.
+// ponytail: deliberately NOT self-/give on respawn (needs the bot itself
+// as OP); with keepInventory the kit survives death, so a manual /give is
+// enough until blocks run out.
+function kitLine(bot) {
+  let scaffold = 0
+  let pickaxe = false
+  let sword = false
+  try {
+    const items = bot.inventory.items()
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string') continue
+        if (i.name === 'dirt' || i.name === 'cobblestone') scaffold += typeof i.count === 'number' ? i.count : 1
+        if (i.name.endsWith('_pickaxe')) pickaxe = true
+        if (i.name.endsWith('_sword')) sword = true
+      }
+    }
+  } catch (_) { /* inventory not ready at spawn: the line must still print */ }
+  return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'}`
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce }

@@ -44,6 +44,12 @@ function mockBot() {
   return bot
 }
 
+// equipGear batches run on a promise chain (serialised mineflayer window
+// clicks): flush macrotasks before asserting equip counts from sync callers.
+function flushGear() {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
 function playerEntity(x) {
   return { id: 7, position: pos(x, 64, 0) }
 }
@@ -203,30 +209,34 @@ describe('fight behaviour', () => {
     assert.equal(far.calls.setGoal, 1)
   })
 
-  it('equips the first sword once per target', () => {
+  it('equips the first sword once per target', async () => {
     const bot = mockBot()
     const sword = { name: 'iron_sword' }
     bot._items = [{ name: 'dirt' }, sword]
     const ctx = { lastGoalKey: '' }
     const first = { hostile: mobEntity(1, 'zombie', 2) }
     fight(bot, ctx, playerEntity(10), first)
+    await flushGear()
     assert.equal(bot.calls.equip, 1)
     assert.deepEqual(bot.calls.equipArgs, [sword, 'hand'])
     // stationary at melee range: the steady state while swinging — still one equip
     fight(bot, ctx, playerEntity(10), first)
     fight(bot, ctx, playerEntity(10), first)
+    await flushGear()
     assert.equal(bot.calls.equip, 1) // same target: no re-equip
     assert.equal(bot.calls.attack, 3)
     assert.equal(bot.calls.setGoal, 1) // goal satisfied: no re-issue
     bot._moving = false
     fight(bot, ctx, playerEntity(10), { hostile: mobEntity(2, 'zombie', 2) })
+    await flushGear()
     assert.equal(bot.calls.equip, 2) // new target: equip again
   })
 
-  it('never equips without a sword in inventory', () => {
+  it('never equips without a sword in inventory', async () => {
     const bot = mockBot()
     bot._items = [{ name: 'dirt' }]
     fight(bot, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    await flushGear()
     assert.equal(bot.calls.equip, 0)
     assert.equal(bot.calls.attack, 1) // fists are fine
   })
@@ -277,7 +287,7 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.setGoal, 1) // margin (2) not beaten: no switch
   })
 
-  it('stays on target when the nearest rank flip-flops', () => {
+  it('stays on target when the nearest rank flip-flops', async () => {
     const bot = mockBot()
     bot._items = [{ name: 'iron_sword' }]
     const a = mobEntity(1, 'zombie', 5)
@@ -286,6 +296,7 @@ describe('fight behaviour', () => {
     const ctx = { lastGoalKey: '' }
     const player = playerEntity(10)
     fight(bot, ctx, player, { hostile: a })
+    await flushGear()
     assert.equal(bot.calls.setGoal, 1)
     assert.equal(bot.calls.equip, 1)
     fight(bot, ctx, player, { hostile: b }) // perception re-ranked
@@ -293,6 +304,7 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.equip, 1)
     delete bot.entities[1] // A despawns: switch to B
     fight(bot, ctx, player, { hostile: b })
+    await flushGear()
     assert.equal(bot.calls.setGoal, 2)
     assert.equal(bot.calls.equip, 2)
   })
@@ -468,5 +480,97 @@ describe('stub fight end-to-end', () => {
     const r = await ticker.tick()
     assert.ok(r.decision, 'tick threw on the gone entity')
     assert.equal(r.decision.action, 'follow')
+  })
+})
+
+describe('melee reflex skip (one swing per tick)', () => {
+  it('exports the swing and equipGear helpers for the tick reflex', () => {
+    assert.equal(typeof fight.swing, 'function')
+    assert.equal(typeof fight.equipGear, 'function')
+  })
+
+  it('skips its own swing when the reflex swung this tick, at any mob', () => {
+    const bot = mockBot()
+    // different mob than fight holds: the arm still swung only once.
+    fight(bot, { lastGoalKey: '', reflexSwung: true }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('swings when the reflex did not fire this tick', () => {
+    const bot = mockBot()
+    fight(bot, { lastGoalKey: '', reflexSwung: false }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 1)
+    const plain = mockBot()
+    fight(plain, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(plain.calls.attack, 1) // direct callers set no reflex flag
+  })
+
+  it('skips the given-up-branch swing on a same-tick reflex swing', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '', fightGivenUpId: 1, reflexSwung: true }
+    bot.entities = { 1: mobEntity(1, 'zombie', 2) }
+    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 0)
+    assert.equal(ctx.fightGivenUpId, null) // latch still clears for re-engage
+  })
+})
+
+describe('equipGear', () => {
+  function gearBot(items, slots) {
+    const bot = mockBot()
+    bot._items = items
+    bot.inventory.slots = slots || []
+    const seen = []
+    bot.equip = (item, dest) => { seen.push([item, dest]) }
+    return { bot, seen }
+  }
+
+  it('equips sword to hand and chestplate to torso', async () => {
+    const sword = { name: 'iron_sword' }
+    const chest = { name: 'iron_chestplate' }
+    const { bot, seen } = gearBot([sword, chest])
+    await fight.equipGear(bot)
+    assert.deepEqual(seen, [[sword, 'hand'], [chest, 'torso']])
+  })
+
+  it('equips the full iron set to the right destinations', async () => {
+    const kit = [{ name: 'iron_sword' }, { name: 'iron_helmet' }, { name: 'iron_chestplate' }, { name: 'iron_leggings' }, { name: 'iron_boots' }]
+    const { bot, seen } = gearBot(kit)
+    await fight.equipGear(bot)
+    assert.deepEqual(seen, [[kit[0], 'hand'], [kit[1], 'head'], [kit[2], 'torso'], [kit[3], 'legs'], [kit[4], 'feet']])
+  })
+
+  it('skips armor slots that are already filled', async () => {
+    const sword = { name: 'iron_sword' }
+    const chest = { name: 'iron_chestplate' }
+    const slots = []
+    slots[6] = { name: 'iron_chestplate' } // torso already geared
+    const { bot, seen } = gearBot([sword, chest], slots)
+    await fight.equipGear(bot)
+    assert.deepEqual(seen, [[sword, 'hand']])
+  })
+
+  it('does not touch inventory when the bot cannot equip', async () => {
+    // The !bot.inventory half needs no test: without it, items() throws
+    // inside gearBatch's try and is swallowed, same observable behaviour.
+    let asked = false
+    await fight.equipGear({ inventory: { items: () => { asked = true; return [{ name: 'iron_sword' }] } } })
+    assert.equal(asked, false)
+  })
+
+  it('serialises concurrent batches instead of interleaving clicks', async () => {
+    // One mineflayer equip is two window clicks sharing a cursor: fire two
+    // batches at once and each equip must finish before the next starts.
+    const order = []
+    const bot = mockBot()
+    bot._items = [{ name: 'iron_sword' }, { name: 'iron_chestplate' }]
+    bot.inventory.slots = []
+    bot.equip = async (item, dest) => {
+      order.push(`start:${dest}`)
+      await new Promise((resolve) => setImmediate(resolve))
+      order.push(`end:${dest}`)
+    }
+    await Promise.all([fight.equipGear(bot), fight.equipGear(bot)])
+    assert.deepEqual(order, ['start:hand', 'end:hand', 'start:torso', 'end:torso', 'start:hand', 'end:hand', 'start:torso', 'end:torso'])
   })
 })

@@ -190,6 +190,39 @@ describe('lead behaviour', () => {
     assert.ok(ctx.lead)
   })
 
+  it('gives up after waiting longer than budget with chat and clears', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    assert.equal(ctx.lead.waiting, true)
+    for (let t = 0; t < lead.WAIT_BUDGET_TICKS; t++) {
+      assert.ok(ctx.lead, `gave up early at wait tick ${t}`)
+      lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    }
+    assert.equal(ctx.lead, null)
+    assert.deepEqual(bot.calls.chats, ['giving up on iron_ore'])
+  })
+
+  it('resuming before wait budget expires resets the wait budget', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    for (let t = 0; t < 100; t++) {
+      lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    }
+    assert.ok(ctx.lead)
+    assert.equal(ctx.lead.waiting, true)
+    lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
+    assert.equal(ctx.lead.waiting, false)
+    assert.equal(ctx.lead.waitTicks, 0)
+    lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    for (let t = 0; t < 100; t++) {
+      lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
+    }
+    assert.ok(ctx.lead, 'wait budget was not reset after resume')
+    assert.deepEqual(bot.calls.chats, [])
+  })
+
   it('does nothing without an order or position', () => {
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }
@@ -199,3 +232,4 @@ describe('lead behaviour', () => {
     assert.deepEqual(bot.calls.chats, [])
   })
 })
+

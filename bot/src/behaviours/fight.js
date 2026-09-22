@@ -43,11 +43,12 @@ function fight(bot, ctx, target, state) {
   if (ctx.fightGivenUpId === hostile.id) {
     // Pursuit abandoned (the brain sees hostile_reachable=false and yields
     // to follow): shadow the player as the local safety net, swing if the
-    // mob wandered into range.
+    // mob wandered into range (unless the melee reflex already swung this
+    // tick — one swing per tick).
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
-      swing(bot, hostile)
+      if (!ctx.reflexSwung) swing(bot, hostile)
     } else {
       shadowPlayer(bot, ctx, target)
     }
@@ -58,7 +59,7 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = key
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
-    equipSword(bot)
+    equipGear(bot)
   } else if (!inRange) {
     if (bot.pathfinder.isMoving()) {
       ctx.fightPursuit = 0 // progress: a later stall gets a fresh budget
@@ -76,7 +77,10 @@ function fight(bot, ctx, target, state) {
   } else {
     ctx.fightPursuit = 0
   }
-  if (inRange) {
+  // Same-tick reflex guard: the reflex already swung (at any mob — it hits
+  // the nearest while fight may hold a sticky incumbent), so a second
+  // bot.attack here would double the swing rate.
+  if (inRange && !ctx.reflexSwung) {
     swing(bot, hostile)
   }
 }
@@ -123,17 +127,56 @@ function swing(bot, hostile) {
 
 // ponytail: first sword in inventory wins (no attackDamage ranking) —
 // an op can /give IdkBot iron_sword; fists are fine for the demo.
-function equipSword(bot) {
-  if (!bot.inventory || typeof bot.inventory.items !== 'function') return
-  const sword = bot.inventory.items().find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
-  if (!sword || typeof bot.equip !== 'function') return
+// Armor is the same idea: first *_helmet/_chestplate/_leggings/_boots
+// to head/torso/legs/feet, skipping a slot that already holds armor
+// (mineflayer armor slots: head=5, torso=6, legs=7, feet=8).
+// No mineflayer-armor-manager: four suffix matches via bot.equip is enough.
+const ARMOR_SLOTS = [
+  { suffix: '_helmet', dest: 'head', slot: 5 },
+  { suffix: '_chestplate', dest: 'torso', slot: 6 },
+  { suffix: '_leggings', dest: 'legs', slot: 7 },
+  { suffix: '_boots', dest: 'feet', slot: 8 },
+]
+
+async function equipOne(bot, item, dest) {
   try {
-    const r = bot.equip(sword, 'hand')
-    if (r && typeof r.catch === 'function') r.catch(() => {})
+    await bot.equip(item, dest)
   } catch {
     // best-effort: fists are fine.
   }
 }
 
+async function gearBatch(bot) {
+  if (!bot.inventory || typeof bot.inventory.items !== 'function') return
+  if (typeof bot.equip !== 'function') return
+  let items
+  try {
+    items = bot.inventory.items()
+  } catch {
+    return // best-effort: inventory not ready at spawn
+  }
+  if (!Array.isArray(items)) return
+  const sword = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
+  if (sword) await equipOne(bot, sword, 'hand')
+  for (const { suffix, dest, slot } of ARMOR_SLOTS) {
+    if (bot.inventory.slots && bot.inventory.slots[slot]) continue // already geared
+    const piece = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith(suffix))
+    if (piece) await equipOne(bot, piece, dest)
+  }
+}
+
+// Serialised across calls: one mineflayer equip is two window clicks
+// sharing a single cursor, so overlapping batches would swap pieces down
+// the hotbar instead of wearing them. Callers stay fire-and-forget —
+// the chain never rejects.
+let gearChain = Promise.resolve()
+
+function equipGear(bot) {
+  gearChain = gearChain.then(() => gearBatch(bot)).catch(() => {})
+  return gearChain
+}
+
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
+module.exports.swing = swing
+module.exports.equipGear = equipGear

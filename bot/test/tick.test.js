@@ -10,14 +10,16 @@ function pos(x, y, z) {
   const p = {
     x, y, z,
     distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
-    clone() { return pos(p.x, p.y, p.z) }
+    clone() { return pos(p.x, p.y, p.z) },
+    floored() { return pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
   }
   return p
 }
 
 function mockBot() {
-  const calls = { setGoal: 0, stop: 0 }
-  return {
+  const calls = { setGoal: 0, stop: 0, jump: 0, goals: [] }
+  const controls = {}
+  const bot = {
     calls,
     username: 'IdkBot',
     players: {},
@@ -26,13 +28,29 @@ function mockBot() {
     food: 20,
     entity: { position: pos(0, 64, 0) },
     pathfinder: {
-      setGoal: () => { calls.setGoal++ },
+      goal: null,
+      setGoal: (g) => {
+        calls.setGoal++
+        calls.goals.push(g)
+        bot.pathfinder.goal = g
+        bot.clearControlStates()
+      },
       stop: () => { calls.stop++ },
       isMoving: () => false,
       setMovements: (m) => { calls.movements = m }
     },
+    setControlState: (control, val) => {
+      controls[control] = !!val
+      if (control === 'jump') calls.jump = val ? 1 : 0
+    },
+    clearControlStates: () => {
+      for (const k in controls) controls[k] = false
+      calls.jump = 0
+    },
+    getControlState: (control) => !!controls[control],
     chat: () => {}
   }
+  return bot
 }
 
 function mockBrain(decision) {
@@ -216,6 +234,333 @@ describe('pathfinder status on the decision line', () => {
     await ticker.tick()
     // reset= logged once: stale reason does not repeat, path= persists
     assert.match(lines[lines.length - 1], /moving=false path=noPath reset=none/)
+  })
+})
+
+describe('follow behaviour and unstuck reflex', () => {
+  it('does not re-issue setGoal while status is partial within 6 s; re-issues after 6 s', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    const realNow = Date.now
+    let now = 100000
+    Date.now = () => now
+    try {
+      await ticker.tick() // initial setGoal (t = 0)
+      assert.equal(bot.calls.setGoal, 1)
+
+      ticker.setPathStatus('partial')
+      now += 1000 // 1 s later: search still in progress
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 1)
+
+      now += 4000 // 5 s later (total 5 s elapsed)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 1)
+
+      now += 1001 // 6.001 s elapsed (>= 6000 ms)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 2)
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  it('re-arms 6 s search protection window while moving', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    const realNow = Date.now
+    let now = 100000
+    Date.now = () => now
+    try {
+      await ticker.tick() // initial setGoal (t = 0)
+      assert.equal(bot.calls.setGoal, 1)
+
+      // Move for 10 s
+      bot.pathfinder.isMoving = () => true
+      ticker.setPathStatus('partial')
+      for (let i = 0; i < 10; i++) {
+        now += 1000
+        await ticker.tick()
+      }
+      assert.equal(bot.calls.setGoal, 1)
+
+      // Bot stops moving; status still partial. Should not immediately re-issue
+      bot.pathfinder.isMoving = () => false
+      now += 1000 // 1 s after stopping (11 s since initial setGoal, but 1 s since moving)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 1)
+
+      // After 6 s stationary with partial status, it re-issues
+      now += 5001 // 6.001 s after stopping
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 2)
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  it('two consecutive noPath results with unchanged position produce one stuck log, one jump, one GoalNear, then GoalFollow', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      // Tick 1: initial setGoal (GoalFollow)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+
+      // First terminal result
+      ticker.setPathStatus('noPath')
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 2)
+      assert.equal(bot.calls.goals[1].constructor.name, 'GoalFollow')
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 0)
+
+      // Second consecutive terminal result with position unchanged
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[2]
+      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
+      assert.equal(g.y, 64)
+      assert.equal(bot.calls.jump, 1)
+      const stuckLines = lines.filter((l) => l.includes('stuck reason=noPath'))
+      assert.equal(stuckLines.length, 1)
+      assert.match(stuckLines[0], /^stuck reason=noPath pos=0,64,0 dist=10\.0$/)
+
+      // Next tick: restores GoalFollow
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 4)
+      assert.equal(bot.calls.goals[3].constructor.name, 'GoalFollow')
+      assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 1)
+      assert.equal(bot.calls.jump, 0) // jump released after one tick
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('movement (>0.5 block) resets the stall counter', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal
+      ticker.setPathStatus('noPath')
+      await ticker.tick() // 1st noPath from (0, 64, 0)
+      assert.equal(bot.calls.setGoal, 2)
+      assert.equal(bot.calls.jump, 0)
+
+      // Bot moves > 0.5 block (e.g. 1.0 block)
+      bot.entity.position = pos(1, 64, 0)
+      await ticker.tick() // 1st noPath from (1, 64, 0) -> stall counter was reset, now 1
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalFollow')
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 0)
+
+      // Second consecutive noPath from (1, 64, 0)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 4)
+      assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
+      assert.equal(bot.calls.jump, 1)
+      const stuckLines = lines.filter((l) => l.includes('stuck reason=noPath'))
+      assert.equal(stuckLines.length, 1)
+      assert.match(stuckLines[0], /^stuck reason=noPath pos=1,64,0 dist=/)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('goal key change resets the stall counter and nudge state', async () => {
+    const bot = mockBot()
+    bot.players = {
+      Steve: { username: 'Steve', entity: playerEntity(10) },
+      Alex: { username: 'Alex', entity: playerEntity(15) }
+    }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // follow Steve
+    ticker.setPathStatus('noPath')
+    await ticker.tick() // stall 1 for Steve
+
+    ticker.setFollow('Alex') // switch target
+    await ticker.tick() // fresh follow Alex
+    assert.equal(bot.calls.jump, 0)
+
+    // First stall for Alex: must NOT escalate (counter was reset)
+    await ticker.tick()
+    assert.equal(bot.calls.jump, 0)
+  })
+
+  it('movement <= 0.5 block does not reset the stall counter', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // initial setGoal
+    ticker.setPathStatus('noPath')
+    await ticker.tick() // stall 1 at (0, 64, 0)
+    assert.equal(bot.calls.jump, 0)
+
+    // Minor jitter: 0.3 block movement (<= 0.5)
+    bot.entity.position = pos(0.3, 64, 0)
+    await ticker.tick() // stall 2 -> must escalate
+    assert.equal(bot.calls.jump, 1)
+    assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+  })
+
+  it('active movement suppresses re-issue and clears stall counter if moved >0.5 block', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // initial setGoal
+    ticker.setPathStatus('noPath')
+    await ticker.tick() // stall 1
+
+    // Bot starts moving along path and advances > 0.5 block
+    bot.pathfinder.isMoving = () => true
+    bot.entity.position = pos(2, 64, 0)
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 2) // no new setGoal while moving
+    assert.equal(bot.calls.jump, 0)
+
+    // Bot stops again
+    bot.pathfinder.isMoving = () => false
+    await ticker.tick() // stall 1 from new pos (counter was reset while moving)
+    assert.equal(bot.calls.setGoal, 3)
+    assert.equal(bot.calls.jump, 0)
+  })
+
+  it('timeout status triggers re-issue and escalation after 2 consecutive timeouts', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal
+      ticker.setPathStatus('timeout')
+      await ticker.tick() // timeout 1
+      assert.equal(bot.calls.setGoal, 2)
+      assert.equal(bot.calls.jump, 0)
+
+      await ticker.tick() // timeout 2 -> escalate
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.jump, 1)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      const stuckLines = lines.filter((l) => l.includes('stuck reason=timeout'))
+      assert.equal(stuckLines.length, 1)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('success with empty path (stationary) counts as terminal and triggers escalation', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick()
+    ticker.setPathStatus('success')
+    bot.pathfinder.isMoving = () => false // success but empty path
+    await ticker.tick() // stall 1
+    assert.equal(bot.calls.setGoal, 2)
+
+    await ticker.tick() // stall 2
+    assert.equal(bot.calls.setGoal, 3)
+    assert.equal(bot.calls.jump, 1)
+  })
+
+  it('resting within follow range does not count as stalled across ticks', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal
+      ticker.setPathStatus('success')
+
+      // Sits in range across multiple ticks
+      await ticker.tick()
+      await ticker.tick()
+      await ticker.tick()
+
+      assert.equal(bot.calls.setGoal, 1) // no re-issues while resting in range
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck')).length, 0)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('resting at floored follow range with fractional offset does not false-stuck', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.entity.position = pos(10.5, 64, 0.5)
+      bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(13.9, 64, 0.9) } } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal installs GoalFollow(Steve, 3)
+      ticker.setPathStatus('success')
+
+      // Sits in floored follow range across multiple ticks
+      await ticker.tick()
+      await ticker.tick()
+      await ticker.tick()
+
+      assert.equal(bot.calls.setGoal, 1) // no false re-issue
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck')).length, 0)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('re-issues setGoal when player moves out of resting range', async () => {
+    const bot = mockBot()
+    bot.entity.position = pos(0, 64, 0)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(2, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // initial setGoal (calls.setGoal = 1)
+    ticker.setPathStatus('success')
+
+    // Resting at 2 blocks (satisfied)
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+
+    // Player moves out of follow range
+    bot.players.Steve.entity.position = pos(6, 64, 0)
+    ticker.setPathStatus('noPath')
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 2)
   })
 })
 
@@ -637,31 +982,32 @@ describe('nobody-online leave', () => {
     }
   })
 
-  it('runOnce own quit resolves without exiting; unexpected end exits', async () => {
+  function connBot() {
     const { EventEmitter } = require('node:events')
-    const { runOnce } = require('../src/index')
-    function connBot() {
-      const bot = new EventEmitter()
-      bot.username = 'IdkBot'
-      bot.players = {}
-      bot.entities = {}
-      bot.health = 20
-      bot.food = 20
-      bot.entity = { position: pos(0, 64, 0) }
-      // real registry: Movements walks blocks/items/biomes via prismarine-*
-      bot.registry = require('minecraft-data')('1.21.1')
-      bot.pathfinder = {
-        isMoving: () => false,
-        stop: () => {},
-        setGoal: () => {},
-        setMovements: (m) => { bot.movements = m },
-      }
-      bot.loadPlugin = () => {}
-      bot.quitCalls = 0
-      bot.quit = (reason) => { bot.quitCalls++; bot.emit('end', reason || 'quit') }
-      bot.chat = () => {}
-      return bot
+    const bot = new EventEmitter()
+    bot.username = 'IdkBot'
+    bot.players = {}
+    bot.entities = {}
+    bot.health = 20
+    bot.food = 20
+    bot.entity = { position: pos(0, 64, 0) }
+    // real registry: Movements walks blocks/items/biomes via prismarine-*
+    bot.registry = require('minecraft-data')('1.21.1')
+    bot.pathfinder = {
+      isMoving: () => false,
+      stop: () => {},
+      setGoal: () => {},
+      setMovements: (m) => { bot.movements = m },
     }
+    bot.loadPlugin = () => {}
+    bot.quitCalls = 0
+    bot.quit = (reason) => { bot.quitCalls++; bot.emit('end', reason || 'quit') }
+    bot.chat = () => {}
+    return bot
+  }
+
+  it('runOnce own quit resolves without exiting; unexpected end exits', async () => {
+    const { runOnce } = require('../src/index')
     const realExit = process.exit
     let exits = 0
     process.exit = () => { exits++; throw new Error('exit') }
@@ -711,6 +1057,46 @@ describe('nobody-online leave', () => {
     } finally {
       process.exit = realExit
     }
+  })
+
+  it('runOnce wires spawn kit log and playerLeft lead clear', async () => {
+    const { runOnce } = require('../src/index')
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    const realExit = process.exit
+    let exits = 0
+    process.exit = () => { exits++ }
+    try {
+      const bot = connBot()
+      let done = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 100000,
+        brain: mockBrain(), leaveAfterMs: 0, followName: '',
+        createBot: () => bot,
+        pingFn: async () => ({ players: { online: 1, sample: [{ name: 'Steve' }] } }),
+      }).then(() => { done = true }, () => { done = true })
+      // merge seam (3nt.11 x 3nt.14): both listeners must survive in runOnce
+      assert.equal(bot.listenerCount('playerLeft'), 1, 'playerLeft wired')
+      assert.equal(bot.listeners('spawn').length, 2, 'spawn kit tap wired')
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 50))
+      assert.ok(lines.some((l) => l.includes('spawned as IdkBot')), 'spawn logged')
+      assert.ok(lines.some((l) => l.includes('kit scaffold=')), 'spawn logs kit line')
+      bot.emit('playerLeft', { username: 'Steve' })
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal(exits, 0)
+      assert.equal(done, false)
+    } finally {
+      console.log = origLog
+      process.exit = realExit
+    }
+  })
+
+  it('declares minecraft-protocol (required directly by src/index.js)', () => {
+    const pkg = require('../package.json')
+    assert.ok(pkg.dependencies && pkg.dependencies['minecraft-protocol'], 'direct require must be declared')
+    assert.equal(typeof require('minecraft-protocol').ping, 'function')
   })
 
   it('playersOccupied ignores our own just-quit ghost, joins on anyone else', async () => {
@@ -839,6 +1225,7 @@ describe('find me chat sets the lead order', () => {
     assert.ok(order, 'lead order not set')
     assert.equal(order.name, 'coal_ore')
     assert.equal(order.pos.x, 10)
+    assert.equal(order.by, 'Steve')
     assert.ok((bot.lines || []).some((l) => l.includes('coal_ore at 10 60 0')))
   })
 
@@ -880,5 +1267,382 @@ describe('lead after stop', () => {
     assert.equal(r.decision.action, 'lead')
     assert.ok(lines.some((l) => l.includes('action=lead')))
     assert.equal(bot.calls.setGoal, 1)
+  })
+})
+
+describe('lead hygiene: death, respawn, and player left', () => {
+  const { handlePlayerLeft, createLifecycle, TARGET_GONE_TICKS } = require('../src/index')
+
+  it('bot death clears lead order', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    const life = createLifecycle(ticker)
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    life.onDeath(bot)
+    assert.equal(ticker.getLead(), null)
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+  })
+
+  it('bot respawn clears lead order', async () => {
+    const { handleRespawn } = require('../src/index')
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    const life = createLifecycle(ticker)
+    life.onDeath(bot)
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    life.onRespawn(bot)
+    assert.equal(ticker.getLead(), null)
+
+    // handleRespawn directly
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handleRespawn(bot, ticker)
+    assert.equal(ticker.getLead(), null)
+  })
+
+
+  it('dead bot (health <= 0) clears lead order during tick', async () => {
+    const bot = mockBot()
+    bot.health = 0
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    const r = await ticker.tick()
+    assert.equal(ticker.getLead(), null)
+    assert.notEqual(r.decision.action, 'lead')
+  })
+
+  it('playerLeft clears lead order when followed player leaves', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+  })
+
+  it('playerLeft does not clear lead order when another player leaves', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(ticker.getLead())
+  })
+
+  it('playerLeft clears lead order when followName is empty', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: '' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('target gone for N ticks clears lead order', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    // Player disappears
+    bot.players = {}
+    for (let t = 0; t < TARGET_GONE_TICKS - 1; t++) {
+      await ticker.tick()
+      assert.ok(ticker.getLead(), `lead cleared early at tick ${t}`)
+    }
+    await ticker.tick() // Nth tick
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('target returning before N ticks resets the target-gone counter', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    // Disappear for half the budget
+    bot.players = {}
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead())
+    // Reappear for 1 tick
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    await ticker.tick()
+    assert.ok(ticker.getLead())
+    // Disappear again for half the budget -> should NOT expire yet
+    bot.players = {}
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'target gone counter was not reset when target reappeared')
+  })
+
+  it('unrelated player leaving in nearest-player mode does not clear order issued by another player', async () => {
+    const bot = mockBot()
+    bot.players = {
+      Steve: { username: 'Steve', entity: playerEntity(2) },
+      Alex: { username: 'Alex', entity: playerEntity(10) }
+    }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: '' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0), by: 'Steve' })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(ticker.getLead(), 'unrelated leaver cleared the lead order')
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('setLead resets leadTargetGone counter', async () => {
+    const bot = mockBot()
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    ticker.setLead({ name: 'diamond_ore', pos: pos(20, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'setLead did not reset leadTargetGone')
+  })
+})
+
+describe('melee reflex', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function reflexBot() {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.lookAtCalls = 0
+    bot.equipCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => { bot.lookAtCalls++ }
+    bot._items = [{ name: 'iron_sword' }]
+    bot.inventory = { items: () => bot._items }
+    bot.equip = () => { bot.equipCalls++ }
+    return bot
+  }
+
+  function zombie(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  const reflexLines = () => lines.filter((l) => l.includes('reflex swing'))
+
+  it('swings when the brain answers follow with a zombie at 1 block', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow') // brain still owns the body
+    assert.equal(bot.attackCalls, 1) // ...while the arm swings anyway
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('does not swing when the zombie is at 5 blocks', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(bot.attackCalls, 0)
+    assert.deepEqual(reflexLines(), [])
+  })
+
+  it('swings with nobody online (spawn defence)', async () => {
+    const bot = reflexBot()
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(bot.attackCalls, 1)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('swings every tick but logs and equips once per target', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve)) // gear batches are chained
+    assert.equal(bot.attackCalls, 2)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+    assert.equal(bot.equipCalls, 1)
+    bot.entities = { 2: zombie(2, 1) } // new mob walks up
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.attackCalls, 3)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie', 'reflex swing zombie'])
+    assert.equal(bot.equipCalls, 2)
+  })
+})
+
+describe('melee reflex cadence with nobody online', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function pos2(x, y, z) {
+    const p = { x, y, z, distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z), clone() { return pos2(p.x, p.y, p.z) } }
+    return p
+  }
+
+  it('ticks fast while swinging solo, slow once the mob is gone', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = mockBot()
+      bot.attack = () => { bot.attackCalls = (bot.attackCalls || 0) + 1 }
+      bot.lookAt = () => {}
+      const zp = pos2(1, 64, 0)
+      zp.offset = (ox, oy, oz) => pos2(zp.x + ox, zp.y + oy, zp.z + oz)
+      bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      await ticker.tick()
+      assert.equal(bot.attackCalls, 1)
+      assert.deepEqual(delays, [111]) // swinging: fast, not the 10 s idle poll
+      delete bot.entities[1] // mob dies
+      await ticker.tick()
+      assert.deepEqual(delays, [111, 222]) // nothing in reach: back to slow
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+})
+
+describe('melee reflex with two hostiles (one swing per tick)', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function mob(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('reflex on the newcomer plus fight on the sticky incumbent is still one attack', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mob(1, 2.5) } // incumbent, in swing reach
+    // the dispatch-table test above deletes BEHAVIOURS.fight: restore it so
+    // action=fight really dispatches (otherwise this test pins nothing).
+    BEHAVIOURS.fight = require('../src/behaviours/fight')
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 1) // reflex + fight agree on the target: one swing
+    bot.entities = { 1: mob(1, 2.5), 2: mob(2, 2.0) } // newcomer nearer, inside the 2-block sticky margin
+    await ticker.tick()
+    // reflex hits the nearest (2) while fight holds the incumbent (1):
+    // the arm still swings exactly once.
+    assert.equal(bot.attackCalls, 2)
+  })
+})
+
+describe('melee reflex while parked', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('stop parks the body but the arm still swings, with no brain call', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    const zp = pos(1, 64, 0)
+    zp.offset = (ox, oy, oz) => pos(zp.x + ox, zp.y + oy, zp.z + oz)
+    bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('')
+    ticker.stop()
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(r.calledBrain, false)
+    assert.equal(bot.attackCalls, 1)
+    assert.equal(bot.calls.setGoal, 0) // parked: no body goal issued
+  })
+})
+
+describe('kit inventory log line', () => {
+  const { kitLine } = require('../src/index')
+
+  function kitBot(items) {
+    return { inventory: { items: () => items } }
+  }
+
+  it('counts cobblestone 64 + dirt 3 as scaffold=67 with pickaxe and sword', () => {
+    const bot = kitBot([
+      { name: 'cobblestone', count: 64 },
+      { name: 'dirt', count: 3 },
+      { name: 'iron_pickaxe', count: 1 },
+      { name: 'iron_sword', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=67 pickaxe=yes sword=yes')
+  })
+
+  it('ignores non-scaffolding blocks and reports missing tools as no', () => {
+    const bot = kitBot([
+      { name: 'stone', count: 64 },
+      { name: 'iron_sword', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=0 pickaxe=no sword=yes')
+  })
+
+  it('reports sword=no when other items are present but no sword', () => {
+    const bot = kitBot([
+      { name: 'cobblestone', count: 10 },
+      { name: 'iron_pickaxe', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=10 pickaxe=yes sword=no')
+  })
+
+  it('empty inventory still prints zeros', () => {
+    assert.equal(kitLine(kitBot([])), 'kit scaffold=0 pickaxe=no sword=no')
+  })
+
+  it('missing inventory still prints zeros instead of throwing', () => {
+    assert.equal(kitLine({}), 'kit scaffold=0 pickaxe=no sword=no')
+    assert.equal(kitLine({ inventory: { items: () => { throw new Error('not ready') } } }), 'kit scaffold=0 pickaxe=no sword=no')
   })
 })
