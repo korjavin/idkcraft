@@ -60,6 +60,12 @@ function follow(bot, ctx, target, state) {
 
   if (isMoving) return
 
+  // Goal satisfied: resting within follow range of target is not a stall
+  if (bp && target.position && bp.distanceTo(target.position) <= FOLLOW_RANGE) {
+    ctx.followStalls = 0
+    return
+  }
+
   const status = ctx.lastPathStatus || 'none'
   const isTerminal = status === 'noPath' || status === 'timeout' || (status === 'success' && !isMoving)
   const timedOut = (now - (ctx.followIssuedAt || 0)) >= SEARCH_TIMEOUT_MS
@@ -92,7 +98,3 @@ function follow(bot, ctx, target, state) {
 }
 
 module.exports = follow
-module.exports.SEARCH_TIMEOUT_MS = SEARCH_TIMEOUT_MS
-module.exports.MAX_STALLS = MAX_STALLS
-module.exports.MOVE_TOLERANCE = MOVE_TOLERANCE
-module.exports.NUDGE_OFFSET = NUDGE_OFFSET

@@ -435,6 +435,32 @@ describe('follow behaviour and unstuck reflex', () => {
     assert.equal(bot.calls.setGoal, 3)
     assert.equal(bot.calls.jump, 1)
   })
+
+  it('resting within follow range does not count as stalled across ticks', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal
+      ticker.setPathStatus('success')
+
+      // Sits in range across multiple ticks
+      await ticker.tick()
+      await ticker.tick()
+      await ticker.tick()
+
+      assert.equal(bot.calls.setGoal, 1) // no re-issues while resting in range
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck')).length, 0)
+    } finally {
+      console.log = origLog
+    }
+  })
 })
 
 describe('stateKey', () => {
