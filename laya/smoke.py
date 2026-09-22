@@ -8,7 +8,7 @@ sends (model, state text, questions) -- it is the exact JEV-shaped body.
 
 Waits for /health (up to 120 s), POSTs request.json 20x asserting
 answers.action.choice in {fight, follow, roam, idle} and answers.sprint.noul is a float
-in [0,1], then prints p50/p95 ms plus the answers for 9 canned states as a
+in [0,1], then prints p50/p95 ms plus the answers for 13 canned states as a
 table for the human quality check. Exit non-zero on any shape failure.
 Latency is printed, not asserted.
 """
@@ -28,25 +28,35 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # NOTE: "dist 1 still" repeats the "dist 1" state on purpose: posting the same
 # state twice probes whether the model answers deterministically. A split answer
 # across the two rows means model jitter, not a state difference.
+# Similarly, "prod 55.2 h0.7" and "prod 26.8 h0.7" collapse to the identical categorical
+# wire state (player=away ... hostile=adjacent), serving as a second consistency check.
 STATES = [
     ("dist 12 moving",
-     "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("dist 5",
-     "distance_to_player=5.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=far player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("dist 1",
-     "distance_to_player=1.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=near player_moving=no hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("hostile 4",
-     "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false hostile_reachable=true"),
+     "player=far player_moving=no hostile=near hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("dist 1 still",
-     "distance_to_player=1.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=near player_moving=no hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("dist 1 moving",
-     "distance_to_player=1.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=near player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("dist 5 still",
-     "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
+     "player=far player_moving=no hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
     ("hostile 4 weak",
-     "distance_to_player=5.0 player_visible=true player_moving=false bot_health=5 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false hostile_reachable=true"),
+     "player=far player_moving=no hostile=near hostile_near_player=no hostile_reachable=yes health=low food=ok"),
     ("h4 unreachable",
-     "distance_to_player=10.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false hostile_reachable=false"),
+     "player=away player_moving=no hostile=near hostile_near_player=no hostile_reachable=no health=ok food=ok"),
+    ("prod 2.7 near_p",
+     "player=near player_moving=yes hostile=near hostile_near_player=yes hostile_reachable=yes health=ok food=ok"),
+    ("prod 55.2 h0.7",
+     "player=away player_moving=yes hostile=adjacent hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
+    ("prod 26.8 h0.7",
+     "player=away player_moving=yes hostile=adjacent hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
+    ("prod 10.7 h7.5",
+     "player=away player_moving=yes hostile=near hostile_near_player=no hostile_reachable=yes health=ok food=ok"),
 ]
 
 
@@ -115,9 +125,9 @@ def main():
     p50 = statistics.median(lat)
     p95 = ordered[min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)]
     print("posts=%d p50=%.0fms p95=%.0fms" % (len(lat), p50, p95))
-    print("%-14s %-8s %-8s %s" % ("state", "action", "sprint", "ms"))
+    print("%-16s %-8s %-8s %s" % ("state", "action", "sprint", "ms"))
     for label, ms, data in rows:
-        print("%-14s %-8s %-8.3f %.0f" % (
+        print("%-16s %-8s %-8.3f %.0f" % (
             label, data["answers"]["action"]["choice"],
             data["answers"]["sprint"]["noul"], ms))
     return 0
