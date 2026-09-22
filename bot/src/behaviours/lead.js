@@ -18,6 +18,10 @@ const RESUME_DIST = 8
 const GIVE_UP_TICKS = 10
 const RETRY_EVERY_TICKS = 6
 
+// Wait budget (ticks at BRAIN_TICK_MS, ~120 s at the 1 s default): a player
+// who never comes back within RESUME_DIST must not pin the order forever.
+const WAIT_BUDGET_TICKS = 120
+
 function dist(a, b) {
   if (a && typeof a.distanceTo === 'function') return a.distanceTo(b)
   if (b && typeof b.distanceTo === 'function') return b.distanceTo(a)
@@ -68,14 +72,24 @@ function lead(bot, ctx, target, state) {
   if (order.waiting) {
     if (dp != null && dp <= RESUME_DIST) {
       order.waiting = false
+      order.waitTicks = 0
       ctx.leadStuck = 0
     } else {
+      order.waitTicks = (order.waitTicks || 0) + 1
+      if (order.waitTicks > WAIT_BUDGET_TICKS) {
+        bot.chat(`giving up on ${order.name}`)
+        ctx.lead = null
+        ctx.leadStuck = 0
+        holdGoal(bot, ctx)
+        return
+      }
       holdGoal(bot, ctx)
       ctx.leadStuck = 0
       return
     }
   } else if (dp != null && dp > WAIT_DIST) {
     order.waiting = true
+    order.waitTicks = 1
     holdGoal(bot, ctx)
     ctx.leadStuck = 0
     return
@@ -110,3 +124,4 @@ module.exports.WAIT_DIST = WAIT_DIST
 module.exports.RESUME_DIST = RESUME_DIST
 module.exports.GIVE_UP_TICKS = GIVE_UP_TICKS
 module.exports.RETRY_EVERY_TICKS = RETRY_EVERY_TICKS
+module.exports.WAIT_BUDGET_TICKS = WAIT_BUDGET_TICKS
