@@ -491,6 +491,26 @@ describe('follow behaviour and unstuck reflex', () => {
       console.log = origLog
     }
   })
+
+  it('re-issues setGoal when player moves out of resting range', async () => {
+    const bot = mockBot()
+    bot.entity.position = pos(0, 64, 0)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(2, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // initial setGoal (calls.setGoal = 1)
+    ticker.setPathStatus('success')
+
+    // Resting at 2 blocks (satisfied)
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+
+    // Player moves out of follow range
+    bot.players.Steve.entity.position = pos(6, 64, 0)
+    ticker.setPathStatus('noPath')
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 2)
+  })
 })
 
 describe('stateKey', () => {
