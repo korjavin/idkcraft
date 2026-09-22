@@ -26,13 +26,26 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   let lastStateKey = null
   let lastDecision = null
 
+  // mineflayer-pathfinder's stop() only sets a stopPathing flag that the
+  // next setGoal consumes with the new goal — on an empty path with no goal
+  // it latches and swallows the next goal, so skip it there. A live but
+  // stationary goal (dynamic follow resting in range) still needs cancelling;
+  // setGoal(null) clears it without latching. lastGoalKey still flips to
+  // 'idle' for stop-once.
+  function stopOnce() {
+    if (ctx.lastGoalKey !== 'idle') {
+      if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
+      else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
+      ctx.lastGoalKey = 'idle'
+    }
+  }
+
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
       handler(bot, ctx, target, state)
     } else {
-      if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
-      ctx.lastGoalKey = 'idle'
+      stopOnce()
     }
     if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
@@ -66,10 +79,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           lastDecision = null
           lastStateKey = null
         }
-        if (ctx.lastGoalKey !== 'idle') {
-          bot.pathfinder.stop()
-          ctx.lastGoalKey = 'idle'
-        }
+        stopOnce()
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
@@ -82,10 +92,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (!target) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
-        if (ctx.lastGoalKey !== 'idle') {
-          bot.pathfinder.stop()
-          ctx.lastGoalKey = 'idle'
-        }
+        stopOnce()
         lastTargetPos = null
         lastDecision = null
         lastStateKey = null
@@ -118,10 +125,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (ctx.paused) {
         // 'stop' landed during the brain await: discard the stale decision
         // so one in-flight tick cannot issue a follow goal after the park.
-        if (ctx.lastGoalKey !== 'idle') {
-          bot.pathfinder.stop()
-          ctx.lastGoalKey = 'idle'
-        }
+        stopOnce()
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
@@ -147,8 +151,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
-      if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
-      ctx.lastGoalKey = 'idle'
+      stopOnce()
     }
   }
 }
