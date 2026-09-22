@@ -328,7 +328,7 @@ function fleeReflex(bot, ctx) {
         } else {
           try {
             const state = buildState(bot, null)
-            reflexFast = meleeReflex(bot, ctx, state)
+            if (meleeReflex(bot, ctx, state)) reflexFast = true
             eatReflex(bot, ctx, state)
           } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
@@ -359,7 +359,7 @@ function fleeReflex(bot, ctx) {
         // standing on the bot still gets swung at every slow tick.
         try {
           const state = buildState(bot, null)
-          reflexFast = meleeReflex(bot, ctx, state)
+          if (meleeReflex(bot, ctx, state)) reflexFast = true
           eatReflex(bot, ctx, state)
         } catch (_) { /* facts best-effort */ }
         if (ctx.lead) {
