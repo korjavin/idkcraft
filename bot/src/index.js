@@ -10,21 +10,23 @@ const BEHAVIOURS = {
   fight: require('./behaviours/fight'),
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
+  lead: require('./behaviours/lead'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
 // up every 10 s just to re-scan the player list is plenty.
 const IDLE_TICK_MS = 10000
 const IDLE_LOG_MS = 60000
-// Server-ping cadence while off the server (owner: 5 s so the bot rejoins
-// ~5 s after the first player appears), and the nobody-online grace before
-// the bot quits (one night-tick so a relogging player never sees it leave).
-const JOIN_POLL_MS = 5000
-// Quiet settle after the ping first sees a player: Paper's connection
-// throttle (~4 s) counts our status pings as connections, so joining the
-// instant a ping succeeds is kicked as throttled. 6 s of silence lets the
-// window expire; join still lands well inside the 20 s e2e budget.
-const JOIN_SETTLE_MS = 6000
+// Server-ping cadence while off the server (owner: rejoin ~5 s after the
+// first player appears), and the nobody-online grace before the bot quits
+// (one night-tick so a relogging player never sees it leave).
+const JOIN_POLL_MS = 2000
+// Quiet settle after the ping first sees a player: Paper's connection-throttle
+// (default 4000 ms; the local test image uses the default) counts our status
+// pings, so joining the instant a ping succeeds is kicked as throttled.
+// 4500 ms clears the 4 s window with a small margin; typical join lands
+// ~5.5 s after the first player (up to ~6.5 s worst case).
+const JOIN_SETTLE_MS = 4500
 const LEAVE_AFTER_MS_DEFAULT = 60000
 // Re-probe ceiling (ticks) for a given-up hostile: the world may change
 // (bridged ravine, opened door), so a pursuit fight abandoned is retried
@@ -34,7 +36,7 @@ const LEAVE_AFTER_MS_DEFAULT = 60000
 const FIGHT_REPROBE_TICKS = 30
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0 }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -241,6 +243,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
+      if (ctx.lead && decision.action !== 'fight') {
+        // Lead is an explicit player order: it overrides the brain like
+        // 'stop' does, but fight still preempts (safety beats errands).
+        const handler = BEHAVIOURS.lead
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
+        const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
+        return { decision: { ...decision, action: 'lead' }, calledBrain }
+      }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
     } catch (err) {
@@ -260,11 +272,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; if (name) ctx.paused = false },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
+      ctx.lead = null
+      ctx.leadStuck = 0
       stopOnce()
-    }
+    },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false }
   }
 }
 
@@ -420,6 +435,7 @@ function handleChat(bot, ticker, username, message) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
         bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
+        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position })
       }
     }
   }
