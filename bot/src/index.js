@@ -23,6 +23,7 @@ const IDLE_LOG_MS = 60000
 // answers follow for an unreachable mob, fight stops being dispatched and
 // its own counter would never advance.
 const FIGHT_REPROBE_TICKS = 30
+const TARGET_GONE_TICKS = 10
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0 }
@@ -120,6 +121,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
         stopOnce()
+        if (ctx.lead) {
+          ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
+          if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
+            ctx.lead = null
+            ctx.leadStuck = 0
+            ctx.leadTargetGone = 0
+          }
+        }
         lastTargetPos = null
         lastDecision = null
         lastStateKey = null
@@ -129,6 +138,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+      }
+      ctx.leadTargetGone = 0
+      if (typeof bot.health === 'number' && bot.health <= 0) {
+        ctx.lead = null
+        ctx.leadStuck = 0
       }
       const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
       lastTargetPos = state._lastTargetPos
@@ -224,7 +238,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       ctx.leadStuck = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false }
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false },
+    clearLead: (player) => {
+      if (player && followName && player.username && player.username !== followName) return
+      ctx.lead = null
+      ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
+    },
+    getLead: () => ctx.lead
   }
 }
 
@@ -256,9 +277,10 @@ function main() {
   bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
   bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
-  const life = createLifecycle()
+  const life = createLifecycle(ticker)
   bot.on('death', () => life.onDeath(bot))
   bot.on('respawn', () => life.onRespawn(bot))
+  bot.on('playerLeft', (player) => handlePlayerLeft(bot, ticker, player))
 
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
@@ -327,24 +349,34 @@ function respawnLine(bot) {
   return `respawn at ${at}`
 }
 
-function handleDeath(bot) {
+function handleDeath(bot, ticker) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(deathLine(bot))
 }
 
-function handleRespawn(bot) {
+function handleRespawn(bot, ticker) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+}
+
+function handlePlayerLeft(bot, ticker, player) {
+  if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead(player)
 }
 
 // Death/respawn pair: mineflayer also emits 'respawn' on dimension change
 // (portal transit), which is not a reappearance after death. The flag keeps
 // the log strictly paired — one respawn line per observed death — so the
 // death/respawn counts stay meaningful.
-function createLifecycle() {
+function createLifecycle(ticker) {
   let died = false
   return {
-    onDeath(bot) { died = true; handleDeath(bot) },
-    onRespawn(bot) { if (!died) return; died = false; handleRespawn(bot) },
+    onDeath(bot, t = ticker) { died = true; handleDeath(bot, t) },
+    onRespawn(bot, t = ticker) {
+      if (!died) return
+      died = false
+      handleRespawn(bot, t)
+    },
   }
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle }
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, createLifecycle, TARGET_GONE_TICKS }

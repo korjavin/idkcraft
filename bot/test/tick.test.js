@@ -1042,3 +1042,124 @@ describe('lead after stop', () => {
     assert.equal(bot.calls.setGoal, 1)
   })
 })
+
+describe('lead hygiene: death, respawn, and player left', () => {
+  const { handlePlayerLeft, createLifecycle, TARGET_GONE_TICKS } = require('../src/index')
+
+  it('bot death clears lead order', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    const life = createLifecycle(ticker)
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    life.onDeath(bot)
+    assert.equal(ticker.getLead(), null)
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+  })
+
+  it('bot respawn clears lead order', async () => {
+    const { handleRespawn } = require('../src/index')
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    const life = createLifecycle(ticker)
+    life.onDeath(bot)
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    life.onRespawn(bot)
+    assert.equal(ticker.getLead(), null)
+
+    // handleRespawn directly
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handleRespawn(bot, ticker)
+    assert.equal(ticker.getLead(), null)
+  })
+
+
+  it('dead bot (health <= 0) clears lead order during tick', async () => {
+    const bot = mockBot()
+    bot.health = 0
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    const r = await ticker.tick()
+    assert.equal(ticker.getLead(), null)
+    assert.notEqual(r.decision.action, 'lead')
+  })
+
+  it('playerLeft clears lead order when followed player leaves', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+  })
+
+  it('playerLeft does not clear lead order when another player leaves', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(ticker.getLead())
+  })
+
+  it('playerLeft clears lead order when followName is empty', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: '' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('target gone for N ticks clears lead order', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    assert.ok(ticker.getLead())
+    // Player disappears
+    bot.players = {}
+    for (let t = 0; t < TARGET_GONE_TICKS - 1; t++) {
+      await ticker.tick()
+      assert.ok(ticker.getLead(), `lead cleared early at tick ${t}`)
+    }
+    await ticker.tick() // Nth tick
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('target returning before N ticks resets the target-gone counter', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    // Disappear for half the budget
+    bot.players = {}
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead())
+    // Reappear for 1 tick
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    await ticker.tick()
+    assert.ok(ticker.getLead())
+    // Disappear again for half the budget -> should NOT expire yet
+    bot.players = {}
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'target gone counter was not reset when target reappeared')
+  })
+})
+
