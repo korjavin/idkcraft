@@ -85,6 +85,19 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 
 ### Chat Commands
 
+#### How to talk to the bot
+
+- **Opening chat:**
+  - **Nintendo Switch / Bedrock:** Press **Right on the D-pad** to open chat (default controller layout; check **Settings → Controls → Chat** if remapped), type your message, and press the send button.
+  - **Java Edition:** Press **T** to open the chat window.
+- **NO leading slash:** Type commands directly as plain text (e.g. `follow me`, not `/follow me`). Any message starting with a slash (`/`) is treated by Paper as a server command, so the bot never receives it.
+- **Case-insensitive:** Commands are case-insensitive (`follow me`, `FOLLOW ME`). Block names for search should be in English, snake_case (e.g. `coal_ore`, `diamond_ore`, `iron_block`).
+- **Command list & replies:**
+  - `follow me` — Locks onto you and resumes following, replying with `Following <username>` (e.g. `Following Player`).
+  - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply.
+  - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`) — Searches loaded chunks within 48 blocks. The bot replies with `<block> at <x> <y> <z> (<N> blocks)` (e.g. `coal_ore at -12 64 200 (14 blocks)`), `no <block> within 48 blocks`, or `unknown block: <block>`.
+- **Bot chat & ore reports:** The bot answers command responses in chat; if no reply appears within ~2 s, check the log line `decision source=...` is still flowing. The bot also broadcasts unsolicited ore announcements when its scouting reflex detects veins (e.g. `diamond_ore x4 at -60 12 -180`); these are autonomous scout reflex announcements, not replies to commands.
+
 | Command | Action | Implementation |
 | --- | --- | --- |
 | `follow me` | Locks onto speaker, resumes movement if parked | Sets `followName` to speaker, unparks ticker, replies `Following <username>` |
