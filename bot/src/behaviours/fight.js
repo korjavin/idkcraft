@@ -15,6 +15,11 @@ const SWING_RANGE = 3
 // arbitration stays with the brain.
 const RETRY_EVERY_TICKS = 6
 const GIVE_UP_TICKS = 18
+// ponytail: hysteresis margin (blocks) + re-probe ceiling (ticks). A newcomer
+// this much nearer than the incumbent wins immediately; a written-off target
+// is re-pursued from scratch this often in case the world changed.
+const STICKY_MARGIN_BLOCKS = 2
+const SHADOW_REPROBE_TICKS = 30
 
 // ponytail: one function, no base class or activate/deactivate hooks —
 // same shape as follow.js. One swing per tick (1/s); a 600 ms swing timer
@@ -26,6 +31,7 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = 'idle'
     ctx.fightId = null
     ctx.fightGivenUpId = null
+    ctx.fightShadowTicks = 0
     return
   }
   ctx.fightId = hostile.id
@@ -36,9 +42,18 @@ function fight(bot, ctx, target, state) {
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
+      ctx.fightShadowTicks = 0
       swing(bot, hostile)
     } else {
-      shadowPlayer(bot, ctx, target)
+      ctx.fightShadowTicks = (ctx.fightShadowTicks || 0) + 1
+      if (ctx.fightShadowTicks >= SHADOW_REPROBE_TICKS) {
+        // The world may have changed (bridged ravine, opened door): probe
+        // the pursuit again from scratch instead of shadowing forever.
+        ctx.fightShadowTicks = 0
+        ctx.fightGivenUpId = null
+      } else {
+        shadowPlayer(bot, ctx, target)
+      }
     }
     return
   }
@@ -47,6 +62,7 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = key
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
+    ctx.fightShadowTicks = 0
     equipSword(bot)
   } else if (!inRange) {
     if (bot.pathfinder.isMoving()) {
@@ -73,12 +89,21 @@ function fight(bot, ctx, target, state) {
 // Stay on the current target while it is still a fight candidate: perception
 // re-ranks nearest every tick, and flip-flopping between two mobs would reset
 // the retry spacing and the give-up budget (and re-equip) on every crossover.
+// Two escapes: a written-off incumbent never wins (a newly picked target may
+// be the reachable fight the give-up was blinding us to), and a newcomer
+// nearer by STICKY_MARGIN_BLOCKS wins immediately.
 function stickyTarget(bot, ctx, target, fresh) {
-  if (ctx.fightId != null && (!fresh || fresh.id !== ctx.fightId)) {
-    const prev = bot.entities ? bot.entities[ctx.fightId] : null
-    if (isFightTarget(prev, bot.entity.position, target && target.position)) return prev
+  if (ctx.fightId == null) return fresh
+  if (fresh && fresh.id === ctx.fightId) return fresh
+  if (ctx.fightGivenUpId === ctx.fightId) return fresh
+  const prev = bot.entities ? bot.entities[ctx.fightId] : null
+  if (!isFightTarget(prev, bot.entity.position, target && target.position)) return fresh
+  if (fresh) {
+    const dPrev = prev.position.distanceTo(bot.entity.position)
+    const dFresh = fresh.position.distanceTo(bot.entity.position)
+    if (dFresh + STICKY_MARGIN_BLOCKS < dPrev) return fresh
   }
-  return fresh
+  return prev
 }
 
 function shadowPlayer(bot, ctx, target) {

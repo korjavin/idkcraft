@@ -238,6 +238,65 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.equip, 2)
   })
 
+  it('engages a new mob instead of resurrecting a given-up one', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    const a = mobEntity(1, 'zombie', 6)
+    bot.entities = { 1: a }
+    fight(bot, ctx, player, { hostile: a })
+    for (let t = 0; t < 20; t++) fight(bot, ctx, player, { hostile: a })
+    const b = mobEntity(2, 'zombie', 4) // reachable, now nearest
+    bot.entities = { 1: a, 2: b }
+    fight(bot, ctx, player, { hostile: b })
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.entity, b) // pursuing B, not shadowing past A
+  })
+
+  it('swings at a new mob in range while the incumbent is given up', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    const a = mobEntity(1, 'zombie', 6)
+    bot.entities = { 1: a }
+    fight(bot, ctx, player, { hostile: a })
+    for (let t = 0; t < 20; t++) fight(bot, ctx, player, { hostile: a })
+    const b = mobEntity(2, 'zombie', 2)
+    bot.entities = { 1: a, 2: b }
+    fight(bot, ctx, player, { hostile: b })
+    assert.equal(bot.calls.attack, 1)
+  })
+
+  it('switches to a newcomer nearer by the margin', () => {
+    const bot = mockBot()
+    const a = mobEntity(1, 'zombie', 7)
+    const b = mobEntity(2, 'zombie', 2)
+    bot.entities = { 1: a, 2: b }
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    fight(bot, ctx, player, { hostile: a })
+    assert.equal(bot.calls.setGoal, 1)
+    fight(bot, ctx, player, { hostile: b }) // 5 nearer: margin (2) beaten
+    assert.equal(bot.calls.setGoal, 2)
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.entity, b)
+  })
+
+  it('re-probes a given-up mob instead of shadowing forever', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    const zombie = mobEntity(1, 'zombie', 6)
+    const state = { hostile: zombie }
+    for (let t = 0; t < 21; t++) fight(bot, ctx, player, state)
+    const mobGoals = () => bot.calls.goals.filter((g) => g.entity === zombie)
+    assert.equal(mobGoals().length, 4) // given up
+    for (let t = 0; t < 35; t++) fight(bot, ctx, player, state)
+    assert.equal(mobGoals().length, 5) // re-probed from scratch
+    assert.equal(bot.calls.stop, 0)
+    assert.equal(bot.calls.attack, 0)
+  })
+
   it('stops only a moving bot when the target is missing or dead', () => {
     const missing = mockBot()
     const ctx = { lastGoalKey: 'fight:1' }
