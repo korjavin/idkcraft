@@ -417,4 +417,25 @@ describe('stub fight end-to-end', () => {
     for (let t = 0; t < 35; t++) actions.push((await ticker.tick()).decision.action)
     assert.ok(actions.slice(firstFollow + 30).includes('fight'), `ticker never re-probed: ${actions.slice(firstFollow).join(',')}`)
   })
+
+  it('given-up incumbent with a nearer reachable mob -> fights the newcomer', async () => {
+    // A at 6 blocks stalls pursuit; B appears at 5 (inside the 2-block sticky
+    // margin, so fight holds A while perception ranks B nearest). After A is
+    // written off the brain must send the body to reachable B — never re-arm
+    // A forever, never strand on follow while B threatens.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    const a = mobEntity(1, 'zombie', 6)
+    bot.entities = { 1: a }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 10; t++) await ticker.tick() // pursuing A
+    const b = mobEntity(2, 'zombie', 5)
+    bot.entities = { 1: a, 2: b }
+    const actions = []
+    for (let t = 0; t < 50; t++) actions.push((await ticker.tick()).decision.action)
+    const goalsFor = (m) => bot.calls.goals.filter((g) => g.entity === m).length
+    assert.ok(goalsFor(b) >= 1, 'newcomer B never pathed to')
+    assert.ok(actions.includes('follow'), `brain never saw unreachable: ${actions.join(',')}`)
+    assert.equal(bot.calls.attack, 0) // both out of swing range throughout
+  })
 })

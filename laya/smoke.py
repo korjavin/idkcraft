@@ -45,7 +45,7 @@ STATES = [
      "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true"),
     ("hostile 4 weak",
      "distance_to_player=5.0 player_visible=true player_moving=false bot_health=5 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false hostile_reachable=true"),
-    ("hostile 4 unreach",
+    ("h4 unreachable",
      "distance_to_player=10.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false hostile_reachable=false"),
 ]
 

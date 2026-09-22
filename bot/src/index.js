@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
-const { findTarget, buildState, stateKey } = require('./perception')
+const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 
 const BEHAVIOURS = {
@@ -112,16 +112,25 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
       lastTargetPos = state._lastTargetPos
       // Feed fight's give-up latch back to the brain as hostile_reachable.
-      if (ctx.fightGivenUpId != null && (!state.hostile || state.hostile.id !== ctx.fightGivenUpId)) {
-        ctx.fightGivenUpId = null // stale: mob gone, or a new mob is nearest
-        ctx.fightUnreachableTicks = 0
-        state.hostile_reachable = true
-      } else if (state.hostile && ctx.fightGivenUpId === state.hostile.id) {
-        ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
-        if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
-          ctx.fightGivenUpId = null
+      // Keyed on the latched mob itself, not state.hostile: fight pursues the
+      // sticky incumbent (ctx.fightId) while perception ranks nearest, and a
+      // newcomer inside the sticky margin must not read as a stale latch —
+      // clearing there would re-arm pursuit of the unreachable mob forever.
+      if (ctx.fightGivenUpId != null) {
+        const latched = bot.entities ? bot.entities[ctx.fightGivenUpId] : null
+        if (!isFightTarget(latched, bot.entity.position, target && target.position)) {
+          ctx.fightGivenUpId = null // stale: mob gone or no longer a candidate
           ctx.fightUnreachableTicks = 0
           state.hostile_reachable = true
+        } else if (state.hostile && state.hostile.id === ctx.fightGivenUpId) {
+          ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
+          if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
+            ctx.fightGivenUpId = null
+            ctx.fightUnreachableTicks = 0
+            state.hostile_reachable = true
+          }
+        } else {
+          ctx.fightUnreachableTicks = 0
         }
       } else {
         ctx.fightUnreachableTicks = 0
