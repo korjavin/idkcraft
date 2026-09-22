@@ -11,9 +11,15 @@ fi
 lines=$(wc -l < "$log" | tr -d ' ')
 echo "lines: $lines"
 echo "--- per action= ---"
-grep -o -E 'action=[A-Za-z_-]+' "$log" | sort | uniq -c | sort -rn || echo "(none)"
+actions=$(grep -o -E 'action=[A-Za-z_-]+' "$log" | sort | uniq -c | sort -rn)
+[ -n "$actions" ] || actions='(none)'
+printf '%s\n' "$actions"
 echo "--- per source= ---"
-grep -o -E 'source=[A-Za-z_-]+' "$log" | sort | uniq -c | sort -rn || echo "(none)"
+# Decision lines only: 'brain disagree' lines also carry source= and would
+# double-count every tick the model diverged from the reference policy.
+sources=$(grep 'decision ' "$log" | grep -o -E 'source=[A-Za-z_-]+' | sort | uniq -c | sort -rn)
+[ -n "$sources" ] || sources='(none)'
+printf '%s\n' "$sources"
 echo "brain disagree: $(grep -c 'brain disagree' "$log" || true)"
 echo "stub-fallback: $(grep -c 'stub-fallback' "$log" || true)"
 echo "deaths: $(grep -c -E '(^| )death health=' "$log" || true)"

@@ -418,7 +418,7 @@ describe('paused stop', () => {
 })
 
 describe('death/respawn log lines', () => {
-  const { deathLine, respawnLine, handleDeath, handleRespawn } = require('../src/index')
+  const { deathLine, respawnLine, handleDeath, handleRespawn, createLifecycle } = require('../src/index')
   const { buildState } = require('../src/perception')
 
   function deadBot() {
@@ -449,6 +449,47 @@ describe('death/respawn log lines', () => {
     const bot = deadBot()
     bot.entity = { position: pos(0, 64, 0) }
     assert.equal(respawnLine(bot), 'respawn at 0 64 0')
+  })
+
+  it('respawn prefers spawnPoint: entity position is still the death coords', () => {
+    const bot = deadBot() // entity at death coords, spawnPoint at world spawn
+    bot.spawnPoint = pos(0, 64, 0)
+    assert.equal(respawnLine(bot), 'respawn at 0 64 0')
+  })
+
+  it('respawn falls back to entity position, then unknown', () => {
+    const noSpawn = deadBot()
+    noSpawn.entity = { position: pos(5, 64, 5) }
+    assert.equal(respawnLine(noSpawn), 'respawn at 5 64 5')
+    const neither = deadBot()
+    neither.entity = null
+    assert.equal(respawnLine(neither), 'respawn at unknown')
+  })
+
+  it('lifecycle pairs death/respawn: lone respawn (dimension change) stays silent', () => {
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      const life = createLifecycle()
+      const bot = deadBot()
+      bot.spawnPoint = pos(0, 64, 0)
+      life.onRespawn(bot) // portal transit, no death before it
+      assert.deepEqual(lines, [])
+      life.onDeath(bot)
+      life.onRespawn(bot)
+      assert.deepEqual(lines, [
+        'death health=0 hostiles=1 at 100 64 -20',
+        'respawn at 0 64 0',
+      ])
+      life.onRespawn(bot) // second respawn without a death stays silent
+      assert.equal(lines.length, 2)
+      life.onDeath(bot) // a new death re-arms the respawn line
+      life.onRespawn(bot)
+      assert.equal(lines.length, 4)
+    } finally {
+      console.log = orig
+    }
   })
 
   it('handlers print exactly one line each', () => {

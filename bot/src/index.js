@@ -213,8 +213,9 @@ function main() {
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
-  bot.on('death', () => handleDeath(bot))
-  bot.on('respawn', () => handleRespawn(bot))
+  const life = createLifecycle()
+  bot.on('death', () => life.onDeath(bot))
+  bot.on('respawn', () => life.onRespawn(bot))
 
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
@@ -272,8 +273,13 @@ function deathLine(bot) {
 }
 
 function respawnLine(bot) {
-  const pos = bot.entity && bot.entity.position
-  const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
+  // At the 'respawn' packet bot.entity.position still holds the death
+  // coords (mineflayer only moves it on the later position sync), so read
+  // bot.spawnPoint instead: this bot sets no bed/anchor, meaning respawn
+  // always lands on world spawn. Entity position is the fallback.
+  const dest = (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
+    (bot.entity && bot.entity.position)
+  const at = dest ? `${Math.floor(dest.x)} ${Math.floor(dest.y)} ${Math.floor(dest.z)}` : 'unknown'
   return `respawn at ${at}`
 }
 
@@ -285,4 +291,16 @@ function handleRespawn(bot) {
   console.log(respawnLine(bot))
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine }
+// Death/respawn pair: mineflayer also emits 'respawn' on dimension change
+// (portal transit), which is not a reappearance after death. The flag keeps
+// the log strictly paired — one respawn line per observed death — so the
+// death/respawn counts stay meaningful.
+function createLifecycle() {
+  let died = false
+  return {
+    onDeath(bot) { died = true; handleDeath(bot) },
+    onRespawn(bot) { if (!died) return; died = false; handleRespawn(bot) },
+  }
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle }

@@ -149,7 +149,7 @@ Line types:
 | `brain disagree source=<s> model=<a> stub=<r> ...` | The remote brain answered differently from the local reference policy. A high rate means the prompt criteria and the rules drifted apart. |
 | `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
-| `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). A death with no respawn after it means the bot never came back. |
+| `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). Coords are the respawn destination (world spawn — the bot sets no bed), because the position field still holds the death coords at that instant. Strictly one per death: `respawn` packets from dimension changes are not logged. A death with no respawn after it means the bot never came back. |
 | `tick error: ...` | The tick threw instead of deciding; the bot retried on the next tick. Frequent lines here point at perception or brain bugs, not at the model. |
 
 ## Online-mode note
