@@ -816,3 +816,158 @@ describe('death/respawn log lines', () => {
     ])
   })
 })
+
+describe('lead override', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function leadBot() {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    bot.chat = (line) => { bot.lines = bot.lines || []; bot.lines.push(line) }
+    return bot
+  }
+
+  it('lead order overrides follow and logs action=lead', async () => {
+    const bot = leadBot()
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'lead')
+    assert.equal(bot.calls.setGoal, 1)
+    assert.ok(lines.some((l) => l.includes('action=lead')), 'log keeps format with action=lead')
+    assert.ok(!lines.some((l) => l.includes('action=follow')), 'brain follow not dispatched')
+  })
+
+  it('fight still preempts a lead order', async () => {
+    const bot = leadBot()
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    // fight with no hostile shadows the player (bodyguard fallback): a goal,
+    // but never the lead key.
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'fight')
+    assert.ok(lines.some((l) => l.includes('action=fight')))
+    assert.ok(!lines.some((l) => l.includes('action=lead')))
+  })
+
+  it('stop clears the lead order and parks', async () => {
+    const bot = leadBot()
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+    ticker.setFollow('')
+    ticker.stop()
+    lines.length = 0
+    const goalsBefore = bot.calls.setGoal
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'idle')
+    assert.equal(bot.calls.setGoal, goalsBefore) // parked: no fresh lead goal
+    assert.ok(lines.every((l) => !l.includes('action=lead')))
+  })
+
+  it('follow me clears the lead order', async () => {
+    const bot = leadBot()
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    ticker.setFollow('Steve') // chat 'follow me' path
+    lines.length = 0
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.ok(!lines.some((l) => l.includes('action=lead')))
+  })
+
+  it('arrival clears the order so follow resumes next tick', async () => {
+    const bot = leadBot()
+    bot.entity.position = pos(9, 64, 0)
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(9) } }
+    const seq = [
+      { action: 'follow', sprint: false, source: 'stub' },
+      { action: 'follow', sprint: false, source: 'stub' },
+    ]
+    let i = 0
+    const brain = { calls: 0, async decide() { this.calls++; return seq[Math.min(i++, seq.length - 1)] } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    const r1 = await ticker.tick()
+    assert.equal(r1.decision.action, 'lead')
+    assert.ok((bot.lines || []).some((l) => l === 'here: coal at 10 64 0'))
+    lines.length = 0
+    const r2 = await ticker.tick()
+    assert.equal(r2.decision.action, 'follow') // order gone: brain owns the body again
+    assert.ok(!lines.some((l) => l.includes('action=lead')))
+  })
+})
+
+describe('find me chat sets the lead order', () => {
+  const { handleChat } = require('../src/index')
+  const { findNearest } = require('../src/behaviours/scout')
+
+  it('find me <block> replies and sets ctx.lead when found', () => {
+    const bot = mockBot()
+    bot.username = 'IdkBot'
+    bot.chat = (line) => { bot.lines = bot.lines || []; bot.lines.push(line) }
+    bot.registry = { blocksByName: { coal_ore: { id: 16 } } }
+    bot.entity = { position: pos(0, 64, 0) }
+    bot.findBlocks = () => [pos(10, 60, 0)]
+    bot.blockAt = () => ({ name: 'coal_ore' })
+    let order = null
+    const ticker = { setLead: (o) => { order = o }, setFollow: () => {}, stop: () => {} }
+    // sanity: the fixture really resolves, or the assertion pins nothing
+    const res = findNearest(bot, 'coal')
+    assert.ok(res && res.position)
+    handleChat(bot, ticker, 'Steve', 'find me coal')
+    assert.ok(order, 'lead order not set')
+    assert.equal(order.name, 'coal_ore')
+    assert.equal(order.pos.x, 10)
+    assert.ok((bot.lines || []).some((l) => l.includes('coal_ore at 10 60 0')))
+  })
+
+  it('find me with nothing nearby sets no order', () => {
+    const bot = mockBot()
+    bot.username = 'IdkBot'
+    bot.chat = () => {}
+    bot.registry = { blocksByName: { coal_ore: { id: 16 } } }
+    bot.entity = { position: pos(0, 64, 0) }
+    bot.findBlocks = () => []
+    let order = 'unset'
+    const ticker = { setLead: (o) => { order = o }, setFollow: () => {}, stop: () => {} }
+    handleChat(bot, ticker, 'Steve', 'find me coal')
+    assert.equal(order, 'unset')
+  })
+})
+
+describe('lead after stop', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('find me after stop unparks and leads', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('')
+    ticker.stop()
+    await ticker.tick() // parked
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) }) // find me path
+    lines.length = 0
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'lead')
+    assert.ok(lines.some((l) => l.includes('action=lead')))
+    assert.equal(bot.calls.setGoal, 1)
+  })
+})
