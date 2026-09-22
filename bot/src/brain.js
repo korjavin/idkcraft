@@ -171,19 +171,57 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   }
 }
 
+// Hard states are judgement calls where the fixed rule is known to conflict or
+// to have failed. The FSM is a precedence chain (if fight ... else if ... else
+// roam): exactly one rule fires by construction, so counting "rules that fire"
+// would always say 1. Hardness is therefore named per case, each with the prod
+// line that motivated it (epic catalogue H1-H4). Ordered: first match wins so
+// the route log stays comparable over time. No margin bands: the model answers
+// a constant today, bands would only inject noise at every boundary crossing.
+// H1 low-health-hostile: hostile fact and health < 6 (fight vs follow/survive).
+// H4 unreachable-hostile: hostile_reachable === false (re-probe vs shadow).
+// H2 crowd: nearby_hostiles >= 3 (FSM roams/fights into a crowd).
+// H3 hostile-vs-far-player: hostile fact and distance_to_player > 8 (chase vs run).
+function isHard(state) {
+  if (!state || typeof state !== 'object') return null
+  const hostileFact = typeof state.hostile_distance === 'number' || !!state.hostile_near_player
+  if (hostileFact && state.bot_health < 6) return 'low-health-hostile'
+  if (state.hostile_reachable === false) return 'unreachable-hostile'
+  if (state.nearby_hostiles >= 3) return 'crowd'
+  if (hostileFact && state.distance_to_player > 8) return 'hostile-vs-far-player'
+  return null
+}
+
+function hybridBrain(remote) {
+  return {
+    name: 'hybrid',
+    async decide(state) {
+      const fsm = stubBrain.decide(state)
+      const reason = isHard(state)
+      if (!reason) {
+        console.log(`brain route=easy fsm=${fsm.action}`)
+        return fsm
+      }
+      const model = await remote.decide(state)
+      console.log(`brain route=hard reason=${reason} model=${model.action} fsm=${fsm.action} source=${model.source}`)
+      return model
+    }
+  }
+}
+
 function makeBrain(env) {
   const customUrl = env && env.BRAIN_URL
   const key = env && env.TYPESAFE_API_KEY
   if (customUrl || key) {
     const url = customUrl || JEV_ENDPOINT
-    const source = sourceForUrl(url)
-    console.log(`brain=${source}`)
     const rawTimeout = (env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000'
     const timeoutMs = parseInt(rawTimeout, 10)
-    return jevBrain(key, undefined, Number.isFinite(timeoutMs) ? timeoutMs : 1000, url)
+    const remote = jevBrain(key, undefined, Number.isFinite(timeoutMs) ? timeoutMs : 1000, url)
+    console.log(`brain=hybrid(${remote.name})`)
+    return hybridBrain(remote)
   }
   console.log('brain=stub')
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }
