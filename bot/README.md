@@ -37,8 +37,9 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
-idle decision, slow 10 s poll, at most one log line per minute) and performs no
-scout scans. While a player is visible the tick stays at `BRAIN_TICK_MS`, but an
+idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
+hostile in reach, still no brain calls — at most one log line per minute) and
+performs no scout scans (the nobody-online tick only scans entities for the reflex). While a player is visible the tick stays at `BRAIN_TICK_MS`, but an
 unchanged perception state (distance rounded to 1 block, same flags) reuses the
 last decision instead of calling the brain again.
 
