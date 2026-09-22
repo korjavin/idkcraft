@@ -674,7 +674,7 @@ describe('nobody-online leave', () => {
         createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
       })
       bot.emit('spawn')
-      await p
+      await Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error('runOnce never resolved')), 2000))])
       assert.equal(bot.quitCalls, 1)
       assert.equal(exits, 0)
       // unexpected end with no quit: fatal exit, no resolve
@@ -689,6 +689,25 @@ describe('nobody-online leave', () => {
       assert.equal(exits, 1)
       assert.equal(resolved, false)
       assert.equal(bot2.quitCalls, 0)
+
+      // stand-down: a player online-but-far re-arms every grace period, never quits
+      const bot3 = connBot()
+      let pings = 0
+      let resolved3 = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: '',
+        createBot: () => bot3,
+        pingFn: async () => { pings++; return { players: { online: 1, sample: [{ name: 'Steve' }] } } },
+      }).then(() => { resolved3 = true }, () => { resolved3 = true })
+      bot3.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.equal(bot3.quitCalls, 0) // stood down: still on the "server"
+      assert.ok(pings >= 3, `re-armed every grace period (pings=${pings})`)
+      assert.equal(resolved3, false)
+      assert.equal(exits, 1) // no fatal exit from standing down
+      // runOnce stays pending by design here (no quit, no end); its timers
+      // are unref'd so the suite still exits cleanly.
     } finally {
       process.exit = realExit
     }
