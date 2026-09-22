@@ -115,6 +115,10 @@ def main():
         rows.append((label, ms, data))
     if fails:
         return 1
+    with urllib.request.urlopen(BASE + "/metrics", timeout=5) as res:
+        if "laya_predict_duration_seconds_count" not in res.read().decode():
+            print("FAIL: /metrics lacks laya_predict_duration_seconds")
+            return 1
 
     ordered = sorted(lat)
     p50 = statistics.median(lat)

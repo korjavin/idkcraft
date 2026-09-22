@@ -597,3 +597,17 @@ describe('hybridBrain', () => {
     assert.match(logs[0], /brain route=hard reason=crowd.*source=stub-fallback/)
   })
 })
+
+describe('brain metrics', () => {
+  it('counts remote brain outcomes and serves them in the exposition', async () => {
+    const metrics = require('../src/metrics')
+    const ok = async () => ({ ok: true, json: async () => ({ answers: { action: { choice: 'follow' }, sprint: { noul: 0 } } }) })
+    const down = async () => ({ ok: false, status: 503 })
+    await jevBrain('k', ok, 1000, 'http://laya:8000/v1/systemone').decide({ distance_to_player: 12 })
+    await jevBrain('k', down, 1000, 'http://laya:8000/v1/systemone').decide({ distance_to_player: 12 })
+    const text = await metrics.client.register.metrics()
+    assert.match(text, /idkcraft_bot_brain_requests_total\{source="laya",outcome="ok"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_brain_requests_total\{source="laya",outcome="http"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_brain_request_duration_seconds_count\{source="laya"\} [2-9]/)
+  })
+})

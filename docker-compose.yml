@@ -96,6 +96,10 @@ services:
       BRAIN_URL: ${BRAIN_URL:-http://laya:8000/v1/systemone}
       BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9464"
+    networks: [default, monitoring]
     logging:
       driver: json-file
       options:
@@ -113,6 +117,10 @@ services:
     environment:
       OMP_NUM_THREADS: ${LAYA_THREADS:-4}
       MKL_NUM_THREADS: ${LAYA_THREADS:-4}
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "8000"
+    networks: [default, monitoring]
     logging:
       driver: json-file
       options:
@@ -126,6 +134,15 @@ services:
       timeout: 5s
       start_period: 120s
       retries: 10
+# Host monitoring stack (korjavin/monitoring-compose): its vmagent
+# discovers containers labelled prometheus.scrape=true, but can only reach
+# them on a network it is attached to. Locally without that stack:
+#   docker network create monitoring_internal
+networks:
+  monitoring:
+    external: true
+    name: ${MONITORING_NETWORK:-monitoring_internal}
+
 configs:
   # Inline patch definition (no bind mount: Portainer git stacks resolve
   # binds on the host, where the repo path does not exist). Single source

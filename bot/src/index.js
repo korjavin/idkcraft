@@ -5,6 +5,7 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
 const origEquipGear = fightMod.equipGear
@@ -202,6 +203,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 // ticks. Logs at most one line per target; fight.js skips its own swing
 // via ctx.reflexSwung so the rate stays one swing per tick.
 function meleeReflex(bot, ctx, state) {
+  // Every tick path that has facts passes here, so vitals are exported here too.
+  metrics.setVitals(state)
   const hostile = state && state.hostile
   if (!hostile || hostile.isValid === false) return false
   let d
@@ -215,6 +218,7 @@ function meleeReflex(bot, ctx, state) {
     console.log(`reflex swing ${hostile.name || 'mob'}`)
   }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
+  metrics.events.inc({ event: 'reflex_swing' })
   ctx.reflexSwung = true // any target: the arm swung once this tick
   return true
 }
@@ -242,6 +246,16 @@ function meleeReflex(bot, ctx, state) {
   }
 
   async function tick() {
+    const endTimer = metrics.tickDuration.startTimer()
+    const r = await runTick()
+    if (r.decision) {
+      endTimer({ brain_called: String(r.calledBrain) })
+      metrics.decisions.inc({ source: r.decision.source, action: r.decision.action })
+    }
+    return r
+  }
+
+  async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
@@ -523,7 +537,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       console.log(`spawned as ${bot.username}`)
       ticker.start()
     })
-    bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
+    bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
     bot.on('chat', (chatUsername, message) => handleChat(bot, ticker, chatUsername, message))
 
@@ -543,6 +557,8 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // and the container restart reconnects. Late errors on the intentionally
     // closed connection are ignored so they cannot kill the next one.
     bot.on('end', (reason) => {
+      metrics.online.set(0)
+      metrics.setVitals(null)
       if (wantQuit) { ticker.destroy(); resolve() }
       else fatal('end', reason || 'disconnected')
     })
@@ -560,6 +576,7 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
+  metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
     // 0 disables the leave: join immediately and stay on, like before.
@@ -650,10 +667,11 @@ function handlePlayerLeft(bot, ticker, player) {
 function createLifecycle(ticker) {
   let died = false
   return {
-    onDeath(bot, t = ticker) { died = true; handleDeath(bot, t) },
+    onDeath(bot, t = ticker) { died = true; metrics.events.inc({ event: 'death' }); handleDeath(bot, t) },
     onRespawn(bot, t = ticker) {
       if (!died) return
       died = false
+      metrics.events.inc({ event: 'respawn' })
       handleRespawn(bot, t)
     },
   }

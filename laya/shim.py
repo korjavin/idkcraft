@@ -10,7 +10,8 @@ import time
 
 import laya
 import torch
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel
 
 # ponytail: subfolder "typed-decisions" (421M, 1024 ctx) if quality is poor;
@@ -46,6 +47,13 @@ assert next(agent.model.encoder.parameters()).dtype is torch.bfloat16, "bf16 pat
 app = FastAPI()
 log = logging.getLogger("uvicorn.error")
 
+PREDICT_SECONDS = Histogram(
+    "laya_predict_duration_seconds", "agent.predict latency",
+    buckets=(0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5))
+ANSWERS = Counter("laya_answers_total", "Answered action choice (error = predict raised)", ["choice"])
+SPRINT = Histogram("laya_sprint_noul", "sprint noul probability",
+                   buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1))
+
 
 class SystemOneBody(BaseModel):
     model: str = "laya"
@@ -60,11 +68,28 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+def metrics():
+    # Scraped by the host vmagent (compose label prometheus.scrape=true).
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post("/v1/systemone")
 def systemone(body: SystemOneBody):
     t0 = time.perf_counter()
-    result = agent.predict(body.state, body.questions)
-    ms = (time.perf_counter() - t0) * 1000
+    try:
+        result = agent.predict(body.state, body.questions)
+    except Exception:
+        ANSWERS.labels("error").inc()
+        raise
+    elapsed = time.perf_counter() - t0
+    PREDICT_SECONDS.observe(elapsed)
+    answers = result["answers"]
+    ANSWERS.labels(str((answers.get("action") or {}).get("choice"))).inc()
+    noul = (answers.get("sprint") or {}).get("noul")
+    if isinstance(noul, (int, float)):
+        SPRINT.observe(noul)
+    ms = elapsed * 1000
     log.info("systemone model=%s questions=%s elapsed_ms=%.1f",
              body.model, sorted(body.questions), ms)
-    return {"model": "laya-multilingual", "answers": result["answers"], "usage": result.get("usage", {})}
+    return {"model": "laya-multilingual", "answers": answers, "usage": result.get("usage", {})}
