@@ -60,8 +60,15 @@ function follow(bot, ctx, target, state) {
 
   if (isMoving) return
 
-  // Goal satisfied: resting within follow range of target is not a stall
-  if (bp && target.position && bp.distanceTo(target.position) <= FOLLOW_RANGE) {
+  // Goal satisfied: resting within follow range of target is not a stall.
+  // Pathfinder's GoalFollow.isEnd tests floored block coords, so delegate to
+  // goal.isEnd when available to match the resting node position.
+  const g = bot.pathfinder && bot.pathfinder.goal
+  const node = bp && (typeof bp.floored === 'function' ? bp.floored() : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) })
+  const satisfied = g && node && typeof g.isEnd === 'function'
+    ? g.isEnd(node)
+    : (bp && target.position && bp.distanceTo(target.position) <= FOLLOW_RANGE)
+  if (satisfied) {
     ctx.followStalls = 0
     return
   }

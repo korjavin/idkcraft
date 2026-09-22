@@ -10,14 +10,15 @@ function pos(x, y, z) {
   const p = {
     x, y, z,
     distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
-    clone() { return pos(p.x, p.y, p.z) }
+    clone() { return pos(p.x, p.y, p.z) },
+    floored() { return pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
   }
   return p
 }
 
 function mockBot() {
   const calls = { setGoal: 0, stop: 0, jump: 0, goals: [] }
-  return {
+  const bot = {
     calls,
     username: 'IdkBot',
     players: {},
@@ -26,7 +27,8 @@ function mockBot() {
     food: 20,
     entity: { position: pos(0, 64, 0) },
     pathfinder: {
-      setGoal: (g) => { calls.setGoal++; calls.goals.push(g) },
+      goal: null,
+      setGoal: (g) => { calls.setGoal++; calls.goals.push(g); bot.pathfinder.goal = g },
       stop: () => { calls.stop++ },
       isMoving: () => false,
       setMovements: (m) => { calls.movements = m }
@@ -36,6 +38,7 @@ function mockBot() {
     },
     chat: () => {}
   }
+  return bot
 }
 
 function mockBrain(decision) {
@@ -455,6 +458,33 @@ describe('follow behaviour and unstuck reflex', () => {
       await ticker.tick()
 
       assert.equal(bot.calls.setGoal, 1) // no re-issues while resting in range
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck')).length, 0)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('resting at floored follow range with fractional offset does not false-stuck', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+
+    try {
+      const bot = mockBot()
+      bot.entity.position = pos(10.5, 64, 0.5)
+      bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(13.9, 64, 0.9) } } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial setGoal installs GoalFollow(Steve, 3)
+      ticker.setPathStatus('success')
+
+      // Sits in floored follow range across multiple ticks
+      await ticker.tick()
+      await ticker.tick()
+      await ticker.tick()
+
+      assert.equal(bot.calls.setGoal, 1) // no false re-issue
       assert.equal(bot.calls.jump, 0)
       assert.equal(lines.filter((l) => l.includes('stuck')).length, 0)
     } finally {
