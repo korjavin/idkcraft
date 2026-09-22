@@ -1042,3 +1042,185 @@ describe('lead after stop', () => {
     assert.equal(bot.calls.setGoal, 1)
   })
 })
+
+describe('melee reflex', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function reflexBot() {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.lookAtCalls = 0
+    bot.equipCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => { bot.lookAtCalls++ }
+    bot._items = [{ name: 'iron_sword' }]
+    bot.inventory = { items: () => bot._items }
+    bot.equip = () => { bot.equipCalls++ }
+    return bot
+  }
+
+  function zombie(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  const reflexLines = () => lines.filter((l) => l.includes('reflex swing'))
+
+  it('swings when the brain answers follow with a zombie at 1 block', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow') // brain still owns the body
+    assert.equal(bot.attackCalls, 1) // ...while the arm swings anyway
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('does not swing when the zombie is at 5 blocks', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(bot.attackCalls, 0)
+    assert.deepEqual(reflexLines(), [])
+  })
+
+  it('swings with nobody online (spawn defence)', async () => {
+    const bot = reflexBot()
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(bot.attackCalls, 1)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('swings every tick but logs and equips once per target', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 2)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+    assert.equal(bot.equipCalls, 1)
+    bot.entities = { 2: zombie(2, 1) } // new mob walks up
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 3)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie', 'reflex swing zombie'])
+    assert.equal(bot.equipCalls, 2)
+  })
+})
+
+describe('melee reflex cadence with nobody online', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function pos2(x, y, z) {
+    const p = { x, y, z, distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z), clone() { return pos2(p.x, p.y, p.z) } }
+    return p
+  }
+
+  it('ticks fast while swinging solo, slow once the mob is gone', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = mockBot()
+      bot.attack = () => { bot.attackCalls = (bot.attackCalls || 0) + 1 }
+      bot.lookAt = () => {}
+      const zp = pos2(1, 64, 0)
+      zp.offset = (ox, oy, oz) => pos2(zp.x + ox, zp.y + oy, zp.z + oz)
+      bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      await ticker.tick()
+      assert.equal(bot.attackCalls, 1)
+      assert.deepEqual(delays, [111]) // swinging: fast, not the 10 s idle poll
+      delete bot.entities[1] // mob dies
+      await ticker.tick()
+      assert.deepEqual(delays, [111, 222]) // nothing in reach: back to slow
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+})
+
+describe('melee reflex with two hostiles (one swing per tick)', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function mob(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('reflex on the newcomer plus fight on the sticky incumbent is still one attack', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mob(1, 2.5) } // incumbent, in swing reach
+    // the dispatch-table test above deletes BEHAVIOURS.fight: restore it so
+    // action=fight really dispatches (otherwise this test pins nothing).
+    BEHAVIOURS.fight = require('../src/behaviours/fight')
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 1) // reflex + fight agree on the target: one swing
+    bot.entities = { 1: mob(1, 2.5), 2: mob(2, 2.0) } // newcomer nearer, inside the 2-block sticky margin
+    await ticker.tick()
+    // reflex hits the nearest (2) while fight holds the incumbent (1):
+    // the arm still swings exactly once.
+    assert.equal(bot.attackCalls, 2)
+  })
+})
+
+describe('melee reflex while parked', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('stop parks the body but the arm still swings, with no brain call', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    const zp = pos(1, 64, 0)
+    zp.offset = (ox, oy, oz) => pos(zp.x + ox, zp.y + oy, zp.z + oz)
+    bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('')
+    ticker.stop()
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(r.calledBrain, false)
+    assert.equal(bot.attackCalls, 1)
+    assert.equal(bot.calls.setGoal, 0) // parked: no body goal issued
+  })
+})

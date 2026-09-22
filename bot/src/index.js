@@ -6,8 +6,9 @@ const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 
+const fightMod = require('./behaviours/fight')
 const BEHAVIOURS = {
-  fight: require('./behaviours/fight'),
+  fight: fightMod,
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
@@ -25,7 +26,7 @@ const IDLE_LOG_MS = 60000
 const FIGHT_REPROBE_TICKS = 30
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0 }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -67,6 +68,30 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
 
+// Melee reflex (3nt.13): the arm is not the body. A hostile already
+// within swing reach is hit every tick regardless of the brain answer —
+// the same every-tick seam as scout. Runs on every tick path that has (or
+// can cheaply build) hostile facts, including parked and nobody-online
+// ticks. Logs at most one line per target; fight.js skips its own swing
+// via ctx.reflexSwung so the rate stays one swing per tick.
+function meleeReflex(bot, ctx, state) {
+  const hostile = state && state.hostile
+  if (!hostile || hostile.isValid === false) return false
+  let d
+  try {
+    d = bot.entity.position.distanceTo(hostile.position)
+  } catch (_) { return false }
+  if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
+  if (ctx.reflexTargetId !== hostile.id) {
+    ctx.reflexTargetId = hostile.id
+    try { fightMod.equipSword(bot) } catch (_) { /* fists are fine */ }
+    console.log(`reflex swing ${hostile.name || 'mob'}`)
+  }
+  try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
+  ctx.reflexSwung = true // any target: the arm swung once this tick
+  return true
+}
+
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
@@ -87,13 +112,17 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   async function tick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
+    ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
+    // Fast cadence while the reflex swings with nobody online: those ticks
+    // make no brain call, so speeding them up costs nothing.
+    let reflexFast = false
     try {
       if (ctx.paused) {
         // 'stop' parks the bot: perception + scout keep running while a
         // player is visible, but the brain is skipped and idle is dispatched
-        // (stop once) — same cost guard as 'no player online', including no
-        // scans with nobody online.
+        // (stop once) — same cost guard as 'no player online'. The only scan
+        // with nobody online is the melee reflex hostile check below.
         const target = findTarget(bot, followName)
         lastVisible = !!target
         if (target) {
@@ -101,7 +130,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           lastTargetPos = state._lastTargetPos
           if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
           if (ctx.scout) ctx.scout.tick()
+          meleeReflex(bot, ctx, state)
         } else {
+          try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
@@ -120,6 +151,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
         stopOnce()
+        // Melee reflex at spawn: the brain never runs here, but a hostile
+        // standing on the bot still gets swung at every slow tick.
+        try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
         lastTargetPos = null
         lastDecision = null
         lastStateKey = null
@@ -165,6 +199,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // every-tick hooks (no body cost) go here
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
       if (ctx.scout) ctx.scout.tick()
+      meleeReflex(bot, ctx, state)
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
@@ -207,7 +242,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible)
+      scheduleNext(lastVisible || reflexFast)
     }
   }
 

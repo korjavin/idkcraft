@@ -37,8 +37,9 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
-idle decision, slow 10 s poll, at most one log line per minute) and performs no
-scout scans. While a player is visible the tick stays at `BRAIN_TICK_MS`, but an
+idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
+hostile in reach, still no brain calls — at most one log line per minute) and
+performs no scout scans (the nobody-online tick only scans entities for the reflex). While a player is visible the tick stays at `BRAIN_TICK_MS`, but an
 unchanged perception state (distance rounded to 1 block, same flags) reuses the
 last decision instead of calling the brain again.
 
@@ -65,6 +66,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
+| `melee reflex` | Hostile within 3 blocks of the bot under any brain answer, even with nobody online | Local reflex (no brain cost; the arm, not the body) | Summon a zombie next to the bot while the brain answers `follow`; bot swings within 1-2 ticks with no `action=fight` decision |
 
 ### Reflex Mechanics & Implementation Details
 
@@ -102,7 +104,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | Command | Action | Implementation |
 | --- | --- | --- |
 | `follow me` | Locks onto speaker, resumes movement if parked | Sets `followName` to speaker, unparks ticker, replies `Following <username>` |
-| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible |
+| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks; replies with `<block> at <x> <y> <z> (<N> blocks)`, `no <block> within 48 blocks`, or `unknown block: <block>` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
