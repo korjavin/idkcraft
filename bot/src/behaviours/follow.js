@@ -70,6 +70,12 @@ function follow(bot, ctx, target, state) {
   // (No setGoal(null) first: it only repeats that same resetPath, reaches no
   // fullStop, and emits a spurious path_reset; stop() is worse — its latch
   // would swallow the GoalNear issued in the same tick.)
+  // Known limit: 'stuck' fires only after 3.5 s without any path reset, and a
+  // walking player re-anchors GoalFollow (goal_moved) faster than that, so
+  // this branch cannot fire while the followed player keeps moving — the bot
+  // un-wedges once they stand still (~7 s). A displacement-only trigger is
+  // future work; it needs live tuning against the while-moving protection
+  // window, not a new constant picked blind.
   if (isMoving) {
     if ((ctx.stuckResets || 0) >= 2) {
       const dist = typeof state?.distance_to_player === 'number'

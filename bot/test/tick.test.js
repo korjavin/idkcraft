@@ -582,7 +582,7 @@ describe('follow behaviour and unstuck reflex', () => {
     assert.equal(bot.calls.setGoal, 2)
   })
 
-  it('two path_reset stuck while moving with no displacement nudge once (setGoal null + GoalNear), then GoalFollow', async () => {
+  it('two path_reset stuck while moving with no displacement nudge once with a single GoalNear sidestep, then GoalFollow', async () => {
     const lines = []
     const origLog = console.log
     console.log = (line) => { lines.push(String(line)) }
