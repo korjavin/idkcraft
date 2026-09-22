@@ -1,9 +1,9 @@
 'use strict'
 
 const mineflayer = require('mineflayer')
-const { pathfinder, Movements } = require('mineflayer-pathfinder')
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
-const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
+const { findTarget, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 const metrics = require('./metrics')
 
@@ -112,7 +112,7 @@ function eatReflex(bot, ctx, state) {
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -205,6 +205,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 function meleeReflex(bot, ctx, state) {
   // Every tick path that has facts passes here, so vitals are exported here too.
   metrics.setVitals(state)
+  // Same seam for the death line's hostile snapshot (see deathLine): the
+  // killer is often gone at the death tick (exploded creeper), so the last
+  // tick's scan is the truthful one.
+  try { ctx.lastHostileSnap = snapHostiles(bot) } catch (_) { /* snapshot best-effort */ }
   const hostile = state && state.hostile
   if (!hostile || hostile.isValid === false) return false
   let d
@@ -221,6 +225,47 @@ function meleeReflex(bot, ctx, state) {
   metrics.events.inc({ event: 'reflex_swing' })
   ctx.reflexSwung = true // any target: the arm swung once this tick
   return true
+}
+
+// Creeper flee reflex (c2u): creepers are the one hostile the brain never
+// sees (isFightTarget excludes them, so no hostile fact and no hard route),
+// yet they kill. Within CREEPER_FLEE_RANGE the body walks away from the
+// nearest creeper — an FSM rule, never an attack (hitting one near the
+// player explodes it next to the player). Returns the creeper distance, or
+// false when none is close.
+// ponytail: no isHard 'creeper-near' case — the reflex already moves the
+// body, so asking the model follow-vs-flee would add a wire case for zero gain.
+const CREEPER_FLEE_RANGE = 6
+const CREEPER_FLEE_DIST = 6
+function fleeReflex(bot, ctx) {
+  let creeper = null
+  try { creeper = findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
+  if (!creeper) { ctx.fleeTargetId = null; return false }
+  const bp = bot.entity && bot.entity.position
+  if (!bp) return false
+  let d
+  try { d = bp.distanceTo(creeper.position) } catch (_) { return false }
+  if (typeof d !== 'number') return false
+  let dx = bp.x - creeper.position.x
+  let dz = bp.z - creeper.position.z
+  if (dx === 0 && dz === 0) dx = 1
+  const len = Math.hypot(dx, dz)
+  const nx = bp.x + (dx / len) * CREEPER_FLEE_DIST
+  const nz = bp.z + (dz / len) * CREEPER_FLEE_DIST
+  const key = `flee:${creeper.id}`
+  let moving = false
+  try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
+  // Re-issue on a new creeper or a stalled executor (the creeper chases, so a
+  // finished away-goal is stale); never tear down a running climb-out.
+  if (key !== ctx.lastGoalKey || !moving) {
+    bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
+    ctx.lastGoalKey = key
+  }
+  if (ctx.fleeTargetId !== creeper.id) {
+    ctx.fleeTargetId = creeper.id
+    console.log(`reflex flee creeper dist=${d.toFixed(1)}`)
+  }
+  return d
 }
 
   function applyDecision(decision, target, state) {
@@ -290,7 +335,8 @@ function meleeReflex(bot, ctx, state) {
           lastDecision = null
           lastStateKey = null
         }
-        stopOnce()
+        // Parked but not dead: a hissing creeper still moves the body.
+        if (!fleeReflex(bot, ctx)) stopOnce()
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
@@ -305,7 +351,10 @@ function meleeReflex(bot, ctx, state) {
       if (!target) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
-        stopOnce()
+        // A hissing creeper still moves the body (fast ticks while fleeing).
+        const fledAlone = fleeReflex(bot, ctx)
+        if (fledAlone) reflexFast = true
+        else stopOnce()
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
         try {
@@ -373,6 +422,14 @@ function meleeReflex(bot, ctx, state) {
       if (ctx.scout) ctx.scout.tick()
       meleeReflex(bot, ctx, state)
       eatReflex(bot, ctx, state)
+      // Safety preempts arbitration (and the lead order below): the brain
+      // never sees creepers, so nothing else would move the body.
+      const fleeDist = fleeReflex(bot, ctx)
+      if (fleeDist !== false) {
+        const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
+        return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
+      }
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
@@ -625,14 +682,27 @@ if (require.main === module) { main().catch((err) => fatal('main', err)) }
 function deathLine(bot) {
   let health = typeof bot.health === 'number' ? bot.health : 20
   let hostiles = 0
+  let nearest = null
   try {
     const state = buildState(bot, null)
     health = state.bot_health
     hostiles = state.nearby_hostiles
+    const snap = (bot && bot._tickerCtx && bot._tickerCtx.lastHostileSnap) || null
+    if (hostiles <= 0 && snap && typeof snap.count === 'number' && snap.count > 0) {
+      // The killer is usually gone at the death tick (exploded creeper), so a
+      // live scan prints hostiles=0 over a corpse. The last tick's snapshot
+      // is the truthful count.
+      hostiles = snap.count
+    }
+    const live = snapHostiles(bot)
+    if (live && live.count > 0) nearest = live
+    else if (snap && snap.count > 0) nearest = snap
   } catch (_) { /* keep defaults: the line must still print */ }
   const pos = bot.entity && bot.entity.position
   const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
-  return `death health=${health} hostiles=${hostiles} at ${at}`
+  let line = `death health=${health} hostiles=${hostiles} at ${at}`
+  if (nearest && nearest.name) line += ` nearest=${nearest.name} ${nearest.dist.toFixed(1)}`
+  return line
 }
 
 function respawnLine(bot) {

@@ -24,6 +24,48 @@ function isFightTarget(entity, botPos, playerPos) {
   return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
 }
 
+// Nearest live creeper within maxDist blocks of the bot (or null). Creepers
+// are not fight targets (isFightTarget) so they need their own fact for the
+// flee reflex in index.js.
+function findCreeper(bot, maxDist) {
+  const bp = bot && bot.entity && bot.entity.position
+  if (!bp) return null
+  let best = null
+  let bestDist = Infinity
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || entity.type === 'player' || !entity.position) continue
+    if ((entity.name || '') !== 'creeper') continue
+    if (entity.isValid === false) continue
+    let d
+    try { d = entity.position.distanceTo(bp) } catch (_) { continue }
+    if (typeof d !== 'number' || d > maxDist) continue
+    if (d < bestDist) { bestDist = d; best = entity }
+  }
+  return best
+}
+
+// Snapshot of all hostiles (fight targets AND creepers): the death line's
+// truth source — at the death tick the killer is often already gone
+// (exploded creeper), so the ticker snapshots this every tick. Same <16 rule
+// as nearby_hostiles.
+function snapHostiles(bot) {
+  const bp = bot && bot.entity && bot.entity.position
+  if (!bp) return { count: 0, name: null, dist: null }
+  let count = 0
+  let name = null
+  let dist = null
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || entity.type === 'player' || !entity.position) continue
+    if (!HOSTILE_NAMES.has(entity.name || '')) continue
+    let d
+    try { d = entity.position.distanceTo(bp) } catch (_) { continue }
+    if (typeof d !== 'number' || d >= 16) continue
+    count++
+    if (dist === null || d < dist) { dist = d; name = entity.name || 'mob' }
+  }
+  return { count, name, dist }
+}
+
 // Dedup key: distance rounded to 1 block + same flags => reuse last decision,
 // skip the JEV call. Staleness is at most half a block of travel.
 function stateKey(state) {
@@ -106,4 +148,4 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   return state
 }
 
-module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget }
+module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles }
