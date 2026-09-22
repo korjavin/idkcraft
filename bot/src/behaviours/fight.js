@@ -10,16 +10,16 @@ const SWING_RANGE = 3
 // allowance would be torn down and restarted forever. So retries are spaced
 // wider than the search allowance, and pursuit is abandoned after
 // GIVE_UP_TICKS stationary ticks: an unreachable mob (cave, glass, ravine)
-// must not pin the tick. After give-up the bot shadows the player instead
-// of freezing, and still swings if the mob walks into range; fight-vs-follow
-// arbitration stays with the brain.
+// must not pin the tick. The give-up latch (ctx.fightGivenUpId) is fed back
+// to the brain as hostile_reachable=false, so fight-vs-follow arbitration
+// stays with the brain; the ticker re-probes the pursuit after 30 ticks.
+// After give-up the bot shadows the player instead of freezing, and still
+// swings if the mob walks into range.
 const RETRY_EVERY_TICKS = 6
 const GIVE_UP_TICKS = 18
-// ponytail: hysteresis margin (blocks) + re-probe ceiling (ticks). A newcomer
-// this much nearer than the incumbent wins immediately; a written-off target
-// is re-pursued from scratch this often in case the world changed.
+// ponytail: hysteresis margin (blocks). A newcomer this much nearer than
+// the incumbent wins immediately.
 const STICKY_MARGIN_BLOCKS = 2
-const SHADOW_REPROBE_TICKS = 30
 
 // ponytail: one function, no base class or activate/deactivate hooks —
 // same shape as follow.js. One swing per tick (1/s); a 600 ms swing timer
@@ -31,7 +31,6 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = 'idle'
     ctx.fightId = null
     ctx.fightGivenUpId = null
-    ctx.fightShadowTicks = 0
     // No visible mob but the brain said fight (e.g. a remote model answering
     // fight on hostile_distance=none): stay with the player instead of
     // parking — the bodyguard fallback, same as after give-up.
@@ -42,22 +41,15 @@ function fight(bot, ctx, target, state) {
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
   if (ctx.fightGivenUpId === hostile.id) {
-    // Pursuit abandoned: shadow the player, swing if it wandered into range.
+    // Pursuit abandoned (the brain sees hostile_reachable=false and yields
+    // to follow): shadow the player as the local safety net, swing if the
+    // mob wandered into range.
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
-      ctx.fightShadowTicks = 0
       swing(bot, hostile)
     } else {
-      ctx.fightShadowTicks = (ctx.fightShadowTicks || 0) + 1
-      if (ctx.fightShadowTicks >= SHADOW_REPROBE_TICKS) {
-        // The world may have changed (bridged ravine, opened door): probe
-        // the pursuit again from scratch instead of shadowing forever.
-        ctx.fightShadowTicks = 0
-        ctx.fightGivenUpId = null
-      } else {
-        shadowPlayer(bot, ctx, target)
-      }
+      shadowPlayer(bot, ctx, target)
     }
     return
   }
@@ -66,7 +58,6 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = key
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
-    ctx.fightShadowTicks = 0
     equipSword(bot)
   } else if (!inRange) {
     if (bot.pathfinder.isMoving()) {

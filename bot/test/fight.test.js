@@ -145,6 +145,23 @@ describe('perception hostile facts', () => {
     assert.equal(state.hostile_near_player, false)
   })
 
+  it('flags the current hostile unreachable when fight gave up on it', () => {
+    const bot = mockBot()
+    const zombie = mobEntity(1, 'zombie', 2)
+    bot.entities = { 1: zombie }
+    assert.equal(buildState(bot, playerEntity(10), null, null).hostile_reachable, true)
+    assert.equal(buildState(bot, playerEntity(10), null, undefined).hostile_reachable, true)
+    const unreach = buildState(bot, playerEntity(10), null, 1)
+    assert.equal(unreach.hostile, zombie)
+    assert.equal(unreach.hostile_reachable, false)
+    assert.equal(buildState(bot, playerEntity(10), null, 2).hostile_reachable, true) // latch names another mob
+  })
+
+  it('stateKey changes when reachability flips', () => {
+    const base = { distance_to_player: 10, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 6, hostile_near_player: false, hostile_reachable: true }
+    assert.notEqual(stateKey(base), stateKey({ ...base, hostile_reachable: false }))
+  })
+
   it('stateKey changes when a hostile approaches', () => {
     const base = { distance_to_player: 10, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: null, hostile_near_player: false }
     assert.notEqual(stateKey(base), stateKey({ ...base, hostile_distance: 4 }))
@@ -324,7 +341,9 @@ describe('fight behaviour', () => {
     assert.equal(last.entity, b)
   })
 
-  it('re-probes a given-up mob instead of shadowing forever', () => {
+  it('never re-probes on its own after give-up: shadows until the brain looks away', () => {
+    // Re-probe lives in the ticker now (it clears the give-up latch after 30
+    // ticks): fight called directly must NOT start a new pursuit by itself.
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }
     const player = playerEntity(10)
@@ -333,8 +352,10 @@ describe('fight behaviour', () => {
     for (let t = 0; t < 21; t++) fight(bot, ctx, player, state)
     const mobGoals = () => bot.calls.goals.filter((g) => g.entity === zombie)
     assert.equal(mobGoals().length, 4) // given up
-    for (let t = 0; t < 35; t++) fight(bot, ctx, player, state)
-    assert.equal(mobGoals().length, 5) // re-probed from scratch
+    for (let t = 0; t < 40; t++) fight(bot, ctx, player, state)
+    assert.equal(mobGoals().length, 4) // still shadowing, no fresh pursuit
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.entity, player)
     assert.equal(bot.calls.stop, 0)
     assert.equal(bot.calls.attack, 0)
   })
@@ -375,5 +396,25 @@ describe('stub fight end-to-end', () => {
 
   it('fight is wired in the dispatch table', () => {
     assert.equal(BEHAVIOURS.fight, fight)
+  })
+
+  it('unreachable zombie -> brain yields follow, ticker re-probes -> fight', async () => {
+    // Zombie at 6 blocks of the bot but far from the player: reachable means
+    // fight, the give-up latch means follow, the 30-tick re-probe means fight.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    const actions = []
+    let r = await ticker.tick()
+    actions.push(r.decision.action)
+    assert.equal(actions[0], 'fight')
+    for (let t = 0; t < 25; t++) actions.push((await ticker.tick()).decision.action)
+    const firstFollow = actions.indexOf('follow')
+    assert.ok(firstFollow > 0, `brain never yielded follow: ${actions.join(',')}`)
+    assert.ok(actions.slice(0, firstFollow).every((a) => a === 'fight'))
+    assert.ok(actions.slice(firstFollow).every((a) => a === 'follow'))
+    for (let t = 0; t < 35; t++) actions.push((await ticker.tick()).decision.action)
+    assert.ok(actions.slice(firstFollow + 30).includes('fight'), `ticker never re-probed: ${actions.slice(firstFollow).join(',')}`)
   })
 })

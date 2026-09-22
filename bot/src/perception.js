@@ -34,7 +34,8 @@ function stateKey(state) {
     !!state.player_visible, !!state.player_moving,
     state.bot_health, state.bot_food, state.nearby_hostiles,
     typeof hd === 'number' ? Math.round(hd) : 'none',
-    !!state.hostile_near_player
+    !!state.hostile_near_player,
+    state.hostile_reachable === false ? 'false' : 'true'
   ].join('|')
 }
 
@@ -54,7 +55,11 @@ function findTarget(bot, followName) {
   return best
 }
 
-function buildState(bot, target, lastTargetPos) {
+// fightGivenUpId is fight's give-up latch (entity id, or null): when it names
+// the current hostile, the mob beat pursuit (cave, glass, ravine) and the
+// brain must yield fight -> follow. Missing/older callers pass nothing and
+// every hostile reads reachable.
+function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   let distanceToPlayer = null
   let playerMoving = false
   let nextPos = null
@@ -94,6 +99,7 @@ function buildState(bot, target, lastTargetPos) {
     nearby_hostiles: nearbyHostiles,
     hostile_distance: hostileDistance,
     hostile_near_player: hostile ? hostilePlayerDistance <= FIGHT_RANGE_PLAYER : false,
+    hostile_reachable: !(hostile && fightGivenUpId != null && hostile.id === fightGivenUpId),
     hostile
   }
   state._lastTargetPos = nextPos
