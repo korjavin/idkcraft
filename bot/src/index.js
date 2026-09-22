@@ -335,8 +335,11 @@ function fleeReflex(bot, ctx) {
           lastDecision = null
           lastStateKey = null
         }
-        // Parked but not dead: a hissing creeper still moves the body.
-        if (!fleeReflex(bot, ctx)) stopOnce()
+        // Parked but not dead: a hissing creeper still moves the body
+        // (fast ticks while fleeing, same as the nobody-online path).
+        const fledParked = fleeReflex(bot, ctx)
+        if (fledParked) reflexFast = true
+        else stopOnce()
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now

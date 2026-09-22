@@ -13,9 +13,9 @@ const HOSTILE_NAMES = new Set([
 const FIGHT_RANGE_BOT = 8
 const FIGHT_RANGE_PLAYER = 6
 
-// ponytail: creepers are excluded from fight targets, not fled from —
-// hitting one near the player makes it explode next to the player, and
-// fleeing is out of scope.
+// ponytail: creepers are excluded from fight targets — hitting one near the
+// player makes it explode next to the player. Fleeing is a tick-level reflex
+// instead (fleeReflex in index.js), never a brain action or an attack.
 function isFightTarget(entity, botPos, playerPos) {
   if (!entity || entity.type === 'player' || !entity.position) return false
   const name = entity.name || ''

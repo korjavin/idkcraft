@@ -1732,6 +1732,26 @@ describe('creeper flee reflex', () => {
     }
   })
 
+  it('fleeing while parked ticks fast and keeps the away goal', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = creeperBot()
+      bot.entities = { 9: creeper(9, 4) } // no players: parked with nobody online
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      ticker.stop() // park
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.deepEqual(delays, [111]) // fast re-arm while fleeing, not 222
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+      assert.equal(bot.calls.goals[0].x, -6)
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
   it('zombie in reach plus creeper near: arm swings, body flees', async () => {
     const bot = creeperBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
