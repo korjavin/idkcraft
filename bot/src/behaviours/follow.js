@@ -58,7 +58,10 @@ function follow(bot, ctx, target, state) {
     ctx.followLastPos = bp.clone()
   }
 
-  if (isMoving) return
+  if (isMoving) {
+    ctx.followIssuedAt = now
+    return
+  }
 
   // Goal satisfied: resting within follow range of the player's current position
   // is not a stall. Evaluates floored block coordinates against current target pos.

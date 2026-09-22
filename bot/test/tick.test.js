@@ -267,6 +267,42 @@ describe('follow behaviour and unstuck reflex', () => {
     }
   })
 
+  it('re-arms 6 s search protection window while moving', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    const realNow = Date.now
+    let now = 100000
+    Date.now = () => now
+    try {
+      await ticker.tick() // initial setGoal (t = 0)
+      assert.equal(bot.calls.setGoal, 1)
+
+      // Move for 10 s
+      bot.pathfinder.isMoving = () => true
+      ticker.setPathStatus('partial')
+      for (let i = 0; i < 10; i++) {
+        now += 1000
+        await ticker.tick()
+      }
+      assert.equal(bot.calls.setGoal, 1)
+
+      // Bot stops moving; status still partial. Should not immediately re-issue
+      bot.pathfinder.isMoving = () => false
+      now += 1000 // 1 s after stopping (11 s since initial setGoal, but 1 s since moving)
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 1)
+
+      // After 6 s stationary with partial status, it re-issues
+      now += 5001 // 6.001 s after stopping
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 2)
+    } finally {
+      Date.now = realNow
+    }
+  })
+
   it('two consecutive noPath results with unchanged position produce one stuck log, one jump, one GoalNear, then GoalFollow', async () => {
     const lines = []
     const origLog = console.log
@@ -294,6 +330,9 @@ describe('follow behaviour and unstuck reflex', () => {
       await ticker.tick()
       assert.equal(bot.calls.setGoal, 3)
       assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[2]
+      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
+      assert.equal(g.y, 64)
       assert.equal(bot.calls.jump, 1)
       const stuckLines = lines.filter((l) => l.includes('stuck reason=noPath'))
       assert.equal(stuckLines.length, 1)
