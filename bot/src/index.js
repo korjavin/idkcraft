@@ -63,7 +63,7 @@ function installEquipGuard(bot, ctx) {
   if (typeof origEquip !== 'function') return
   bot._equipGuardInstalled = true
   bot.equip = function(item, dest, ...args) {
-    if (dest === 'hand' && ctx.eatInFlight && (!item || !EDIBLE_FOODS.has(item.name))) {
+    if (dest === 'hand' && ctx.eatInFlight && item && typeof item.name === 'string' && item.name.endsWith('_sword')) {
       return Promise.resolve()
     }
     return origEquip.call(this, item, dest, ...args)

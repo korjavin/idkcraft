@@ -2004,4 +2004,30 @@ describe('eat reflex', () => {
     assert.equal(res, false)
     assert.equal(bot.consumeCalls, 0)
   })
+
+  it('tool or block equip (e.g. pickaxe) is not dropped during in-flight eat', async () => {
+    const bot = mockBot()
+    bot.food = 12
+    bot.inventory = { items: () => [{ name: 'bread', count: 16 }, { name: 'iron_pickaxe', count: 1 }] }
+    bot.equipCalls = []
+    bot.equip = (item, dest) => { bot.equipCalls.push({ item, dest }); return Promise.resolve() }
+    let resolveConsume
+    bot.consume = () => {
+      bot.consumeCalls = (bot.consumeCalls || 0) + 1
+      return new Promise((resolve) => { resolveConsume = resolve })
+    }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1)
+
+    // While eat is in flight, pathfinder equips a pickaxe to hand:
+    await bot.equip({ name: 'iron_pickaxe' }, 'hand')
+    const handPickaxes = bot.equipCalls.filter((c) => c.dest === 'hand' && c.item.name === 'iron_pickaxe')
+    assert.equal(handPickaxes.length, 1)
+
+    resolveConsume()
+    await new Promise((resolve) => setImmediate(resolve))
+  })
 })
