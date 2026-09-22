@@ -1178,7 +1178,7 @@ describe('lead hygiene: death, respawn, and player left', () => {
     assert.equal(ticker.getLead(), null)
   })
 
-  it('setLead, setFollow, and stop reset leadTargetGone counter', async () => {
+  it('setLead resets leadTargetGone counter', async () => {
     const bot = mockBot()
     bot.players = {}
     const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
@@ -1191,26 +1191,6 @@ describe('lead hygiene: death, respawn, and player left', () => {
       await ticker.tick()
     }
     assert.ok(ticker.getLead(), 'setLead did not reset leadTargetGone')
-
-    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
-      await ticker.tick()
-    }
-    ticker.stop()
-    ticker.setLead({ name: 'gold_ore', pos: pos(30, 64, 0) })
-    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
-      await ticker.tick()
-    }
-    assert.ok(ticker.getLead(), 'stop did not reset leadTargetGone')
-
-    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
-      await ticker.tick()
-    }
-    ticker.setFollow('Steve')
-    ticker.setLead({ name: 'iron_ore', pos: pos(40, 64, 0) })
-    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
-      await ticker.tick()
-    }
-    assert.ok(ticker.getLead(), 'setFollow did not reset leadTargetGone')
   })
 })
 

@@ -17,6 +17,9 @@ const RESUME_DIST = 8
 // then abandon so a walled-off vein never pins the tick.
 const GIVE_UP_TICKS = 10
 const RETRY_EVERY_TICKS = 6
+
+// Wait budget (ticks at BRAIN_TICK_MS, ~120 s at the 1 s default): a player
+// who never comes back within RESUME_DIST must not pin the order forever.
 const WAIT_BUDGET_TICKS = 120
 
 function dist(a, b) {
