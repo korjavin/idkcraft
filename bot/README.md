@@ -48,19 +48,21 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 
 - **Perception is local and always-on (`src/perception.js`):** Every tick, the bot computes distances, player movement, and hostile mob proximity. These are factual inputs, not decisions.
 - **The Brain arbitrates the body (`src/brain.js`):** The pathfinder and attack mechanics share a single physical body. Every tick (1 s), the System-1 classifier chooses ONE exclusive action:
-  - `fight`: Hostile mob threatening bot or player.
-  - `follow`: Player moved away.
-  - `idle`: Player is close (<= 3 blocks).
-  The brain also decides whether to `sprint` when the player is > 8 blocks away (the remote model also checks that the player is moving, while the stub triggers on distance alone).
+  - `fight`: Hostile mob threatening bot or player (within 8 blocks of bot or near player, bot health >= 6).
+  - `follow`: Player moved away (> 3 blocks while moving or with hostile near, > 6 blocks while standing still with no hostile near).
+  - `roam`: Player is within 6 blocks and not moving, no hostile mob near (strolls within 6 blocks of player, walks back past 6, never > 8).
+  - `idle`: Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked.
+  The brain also decides whether to `sprint` when the player is > 8 blocks away (the remote model also checks that the player is moving, while the stub triggers on distance alone). Fight wins over both follow and roam; follow preempts roam when the player walks away.
 - **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
 
 ### Behaviours Table
 
 | Behaviour | Trigger | Who decides | How to observe |
 | --- | --- | --- | --- |
-| `follow` | Player > 3 blocks away (sprints if > 8 blocks; remote checks player moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
-| `fight` | Hostile within 8 blocks of bot OR 6 of player, and health >= 6 | Brain decision (`action=fight`) | `/summon zombie ~5 ~ ~`; bot equips first sword and attacks (1 swing/s within 3 blocks) |
-| `idle` | Player within 3 blocks, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
+| `follow` | Player > 3 blocks away while moving or with hostile near, > 6 blocks while still (sprints if > 8 blocks; remote checks player moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
+| `fight` | Hostile within 8 blocks of bot OR near player, and health >= 6 | Brain decision (`action=fight`) | `/summon zombie ~5 ~ ~`; bot equips first sword and attacks (1 swing/s within 3 blocks) |
+| `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
+| `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
 
 ### Reflex Mechanics & Implementation Details
@@ -71,6 +73,10 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - **Sticky Target:** Locks onto current hostile with a 2-block hysteresis margin (`STICKY_MARGIN_BLOCKS = 2`) so the bot does not flip-flop between targets on every tick.
   - **Pursuit Give-Up & Shadow Fallback:** If pathfinding stalls for 18 stationary ticks (`GIVE_UP_TICKS = 18`, retrying pathing every 6 ticks), pursuit is abandoned (e.g. mob trapped behind glass or in a ravine). The bot drops into shadow mode, following the player at 3 blocks as a bodyguard while still swinging if the mob wanders within 3 blocks (`SWING_RANGE = 3`). Pursuit is re-probed after 30 ticks (`SHADOW_REPROBE_TICKS = 30`). Shadow mode also activates if the brain returns `fight` when no hostile is reachable.
   - **Equipment & Combat:** Equips the first sword in inventory upon engaging (fists if none). Swings once per second at <= 3 blocks range (`SWING_RANGE = 3`).
+- **Roam (`src/behaviours/roam.js`):**
+  - **Stroll Envelope:** Strolls within 6 blocks of a standing player (`ROAM_RADIUS = 6`). When idle and not already moving, picks a random destination within 6 blocks (`GoalNear(x, y, z, 1)`), ensuring the destination never exceeds 8 blocks from the player.
+  - **Walk-Back Past Envelope:** If distance to player exceeds 6 blocks (`HAND_BACK_DIST = 6`), walks back toward the player (`GoalFollow(target, 3)`) rather than standing still, avoiding state-cache freezes and letting the brain re-evaluate on the next tick.
+  - **Preemption & Hierarchy:** Follow preempts roam when the player walks away; fight wins over both whenever a hostile mob threatens.
 - **Scout (`src/behaviours/scout.js`):**
   - Scans loaded chunk blocks in memory every 5 s within a 16-block radius (sees through walls and underground).
   - Valued ores: diamond, emerald, ancient debris, gold, iron, lapis, redstone (deepslate variants grouped under base name; coal and copper excluded).
