@@ -1,1 +1,0 @@
-Final merge-gate check for bead idkcraft-3nt.10. Correct only if: melee override truly restores swings without re-arming pursuit; multi-mob latch fix holds; stub yields follow for unreachable-not-near and fights unreachable-near-player; request.json identical to brain.js; fight.js smaller than origin/master; one new fact; no hostnames/keys. Finding nothing is a valid answer.

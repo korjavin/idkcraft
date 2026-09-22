@@ -1,9 +1,0 @@
-- Bead: the brain contract (the state line sent to the System-1 brain and the action choices it may answer) gains hostile facts and a `fight` choice. The stub brain encodes the same reference policy as the criteria text (fight if hostile ≤ 8 blocks or hostile near player, and health ≥ 6; else follow when dist > 3; else idle). jevBrain logs `brain disagree source=... model=X stub=Y state=...` only when model and stub differ; the model's answer still wins. laya/test/request.json must be byte-identical in shape to what brain.js sends; smoke.py accepts fight.
-- Correct only if:
-  - a state without hostile fields (today's index.js) still produces the same request as before plus `hostile_distance=none hostile_near_player=false` (or equivalent) — no crash, no NaN
-  - parseAction maps `fight` and still falls back safely on garbage
-  - the stub policy matches the criteria text exactly (thresholds 8 / 6 blocks / health 6), including the boundary values
-  - the disagreement log fires only on disagreement, never on the stub-fallback path, and does not double the brain calls or the log volume per tick (cost guard: 1 log/min idle)
-  - request.json fields and criteria strings are identical to brain.js
-  - no hostname, IP or key anywhere
-- This is the merge gate: answer whether anything here should not ship. Finding nothing is a valid answer.

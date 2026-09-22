@@ -1,8 +1,0 @@
-- Diff command: `git diff origin/master...HEAD`
-- Scale: 4 files (+205/-20)
-- Changes in round 2:
-  - `bot/src/behaviours/scout.js`: `resolveBlockIds` also scans `byName` for `${base}_ore` substrings, resolving `nether_gold_ore` and `nether_quartz_ore` for `find me quartz`/`gold`.
-  - `bot/test/scout.test.js`: added test for `findNearest(bot, 'quartz')` and test pinning distance rounding down when fractional part is below .5 (guards against `Math.ceil`).
-- Files to read in full: `bot/src/behaviours/scout.js`, `bot/src/index.js`, `bot/test/scout.test.js`, `bot/README.md`
-- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`
-- Tests already ran 62/62 — do not run.

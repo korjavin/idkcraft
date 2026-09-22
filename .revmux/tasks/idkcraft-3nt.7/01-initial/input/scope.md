@@ -1,9 +1,0 @@
-- Diff command: `git diff origin/master...HEAD`
-- Scale: 4 files (+162/-20)
-- Files to read in full:
-  - `bot/src/behaviours/scout.js` (exported `findNearest` and radius/count default)
-  - `bot/src/index.js` (chat handler for `find me <block>`)
-  - `bot/test/scout.test.js` (unit tests for findNearest and chat command)
-  - `bot/README.md` (in-game chat command doc)
-- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`, `bot/src/perception.js`, `bot/src/brain.js`
-- Tests already ran 59/59 — do not run.

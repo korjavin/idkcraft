@@ -15,3 +15,6 @@ bot/node_modules/
 # Environment configurations
 .env
 *.env
+
+# revmux run archive (local only)
+.revmux/tasks/

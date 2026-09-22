@@ -1,6 +1,0 @@
-- Diff: `git diff origin/master...HEAD` on branch `idkcraft-3nt.9` (workdir `/Users/iv/Projects/idkcraft-muse-2`).
-- Scale: small — 2 files: `bot/src/index.js` (`stopOnce()` + 5 call sites), `bot/test/tick.test.js` (+2 guard tests, 3 mocks moving).
-- History: round 01 found 2 (major stationary-goal + minor vacuous test), both fixed; round 02 clean. Since then merged moved `origin/master` (docs-only: `CLAUDE.md`, `bot/README.md`); this round re-checks the same diff on the new base.
-- Read in full: `bot/src/index.js`, `bot/test/tick.test.js`, pathfinder `stop`/`setGoal`/`goal`/`resetPath`.
-- Ignore: behaviours, perception, brain, laya, compose, e2e, docs.
-- Tests already ran 94/94 green — do not run.

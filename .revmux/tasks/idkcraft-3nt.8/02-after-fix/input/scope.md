@@ -1,5 +1,0 @@
-- Diff: in workdir run `git diff origin/master...HEAD` (branch idkcraft-3nt.8, PR #25, now merged with master incl. 3nt.7 find-me).
-- Scale: our delta vs round 01: paused scout gated on target visible (index.js), paused test strengthened with scout-while-parked assertions + nobody-online test (tick.test.js), README stop sentence merged with find-me line.
-- Read in full: bot/src/index.js paused branch + handleChat, bot/test/tick.test.js paused stop describe, context/bead.md, context/round01.md.
-- Ignore: behaviours/**, perception.js, brain.js, other tests, package.json, laya/**, compose, CLAUDE.md, .beads/.
-- Tests already ran 66/66 — do not run.

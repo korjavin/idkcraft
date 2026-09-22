@@ -1,1 +1,0 @@
-Merge gate re-check for bead idkcraft-3nt.10 after round-01 fixes. Correct only if: the latch fix truly covers the multi-mob case (no re-armed pursuit, newcomer engaged); stub still yields follow for unreachable-not-near and fights unreachable-near-player; request.json identical to brain.js; fight.js smaller; one new fact; no hostnames/keys. Finding nothing is a valid answer.

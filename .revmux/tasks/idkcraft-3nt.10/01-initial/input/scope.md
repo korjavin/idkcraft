@@ -1,5 +1,0 @@
-- Diff: `git diff origin/master...HEAD` on branch idkcraft-3nt.10 (PR #30). Small: 9 files, +135/-49.
-- Read in full: bot/src/brain.js, bot/src/perception.js, bot/src/index.js (latch block), bot/src/behaviours/fight.js.
-- Skim: bot/test/brain.test.js, bot/test/fight.test.js, laya/smoke.py, laya/test/request.json, bot/README.md (fight/brain paras).
-- Ignore: bot/src/behaviours/roam.js, scout.js, follow.js, CLAUDE.md, docker-compose.yml, .beads/, .revmux/ (review scaffolding).
-- Tests already ran 121/121 green via `cd bot && npm ci && npm test` — do not run.

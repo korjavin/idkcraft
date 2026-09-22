@@ -1,5 +1,0 @@
-- Diff: `git diff origin/master...HEAD` on branch idkcraft-3nt.10 (PR #30). Rounds 01+02 found 1 major each, both fixed and pushed.
-- Round-02 fix to verify: bot/src/index.js melee override (latched mob within SWING_RANGE reports reachable, latch stays for fight.js to clear while swinging); SWING_RANGE exported from fight.js; new ticker melee test in bot/test/fight.test.js.
-- Read in full: bot/src/index.js (latch block), bot/src/behaviours/fight.js (given-up branch + export). Skim the rest.
-- Ignore: roam.js, scout.js, follow.js, CLAUDE.md, docker-compose.yml, .beads/, .revmux/.
-- Tests already ran 123/123 green via `cd bot && npm test` — do not run.

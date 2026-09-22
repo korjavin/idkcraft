@@ -1,8 +1,0 @@
-- Under review: branch `idkcraft-3nt.4` (PR #22), one commit, against `origin/master`.
-- Diff: `git diff origin/master...HEAD` (workdir is a detached checkout of the branch head)
-- Scale: 5 files, +363/-1
-- Read in full: `bot/src/behaviours/scout.js`, `bot/test/scout.test.js`, the 3 changed lines of `bot/src/index.js` and their surroundings (the tick function), `bot/README.md` diff, `bot/package.json` diff
-- Also read for context (unchanged): `bot/src/perception.js`, `bot/src/index.js` cost guards (idle branch, 10 s idle poll)
-- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`, `bot/src/brain.js`
-- Tests: `npm test` in `bot/` already ran, 35/35 pass — do not run it
-- Explicit exclusions: in-game acceptance is deferred to the prod bead (3nt.6) — not a finding. `bot/package.json` test-script edit is outside the bead's file list but required for `npm test` to run the new file — accepted, not a finding.

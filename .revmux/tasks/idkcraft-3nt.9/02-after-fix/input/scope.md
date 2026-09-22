@@ -1,6 +1,0 @@
-- Diff: `git diff origin/master...HEAD` on branch `idkcraft-3nt.9` (workdir `/Users/iv/Projects/idkcraft-muse-2`).
-- Scale: small — 2 files: `bot/src/index.js` (`stopOnce()` helper + 5 call sites), `bot/test/tick.test.js` (+2 guard tests, 3 mocks set moving).
-- Round 01 raised 2 findings (1 major: stationary live goal not cancelled; 1 minor: vacuous parked-stop test). Both fixed: `stopOnce()` now cancels a stationary live goal via `setGoal(null)`; parked-stop test parks while moving.
-- Read in full: `bot/src/index.js` (`stopOnce`), `bot/test/tick.test.js` (`stop guard` + `paused stop`), `bot/node_modules/mineflayer-pathfinder/index.js` (`stop`/`setGoal`/`goal` getter/`resetPath`).
-- Ignore: behaviours, perception, brain, laya, compose, e2e.
-- Tests already ran 94/94 green — do not run.

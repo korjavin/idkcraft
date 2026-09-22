@@ -1,8 +1,0 @@
-- Diff command: `git diff origin/master...HEAD`
-- Scale: 4 files (+174/-20)
-- Changes in this fix round:
-  - `bot/src/behaviours/scout.js`: de-futured comment on `resolveBlockIds` (dropped "future" to match line 77).
-  - `bot/test/scout.test.js`: added test for non-integral Euclidean distance rounding (`res.distance === 6` for ~5.83 dist), which fails if `Math.floor`/`trunc` is used.
-- Files to read in full: `bot/src/behaviours/scout.js`, `bot/src/index.js`, `bot/test/scout.test.js`, `bot/README.md`
-- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`
-- Tests already ran 60/60 — do not run.

@@ -1,9 +1,0 @@
-- **Diff command:** `git diff origin/master...HEAD`
-- **Scale:** 2 files changed, 63 insertions, 11 deletions. Documentation only.
-- **Files to read in full:**
-  - `bot/README.md`: intro, Behaviours table, reflex mechanics, chat commands, brain arbitration, brain disagreement logging.
-  - `CLAUDE.md`: Architecture Overview pointer to behaviours layout.
-  - Reference files to verify numbers: `bot/src/index.js`, `bot/src/perception.js`, `bot/src/behaviours/fight.js`, `bot/src/behaviours/follow.js`, `bot/src/behaviours/scout.js`, `bot/src/brain.js`.
-- **What to ignore:** All code files (`bot/src/*`, `bot/test/*`, `laya/*`, `docker-compose.yml`, `.github/*`, `.beads/*`).
-- **Tests:** No code changed, docs only — the tests are unaffected (all 92 unit tests passing).
-- **Privacy:** Grep for IP/hostnames returns clean.
