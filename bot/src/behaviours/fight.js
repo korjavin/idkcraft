@@ -48,7 +48,7 @@ function fight(bot, ctx, target, state) {
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
-      if (ctx.reflexSwungId !== hostile.id) swing(bot, hostile)
+      if (!ctx.reflexSwung) swing(bot, hostile)
     } else {
       shadowPlayer(bot, ctx, target)
     }
@@ -77,9 +77,10 @@ function fight(bot, ctx, target, state) {
   } else {
     ctx.fightPursuit = 0
   }
-  // Same-tick reflex guard: the reflex already swung at this mob, so a
-  // second bot.attack here would double the swing rate.
-  if (inRange && ctx.reflexSwungId !== hostile.id) {
+  // Same-tick reflex guard: the reflex already swung (at any mob — it hits
+  // the nearest while fight may hold a sticky incumbent), so a second
+  // bot.attack here would double the swing rate.
+  if (inRange && !ctx.reflexSwung) {
     swing(bot, hostile)
   }
 }

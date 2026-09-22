@@ -815,3 +815,38 @@ describe('melee reflex cadence with nobody online', () => {
     }
   })
 })
+
+describe('melee reflex with two hostiles (one swing per tick)', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function mob(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('reflex on the newcomer plus fight on the sticky incumbent is still one attack', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mob(1, 2.5) } // incumbent, in swing reach
+    // the dispatch-table test above deletes BEHAVIOURS.fight: restore it so
+    // action=fight really dispatches (otherwise this test pins nothing).
+    BEHAVIOURS.fight = require('../src/behaviours/fight')
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 1) // reflex + fight agree on the target: one swing
+    bot.entities = { 1: mob(1, 2.5), 2: mob(2, 2.0) } // newcomer nearer, inside the 2-block sticky margin
+    await ticker.tick()
+    // reflex hits the nearest (2) while fight holds the incumbent (1):
+    // the arm still swings exactly once.
+    assert.equal(bot.attackCalls, 2)
+  })
+})

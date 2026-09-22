@@ -26,7 +26,7 @@ const IDLE_LOG_MS = 60000
 const FIGHT_REPROBE_TICKS = 30
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwungId: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -73,7 +73,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 // the same every-tick seam as scout. Runs on every tick path that has (or
 // can cheaply build) hostile facts, including parked and nobody-online
 // ticks. Logs at most one line per target; fight.js skips its own swing
-// via ctx.reflexSwungId so the rate stays one swing per tick.
+// via ctx.reflexSwung so the rate stays one swing per tick.
 function meleeReflex(bot, ctx, state) {
   const hostile = state && state.hostile
   if (!hostile || hostile.isValid === false) return false
@@ -88,7 +88,7 @@ function meleeReflex(bot, ctx, state) {
     console.log(`reflex swing ${hostile.name || 'mob'}`)
   }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
-  ctx.reflexSwungId = hostile.id
+  ctx.reflexSwung = true // any target: the arm swung once this tick
   return true
 }
 
@@ -112,7 +112,7 @@ function meleeReflex(bot, ctx, state) {
   async function tick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
-    ctx.reflexSwungId = null // fresh each tick: fight skips only a same-tick reflex swing
+    ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
     // make no brain call, so speeding them up costs nothing.
