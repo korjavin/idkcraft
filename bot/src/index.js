@@ -113,6 +113,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           lastDecision = decision
         }
       }
+      if (ctx.paused) {
+        // 'stop' landed during the brain await: discard the stale decision
+        // so one in-flight tick cannot issue a follow goal after the park.
+        if (ctx.lastGoalKey !== 'idle') {
+          bot.pathfinder.stop()
+          ctx.lastGoalKey = 'idle'
+        }
+        const now = Date.now()
+        if (now - lastIdleLog >= IDLE_LOG_MS) {
+          lastIdleLog = now
+          console.log('decision source=local-idle action=idle sprint=false dist=none')
+        }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
     } catch (err) {

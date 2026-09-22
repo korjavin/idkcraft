@@ -309,8 +309,42 @@ describe('paused stop', () => {
     ticker.stop()
     bot.players = {}
     const before = bot.findCalls
-    await ticker.tick()
+    // advance past the 5 s scout throttle so a scan would fire without the
+    // target guard — the assertion must pin the guard, not the throttle
+    const realNow = Date.now
+    const t0 = realNow()
+    Date.now = () => t0 + 6000
+    try {
+      await ticker.tick()
+    } finally {
+      Date.now = realNow
+    }
     assert.equal(bot.findCalls, before)
+  })
+
+  it('stop during the brain await discards the stale follow', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    let resolveBrain
+    const brain = {
+      calls: 0,
+      decide() {
+        this.calls++
+        return new Promise((resolve) => { resolveBrain = resolve })
+      }
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const pending = ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    // chat 'stop' lands while the brain call is in flight
+    ticker.setFollow('')
+    ticker.stop()
+    lines.length = 0
+    resolveBrain({ action: 'follow', sprint: false, source: 'jev' })
+    const r = await pending
+    assert.equal(bot.calls.setGoal, 0)
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision after mid-await stop')
   })
 
 })
