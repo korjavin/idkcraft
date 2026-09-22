@@ -3,8 +3,8 @@
 Node 22 companion bot that joins the Paper server, follows the player, scouts
 for valuable ore, and fights hostile mobs. Built around a "one body, many senses"
 concurrency architecture: perception and scouting are local, always-on reflexes,
-while the System-1 brain (remote LAYA/JEV model or built-in stub) arbitrates who
-owns the body each second.
+while the hybrid brain (rule FSM primary, remote LAYA/JEV model on named
+hard states, built-in stub fallback) arbitrates who owns the body each second.
 
 ## Run locally
 
@@ -33,7 +33,7 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BOT_FOLLOW` | `` (nearest player) | Player name to follow |
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
 | `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; bogus key still joins, logs `stub-fallback` |
-| `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); set to the sidecar to run without a key, decisions then log `source=laya` |
+| `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); when set, the hybrid brain runs: FSM primary, remote model on hard states only. Empty = FSM only (`brain=stub`); that is the rollback. |
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
 
@@ -50,21 +50,66 @@ online-but-far keeps it idling instead of flapping join/leave. Off the
 server nothing can kill it and no chunks stay loaded for it. `BOT_LEAVE_AFTER_MS=0`
 keeps the old always-on behaviour. While a player is visible the tick stays at
 `BRAIN_TICK_MS`, but an unchanged perception state (distance rounded to 1 block,
-same flags) reuses the last decision instead of calling the brain again.
+same flags) reuses the last decision instead of calling the brain again. Easy states never call the model at all — the network is touched only on named hard states (see Hard states below).
 
 ## Behaviours & Arbitration
 
 The bot uses a "one body, many senses" model to handle concurrent activities without conflicting controls:
 
 - **Perception is local and always-on (`src/perception.js`):** Every tick, the bot computes distances, player movement, and hostile mob proximity. These are factual inputs, not decisions.
-- **The Brain arbitrates the body (`src/brain.js`):** The pathfinder and attack mechanics share a single physical body. Every tick (1 s), the System-1 classifier chooses ONE exclusive action:
+- **The Brain arbitrates the body (`src/brain.js`):** The pathfinder and attack mechanics share a single physical body. Two brains, one interface (`decide(state) -> {action, sprint, source}`):
+  - The rule FSM (`stubBrain`) is PRIMARY: it decides every tick, and easy states never touch the network (`source=stub`).
+  - The remote model (`source=laya` on the sidecar, `source=jev` on JEV) is consulted only on named hard states, and there the MODEL WINS. On timeout/error the FSM answer is used (`source=stub-fallback`, retried on the next state change).
+  The per-action rules below are the FSM — still the whole policy on easy states:
   - `fight`: Reachable hostile mob within 8 blocks of bot, or any hostile near the player, with bot health >= 6. A mob flagged `hostile_reachable=false` (fight gave up pursuit) yields to `follow` unless it threatens the player.
   - `follow`: Player moved away (> 3 blocks while moving or with hostile near, > 6 blocks while standing still with no hostile near).
   - `roam`: Player is within 6 blocks and not moving, no hostile mob near (strolls within 6 blocks of player, walks back past 6, never > 8).
   - `idle`: Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked.
-  The brain also decides whether to `sprint` when the player is far ahead (the remote model triggers when the player is `away` [> 6 blocks] and moving, while the reference stub triggers on distance alone [> 8 blocks]). The body ignores it and always walks (`Movements.allowSprinting` stays false) because a sprint-jump wedges the bot flush against 1-block steps. Fight wins over both follow and roam; follow preempts roam when the player walks away.
-  To help small classifier models discriminate state, the wire state sent to the remote brain uses categorical words rather than numbers: `player=near|far|away|none` (<=3 / <=6 / >6 / no target), `player_moving=yes|no`, `hostile=adjacent|near|far|none` (<=3 / <=8 / <16 / none), `hostile_near_player=yes|no`, `hostile_reachable=yes|no`, `health=low|ok` (<6 / >=6), and `food=hungry|ok`.
+  Sprint always comes from the rule FSM (`distance_to_player > 8`); it is no longer asked of the model. The body ignores it and always walks (`Movements.allowSprinting` stays false) because a sprint-jump wedges the bot flush against 1-block steps. Fight wins over both follow and roam; follow preempts roam when the player walks away.
+  To help small classifier models discriminate state, the wire state sent to the remote brain uses categorical words rather than numbers: a leading `hard=<reason>` word naming the hard case (`low-health-hostile|unreachable-hostile|crowd|hostile-vs-far-player` — the one fact that distinguishes the hard states, passed by the router), then `player=near|far|away|none` (<=3 / <=6 / >6 / no target), `player_moving=yes|no`, `hostile=adjacent|near|far|none` (<=3 / <=8 / <16 / none), `hostile_near_player=yes|no`, `hostile_reachable=yes|no`, `health=low|ok` (<6 / >=6), and `food=hungry|ok`.
 - **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
+
+### Hard states
+
+`isHard(state)` names the states where the fixed rule is known to conflict
+or to have failed. The FSM is a precedence chain, so exactly one rule always
+fires — hardness is a judgement written down per case (first match wins),
+not derived by counting. On these the remote model is consulted and wins:
+
+| Name | Numeric condition (`isHard`) | Why the rules cannot decide | Who wins |
+| --- | --- | --- | --- |
+| `low-health-hostile` | hostile fact (`hostile_distance` is a number or `hostile_near_player`) and `bot_health < 6` | Bot at 4.9 hp shadowing while the player was slain 5 times: fight (protect) vs follow (survive) is a real judgement | model |
+| `unreachable-hostile` | `hostile_reachable === false` (fight's give-up latch) | The rules already failed once on this mob; re-probe vs shadow the player is a guess | model |
+| `crowd` | `nearby_hostiles >= 3` | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it | model |
+| `hostile-vs-far-player` | hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless) | model |
+
+### What the model is asked
+
+Every named hard case is a fight-vs-follow judgement, so the wire question
+is exactly that — two choices, one sentence of instructions ("The simple
+rules could not decide this state; choose fight or follow."), rule-style
+criteria on the categorical words plus the `hard=` word. Sprint is not
+asked. Local smoke round against the sidecar (8 hard rows + 2
+consistency repeats, `laya/smoke.py`):
+
+| state | model | verdict |
+| --- | --- | --- |
+| H1 low-health (health low, hostile far, near player) | fight | wrong (fights while weak; rule says health is low -> follow) |
+| H1b near (player far, hostile near, health low) | fight | wrong (fights while weak; rule says health is low -> follow) |
+| H2 crowd (no hostile fact, health ok) | fight | matches rule (hard is crowd and health ok -> fight) |
+| H2b crowd weak (hostile near, health low) | fight | wrong (fights while weak; rule says health is low -> follow) |
+| H3 far-player (hostile adjacent, player away, health ok) | follow | matches rule (hostile-vs-far-player and player away -> follow) |
+| H3b far weak (hostile near, health low) | follow | matches rule (health is low -> follow) |
+| H4 unreachable (reachable no, near player no) | fight | wrong (nothing threatens the player; rule says unreachable-hostile -> follow) |
+| H4b unreach-near-p (reachable no, near player yes) | fight | matches rule (hostile near player and health ok -> fight) |
+| H1 repeat (same wire state as H1) | fight | consistent with H1 (no jitter this round) |
+| H3 repeat (same wire state as H3) | follow | consistent with H3 |
+
+Readout: 4/8 match; the model leans fight (fights all three low-health
+rows plus the unreachable mob with nobody to protect). Caveats: H2b/H3b
+are synthetic wire states the first-match router can never send, and
+H3/H3b/H4b satisfy both criteria, so the decidable readout is 1/5 —
+see the full table and verdicts in the idkcraft-872.3 PR body.
 
 ### Behaviours Table
 
@@ -118,13 +163,25 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
 
-### Brain Disagreement Logging
+### Brain route and disagreement logging
 
-When running with a remote classifier (`source=laya` or `source=jev`), each decision is compared against `stubBrain`, which encodes the exact reference policy:
+With the hybrid brain every brain call logs one route line to stdout:
+
+```
+brain route=easy fsm=<a>
+brain route=hard reason=<r> model=<a> fsm=<b> source=<s>
+```
+
+On hard states the model's answer is also compared against `stubBrain`, which encodes the exact reference policy:
 ```
 brain disagree source=<source> model=<action> stub=<ref> state=<state-line>
 ```
-Logged to stderr whenever the model output diverges from the reference rules. Note that the disagree log line deliberately retains the numeric `state=` representation (via `numericStateToText`) so downstream tools like `logstats.sh` can parse exact distances and metrics even though the remote model receives categorical words. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
+Logged to stderr whenever the model output diverges from the reference rules — so `brain disagree` now appears only on hard states. Note that the disagree log line deliberately retains the numeric `state=` representation (via `numericStateToText`) so downstream tools like `logstats.sh` can parse exact distances and metrics even though the remote model receives categorical words. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
+
+How to read the ratio: `sh bot/scripts/logstats.sh bot.log` prints the
+route easy / route hard counts plus the per-reason hard histogram — how
+often the model is consulted (`route=hard` / all) and how often it
+disagrees.
 
 ## Ops: gearing the bot
 
@@ -180,7 +237,7 @@ Summarise a saved log:
 sh bot/scripts/logstats.sh bot.log
 ```
 
-It prints counts per `action=` and per `source=`, the brain-disagreement
+It prints counts per `action=` and per `source=`, the `route=easy` / `route=hard` counts with the per-reason hard histogram, the brain-disagreement
 count, deaths, respawns, tick errors, the `stub-fallback` count, and the
 first/last timestamp (timestamps only appear when the log was saved
 with `--timestamps`).
@@ -190,7 +247,8 @@ Line types:
 | Line | Meaning |
 | --- | --- |
 | `decision source=<s> action=<a> ...` | One per tick while a player is visible (at most one per minute when idle). Compare `source=laya` against the stub to judge the model. |
-| `brain disagree source=<s> model=<a> stub=<r> ...` | The remote brain answered differently from the local reference policy. A high rate means the prompt criteria and the rules drifted apart. |
+| `brain route=easy fsm=<a>` / `brain route=hard reason=<r> model=<a> fsm=<b> source=<s>` | One per brain call: which route was taken and both answers on hard states. `route=hard` / all = how often the model is consulted. |
+| `brain disagree source=<s> model=<a> stub=<r> ...` | The model answered differently from the local reference policy (hard states only). A high rate means the prompt criteria and the rules drifted apart. |
 | `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
 | `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results; triggers jump + 2-block sidestep nudge. |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
