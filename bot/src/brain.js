@@ -1,7 +1,7 @@
 'use strict'
 
 // The one brain interface, two implementations. No classes needed.
-// decide(state) -> { action: 'fight' | 'follow' | 'idle', sprint: bool, source }
+// decide(state) -> { action: 'fight' | 'follow' | 'roam' | 'idle', sprint: bool, source }
 // state = { distance_to_player, player_visible, player_moving, bot_health, bot_food, nearby_hostiles, hostile_distance, hostile_near_player }
 
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
@@ -30,13 +30,19 @@ const stubBrain = {
     const d = state.distance_to_player
     if (typeof d !== 'number') return { action: 'idle', sprint: false, source: 'stub' }
     if (d > 3) return { action: 'follow', sprint: d > 8, source: 'stub' }
+    // Roam ranks last: close to a standing player with no hostile near.
+    // A moving player means idle (wait for them); any hostile fact means
+    // idle too — fight (or caution at low health) owns the body instead.
+    if (!state.player_moving && typeof hd !== 'number' && !near) {
+      return { action: 'roam', sprint: false, source: 'stub' }
+    }
     return { action: 'idle', sprint: false, source: 'stub' }
   }
 }
 
 function parseAction(answer) {
   const choice = answer && answer.choice
-  return choice === 'fight' || choice === 'follow' || choice === 'idle' ? choice : null
+  return choice === 'fight' || choice === 'follow' || choice === 'roam' || choice === 'idle' ? choice : null
 }
 
 // Noul answers are documented as {"type":"noul","noul":0..1} (0..1
@@ -81,11 +87,12 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'Decide what the companion bot does this second. Fight when a hostile mob is within 8 blocks of the bot or near the player and the bot has at least 6 health. Otherwise follow when the player is more than 3 blocks away. Otherwise wait.',
+                instructions: 'Decide what the companion bot does this second. Fight when a hostile mob is within 8 blocks of the bot or near the player and the bot has at least 6 health. Otherwise follow when the player is more than 3 blocks away. Otherwise roam when the player is within 3 blocks and is not moving and no hostile mob is near. Otherwise wait.',
                 criteria: {
                   fight: 'A hostile mob is within 8 blocks (or near the player) and bot_health is 6 or more: attack the mob.',
                   follow: 'The player is far away (more than 3 blocks): the bot should walk toward the player and stay close.',
-                  idle: 'The player is already within 3 blocks: the bot should stand still and wait.'
+                  idle: 'The player is already within 3 blocks: the bot should stand still and wait.',
+                  roam: 'The player is within 3 blocks and is not moving, and no hostile mob is near: walk a few blocks around the player to look at the surroundings.'
                 }
               },
               sprint: {

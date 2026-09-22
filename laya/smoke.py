@@ -7,8 +7,8 @@ NOTE: test/request.json must be kept in sync with what bot/src/brain.js
 sends (model, state text, questions) -- it is the exact JEV-shaped body.
 
 Waits for /health (up to 120 s), POSTs request.json 20x asserting
-answers.action.choice in {fight, follow, idle} and answers.sprint.noul is a float
-in [0,1], then prints p50/p95 ms plus the answers for 4 canned states as a
+answers.action.choice in {fight, follow, roam, idle} and answers.sprint.noul is a float
+in [0,1], then prints p50/p95 ms plus the answers for 5 canned states as a
 table for the human quality check. Exit non-zero on any shape failure.
 Latency is printed, not asserted.
 """
@@ -34,6 +34,8 @@ STATES = [
      "distance_to_player=1.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
     ("hostile 4",
      "distance_to_player=5.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=1 hostile_distance=4.0 hostile_near_player=false"),
+    ("dist 1 still",
+     "distance_to_player=1.0 player_visible=true player_moving=false bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
 ]
 
 
@@ -53,7 +55,7 @@ def check(data):
         sprint = data["answers"]["sprint"]["noul"]
     except (KeyError, TypeError) as e:
         return "missing field: %s" % e
-    if action not in ("fight", "follow", "idle"):
+    if action not in ("fight", "follow", "roam", "idle"):
         return "bad choice: %r" % (action,)
     if isinstance(sprint, bool) or not isinstance(sprint, (int, float)) or not 0 <= sprint <= 1:
         return "bad noul: %r" % (sprint,)
