@@ -542,3 +542,80 @@ describe('death/respawn log lines', () => {
     ])
   })
 })
+
+describe('nobody-online leave', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function leaveBot() {
+    const bot = mockBot()
+    bot.quitCalls = 0
+    bot.quit = () => { bot.quitCalls++ }
+    return bot
+  }
+
+  it('fires onLeave once after leaveAfterMs of empty ticks; a target resets the streak', async () => {
+    const bot = leaveBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online') })
+    for (let i = 0; i < 5; i++) await ticker.tick()
+    assert.equal(bot.quitCalls, 0)
+    await ticker.tick() // 6th idle tick: 60 ms reached
+    assert.equal(bot.quitCalls, 1)
+    await ticker.tick()
+    await ticker.tick()
+    assert.equal(bot.quitCalls, 1) // latched: quit exactly once
+    // a target appearing resets the counter
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    await ticker.tick()
+    bot.players = {}
+    for (let i = 0; i < 5; i++) await ticker.tick()
+    assert.equal(bot.quitCalls, 1)
+    await ticker.tick() // 6 empty ticks again
+    assert.equal(bot.quitCalls, 2)
+  })
+
+  it('leaveAfterMs 0 disables the leave', async () => {
+    const bot = leaveBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, onLeave: () => bot.quit('nobody online') })
+    for (let i = 0; i < 10; i++) await ticker.tick()
+    assert.equal(bot.quitCalls, 0)
+  })
+
+  it('parseLeaveAfterMs defaults 60000, honours 0, falls back on garbage', async () => {
+    const { parseLeaveAfterMs } = require('../src/index')
+    assert.equal(parseLeaveAfterMs({}), 60000)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: '0' }), 0)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: '5000' }), 5000)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: 'bogus' }), 60000)
+  })
+
+  it('waitForPlayers polls until players.online > 0; refused pings count as empty', async () => {
+    const { waitForPlayers } = require('../src/index')
+    let calls = 0
+    const pingFn = async () => {
+      calls++
+      if (calls === 1) throw new Error('refused')
+      return calls <= 2 ? { players: { online: 0 } } : { players: { online: 2 } }
+    }
+    await waitForPlayers({ host: 'x', port: 1, pingFn, pollMs: 10 })
+    assert.equal(calls, 3)
+  })
+
+  it('playersOccupied ignores our own just-quit ghost, joins on anyone else', async () => {
+    const { playersOccupied, waitForPlayers } = require('../src/index')
+    const ghost = { players: { online: 1, sample: [{ name: 'IdkBot' }] } }
+    assert.equal(playersOccupied(ghost, 'IdkBot'), false)
+    assert.equal(playersOccupied({ players: { online: 1, sample: [{ name: 'Steve' }] } }, 'IdkBot'), true)
+    assert.equal(playersOccupied({ players: { online: 2, sample: [{ name: 'IdkBot' }] } }, 'IdkBot'), true)
+    assert.equal(playersOccupied({ players: { online: 0 } }, 'IdkBot'), false)
+    // ghost first, then truly empty, then a real player: polls past the ghost
+    const seq = [ghost, { players: { online: 0 } }, { players: { online: 1, sample: [{ name: 'Steve' }] } }]
+    let calls = 0
+    await waitForPlayers({ host: 'x', port: 1, pingFn: async () => seq[calls++], pollMs: 10, username: 'IdkBot' })
+    assert.equal(calls, 3)
+  })
+})
