@@ -70,7 +70,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 
 | Behaviour | Trigger | Who decides | How to observe |
 | --- | --- | --- | --- |
-| `follow` | Player > 3 blocks away while moving or with hostile near, > 6 blocks while still (sprints if far: stub > 8 blocks, remote `away` [> 6 blocks] and moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
+| `follow` | Player > 3 blocks away while moving or with hostile near, > 6 blocks while still (the brain may answer sprint when far, but the body always walks) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player at walking speed |
 | `fight` | Reachable hostile within 8 blocks of bot OR near player, and health >= 6 (unreachable mob yields to `follow` unless near player) | Brain decision (`action=fight`) | `/summon zombie ~5 ~ ~`; bot equips first sword and attacks (1 swing/s within 3 blocks) |
 | `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
