@@ -37,7 +37,7 @@ const LEAVE_AFTER_MS_DEFAULT = 60000
 const FIGHT_REPROBE_TICKS = 30
 const TARGET_GONE_TICKS = 10
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null }) {
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false }
   let inFlight = false
   let lastTargetPos = null
@@ -66,16 +66,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     return `moving=${moving} path=${path} reset=${reset}`
   }
 
-  // Nobody-online streak: consecutive no-target time. When it reaches
-  // leaveAfterMs the ticker fires onLeave once (main() quits there); a
-  // visible target resets the streak. Time-based, not tick-counted, so the
-  // same option works at any cadence. 0 disables.
-  let emptyMs = 0
+  // Nobody-online streak: wall time since the first consecutive no-target
+  // tick. When it reaches leaveAfterMs the ticker fires onLeave once (main()
+  // quits there); a visible target resets the streak. Wall time, not
+  // tick-counted: empty-server ticks can run at the fast 1 s cadence while
+  // the melee reflex is swinging, so counting idleTickMs per tick would
+  // expire the grace up to 10x early. 0 disables. `now` is injectable for
+  // tests, like the scout seam.
+  let emptySince = null
   let leaveFired = false
   function noteEmpty() {
     if (!leaveAfterMs) return
-    emptyMs += idleTickMs
-    if (!leaveFired && emptyMs >= leaveAfterMs) {
+    const t = now()
+    if (emptySince === null) emptySince = t
+    if (!leaveFired && t - emptySince >= leaveAfterMs) {
       leaveFired = true
       if (typeof onLeave === 'function') {
         try { onLeave() } catch (err) { console.error(`onLeave error: ${err && err.message ? err.message : err}`) }
@@ -83,7 +87,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
   function noteSeen() {
-    emptyMs = 0
+    emptySince = null
     leaveFired = false
   }
   // Tear-down for the join loop: after our own quit() the old ticker must
@@ -96,7 +100,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // Stand down after a re-check found someone online: re-arm the streak so
   // the next grace period is measured fresh from here.
   function rearm() {
-    emptyMs = 0
+    emptySince = null
     leaveFired = false
   }
 

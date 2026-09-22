@@ -905,22 +905,36 @@ describe('nobody-online leave', () => {
 
   it('fires onLeave once after leaveAfterMs of empty ticks; a target resets the streak', async () => {
     const bot = leaveBot()
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online') })
-    for (let i = 0; i < 5; i++) await ticker.tick()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online'), now: () => t })
+    const tick = async () => { await ticker.tick(); t += 10 }
+    for (let i = 0; i < 6; i++) await tick() // ticks at t=0..50: 50 ms elapsed
     assert.equal(bot.quitCalls, 0)
-    await ticker.tick() // 6th idle tick: 60 ms reached
+    await tick() // 7th tick at t=60: grace reached
     assert.equal(bot.quitCalls, 1)
-    await ticker.tick()
-    await ticker.tick()
+    await tick()
+    await tick()
     assert.equal(bot.quitCalls, 1) // latched: quit exactly once
-    // a target appearing resets the counter
+    // a target appearing resets the streak
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    await ticker.tick()
+    await tick() // seen tick resets the streak
     bot.players = {}
-    for (let i = 0; i < 5; i++) await ticker.tick()
+    for (let i = 0; i < 6; i++) await tick()
     assert.equal(bot.quitCalls, 1)
-    await ticker.tick() // 6 empty ticks again
+    await tick() // 7th tick again: grace reached
     assert.equal(bot.quitCalls, 2)
+  })
+
+  it('fast empty ticks do not expire a slow grace early (wall time, not ticks)', async () => {
+    const bot = leaveBot()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10000, leaveAfterMs: 60000, onLeave: () => bot.quit('nobody online'), now: () => t })
+    // fast 1 s cadence (melee reflex swinging on an empty server): 6 ticks = 6 real s
+    for (let i = 0; i < 6; i++) { await ticker.tick(); t += 1000 } // t=0..5000: 5 s elapsed
+    assert.equal(bot.quitCalls, 0) // tick-counting code quits here (6 x 10 s)
+    t += 54000 // 60 real seconds since the first empty tick
+    await ticker.tick()
+    assert.equal(bot.quitCalls, 1)
   })
 
   it('leaveAfterMs 0 disables the leave', async () => {
@@ -952,11 +966,13 @@ describe('nobody-online leave', () => {
 
   it('rearm resets the leave streak after standing down', async () => {
     const bot = leaveBot()
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online') })
-    for (let i = 0; i < 6; i++) await ticker.tick()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online'), now: () => t })
+    const tick = async () => { await ticker.tick(); t += 10 }
+    for (let i = 0; i < 7; i++) await tick()
     assert.equal(bot.quitCalls, 1)
     ticker.rearm() // a re-check found someone online-but-far: stand down
-    for (let i = 0; i < 6; i++) await ticker.tick()
+    for (let i = 0; i < 7; i++) await tick()
     assert.equal(bot.quitCalls, 2) // next full grace period quits again
   })
 
@@ -1047,7 +1063,7 @@ describe('nobody-online leave', () => {
         pingFn: async () => { pings++; return { players: { online: 1, sample: [{ name: 'Steve' }] } } },
       }).then(() => { resolved3 = true }, () => { resolved3 = true })
       bot3.emit('spawn')
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 150))
       assert.equal(bot3.quitCalls, 0) // stood down: still on the "server"
       assert.ok(pings >= 3, `re-armed every grace period (pings=${pings})`)
       assert.equal(resolved3, false)
