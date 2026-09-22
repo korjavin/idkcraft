@@ -155,6 +155,25 @@ describe('ticker movements', () => {
     ticker.setMovements(m)
     assert.equal(bot.calls.movements, m)
   })
+
+  it('holds allowSprinting false whatever decision.sprint says', async () => {
+    // sprint-jump wedges the bot flush against a 1-block step: the body
+    // must never sprint even when the brain answers sprint=true.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: true, source: 'laya' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const m = { allowSprinting: true }
+    ticker.setMovements(m)
+    assert.equal(m.allowSprinting, false)
+    const r = await ticker.tick()
+    assert.equal(r.decision.sprint, true) // wire/log keeps the brain's opinion
+    assert.equal(m.allowSprinting, false)
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    bot.players.Steve.entity.position = pos(25, 64, 0) // fresh state: re-decide
+    await ticker.tick()
+    assert.equal(m.allowSprinting, false)
+  })
 })
 
 describe('ticker with a target', () => {
