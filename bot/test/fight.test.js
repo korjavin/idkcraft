@@ -454,4 +454,19 @@ describe('stub fight end-to-end', () => {
     assert.equal(r.decision.action, 'fight')
     assert.ok(bot.calls.attack > before, 'no swing at a melee mob')
   })
+
+  it('latched mob that despawns clears the latch instead of throwing', async () => {
+    // Latch set on a stalled zombie; the mob then dies. The stale-latch
+    // guard must clear it (and never dereference the gone entity): the next
+    // tick still dispatches follow instead of dying in the tick catch.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 25; t++) await ticker.tick()
+    delete bot.entities[1] // zombie dies after give-up
+    const r = await ticker.tick()
+    assert.ok(r.decision, 'tick threw on the gone entity')
+    assert.equal(r.decision.action, 'follow')
+  })
 })
