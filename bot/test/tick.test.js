@@ -225,3 +225,126 @@ describe('scout seam', () => {
     assert.deepEqual(bot.lines, [])
   })
 })
+
+describe('paused stop', () => {
+  let origLog
+  let lines
+  // silence per-tick decision logs but record them for the no-follow assertion
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('stop parks across ticks with a player nearby; follow me resumes', async () => {
+    const bot = mockBot()
+    bot.registry = { blocksByName: { iron_ore: { id: 15 } } }
+    bot.findCalls = 0
+    bot.lines = []
+    bot.findBlocks = () => { bot.findCalls++; return [pos(4, 60, 1)] }
+    bot.blockAt = () => ({ name: 'iron_ore' })
+    bot.chat = (line) => { bot.lines.push(line) }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'jev' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setMovements({ allowSprinting: false })
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(brain.calls, 1)
+    assert.equal(bot.findCalls, 1)
+    assert.deepEqual(bot.lines, ['iron_ore x1 at 4 60 1'])
+    // chat 'stop': clear the follow lock and park
+    ticker.setFollow('')
+    ticker.stop()
+    lines.length = 0
+    const brainBefore = brain.calls
+    const goalsBefore = bot.calls.setGoal
+    const stopsBefore = bot.calls.stop
+    // scout throttle is 5 s: advance time and offer a new vein so the paused
+    // tick must scan again to report it — deleting the scout seam fails here
+    const realNow = Date.now
+    const t0 = realNow()
+    Date.now = () => t0 + 6000
+    bot.findBlocks = () => { bot.findCalls++; return [pos(9, 60, 2)] }
+    let r1, r2, r3
+    try {
+      r1 = await ticker.tick()
+      r2 = await ticker.tick()
+      r3 = await ticker.tick()
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(r1.calledBrain, false)
+    assert.equal(r2.calledBrain, false)
+    assert.equal(r3.calledBrain, false)
+    assert.equal(brain.calls, brainBefore)
+    assert.equal(bot.calls.setGoal, goalsBefore)
+    // idle dispatched once: the park stopped already, paused ticks add no more stops
+    assert.equal(bot.calls.stop, stopsBefore)
+    assert.deepEqual(r3.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision while parked')
+    assert.ok(bot.findCalls > 1, 'scout keeps scanning while parked')
+    assert.ok(bot.lines.some((l) => l.includes('9 60 2')), 'scout reports new veins while parked')
+    // chat 'follow me': resume
+    ticker.setFollow('Steve')
+    lines.length = 0
+    await ticker.tick()
+    assert.ok(bot.calls.setGoal > goalsBefore)
+  })
+
+  it('parked with nobody online scans nothing', async () => {
+    const bot = mockBot()
+    bot.registry = { blocksByName: { iron_ore: { id: 15 } } }
+    bot.findCalls = 0
+    bot.findBlocks = () => { bot.findCalls++; return [pos(4, 60, 1)] }
+    bot.blockAt = () => ({ name: 'iron_ore' })
+    bot.lines = []
+    bot.chat = (line) => { bot.lines.push(line) }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.findCalls, 1)
+    ticker.setFollow('')
+    ticker.stop()
+    bot.players = {}
+    const before = bot.findCalls
+    // advance past the 5 s scout throttle so a scan would fire without the
+    // target guard — the assertion must pin the guard, not the throttle
+    const realNow = Date.now
+    const t0 = realNow()
+    Date.now = () => t0 + 6000
+    try {
+      await ticker.tick()
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(bot.findCalls, before)
+  })
+
+  it('stop during the brain await discards the stale follow', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    let resolveBrain
+    const brain = {
+      calls: 0,
+      decide() {
+        this.calls++
+        return new Promise((resolve) => { resolveBrain = resolve })
+      }
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const pending = ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    // chat 'stop' lands while the brain call is in flight
+    ticker.setFollow('')
+    ticker.stop()
+    lines.length = 0
+    resolveBrain({ action: 'follow', sprint: false, source: 'jev' })
+    const r = await pending
+    assert.equal(bot.calls.setGoal, 0)
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision after mid-await stop')
+  })
+
+})
