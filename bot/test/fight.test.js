@@ -550,9 +550,12 @@ describe('equipGear', () => {
     assert.deepEqual(seen, [[sword, 'hand']])
   })
 
-  it('does nothing without inventory or equip', async () => {
-    await fight.equipGear({})
-    await fight.equipGear({ inventory: { items: () => [{ name: 'iron_sword' }] } })
+  it('does not touch inventory when the bot cannot equip', async () => {
+    // The !bot.inventory half needs no test: without it, items() throws
+    // inside gearBatch's try and is swallowed, same observable behaviour.
+    let asked = false
+    await fight.equipGear({ inventory: { items: () => { asked = true; return [{ name: 'iron_sword' }] } } })
+    assert.equal(asked, false)
   })
 
   it('serialises concurrent batches instead of interleaving clicks', async () => {
