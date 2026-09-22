@@ -42,12 +42,23 @@ function holdGoal(bot, ctx) {
   }
 }
 
+// Arrival is measured the same way the goal is: GoalNear.isEnd tests integer
+// block coordinates, and the pathfinder checks the floored entity position —
+// a float comparison would miss by up to ~0.7 blocks (entity stands at the
+// block centre) and report 'cannot reach' from 2.5 blocks away.
+function arrived(bp, pos) {
+  const dx = Math.floor(bp.x) - pos.x
+  const dy = Math.floor(bp.y) - pos.y
+  const dz = Math.floor(bp.z) - pos.z
+  return dx * dx + dy * dy + dz * dz <= ARRIVE_DIST * ARRIVE_DIST
+}
+
 function lead(bot, ctx, target, state) {
   const order = ctx.lead
   if (!order || !order.pos) return
   const bp = bot.entity && bot.entity.position
   if (!bp) return
-  if (dist(bp, order.pos) <= ARRIVE_DIST) {
+  if (arrived(bp, order.pos)) {
     bot.chat(`here: ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
     ctx.lead = null
     ctx.leadStuck = 0
@@ -71,7 +82,7 @@ function lead(bot, ctx, target, state) {
   }
   const key = `lead:${order.pos.x},${order.pos.y},${order.pos.z}`
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), true)
+    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
     ctx.lastGoalKey = key
     ctx.leadStuck = 0
     return
@@ -89,7 +100,7 @@ function lead(bot, ctx, target, state) {
     return
   }
   if (ctx.leadStuck % RETRY_EVERY_TICKS === 0) {
-    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), true)
+    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
   }
 }
 

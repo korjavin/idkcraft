@@ -202,7 +202,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       ctx.leadStuck = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0 }
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false }
   }
 }
 

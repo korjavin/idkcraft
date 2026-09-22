@@ -58,7 +58,7 @@ describe('lead behaviour', () => {
     assert.equal(goal.y, 64)
     assert.equal(goal.z, 0)
     assert.equal(goal.rangeSq, 4) // range 2
-    assert.equal(bot.calls.dynamic[0], true)
+    assert.equal(bot.calls.dynamic[0], false) // static ore goal, like roam
     assert.equal(ctx.lastGoalKey, 'lead:10,64,0')
   })
 
@@ -140,6 +140,18 @@ describe('lead behaviour', () => {
     assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0'])
     assert.equal(ctx.lead, null)
     assert.equal(bot.calls.setGoal, 0)
+  })
+
+  it('arrival from a block centre matches the goal measure (12.5,0.5 vs ore at 10)', () => {
+    // GoalNear.isEnd passes on feet block (12,64,0): dx=2 exactly. The entity
+    // stands at the block centre, 2.55 float blocks away — a float arrival
+    // check would walk past this into 'cannot reach'.
+    const bot = mockBot()
+    bot.entity.position = pos(12.5, 64, 0.5)
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'coal') }
+    lead(bot, ctx, playerEntity(12), { distance_to_player: 1 })
+    assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0'])
+    assert.equal(ctx.lead, null)
   })
 
   it('arrival boundary: 2.0 arrives, 2.1 keeps walking', () => {

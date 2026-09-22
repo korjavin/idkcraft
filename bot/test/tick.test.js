@@ -544,3 +544,30 @@ describe('find me chat sets the lead order', () => {
     assert.equal(order, 'unset')
   })
 })
+
+describe('lead after stop', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('find me after stop unparks and leads', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('')
+    ticker.stop()
+    await ticker.tick() // parked
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) }) // find me path
+    lines.length = 0
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'lead')
+    assert.ok(lines.some((l) => l.includes('action=lead')))
+    assert.equal(bot.calls.setGoal, 1)
+  })
+})
