@@ -31,8 +31,38 @@ function roam(bot, ctx, target, state) {
     }
     return
   }
-  // Already strolling: keep walking until the pathfinder stops.
-  if (bot.pathfinder.isMoving()) return
+  // Progress zeroes the wedge counter: only consecutive stuck resets with
+  // no displacement count (same rule as follow.js).
+  if (typeof bp.distanceTo === 'function' && ctx.roamLastPos) {
+    if (bp.distanceTo(ctx.roamLastPos) > 0.5) ctx.stuckResets = 0
+  }
+  if (typeof bp.clone === 'function') ctx.roamLastPos = bp.clone()
+  // One-tick jump from a nudge expires here: the flag is set the same tick
+  // the sidestep goal is issued, so clearing on the next roam tick jumps
+  // exactly once without latching the control state on.
+  if (ctx.roamNudge) {
+    ctx.roamNudge = false
+    if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
+  }
+  // Already strolling: keep walking until the pathfinder stops — unless the
+  // executor is wedged (isMoving while stuck resets pile up with no
+  // displacement; prod: 10 ticks at dist=4.6 with 3x reset=stuck). Same
+  // recovery as follow.js: sidestep 2 blocks + one jump, then a fresh goal,
+  // so two stuck resets on one goal always force a new target.
+  if (bot.pathfinder.isMoving()) {
+    if ((ctx.stuckResets || 0) >= 2) {
+      console.log(`stuck reason=wedge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)} dist=${distToPlayer.toFixed(1)}`)
+      const wedgeAngle = Math.random() * Math.PI * 2
+      const nx = bp.x + Math.cos(wedgeAngle) * 2
+      const nz = bp.z + Math.sin(wedgeAngle) * 2
+      bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
+      if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
+      ctx.roamNudge = true
+      ctx.stuckResets = 0
+      ctx.lastGoalKey = `roam-nudge:${Math.round(nx)},${Math.round(nz)}`
+    }
+    return
+  }
   const angle = Math.random() * Math.PI * 2
   const r = Math.random() * ROAM_RADIUS
   const x = pp.x + Math.cos(angle) * r
