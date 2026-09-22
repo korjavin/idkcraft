@@ -316,6 +316,7 @@ function meleeReflex(bot, ctx, state) {
         if (ctx.lead) {
           ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
           if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
+            bot.chat(`giving up on ${ctx.lead.name}; following you again`)
             ctx.lead = null
             ctx.leadStuck = 0
             ctx.leadTargetGone = 0
@@ -333,6 +334,7 @@ function meleeReflex(bot, ctx, state) {
       }
       ctx.leadTargetGone = 0
       if (typeof bot.health === 'number' && bot.health <= 0) {
+        if (ctx.lead) bot.chat('following you again')
         ctx.lead = null
         ctx.leadStuck = 0
       }
@@ -445,6 +447,7 @@ function meleeReflex(bot, ctx, state) {
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
+      if (ctx.lead && !player) bot.chat('following you again')
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
@@ -609,8 +612,8 @@ function handleChat(bot, ticker, username, message) {
       } else if (!res) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
-        bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
-        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username })
+        bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
+        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username, lastProgressAt: Date.now() })
       }
     }
   }

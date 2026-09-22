@@ -1313,7 +1313,7 @@ describe('lead override', () => {
     ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
     const r1 = await ticker.tick()
     assert.equal(r1.decision.action, 'lead')
-    assert.ok((bot.lines || []).some((l) => l === 'here: coal at 10 64 0'))
+    assert.ok((bot.lines || []).some((l) => l === 'here: coal at 10 64 0; following you again'))
     lines.length = 0
     const r2 = await ticker.tick()
     assert.equal(r2.decision.action, 'follow') // order gone: brain owns the body again
@@ -1343,7 +1343,7 @@ describe('find me chat sets the lead order', () => {
     assert.equal(order.name, 'coal_ore')
     assert.equal(order.pos.x, 10)
     assert.equal(order.by, 'Steve')
-    assert.ok((bot.lines || []).some((l) => l.includes('coal_ore at 10 60 0')))
+    assert.deepEqual(bot.lines, ['leading you to coal_ore, 11 blocks, follow me'])
   })
 
   it('find me with nothing nearby sets no order', () => {
@@ -1392,6 +1392,8 @@ describe('lead hygiene: death, respawn, and player left', () => {
 
   it('bot death clears lead order', async () => {
     const bot = mockBot()
+    const chats = []
+    bot.chat = (line) => chats.push(line)
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
     const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
     const life = createLifecycle(ticker)
@@ -1399,6 +1401,7 @@ describe('lead hygiene: death, respawn, and player left', () => {
     assert.ok(ticker.getLead())
     life.onDeath(bot)
     assert.equal(ticker.getLead(), null)
+    assert.deepEqual(chats, ['following you again'])
     const r = await ticker.tick()
     assert.equal(r.decision.action, 'follow')
   })
@@ -1469,6 +1472,8 @@ describe('lead hygiene: death, respawn, and player left', () => {
 
   it('target gone for N ticks clears lead order', async () => {
     const bot = mockBot()
+    const chats = []
+    bot.chat = (line) => chats.push(line)
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(2) } }
     const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
     ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
@@ -1481,6 +1486,7 @@ describe('lead hygiene: death, respawn, and player left', () => {
     }
     await ticker.tick() // Nth tick
     assert.equal(ticker.getLead(), null)
+    assert.deepEqual(chats, ['giving up on coal; following you again'])
   })
 
   it('target returning before N ticks resets the target-gone counter', async () => {
