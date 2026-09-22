@@ -236,12 +236,11 @@ function main() {
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
   // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
-  // decision line. Guarded: the test mockBot is a plain object, not an
-  // EventEmitter, so bot.on may be undefined there.
-  if (typeof bot.on === 'function') {
-    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
-    bot.on('path_reset', (reason) => ticker.setPathReset(reason))
-  }
+  // decision line. Registered here in main(), not in createTicker: the test
+  // mockBot is a plain object, not an EventEmitter, so only the real
+  // mineflayer bot ever reaches this code.
+  bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
+  bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
   const life = createLifecycle()
   bot.on('death', () => life.onDeath(bot))

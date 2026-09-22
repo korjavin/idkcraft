@@ -206,7 +206,9 @@ describe('pathfinder status on the decision line', () => {
     assert.match(lines[lines.length - 1], /decision source=laya action=follow sprint=true dist=10\.0 moving=false path=none reset=none/)
     ticker.setPathStatus('noPath')
     ticker.setPathReset('stuck')
-    // fresh state so the brain re-decides and the line re-logs
+    // fresh state so the brain re-decides: the suffix must survive a
+    // re-decide, not just ride the cached-decision path (the line logs
+    // every tick either way)
     bot.players.Steve.entity.position = pos(25, 64, 0)
     await ticker.tick()
     assert.match(lines[lines.length - 1], /moving=false path=noPath reset=stuck/)
