@@ -136,3 +136,4 @@ function equipSword(bot) {
 }
 
 module.exports = fight
+module.exports.SWING_RANGE = SWING_RANGE

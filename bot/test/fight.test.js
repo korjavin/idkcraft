@@ -438,4 +438,20 @@ describe('stub fight end-to-end', () => {
     assert.ok(actions.includes('follow'), `brain never saw unreachable: ${actions.join(',')}`)
     assert.equal(bot.calls.attack, 0) // both out of swing range throughout
   })
+
+  it('latched mob that walks into melee range gets swung on the next tick', async () => {
+    // Pursuit stalls and the brain yields follow; the zombie then walks to 1
+    // block with the player still far, so only the melee override can bring
+    // fight back — the bot must swing instead of taking hits until re-probe.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 25; t++) await ticker.tick()
+    bot.entities = { 1: mobEntity(1, 'zombie', 1) }
+    const before = bot.calls.attack
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'fight')
+    assert.ok(bot.calls.attack > before, 'no swing at a melee mob')
+  })
 })

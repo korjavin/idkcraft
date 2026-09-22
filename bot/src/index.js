@@ -122,6 +122,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           ctx.fightGivenUpId = null // stale: mob gone or no longer a candidate
           ctx.fightUnreachableTicks = 0
           state.hostile_reachable = true
+        } else if (latched.position.distanceTo(bot.entity.position) <= BEHAVIOURS.fight.SWING_RANGE) {
+          // Written-off mob in melee reach: report reachable so the brain
+          // answers fight and fight.js swings via its given-up branch (which
+          // clears the latch itself). The latch stays set — clearing here
+          // would re-issue a pursuit goal at a mob already in reach.
+          state.hostile_reachable = true
         } else if (state.hostile && state.hostile.id === ctx.fightGivenUpId) {
           ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
           if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
