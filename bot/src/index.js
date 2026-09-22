@@ -38,7 +38,7 @@ const FIGHT_REPROBE_TICKS = 30
 const TARGET_GONE_TICKS = 10
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0 }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -320,7 +320,7 @@ function meleeReflex(bot, ctx, state) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
-    setPathReset: (reason) => { ctx.lastPathReset = reason || null },
+    setPathReset: (reason) => { ctx.lastPathReset = reason || null; if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1 },
     start: () => scheduleNext(true),
     // ponytail: sprint-jump wedges the bot flush against a 1-block step
     // (sprint speed reaches the face before the queued jump lifts off, so

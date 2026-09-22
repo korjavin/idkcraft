@@ -35,12 +35,14 @@ function follow(bot, ctx, target, state) {
     ctx.followStalls = 0
     ctx.followLastPos = bp ? bp.clone() : null
     ctx.followNudge = false
+    ctx.stuckResets = 0
     return
   }
 
   if (ctx.followNudge) {
     ctx.followNudge = false
     ctx.followStalls = 0
+    ctx.stuckResets = 0
     ctx.followIssuedAt = now
     if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
     bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
@@ -52,13 +54,46 @@ function follow(bot, ctx, target, state) {
   if (ctx.followLastPos && bp) {
     if (bp.distanceTo(ctx.followLastPos) > MOVE_TOLERANCE) {
       ctx.followStalls = 0
+      ctx.stuckResets = 0
       ctx.followLastPos = bp.clone()
     }
   } else if (bp) {
     ctx.followLastPos = bp.clone()
   }
 
+  // Wedged executor: the pathfinder keeps reporting isMoving() while its
+  // own 3.5 s 'stuck' reset replans the identical move, so the terminal
+  // stall counter below never advances. Two 'stuck' resets with no
+  // displacement since the last progress count as a stall even while moving.
+  // Recovery is the usual sidestep: issuing GoalNear empties the stale
+  // executor path (resetPath) and plans 2 blocks sideways + one-tick jump.
+  // (No setGoal(null) first: it only repeats that same resetPath, reaches no
+  // fullStop, and emits a spurious path_reset; stop() is worse — its latch
+  // would swallow the GoalNear issued in the same tick.)
+  // Known limit: 'stuck' fires only after 3.5 s without any path reset, and a
+  // walking player re-anchors GoalFollow (goal_moved) faster than that, so
+  // this branch cannot fire while the followed player keeps moving — the bot
+  // un-wedges once they stand still (~7 s). A displacement-only trigger is
+  // future work; it needs live tuning against the while-moving protection
+  // window, not a new constant picked blind.
   if (isMoving) {
+    if ((ctx.stuckResets || 0) >= 2) {
+      const dist = typeof state?.distance_to_player === 'number'
+        ? state.distance_to_player.toFixed(1)
+        : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
+      console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
+      const angle = Math.random() * Math.PI * 2
+      const nx = (bp ? bp.x : 0) + Math.cos(angle) * NUDGE_OFFSET
+      const nz = (bp ? bp.z : 0) + Math.sin(angle) * NUDGE_OFFSET
+      const ny = bp ? bp.y : 64
+      bot.pathfinder.setGoal(new goals.GoalNear(nx, ny, nz, 1), false)
+      if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
+      ctx.followNudge = true
+      ctx.followStalls = 0
+      ctx.stuckResets = 0
+      ctx.followIssuedAt = now
+      return
+    }
     ctx.followIssuedAt = now
     return
   }
