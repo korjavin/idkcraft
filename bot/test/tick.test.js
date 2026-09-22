@@ -999,6 +999,7 @@ describe('find me chat sets the lead order', () => {
     assert.ok(order, 'lead order not set')
     assert.equal(order.name, 'coal_ore')
     assert.equal(order.pos.x, 10)
+    assert.equal(order.by, 'Steve')
     assert.ok((bot.lines || []).some((l) => l.includes('coal_ore at 10 60 0')))
   })
 
@@ -1160,6 +1161,56 @@ describe('lead hygiene: death, respawn, and player left', () => {
       await ticker.tick()
     }
     assert.ok(ticker.getLead(), 'target gone counter was not reset when target reappeared')
+  })
+
+  it('unrelated player leaving in nearest-player mode does not clear order issued by another player', async () => {
+    const bot = mockBot()
+    bot.players = {
+      Steve: { username: 'Steve', entity: playerEntity(2) },
+      Alex: { username: 'Alex', entity: playerEntity(10) }
+    }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: '' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0), by: 'Steve' })
+    assert.ok(ticker.getLead())
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(ticker.getLead(), 'unrelated leaver cleared the lead order')
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(ticker.getLead(), null)
+  })
+
+  it('setLead, setFollow, and stop reset leadTargetGone counter', async () => {
+    const bot = mockBot()
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10, followName: 'Steve' })
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    ticker.setLead({ name: 'diamond_ore', pos: pos(20, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'setLead did not reset leadTargetGone')
+
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    ticker.stop()
+    ticker.setLead({ name: 'gold_ore', pos: pos(30, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'stop did not reset leadTargetGone')
+
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    ticker.setFollow('Steve')
+    ticker.setLead({ name: 'iron_ore', pos: pos(40, 64, 0) })
+    for (let t = 0; t < Math.floor(TARGET_GONE_TICKS / 2); t++) {
+      await ticker.tick()
+    }
+    assert.ok(ticker.getLead(), 'setFollow did not reset leadTargetGone')
   })
 })
 

@@ -231,16 +231,18 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setPathReset: (reason) => { ctx.lastPathReset = reason || null },
     start: () => scheduleNext(true),
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; if (name) ctx.paused = false },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
       ctx.lead = null
       ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.paused = false },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false },
     clearLead: (player) => {
-      if (player && followName && player.username && player.username !== followName) return
+      const targetName = followName || (ctx.lead && ctx.lead.by)
+      if (player && targetName && player.username && player.username !== targetName) return
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
@@ -313,7 +315,7 @@ function handleChat(bot, ticker, username, message) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
         bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
-        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position })
+        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username })
       }
     }
   }
