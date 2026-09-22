@@ -5,11 +5,35 @@ const assert = require('node:assert/strict')
 const { stubBrain, jevBrain, makeBrain } = require('../src/brain')
 
 describe('stubBrain', () => {
-  it('idles when the player is close (dist 1)', () => {
-    assert.deepEqual(stubBrain.decide({ distance_to_player: 1 }), { action: 'idle', sprint: false, source: 'stub' })
+  it('roams when the player is close and still with no hostile (dist 1)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: false }), { action: 'roam', sprint: false, source: 'stub' })
   })
-  it('follows without sprint at mid range (dist 5)', () => {
-    assert.deepEqual(stubBrain.decide({ distance_to_player: 5 }), { action: 'follow', sprint: false, source: 'stub' })
+  it('idles when the player is close but moving (dist 1)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: true }), { action: 'idle', sprint: false, source: 'stub' })
+  })
+  it('idles when close and still but a hostile is near (no roam into danger)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: false, hostile_distance: 4, bot_health: 5 }), { action: 'idle', sprint: false, source: 'stub' })
+  })
+  it('fight wins over roam when a hostile is in range (dist 1, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: false, hostile_distance: 4, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
+  })
+  it('fight wins over roam on hostile_near_player alone (dist 1, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 1, player_moving: false, hostile_near_player: true, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
+  })
+  it('follow wins over roam once the player is beyond the envelope (dist 7, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 7, player_moving: false }), { action: 'follow', sprint: false, source: 'stub' })
+  })
+  it('follows without sprint at mid range while the player moves (dist 5)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: true }), { action: 'follow', sprint: false, source: 'stub' })
+  })
+  it('roams the stroll envelope while the player is still (dist 5)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false }), { action: 'roam', sprint: false, source: 'stub' })
+  })
+  it('idles when the player is close and moving (dist 2)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 2, player_moving: true }), { action: 'idle', sprint: false, source: 'stub' })
+  })
+  it('falls back to the legacy rule on hostile facts at low health (dist 5, still)', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 5, player_moving: false, hostile_distance: 4, bot_health: 5 }), { action: 'follow', sprint: false, source: 'stub' })
   })
   it('follows with sprint when far (dist 12)', () => {
     assert.deepEqual(stubBrain.decide({ distance_to_player: 12 }), { action: 'follow', sprint: true, source: 'stub' })
@@ -78,7 +102,7 @@ describe('jevBrain', () => {
   it('falls back to stub with source stub-fallback on http error', async () => {
     const denied = async () => ({ ok: false, status: 401 })
     const decision = await jevBrain('bogus', denied).decide({ distance_to_player: 1 })
-    assert.deepEqual(decision, { action: 'idle', sprint: false, source: 'stub-fallback' })
+    assert.deepEqual(decision, { action: 'roam', sprint: false, source: 'stub-fallback' })
   })
 
   it('sends the expected request shape', async () => {
@@ -93,9 +117,56 @@ describe('jevBrain', () => {
     assert.equal(seen.opts.headers.Authorization, 'Bearer k')
     assert.equal(seen.opts.body.model, 'jev-latest')
     assert.deepEqual(Object.keys(seen.opts.body.questions).sort(), ['action', 'sprint'])
-    assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow', 'idle'])
+    assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow', 'idle', 'roam'])
     assert.equal(typeof seen.opts.body.state, 'string')
     assert.match(seen.opts.body.state, /distance_to_player=12\.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false/)
+  })
+
+  it('maps a canned remote answer to roam with source jev', async () => {
+    const canned = async () => ({
+      ok: true,
+      json: async () => ({
+        model: 'jev-1.13.0',
+        answers: {
+          action: { type: 'choice', choice: 'roam', probabilities: { roam: 0.9, idle: 0.1 }, confidence: 0.8 },
+          sprint: { type: 'noul', noul: 0.1 }
+        },
+        usage: {}
+      })
+    })
+    const origError = console.error
+    const logs = []
+    console.error = (msg) => logs.push(msg)
+    try {
+      const decision = await jevBrain('test-key', canned).decide({ distance_to_player: 1, player_moving: false })
+      assert.deepEqual(decision, { action: 'roam', sprint: false, source: 'jev' })
+      assert.equal(logs.length, 0) // stub agrees: roam
+    } finally {
+      console.error = origError
+    }
+  })
+
+  it('logs brain disagree when the model idles where the stub roams', async () => {
+    const origError = console.error
+    const logs = []
+    console.error = (msg) => logs.push(msg)
+    try {
+      const canned = async () => ({
+        ok: true,
+        json: async () => ({
+          answers: {
+            action: { type: 'choice', choice: 'idle' },
+            sprint: { type: 'noul', noul: 0.1 }
+          }
+        })
+      })
+      const decision = await jevBrain('test-key', canned).decide({ distance_to_player: 1, player_moving: false })
+      assert.deepEqual(decision, { action: 'idle', sprint: false, source: 'jev' })
+      assert.equal(logs.length, 1)
+      assert.match(logs[0], /^brain disagree source=jev model=idle stub=roam state=.*distance_to_player=1\.0/)
+    } finally {
+      console.error = origError
+    }
   })
 
   it('logs brain disagree when model action differs from stub reference', async () => {
@@ -145,7 +216,7 @@ describe('jevBrain', () => {
           }
         })
       })
-      const agreeState = { distance_to_player: 5, bot_health: 20 }
+      const agreeState = { distance_to_player: 5, player_moving: true, bot_health: 20 }
       const decision = await jevBrain('test-key', canned).decide(agreeState)
       assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'jev' })
       assert.equal(logs.length, 0)

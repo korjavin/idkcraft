@@ -9,6 +9,7 @@ const { makeScout, findNearest } = require('./behaviours/scout')
 const BEHAVIOURS = {
   fight: require('./behaviours/fight'),
   follow: require('./behaviours/follow'),
+  roam: require('./behaviours/roam'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
