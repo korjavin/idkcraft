@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
-const { findTarget, buildState, stateKey } = require('./perception')
+const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 
 const BEHAVIOURS = {
@@ -16,6 +16,12 @@ const BEHAVIOURS = {
 // up every 10 s just to re-scan the player list is plenty.
 const IDLE_TICK_MS = 10000
 const IDLE_LOG_MS = 60000
+// Re-probe ceiling (ticks) for a given-up hostile: the world may change
+// (bridged ravine, opened door), so a pursuit fight abandoned is retried
+// from scratch this often. Lives here, not in fight.js — once the brain
+// answers follow for an unreachable mob, fight stops being dispatched and
+// its own counter would never advance.
+const FIGHT_REPROBE_TICKS = 30
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
   const ctx = { lastGoalKey: '', movements: null, paused: false }
@@ -103,8 +109,38 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
       }
-      const state = buildState(bot, target, lastTargetPos)
+      const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
       lastTargetPos = state._lastTargetPos
+      // Feed fight's give-up latch back to the brain as hostile_reachable.
+      // Keyed on the latched mob itself, not state.hostile: fight pursues the
+      // sticky incumbent (ctx.fightId) while perception ranks nearest, and a
+      // newcomer inside the sticky margin must not read as a stale latch —
+      // clearing there would re-arm pursuit of the unreachable mob forever.
+      if (ctx.fightGivenUpId != null) {
+        const latched = bot.entities ? bot.entities[ctx.fightGivenUpId] : null
+        if (!isFightTarget(latched, bot.entity.position, target && target.position)) {
+          ctx.fightGivenUpId = null // stale: mob gone or no longer a candidate
+          ctx.fightUnreachableTicks = 0
+          state.hostile_reachable = true
+        } else if (latched.position.distanceTo(bot.entity.position) <= BEHAVIOURS.fight.SWING_RANGE) {
+          // Written-off mob in melee reach: report reachable so the brain
+          // answers fight and fight.js swings via its given-up branch (which
+          // clears the latch itself). The latch stays set — clearing here
+          // would re-issue a pursuit goal at a mob already in reach.
+          state.hostile_reachable = true
+        } else if (state.hostile && state.hostile.id === ctx.fightGivenUpId) {
+          ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
+          if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
+            ctx.fightGivenUpId = null
+            ctx.fightUnreachableTicks = 0
+            state.hostile_reachable = true
+          }
+        } else {
+          ctx.fightUnreachableTicks = 0
+        }
+      } else {
+        ctx.fightUnreachableTicks = 0
+      }
       // every-tick hooks (no body cost) go here
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
       if (ctx.scout) ctx.scout.tick()

@@ -2,7 +2,9 @@
 
 // The one brain interface, two implementations. No classes needed.
 // decide(state) -> { action: 'fight' | 'follow' | 'roam' | 'idle', sprint: bool, source }
-// state = { distance_to_player, player_visible, player_moving, bot_health, bot_food, nearby_hostiles, hostile_distance, hostile_near_player }
+// state = { distance_to_player, player_visible, player_moving, bot_health, bot_food, nearby_hostiles, hostile_distance, hostile_near_player, hostile_reachable }
+// hostile_reachable=false comes from fight's give-up latch (unreachable mob:
+// cave, glass, ravine). Missing means reachable (older callers).
 
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
@@ -24,7 +26,10 @@ const stubBrain = {
     const hd = state.hostile_distance
     const near = !!state.hostile_near_player
     const health = typeof state.bot_health === 'number' ? state.bot_health : 20
-    if (((typeof hd === 'number' && hd <= 8) || near) && health >= 6) {
+    // Unreachable mob (fight gave up pursuit): yield to follow unless the mob
+    // threatens the player — the arbitration the brain owns.
+    const unreachable = state.hostile_reachable === false
+    if (((typeof hd === 'number' && hd <= 8 && !unreachable) || near) && health >= 6) {
       return { action: 'fight', sprint: false, source: 'stub' }
     }
     const d = state.distance_to_player
@@ -70,7 +75,8 @@ function stateToText(state) {
     `bot_health=${state.bot_health} bot_food=${state.bot_food} ` +
     `nearby_hostiles=${state.nearby_hostiles} ` +
     `hostile_distance=${typeof hd === 'number' ? hd.toFixed(1) : 'none'} ` +
-    `hostile_near_player=${!!state.hostile_near_player}`
+    `hostile_near_player=${!!state.hostile_near_player} ` +
+    `hostile_reachable=${state.hostile_reachable === false ? 'false' : 'true'}`
 }
 
 function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
@@ -95,9 +101,9 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'Decide what the companion bot does this second. Fight when a hostile mob is within 8 blocks of the bot or near the player and the bot has at least 6 health. Otherwise follow when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near. Otherwise roam when the player is within 6 blocks and is not moving and no hostile mob is near. Otherwise wait.',
+                instructions: 'Decide what the companion bot does this second. Fight when a reachable hostile mob is within 8 blocks of the bot, or a hostile mob is near the player, and the bot has at least 6 health. A mob flagged hostile_reachable=false is unreachable: do not fight it unless it is near the player. Otherwise follow when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near. Otherwise roam when the player is within 6 blocks and is not moving and no hostile mob is near. Otherwise wait.',
                 criteria: {
-                  fight: 'A hostile mob is within 8 blocks (or near the player) and bot_health is 6 or more: attack the mob.',
+                  fight: 'A hostile mob is within 8 blocks and hostile_reachable=true, or near the player, and bot_health is 6 or more: attack the mob. hostile_reachable=false means unreachable: do not fight unless near the player.',
                   follow: 'Walk toward the player and stay close when the player is far: more than 3 blocks while moving or while a hostile mob is near, more than 6 blocks while standing still with no hostile near.',
                   idle: 'Stand still and wait: no target, the player is within 3 blocks and moving, or a hostile mob is near while bot_health is below 6 and the player is within 3 blocks.',
                   roam: 'The player is within 6 blocks and is not moving, and no hostile mob is near: walk a few blocks around the player to look at the surroundings.'

@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { stubBrain, jevBrain, makeBrain } = require('../src/brain')
+const { stubBrain, jevBrain, makeBrain, stateToText } = require('../src/brain')
 
 describe('stubBrain', () => {
   it('roams when the player is close and still with no hostile (dist 1)', () => {
@@ -55,6 +55,25 @@ describe('stubBrain', () => {
   })
   it('fights with hostile_near_player only', () => {
     assert.deepEqual(stubBrain.decide({ hostile_near_player: true, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
+  })
+  it('yields follow for an unreachable hostile not near the player', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 10, player_moving: false, hostile_distance: 4, hostile_near_player: false, hostile_reachable: false, bot_health: 20 }), { action: 'follow', sprint: true, source: 'stub' })
+  })
+  it('still fights an unreachable hostile that threatens the player', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 10, player_moving: false, hostile_distance: 12, hostile_near_player: true, hostile_reachable: false, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
+  })
+  it('treats a missing reachable flag as reachable', () => {
+    assert.deepEqual(stubBrain.decide({ distance_to_player: 10, hostile_distance: 4, hostile_near_player: false, bot_health: 20 }), { action: 'fight', sprint: false, source: 'stub' })
+  })
+})
+
+describe('stateToText reachable flag', () => {
+  const base = { distance_to_player: 5, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 4, hostile_near_player: false }
+  it('defaults to hostile_reachable=true', () => {
+    assert.match(stateToText(base), /hostile_reachable=true/)
+  })
+  it('renders hostile_reachable=false from the give-up latch', () => {
+    assert.match(stateToText({ ...base, hostile_reachable: false }), /hostile_reachable=false/)
   })
 })
 
@@ -119,7 +138,7 @@ describe('jevBrain', () => {
     assert.deepEqual(Object.keys(seen.opts.body.questions).sort(), ['action', 'sprint'])
     assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow', 'idle', 'roam'])
     assert.equal(typeof seen.opts.body.state, 'string')
-    assert.match(seen.opts.body.state, /distance_to_player=12\.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false/)
+    assert.match(seen.opts.body.state, /distance_to_player=12\.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false hostile_reachable=true/)
   })
 
   it('maps a canned remote answer to roam with source jev', async () => {

@@ -145,6 +145,23 @@ describe('perception hostile facts', () => {
     assert.equal(state.hostile_near_player, false)
   })
 
+  it('flags the current hostile unreachable when fight gave up on it', () => {
+    const bot = mockBot()
+    const zombie = mobEntity(1, 'zombie', 2)
+    bot.entities = { 1: zombie }
+    assert.equal(buildState(bot, playerEntity(10), null, null).hostile_reachable, true)
+    assert.equal(buildState(bot, playerEntity(10), null, undefined).hostile_reachable, true)
+    const unreach = buildState(bot, playerEntity(10), null, 1)
+    assert.equal(unreach.hostile, zombie)
+    assert.equal(unreach.hostile_reachable, false)
+    assert.equal(buildState(bot, playerEntity(10), null, 2).hostile_reachable, true) // latch names another mob
+  })
+
+  it('stateKey changes when reachability flips', () => {
+    const base = { distance_to_player: 10, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 6, hostile_near_player: false, hostile_reachable: true }
+    assert.notEqual(stateKey(base), stateKey({ ...base, hostile_reachable: false }))
+  })
+
   it('stateKey changes when a hostile approaches', () => {
     const base = { distance_to_player: 10, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: null, hostile_near_player: false }
     assert.notEqual(stateKey(base), stateKey({ ...base, hostile_distance: 4 }))
@@ -324,7 +341,9 @@ describe('fight behaviour', () => {
     assert.equal(last.entity, b)
   })
 
-  it('re-probes a given-up mob instead of shadowing forever', () => {
+  it('never re-probes on its own after give-up: shadows until the brain looks away', () => {
+    // Re-probe lives in the ticker now (it clears the give-up latch after 30
+    // ticks): fight called directly must NOT start a new pursuit by itself.
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }
     const player = playerEntity(10)
@@ -333,8 +352,10 @@ describe('fight behaviour', () => {
     for (let t = 0; t < 21; t++) fight(bot, ctx, player, state)
     const mobGoals = () => bot.calls.goals.filter((g) => g.entity === zombie)
     assert.equal(mobGoals().length, 4) // given up
-    for (let t = 0; t < 35; t++) fight(bot, ctx, player, state)
-    assert.equal(mobGoals().length, 5) // re-probed from scratch
+    for (let t = 0; t < 40; t++) fight(bot, ctx, player, state)
+    assert.equal(mobGoals().length, 4) // still shadowing, no fresh pursuit
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.entity, player)
     assert.equal(bot.calls.stop, 0)
     assert.equal(bot.calls.attack, 0)
   })
@@ -375,5 +396,77 @@ describe('stub fight end-to-end', () => {
 
   it('fight is wired in the dispatch table', () => {
     assert.equal(BEHAVIOURS.fight, fight)
+  })
+
+  it('unreachable zombie -> brain yields follow, ticker re-probes -> fight', async () => {
+    // Zombie at 6 blocks of the bot but far from the player: reachable means
+    // fight, the give-up latch means follow, the 30-tick re-probe means fight.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    const actions = []
+    let r = await ticker.tick()
+    actions.push(r.decision.action)
+    assert.equal(actions[0], 'fight')
+    for (let t = 0; t < 25; t++) actions.push((await ticker.tick()).decision.action)
+    const firstFollow = actions.indexOf('follow')
+    assert.ok(firstFollow > 0, `brain never yielded follow: ${actions.join(',')}`)
+    assert.ok(actions.slice(0, firstFollow).every((a) => a === 'fight'))
+    assert.ok(actions.slice(firstFollow).every((a) => a === 'follow'))
+    for (let t = 0; t < 35; t++) actions.push((await ticker.tick()).decision.action)
+    assert.ok(actions.slice(firstFollow + 30).includes('fight'), `ticker never re-probed: ${actions.slice(firstFollow).join(',')}`)
+  })
+
+  it('given-up incumbent with a nearer reachable mob -> fights the newcomer', async () => {
+    // A at 6 blocks stalls pursuit; B appears at 5 (inside the 2-block sticky
+    // margin, so fight holds A while perception ranks B nearest). After A is
+    // written off the brain must send the body to reachable B — never re-arm
+    // A forever, never strand on follow while B threatens.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    const a = mobEntity(1, 'zombie', 6)
+    bot.entities = { 1: a }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 10; t++) await ticker.tick() // pursuing A
+    const b = mobEntity(2, 'zombie', 5)
+    bot.entities = { 1: a, 2: b }
+    const actions = []
+    for (let t = 0; t < 50; t++) actions.push((await ticker.tick()).decision.action)
+    const goalsFor = (m) => bot.calls.goals.filter((g) => g.entity === m).length
+    assert.ok(goalsFor(b) >= 1, 'newcomer B never pathed to')
+    assert.ok(actions.includes('follow'), `brain never saw unreachable: ${actions.join(',')}`)
+    assert.equal(bot.calls.attack, 0) // both out of swing range throughout
+  })
+
+  it('latched mob that walks into melee range gets swung on the next tick', async () => {
+    // Pursuit stalls and the brain yields follow; the zombie then walks to 1
+    // block with the player still far, so only the melee override can bring
+    // fight back — the bot must swing instead of taking hits until re-probe.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 25; t++) await ticker.tick()
+    bot.entities = { 1: mobEntity(1, 'zombie', 1) }
+    const before = bot.calls.attack
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'fight')
+    assert.ok(bot.calls.attack > before, 'no swing at a melee mob')
+  })
+
+  it('latched mob that despawns clears the latch instead of throwing', async () => {
+    // Latch set on a stalled zombie; the mob then dies. The stale-latch
+    // guard must clear it (and never dereference the gone entity): the next
+    // tick still dispatches follow instead of dying in the tick catch.
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(30) } }
+    bot.entities = { 1: mobEntity(1, 'zombie', 6) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 25; t++) await ticker.tick()
+    delete bot.entities[1] // zombie dies after give-up
+    const r = await ticker.tick()
+    assert.ok(r.decision, 'tick threw on the gone entity')
+    assert.equal(r.decision.action, 'follow')
   })
 })
