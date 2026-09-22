@@ -34,7 +34,7 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); set to the sidecar to run without a key, decisions then log `source=laya` |
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 
-In-game chat: `follow me` locks onto the speaker, `stop` clears the lock, `find me <block>` reports the nearest matching block within 48 blocks.
+In-game chat: `follow me` locks onto the speaker, `stop` parks the bot (clears the lock and holds still until `follow me`), `find me <block>` reports the nearest matching block within 48 blocks.
 
 Cost guards: with no player online the bot makes no JEV calls at all (local
 idle decision, slow 10 s poll, at most one log line per minute). While a

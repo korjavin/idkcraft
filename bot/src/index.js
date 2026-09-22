@@ -16,7 +16,7 @@ const IDLE_TICK_MS = 10000
 const IDLE_LOG_MS = 60000
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  const ctx = { lastGoalKey: '', movements: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -47,6 +47,34 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     inFlight = true
     let calledBrain = false
     try {
+      if (ctx.paused) {
+        // 'stop' parks the bot: perception + scout keep running while a
+        // player is visible, but the brain is skipped and idle is dispatched
+        // (stop once) — same cost guard as 'no player online', including no
+        // scans with nobody online.
+        const target = findTarget(bot, followName)
+        lastVisible = !!target
+        if (target) {
+          const state = buildState(bot, target, lastTargetPos)
+          lastTargetPos = state._lastTargetPos
+          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+          if (ctx.scout) ctx.scout.tick()
+        } else {
+          lastTargetPos = null
+          lastDecision = null
+          lastStateKey = null
+        }
+        if (ctx.lastGoalKey !== 'idle') {
+          bot.pathfinder.stop()
+          ctx.lastGoalKey = 'idle'
+        }
+        const now = Date.now()
+        if (now - lastIdleLog >= IDLE_LOG_MS) {
+          lastIdleLog = now
+          console.log('decision source=local-idle action=idle sprint=false dist=none')
+        }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+      }
       const target = findTarget(bot, followName)
       lastVisible = !!target
       if (!target) {
@@ -85,6 +113,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           lastDecision = decision
         }
       }
+      if (ctx.paused) {
+        // 'stop' landed during the brain await: discard the stale decision
+        // so one in-flight tick cannot issue a follow goal after the park.
+        if (ctx.lastGoalKey !== 'idle') {
+          bot.pathfinder.stop()
+          ctx.lastGoalKey = 'idle'
+        }
+        const now = Date.now()
+        if (now - lastIdleLog >= IDLE_LOG_MS) {
+          lastIdleLog = now
+          console.log('decision source=local-idle action=idle sprint=false dist=none')
+        }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
     } catch (err) {
@@ -100,8 +142,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     tick,
     start: () => scheduleNext(true),
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = '' },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; if (name) ctx.paused = false },
     stop: () => {
+      ctx.paused = true
       if (ctx.lastGoalKey !== 'idle') bot.pathfinder.stop()
       ctx.lastGoalKey = 'idle'
     }
