@@ -149,7 +149,8 @@ function meleeReflex(bot, ctx, state) {
     } else {
       stopOnce()
     }
-    if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
+    // sprint stays on the decision line as the brain's opinion only; the
+    // body never sprints (see setMovements).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
@@ -301,7 +302,6 @@ function meleeReflex(bot, ctx, state) {
         // 'stop' does, but fight still preempts (safety beats errands).
         const handler = BEHAVIOURS.lead
         if (typeof handler === 'function') handler(bot, ctx, target, state)
-        if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
         const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
@@ -322,7 +322,14 @@ function meleeReflex(bot, ctx, state) {
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
     setPathReset: (reason) => { ctx.lastPathReset = reason || null },
     start: () => scheduleNext(true),
-    setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
+    // ponytail: sprint-jump wedges the bot flush against a 1-block step
+    // (sprint speed reaches the face before the queued jump lifts off, so
+    // physics resolves vel.y=0 with onGround=false and no later jump can
+    // fire). Hold the flag off here — the single write site — so neither
+    // applyDecision nor the lead branch can re-enable it per tick; sprint on
+    // the decision line stays the brain's opinion only. Upgrade path: sprint
+    // only on flat segments needs a hook inside the pathfinder executor.
+    setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },

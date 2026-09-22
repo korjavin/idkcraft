@@ -62,7 +62,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - `follow`: Player moved away (> 3 blocks while moving or with hostile near, > 6 blocks while standing still with no hostile near).
   - `roam`: Player is within 6 blocks and not moving, no hostile mob near (strolls within 6 blocks of player, walks back past 6, never > 8).
   - `idle`: Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked.
-  The brain also decides whether to `sprint` when the player is far ahead (the remote model triggers when the player is `away` [> 6 blocks] and moving, while the reference stub triggers on distance alone [> 8 blocks]). Fight wins over both follow and roam; follow preempts roam when the player walks away.
+  The brain also decides whether to `sprint` when the player is far ahead (the remote model triggers when the player is `away` [> 6 blocks] and moving, while the reference stub triggers on distance alone [> 8 blocks]). The body ignores it and always walks (`Movements.allowSprinting` stays false) because a sprint-jump wedges the bot flush against 1-block steps. Fight wins over both follow and roam; follow preempts roam when the player walks away.
   To help small classifier models discriminate state, the wire state sent to the remote brain uses categorical words rather than numbers: `player=near|far|away|none` (<=3 / <=6 / >6 / no target), `player_moving=yes|no`, `hostile=adjacent|near|far|none` (<=3 / <=8 / <16 / none), `hostile_near_player=yes|no`, `hostile_reachable=yes|no`, `health=low|ok` (<6 / >=6), and `food=hungry|ok`.
 - **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
 
@@ -70,7 +70,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 
 | Behaviour | Trigger | Who decides | How to observe |
 | --- | --- | --- | --- |
-| `follow` | Player > 3 blocks away while moving or with hostile near, > 6 blocks while still (sprints if far: stub > 8 blocks, remote `away` [> 6 blocks] and moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
+| `follow` | Player > 3 blocks away while moving or with hostile near, > 6 blocks while still (the brain may answer sprint when far, but the body always walks) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player at walking speed |
 | `fight` | Reachable hostile within 8 blocks of bot OR near player, and health >= 6 (unreachable mob yields to `follow` unless near player) | Brain decision (`action=fight`) | `/summon zombie ~5 ~ ~`; bot equips first sword and attacks (1 swing/s within 3 blocks) |
 | `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
