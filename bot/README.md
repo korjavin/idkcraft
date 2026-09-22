@@ -23,6 +23,17 @@ MC_HOST=localhost node src/index.js          # terminal 2: the bot (brain=stub)
 MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 ```
 
+Step-up check (proves a movement fix in ~60 s): with the server and the bot
+running as above, run `MC_HOST=localhost node test/e2e-step.js`. It drives the
+server over RCON (`docker exec idk-mc rcon-cli`, enabled by mc-up.sh): `/fill`s
+a 7x7 1-block stone plateau, walks the FakePlayer end to end on top (constant
+motion keeps the stub on follow; a standing player would read as roam), and
+asserts IdkBot climbs up within 15 s from a cardinal and a diagonal start,
+printing the bot's y each second. A wedge shows as y hovering ~0.5 above ground until the 15 s
+timeout; a healthy climb reaches plateau-top y on two consecutive samples and
+passes. (RCON, not an opped FakePlayer: the `OPS`-seeded ops.json UUID does not
+match offline-mode logins, so the server rejects chat-sent commands.)
+
 ## Env vars
 
 | Var | Default | Meaning |
