@@ -99,6 +99,46 @@ brain disagree source=<source> model=<action> stub=<ref> state=<state-line>
 ```
 Logged to stderr whenever the model output diverges from the reference rules. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
 
+## Reading the logs
+
+The bot logs one line per tick, so a saved log plus a text search answers
+most "why did it do that?" questions. The compose stack keeps up to
+100 MB per container (`json-file`, `max-size: 20m`, `max-file: 5`), so a
+day of play survives; the host journal it replaced was vacuumed after
+~2.5 h.
+
+Get a log:
+
+```sh
+# From Portainer: Containers -> <bot container> -> Logs -> Download.
+# From a shell next to the server:
+docker logs --timestamps <bot-container> > bot.log
+# Death causes come from the server side (the bot only sees it died):
+docker logs <mc-container> | grep 'IdkBot was'
+```
+
+Summarise a saved log:
+
+```sh
+sh bot/scripts/logstats.sh bot.log
+```
+
+It prints counts per `action=` and per `source=`, the brain-disagreement
+count, deaths, respawns, tick errors, the `stub-fallback` count, and the
+first/last timestamp (timestamps only appear when the log was saved
+with `--timestamps`).
+
+Line types:
+
+| Line | Meaning |
+| --- | --- |
+| `decision source=<s> action=<a> ...` | One per tick while a player is visible (at most one per minute when idle). Compare `source=laya` against the stub to judge the model. |
+| `brain disagree source=<s> model=<a> stub=<r> ...` | The remote brain answered differently from the local reference policy. A high rate means the prompt criteria and the rules drifted apart. |
+| `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
+| `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
+| `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). A death with no respawn after it means the bot never came back. |
+| `tick error: ...` | The tick threw instead of deciding; the bot retried on the next tick. Frequent lines here point at perception or brain bugs, not at the model. |
+
 ## Online-mode note
 
 The server runs offline-mode, so the bot uses `auth: 'offline'` — no

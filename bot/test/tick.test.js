@@ -416,3 +416,56 @@ describe('paused stop', () => {
   })
 
 })
+
+describe('death/respawn log lines', () => {
+  const { deathLine, respawnLine, handleDeath, handleRespawn } = require('../src/index')
+  const { buildState } = require('../src/perception')
+
+  function deadBot() {
+    return {
+      username: 'IdkBot',
+      health: 0,
+      food: 10,
+      players: {},
+      entities: {
+        1: { id: 1, type: 'mob', name: 'zombie', position: pos(102, 64, -20) },
+      },
+      entity: { position: pos(100, 64, -20) },
+    }
+  }
+
+  it('death line carries health, hostile count and position', () => {
+    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20')
+  })
+
+  it('hostile count ignores mobType-only entities (no deprecated fallback)', () => {
+    const bot = deadBot()
+    bot.entities[2] = { id: 2, type: 'mob', mobType: 'zombie', position: pos(101, 64, -20) }
+    assert.equal(buildState(bot, null).nearby_hostiles, 1)
+    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20')
+  })
+
+  it('respawn line carries the position', () => {
+    const bot = deadBot()
+    bot.entity = { position: pos(0, 64, 0) }
+    assert.equal(respawnLine(bot), 'respawn at 0 64 0')
+  })
+
+  it('handlers print exactly one line each', () => {
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      handleDeath(deadBot())
+      const bot = deadBot()
+      bot.entity = { position: pos(0, 64, 0) }
+      handleRespawn(bot)
+    } finally {
+      console.log = orig
+    }
+    assert.deepEqual(lines, [
+      'death health=0 hostiles=1 at 100 64 -20',
+      'respawn at 0 64 0',
+    ])
+  })
+})

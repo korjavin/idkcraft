@@ -213,6 +213,9 @@ function main() {
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
+  bot.on('death', () => handleDeath(bot))
+  bot.on('respawn', () => handleRespawn(bot))
+
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
     process.exit(1)
@@ -251,4 +254,35 @@ function handleChat(bot, ticker, username, message) {
 
 if (require.main === module) main()
 
-module.exports = { createTicker, BEHAVIOURS, handleChat }
+// Death/respawn are logged, never silent: mineflayer auto-respawns by
+// default, so without these lines a death looks like a teleport. The
+// hostile count reuses buildState(bot, null) (null target = no player
+// needed for the nearby-hostile scan).
+function deathLine(bot) {
+  let health = typeof bot.health === 'number' ? bot.health : 20
+  let hostiles = 0
+  try {
+    const state = buildState(bot, null)
+    health = state.bot_health
+    hostiles = state.nearby_hostiles
+  } catch (_) { /* keep defaults: the line must still print */ }
+  const pos = bot.entity && bot.entity.position
+  const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
+  return `death health=${health} hostiles=${hostiles} at ${at}`
+}
+
+function respawnLine(bot) {
+  const pos = bot.entity && bot.entity.position
+  const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
+  return `respawn at ${at}`
+}
+
+function handleDeath(bot) {
+  console.log(deathLine(bot))
+}
+
+function handleRespawn(bot) {
+  console.log(respawnLine(bot))
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine }

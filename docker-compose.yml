@@ -56,6 +56,11 @@ services:
     volumes:
       - ${MC_DATA_PATH:-./data}:/data
     mem_limit: ${MC_MEM_LIMIT:-3g}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
     # Portainer refuses service_healthy dependents without one. Uses the
     # image's bundled mc-health script; start_period covers first boot
@@ -91,6 +96,11 @@ services:
       BRAIN_URL: ${BRAIN_URL:-http://laya:8000/v1/systemone}
       BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
   laya:
     # Built by CI from ./laya and pushed to GHCR.
@@ -104,6 +114,11 @@ services:
     environment:
       OMP_NUM_THREADS: ${LAYA_THREADS:-4}
       MKL_NUM_THREADS: ${LAYA_THREADS:-4}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       # CMD-SHELL (not CMD list): Portainer word-splits CMD lists, so -c
       # received only "import" (SyntaxError). CMD-SHELL re-joins the words
