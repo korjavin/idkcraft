@@ -133,7 +133,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
                 instructions: 'Decide what the companion bot does this second. Fight when hostile is adjacent or near and hostile_reachable is yes and health is ok, or hostile_near_player is yes and health is ok. When hostile_reachable is no, do not fight unless hostile_near_player is yes. Otherwise follow when player is away, or player is far while player_moving is yes or hostile is not none. Otherwise roam when player is near or far, player_moving is no, and hostile is none. Otherwise wait.',
                 criteria: {
                   fight: 'hostile is adjacent or near and hostile_reachable is yes, or hostile_near_player is yes, and health is ok: attack the mob. When hostile_reachable is no, do not fight unless hostile_near_player is yes.',
-                  follow: 'Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none, or player is near while health is low and hostile is not none.',
+                  follow: 'Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none.',
                   idle: 'Stand still and wait: player is none, player is near and player_moving is yes, or player is near while health is low and hostile is not none.',
                   roam: 'player is near or far, player_moving is no, and hostile is none: walk a few blocks around the player to look at the surroundings.'
                 }

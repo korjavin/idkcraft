@@ -8,7 +8,7 @@ sends (model, state text, questions) -- it is the exact JEV-shaped body.
 
 Waits for /health (up to 120 s), POSTs request.json 20x asserting
 answers.action.choice in {fight, follow, roam, idle} and answers.sprint.noul is a float
-in [0,1], then prints p50/p95 ms plus the answers for 9 canned states as a
+in [0,1], then prints p50/p95 ms plus the answers for 13 canned states as a
 table for the human quality check. Exit non-zero on any shape failure.
 Latency is printed, not asserted.
 """
