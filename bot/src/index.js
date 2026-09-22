@@ -213,6 +213,10 @@ function main() {
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
+  const life = createLifecycle()
+  bot.on('death', () => life.onDeath(bot))
+  bot.on('respawn', () => life.onRespawn(bot))
+
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
     process.exit(1)
@@ -251,4 +255,52 @@ function handleChat(bot, ticker, username, message) {
 
 if (require.main === module) main()
 
-module.exports = { createTicker, BEHAVIOURS, handleChat }
+// Death/respawn are logged, never silent: mineflayer auto-respawns by
+// default, so without these lines a death looks like a teleport. The
+// hostile count reuses buildState(bot, null) (null target = no player
+// needed for the nearby-hostile scan).
+function deathLine(bot) {
+  let health = typeof bot.health === 'number' ? bot.health : 20
+  let hostiles = 0
+  try {
+    const state = buildState(bot, null)
+    health = state.bot_health
+    hostiles = state.nearby_hostiles
+  } catch (_) { /* keep defaults: the line must still print */ }
+  const pos = bot.entity && bot.entity.position
+  const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
+  return `death health=${health} hostiles=${hostiles} at ${at}`
+}
+
+function respawnLine(bot) {
+  // At the 'respawn' packet bot.entity.position still holds the death
+  // coords (mineflayer only moves it on the later position sync), so read
+  // bot.spawnPoint instead: this bot sets no bed/anchor, meaning respawn
+  // always lands on world spawn. Entity position is the fallback.
+  const dest = (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
+    (bot.entity && bot.entity.position)
+  const at = dest ? `${Math.floor(dest.x)} ${Math.floor(dest.y)} ${Math.floor(dest.z)}` : 'unknown'
+  return `respawn at ${at}`
+}
+
+function handleDeath(bot) {
+  console.log(deathLine(bot))
+}
+
+function handleRespawn(bot) {
+  console.log(respawnLine(bot))
+}
+
+// Death/respawn pair: mineflayer also emits 'respawn' on dimension change
+// (portal transit), which is not a reappearance after death. The flag keeps
+// the log strictly paired — one respawn line per observed death — so the
+// death/respawn counts stay meaningful.
+function createLifecycle() {
+  let died = false
+  return {
+    onDeath(bot) { died = true; handleDeath(bot) },
+    onRespawn(bot) { if (!died) return; died = false; handleRespawn(bot) },
+  }
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle }

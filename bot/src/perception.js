@@ -18,7 +18,7 @@ const FIGHT_RANGE_PLAYER = 6
 // fleeing is out of scope.
 function isFightTarget(entity, botPos, playerPos) {
   if (!entity || entity.type === 'player' || !entity.position) return false
-  const name = entity.name || entity.mobType || ''
+  const name = entity.name || ''
   if (!HOSTILE_NAMES.has(name) || name === 'creeper') return false
   if (entity.position.distanceTo(botPos) <= FIGHT_RANGE_BOT) return true
   return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
@@ -73,7 +73,7 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   let nearbyHostiles = 0
   for (const entity of Object.values(bot.entities)) {
     if (entity.type === 'player' || !entity.position) continue
-    const name = entity.name || entity.mobType || ''
+    const name = entity.name || ''
     if (!HOSTILE_NAMES.has(name)) continue
     if (entity.position.distanceTo(bot.entity.position) < 16) nearbyHostiles++
   }
