@@ -850,3 +850,32 @@ describe('melee reflex with two hostiles (one swing per tick)', () => {
     assert.equal(bot.attackCalls, 2)
   })
 })
+
+describe('melee reflex while parked', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('stop parks the body but the arm still swings, with no brain call', async () => {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    const zp = pos(1, 64, 0)
+    zp.offset = (ox, oy, oz) => pos(zp.x + ox, zp.y + oy, zp.z + oz)
+    bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('')
+    ticker.stop()
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(r.calledBrain, false)
+    assert.equal(bot.attackCalls, 1)
+    assert.equal(bot.calls.setGoal, 0) // parked: no body goal issued
+  })
+})

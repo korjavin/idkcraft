@@ -104,7 +104,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | Command | Action | Implementation |
 | --- | --- | --- |
 | `follow me` | Locks onto speaker, resumes movement if parked | Sets `followName` to speaker, unparks ticker, replies `Following <username>` |
-| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible |
+| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks; replies with `<block> at <x> <y> <z> (<N> blocks)`, `no <block> within 48 blocks`, or `unknown block: <block>` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
