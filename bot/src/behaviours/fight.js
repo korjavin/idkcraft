@@ -43,11 +43,12 @@ function fight(bot, ctx, target, state) {
   if (ctx.fightGivenUpId === hostile.id) {
     // Pursuit abandoned (the brain sees hostile_reachable=false and yields
     // to follow): shadow the player as the local safety net, swing if the
-    // mob wandered into range.
+    // mob wandered into range (unless the melee reflex already swung this
+    // tick — one swing per tick).
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
-      swing(bot, hostile)
+      if (!ctx.reflexSwung) swing(bot, hostile)
     } else {
       shadowPlayer(bot, ctx, target)
     }
@@ -76,7 +77,10 @@ function fight(bot, ctx, target, state) {
   } else {
     ctx.fightPursuit = 0
   }
-  if (inRange) {
+  // Same-tick reflex guard: the reflex already swung (at any mob — it hits
+  // the nearest while fight may hold a sticky incumbent), so a second
+  // bot.attack here would double the swing rate.
+  if (inRange && !ctx.reflexSwung) {
     swing(bot, hostile)
   }
 }
@@ -137,3 +141,5 @@ function equipSword(bot) {
 
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
+module.exports.swing = swing
+module.exports.equipSword = equipSword
