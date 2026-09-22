@@ -26,12 +26,15 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   let lastDecision = null
 
   // mineflayer-pathfinder's stop() only sets a stopPathing flag that the
-  // next setGoal consumes along with the new goal — called on an empty
-  // path it latches and swallows the next goal. So never stop unless the
-  // bot is actually moving; lastGoalKey still flips to 'idle' for stop-once.
+  // next setGoal consumes with the new goal — on an empty path with no goal
+  // it latches and swallows the next goal, so skip it there. A live but
+  // stationary goal (dynamic follow resting in range) still needs cancelling;
+  // setGoal(null) clears it without latching. lastGoalKey still flips to
+  // 'idle' for stop-once.
   function stopOnce() {
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
+      else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
       ctx.lastGoalKey = 'idle'
     }
   }

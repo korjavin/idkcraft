@@ -97,6 +97,36 @@ describe('stop guard', () => {
     assert.equal(calls.setGoal, 2)
     assert.equal(calls.effectiveGoals, 2)
   })
+
+  it('chat stop cancels a stationary live goal without latching; follow resumes', async () => {
+    // goal-tracking mock: setGoal installs/clears, a latched stop swallows it
+    let liveGoal = null
+    let latched = false
+    const calls = { setGoal: 0, stop: 0 }
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.pathfinder.goal = null
+    bot.pathfinder.isMoving = () => false // resting in range: live goal, empty path
+    bot.pathfinder.setGoal = (g) => {
+      calls.setGoal++
+      if (latched) { latched = false; liveGoal = null; bot.pathfinder.goal = null; return }
+      liveGoal = g || null
+      bot.pathfinder.goal = liveGoal
+    }
+    bot.pathfinder.stop = () => { calls.stop++; latched = true }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'stub-fallback' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    await ticker.tick() // follow installs the live goal
+    assert.ok(liveGoal)
+    ticker.setFollow('')
+    ticker.stop() // chat stop while stationary: cancel, do not latch
+    assert.equal(calls.stop, 0)
+    assert.equal(liveGoal, null)
+    ticker.setFollow('Steve')
+    await ticker.tick() // follow resumes on the first tick, nothing swallowed
+    assert.ok(liveGoal)
+    assert.equal(calls.stop, 0)
+  })
 })
 
 describe('ticker movements', () => {
@@ -291,7 +321,8 @@ describe('paused stop', () => {
     assert.equal(brain.calls, 1)
     assert.equal(bot.findCalls, 1)
     assert.deepEqual(bot.lines, ['iron_ore x1 at 4 60 1'])
-    // chat 'stop': clear the follow lock and park
+    // chat 'stop': clear the follow lock and park (moving, so the park stops once)
+    bot.pathfinder.isMoving = () => true
     ticker.setFollow('')
     ticker.stop()
     lines.length = 0
