@@ -38,7 +38,6 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
-Cost guards: with no player online the bot makes no brain calls at all (local
 idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
 hostile in reach, still no brain calls — at most one log line per minute) and
 performs no scout scans (the nobody-online tick only scans entities for the
@@ -52,7 +51,6 @@ server nothing can kill it and no chunks stay loaded for it. `BOT_LEAVE_AFTER_MS
 keeps the old always-on behaviour. While a player is visible the tick stays at
 `BRAIN_TICK_MS`, but an unchanged perception state (distance rounded to 1 block,
 same flags) reuses the last decision instead of calling the brain again.
-
 
 ## Behaviours & Arbitration
 
