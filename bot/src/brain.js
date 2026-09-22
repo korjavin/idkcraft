@@ -57,12 +57,9 @@ function parseAction(answer) {
   const choice = answer && answer.choice
   return choice === 'fight' || choice === 'follow' || choice === 'roam' || choice === 'idle' ? choice : null
 }
-
-// Noul answers are documented as {"type":"noul","noul":0..1} (0..1
-// probability, no confidence field).
-function parseNoul(answer) {
-  return typeof answer?.noul === 'number' ? answer.noul >= 0.5 : false
-}
+// roam/idle never reach the model: hybridBrain consults it only on hard
+// states, and every hard case is a fight-vs-follow judgement. parseAction
+// still accepts all four words (harmless: a 2-key criteria can only yield two).
 
 // JEV `state` is documented as a string; send one compact categorical text line.
 function stateToText(state) {
@@ -113,7 +110,12 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   const source = sourceForUrl(url)
   return {
     name: source,
-    async decide(state) {
+    // reason is the hard-case name hybridBrain passes (isHard's answer, the
+    // one fact that distinguishes the hard states); it rides the wire as a
+    // leading hard=<reason> word. Sprint is NOT asked: the model answered
+    // sprint 0.91 for everything, and the FSM rule (d > 8) already gets this
+    // body detail right — the decision below returns the FSM's sprint.
+    async decide(state, reason = '') {
       // ponytail: one call per tick, no batching/caching — upgrade path is
       // batching states if JEV cost ever matters ($0.042/M tokens; ~200
       // tokens/tick -> pennies/day).
@@ -126,24 +128,14 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
           headers,
           body: JSON.stringify({
             model: JEV_MODEL,
-            state: stateToText(state),
+            state: `hard=${reason} ${stateToText(state)}`,
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'Decide what the companion bot does this second. Fight when hostile is adjacent or near and hostile_reachable is yes and health is ok, or hostile_near_player is yes and health is ok. When hostile_reachable is no, do not fight unless hostile_near_player is yes. Otherwise follow when player is away, or player is far while player_moving is yes or hostile is not none. Otherwise roam when player is near or far, player_moving is no, and hostile is none. Otherwise wait.',
+                instructions: 'The simple rules could not decide this state; choose fight or follow.',
                 criteria: {
-                  fight: 'hostile is adjacent or near and hostile_reachable is yes, or hostile_near_player is yes, and health is ok: attack the mob. When hostile_reachable is no, do not fight unless hostile_near_player is yes.',
-                  follow: 'Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none.',
-                  idle: 'Stand still and wait: player is none, player is near and player_moving is yes, or player is near while health is low and hostile is not none.',
-                  roam: 'player is near or far, player_moving is no, and hostile is none: walk a few blocks around the player to look at the surroundings.'
-                }
-              },
-              sprint: {
-                type: 'noul',
-                instructions: 'player is away and player_moving is yes, so the bot should sprint to catch up.',
-                criteria: {
-                  true: 'sprint to catch up',
-                  false: 'walking is enough'
+                  fight: 'hard is crowd and health is ok, or hard is hostile-vs-far-player and hostile is adjacent or near, or hostile_near_player is yes and health is ok: pursue and hit the mob.',
+                  follow: 'health is low, or hard is unreachable-hostile, or hard is hostile-vs-far-player and player is away: leave the mob and walk to the player.'
                 }
               }
             }
@@ -153,12 +145,11 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         const data = await res.json()
         let action = parseAction(data && data.answers && data.answers.action)
         if (!action) throw new Error('jev missing action answer')
-        const sprint = parseNoul(data.answers.sprint)
-        const ref = stubBrain.decide(state).action
-        if (ref !== action) {
-          console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${numericStateToText(state)}`)
+        const fsm = stubBrain.decide(state)
+        if (fsm.action !== action) {
+          console.error(`brain disagree source=${source} model=${action} stub=${fsm.action} state=${numericStateToText(state)}`)
         }
-        return { action, sprint, source }
+        return { action, sprint: fsm.sprint, source }
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
         // retries naturally. Never crash the bot because of the brain.
@@ -202,7 +193,7 @@ function hybridBrain(remote) {
         console.log(`brain route=easy fsm=${fsm.action}`)
         return fsm
       }
-      const model = await remote.decide(state)
+      const model = await remote.decide(state, reason)
       console.log(`brain route=hard reason=${reason} model=${model.action} fsm=${fsm.action} source=${model.source}`)
       return model
     }
