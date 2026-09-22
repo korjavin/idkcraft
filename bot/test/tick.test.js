@@ -187,6 +187,38 @@ describe('ticker with a target', () => {
   })
 })
 
+describe('pathfinder status on the decision line', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  it('appends moving/path/reset; a fed noPath shows on the next line; reset clears after one log', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: true, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.ok(lines.length > 0)
+    assert.match(lines[lines.length - 1], /decision source=laya action=follow sprint=true dist=10\.0 moving=false path=none reset=none/)
+    ticker.setPathStatus('noPath')
+    ticker.setPathReset('stuck')
+    // fresh state so the brain re-decides: the suffix must survive a
+    // re-decide, not just ride the cached-decision path (the line logs
+    // every tick either way)
+    bot.players.Steve.entity.position = pos(25, 64, 0)
+    await ticker.tick()
+    assert.match(lines[lines.length - 1], /moving=false path=noPath reset=stuck/)
+    bot.players.Steve.entity.position = pos(40, 64, 0)
+    await ticker.tick()
+    // reset= logged once: stale reason does not repeat, path= persists
+    assert.match(lines[lines.length - 1], /moving=false path=noPath reset=none/)
+  })
+})
+
 describe('stateKey', () => {
   const base = { distance_to_player: 12.4, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 0 }
   it('rounds distance to 1 block and covers the flags', () => {
@@ -415,6 +447,100 @@ describe('paused stop', () => {
     assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision after mid-await stop')
   })
 
+})
+
+describe('death/respawn log lines', () => {
+  const { deathLine, respawnLine, handleDeath, handleRespawn, createLifecycle } = require('../src/index')
+  const { buildState } = require('../src/perception')
+
+  function deadBot() {
+    return {
+      username: 'IdkBot',
+      health: 0,
+      food: 10,
+      players: {},
+      entities: {
+        1: { id: 1, type: 'mob', name: 'zombie', position: pos(102, 64, -20) },
+      },
+      entity: { position: pos(100, 64, -20) },
+    }
+  }
+
+  it('death line carries health, hostile count and position', () => {
+    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20')
+  })
+
+  it('hostile count ignores mobType-only entities (no deprecated fallback)', () => {
+    const bot = deadBot()
+    bot.entities[2] = { id: 2, type: 'mob', mobType: 'zombie', position: pos(101, 64, -20) }
+    assert.equal(buildState(bot, null).nearby_hostiles, 1)
+    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20')
+  })
+
+  it('respawn line carries the position', () => {
+    const bot = deadBot()
+    bot.entity = { position: pos(0, 64, 0) }
+    assert.equal(respawnLine(bot), 'respawn at 0 64 0')
+  })
+
+  it('respawn prefers spawnPoint: entity position is still the death coords', () => {
+    const bot = deadBot() // entity at death coords, spawnPoint at world spawn
+    bot.spawnPoint = pos(0, 64, 0)
+    assert.equal(respawnLine(bot), 'respawn at 0 64 0')
+  })
+
+  it('respawn falls back to entity position, then unknown', () => {
+    const noSpawn = deadBot()
+    noSpawn.entity = { position: pos(5, 64, 5) }
+    assert.equal(respawnLine(noSpawn), 'respawn at 5 64 5')
+    const neither = deadBot()
+    neither.entity = null
+    assert.equal(respawnLine(neither), 'respawn at unknown')
+  })
+
+  it('lifecycle pairs death/respawn: lone respawn (dimension change) stays silent', () => {
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      const life = createLifecycle()
+      const bot = deadBot()
+      bot.spawnPoint = pos(0, 64, 0)
+      life.onRespawn(bot) // portal transit, no death before it
+      assert.deepEqual(lines, [])
+      life.onDeath(bot)
+      life.onRespawn(bot)
+      assert.deepEqual(lines, [
+        'death health=0 hostiles=1 at 100 64 -20',
+        'respawn at 0 64 0',
+      ])
+      life.onRespawn(bot) // second respawn without a death stays silent
+      assert.equal(lines.length, 2)
+      life.onDeath(bot) // a new death re-arms the respawn line
+      life.onRespawn(bot)
+      assert.equal(lines.length, 4)
+    } finally {
+      console.log = orig
+    }
+  })
+
+  it('handlers print exactly one line each', () => {
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      handleDeath(deadBot())
+      const bot = deadBot()
+      bot.entity = { position: pos(0, 64, 0) }
+      handleRespawn(bot)
+    } finally {
+      console.log = orig
+    }
+    assert.deepEqual(lines, [
+      'death health=0 hostiles=1 at 100 64 -20',
+      'respawn at 0 64 0',
+    ])
+  })
 })
 
 describe('lead override', () => {

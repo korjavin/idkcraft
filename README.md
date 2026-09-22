@@ -51,7 +51,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 
 - **Automatic Presence:** The bot container joins the server automatically with the username `IdkBot`.
 - **Behavior:** Operates a ~1-second System-1 perception-decision loop. Evaluates distance, player velocity, and threat state to follow the nearest player (or a designated player set by `BOT_FOLLOW`).
-- **Commands:** Supports in-game chat instructions such as `follow me` and `stop` (see `bot/README.md` for full command documentation and brain options).
+- **Commands:** Supports in-game chat instructions such as `follow me` and `stop` (open chat with D-pad Right on Switch or T on Java, type `follow me` without a slash; see [bot/README.md](bot/README.md#chat-commands) for full command documentation and brain options).
 
 ---
 

@@ -32,6 +32,26 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   let lastIdleLog = 0
   let lastStateKey = null
   let lastDecision = null
+  // Latest mineflayer-pathfinder status: 'path_update' carries
+  // results.status (success|partial|timeout|noPath), 'path_reset' carries a
+  // reason (stuck, dig_error, no_scaffolding_blocks, goal_moved, ...).
+  // Facts about the body, logged on the decision line so a stall is diagnosable.
+  ctx.lastPathStatus = 'none'
+  ctx.lastPathReset = null
+
+  // Suffix for every decision line. Existing fields and order are untouched
+  // (prod greps 'decision source='). reset= clears after one log so a stale
+  // reason does not repeat; path= persists until the next path_update.
+  function pathSuffix() {
+    let moving = false
+    try {
+      if (bot.pathfinder && typeof bot.pathfinder.isMoving === 'function') moving = !!bot.pathfinder.isMoving()
+    } catch (_) { /* stationary default */ }
+    const path = ctx.lastPathStatus || 'none'
+    const reset = ctx.lastPathReset || 'none'
+    ctx.lastPathReset = null
+    return `moving=${moving} path=${path} reset=${reset}`
+  }
 
   // mineflayer-pathfinder's stop() only sets a stopPathing flag that the
   // next setGoal consumes with the new goal — on an empty path with no goal
@@ -56,7 +76,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
     if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-    console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist}`)
+    console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
 
   function scheduleNext(fast) {
@@ -90,7 +110,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
-          console.log('decision source=local-idle action=idle sprint=false dist=none')
+          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
       }
@@ -106,7 +126,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
-          console.log('decision source=local-idle action=idle sprint=false dist=none')
+          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
       }
@@ -166,7 +186,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
-          console.log('decision source=local-idle action=idle sprint=false dist=none')
+          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
@@ -177,7 +197,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (typeof handler === 'function') handler(bot, ctx, target, state)
         if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
         const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist}`)
+        console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
       }
       applyDecision(decision, target, state)
@@ -193,6 +213,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   return {
     tick,
+    setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
+    setPathReset: (reason) => { ctx.lastPathReset = reason || null },
     start: () => scheduleNext(true),
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
     setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; if (name) ctx.paused = false },
@@ -226,6 +248,17 @@ function main() {
   })
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
+
+  // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
+  // decision line. Registered here in main(), not in createTicker: the test
+  // mockBot is a plain object, not an EventEmitter, so only the real
+  // mineflayer bot ever reaches this code.
+  bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
+  bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+
+  const life = createLifecycle()
+  bot.on('death', () => life.onDeath(bot))
+  bot.on('respawn', () => life.onRespawn(bot))
 
   function fatal(where, err) {
     console.error(`${where}: ${err && err.message ? err.message : err}`)
@@ -266,4 +299,52 @@ function handleChat(bot, ticker, username, message) {
 
 if (require.main === module) main()
 
-module.exports = { createTicker, BEHAVIOURS, handleChat }
+// Death/respawn are logged, never silent: mineflayer auto-respawns by
+// default, so without these lines a death looks like a teleport. The
+// hostile count reuses buildState(bot, null) (null target = no player
+// needed for the nearby-hostile scan).
+function deathLine(bot) {
+  let health = typeof bot.health === 'number' ? bot.health : 20
+  let hostiles = 0
+  try {
+    const state = buildState(bot, null)
+    health = state.bot_health
+    hostiles = state.nearby_hostiles
+  } catch (_) { /* keep defaults: the line must still print */ }
+  const pos = bot.entity && bot.entity.position
+  const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
+  return `death health=${health} hostiles=${hostiles} at ${at}`
+}
+
+function respawnLine(bot) {
+  // At the 'respawn' packet bot.entity.position still holds the death
+  // coords (mineflayer only moves it on the later position sync), so read
+  // bot.spawnPoint instead: this bot sets no bed/anchor, meaning respawn
+  // always lands on world spawn. Entity position is the fallback.
+  const dest = (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
+    (bot.entity && bot.entity.position)
+  const at = dest ? `${Math.floor(dest.x)} ${Math.floor(dest.y)} ${Math.floor(dest.z)}` : 'unknown'
+  return `respawn at ${at}`
+}
+
+function handleDeath(bot) {
+  console.log(deathLine(bot))
+}
+
+function handleRespawn(bot) {
+  console.log(respawnLine(bot))
+}
+
+// Death/respawn pair: mineflayer also emits 'respawn' on dimension change
+// (portal transit), which is not a reappearance after death. The flag keeps
+// the log strictly paired — one respawn line per observed death — so the
+// death/respawn counts stay meaningful.
+function createLifecycle() {
+  let died = false
+  return {
+    onDeath(bot) { died = true; handleDeath(bot) },
+    onRespawn(bot) { if (!died) return; died = false; handleRespawn(bot) },
+  }
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle }
