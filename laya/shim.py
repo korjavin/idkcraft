@@ -1,7 +1,7 @@
 """LAYA sidecar shim: serves the JEV System-1 wire shape from local weights.
 
 POST /v1/systemone {model, state, questions} -> {model, answers, usage}.
-The bot reads only answers.action.choice and answers.sprint.noul.
+The bot reads only answers.action.choice (fight|follow); the state string carries a leading hard=<reason> word.
 No auth: internal compose network only, any Authorization header is ignored.
 """
 

@@ -96,6 +96,8 @@ def main():
         template = json.load(f)
 
     lat, fails, rows = [], 0, []
+    # NOTE: every table row gets its own POST below. The 20 latency posts all
+    # send the single template state, so none of them may stand in for a row.
     for i in range(20):  # latency sample + shape asserts on the exact bot body
         ms, data = call(template)
         err = check(data)
@@ -103,9 +105,7 @@ def main():
             print("FAIL post %d: %s" % (i, err))
             fails += 1
         lat.append(ms)
-        if i == 0:
-            rows.append((STATES[0][0], ms, data))
-    for label, state in STATES[1:]:  # one post per state for the quality table
+    for label, state in STATES:  # one post per state for the quality table
         body = dict(template, state=state)
         ms, data = call(body)
         err = check(data)
