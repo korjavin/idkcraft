@@ -778,3 +778,40 @@ describe('melee reflex', () => {
     assert.equal(bot.equipCalls, 2)
   })
 })
+
+describe('melee reflex cadence with nobody online', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function pos2(x, y, z) {
+    const p = { x, y, z, distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z), clone() { return pos2(p.x, p.y, p.z) } }
+    return p
+  }
+
+  it('ticks fast while swinging solo, slow once the mob is gone', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = mockBot()
+      bot.attack = () => { bot.attackCalls = (bot.attackCalls || 0) + 1 }
+      bot.lookAt = () => {}
+      const zp = pos2(1, 64, 0)
+      zp.offset = (ox, oy, oz) => pos2(zp.x + ox, zp.y + oy, zp.z + oz)
+      bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      await ticker.tick()
+      assert.equal(bot.attackCalls, 1)
+      assert.deepEqual(delays, [111]) // swinging: fast, not the 10 s idle poll
+      delete bot.entities[1] // mob dies
+      await ticker.tick()
+      assert.deepEqual(delays, [111, 222]) // nothing in reach: back to slow
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+})

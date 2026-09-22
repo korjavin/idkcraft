@@ -76,12 +76,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 // via ctx.reflexSwungId so the rate stays one swing per tick.
 function meleeReflex(bot, ctx, state) {
   const hostile = state && state.hostile
-  if (!hostile || hostile.isValid === false) return
+  if (!hostile || hostile.isValid === false) return false
   let d
   try {
     d = bot.entity.position.distanceTo(hostile.position)
-  } catch (_) { return }
-  if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return
+  } catch (_) { return false }
+  if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
   if (ctx.reflexTargetId !== hostile.id) {
     ctx.reflexTargetId = hostile.id
     try { fightMod.equipSword(bot) } catch (_) { /* fists are fine */ }
@@ -89,6 +89,7 @@ function meleeReflex(bot, ctx, state) {
   }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
   ctx.reflexSwungId = hostile.id
+  return true
 }
 
   function applyDecision(decision, target, state) {
@@ -113,12 +114,15 @@ function meleeReflex(bot, ctx, state) {
     inFlight = true
     ctx.reflexSwungId = null // fresh each tick: fight skips only a same-tick reflex swing
     let calledBrain = false
+    // Fast cadence while the reflex swings with nobody online: those ticks
+    // make no brain call, so speeding them up costs nothing.
+    let reflexFast = false
     try {
       if (ctx.paused) {
         // 'stop' parks the bot: perception + scout keep running while a
         // player is visible, but the brain is skipped and idle is dispatched
-        // (stop once) — same cost guard as 'no player online', including no
-        // scans with nobody online.
+        // (stop once) — same cost guard as 'no player online'. The only scan
+        // with nobody online is the melee reflex hostile check below.
         const target = findTarget(bot, followName)
         lastVisible = !!target
         if (target) {
@@ -128,7 +132,7 @@ function meleeReflex(bot, ctx, state) {
           if (ctx.scout) ctx.scout.tick()
           meleeReflex(bot, ctx, state)
         } else {
-          try { meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+          try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
@@ -149,7 +153,7 @@ function meleeReflex(bot, ctx, state) {
         stopOnce()
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
-        try { meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+        try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
         lastTargetPos = null
         lastDecision = null
         lastStateKey = null
@@ -238,7 +242,7 @@ function meleeReflex(bot, ctx, state) {
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible)
+      scheduleNext(lastVisible || reflexFast)
     }
   }
 
