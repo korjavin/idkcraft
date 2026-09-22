@@ -22,6 +22,12 @@ sources=$(grep 'decision ' "$log" | grep -o -E 'source=[A-Za-z_-]+' | sort | uni
 [ -n "$sources" ] || sources='(none)'
 printf '%s\n' "$sources"
 echo "brain disagree: $(grep -c 'brain disagree' "$log" || true)"
+echo "route easy: $(grep -c 'brain route=easy' "$log" || true)"
+echo "route hard: $(grep -c 'brain route=hard' "$log" || true)"
+echo "--- per reason= (hard only) ---"
+reasons=$(grep -o -E 'reason=[A-Za-z_-]+' "$log" | sort | uniq -c | sort -rn)
+[ -n "$reasons" ] || reasons='(none)'
+printf '%s\n' "$reasons"
 echo "stub-fallback: $(grep -c 'stub-fallback' "$log" || true)"
 echo "deaths: $(grep -c -E '(^| )death health=' "$log" || true)"
 echo "respawns: $(grep -c -E '(^| )respawn at ' "$log" || true)"
