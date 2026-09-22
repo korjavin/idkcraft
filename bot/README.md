@@ -37,32 +37,32 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
-idle decision, slow 10 s poll, at most one log line per minute). While a
-player is visible the tick stays at `BRAIN_TICK_MS`, but an unchanged
-perception state (distance rounded to 1 block, same flags) reuses the last
-decision instead of calling the brain again.
+idle decision, slow 10 s poll, at most one log line per minute) and performs no
+scout scans. While a player is visible the tick stays at `BRAIN_TICK_MS`, but an
+unchanged perception state (distance rounded to 1 block, same flags) reuses the
+last decision instead of calling the brain again.
 
 ## Behaviours & Arbitration
 
 The bot uses a "one body, many senses" model to handle concurrent activities without conflicting controls:
 
-- **Perception is local and always-on (`src/perception.js`):** Every tick, the bot computes distances, hostile mob proximity, and loaded ore chunks. These are factual inputs, not decisions.
+- **Perception is local and always-on (`src/perception.js`):** Every tick, the bot computes distances, player movement, and hostile mob proximity. These are factual inputs, not decisions.
 - **The Brain arbitrates the body (`src/brain.js`):** The pathfinder and attack mechanics share a single physical body. Every tick (1 s), the System-1 classifier chooses ONE exclusive action:
   - `fight`: Hostile mob threatening bot or player.
   - `follow`: Player moved away.
   - `idle`: Player is close (<= 3 blocks).
-  - *(roam is currently being added as a fourth choice to stroll near a stationary player).*
-  The brain also decides whether to `sprint` (when player is > 8 blocks away and moving).
-- **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick alongside whatever decision is executing.
+  - *(roam is being added as a fourth choice in a follow-up).*
+  The brain also decides whether to `sprint` when the player is > 8 blocks away (the remote model also checks that the player is moving, while the stub triggers on distance alone).
+- **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
 
 ### Behaviours Table
 
 | Behaviour | Trigger | Who decides | How to observe |
 | --- | --- | --- | --- |
-| `follow` | Player > 3 blocks away (`sprint` if > 8 blocks and moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
+| `follow` | Player > 3 blocks away (sprints if > 8 blocks; remote checks player moving) | Brain decision (`action=follow`) | Walk away from bot; bot paths toward player (sprints if you run far ahead) |
 | `fight` | Hostile within 8 blocks of bot OR 6 of player, and health >= 6 | Brain decision (`action=fight`) | `/summon zombie ~5 ~ ~`; bot equips first sword and attacks (1 swing/s within 3 blocks) |
 | `idle` | Player within 3 blocks, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
-| `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost, runs every tick) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
+| `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
 
 ### Reflex Mechanics & Implementation Details
 
@@ -77,8 +77,6 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - Valued ores: diamond, emerald, ancient debris, gold, iron, lapis, redstone (deepslate variants grouped under base name; coal and copper excluded).
   - Reports up to 3 new veins per scan in chat as `<ore> x<count> at <x> <y> <z>`, sorted by priority (highest value first).
   - Deduplicates positions (seen cache capped at 5,000 entries) so the bot never repeats announcements while standing still.
-- **Roam (upcoming):**
-  - A fourth brain choice: stroll within 6 blocks of a standing player to broaden ore scanning coverage.
 
 ### Chat Commands
 
