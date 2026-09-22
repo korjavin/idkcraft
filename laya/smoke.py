@@ -25,6 +25,9 @@ import urllib.request
 BASE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("LAYA_URL", "http://127.0.0.1:8000")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# NOTE: "dist 1 still" repeats the "dist 1" state on purpose: posting the same
+# state twice probes whether the model answers deterministically. A split answer
+# across the two rows means model jitter, not a state difference.
 STATES = [
     ("dist 12 moving",
      "distance_to_player=12.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false"),
