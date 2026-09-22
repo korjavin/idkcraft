@@ -7,6 +7,7 @@ const { findTarget, buildState, stateKey } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 
 const BEHAVIOURS = {
+  fight: require('./behaviours/fight'),
   follow: require('./behaviours/follow'),
 }
 

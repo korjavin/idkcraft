@@ -8,14 +8,33 @@ const HOSTILE_NAMES = new Set([
   'bogged', 'creaking'
 ])
 
+// Fight-candidate ranges: same numbers the brain criteria state (3nt.2) —
+// a hostile counts for fight when within 8 blocks of the bot OR 6 of the player.
+const FIGHT_RANGE_BOT = 8
+const FIGHT_RANGE_PLAYER = 6
+
+// ponytail: creepers are excluded from fight targets, not fled from —
+// hitting one near the player makes it explode next to the player, and
+// fleeing is out of scope.
+function isFightTarget(entity, botPos, playerPos) {
+  if (!entity || entity.type === 'player' || !entity.position) return false
+  const name = entity.name || entity.mobType || ''
+  if (!HOSTILE_NAMES.has(name) || name === 'creeper') return false
+  if (entity.position.distanceTo(botPos) <= FIGHT_RANGE_BOT) return true
+  return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
+}
+
 // Dedup key: distance rounded to 1 block + same flags => reuse last decision,
 // skip the JEV call. Staleness is at most half a block of travel.
 function stateKey(state) {
   const d = state.distance_to_player
+  const hd = state.hostile_distance
   return [
     typeof d === 'number' ? Math.round(d) : 'none',
     !!state.player_visible, !!state.player_moving,
-    state.bot_health, state.bot_food, state.nearby_hostiles
+    state.bot_health, state.bot_food, state.nearby_hostiles,
+    typeof hd === 'number' ? Math.round(hd) : 'none',
+    !!state.hostile_near_player
   ].join('|')
 }
 
@@ -53,16 +72,32 @@ function buildState(bot, target, lastTargetPos) {
     if (!HOSTILE_NAMES.has(name)) continue
     if (entity.position.distanceTo(bot.entity.position) < 16) nearbyHostiles++
   }
+  let hostile = null
+  let hostileDistance = null
+  let hostilePlayerDistance = Infinity
+  for (const entity of Object.values(bot.entities)) {
+    if (!isFightTarget(entity, bot.entity.position, target && target.position)) continue
+    const dBot = entity.position.distanceTo(bot.entity.position)
+    const dPlayer = target ? entity.position.distanceTo(target.position) : Infinity
+    if (hostileDistance === null || dBot < hostileDistance) {
+      hostile = entity
+      hostileDistance = dBot
+      hostilePlayerDistance = dPlayer
+    }
+  }
   const state = {
     distance_to_player: distanceToPlayer,
     player_visible: !!target,
     player_moving: playerMoving,
     bot_health: typeof bot.health === 'number' ? bot.health : 20,
     bot_food: typeof bot.food === 'number' ? bot.food : 20,
-    nearby_hostiles: nearbyHostiles
+    nearby_hostiles: nearbyHostiles,
+    hostile_distance: hostileDistance,
+    hostile_near_player: hostile ? hostilePlayerDistance <= FIGHT_RANGE_PLAYER : false,
+    hostile
   }
   state._lastTargetPos = nextPos
   return state
 }
 
-module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES }
+module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget }

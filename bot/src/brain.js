@@ -108,10 +108,6 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         if (ref !== action) {
           console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${stateToText(state)}`)
         }
-        // ponytail: remove once perception sends hostile_distance (idkcraft-3nt.3)
-        if (action === 'fight' && (!state || !('hostile_distance' in state))) {
-          action = ref
-        }
         return { action, sprint, source }
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
