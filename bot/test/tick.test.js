@@ -888,6 +888,248 @@ describe('death/respawn log lines', () => {
   })
 })
 
+describe('nobody-online leave', () => {
+  let origLog
+  beforeEach(() => {
+    origLog = console.log
+    console.log = () => {}
+  })
+  afterEach(() => { console.log = origLog })
+
+  function leaveBot() {
+    const bot = mockBot()
+    bot.quitCalls = 0
+    bot.quit = () => { bot.quitCalls++ }
+    return bot
+  }
+
+  it('fires onLeave once after leaveAfterMs of empty ticks; a target resets the streak', async () => {
+    const bot = leaveBot()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online'), now: () => t })
+    const tick = async () => { await ticker.tick(); t += 10 }
+    for (let i = 0; i < 6; i++) await tick() // ticks at t=0..50: 50 ms elapsed
+    assert.equal(bot.quitCalls, 0)
+    await tick() // 7th tick at t=60: grace reached
+    assert.equal(bot.quitCalls, 1)
+    await tick()
+    await tick()
+    assert.equal(bot.quitCalls, 1) // latched: quit exactly once
+    // a target appearing resets the streak
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    await tick() // seen tick resets the streak
+    bot.players = {}
+    for (let i = 0; i < 6; i++) await tick()
+    assert.equal(bot.quitCalls, 1)
+    await tick() // 7th tick again: grace reached
+    assert.equal(bot.quitCalls, 2)
+  })
+
+  it('fast empty ticks do not expire a slow grace early (wall time, not ticks)', async () => {
+    const bot = leaveBot()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10000, leaveAfterMs: 60000, onLeave: () => bot.quit('nobody online'), now: () => t })
+    // fast 1 s cadence (melee reflex swinging on an empty server): 6 ticks = 6 real s
+    for (let i = 0; i < 6; i++) { await ticker.tick(); t += 1000 } // t=0..5000: 5 s elapsed
+    assert.equal(bot.quitCalls, 0) // tick-counting code quits here (6 x 10 s)
+    t += 54000 // 60 real seconds since the first empty tick
+    await ticker.tick()
+    assert.equal(bot.quitCalls, 1)
+  })
+
+  it('leaveAfterMs 0 disables the leave', async () => {
+    const bot = leaveBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, onLeave: () => bot.quit('nobody online') })
+    for (let i = 0; i < 10; i++) await ticker.tick()
+    assert.equal(bot.quitCalls, 0)
+  })
+
+  it('parseLeaveAfterMs defaults 60000, honours 0, falls back on garbage', async () => {
+    const { parseLeaveAfterMs } = require('../src/index')
+    assert.equal(parseLeaveAfterMs({}), 60000)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: '0' }), 0)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: '5000' }), 5000)
+    assert.equal(parseLeaveAfterMs({ BOT_LEAVE_AFTER_MS: 'bogus' }), 60000)
+  })
+
+  it('waitForPlayers polls until players.online > 0; refused pings count as empty', async () => {
+    const { waitForPlayers } = require('../src/index')
+    let calls = 0
+    const pingFn = async () => {
+      calls++
+      if (calls === 1) throw new Error('refused')
+      return calls <= 2 ? { players: { online: 0 } } : { players: { online: 2 } }
+    }
+    await waitForPlayers({ host: 'x', port: 1, pingFn, pollMs: 10 })
+    assert.equal(calls, 3)
+  })
+
+  it('rearm resets the leave streak after standing down', async () => {
+    const bot = leaveBot()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('nobody online'), now: () => t })
+    const tick = async () => { await ticker.tick(); t += 10 }
+    for (let i = 0; i < 7; i++) await tick()
+    assert.equal(bot.quitCalls, 1)
+    ticker.rearm() // a re-check found someone online-but-far: stand down
+    for (let i = 0; i < 7; i++) await tick()
+    assert.equal(bot.quitCalls, 2) // next full grace period quits again
+  })
+
+  it('destroy stops the self re-arm', async () => {
+    const delays = []
+    const cleared = []
+    const origSet = global.setTimeout
+    const origClear = global.clearTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return origSet(fn, ms, ...rest) }
+    global.clearTimeout = (t, ...rest) => { cleared.push(t); return origClear(t, ...rest) }
+    try {
+      const bot = leaveBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      await ticker.tick() // schedules the next tick
+      assert.deepEqual(delays, [10])
+      ticker.destroy() // clears the pending tick, schedules nothing after
+      assert.equal(cleared.length, 1)
+      await ticker.tick() // a tick still runs once asked, but re-arms nothing
+      assert.deepEqual(delays, [10])
+    } finally {
+      global.setTimeout = origSet
+      global.clearTimeout = origClear
+    }
+  })
+
+  function connBot() {
+    const { EventEmitter } = require('node:events')
+    const bot = new EventEmitter()
+    bot.username = 'IdkBot'
+    bot.players = {}
+    bot.entities = {}
+    bot.health = 20
+    bot.food = 20
+    bot.entity = { position: pos(0, 64, 0) }
+    // real registry: Movements walks blocks/items/biomes via prismarine-*
+    bot.registry = require('minecraft-data')('1.21.1')
+    bot.pathfinder = {
+      isMoving: () => false,
+      stop: () => {},
+      setGoal: () => {},
+      setMovements: (m) => { bot.movements = m },
+    }
+    bot.loadPlugin = () => {}
+    bot.quitCalls = 0
+    bot.quit = (reason) => { bot.quitCalls++; bot.emit('end', reason || 'quit') }
+    bot.chat = () => {}
+    return bot
+  }
+
+  it('runOnce own quit resolves without exiting; unexpected end exits', async () => {
+    const { runOnce } = require('../src/index')
+    const realExit = process.exit
+    let exits = 0
+    process.exit = () => { exits++; throw new Error('exit') }
+    try {
+      // own quit: empty server, one grace tick, confirm ping empty -> quit -> resolve
+      const bot = connBot()
+      const p = runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: '',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      })
+      bot.emit('spawn')
+      await Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error('runOnce never resolved')), 2000))])
+      assert.equal(bot.quitCalls, 1)
+      assert.equal(exits, 0)
+      // unexpected end with no quit: fatal exit, no resolve
+      const bot2 = connBot()
+      let resolved = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 60000, followName: '',
+        createBot: () => bot2, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => { resolved = true }, () => { resolved = true })
+      assert.throws(() => bot2.emit('end', 'boom'), /exit/)
+      assert.equal(exits, 1)
+      assert.equal(resolved, false)
+      assert.equal(bot2.quitCalls, 0)
+
+      // stand-down: a player online-but-far re-arms every grace period, never quits
+      const bot3 = connBot()
+      let pings = 0
+      let resolved3 = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: '',
+        createBot: () => bot3,
+        pingFn: async () => { pings++; return { players: { online: 1, sample: [{ name: 'Steve' }] } } },
+      }).then(() => { resolved3 = true }, () => { resolved3 = true })
+      bot3.emit('spawn')
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(bot3.quitCalls, 0) // stood down: still on the "server"
+      assert.ok(pings >= 3, `re-armed every grace period (pings=${pings})`)
+      assert.equal(resolved3, false)
+      assert.equal(exits, 1) // no fatal exit from standing down
+      // runOnce stays pending by design here (no quit, no end); its timers
+      // are unref'd so the suite still exits cleanly.
+    } finally {
+      process.exit = realExit
+    }
+  })
+
+  it('runOnce wires spawn kit log and playerLeft lead clear', async () => {
+    const { runOnce } = require('../src/index')
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    const realExit = process.exit
+    let exits = 0
+    process.exit = () => { exits++ }
+    try {
+      const bot = connBot()
+      let done = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 100000,
+        brain: mockBrain(), leaveAfterMs: 0, followName: '',
+        createBot: () => bot,
+        pingFn: async () => ({ players: { online: 1, sample: [{ name: 'Steve' }] } }),
+      }).then(() => { done = true }, () => { done = true })
+      // merge seam (3nt.11 x 3nt.14): both listeners must survive in runOnce
+      assert.equal(bot.listenerCount('playerLeft'), 1, 'playerLeft wired')
+      assert.equal(bot.listeners('spawn').length, 2, 'spawn kit tap wired')
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 50))
+      assert.ok(lines.some((l) => l.includes('spawned as IdkBot')), 'spawn logged')
+      assert.ok(lines.some((l) => l.includes('kit scaffold=')), 'spawn logs kit line')
+      bot.emit('playerLeft', { username: 'Steve' })
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal(exits, 0)
+      assert.equal(done, false)
+    } finally {
+      console.log = origLog
+      process.exit = realExit
+    }
+  })
+
+  it('declares minecraft-protocol (required directly by src/index.js)', () => {
+    const pkg = require('../package.json')
+    assert.ok(pkg.dependencies && pkg.dependencies['minecraft-protocol'], 'direct require must be declared')
+    assert.equal(typeof require('minecraft-protocol').ping, 'function')
+  })
+
+  it('playersOccupied ignores our own just-quit ghost, joins on anyone else', async () => {
+    const { playersOccupied, waitForPlayers } = require('../src/index')
+    const ghost = { players: { online: 1, sample: [{ name: 'IdkBot' }] } }
+    assert.equal(playersOccupied(ghost, 'IdkBot'), false)
+    assert.equal(playersOccupied({ players: { online: 1, sample: [{ name: 'Steve' }] } }, 'IdkBot'), true)
+    assert.equal(playersOccupied({ players: { online: 2, sample: [{ name: 'IdkBot' }] } }, 'IdkBot'), true)
+    assert.equal(playersOccupied({ players: { online: 0 } }, 'IdkBot'), false)
+    // ghost first, then truly empty, then a real player: polls past the ghost
+    const seq = [ghost, { players: { online: 0 } }, { players: { online: 1, sample: [{ name: 'Steve' }] } }]
+    let calls = 0
+    await waitForPlayers({ host: 'x', port: 1, pingFn: async () => seq[calls++], pollMs: 10, username: 'IdkBot' })
+    assert.equal(calls, 3)
+  })
+})
+
 describe('lead override', () => {
   let origLog
   let lines
