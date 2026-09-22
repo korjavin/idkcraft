@@ -62,17 +62,20 @@ function follow(bot, ctx, target, state) {
   }
 
   // Wedged executor: the pathfinder keeps reporting isMoving() while its
-  // own stuck reset fires every few seconds, replanning the identical move.
-  // Two 'stuck' resets with no displacement since the last progress count as
-  // a stall even while moving. Un-wedge first (executor off so the stale goal
-  // cannot swallow the sidestep), then the usual GoalNear nudge + jump.
+  // own 3.5 s 'stuck' reset replans the identical move, so the terminal
+  // stall counter below never advances. Two 'stuck' resets with no
+  // displacement since the last progress count as a stall even while moving.
+  // Recovery is the usual sidestep: issuing GoalNear empties the stale
+  // executor path (resetPath) and plans 2 blocks sideways + one-tick jump.
+  // (No setGoal(null) first: it only repeats that same resetPath, reaches no
+  // fullStop, and emits a spurious path_reset; stop() is worse — its latch
+  // would swallow the GoalNear issued in the same tick.)
   if (isMoving) {
     if ((ctx.stuckResets || 0) >= 2) {
       const dist = typeof state?.distance_to_player === 'number'
         ? state.distance_to_player.toFixed(1)
         : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
       console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
-      bot.pathfinder.setGoal(null)
       const angle = Math.random() * Math.PI * 2
       const nx = (bp ? bp.x : 0) + Math.cos(angle) * NUDGE_OFFSET
       const nz = (bp ? bp.z : 0) + Math.sin(angle) * NUDGE_OFFSET

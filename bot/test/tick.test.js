@@ -602,10 +602,9 @@ describe('follow behaviour and unstuck reflex', () => {
 
       ticker.setPathReset('stuck')
       await ticker.tick() // 2nd stuck, no displacement: wedge nudge
-      assert.equal(bot.calls.setGoal, 3) // setGoal(null) to drop the executor, then GoalNear
-      assert.equal(bot.calls.goals[1], null)
-      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
-      const g = bot.calls.goals[2]
+      assert.equal(bot.calls.setGoal, 2) // exactly one goal: the GoalNear sidestep
+      assert.equal(bot.calls.goals[1].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[1]
       assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
       assert.equal(g.y, 64)
       assert.equal(bot.calls.jump, 1)
@@ -614,8 +613,8 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0$/)
 
       await ticker.tick() // nudge tick: GoalFollow again, jump released
-      assert.equal(bot.calls.setGoal, 4)
-      assert.equal(bot.calls.goals[3].constructor.name, 'GoalFollow')
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalFollow')
       assert.equal(bot.calls.jump, 0)
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
     } finally {
