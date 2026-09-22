@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { stubBrain, jevBrain, makeBrain, stateToText, numericStateToText } = require('../src/brain')
+const { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText } = require('../src/brain')
 
 describe('stubBrain', () => {
   it('roams when the player is close and still with no hostile (dist 1)', () => {
@@ -369,12 +369,12 @@ describe('configurable brain endpoint (laya sidecar)', () => {
     assert.deepEqual(decision, { action: 'follow', sprint: true, source: 'laya' })
   })
 
-  it('(b) makeBrain picks remote for BRAIN_URL, stub for empty env', () => {
-    assert.equal(makeBrain({ BRAIN_URL: LAYA }).name, 'laya')
+  it('(b) makeBrain picks hybrid for BRAIN_URL, stub for empty env', () => {
+    assert.equal(makeBrain({ BRAIN_URL: LAYA }).name, 'hybrid')
     assert.equal(makeBrain({}).name, 'stub')
   })
 
-  it('(c) BRAIN_TIMEOUT_MS bounds a hanging call', async () => {
+  it('(c) BRAIN_TIMEOUT_MS bounds a hanging call on a hard state', async () => {
     const hanging = (url, opts) => new Promise((resolve, reject) => {
       opts.signal.addEventListener('abort', () => reject(new Error('aborted')))
     })
@@ -383,9 +383,22 @@ describe('configurable brain endpoint (laya sidecar)', () => {
     try {
       const brain = makeBrain({ BRAIN_URL: LAYA, BRAIN_TIMEOUT_MS: '50' })
       const t0 = Date.now()
-      const decision = await brain.decide({ distance_to_player: 12 })
+      const decision = await brain.decide({ nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false, bot_health: 20 })
       assert.ok(Date.now() - t0 < 1000, 'aborted near the 50 ms deadline')
       assert.equal(decision.source, 'stub-fallback')
+    } finally {
+      global.fetch = origFetch
+    }
+  })
+  it('(d) easy states never touch the network', async () => {
+    let calls = 0
+    const origFetch = global.fetch
+    global.fetch = async () => { calls++; throw new Error('must not be called') }
+    try {
+      const brain = makeBrain({ BRAIN_URL: LAYA, BRAIN_TIMEOUT_MS: '50' })
+      const decision = await brain.decide({ distance_to_player: 12 })
+      assert.equal(decision.source, 'stub')
+      assert.equal(calls, 0)
     } finally {
       global.fetch = origFetch
     }
@@ -393,9 +406,120 @@ describe('configurable brain endpoint (laya sidecar)', () => {
 })
 
 describe('makeBrain', () => {
-  it('picks stub without a key and jev with a key', () => {
+  it('picks stub without a key and hybrid with a key', () => {
     assert.equal(makeBrain({}).name, 'stub')
     assert.equal(makeBrain({ TYPESAFE_API_KEY: '' }).name, 'stub')
-    assert.equal(makeBrain({ TYPESAFE_API_KEY: 'x' }).name, 'jev')
+    assert.equal(makeBrain({ TYPESAFE_API_KEY: 'x' }).name, 'hybrid')
+  })
+  it('picks hybrid for BRAIN_URL', () => {
+    assert.equal(makeBrain({ BRAIN_URL: 'http://laya:8000/v1/systemone' }).name, 'hybrid')
+  })
+})
+
+describe('isHard', () => {
+  it('low-health-hostile for the prod H1 state', () => {
+    assert.equal(isHard({ hostile_distance: 9.5, hostile_near_player: true, bot_health: 4.9, distance_to_player: 9.9 }), 'low-health-hostile')
+  })
+  it('crowd for the prod H2 state', () => {
+    assert.equal(isHard({ nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false }), 'crowd')
+  })
+  it('hostile-vs-far-player for the prod H3 state', () => {
+    assert.equal(isHard({ hostile_distance: 0.7, distance_to_player: 26.8, bot_health: 15.8 }), 'hostile-vs-far-player')
+  })
+  it('unreachable-hostile for the H4 latch state', () => {
+    assert.equal(isHard({ hostile_reachable: false, hostile_distance: 4, distance_to_player: 10 }), 'unreachable-hostile')
+  })
+  it('null for every existing easy stub case', () => {
+    const easies = [
+      { distance_to_player: 1, player_moving: false },
+      { distance_to_player: 2, player_moving: true },
+      { distance_to_player: 5, player_moving: true },
+      { distance_to_player: 7, player_moving: false },
+      { distance_to_player: 12 },
+      { distance_to_player: null },
+      { hostile_distance: 4, bot_health: 20, distance_to_player: 5 },
+      { hostile_distance: 8, bot_health: 6, distance_to_player: 5 }
+    ]
+    for (const s of easies) assert.equal(isHard(s), null)
+  })
+  it('precedence: low-health-hostile beats crowd', () => {
+    assert.equal(isHard({ hostile_distance: 4, bot_health: 5, nearby_hostiles: 3, distance_to_player: 5 }), 'low-health-hostile')
+  })
+})
+
+describe('hybridBrain', () => {
+  const LAYA = 'http://laya:8000/v1/systemone'
+  const canned = (choice, noul = 0.1) => async () => ({
+    ok: true,
+    json: async () => ({ answers: { action: { type: 'choice', choice }, sprint: { type: 'noul', noul } } })
+  })
+  async function capture(fn) {
+    const origLog = console.log
+    const origErr = console.error
+    const logs = []
+    const errs = []
+    console.log = (m) => logs.push(m)
+    console.error = (m) => errs.push(m)
+    try {
+      const r = await fn()
+      return { r, logs, errs }
+    } finally {
+      console.log = origLog
+      console.error = origErr
+    }
+  }
+
+  it('easy: zero fetch calls, deep-equals stub, route line', async () => {
+    let calls = 0
+    const spy = async () => {
+      calls++
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' }, sprint: { type: 'noul', noul: 0.1 } } }) }
+    }
+    const brain = hybridBrain(jevBrain('k', spy, 1000, LAYA))
+    const state = { distance_to_player: 7, player_moving: false }
+    const { r, logs } = await capture(() => brain.decide(state))
+    assert.equal(calls, 0)
+    assert.deepEqual(r, stubBrain.decide(state))
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /^brain route=easy fsm=follow$/)
+  })
+
+  it('hard low-health: model wins, route carries both answers, disagree still emitted', async () => {
+    const state = { hostile_distance: 9.5, hostile_near_player: true, bot_health: 4.9, distance_to_player: 9.9 }
+    assert.equal(stubBrain.decide(state).action, 'follow')
+    const brain = hybridBrain(jevBrain('', canned('fight', 0.1), 1000, LAYA))
+    const { r, logs, errs } = await capture(() => brain.decide(state))
+    assert.equal(r.action, 'fight')
+    assert.equal(r.source, 'laya')
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /brain route=hard reason=low-health-hostile model=fight fsm=follow/)
+    assert.equal(errs.length, 1)
+    assert.match(errs[0], /^brain disagree/)
+  })
+
+  it('hard far-player: FSM fight loses to model follow', async () => {
+    const state = { hostile_distance: 0.7, distance_to_player: 26.8, bot_health: 15.8 }
+    assert.equal(stubBrain.decide(state).action, 'fight')
+    assert.equal(isHard(state), 'hostile-vs-far-player')
+    const brain = hybridBrain(jevBrain('', canned('follow', 0.1), 1000, LAYA))
+    const { r, logs, errs } = await capture(() => brain.decide(state))
+    assert.equal(r.action, 'follow')
+    assert.equal(r.source, 'laya')
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /brain route=hard reason=hostile-vs-far-player model=follow fsm=fight/)
+    assert.equal(errs.length, 1)
+    assert.match(errs[0], /^brain disagree/)
+  })
+
+  it('fallback: fetch rejects -> FSM answer, source stub-fallback, route line carries it', async () => {
+    const state = { nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false, bot_health: 20 }
+    const expected = stubBrain.decide(state)
+    const failing = async () => { throw new Error('boom') }
+    const brain = hybridBrain(jevBrain('', failing, 1000, LAYA))
+    const { r, logs } = await capture(() => brain.decide(state))
+    assert.equal(r.action, expected.action)
+    assert.equal(r.source, 'stub-fallback')
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /brain route=hard reason=crowd.*source=stub-fallback/)
   })
 })
