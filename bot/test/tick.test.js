@@ -913,14 +913,14 @@ describe('death/respawn log lines', () => {
   }
 
   it('death line carries health, hostile count and position', () => {
-    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20')
+    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0')
   })
 
   it('hostile count ignores mobType-only entities (no deprecated fallback)', () => {
     const bot = deadBot()
     bot.entities[2] = { id: 2, type: 'mob', mobType: 'zombie', position: pos(101, 64, -20) }
     assert.equal(buildState(bot, null).nearby_hostiles, 1)
-    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20')
+    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0')
   })
 
   it('respawn line carries the position', () => {
@@ -957,7 +957,7 @@ describe('death/respawn log lines', () => {
       life.onDeath(bot)
       life.onRespawn(bot)
       assert.deepEqual(lines, [
-        'death health=0 hostiles=1 at 100 64 -20',
+        'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0',
         'respawn at 0 64 0',
       ])
       life.onRespawn(bot) // second respawn without a death stays silent
@@ -968,6 +968,24 @@ describe('death/respawn log lines', () => {
     } finally {
       console.log = orig
     }
+  })
+
+  it('death line falls back to the last tick snapshot when the killer is gone', async () => {
+    // Prod: creeper exploded on the bot, entity gone at the death tick, live
+    // scan prints hostiles=0. The ticker snapshots every tick via meleeReflex.
+    const bot = mockBot()
+    bot.entities = { 9: { id: 9, name: 'creeper', type: 'mob', position: pos(4, 64, 0) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const orig = console.log
+    console.log = () => {}
+    try {
+      await ticker.tick() // nobody-online tick: snapshot records the creeper
+    } finally {
+      console.log = orig
+    }
+    bot.entities = {} // the killer exploded with the bot
+    bot.health = 0
+    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 0 64 0 nearest=creeper 4.0')
   })
 
   it('handlers print exactly one line each', () => {
@@ -983,7 +1001,7 @@ describe('death/respawn log lines', () => {
       console.log = orig
     }
     assert.deepEqual(lines, [
-      'death health=0 hostiles=1 at 100 64 -20',
+      'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0',
       'respawn at 0 64 0',
     ])
   })
@@ -1623,6 +1641,133 @@ describe('melee reflex', () => {
     assert.equal(bot.attackCalls, 3)
     assert.deepEqual(reflexLines(), ['reflex swing zombie', 'reflex swing zombie'])
     assert.equal(bot.equipCalls, 2)
+  })
+})
+
+describe('creeper flee reflex', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function creeperBot() {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.lookAtCalls = 0
+    bot.equipCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => { bot.lookAtCalls++ }
+    bot._items = [{ name: 'iron_sword' }]
+    bot.inventory = { items: () => bot._items }
+    bot.equip = () => { bot.equipCalls++ }
+    return bot
+  }
+
+  function creeper(id, x) {
+    return { id, name: 'creeper', type: 'mob', position: pos(x, 64, 0), height: 1.7 }
+  }
+
+  function zombieAt(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  const fleeLines = () => lines.filter((l) => l.includes('reflex flee creeper'))
+
+  it('creeper at 4 blocks: away GoalNear, no swing, no brain call', async () => {
+    const bot = creeperBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 9: creeper(9, 4) }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'stub' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'flee')
+    assert.equal(r.decision.source, 'reflex')
+    assert.equal(r.calledBrain, false)
+    assert.equal(brain.calls, 0)
+    assert.equal(bot.calls.setGoal, 1)
+    const goal = bot.calls.goals[0]
+    assert.equal(goal.constructor.name, 'GoalNear')
+    assert.equal(goal.x, -6) // from (0,64,0) away from the creeper at x=4
+    assert.equal(goal.y, 64)
+    assert.equal(bot.attackCalls, 0) // never hit a creeper (explosion near the player)
+    assert.deepEqual(fleeLines(), ['reflex flee creeper dist=4.0'])
+
+    // Climbing out: moving along, no re-issue, distance grows, still fleeing.
+    bot.entity.position = pos(-2, 64, 0)
+    bot.pathfinder.isMoving = () => true
+    const r2 = await ticker.tick()
+    assert.equal(r2.decision.action, 'flee')
+    assert.equal(bot.calls.setGoal, 1)
+    assert.ok(bot.entity.position.distanceTo(bot.entities[9].position) > 4)
+    assert.deepEqual(fleeLines(), ['reflex flee creeper dist=4.0']) // logged once per creeper
+  })
+
+  it('creeper beyond 6 blocks: normal follow dispatch, brain called', async () => {
+    const bot = creeperBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 9: creeper(9, 10) }
+    const brain = mockBrain({ action: 'follow', sprint: false, source: 'stub' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(r.calledBrain, true)
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+    assert.deepEqual(fleeLines(), [])
+  })
+
+  it('fleeing with nobody online ticks fast (no 10 s idle cadence)', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = creeperBot()
+      bot.entities = { 9: creeper(9, 4) } // no players: nobody online
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      await ticker.tick()
+      assert.deepEqual(delays, [111]) // fast re-arm while fleeing, not 222
+      assert.equal(bot.calls.setGoal, 1)
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
+  it('fleeing while parked ticks fast and keeps the away goal', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = creeperBot()
+      bot.entities = { 9: creeper(9, 4) } // no players: parked with nobody online
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
+      ticker.stop() // park
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.deepEqual(delays, [111]) // fast re-arm while fleeing, not 222
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+      assert.equal(bot.calls.goals[0].x, -6)
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
+  it('zombie in reach plus creeper near: arm swings, body flees', async () => {
+    const bot = creeperBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombieAt(1, 1), 9: creeper(9, 4) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'flee') // body leaves even though the brain says fight
+    assert.equal(bot.attackCalls, 1) // ...while the arm still hits the zombie
+    assert.deepEqual(lines.filter((l) => l.includes('reflex swing')), ['reflex swing zombie'])
+    assert.deepEqual(fleeLines(), ['reflex flee creeper dist=4.0'])
   })
 })
 
