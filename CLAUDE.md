@@ -83,7 +83,7 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 |  | itzg/minecraft-server   |<----+ ghcr.io/korjavin/     |  |
 |  | TYPE=PAPER + Geyser     |     |   idkcraft:<sha>      |  |
 |  | 25565/tcp (Java + Bot)  |     | Node 22 + mineflayer  |  |
-|  | 19132/udp (Bedrock)     |     | JEV System-1 loop     |  |
+|  | 19132/udp (Bedrock)     |     | rule FSM + System-1 on hard states |  |
 |  +-------------------------+     +-----------------------+  |
 |                                                             |
 |  +-----------------------------------------------------+    |
@@ -112,8 +112,9 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = nearest player)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
-  - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); the sidecar needs no key
+  - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); hybrid (FSM primary, model on hard states only); empty = FSM only, the rollback; the sidecar needs no key
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
+  - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
 

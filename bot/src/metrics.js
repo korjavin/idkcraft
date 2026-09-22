@@ -24,6 +24,11 @@ const disagreements = new client.Counter({
   help: 'Remote brain answer differs from the stub reference',
   labelNames: ['model', 'stub']
 })
+const routes = new client.Counter({
+  name: 'idkcraft_bot_brain_routes_total',
+  help: 'Hybrid brain routing: easy = rule FSM only, hard = remote model consulted (reason = hard state)',
+  labelNames: ['route', 'reason']
+})
 const decisions = new client.Counter({
   name: 'idkcraft_bot_decisions_total',
   help: 'Decisions dispatched to the body, by source and action',
@@ -46,6 +51,11 @@ const vitals = new client.Gauge({
   labelNames: ['fact']
 })
 
+const online = new client.Gauge({
+  name: 'idkcraft_bot_online',
+  help: '1 while the bot is joined; it leaves an empty server (BOT_LEAVE_AFTER_MS)'
+})
+
 function setVitals(state) {
   for (const f of ['bot_health', 'bot_food', 'distance_to_player', 'hostile_distance', 'nearby_hostiles']) {
     const v = state && state[f]
@@ -63,4 +73,4 @@ function serve(port) {
   }).listen(port, () => console.log(`metrics on :${port}/metrics`))
 }
 
-module.exports = { client, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, setVitals, serve }
+module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, setVitals, serve }

@@ -372,20 +372,32 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.attack, 0)
   })
 
-  it('shadows the player when fight has no hostile, stopping only a moving bot', () => {
+  it('delegates to follow when fight has no hostile: no stop, one follow goal', () => {
+    // Regression: stop() latches stopPathing and the next setGoal nulls the
+    // goal in the same tick, so the no-hostile fallback must never stop —
+    // it delegates to follow.js (one follow implementation).
+    const player = { id: 7, username: 'Steve', position: pos(10, 64, 0) }
     const missing = mockBot()
     const ctx = { lastGoalKey: 'fight:1' }
-    const player = playerEntity(10)
     fight(missing, ctx, player, { hostile: null })
     assert.equal(missing.calls.stop, 0) // stationary: nothing to halt
     assert.equal(missing.calls.attack, 0)
+    assert.equal(missing.calls.setGoal, 1)
+    assert.equal(ctx.lastGoalKey, 'follow:Steve')
     const last = missing.calls.goals[missing.calls.goals.length - 1]
-    assert.equal(last.entity, player) // bodyguard, not parked
+    assert.equal(last.entity, player) // bodyguard via follow, not parked
     const dead = mockBot()
     dead._moving = true
-    fight(dead, { lastGoalKey: 'fight:1' }, player, { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
-    assert.equal(dead.calls.stop, 1) // halt the chase to the corpse
+    const deadCtx = { lastGoalKey: 'fight:1' }
+    fight(dead, deadCtx, player, { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
+    assert.equal(dead.calls.stop, 0) // moving: still no stop, goal must stick
     assert.equal(dead.calls.attack, 0)
+    assert.equal(dead.calls.setGoal, 1)
+    assert.equal(deadCtx.lastGoalKey, 'follow:Steve')
+    assert.equal(dead.calls.goals[dead.calls.goals.length - 1].entity, player)
+    fight(dead, deadCtx, player, { hostile: null })
+    assert.equal(dead.calls.stop, 0)
+    assert.equal(dead.calls.setGoal, 1) // moving: follow spaces re-issues
   })
 })
 

@@ -5,6 +5,7 @@
 // IdkBot's distance to it drops below 4 blocks within 30 s. Exit 0/1.
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const { waitFor, sleep } = require('./e2e-util')
 
 const MC_HOST = process.env.MC_HOST || 'localhost'
 const MC_PORT = parseInt(process.env.MC_PORT || '25565', 10)
@@ -13,13 +14,6 @@ const FAKE_NAME = `FakePlayer${Math.floor(Math.random() * 10000)}`
 
 const fake = mineflayer.createBot({ host: MC_HOST, port: MC_PORT, username: FAKE_NAME, auth: 'offline' })
 fake.loadPlugin(pathfinder)
-
-function waitFor(emitter, event, timeoutMs, what) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), timeoutMs)
-    emitter.once(event, (...args) => { clearTimeout(timer); resolve(args) })
-  })
-}
 
 function distanceToIdkBot() {
   const idk = fake.players[BOT_USERNAME] && fake.players[BOT_USERNAME].entity
@@ -36,7 +30,7 @@ async function main() {
   const deadline = Date.now() + 60000
   while (distanceToIdkBot() === null) {
     if (Date.now() > deadline) throw new Error('IdkBot never appeared')
-    await new Promise((r) => setTimeout(r, 1000))
+    await sleep(1000)
   }
   console.log(`IdkBot spotted at dist=${distanceToIdkBot().toFixed(1)}`)
 
@@ -46,7 +40,7 @@ async function main() {
   const chunkDeadline = Date.now() + 30000
   while (fake.blockAt(fake.entity.position.offset(0, -1, 0)) == null) {
     if (Date.now() > chunkDeadline) throw new Error('world never loaded for FakePlayer')
-    await new Promise((r) => setTimeout(r, 1000))
+    await sleep(1000)
   }
   console.log('world loaded, walking away')
 
@@ -81,7 +75,7 @@ async function main() {
       console.error('FAIL: IdkBot did not get within 4 blocks in 30 s')
       process.exit(1)
     }
-    await new Promise((r) => setTimeout(r, 1000))
+    await sleep(1000)
   }
 }
 

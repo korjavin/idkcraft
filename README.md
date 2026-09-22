@@ -83,5 +83,5 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
      docker exec idkcraft-mc rcon-cli whitelist add .<Gamertag>
      ```
 4. **Verification & Logs:**
-   - Bot status: Run `docker logs idkcraft-bot` to verify `brain=laya` (or `brain=jev` when `BRAIN_URL` is overridden to JEV) and matching `decision source=` log entries.
+   - Bot status: Run `docker logs idkcraft-bot` to verify `brain=hybrid(...)` (`brain=stub` when `BRAIN_URL` is empty) and matching `brain route=easy|hard` plus `decision source=` log entries.
    - Server status: Run `docker logs idkcraft-mc` to verify `Started Geyser on UDP port 19132`.
