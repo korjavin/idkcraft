@@ -475,6 +475,7 @@ describe('melee reflex skip (one swing per tick)', () => {
   it('exports the swing and equipSword helpers for the tick reflex', () => {
     assert.equal(typeof fight.swing, 'function')
     assert.equal(typeof fight.equipSword, 'function')
+    assert.equal(typeof fight.equipGear, 'function')
   })
 
   it('skips its own swing when the reflex swung this tick, at any mob', () => {
@@ -500,5 +501,46 @@ describe('melee reflex skip (one swing per tick)', () => {
     fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
     assert.equal(bot.calls.attack, 0)
     assert.equal(ctx.fightGivenUpId, null) // latch still clears for re-engage
+  })
+})
+
+describe('equipGear', () => {
+  function gearBot(items, slots) {
+    const bot = mockBot()
+    bot._items = items
+    bot.inventory.slots = slots || []
+    const seen = []
+    bot.equip = (item, dest) => { seen.push([item, dest]) }
+    return { bot, seen }
+  }
+
+  it('equips sword to hand and chestplate to torso', () => {
+    const sword = { name: 'iron_sword' }
+    const chest = { name: 'iron_chestplate' }
+    const { bot, seen } = gearBot([sword, chest])
+    fight.equipGear(bot)
+    assert.deepEqual(seen, [[sword, 'hand'], [chest, 'torso']])
+  })
+
+  it('equips the full iron set to the right destinations', () => {
+    const kit = [{ name: 'iron_sword' }, { name: 'iron_helmet' }, { name: 'iron_chestplate' }, { name: 'iron_leggings' }, { name: 'iron_boots' }]
+    const { bot, seen } = gearBot(kit)
+    fight.equipGear(bot)
+    assert.deepEqual(seen, [[kit[0], 'hand'], [kit[1], 'head'], [kit[2], 'torso'], [kit[3], 'legs'], [kit[4], 'feet']])
+  })
+
+  it('skips armor slots that are already filled', () => {
+    const sword = { name: 'iron_sword' }
+    const chest = { name: 'iron_chestplate' }
+    const slots = []
+    slots[6] = { name: 'iron_chestplate' } // torso already geared
+    const { bot, seen } = gearBot([sword, chest], slots)
+    fight.equipGear(bot)
+    assert.deepEqual(seen, [[sword, 'hand']])
+  })
+
+  it('does nothing without inventory or equip', () => {
+    assert.doesNotThrow(() => fight.equipGear({}))
+    assert.doesNotThrow(() => fight.equipGear({ inventory: { items: () => [{ name: 'iron_sword' }] } }))
   })
 })

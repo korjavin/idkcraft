@@ -59,7 +59,7 @@ function fight(bot, ctx, target, state) {
     ctx.lastGoalKey = key
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
-    equipSword(bot)
+    equipGear(bot)
   } else if (!inRange) {
     if (bot.pathfinder.isMoving()) {
       ctx.fightPursuit = 0 // progress: a later stall gets a fresh budget
@@ -127,19 +127,52 @@ function swing(bot, hostile) {
 
 // ponytail: first sword in inventory wins (no attackDamage ranking) —
 // an op can /give IdkBot iron_sword; fists are fine for the demo.
-function equipSword(bot) {
-  if (!bot.inventory || typeof bot.inventory.items !== 'function') return
-  const sword = bot.inventory.items().find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
-  if (!sword || typeof bot.equip !== 'function') return
+// Armor is the same idea: first *_helmet/_chestplate/_leggings/_boots
+// to head/torso/legs/feet, skipping a slot that already holds armor
+// (mineflayer armor slots: head=5, torso=6, legs=7, feet=8).
+// No mineflayer-armor-manager: four suffix matches via bot.equip is enough.
+const ARMOR_SLOTS = [
+  { suffix: '_helmet', dest: 'head', slot: 5 },
+  { suffix: '_chestplate', dest: 'torso', slot: 6 },
+  { suffix: '_leggings', dest: 'legs', slot: 7 },
+  { suffix: '_boots', dest: 'feet', slot: 8 },
+]
+
+function equipOne(bot, item, dest) {
   try {
-    const r = bot.equip(sword, 'hand')
+    const r = bot.equip(item, dest)
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch {
     // best-effort: fists are fine.
   }
 }
 
+function equipGear(bot) {
+  if (!bot.inventory || typeof bot.inventory.items !== 'function') return
+  if (typeof bot.equip !== 'function') return
+  let items
+  try {
+    items = bot.inventory.items()
+  } catch {
+    return // best-effort: inventory not ready at spawn
+  }
+  if (!Array.isArray(items)) return
+  const sword = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
+  if (sword) equipOne(bot, sword, 'hand')
+  for (const { suffix, dest, slot } of ARMOR_SLOTS) {
+    if (bot.inventory.slots && bot.inventory.slots[slot]) continue // already geared
+    const piece = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith(suffix))
+    if (piece) equipOne(bot, piece, dest)
+  }
+}
+
+// Pre-gear name kept for older callers; same behaviour.
+function equipSword(bot) {
+  equipGear(bot)
+}
+
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
 module.exports.equipSword = equipSword
+module.exports.equipGear = equipGear
