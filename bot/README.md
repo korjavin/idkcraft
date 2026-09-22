@@ -154,7 +154,7 @@ The bot fights with what it carries. An op hands it an iron kit once;
   dig-through paths become cheap enough for A* to pick.
 - Then `/give IdkBot bread 64`: natural regeneration requires food >= 18;
   the eat reflex consumes bread when food drops below 18, top up when the
-  log shows `kit food=0`.
+  `kit` line shows `food=0`.
 - To op yourself, add your name to the `OPS` env list on the stack and restart.
 
 ## Reading the logs

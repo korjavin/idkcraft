@@ -7,6 +7,12 @@ const { findTarget, buildState, stateKey, isFightTarget } = require('./perceptio
 const { makeScout, findNearest } = require('./behaviours/scout')
 
 const fightMod = require('./behaviours/fight')
+const origEquipGear = fightMod.equipGear
+fightMod.equipGear = function(bot) {
+  if (bot && bot._tickerCtx && bot._tickerCtx.eatInFlight) return Promise.resolve()
+  return origEquipGear(bot)
+}
+
 const BEHAVIOURS = {
   fight: fightMod,
   follow: require('./behaviours/follow'),
@@ -61,25 +67,39 @@ function eatReflex(bot, ctx, state) {
   if (typeof bot.consume !== 'function') return false
 
   ctx.eatInFlight = true
-  console.log(`eat ${foodItem.name} food=${bot.food}`)
+  const prevFood = bot.food
   const doEat = async () => {
     try {
       if (typeof bot.equip === 'function') {
         try { await bot.equip(foodItem, 'hand') } catch (_) {}
       }
       await bot.consume()
-      try { fightMod.equipGear(bot) } catch (_) {}
+      console.log(`eat ${foodItem.name} food=${prevFood}`)
+      ctx.eatInFlight = false
+      try { origEquipGear(bot) } catch (_) {}
     } catch (_) {
     } finally {
       ctx.eatInFlight = false
     }
   }
-  ctx.eatPromise = doEat()
+  void doEat()
   return true
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, eatInFlight: false }
+  if (bot) {
+    bot._tickerCtx = ctx
+    const origEquip = bot.equip
+    if (typeof origEquip === 'function') {
+      bot.equip = function(item, dest, ...args) {
+        if (dest === 'hand' && ctx.eatInFlight && (!item || !EDIBLE_FOODS.has(item.name))) {
+          return Promise.resolve()
+        }
+        return origEquip.call(this, item, dest, ...args)
+      }
+    }
+  }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -184,8 +204,13 @@ function meleeReflex(bot, ctx, state) {
           if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
           if (ctx.scout) ctx.scout.tick()
           meleeReflex(bot, ctx, state)
+          eatReflex(bot, ctx, state)
         } else {
-          try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+          try {
+            const state = buildState(bot, null)
+            reflexFast = meleeReflex(bot, ctx, state)
+            eatReflex(bot, ctx, state)
+          } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
@@ -206,7 +231,11 @@ function meleeReflex(bot, ctx, state) {
         stopOnce()
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
-        try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+        try {
+          const state = buildState(bot, null)
+          reflexFast = meleeReflex(bot, ctx, state)
+          eatReflex(bot, ctx, state)
+        } catch (_) { /* facts best-effort */ }
         if (ctx.lead) {
           ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
           if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {

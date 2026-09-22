@@ -1472,7 +1472,7 @@ describe('eat reflex', () => {
 
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
-    assert.deepEqual(eatLines(), ['eat bread food=12'])
+    assert.deepEqual(eatLines(), []) // in flight: logged only after meal completes
     assert.equal(bot.equipCalls.length, 1)
     assert.equal(bot.equipCalls[0].dest, 'hand')
     assert.equal(bot.equipCalls[0].item.name, 'bread')
@@ -1480,16 +1480,16 @@ describe('eat reflex', () => {
     // Second tick while consume is still in flight: must not call consume again
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
-    assert.equal(eatLines().length, 1)
+    assert.deepEqual(eatLines(), [])
 
     // Complete consume
     resolveConsume()
     await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(eatLines(), ['eat bread food=12'])
 
     // Third tick: consume completed, so it can eat again
     await ticker.tick()
     assert.equal(bot.consumeCalls, 2)
-    assert.equal(eatLines().length, 2)
   })
 
   it('food 18 -> not called', async () => {
@@ -1517,6 +1517,7 @@ describe('eat reflex', () => {
     bot.entities = { 1: zombie(1, 5) }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
     assert.deepEqual(eatLines(), ['eat bread food=12'])
   })
@@ -1535,6 +1536,7 @@ describe('eat reflex', () => {
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
     assert.deepEqual(eatLines(), ['eat cooked_beef food=14'])
   })
@@ -1567,5 +1569,65 @@ describe('eat reflex', () => {
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(call, 2)
+  })
+
+  it('eats when nobody is online', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    lines.length = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+    assert.deepEqual(eatLines(), ['eat bread food=12'])
+  })
+
+  it('eats when parked', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    lines.length = 0
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.stop()
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+    assert.deepEqual(eatLines(), ['eat bread food=12'])
+  })
+
+  it('fight decision does not steal hand while eat is in flight', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] })
+    lines.length = 0
+    let resolveConsume
+    bot.consume = () => {
+      bot.consumeCalls++
+      return new Promise((resolve) => { resolveConsume = resolve })
+    }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const brain = mockBrain({ action: 'fight', sprint: false, source: 'stub' })
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1)
+    assert.equal(bot.equipCalls.length, 1)
+    assert.equal(bot.equipCalls[0].item.name, 'bread')
+    assert.deepEqual(eatLines(), [])
+
+    resolveConsume()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.deepEqual(eatLines(), ['eat bread food=12'])
+    const handEquips = bot.equipCalls.filter((c) => c.dest === 'hand')
+    assert.ok(handEquips.length >= 2)
+    assert.equal(handEquips[handEquips.length - 1].item.name, 'iron_sword')
+  })
+
+  it('hostile-in-swing-range guard in eatReflex directly refuses eating even if reflexSwung is false', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false }
+    const state = { hostile: zombie(1, 1), hostile_distance: 1 }
+    const res = eatReflex(bot, ctx, state)
+    assert.equal(res, false)
+    assert.equal(bot.consumeCalls, 0)
   })
 })
