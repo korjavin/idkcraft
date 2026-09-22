@@ -138,16 +138,15 @@ const ARMOR_SLOTS = [
   { suffix: '_boots', dest: 'feet', slot: 8 },
 ]
 
-function equipOne(bot, item, dest) {
+async function equipOne(bot, item, dest) {
   try {
-    const r = bot.equip(item, dest)
-    if (r && typeof r.catch === 'function') r.catch(() => {})
+    await bot.equip(item, dest)
   } catch {
     // best-effort: fists are fine.
   }
 }
 
-function equipGear(bot) {
+async function gearBatch(bot) {
   if (!bot.inventory || typeof bot.inventory.items !== 'function') return
   if (typeof bot.equip !== 'function') return
   let items
@@ -158,21 +157,26 @@ function equipGear(bot) {
   }
   if (!Array.isArray(items)) return
   const sword = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
-  if (sword) equipOne(bot, sword, 'hand')
+  if (sword) await equipOne(bot, sword, 'hand')
   for (const { suffix, dest, slot } of ARMOR_SLOTS) {
     if (bot.inventory.slots && bot.inventory.slots[slot]) continue // already geared
     const piece = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith(suffix))
-    if (piece) equipOne(bot, piece, dest)
+    if (piece) await equipOne(bot, piece, dest)
   }
 }
 
-// Pre-gear name kept for older callers; same behaviour.
-function equipSword(bot) {
-  equipGear(bot)
+// Serialised across calls: one mineflayer equip is two window clicks
+// sharing a single cursor, so overlapping batches would swap pieces down
+// the hotbar instead of wearing them. Callers stay fire-and-forget —
+// the chain never rejects.
+let gearChain = Promise.resolve()
+
+function equipGear(bot) {
+  gearChain = gearChain.then(() => gearBatch(bot)).catch(() => {})
+  return gearChain
 }
 
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
-module.exports.equipSword = equipSword
 module.exports.equipGear = equipGear
