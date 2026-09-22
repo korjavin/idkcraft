@@ -1,0 +1,123 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 1020656,
+        "raised": 3,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 860673,
+        "raised": 2,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/behaviours/fight.js",
+      "line": 31,
+      "end_line": 39,
+      "severity": "major",
+      "confidence": 90,
+      "title": "After giving up on an unreachable hostile the bot freezes instead of returning to follow",
+      "body": "The round-1 fix stops the pathfinder churn but not the tick-stealing half of the same defect. Once `ctx.fightPursuit \u003e GIVE_UP_TICKS`, fight() calls `pathfinder.stop()`, latches `ctx.lastGoalKey = giveUpKey` (fight.js:50-54) and from then on returns at line 38 with no goal on every tick. Nothing tells the brain to stop choosing fight: perception still reports the mob (`hostile_distance = 6`), and stubBrain checks the hostile arm first and unconditionally (brain.js:27), so `fight` wins regardless of how far the player has walked.\n\nTrigger, run through the real ticker with the stub (26 ticks, zombie stationary at 6 blocks behind glass, player walking from 20 to 45 blocks away): every tick returns `action=fight`; the bot issues `setGoal` 4 times, `stop` once, and then nothing at all — no follow goal is ever set and the bot stands next to the glass indefinitely. It only recovers if the mob dies, despawns, or leaves the 8-block window; a walled-off mob does none of those. The profile names exactly this (\"a behaviour steals the tick from another one … fight never yields\") as a real failure.\n\nSame shape, second trigger: the remote brain answering `fight` when `hostile_distance` is null (now reachable since the brain.js gap guard was deleted in this diff) sends fight() into the `!hostile` branch, which also parks on 'idle' and never follows.\n\nNo test in bot/test/fight.test.js asserts that the bot keeps following once pursuit is abandoned, so the give-up branch can park the bot forever without failing the suite.",
+      "fix": "Don't hijack `ctx.lastGoalKey` for the give-up marker — keep it in its own field (e.g. `ctx.fightGiveUpId = hostile.id`) and, in the give-up branch when the mob is out of swing range, delegate to `require('./follow')(bot, ctx, target, state)` so the player still gets followed while the mob is written off. Add a ticker-level test: unreachable hostile at 6 blocks + player walking away, assert a `follow` GoalFollow is issued after give-up.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/src/behaviours/fight.js",
+      "line": 40,
+      "end_line": 44,
+      "severity": "major",
+      "confidence": 85,
+      "title": "A second hostile at a similar distance flips the target key every tick, defeating both the retry spacing and the give-up",
+      "body": "Pursuit state is keyed on `fight:${hostile.id}` and perception picks the nearest non-creeper fresh every tick (perception.js:78-82) with no stickiness. When two hostiles are close to equidistant, the nearest one alternates, so `key !== ctx.lastGoalKey` is true on every tick: `setGoal(new GoalFollow(...), true)` fires once per second again, `ctx.fightPursuit` is reset to 0 each time so `GIVE_UP_TICKS` is never reached, and `equipSword` runs every tick too.\n\nVerified through the real ticker: two zombies at 6.0 / 6.2 blocks swapping rank produced `setGoal:1 | equip | setGoal:2 | equip | …` for all 12 ticks — no spacing, no give-up. Because `setGoal` calls `resetPath('goal_updated')`, which nulls `astarContext` and clears the `pathUpdated` latch (mineflayer-pathfinder/index.js:142-147, 465-471), this reinstates precisely the round-1 failure the RETRY_EVERY_TICKS comment at fight.js:6-14 says it is preventing: the A* search is torn down before it can finish and restarted every second, and two mobs behind glass pin the bot with no give-up at all.\n\nPer-tick alternation is the worst case, but any occasional swap is enough to reset the pursuit budget, so the give-up guard is unreliable whenever more than one hostile is in the 8-block window — a common night-time situation. No test exercises fight() with two hostiles.",
+      "fix": "Make the target sticky: keep the current target id on ctx and only switch while the current hostile is still valid and in range if the new candidate is meaningfully nearer (e.g. 2 blocks), or reset `ctx.fightPursuit` only on a real target change rather than on every key change. Add a fight.test.js case with two zombies alternating as nearest and assert setGoal is not called every tick.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-3",
+      "file": "bot/src/behaviours/fight.js",
+      "line": 51,
+      "end_line": 53,
+      "severity": "minor",
+      "confidence": 85,
+      "title": "Give-up calls pathfinder.stop() with no active path, latching stopPathing so the next goal is swallowed",
+      "body": "`bot.pathfinder.stop()` does not stop anything directly — it only sets `stopPathing = true` (mineflayer-pathfinder/index.js:162-164). The real `stop()` (which clears `stateGoal` and resets the flag, index.js:390-396) runs only from `resetPath` (index.js:139), the arrived-at-node branch while following a non-empty path (index.js:582), or an invalid goal (index.js:436). Both `stop()` calls this diff adds run at moments where the path is empty by construction: give-up at fight.js:51 is only reachable from the `!bot.pathfinder.isMoving()` branch (i.e. `path.length === 0`), and the dead-target stop at fight.js:24 typically fires while the bot stands at melee range with the goal satisfied.\n\nSo `stopPathing` stays latched and `stateGoal` stays set to the abandoned `GoalFollow(mob, 2)`. The next `bot.pathfinder.setGoal(...)` from any behaviour assigns `stateGoal` and then calls `resetPath('goal_updated')` (index.js:142-147), whose last line is `if (stopPathing) return stop()` — which nulls the goal that was just set.\n\nFailure sequence: a zombie sealed behind glass, stationary, 6 blocks away. fight() pursues, the bot never moves, `ctx.fightPursuit` reaches 19, `bot.pathfinder.stop()` latches the flag, `lastGoalKey = 'fight-giveup:1'`. The mob then despawns or the brain switches to follow; follow.js:14 calls `setGoal(new GoalFollow(player, 3), true)` and the freshly issued goal is discarded, so the bot stands still for that tick (follow.js re-issues while not moving, so it self-heals on the following tick, ~1 s at the default `BRAIN_TICK_MS`). In fight's own retry path the cost is higher: the swallowed goal is only retried at the next `% RETRY_EVERY_TICKS` boundary, up to 6 seconds of standing still.\n\nThe window closes by itself if the mob moves, since `GoalFollow.hasChanged()` fires `resetPath('goal_moved', false)` (index.js:437-439) and consumes the flag harmlessly. So the bad case needs a target that stays put — exactly the unreachable-mob case the give-up was added for. Similar pre-existing instances of the pattern exist at index.js:33 and index.js:57, but the give-up branch is the one guaranteed to fire with an empty path every time.",
+      "fix": "In the give-up branch, clear the goal explicitly instead of relying on the flag: `bot.pathfinder.setGoal(null)` (which runs resetPath and drops stateGoal without latching), or call `bot.pathfinder.stop()` only when `bot.pathfinder.isMoving()` is true.",
+      "sources": [
+        "loop+goal",
+        "contract"
+      ],
+      "lenses": [
+        "bot-loop",
+        "contract"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 1906961,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 134436
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 14471,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      }
+    ]
+  }
+}

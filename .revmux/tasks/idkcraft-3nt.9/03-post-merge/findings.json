@@ -1,0 +1,88 @@
+{
+  "scope": {
+    "task": "idkcraft-3nt.9",
+    "run": "03-post-merge",
+    "scope_path": "/Users/iv/Projects/idkcraft/.revmux/tasks/idkcraft-3nt.9/03-post-merge/input/scope.md"
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 617330,
+        "raised": 1,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 563721,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [],
+  "open_questions": [],
+  "pre_existing": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/index.js",
+      "line": 36,
+      "end_line": 37,
+      "severity": "minor",
+      "confidence": 65,
+      "title": "stopOnce() still latches stopPathing on the moving branch, so the ~6 s fight freeze stays reachable",
+      "body": "`stopOnce()` guards only the empty-path case. When `isMoving()` is true it still calls `bot.pathfinder.stop()`, which in mineflayer-pathfinder 2.4.5 only sets `stopPathing = true` (node_modules/mineflayer-pathfinder/index.js:162-164). That flag is consumed in exactly two places: node arrival in `monitorMovement` (index.js:581-584) and any `resetPath` (index.js:139 `if (stopPathing) return stop()`). Usually the bot reaches the next node in well under a tick, so the latch is gone before the next brain decision and this is harmless.\n\nIt is not harmless when the next path node takes longer than one tick. Concrete sequence, `BRAIN_TICK_MS=1000`: the bot is following Steve and the next node has `toBreak` entries, so it is digging through stone. Steve stands still, so the dynamic `GoalFollow.hasChanged()` never fires and no `resetPath` runs. Tick N: the brain returns `idle` -\u003e `applyDecision` -\u003e `stopOnce()` -\u003e `isMoving()` is true -\u003e `stop()` sets the latch, `lastGoalKey='idle'`. The dig is still running, so no node arrival consumes it. Tick N+1: a zombie spawns, the brain returns `fight` -\u003e fight.js:63-66 `key !== ctx.lastGoalKey` -\u003e `setGoal(new GoalFollow(hostile, 2), true)` -\u003e `resetPath('goal_updated')` -\u003e `if (stopPathing) return stop()` -\u003e `stateGoal = null`, the goal is swallowed. fight.js has already set `ctx.lastGoalKey = 'fight:\u003cid\u003e'` and `ctx.fightPursuit = 0`. Ticks N+2..N+6: `key === ctx.lastGoalKey`, `!inRange`, `isMoving()` false -\u003e `fightPursuit` increments, and the re-issue only happens at `fightPursuit % RETRY_EVERY_TICKS === 0` (fight.js:81-83, `RETRY_EVERY_TICKS = 6`). The bot stands still for ~6 s before pathing to the mob.\n\nWhy the change under review did not introduce it: all five call sites did an unconditional `stop()` before the diff, and the change does not make the moving branch newly reachable. `follow` also self-heals in one tick because follow.js:13 re-issues whenever `!isMoving()`; only fight's deliberately spaced retries turn it into a multi-second stall. The reporting source judged all merge-gate criteria met and would not block the merge on this, suggesting a follow-up bead instead.",
+      "fix": "Follow-up, not this diff: `setGoal(null)` is a strictly stronger halt than `stop()` — `resetPath` empties `path` and calls `bot.clearControlStates()` immediately, and it never sets `stopPathing` — so `stopOnce()` could drop the branch entirely and always cancel via `setGoal(null)` when `bot.pathfinder.goal || bot.pathfinder.isMoving()`. Tradeoff: `stop()` lets the bot finish walking to the current node, while `setGoal(null)` halts mid-step. It also needs the two `calls.stop === 1` assertions (bot/test/tick.test.js:65 and 217) rewritten.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    }
+  ],
+  "immaterial": [],
+  "stats": {
+    "started_at": "2026-09-22T02:46:02.501082+02:00",
+    "finished_at": "2026-09-22T02:48:02.729131+02:00",
+    "duration_ms": 120230,
+    "tokens": 1201914,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 112019
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 8209,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      },
+      {
+        "name": "verify",
+        "duration_ms": 0
+      }
+    ]
+  }
+}

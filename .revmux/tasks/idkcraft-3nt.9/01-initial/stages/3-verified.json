@@ -1,0 +1,111 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 342717,
+        "raised": 2,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 348521,
+        "raised": 1,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/index.js",
+      "line": 32,
+      "end_line": 37,
+      "severity": "major",
+      "confidence": 92,
+      "title": "stopOnce() skips goal cancellation when not moving, so chat `stop` no longer stops a parked follow",
+      "body": "`stopOnce()` only calls `bot.pathfinder.stop()` when `isMoving()`, but it flips `ctx.lastGoalKey` to `'idle'` unconditionally. In mineflayer-pathfinder `isMoving()` is `path.length \u003e 0` (bot/node_modules/mineflayer-pathfinder/index.js:154), while the goal lives in a separate `stateGoal`. `setGoal(new goals.GoalFollow(target, 3), true)` (bot/src/behaviours/follow.js:14) is dynamic, so once the bot is within range `monitorMovement` sees `path.length === 0` and — because `dynamicGoal` is true — deliberately does NOT clear `stateGoal` (index.js:460-470). The normal parked state is therefore: live dynamic follow goal, empty path, `isMoving() === false`.\n\nConcrete failure: the bot is following Steve, standing 2 blocks away. Steve types `stop` → `handleChat` → `ticker.setFollow('')` → `ticker.stop()` → `ctx.paused = true` and `stopOnce()`: `isMoving()` is false, so `pathfinder.stop()` is never called, the `GoalFollow` stays installed, and `lastGoalKey` becomes `'idle'`. Steve walks out of range → `GoalFollow.hasChanged()` (lib/goals.js:349) → `resetPath('goal_moved', false)` → `pathUpdated = false` → `getPathTo` → the bot follows again, despite being parked. Every subsequent paused tick calls `stopOnce()` but short-circuits on the `lastGoalKey === 'idle'` guard, so nothing ever cancels the goal: `stop` is advisory only until `follow me` or a restart.\n\nBefore this change the same sequence worked: `stop()` latched `stopPathing`, and the latch was consumed by the very next `resetPath('goal_moved')` (index.js:138 `if (stopPathing) return stop()`), which nulled `stateGoal`, the path and the control states. The latch the bead calls a bug was also the thing that cancelled a pending goal, so this is a regression introduced by the diff.\n\nThe same hole applies to the `idle` branch of `applyDecision` (bot/src/index.js:44) — the brain deciding `idle` while the bot rests next to the player leaves the follow goal live, so the bot resumes following on the player's next step — and to the in-flight-park branch at bot/src/index.js:124. Correction to the original report: `GoalFollow` does override `isValid()` (`this.entity != null`, lib/goals.js:361), but mineflayer only deletes the entity from `bot.entities`; the captured object reference stays non-null, so a logged-out player still does not invalidate the goal. In that case the stale entity position also stops changing, so `hasChanged()` stays false and the `!target` branch at bot/src/index.js:91 has no visible consequence — the live cases are the paused-with-player-present and brain-said-idle ones.",
+      "fix": "Cancel the goal instead of doing nothing on an empty path — `setGoal(null)` clears `stateGoal` and the path via `resetPath('goal_updated')` without setting `stopPathing`, so it cannot latch:\n\n```js\nfunction stopOnce() {\n  if (ctx.lastGoalKey !== 'idle') {\n    if (bot.pathfinder.isMoving()) bot.pathfinder.stop()\n    else bot.pathfinder.setGoal(null)\n    ctx.lastGoalKey = 'idle'\n  }\n}\n```\n\nThe new guard test (bot/test/tick.test.js:69-99) then needs both counters bumped, not just one: the idle tick issues an un-swallowed `setGoal(null)`, so the sequence becomes `calls.setGoal === 3` and `calls.effectiveGoals === 3`; `calls.stop === 0` and the no-latch property still hold. Add a ticker test that a parked dynamic follow goal is cleared by `ticker.stop()` when `isMoving()` is false.",
+      "sources": [
+        "loop+goal",
+        "contract"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests",
+        "contract"
+      ],
+      "verdict": "refined"
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/test/tick.test.js",
+      "line": 320,
+      "end_line": 321,
+      "severity": "minor",
+      "confidence": 85,
+      "title": "Existing chat-stop test now asserts 0 === 0 and its comment states the opposite of what happens",
+      "body": "`mockBot()`'s default is `isMoving: () =\u003e false` (bot/test/tick.test.js:31), and this test never overrides it. After the change `ticker.stop()` no longer calls `pathfinder.stop()`, so `stopsBefore` is 0 and the assertion `assert.equal(bot.calls.stop, stopsBefore)` is `0 === 0` — it passes by construction. The comment above it, \"idle dispatched once: the park stopped already, paused ticks add no more stops\", is now factually wrong: the park stopped nothing.\n\nConcretely, the defect this assertion used to catch is no longer caught: drop the `ctx.lastGoalKey !== 'idle'` guard from `stopOnce()` so every paused tick stops, and this test still goes green, because with `isMoving()` false no call is counted either way. The stop-once-while-parked property is now only covered indirectly by the two tests that force `isMoving = () =\u003e true`, neither of which exercises the `ticker.stop()` chat path.",
+      "fix": "Set `bot.pathfinder.isMoving = () =\u003e true` before the `ticker.stop()` call in this test so `stopsBefore` is 1 and the \"paused ticks add no more stops\" assertion has teeth again, and fix the comment.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": "confirmed"
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 989264,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 67821
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 15512,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      },
+      {
+        "name": "verify",
+        "duration_ms": 44753,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      }
+    ]
+  }
+}

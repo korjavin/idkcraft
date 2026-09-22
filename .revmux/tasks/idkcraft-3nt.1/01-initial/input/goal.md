@@ -1,0 +1,8 @@
+- Bead: a pure move. Split the 214-line tick closure along sense/decide/act: perception.js (findTarget, buildState, stateKey, HOSTILE_NAMES), behaviours/follow.js (GoalFollow re-issue logic), index.js keeps createTicker, cadence, dedup, and a `BEHAVIOURS` dispatch table; idle/unknown → pathfinder.stop() once; a commented every-tick seam after buildState.
+- Correct only if:
+  - runtime behaviour is identical: every moved block maps 1:1 to its origin; log line format `decision source=... action=... sprint=... dist=...` unchanged; idle cost guards (no brain call without a player, 10 s idle poll, 1 log/min) unchanged; dedup rule unchanged; chat commands unchanged
+  - `player_moving` still computed from the previous target position across ticks (state threaded, not lost)
+  - no pathfinder goal construction and no HOSTILE_NAMES remain in index.js
+  - the new dispatch test would fail if follow/idle routing were inverted
+  - the BEHAVIOURS table and the every-tick seam sit on their own lines so fight/scout beads rebase trivially
+- This is the merge gate: answer whether anything here should not ship. Finding nothing is a valid answer.

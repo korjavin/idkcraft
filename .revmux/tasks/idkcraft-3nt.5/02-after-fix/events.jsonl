@@ -1,0 +1,15 @@
+{"kind":"stage","stage":"find","at":"2026-09-22T02:55:50.035652+02:00"}
+{"kind":"agent_started","agent":"loop+goal","text":"bot-loop, goal-and-tests","at":"2026-09-22T02:55:50.036792+02:00"}
+{"kind":"agent_started","agent":"contract","text":"contract","at":"2026-09-22T02:56:20.038189+02:00"}
+{"kind":"agent_activity","agent":"loop+goal","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.","at":"2026-09-22T03:00:45.001871+02:00"}
+{"kind":"agent_progress","agent":"loop+goal","text":"exit 1","at":"2026-09-22T03:00:45.543077+02:00"}
+{"kind":"agent_retried","agent":"loop+goal","text":"agent loop+goal exited 1","at":"2026-09-22T03:00:50.820437+02:00"}
+{"kind":"agent_activity","agent":"contract","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.","at":"2026-09-22T03:01:31.022847+02:00"}
+{"kind":"agent_progress","agent":"contract","text":"exit 1","at":"2026-09-22T03:01:31.315976+02:00"}
+{"kind":"agent_retried","agent":"contract","text":"agent contract exited 1","at":"2026-09-22T03:01:40.906871+02:00"}
+{"kind":"agent_activity","agent":"loop+goal","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.","at":"2026-09-22T03:07:04.823188+02:00"}
+{"kind":"agent_progress","agent":"loop+goal","text":"exit 1","at":"2026-09-22T03:07:05.139858+02:00"}
+{"kind":"agent_degraded","agent":"loop+goal","text":"agent loop+goal exited 1","at":"2026-09-22T03:07:05.14014+02:00"}
+{"kind":"agent_activity","agent":"contract","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.","at":"2026-09-22T03:07:33.180067+02:00"}
+{"kind":"agent_progress","agent":"contract","text":"exit 1","at":"2026-09-22T03:07:33.732523+02:00"}
+{"kind":"agent_degraded","agent":"contract","text":"agent contract exited 1","at":"2026-09-22T03:07:33.732786+02:00"}

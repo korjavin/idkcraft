@@ -1,0 +1,121 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 1148579,
+        "raised": 4,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 716076,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/behaviours/fight.js",
+      "line": 16,
+      "end_line": 20,
+      "severity": "major",
+      "confidence": 65,
+      "title": "A hostile the pathfinder cannot reach pins the bot in fight and restarts the path search every tick",
+      "body": "`fight()` re-enters the setGoal branch whenever `key !== ctx.lastGoalKey || !bot.pathfinder.isMoving()`. In mineflayer-pathfinder `isMoving()` is `path.length \u003e 0` (node_modules/mineflayer-pathfinder/index.js:154), so \"not moving\" is the steady state both at melee range and, crucially, when no path could be found. `setGoal` calls `resetPath` (index.js:142-147), which sets `astarContext = null`, `pathUpdated = false` and `bot.clearControlStates()` — so the search restarts from scratch each tick and a search that needs more than one tick (~1 s, `tickTimeout` 40 ms per physics tick, `thinkTimeout` 5000 ms) never completes.\n\nConcrete sequence: a phantom (in HOSTILE_NAMES, not a creeper) swoops to within 8 blocks of the bot at night. Tick 1: perception yields `hostile_distance ≈ 6`, stub/LAYA answers `fight` (hd ≤ 8, health ≥ 6). fight sets `GoalFollow(phantom, 2)`; the bot cannot path to a flying entity (towering needs scaffolding the bot has none of) and never gets within 3 blocks, so it never swings. Ticks 2..N: `path.length === 0` → setGoal re-issued → A* restarted → `clearControlStates()`. The bot stands still, burns ~40 ms of every 50 ms physics tick, and does not follow the player for as long as the mob stays in range. A mob behind glass/a fence, or one across a ravine, gives the same standstill without the dawn escape. There is no give-up timer and no test covering an unreachable target.",
+      "fix": "Bound the fight: give up on a target that has not come within swing range for N ticks (e.g. keep a per-target tick counter on `ctx` and return without a goal once it trips, or drop the target when `path_update` reports `noPath`), and re-issue the goal only on target change rather than on every `!isMoving()` tick.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/src/behaviours/fight.js",
+      "line": 19,
+      "end_line": 19,
+      "severity": "minor",
+      "confidence": 80,
+      "title": "equipSword runs every tick in melee range; the \"once per target\" test passes by construction",
+      "body": "`equipSword(bot)` sits inside the `key !== ctx.lastGoalKey || !bot.pathfinder.isMoving()` branch. At melee range the GoalFollow(mob, 2) goal is satisfied, the path is empty and `isMoving()` returns false (node_modules/mineflayer-pathfinder/index.js:154), so the branch runs on every tick and `bot.equip` is called once per second for the whole fight — not \"before the first swing on a new target\" as the bead asks.\n\nRuntime damage is small because mineflayer's `equip` early-returns when `sourceSlot === destSlot` (node_modules/mineflayer/lib/plugins/simple_inventory.js:99-103), so after the first equip it is a no-op. The test problem is real though: bot/test/fight.test.js:154 sets `bot._moving = true` before asserting `bot.calls.equip === 1`, and `_moving = true` is exactly the state that never holds while the bot is standing next to the mob swinging. The assertion therefore certifies a property the code does not have in the only situation it matters; inverting or removing the equip guard would not fail any test.",
+      "fix": "Equip on target change only — hoist `equipSword` under a `key !== ctx.lastGoalKey` check separate from the `!isMoving()` re-path retry — and drop the `_moving = true` setup from the test so it exercises the melee case.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests",
+        "bot-loop"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-3",
+      "file": "bot/src/perception.js",
+      "line": 77,
+      "end_line": 77,
+      "severity": "minor",
+      "confidence": 80,
+      "title": "The \"within 6 blocks of the player\" half of the fight-candidate filter is never exercised by a test",
+      "body": "`if (dBot \u003e FIGHT_RANGE_BOT \u0026\u0026 dPlayer \u003e FIGHT_RANGE_PLAYER) continue` admits a hostile that is far from the bot but close to the player — the case the bead's headline behaviour (defend the player) depends on. No test reaches it. In bot/test/fight.test.js:68-74 the zombie is at x=8 with the bot at x=0, so `dBot \u003e 8` is already false and the OR short-circuits on the bot-range arm; in the out-of-range test (fight.test.js:95-102) the skeleton is 20 from the bot and 10 from the player, so both arms reject it either way. Deleting `|| dPlayer \u003e FIGHT_RANGE_PLAYER` (or flipping the `\u0026\u0026` to `||`) leaves all 14 tests green.\n\nDefect that would slip through: a zombie 12 blocks from the bot and 2 blocks from the player is dropped from the scan, `hostile_distance` comes back null, the stub answers `follow`, and the bot walks to the player while the mob hits them.",
+      "fix": "Add one perception case: bot at 0, zombie at 12, player at 14 — assert `hostile_distance === 12` and `hostile_near_player === true`.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 1887466,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 170881
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 12485,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      }
+    ]
+  }
+}

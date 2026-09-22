@@ -1,0 +1,178 @@
+You are merging a review panel's findings into one set. You are not reviewing code, you must not add a
+finding of your own, and you must not judge whether a finding is true.
+
+**Work from the findings text below and nothing else. Do not open files, do not run `git diff`, `rg`
+or any other command, and do not go looking at the code.** Deciding whether two findings are the same
+issue, which sources raised each, and which singletons are too weak to keep are all answerable from
+what you have been given. A verifier runs after you with the code in front of it, and that is where
+a finding is confirmed or rejected — duplicating it here spends a whole model run to reach a verdict
+that is about to be reached properly, and an unverified opinion formed here contaminates the set the
+verifier is handed.
+
+Nothing you do writes anything. Do not modify, delete, move, stage or commit, and do not write a file
+through a shell redirect.
+
+## Sources that ran
+
+2 sources ran, 2 reported.
+- loop+goal (lenses: bot-loop, goal-and-tests) reported 2 findings: loop+goal-1, loop+goal-2
+- contract (lenses: contract) reported 4 findings: contract-1, contract-2, contract-3, contract-4
+
+Treat that list as fact. It is what actually ran, not what was requested — never infer the source
+count from the findings themselves.
+
+## Findings
+
+[
+  {
+    "id": "loop+goal-1",
+    "file": "laya/smoke.py",
+    "line": 28,
+    "end_line": 45,
+    "severity": "major",
+    "confidence": 95,
+    "title": "Bead acceptance criterion unmet: no smoke table, so the four-choice question the bead exists to answer is undecided",
+    "body": "The bead's acceptance criteria are \"npm test green; ... smoke table with four choices pasted in PR; fallback path recorded on the bead if taken\", and the Why section states the specific risk being tested: \"adding a fourth choice is a risk for LAYA (cne.4 showed it collapses to one answer when criteria are vague)\". The bead's fallback instruction is conditional on that evidence: \"if the smoke table shows LAYA now answers roam or idle where it should fight/follow, drop roam from the brain question and make it a local rule instead\".\n\nThe PR body (#28) says under \"Smoke table: pending (no sidecar locally)\": \"`smoke.py` could not run here — no sidecar is listening on this machine. Please run it where the sidecar lives and paste the quality table here before merge.\" `gh pr view 28 --json comments` returns no comments, so no table was ever attached. The fallback section then records \"Path taken: the four-choice brain question stays. There is no local evidence of collapse\" — i.e. the decision the bead asked to be made *from* the table was made from its absence.\n\nConcrete consequence, not hypothetical: nothing in the code forces the deployed path to work. `index.js:136` dispatches `decision.action` from whatever the remote brain answered, and the default `BRAIN_URL` is the laya sidecar. `smoke.py check()` (laya/smoke.py:58-70) validates shape only — it accepts `idle` for every state — so a model that collapses to `idle` on the eight rows passes the smoke gate silently. If laya collapses, the deployed bot behaves exactly as before the bead (freezes next to a standing player), one `brain disagree ... model=idle stub=roam` line is logged, the decision is then cached, and the in-game acceptance criterion (\"within ~10 s the bot starts strolling\") fails on the real stack while all 113 unit tests stay green. The bead also asks for the fallback outcome to be recorded on the bead itself; it is recorded only in the PR body.\n\nThe code under review is sound — the four-choice question, the criteria and the stub all check out. What is missing is the one piece of evidence that distinguishes the primary path from the fallback path, which is the owner's stated experiment.",
+    "fix": "Run `python laya/smoke.py` where the sidecar lives, paste the 8-row table into PR #28, and confirm `fight`/`follow` still win on `dist 12 moving`, `dist 5`, `hostile 4`; if they do not, take the bead's fallback (drop the `roam` criterion, idle-streak rule in the ticker). Mirror the outcome onto the bead with `bd update idkcraft-3nt.5 --notes=...`.",
+    "sources": [
+      "loop+goal"
+    ],
+    "lenses": [
+      "goal-and-tests"
+    ],
+    "verdict": ""
+  },
+  {
+    "id": "loop+goal-2",
+    "file": "bot/README.md",
+    "line": 52,
+    "end_line": 63,
+    "severity": "minor",
+    "confidence": 95,
+    "title": "bot/README.md still documents three brain actions and the pre-change 3-block thresholds, which this diff falsifies",
+    "body": "This change moved the stub/criteria thresholds: follow now triggers at \u003e3 blocks only while the player is moving and at \u003e6 while standing still (bot/src/brain.js:38-42), and a still player inside 6 blocks yields `roam` (brain.js:47). bot/README.md was not updated, so three statements are now factually wrong for the code in this diff: `:50-52` enumerates the exclusive actions as `fight` / `follow` / `idle` with \"`idle`: Player is close (\u003c= 3 blocks)\"; the behaviours table at `:61` says `follow` triggers at \"Player \u003e 3 blocks away\"; `:63` says `idle` triggers at \"Player within 3 blocks\". There is no `roam` row at all.\n\nFailure case is a reader, not the runtime: the bead's in-game acceptance is checked against this table (\"Log lines show action=roam\"), and an owner following the README to verify the deployed bot finds no documented `action=roam` and an `idle` trigger that states the opposite of what the bot does at 1-3 blocks while standing still. Nothing at runtime reads the README — I confirmed no code path depends on it.\n\nPre-flagged and deferred: the round-04 scope defers this to the docs track because bot/README.md is edited in parallel and is outside this bead's file list. Reporting it only so the merge decision is made knowingly; if the docs track owns it, a follow-up bead is enough.",
+    "fix": "Either add the `roam` bullet/table row and correct the follow/idle triggers to the moving/still split (\u003e3 moving, \u003e6 still), or file a follow-up bead against the docs track so the drift is not lost at merge.",
+    "sources": [
+      "loop+goal"
+    ],
+    "lenses": [
+      "goal-and-tests"
+    ],
+    "verdict": ""
+  },
+  {
+    "id": "contract-1",
+    "file": "bot/src/behaviours/roam.js",
+    "line": 36,
+    "end_line": 41,
+    "severity": "major",
+    "confidence": 90,
+    "title": "Roaming defeats the ticker's brain-call dedup cache: ~1 brain call per tick while a player stands still",
+    "body": "`stateKey` (bot/src/perception.js:33) rounds `distance_to_player` to whole blocks, and the ticker reuses `lastDecision` only while that key is unchanged (bot/src/index.js:113-124) — the deliberate \"skip the JEV call\" guard.\n\nBefore this change, a still player near the bot produced `idle`, the bot did not move, the rounded distance was constant, and the brain was called once and then cached indefinitely. With roam the bot now walks ~4 blocks per 1000 ms tick between random points 0-6 blocks from the player, so the rounded distance flips almost every tick and the cache almost never hits.\n\nI ran the real ticker against the real `stubBrain` with a mock bot that walks toward each issued GoalNear at ~4 blocks/tick, player stationary, 30 ticks:\n- old path (idle, bot stationary): **1** brain call\n- new path (roam): **27** brain calls, 20 goals set\n\nConcretely: one AFK or building player standing next to the bot now drives a POST to `http://laya:8000/v1/systemone` every second, indefinitely, where it previously drove one call for the whole episode. On the deployed stack that is the CPU sidecar (`LAYA_MEM_LIMIT` 3g) running a System-1 inference every second for as long as anyone stands still — the most common state on a hobby server. If a LAYA answer takes longer than `BRAIN_TICK_MS`, the `inFlight` guard also starts dropping ticks, so fight/follow reaction time degrades exactly while roaming.\n\nThis is a side effect of the bead, not its point: the bead asks for strolling, nothing in it asks for the dedup cache to stop working.",
+    "fix": "Give roam its own cheap re-entry so the brain is not re-asked for every block of stroll travel — e.g. include the bot's own motion in the cache decision, or let the ticker keep reusing `lastDecision` while the previous action was `roam` and only the rounded `distance_to_player` changed (hostile fields, `player_moving` and `player_visible` unchanged). Alternatively round `distance_to_player` more coarsely inside the roam envelope.",
+    "sources": [
+      "contract"
+    ],
+    "lenses": [
+      "contract"
+    ],
+    "verdict": ""
+  },
+  {
+    "id": "contract-2",
+    "file": "laya/smoke.py",
+    "line": 37,
+    "end_line": 38,
+    "severity": "minor",
+    "confidence": 95,
+    "title": "New smoke row \"dist 1 still\" is byte-identical to the existing \"dist 1\" row",
+    "body": "`STATES` now has 8 rows but only 7 distinct state strings: row 4 (`\"dist 1 still\"`, laya/smoke.py:37-38) carries exactly the same state text as row 2 (`\"dist 1\"`, laya/smoke.py:33-34) — `distance_to_player=1.0 player_visible=true player_moving=false ... hostile_distance=none hostile_near_player=false`. I parsed `STATES` and confirmed the strings compare equal.\n\n`main()` posts one request per row for `STATES[1:]` (laya/smoke.py:97-103), so every smoke run spends an extra CPU inference on a state it already tested and prints two table rows that can only ever differ through model nondeterminism. The quality table the bead asks to be pasted in the PR therefore advertises 8 states while covering 7 — and the duplicate pair is the very state the bead singled out (\"dist 1 still\").",
+    "fix": "Drop the new `\"dist 1 still\"` row and rename the existing `\"dist 1\"` row to `\"dist 1 still\"`, keeping the table at 7 distinct states.",
+    "sources": [
+      "contract"
+    ],
+    "lenses": [
+      "contract"
+    ],
+    "verdict": ""
+  },
+  {
+    "id": "contract-3",
+    "file": "bot/src/brain.js",
+    "line": 103,
+    "end_line": 103,
+    "severity": "minor",
+    "confidence": 65,
+    "title": "roam criterion says \"no hostile mob is near\" for states whose text reads nearby_hostiles\u003e0",
+    "body": "`nearby_hostiles` counts every hostile within 16 blocks of the bot, creepers included (bot/src/perception.js:68-74), while `hostile_distance` is only set for fight targets — within 8 of the bot or 6 of the player, creepers excluded (bot/src/perception.js:19-25, 78-87). So `nearby_hostiles=1, hostile_distance=none, hostile_near_player=false` is an ordinary state: a creeper 5 blocks away, or a zombie 12 blocks away.\n\nWith that state and a still player at d=2, the stub now returns `roam` (bot/src/brain.js:47). The state line sent to LAYA reads `nearby_hostiles=1 hostile_distance=none`, and the roam criterion asserts \"no hostile mob is near\". A model reading `nearby_hostiles=1` as a hostile being near matches no criterion at all: follow needs \"more than 3 blocks\", idle needs `bot_health` below 6, fight needs a hostile within 8 with no distance given.\n\nThe ambiguity is older than this PR, but it did not bite before: the previous idle criterion (\"The player is already within 3 blocks\") matched this state unconditionally. Making roam the answer here is what exposes it. Impact is confined to the remote brain — stub behaviour is the intended creeper policy — but it will show up as `brain disagree` noise and as LAYA answering follow/idle where the stub roams.",
+    "fix": "Tie the roam and idle criteria to the field the stub actually reads, e.g. roam: \"... and hostile_distance is none and hostile_near_player is false (ignore nearby_hostiles: those are out of reach)\". Regenerate laya/test/request.json from the new strings.",
+    "sources": [
+      "contract"
+    ],
+    "lenses": [
+      "contract"
+    ],
+    "verdict": ""
+  },
+  {
+    "id": "contract-4",
+    "file": "bot/README.md",
+    "line": 61,
+    "end_line": 63,
+    "severity": "minor",
+    "confidence": 85,
+    "title": "README behaviour table now states the wrong follow/idle thresholds and has no roam row",
+    "body": "The behaviour table still documents three actions with the pre-roam thresholds: `follow` as \"Player \u003e 3 blocks away\" (bot/README.md:61) and `idle` as \"Player within 3 blocks\" (bot/README.md:63). After this change the stub follows at \u003e 6 blocks when the player is standing still (bot/src/brain.js:38) and roams — not idles — for a still player within 6 (bot/src/brain.js:47), and `roam` has no row at all.\n\nNothing runtime reads bot/README.md; I confirmed no source file references it. Prose only, so minor. Noting this was explicitly deferred by the review scope as belonging to the parallel docs track — the incremental point is that the two existing rows are now actively wrong, not merely missing a sibling.",
+    "fix": "When the docs track picks this up, add a `roam` row and correct the `follow`/`idle` trigger columns to the still/moving split.",
+    "sources": [
+      "contract"
+    ],
+    "lenses": [
+      "contract"
+    ],
+    "verdict": ""
+  }
+]
+
+## What to produce
+
+1. Split out what is not a defect in the change under review. A question the reviewer could not
+   answer from the code goes to **open questions**; a defect in code the change did not touch goes to
+   **pre-existing**. Move both out first: neither is deduped, boosted or dropped.
+
+2. Deduplicate. Two findings are the same when they name the same file within two lines of each other
+   and describe the same problem. Merge them into one, keeping the clearest title and body.
+
+3. Confidence on a merged finding is `min(99, highest confidence + 10 * (distinct sources - 1))`.
+   A source is a process. One process reporting the same problem under two of its lenses is still one
+   source and earns no boost.
+
+4. Severity is the highest severity any input claimed.
+
+5. Drop a finding that has a single source, confidence below 80, and nothing corroborating it.
+   Never drop a critical or a major this way — a single source is not evidence against a serious
+   defect, and only one reviewer looking in the right place is the normal case for the worst bugs.
+   Keep it and route it to the verifier, which is the authority on whether it is real.
+   When the source list above shows the run was degraded, drop nothing: keep every would-be-drop and
+   route it to the verifier instead. Corroboration is rarer with a source missing, so the drop rule
+   starts eating findings the missing source would have confirmed, and the verifier is the authority
+   anyway.
+
+Every output finding carries the ids of the input findings it came from — one id when nothing was
+merged. Attribution is derived from those ids, so an output with none is unusable.
+
+Prior rounds for this task: /Users/iv/Projects/idkcraft/.revmux/tasks/idkcraft-3nt.5/
+  01-initial           2026-09-22T00:46Z  3 findings (0 critical, 1 major, 2 minor)  sources 2/2
+  03-after-fix-retry2  2026-09-22T01:25Z  4 findings (0 critical, 2 major, 2 minor)  sources 2/2
+
+Each round holds report.md (rendered) and findings.json (machine shape). Read the rounds you judge relevant.
+
+Re-evaluate everything independently. A prior round reporting an issue is not evidence that it is real,
+and a prior round missing one is not evidence that it is absent.
+
+As you work, narrate what you are doing. This is a running commentary read live by a human watching the run, and it is separate from your answer, which goes only in the structured output.
+
+- Before each group of related tool calls, write one short line saying what you are about to check and why: "checking whether the stagger gate can still open on a fork".
+- When something turns out to matter, say so in one line as you find it.
+- Keep going for the whole review. Do not narrate the opening few steps and then fall silent for the rest of it — a reader who stops seeing lines cannot tell you apart from a hung process.
+- One line at a time, under a dozen words, and never a summary of what you already said.

@@ -1,0 +1,108 @@
+{
+  "scope": {
+    "task": "idkcraft-3nt.6-docs",
+    "run": "02-after-fix",
+    "scope_path": "/Users/iv/Projects/idkcraft/.revmux/tasks/idkcraft-3nt.6-docs/02-after-fix/input/scope.md"
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 356875,
+        "raised": 3,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 416575,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/README.md",
+      "line": 54,
+      "end_line": 54,
+      "severity": "minor",
+      "confidence": 90,
+      "title": "README still documents `roam`, which exists nowhere in the tree",
+      "body": "Line 54 reads \"*(roam is being added as a fourth choice in a follow-up).*\" inside the list of actions the brain chooses. `rg -ni roam` over the whole worktree matches this line and nothing else — no code, no test, and `git grep -ni roam origin/master -- bot/` is empty too. `bot/src/brain.js:39` accepts only fight/follow/idle and `stubBrain.decide` has no roam branch, so nothing a reader can run produces it. `bd show idkcraft-3nt.5` confirms roam is still IN_PROGRESS and unmerged, and 3nt.6's own Notes say not to wait for it.\n\nThis is a carry-over: round 1 raised the same line, and this round's scope.md claims \"Removed speculative roam details from documentation\" — the surrounding detail was removed but the forward-looking bullet survived in reworded form, so the claimed fix is incomplete. Impact is contained (the line is labelled as future work, so no reader is misled about today's behaviour), but the README of a learning project now lists a fourth choice that 3nt.5 may land differently.",
+      "fix": "Delete line 54; document roam in the PR that adds it.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/README.md",
+      "line": 78,
+      "end_line": 78,
+      "severity": "minor",
+      "confidence": 85,
+      "title": "Scout cap described as \"3 new veins per scan\" when it is 3 lines, one per ore type",
+      "body": "Line 78 says \"Reports up to 3 new veins per scan in chat as `\u003core\u003e x\u003ccount\u003e at \u003cx\u003e \u003cy\u003e \u003cz\u003e`\". In `bot/src/behaviours/scout.js:137-169` the new positions are grouped into `fresh` keyed by **base ore name**, `names` is that key set sorted by rank and `.slice(0, 3)`, and one chat line is emitted per name with `x${spots.length}` (total new blocks of that ore) at the nearest of them. So the cap is three ore *types*, and a single line can merge several distinct veins: two separate diamond veins found in one scan produce one line `diamond_ore x\u003ctotal\u003e at \u003cnearest\u003e`, with the second vein's coordinates never reported. Conversely a scan turning up four ore types drops the lowest-ranked one entirely, which \"3 new veins\" does not convey either.\n\nThis is a regression in accuracy introduced by the rewrite — `origin/master:bot/README.md:54` said \"at most 3 lines per scan\", which was correct, and goal.md's own criterion asks for \"max 3 lines\". A reader who runs `/setblock` on two separate veins and sees one line would read it as the scout missing a vein.",
+      "fix": "Restore the earlier wording: \"at most 3 lines per scan, one per ore type, highest value first\".",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": "confirmed"
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "2026-09-22T02:39:36.083638+02:00",
+    "finished_at": "2026-09-22T02:41:26.064449+02:00",
+    "duration_ms": 109978,
+    "tokens": 1028600,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 68243
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 10422,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      },
+      {
+        "name": "verify",
+        "duration_ms": 31310,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      }
+    ]
+  }
+}

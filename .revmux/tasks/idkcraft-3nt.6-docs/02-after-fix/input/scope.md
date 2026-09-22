@@ -1,0 +1,11 @@
+- **Diff command:** `git diff origin/master...HEAD`
+- **Scale:** 2 files changed, 61 insertions, 11 deletions. Documentation only. Round 2 after fixing round 1 findings.
+- **Changes in round 2:**
+  - Removed ore scanning reference from `perception.js` bullet (clarified in scout bullet).
+  - Clarified sprint trigger difference between remote model (requires player moving) and stub (distance alone).
+  - Clarified scout scans only run while a player is visible (added to Cost guards and behaviours table).
+  - Removed speculative roam details from documentation.
+- **Files to read in full:** `bot/README.md`, `CLAUDE.md`.
+- **What to ignore:** All code files (`bot/src/*`, `bot/test/*`, etc.).
+- **Tests:** No code changed, docs only — tests unaffected (all 92 unit tests passing).
+- **Privacy:** Grep for IP/hostnames returns clean.

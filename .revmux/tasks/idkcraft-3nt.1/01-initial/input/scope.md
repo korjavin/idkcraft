@@ -1,0 +1,8 @@
+- Under review: branch `idkcraft-3nt.1` (PR #19), one commit, against `origin/master`.
+- Diff: `git diff origin/master...HEAD` (workdir is a detached checkout of the branch head)
+- Scale: 4 files, +130/-88
+- Read in full: `bot/src/index.js`, `bot/src/perception.js`, `bot/src/behaviours/follow.js`, `bot/test/tick.test.js`
+- Also read for context (unchanged): `bot/src/brain.js`, `bot/README.md`
+- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`
+- Tests: `npm test` in `bot/` already ran, 20/20 pass — do not run it
+- Explicit exclusions: the live e2e check (`test/e2e-follow.js`) was not run by the developer; that is known and not a finding

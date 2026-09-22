@@ -1,0 +1,68 @@
+{
+  "scope": {
+    "task": "idkcraft-3nt.6-docs",
+    "run": "03-clean",
+    "scope_path": "/Users/iv/Projects/idkcraft/.revmux/tasks/idkcraft-3nt.6-docs/03-clean/input/scope.md"
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 412306,
+        "raised": 0,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 391830,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "2026-09-22T02:42:06.504056+02:00",
+    "finished_at": "2026-09-22T02:43:18.168955+02:00",
+    "duration_ms": 71663,
+    "tokens": 822049,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 68900
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 2762,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      },
+      {
+        "name": "verify",
+        "duration_ms": 0
+      }
+    ]
+  }
+}

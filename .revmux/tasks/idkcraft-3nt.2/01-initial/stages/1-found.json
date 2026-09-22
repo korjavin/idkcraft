@@ -1,0 +1,168 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 402313,
+        "raised": 4,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 883450,
+        "raised": 2,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/brain.js",
+      "line": 39,
+      "end_line": 39,
+      "severity": "major",
+      "confidence": 72,
+      "title": "`fight` is now a reachable action but nothing on this branch drives the body — the bot stops moving",
+      "body": "`parseAction` (bot/src/brain.js:39) now accepts `fight`, and the action question advertises it to the remote brain (bot/src/brain.js:84-88). `bot/src/index.js` is unchanged and its `applyDecision` only handles `follow`:\n\n```js\nif (decision.action === 'follow' \u0026\u0026 target) { ...setGoal... }\nelse { if (lastGoalKey !== 'idle') bot.pathfinder.stop(); lastGoalKey = 'idle' }\n```\n\nSo a model answer of `fight` falls into the else branch: the bot stops pathfinding, nothing attacks, and it logs `action=fight` while standing still. Before this commit `parseAction` returned null for `fight`, which threw `jev missing action answer`, was caught, and degraded to the stub → `follow`. The change converts a graceful degradation into a stuck bot.\n\nTrigger on prod with `BRAIN_URL=http://laya:8000/...`: player at 5 blocks, a zombie nearby so `nearby_hostiles=1`; the new instructions foreground fighting, so LAYA answers `choice: fight` (shape-legal — `smoke.py`'s check() now accepts it for the no-hostile request.json too). Tick 1: pathfinder.stop(), bot freezes. The decision is cached in `lastDecision` under `stateKey` (which does not include the hostile fields), and because the bot has stopped, its own distance to a standing player no longer changes — the cached `fight` is replayed with no further brain call and the bot stays frozen indefinitely.\n\nThe bead says \"In-game: nothing visible yet\" and \"do not touch bot/src/index.js\", which is exactly the assumption that does not hold: today's state line carries no hostile fields, but it does carry `nearby_hostiles`, and the choice is offered unconditionally. This is a merge-order hazard rather than a code bug in the diff: it only bites in the window between this PR reaching `master` (GitOps deploys to Portainer on push) and idkcraft-3nt.3 landing its dispatch entry.",
+      "fix": "Either hold this PR until idkcraft-3nt.3's fight behaviour is in the same deploy, or make the untouched actuator safe with one word: `if (decision.action !== 'idle' \u0026\u0026 target)` in index.js:87, so an unexpected action keeps following instead of freezing. If index.js must stay untouched per the bead, say in the PR that master must not deploy this alone.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/test/brain.test.js",
+      "line": 20,
+      "end_line": 28,
+      "severity": "minor",
+      "confidence": 88,
+      "title": "No test pins the 8-block / 6-health boundaries the bead names explicitly",
+      "body": "The bead's reference policy is `hostile_distance \u003c= 8` and `bot_health \u003e= 6`, and the criteria string shipped to the model says \"bot_health is 6 or more\". The three new stub tests use `hostile_distance: 4` with `bot_health: 20` and `bot_health: 5` — every one of them still passes if the comparisons are rewritten as `hd \u003c 8` and `health \u003e 6`.\n\nConcrete defect the missing test would catch: a bot at exactly 6 health (3 hearts) with a hostile at exactly 8 blocks refusing to fight, while the criteria text sent to LAYA tells the model to fight — which makes the disagreement log, the whole point of this bead, report a difference that is the stub's fault, not the model's. Since the stub is the declared reference policy the owner reads prod logs against, an off-by-one here silently corrupts the experiment's baseline.",
+      "fix": "Add two stub cases: `{ hostile_distance: 8, bot_health: 6 }` → fight, and `{ hostile_distance: 8.1, bot_health: 20, distance_to_player: 5 }` → follow.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-3",
+      "file": "bot/test/brain.test.js",
+      "line": 95,
+      "end_line": 126,
+      "severity": "minor",
+      "confidence": 85,
+      "title": "Nothing asserts the disagree log stays silent when model and stub agree",
+      "body": "The new test proves the log fires on disagreement, but no test proves it fires *only* then — the bead's wording is \"One line, only on disagreement\". Delete the `if (ref !== action)` guard at bot/src/brain.js:108 and the whole suite still passes: the agreement cases ('maps a canned JEV answer to follow/sprint', 'sends the expected request shape', the laya-endpoint cases) never capture `console.error`, so an unconditional log goes undetected until prod, where it would emit one error-level line for every brain call — i.e. one per tick with a player online, which is exactly the log-volume guard the bead cares about.",
+      "fix": "In the existing disagree test (or a sibling), also run an agreeing case under the same stubbed `console.error` — canned `choice: 'follow'` with `{ distance_to_player: 12 }` — and assert `logs.length === 0`.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-4",
+      "file": "bot/src/brain.js",
+      "line": 108,
+      "end_line": 110,
+      "severity": "minor",
+      "confidence": 55,
+      "title": "Disagreement log has no rate limit on the per-tick path",
+      "body": "`console.error` fires once per successful remote answer whenever model != stub. With `BRAIN_TICK_MS=1000` and a player who is walking, `stateKey` in index.js changes nearly every tick, so `brain.decide` is called nearly every tick and the log can fire nearly every tick. The bead itself records (from idkcraft-cne.4) that LAYA tends to \"answer idle forever\" — a systematic disagreement, not an occasional one. In that case the bot emits a second, error-stream line every second for as long as a player is online, next to the `decision ...` line, against the epic's \"bot logs stay readable: one decision line per tick\".\n\nThe cost guard proper is intact: with nobody online index.js never calls the brain, so the idle path stays at its 1 line/min, and the log adds no extra HTTP calls (the extra `stubBrain.decide` is local and free.) This is the design the bead asked for, so it is a volume judgement rather than a bug — flagging it because the log volume is one of the merge-gate questions.",
+      "fix": "If prod logs turn out noisy, gate the line the same way the idle log is gated (e.g. skip when the model/stub pair is identical to the previous tick's, or one line per minute per pair) rather than removing it.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "contract-1",
+      "file": "bot/src/brain.js",
+      "line": 39,
+      "end_line": 39,
+      "severity": "major",
+      "confidence": 70,
+      "title": "`fight` is now a reachable brain answer, but index.js maps it to a full stop",
+      "body": "`parseAction` (bot/src/brain.js:39) now accepts `fight`, and the action question advertises `fight` as the first criterion (brain.js:84-89), so the remote brain can answer it on any tick. The consumer is unchanged: `applyDecision` in bot/src/index.js:87-99 handles only `follow`; every other action falls into the else branch, which calls `bot.pathfinder.stop()` and sets `lastGoalKey = 'idle'`.\n\nConcrete sequence on prod with BRAIN_URL pointed at the laya sidecar: the player is 12 blocks away, index.js builds a state with no hostile fields so the line reads `... hostile_distance=none hostile_near_player=false`; laya (a ~322M CPU classifier now choosing among three options instead of two) answers `choice: fight`. brain.js returns `{action:'fight', source:'laya'}`, index.js stops the pathfinder and logs `decision source=laya action=fight ...` — the bot neither follows nor fights, it just stands there. That decision is then cached: index.js:144-147 stores any non-`stub-fallback` decision under the current `stateKey`, so while the player stands roughly still no further brain call is made and the bot stays frozen until the rounded distance or a flag changes.\n\nBefore this change a stray answer could only be `follow` or `idle`, both of which index.js executes correctly, so the new stuck state is introduced here. The bead's \"in-game: nothing visible yet\" reasoning covers only the stub path — the model's answer is not constrained by the state fields, and the model's answer wins by design (brain.js:107-111). Merges to master deploy straight to Portainer, so this branch reaches the live server before idkcraft-3nt.3 adds fight execution.\n\nI traced both code paths in full; what I could not verify is how often laya actually picks `fight` on a no-hostile state (the smoke table in the PR only covers the hostile row).",
+      "fix": "Merge idkcraft-3nt.3 (fight behaviour in index.js) together with or before this one, or — since the bead forbids touching index.js here — add a one-line guard in applyDecision that treats `fight` as `follow` until the fight behaviour exists, so an unexecutable action never silently parks the bot.",
+      "sources": [
+        "contract"
+      ],
+      "lenses": [
+        "contract"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "contract-2",
+      "file": "laya/test/request.json",
+      "line": 3,
+      "end_line": 3,
+      "severity": "minor",
+      "confidence": 80,
+      "title": "Editing laya test files retags and redeploys the laya sidecar",
+      "body": "CI tags the laya image by the `laya/` directory tree hash (.github/workflows/deploy.yml:41, `LAYA_SHA=$(git rev-parse HEAD:laya)`). `laya/test/request.json` and `laya/smoke.py` live inside that tree, so this test-only change produces a new LAYA_SHA, `docker manifest inspect` misses, and CI rebuilds, smokes and pushes a new image tag, then rewrites `image: ghcr.io/korjavin/idkcraft-laya:\u003csha\u003e` on the deploy branch (deploy.yml:119). Portainer therefore recreates the sidecar on merge even though the runtime bytes (`shim.py`, weights) are identical.\n\nConsequence: the laya container restarts and reloads the model — the healthcheck allows a 120 s start_period (docker-compose.yml:114) — and during that window every bot tick with a player online fails its brain call and logs `brain jev error, stub fallback`. That is the exact signal this bead's acceptance criterion asks the owner to read (\"no stub-fallback regressions on prod logs\"), so the deploy will produce a burst that looks like a regression and is not one.\n\nThe tagging scheme is pre-existing (introduced by idkcraft-cne.9); what is new is that this is a laya change with no runtime effect. Worth knowing before the merge rather than fixing here.",
+      "fix": "No code change needed in this PR — note the expected stub-fallback burst on the bead so it is not read as a regression. If it recurs, the durable fix is to compute LAYA_SHA from the files the image actually ships (shim.py, Dockerfile, test/request.json) rather than the whole `laya/` tree, so smoke-only edits do not retag.",
+      "sources": [
+        "contract"
+      ],
+      "lenses": [
+        "contract"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 1285763,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 87051
+      }
+    ]
+  }
+}

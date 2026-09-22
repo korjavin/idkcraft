@@ -1,0 +1,5 @@
+- Diff: in workdir run `git diff origin/master...HEAD` (branch idkcraft-3nt.8, PR #25).
+- Scale: small, 3 files, +79/-3.
+- Read in full: bot/src/index.js (ticker + paused branch + setFollow/stop), bot/test/tick.test.js (new paused stop test), bot/README.md (stop sentence), context/bead.md.
+- Ignore: bot/src/behaviours/**, bot/src/perception.js, bot/src/brain.js, bot/test/brain.test.js, bot/test/scout.test.js, bot/test/fight.test.js, bot/package.json, laya/**, docker-compose.yml, CLAUDE.md, .beads/.
+- Tests already ran 49/49 — do not run.

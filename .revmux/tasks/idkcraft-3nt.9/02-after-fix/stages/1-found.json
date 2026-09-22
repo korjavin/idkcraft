@@ -1,0 +1,76 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 588982,
+        "raised": 1,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 389831,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/test/tick.test.js",
+      "line": 70,
+      "end_line": 98,
+      "severity": "minor",
+      "confidence": 75,
+      "title": "'stop guard' test name claims a stationary live goal, but its mock never has one",
+      "body": "The test is titled \"idle after a stationary goal does not latch stop\" and its comment on line 83 reads \"goal never produced a path\", but the mock replaces `setGoal` with a bare counter (lines 77-81) and never populates `bot.pathfinder.goal`, which `mockBot()` does not define either (lines 28-33). So on tick 2 `stopOnce()` evaluates `bot.pathfinder.goal` as `undefined` and takes neither branch — the scenario actually exercised is \"empty path AND no goal\", not \"stationary live goal\".\n\nThat makes the assertion `calls.setGoal === 2` (line 97) mock-specific rather than a property of the code: with the real plugin, `setGoal(new GoalFollow(...), true)` installs `stateGoal` (`mineflayer-pathfinder/index.js:142-146`, exposed by the getter at :104-108), the goal stays live while `isMoving()` is false because `dynamicGoal` suppresses the clear at :460, and the idle tick would therefore issue `setGoal(null)` — giving `calls.setGoal === 3` and `effectiveGoals === 3`.\n\nThe empty-path-no-goal case the test really covers is reachable and is merge-gate criterion 1, so the assertions are valid; the stationary-goal case is covered by the second test (lines 101-129). The defect is that a maintainer reading this test will believe the stationary-goal path is covered here and that it produces no `setGoal` call, which is the opposite of what the code does — the exact confusion round 01 was about. Pre-existing from the first commit of this branch, not introduced by the fix commit.",
+      "fix": "Rename the test to say what it tests — e.g. \"idle with no live goal never stops, so the next follow is not swallowed\" — and change the line 83 comment from \"goal never produced a path\" to note that the mock keeps `pathfinder.goal` unset (goal already reached/cleared, empty path). Leave the assertions as they are.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 978813,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 93514
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+- Diff: `git diff origin/master...HEAD` on branch idkcraft-3nt.10 (PR #30). Round 01 found 1 major + 1 minor, both fixed and pushed.
+- Round-01 major fix to verify: bot/src/index.js latch block now keys on the latched entity via isFightTarget instead of comparing to state.hostile; new two-mob ticker test in bot/test/fight.test.js. Minor: smoke label shortened to fit the 14-char column.
+- Read in full: bot/src/index.js (latch block), bot/test/fight.test.js (two-mob test). Skim the rest of the diff.
+- Ignore: roam.js, scout.js, follow.js, CLAUDE.md, docker-compose.yml, .beads/, .revmux/.
+- Tests already ran 122/122 green via `cd bot && npm test` — do not run.

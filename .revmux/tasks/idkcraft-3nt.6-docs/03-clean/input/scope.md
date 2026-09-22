@@ -1,0 +1,9 @@
+- **Diff command:** `git diff origin/master...HEAD`
+- **Scale:** 2 files changed, 60 insertions, 11 deletions. Documentation only. Round 3.
+- **Changes in round 3:**
+  - Removed roam reference from the brain arbitration choices.
+  - Corrected scout chat cap description to: "Reports at most 3 lines per scan in chat (one per ore type, highest value first)".
+- **Files to read in full:** `bot/README.md`, `CLAUDE.md`.
+- **What to ignore:** All code files (`bot/src/*`, `bot/test/*`, etc.).
+- **Tests:** No code changed, docs only — tests unaffected (all 92 unit tests passing).
+- **Privacy:** Grep for IP/hostnames returns clean.

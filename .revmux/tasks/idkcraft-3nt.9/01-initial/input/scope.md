@@ -1,0 +1,5 @@
+- Diff: `git diff origin/master...HEAD` on branch `idkcraft-3nt.9` (workdir `/Users/iv/Projects/idkcraft-muse-2`).
+- Scale: tiny — 2 files, ~+53/-16: `bot/src/index.js` (one `stopOnce()` helper + 5 one-line call sites), `bot/test/tick.test.js` (+1 guard test, 2 mocks set moving).
+- Read in full: `bot/src/index.js`, `bot/test/tick.test.js`, `bot/src/behaviours/fight.js` (`stopMoving` reference), `bot/node_modules/mineflayer-pathfinder/index.js` (`stop`/`resetPath`/`isMoving`, lines ~115-175, ~385-440, ~575-595).
+- Ignore: `bot/src/behaviours/*` (untouched except as reference), `bot/src/perception.js`, `bot/src/brain.js`, `laya/**`, `docker-compose.yml`, networked e2e.
+- Tests already ran 93/93 green — do not run.

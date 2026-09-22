@@ -1,0 +1,8 @@
+- Under review: branch `idkcraft-3nt.3` (PR #23), one commit, against `origin/master`.
+- Diff: `git diff origin/master...HEAD` (workdir is a detached checkout of the branch head)
+- Scale: 7 files, +282/-39
+- Read in full: `bot/src/perception.js`, `bot/src/behaviours/fight.js`, `bot/test/fight.test.js`, the `brain.js` / `brain.test.js` removals, the 1-line `index.js` change
+- Also read for context (unchanged): `bot/src/index.js` tick (how handler(bot, ctx, target, state) is called, how ctx.lastGoalKey is shared between follow and fight, the idle branch), `bot/src/behaviours/follow.js`, `bot/src/brain.js` stub policy
+- Ignore: `.revmux/`, `laya/`, `docker-compose.yml`, `bot/README.md`
+- Tests: `npm test` in `bot/` already ran, 44/44 pass — do not run it
+- Explicit exclusions: in-game acceptance is deferred to the prod bead (3nt.6). `bot/package.json` test-script edit is required for the new suite to run — accepted. A parallel scout bead adds 3 lines at the every-tick seam and its own test file; the trivial rebase between them is known.

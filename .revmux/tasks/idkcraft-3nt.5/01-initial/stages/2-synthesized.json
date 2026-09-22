@@ -1,0 +1,143 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 714950,
+        "raised": 5,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 977026,
+        "raised": 3,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "contract-1",
+      "file": "bot/src/behaviours/roam.js",
+      "line": 30,
+      "end_line": 31,
+      "severity": "major",
+      "confidence": 99,
+      "title": "Roaming busts the decision cache, so a standing player now costs one brain call per tick instead of one total",
+      "body": "`perception.js:27-29` states the cost guard in writing: \"Dedup key: distance rounded to 1 block + same flags =\u003e reuse last decision, skip the JEV call\", and `index.js:106` only reuses `lastDecision` while `stateKey(state)` is unchanged. `distance_to_player` is part of that key.\n\nBefore this change, a player standing within 3 blocks was the cheapest possible state: the stub answered idle, `applyDecision` stopped the pathfinder, the bot did not move, the rounded distance stayed constant, and the brain was called exactly once and then cached for as long as the player stood still.\n\nRoam moves the bot. `setGoal` sends it up to 6 blocks away at pathfinder speed (~4.3 blocks/s against the default `BRAIN_TICK_MS=1000`), so `Math.round(distance_to_player)` changes on nearly every tick and the cache misses on nearly every tick. Worse, the stub flips to `follow` as soon as the bot crosses 3 blocks, so the bot yo-yos out and back, guaranteeing the key keeps changing.\n\nOne reviewer ran the real `createTicker` with a mock pathfinder walking 4.3 blocks per tick toward the goal, player motionless at 1 block:\n- this branch: `roam, roam, roam, follow, roam, roam, follow, ...` — 10 brain calls in 12 ticks\n- master's behaviour (idle at d\u003c=3): 1 brain call in 12 ticks\n\nSo an AFK or building player — the single most common state on this server — now drives a continuous ~1 req/s stream at `BRAIN_URL`. On the default `laya` sidecar that is a permanent CPU inference load (~127 ms p50 per the CI note) where there was previously none; if `BRAIN_URL` points at JEV it is paid traffic for as long as someone stands still. Nothing crashes — `inFlight` serialises the calls — but a slow answer over `BRAIN_TIMEOUT_MS` yields a stub fallback that is deliberately not cached (`index.js:113`), so a timing-out sidecar produces one call plus one console.error per tick forever.",
+      "fix": "Drop `distance_to_player` out of the dedup key while the last decision was `roam` (or key roam ticks on the goal instead of the distance), so a motionless player yields one brain call and the roam goal simply runs to completion. Cheapest version: in `index.js`, reuse `lastDecision` when `lastDecision.action === 'roam' \u0026\u0026 bot.pathfinder.isMoving()` and only the distance component of the key changed.",
+      "sources": [
+        "contract",
+        "loop+goal"
+      ],
+      "lenses": [
+        "contract",
+        "bot-loop"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-1",
+      "file": "bot/src/behaviours/roam.js",
+      "line": 12,
+      "end_line": 30,
+      "severity": "major",
+      "confidence": 75,
+      "title": "follow preempts roam at 3 blocks, so the stroll yo-yos and never reaches the 6-block radius",
+      "body": "roam picks a point up to ROAM_RADIUS=6 blocks from the player and hands the body back only past HAND_BACK_DIST=6 (roam.js:12-13, :23). But the arbitration that dispatches roam switches to follow at 3 blocks — stubBrain `if (d \u003e 3) return follow` (brain.js:32), and the remote question says the same (\"follow when the player is more than 3 blocks away\", brain.js:90/93). Tick trace with a standing player: tick N, d≈1, brain says roam, roam sets GoalNear at a point ~5 blocks out, bot starts walking. Tick N+1 (1 s later, walking speed ~4.3 b/s) the bot is at d≈4, so stateKey changed and the fresh decision is follow; follow.js sees key `follow:Steve` !== ctx.lastGoalKey (`roam:…`) and calls setGoal(GoalFollow(target,3),true), which replaces the roam goal. The bot reverses mid-stroll and walks back to 3. Tick N+2: d\u003c=3, roam again, new random point. Observable result is a yo-yo between ~1 and ~4.5 blocks, not the \"strolling in a radius of ~6 blocks\" the bead's acceptance criterion asks for, and the ore-scan widening that motivates the bead is roughly halved. Corollary: the `distToPlayer \u003e HAND_BACK_DIST` branch (roam.js:23) is unreachable under the shipped policy — nothing ever dispatches roam at d\u003e3, let alone d\u003e6 — so the 6-block geometry in this file and the 3-block threshold in the brain never agree. No test in bot/test/ covers the roam→follow crossover; a test that ticks the ticker with the real stub while the bot sits at d=4 and asserts the roam goal survives (or is deliberately dropped) would have caught this.",
+      "fix": "Make the two thresholds agree. Smallest version: let the stub hold roam while the player is still — `if (d \u003e 3 \u0026\u0026 (state.player_moving || d \u003e HAND_BACK_DIST)) return follow` (and the matching sentence in the question/criteria text plus request.json), so an in-flight stroll runs out to 6 before follow takes the body back. Alternatively drop ROAM_RADIUS/HAND_BACK_DIST to 3 and accept a smaller stroll, and say so on the bead.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "bot-loop",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "contract-3",
+      "file": "laya/smoke.py",
+      "line": 37,
+      "end_line": 38,
+      "severity": "minor",
+      "confidence": 99,
+      "title": "New \"dist 1 still\" smoke row is byte-identical to the existing \"dist 1\" row, so the quality table gains no roam coverage",
+      "body": "The state strings on lines 34 and 38 are identical character for character — one reviewer parsed `STATES` and compared: `DUPLICATE state string: dist 1 == dist 1 still`. The pre-existing \"dist 1\" row already has `player_moving=false`, so it was already the roam case. The table now makes five calls for four distinct states, and the fifth row can only echo the third.\n\nThe result is that the quality table the bead asks for still cannot separate roam from idle: every row with a close player is still, and every moving row (`dist 12 moving`, `dist 5`) is far. There is no close-and-moving state, which is the one that must answer idle rather than roam — the exact new branch added at `brain.js:36`. The extra row costs one more inference call in the CI gate and returns no new information. The bead asks for this row so the human can judge whether the model degrades with four choices, and the documented fallback (drop roam from the question) is supposed to be decided from that table.\n\nThe PR body reframes the duplicate as a deliberate determinism probe. That is a fair secondary use, but it does not replace the missing discriminating row.",
+      "fix": "Change the new row to the close-and-moving case, e.g. `(\"dist 1 moving\", \"distance_to_player=1.0 player_visible=true player_moving=true bot_health=20 bot_food=20 nearby_hostiles=0 hostile_distance=none hostile_near_player=false\")`, so the table shows roam vs idle side by side.",
+      "sources": [
+        "contract",
+        "loop+goal"
+      ],
+      "lenses": [
+        "contract",
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "contract-2",
+      "file": "bot/src/brain.js",
+      "line": 95,
+      "end_line": 95,
+      "severity": "major",
+      "confidence": 85,
+      "title": "The four-choice request has never been exercised against laya; the smoke quality table the bead requires is missing",
+      "body": "The bead's acceptance criteria require \"smoke.py quality table pasted in the PR with the four-choice outcome\", and the bead exists precisely because a fourth criterion is a known risk for this model (\"cne.4 showed it collapses to one answer when criteria are vague\"), with a recorded fallback path if it degrades. The PR #28 body states plainly that no sidecar was reachable and no table could be produced, and takes the primary path on the grounds that there is \"no local evidence of collapse\" — that is absence of evidence, and the evidence the bead asks for is exactly what is missing.\n\nConcretely, `laya/shim.py:66` passes `body.questions` straight into `agent.predict`, so the choice set the model arbitrates over is whatever `criteria` contains. This change makes that four keys for the first time, and nothing in the change has run against a live sidecar.\n\nThe first execution will be in CI: `.github/workflows/deploy.yml` rebuilds the laya image because the `laya/` tree hash changed, then runs `python3 laya/smoke.py` as a gate. That step has no `continue-on-error`, so if laya errors or returns anything outside `{fight, follow, roam, idle}` the job fails after the bot image has been pushed but before \"Update deploy branch\" and \"Trigger Portainer webhook\" — the live stack silently stays on the previous deploy with a red master build. `check()` accepts all four choices, so a quality collapse (always answering `roam`) passes the gate silently and reaches production as a bot that ignores hostiles.\n\nWhat would settle it: run `laya/smoke.py` against the sidecar and paste the table, or state on the bead that the primary path was taken without it and why.",
+      "fix": "",
+      "sources": [
+        "contract"
+      ],
+      "lenses": [
+        "contract"
+      ],
+      "verdict": ""
+    }
+  ],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 1720907,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 132028
+      },
+      {
+        "name": "synthesis",
+        "duration_ms": 25430,
+        "executor": "claude",
+        "model": "opus",
+        "effort": "high"
+      }
+    ]
+  }
+}

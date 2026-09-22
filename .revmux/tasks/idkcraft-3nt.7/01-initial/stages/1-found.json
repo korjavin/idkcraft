@@ -1,0 +1,112 @@
+{
+  "scope": {
+    "task": "",
+    "run": "",
+    "scope_path": ""
+  },
+  "sources": {
+    "expected": 2,
+    "reported": 2,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "loop+goal",
+        "lenses": [
+          "bot-loop",
+          "goal-and-tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 379237,
+        "raised": 3,
+        "degraded": false
+      },
+      {
+        "name": "contract",
+        "lenses": [
+          "contract"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5",
+        "effort": "high",
+        "tokens": 200800,
+        "raised": 0,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "loop+goal-1",
+      "file": "bot/test/scout.test.js",
+      "line": 248,
+      "end_line": 248,
+      "severity": "minor",
+      "confidence": 85,
+      "title": "No test pins the distance rounding — every fixture is an exact integer distance",
+      "body": "goal.md names \"Euclidean distance rounded\" as a correctness criterion, and `findNearest` implements it with `Math.round(dist(p, origin))` (bot/src/behaviours/scout.js:106). But every fixture in the new tests sits at an exactly integral distance: `pos(6, 64, 8)` from the mock origin `pos(0, 64, 0)` is hypot(6,0,8) = 10.0, used identically at scout.test.js:248, 288 and 311. Swapping `Math.round` for `Math.floor`, `Math.ceil` or `Math.trunc` leaves all 59 tests green.\n\nConcrete defect this would miss: a vein at 5.9 blocks (bot standing at a fractional position, which is the normal case in-game — `bot.entity.position` is not integral) is reported as \"coal_ore at ... (5 blocks)\" under `Math.floor` instead of the 6 the bead asks for. The reply shape is the whole deliverable of this bead, so the one number in it that can be silently wrong is unguarded.",
+      "fix": "Add one case with a non-integral distance, e.g. set the mock origin or block so the true distance is ~5.6, and assert `res.distance === 6`.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-2",
+      "file": "bot/test/scout.test.js",
+      "line": 314,
+      "end_line": 325,
+      "severity": "minor",
+      "confidence": 70,
+      "title": "'does not move the bot' test asserts the value it supplied and cannot fail for the reason it names",
+      "body": "The test snapshots `bot.entity.position` from the mock, calls `handleChat`, and asserts it is unchanged. Nothing in production ever mutates `bot.entity.position` — in a real bot the server does, via physics, after a pathfinder goal is set — and the mock has no `pathfinder` property at all. So the assertion compares the object the test itself constructed against itself and can only pass.\n\nIt does incidentally catch one implementation of movement: a `bot.pathfinder.setGoal(...)` in the `find me` branch would throw TypeError on the mock. It does not catch the other plausible one — `handleChat` is called with `ticker = null` (line 322), so an implementation that walked by routing through the ticker (`ticker.setFollow` / a new goto hook) would be silently no-op'd by the `if (ticker)` guards at index.js:145-151 and the test would still pass. Since \"the bot does not move as a result of the command\" is an explicit acceptance criterion, the test guarding it should be able to fail.",
+      "fix": "Pass a fake ticker and a fake `bot.pathfinder` with recording stubs, then assert `setGoal`/`setFollow`/`stop` were never called.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "loop+goal-3",
+      "file": "bot/src/behaviours/scout.js",
+      "line": 62,
+      "end_line": 62,
+      "severity": "minor",
+      "confidence": 95,
+      "title": "Comment on resolveBlockIds still calls the chat command 'future' after this commit ships it",
+      "body": "Line 62 reads \"// Name -\u003e ore ids for the future 'find me \u003cblock\u003e' chat command\". This commit is the one that adds that caller (bot/src/index.js:153-164), and the diff correctly de-futured the sibling comment on `findNearestBlock` at line 77 (\"Scan helper, exported for the 'find me \u003cblock\u003e' chat command\") and dropped its \"That bead adds a caller, not a copy\" note. Line 62 was left behind, so the file now describes the same command as both shipped and not-yet-written. On a project whose stated convention is that changes should be readable and explain themselves, that is the comment a reader hits first.",
+      "fix": "Drop \"the future\" from line 62 so it matches the wording already used at line 77.",
+      "sources": [
+        "loop+goal"
+      ],
+      "lenses": [
+        "goal-and-tests"
+      ],
+      "verdict": ""
+    }
+  ],
+  "open_questions": [],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "started_at": "0001-01-01T00:00:00Z",
+    "finished_at": "0001-01-01T00:00:00Z",
+    "duration_ms": 0,
+    "tokens": 580037,
+    "stages": [
+      {
+        "name": "find",
+        "duration_ms": 89514
+      }
+    ]
+  }
+}

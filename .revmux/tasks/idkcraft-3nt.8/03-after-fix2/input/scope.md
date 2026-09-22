@@ -1,0 +1,5 @@
+- Diff: in workdir run `git diff origin/master...HEAD` (branch idkcraft-3nt.8, PR #25).
+- Scale: delta vs round 02: post-await paused recheck in tick (discard stale follow if stop lands mid-await), nobody-online test mocks clock past 5 s throttle, new mid-await race test (tick.test.js).
+- Read in full: bot/src/index.js tick incl. both paused guards, bot/test/tick.test.js paused stop describe, context/bead.md, context/round02.md.
+- Ignore: behaviours/**, perception.js, brain.js, other tests, package.json, laya/**, compose, CLAUDE.md, .beads/.
+- Tests already ran 67/67 — do not run.

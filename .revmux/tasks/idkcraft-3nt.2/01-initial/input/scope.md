@@ -1,0 +1,8 @@
+- Under review: branch `idkcraft-3nt.2` (PR #21), one commit, against `origin/master`.
+- Diff: `git diff origin/master...HEAD` (workdir is a detached checkout of the branch head)
+- Scale: 4 files, +91/-15
+- Read in full: `bot/src/brain.js`, `bot/test/brain.test.js`, `laya/smoke.py`, `laya/test/request.json`
+- Also read for context (unchanged): `bot/src/index.js` (the caller: how `state` is built and how `decision.action` is consumed), `laya/shim.py`
+- Ignore: `.revmux/`, `docker-compose.yml`, `bot/src/perception.js` (does not exist on this branch yet — a parallel bead)
+- Tests: `npm test` in `bot/` already ran, 24/24 pass — do not run it. The developer also ran `laya/smoke.py` against a local sidecar: hostile-at-4-blocks → fight
+- Explicit exclusions: the state built by index.js on this branch does not yet carry hostile_distance/hostile_near_player (a parallel bead adds perception); brain.js must therefore tolerate their absence — check that, but do not report the fields being absent from index.js as a finding
