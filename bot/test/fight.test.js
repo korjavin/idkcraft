@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, BEHAVIOURS } = require('../src/index')
-const { buildState, stateKey } = require('../src/perception')
+const { buildState, stateKey, isFightTarget } = require('../src/perception')
 const { stubBrain } = require('../src/brain')
 const fight = require('../src/behaviours/fight')
 
@@ -81,6 +81,34 @@ describe('perception hostile facts', () => {
     assert.equal(state.hostile, null)
     assert.equal(state.hostile_near_player, false)
     assert.equal(state.nearby_hostiles, 1) // compatibility count kept
+  })
+
+  it('never ranks players or passive mobs as hostiles', () => {
+    const bot = mockBot()
+    const zombie = mobEntity(1, 'zombie', 5)
+    bot.entities = {
+      // 'zombie' is a legal player name: the type guard, not the allowlist,
+      // is what keeps the escort target out of the fight scan.
+      7: { id: 7, type: 'player', name: 'zombie', position: pos(2, 64, 0) },
+      3: { id: 3, type: 'mob', name: 'pig', position: pos(3, 64, 0), height: 1.0 },
+      1: zombie
+    }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile_distance, 5)
+    assert.equal(state.hostile, zombie)
+    assert.equal(state.nearby_hostiles, 1) // real zombie only
+  })
+
+  it('isFightTarget classifies kinds, not ranges alone', () => {
+    const botPos = pos(0, 64, 0)
+    const zombie = mobEntity(1, 'zombie', 2)
+    assert.equal(isFightTarget(zombie, botPos, null), true)
+    assert.equal(isFightTarget(mobEntity(9, 'creeper', 2), botPos, null), false)
+    assert.equal(isFightTarget({ id: 7, type: 'player', name: 'Steve', position: pos(2, 64, 0) }, botPos, null), false)
+    assert.equal(isFightTarget({ id: 7, type: 'player', name: 'zombie', position: pos(2, 64, 0) }, botPos, null), false)
+    assert.equal(isFightTarget({ id: 3, type: 'mob', name: 'pig', position: pos(2, 64, 0) }, botPos, null), false)
+    assert.equal(isFightTarget(null, botPos, null), false)
+    assert.equal(isFightTarget(mobEntity(2, 'skeleton', 20), botPos, null), false)
   })
 
   it('prefers the nearest non-creeper when a creeper is closer', () => {
@@ -218,6 +246,20 @@ describe('fight behaviour', () => {
     assert.equal(mobGoals().length, 4) // the swing issued no new goal
   })
 
+  it('holds the incumbent when the newcomer is only just nearer', () => {
+    const bot = mockBot()
+    const a = mobEntity(1, 'zombie', 5.0)
+    bot.entities = { 1: a, 2: mobEntity(2, 'zombie', 5.2) }
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    fight(bot, ctx, player, { hostile: a })
+    assert.equal(bot.calls.setGoal, 1)
+    const b = mobEntity(2, 'zombie', 4.9) // genuinely nearest now, by 0.1
+    bot.entities = { 1: a, 2: b }
+    fight(bot, ctx, player, { hostile: b })
+    assert.equal(bot.calls.setGoal, 1) // margin (2) not beaten: no switch
+  })
+
   it('stays on target when the nearest rank flip-flops', () => {
     const bot = mockBot()
     bot._items = [{ name: 'iron_sword' }]
@@ -297,17 +339,18 @@ describe('fight behaviour', () => {
     assert.equal(bot.calls.attack, 0)
   })
 
-  it('stops only a moving bot when the target is missing or dead', () => {
+  it('shadows the player when fight has no hostile, stopping only a moving bot', () => {
     const missing = mockBot()
     const ctx = { lastGoalKey: 'fight:1' }
-    fight(missing, ctx, playerEntity(10), { hostile: null })
+    const player = playerEntity(10)
+    fight(missing, ctx, player, { hostile: null })
     assert.equal(missing.calls.stop, 0) // stationary: nothing to halt
     assert.equal(missing.calls.attack, 0)
-    assert.equal(missing.calls.setGoal, 0)
-    assert.equal(ctx.lastGoalKey, 'idle')
+    const last = missing.calls.goals[missing.calls.goals.length - 1]
+    assert.equal(last.entity, player) // bodyguard, not parked
     const dead = mockBot()
     dead._moving = true
-    fight(dead, { lastGoalKey: 'fight:1' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
+    fight(dead, { lastGoalKey: 'fight:1' }, player, { hostile: mobEntity(1, 'zombie', 2, { isValid: false }) })
     assert.equal(dead.calls.stop, 1) // halt the chase to the corpse
     assert.equal(dead.calls.attack, 0)
   })

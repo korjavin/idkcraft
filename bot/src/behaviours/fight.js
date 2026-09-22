@@ -32,6 +32,10 @@ function fight(bot, ctx, target, state) {
     ctx.fightId = null
     ctx.fightGivenUpId = null
     ctx.fightShadowTicks = 0
+    // No visible mob but the brain said fight (e.g. a remote model answering
+    // fight on hostile_distance=none): stay with the player instead of
+    // parking — the bodyguard fallback, same as after give-up.
+    shadowPlayer(bot, ctx, target)
     return
   }
   ctx.fightId = hostile.id
