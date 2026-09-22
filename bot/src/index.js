@@ -10,6 +10,7 @@ const BEHAVIOURS = {
   fight: require('./behaviours/fight'),
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
+  lead: require('./behaviours/lead'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -24,7 +25,7 @@ const IDLE_LOG_MS = 60000
 const FIGHT_REPROBE_TICKS = 30
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0 }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -169,6 +170,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         }
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
+      if (ctx.lead && decision.action !== 'fight') {
+        // Lead is an explicit player order: it overrides the brain like
+        // 'stop' does, but fight still preempts (safety beats errands).
+        const handler = BEHAVIOURS.lead
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
+        const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist}`)
+        return { decision: { ...decision, action: 'lead' }, calledBrain }
+      }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
     } catch (err) {
@@ -184,11 +195,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     tick,
     start: () => scheduleNext(true),
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; if (name) ctx.paused = false },
+    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
+      ctx.lead = null
+      ctx.leadStuck = 0
       stopOnce()
-    }
+    },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0 }
   }
 }
 
@@ -244,6 +258,7 @@ function handleChat(bot, ticker, username, message) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
         bot.chat(`${res.name} at ${res.position.x} ${res.position.y} ${res.position.z} (${res.distance} blocks)`)
+        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position })
       }
     }
   }
