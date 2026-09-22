@@ -115,10 +115,10 @@ Logged to stderr whenever the model output diverges from the reference rules. Th
 ## Reading the logs
 
 The bot logs one line per tick, so a saved log plus a text search answers
-most "why did it do that?" questions. The compose stack caps each container log (`json-file`, `max-size: 20m`,
-`max-file: 5` — up to 100 MB where the backend honors `max-file`, `max-size`
-alone where it ignores it), so history survives the host-journal vacuuming
-that used to eat a day of play in ~2.5 h.
+most "why did it do that?" questions. The compose stack caps each container log at 20 MB (`json-file` driver,
+`max-size: 20m`; the prod host runs podman, whose log driver does not accept
+`max-file`), so history survives the host-journal vacuuming that used to eat
+a day of play in ~2.5 h.
 
 Get a log:
 

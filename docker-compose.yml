@@ -60,7 +60,6 @@ services:
       driver: json-file
       options:
         max-size: "20m"
-        max-file: "5"
     # Explicit: the amd64 itzg image variant ships no HEALTHCHECK, and
     # Portainer refuses service_healthy dependents without one. Uses the
     # image's bundled mc-health script; start_period covers first boot
@@ -100,7 +99,6 @@ services:
       driver: json-file
       options:
         max-size: "20m"
-        max-file: "5"
 
   laya:
     # Built by CI from ./laya and pushed to GHCR.
@@ -118,7 +116,6 @@ services:
       driver: json-file
       options:
         max-size: "20m"
-        max-file: "5"
     healthcheck:
       # CMD-SHELL (not CMD list): Portainer word-splits CMD lists, so -c
       # received only "import" (SyntaxError). CMD-SHELL re-joins the words
