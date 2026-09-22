@@ -581,6 +581,88 @@ describe('follow behaviour and unstuck reflex', () => {
     await ticker.tick()
     assert.equal(bot.calls.setGoal, 2)
   })
+
+  it('two path_reset stuck while moving with no displacement nudge once with a single GoalNear sidestep, then GoalFollow', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial GoalFollow
+      assert.equal(bot.calls.setGoal, 1)
+      bot.pathfinder.isMoving = () => true // wedged executor: still "moving"
+      ticker.setPathReset('stuck')
+      await ticker.tick() // 1st stuck: blind, no nudge
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
+
+      ticker.setPathReset('stuck')
+      await ticker.tick() // 2nd stuck, no displacement: wedge nudge
+      assert.equal(bot.calls.setGoal, 2) // exactly one goal: the GoalNear sidestep
+      assert.equal(bot.calls.goals[1].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[1]
+      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
+      assert.equal(g.y, 64)
+      assert.equal(bot.calls.jump, 1)
+      const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
+      assert.equal(stuckLines.length, 1)
+      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0$/)
+
+      await ticker.tick() // nudge tick: GoalFollow again, jump released
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalFollow')
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('displacement between two path_reset stuck clears the wedge counter: no nudge', async () => {
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial GoalFollow
+      bot.pathfinder.isMoving = () => true
+      ticker.setPathReset('stuck')
+      bot.entity.position = pos(1, 64, 0) // progress before the next tick
+      await ticker.tick() // moved > 0.5: counter reset, no nudge
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.jump, 0)
+      ticker.setPathReset('stuck')
+      await ticker.tick() // only 1 since progress: still no nudge
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(bot.calls.goals.filter((g) => g && g.constructor.name === 'GoalNear').length, 0)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('non-stuck path_reset reasons do not feed the wedge counter', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+    await ticker.tick() // initial GoalFollow
+    bot.pathfinder.isMoving = () => true
+    ticker.setPathReset('goal_moved')
+    await ticker.tick()
+    ticker.setPathReset('goal_moved')
+    await ticker.tick()
+    assert.equal(bot.calls.setGoal, 1) // never reached 2 stuck: no nudge
+    assert.equal(bot.calls.jump, 0)
+  })
 })
 
 describe('stateKey', () => {
