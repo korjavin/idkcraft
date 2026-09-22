@@ -24,6 +24,17 @@ const BEHAVIOURS = {
 // up every 10 s just to re-scan the player list is plenty.
 const IDLE_TICK_MS = 10000
 const IDLE_LOG_MS = 60000
+// Server-ping cadence while off the server (owner: rejoin ~5 s after the
+// first player appears), and the nobody-online grace before the bot quits
+// (one night-tick so a relogging player never sees it leave).
+const JOIN_POLL_MS = 2000
+// Quiet settle after the ping first sees a player: Paper's connection-throttle
+// (default 4000 ms; the local test image uses the default) counts our status
+// pings, so joining the instant a ping succeeds is kicked as throttled.
+// 4500 ms clears the 4 s window with a small margin; typical join lands
+// ~5.5 s after the first player (up to ~6.5 s worst case).
+const JOIN_SETTLE_MS = 4500
+const LEAVE_AFTER_MS_DEFAULT = 60000
 // Re-probe ceiling (ticks) for a given-up hostile: the world may change
 // (bridged ravine, opened door), so a pursuit fight abandoned is retried
 // from scratch this often. Lives here, not in fight.js — once the brain
@@ -99,8 +110,8 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '' }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, eatInFlight: false }
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -130,6 +141,44 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const reset = ctx.lastPathReset || 'none'
     ctx.lastPathReset = null
     return `moving=${moving} path=${path} reset=${reset}`
+  }
+
+  // Nobody-online streak: wall time since the first consecutive no-target
+  // tick. When it reaches leaveAfterMs the ticker fires onLeave once (main()
+  // quits there); a visible target resets the streak. Wall time, not
+  // tick-counted: empty-server ticks can run at the fast 1 s cadence while
+  // the melee reflex is swinging, so counting idleTickMs per tick would
+  // expire the grace up to 10x early. 0 disables. `now` is injectable for
+  // tests, like the scout seam.
+  let emptySince = null
+  let leaveFired = false
+  function noteEmpty() {
+    if (!leaveAfterMs) return
+    const t = now()
+    if (emptySince === null) emptySince = t
+    if (!leaveFired && t - emptySince >= leaveAfterMs) {
+      leaveFired = true
+      if (typeof onLeave === 'function') {
+        try { onLeave() } catch (err) { console.error(`onLeave error: ${err && err.message ? err.message : err}`) }
+      }
+    }
+  }
+  function noteSeen() {
+    emptySince = null
+    leaveFired = false
+  }
+  // Tear-down for the join loop: after our own quit() the old ticker must
+  // not tick on (it would log stale idle lines, retain the dead bot's
+  // chunks, and a late socket error would fatal-kill the new connection).
+  function destroy() {
+    destroyed = true
+    if (timer) { clearTimeout(timer); timer = null }
+  }
+  // Stand down after a re-check found someone online: re-arm the streak so
+  // the next grace period is measured fresh from here.
+  function rearm() {
+    emptySince = null
+    leaveFired = false
   }
 
   // mineflayer-pathfinder's stop() only sets a stopPathing flag that the
@@ -177,14 +226,19 @@ function meleeReflex(bot, ctx, state) {
     } else {
       stopOnce()
     }
-    if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
+    // sprint stays on the decision line as the brain's opinion only; the
+    // body never sprints (see setMovements).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
 
+  let timer = null
+  let destroyed = false
   function scheduleNext(fast) {
-    const t = setTimeout(() => { void tick() }, fast ? tickMs : idleTickMs)
-    if (t && typeof t.unref === 'function') t.unref()
+    if (destroyed) return
+    if (timer) { clearTimeout(timer); timer = null }
+    timer = setTimeout(() => { timer = null; void tick() }, fast ? tickMs : idleTickMs)
+    if (timer && typeof timer.unref === 'function') timer.unref()
   }
 
   async function tick() {
@@ -203,6 +257,8 @@ function meleeReflex(bot, ctx, state) {
         // with nobody online is the melee reflex hostile check below.
         const target = findTarget(bot, followName)
         lastVisible = !!target
+        if (target) noteSeen()
+        else noteEmpty()
         if (target) {
           const state = buildState(bot, target, lastTargetPos)
           lastTargetPos = state._lastTargetPos
@@ -230,6 +286,8 @@ function meleeReflex(bot, ctx, state) {
       }
       const target = findTarget(bot, followName)
       lastVisible = !!target
+      if (target) noteSeen()
+      else noteEmpty()
       if (!target) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
@@ -331,7 +389,6 @@ function meleeReflex(bot, ctx, state) {
         // 'stop' does, but fight still preempts (safety beats errands).
         const handler = BEHAVIOURS.lead
         if (typeof handler === 'function') handler(bot, ctx, target, state)
-        if (ctx.movements) ctx.movements.allowSprinting = !!decision.sprint
         const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
@@ -350,9 +407,18 @@ function meleeReflex(bot, ctx, state) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
-    setPathReset: (reason) => { ctx.lastPathReset = reason || null },
+    setPathReset: (reason) => { ctx.lastPathReset = reason || null; if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1 },
     start: () => scheduleNext(true),
-    setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
+    // ponytail: sprint-jump wedges the bot flush against a 1-block step
+    // (sprint speed reaches the face before the queued jump lifts off, so
+    // physics resolves vel.y=0 with onGround=false and no later jump can
+    // fire). Hold the flag off here — the single write site — so neither
+    // applyDecision nor the lead branch can re-enable it per tick; sprint on
+    // the decision line stays the brain's opinion only. Upgrade path: sprint
+    // only on flat segments needs a hook inside the pathfinder executor.
+    setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
+    destroy,
+    rearm,
     setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
@@ -373,47 +439,136 @@ function meleeReflex(bot, ctx, state) {
   }
 }
 
-function main() {
+function parseLeaveAfterMs(env) {
+  const raw = parseInt((env && env.BOT_LEAVE_AFTER_MS) || '60000', 10)
+  if (!Number.isFinite(raw) || raw < 0) return LEAVE_AFTER_MS_DEFAULT
+  return raw
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Off-server wait: ping the server until a real player is online. A refused
+// or silent ping counts as nobody online. At most one line per minute, the
+// same throttle style as local-idle.
+function playersOccupied(res, username) {
+  const p = res && res.players
+  if (!p || typeof p.online !== 'number' || p.online <= 0) return false
+  if (p.online > 1) return true
+  // online==1 right after our own quit() is usually ourselves: the server
+  // has not processed our disconnect yet while our local 'end' already
+  // fired. Only our name in the sample means still empty; anyone else (or
+  // no sample at all) means occupied — joining is the safe default there.
+  const sample = Array.isArray(p.sample) ? p.sample.map((e) => e && e.name).filter(Boolean) : []
+  if (sample.length === 0) return true
+  return sample.some((name) => name !== username)
+}
+
+async function waitForPlayers({ host, port, pingFn, pollMs = JOIN_POLL_MS, username = '' }) {
+  let lastWaitLog = 0
+  for (;;) {
+    let occupied = false
+    try {
+      occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username)
+    } catch (_) { occupied = false }
+    if (occupied) return
+    const now = Date.now()
+    if (now - lastWaitLog >= IDLE_LOG_MS) {
+      lastWaitLog = now
+      console.log('waiting for players')
+    }
+    await sleep(pollMs)
+  }
+}
+
+function fatal(where, err) {
+  console.error(`${where}: ${err && err.message ? err.message : err}`)
+  process.exit(1)
+}
+
+// One connection: resolves after our own quit() (the join loop then goes
+// back to polling). An unexpected end/kicked/error still exits — the
+// container restart is the reconnect path there. createBot/pingFn are
+// parameters so tests can drive the own-quit vs fatal branches.
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
+  return new Promise((resolve) => {
+    const bot = createBot({
+      host,
+      port,
+      username,
+      auth: 'offline' // offline-mode server; see README for the online-mode note
+    })
+    bot.loadPlugin(pathfinder)
+    let wantQuit = false
+    const ticker = createTicker({
+      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs,
+      onLeave: () => { void confirmLeave() }
+    })
+    // The streak only proves nobody is *visible*. Re-check the world-wide
+    // player count before quitting: a player online-but-far would otherwise
+    // flap join/leave every grace period. Standing down re-arms the streak.
+    async function confirmLeave() {
+      let occupied = false
+      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username) } catch (_) { occupied = false }
+      if (occupied) { ticker.rearm(); return }
+      console.log('leaving: nobody online')
+      wantQuit = true
+      ticker.destroy()
+      try { bot.quit('nobody online') } catch (_) { /* already gone */ }
+    }
+
+    bot.once('spawn', () => {
+      ticker.setMovements(new Movements(bot))
+      console.log(`spawned as ${bot.username}`)
+      ticker.start()
+    })
+    bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
+
+    bot.on('chat', (chatUsername, message) => handleChat(bot, ticker, chatUsername, message))
+
+    // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
+    // decision line. Registered here in runOnce(), not in createTicker: the test
+    // mockBot is a plain object, not an EventEmitter, so only the real
+    // mineflayer bot ever reaches this code.
+    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
+    bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+
+    const life = createLifecycle(ticker)
+    bot.on('death', () => life.onDeath(bot))
+    bot.on('respawn', () => life.onRespawn(bot))
+    bot.on('playerLeft', (player) => handlePlayerLeft(bot, ticker, player))
+
+    // Our own quit() resolves back into the join loop; anything else is fatal
+    // and the container restart reconnects. Late errors on the intentionally
+    // closed connection are ignored so they cannot kill the next one.
+    bot.on('end', (reason) => {
+      if (wantQuit) { ticker.destroy(); resolve() }
+      else fatal('end', reason || 'disconnected')
+    })
+    bot.on('error', (err) => { if (!wantQuit) fatal('error', err) })
+    bot.on('kicked', (reason) => { if (!wantQuit) fatal('kicked', reason) })
+  })
+}
+
+async function main() {
   const rawTick = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
   const tickMs = Number.isFinite(rawTick) ? rawTick : 1000
+  const leaveAfterMs = parseLeaveAfterMs(process.env)
+  const host = process.env.MC_HOST || 'mc'
+  const port = parseInt(process.env.MC_PORT || '25565', 10)
+  const username = process.env.BOT_USERNAME || 'IdkBot'
+  const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
-  const bot = mineflayer.createBot({
-    host: process.env.MC_HOST || 'mc',
-    port: parseInt(process.env.MC_PORT || '25565', 10),
-    username: process.env.BOT_USERNAME || 'IdkBot',
-    auth: 'offline' // offline-mode server; see README for the online-mode note
-  })
-  bot.loadPlugin(pathfinder)
-  const ticker = createTicker({ bot, brain, tickMs, followName: process.env.BOT_FOLLOW || '' })
-
-  bot.once('spawn', () => {
-    ticker.setMovements(new Movements(bot))
-    console.log(`spawned as ${bot.username}`)
-    ticker.start()
-  })
-  bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
-
-  bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
-
-  // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
-  // decision line. Registered here in main(), not in createTicker: the test
-  // mockBot is a plain object, not an EventEmitter, so only the real
-  // mineflayer bot ever reaches this code.
-  bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
-  bot.on('path_reset', (reason) => ticker.setPathReset(reason))
-
-  const life = createLifecycle(ticker)
-  bot.on('death', () => life.onDeath(bot))
-  bot.on('respawn', () => life.onRespawn(bot))
-  bot.on('playerLeft', (player) => handlePlayerLeft(bot, ticker, player))
-
-  function fatal(where, err) {
-    console.error(`${where}: ${err && err.message ? err.message : err}`)
-    process.exit(1)
+  const pingFn = require('minecraft-protocol').ping
+  for (;;) {
+    // 0 disables the leave: join immediately and stay on, like before.
+    if (leaveAfterMs !== 0) {
+      await waitForPlayers({ host, port, pingFn, username })
+      await sleep(JOIN_SETTLE_MS)
+    }
+    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName })
   }
-  bot.on('end', (reason) => fatal('end', reason || 'disconnected'))
-  bot.on('error', (err) => fatal('error', err))
-  bot.on('kicked', (reason) => fatal('kicked', reason))
 }
 
 function handleChat(bot, ticker, username, message) {
@@ -444,7 +599,7 @@ function handleChat(bot, ticker, username, message) {
   }
 }
 
-if (require.main === module) main()
+if (require.main === module) { main().catch((err) => fatal('main', err)) }
 
 // Death/respawn are logged, never silent: mineflayer auto-respawns by
 // default, so without these lines a death looks like a teleport. The
@@ -531,4 +686,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

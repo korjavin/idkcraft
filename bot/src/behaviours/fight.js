@@ -2,6 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget } = require('../perception')
+const follow = require('./follow')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -27,14 +28,13 @@ const STICKY_MARGIN_BLOCKS = 2
 function fight(bot, ctx, target, state) {
   let hostile = stickyTarget(bot, ctx, target, state && state.hostile)
   if (!hostile || hostile.isValid === false) {
-    stopMoving(bot, ctx)
-    ctx.lastGoalKey = 'idle'
     ctx.fightId = null
     ctx.fightGivenUpId = null
     // No visible mob but the brain said fight (e.g. a remote model answering
-    // fight on hostile_distance=none): stay with the player instead of
-    // parking — the bodyguard fallback, same as after give-up.
-    shadowPlayer(bot, ctx, target)
+    // fight on hostile_distance=none): delegate to follow.js — one follow
+    // implementation. Never call bot.pathfinder.stop() in the same tick as
+    // setGoal(): stop() latches stopPathing and resetPath nulls the new goal.
+    follow(bot, ctx, target, state)
     return
   }
   ctx.fightId = hostile.id
@@ -50,7 +50,7 @@ function fight(bot, ctx, target, state) {
       ctx.fightPursuit = 0
       if (!ctx.reflexSwung) swing(bot, hostile)
     } else {
-      shadowPlayer(bot, ctx, target)
+      follow(bot, ctx, target, state)
     }
     return
   }
@@ -67,7 +67,7 @@ function fight(bot, ctx, target, state) {
       ctx.fightPursuit = (ctx.fightPursuit || 0) + 1
       if (ctx.fightPursuit > GIVE_UP_TICKS) {
         ctx.fightGivenUpId = hostile.id
-        shadowPlayer(bot, ctx, target)
+        follow(bot, ctx, target, state)
         return
       }
       if (ctx.fightPursuit % RETRY_EVERY_TICKS === 0) {
@@ -103,21 +103,6 @@ function stickyTarget(bot, ctx, target, fresh) {
     if (dFresh + STICKY_MARGIN_BLOCKS < dPrev) return fresh
   }
   return prev
-}
-
-function shadowPlayer(bot, ctx, target) {
-  if (!target) return
-  const skey = `fight-shadow:${target.username || target.id}`
-  if (skey !== ctx.lastGoalKey || !bot.pathfinder.isMoving()) {
-    bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
-    ctx.lastGoalKey = skey
-  }
-}
-
-// pathfinder.stop() only latches a flag the next setGoal would consume along
-// with the new goal — so never stop an empty path, there is nothing to halt.
-function stopMoving(bot, ctx) {
-  if (ctx.lastGoalKey !== 'idle' && bot.pathfinder.isMoving()) bot.pathfinder.stop()
 }
 
 function swing(bot, hostile) {
