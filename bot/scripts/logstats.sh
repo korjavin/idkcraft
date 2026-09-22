@@ -1,8 +1,9 @@
 #!/bin/sh
 # logstats.sh — offline summary of a saved bot log.
 # Usage: sh bot/scripts/logstats.sh bot.log
-# The log is whatever `docker logs --timestamps <container> > bot.log`
-# saved (timestamps optional). Exit 0, prints counts even when zero.
+# The log is whatever `docker logs --timestamps <container> > bot.log 2>&1`
+# saved (timestamps optional; 2>&1 matters — disagree and tick-error lines
+# go to stderr and are lost without it). Exit 0, prints counts even when zero.
 log="${1:?usage: sh bot/scripts/logstats.sh bot.log}"
 if [ ! -r "$log" ]; then
   echo "no such file: $log" >&2
@@ -31,5 +32,5 @@ if [ -n "$first" ]; then
   echo "first: $first"
   echo "last: $last"
 else
-  echo "span: no timestamps (re-save with: docker logs --timestamps <container> > bot.log)"
+  echo "span: no timestamps (re-save with: docker logs --timestamps <container> > bot.log 2>&1)"
 fi
