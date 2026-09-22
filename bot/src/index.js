@@ -5,6 +5,7 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, buildState, stateKey, isFightTarget } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
 const BEHAVIOURS = {
@@ -76,6 +77,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 // ticks. Logs at most one line per target; fight.js skips its own swing
 // via ctx.reflexSwung so the rate stays one swing per tick.
 function meleeReflex(bot, ctx, state) {
+  // Every tick path that has facts passes here, so vitals are exported here too.
+  metrics.setVitals(state)
   const hostile = state && state.hostile
   if (!hostile || hostile.isValid === false) return false
   let d
@@ -89,6 +92,7 @@ function meleeReflex(bot, ctx, state) {
     console.log(`reflex swing ${hostile.name || 'mob'}`)
   }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
+  metrics.events.inc({ event: 'reflex_swing' })
   ctx.reflexSwung = true // any target: the arm swung once this tick
   return true
 }
@@ -111,6 +115,16 @@ function meleeReflex(bot, ctx, state) {
   }
 
   async function tick() {
+    const endTimer = metrics.tickDuration.startTimer()
+    const r = await runTick()
+    if (r.decision) {
+      endTimer({ brain_called: String(r.calledBrain) })
+      metrics.decisions.inc({ source: r.decision.source, action: r.decision.action })
+    }
+    return r
+  }
+
+  async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
@@ -290,6 +304,7 @@ function main() {
   const rawTick = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
   const tickMs = Number.isFinite(rawTick) ? rawTick : 1000
   const brain = makeBrain(process.env)
+  metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const bot = mineflayer.createBot({
     host: process.env.MC_HOST || 'mc',
     port: parseInt(process.env.MC_PORT || '25565', 10),
@@ -304,7 +319,7 @@ function main() {
     console.log(`spawned as ${bot.username}`)
     ticker.start()
   })
-  bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
+  bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
@@ -408,10 +423,11 @@ function handlePlayerLeft(bot, ticker, player) {
 function createLifecycle(ticker) {
   let died = false
   return {
-    onDeath(bot, t = ticker) { died = true; handleDeath(bot, t) },
+    onDeath(bot, t = ticker) { died = true; metrics.events.inc({ event: 'death' }); handleDeath(bot, t) },
     onRespawn(bot, t = ticker) {
       if (!died) return
       died = false
+      metrics.events.inc({ event: 'respawn' })
       handleRespawn(bot, t)
     },
   }

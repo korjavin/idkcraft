@@ -15,7 +15,7 @@ WORKDIR /app
 # (torch_dtype deprecated), which defeats the bf16 memory fit below;
 # laya 0.3.4 targets the 4.x API.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 && \
-    pip install --no-cache-dir laya==0.3.4 transformers==4.57.6 fastapi==0.141.1 uvicorn==0.53.0
+    pip install --no-cache-dir laya==0.3.4 transformers==4.57.6 fastapi==0.141.1 uvicorn==0.53.0 prometheus-client==0.26.0
 
 # Bake weights BEFORE copying the shim so the weights layer caches across
 # shim edits. (Build needs hub access; runtime stays offline via HF_HUB_OFFLINE.)

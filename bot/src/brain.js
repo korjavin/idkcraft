@@ -6,6 +6,8 @@
 // hostile_reachable=false comes from fight's give-up latch (unreachable mob:
 // cave, glass, ravine). Missing means reachable (older callers).
 
+const metrics = require('./metrics')
+
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
 
@@ -117,6 +119,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
       // ponytail: one call per tick, no batching/caching — upgrade path is
       // batching states if JEV cost ever matters ($0.042/M tokens; ~200
       // tokens/tick -> pennies/day).
+      const endTimer = metrics.brainDuration.startTimer({ source })
       try {
         const headers = { 'Content-Type': 'application/json' }
         if (apiKey) headers.Authorization = `Bearer ${apiKey}`
@@ -154,14 +157,24 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
         let action = parseAction(data && data.answers && data.answers.action)
         if (!action) throw new Error('jev missing action answer')
         const sprint = parseNoul(data.answers.sprint)
+        endTimer()
+        metrics.brainRequests.inc({ source, outcome: 'ok' })
         const ref = stubBrain.decide(state).action
         if (ref !== action) {
+          metrics.disagreements.inc({ model: action, stub: ref })
           console.error(`brain disagree source=${source} model=${action} stub=${ref} state=${numericStateToText(state)}`)
         }
         return { action, sprint, source }
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
         // retries naturally. Never crash the bot because of the brain.
+        endTimer()
+        const msg = String(err && err.message ? err.message : err)
+        const outcome = err && err.name === 'TimeoutError' ? 'timeout'
+          : msg.startsWith('jev http') ? 'http'
+          : msg.startsWith('jev missing') ? 'invalid'
+          : 'error'
+        metrics.brainRequests.inc({ source, outcome })
         console.error(`brain jev error, stub fallback: ${err && err.message ? err.message : err}`)
         const fallback = stubBrain.decide(state)
         fallback.source = 'stub-fallback'

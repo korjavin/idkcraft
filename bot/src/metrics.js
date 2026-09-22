@@ -1,0 +1,66 @@
+'use strict'
+
+// Prometheus metrics, scraped by the host vmagent (compose label
+// prometheus.scrape=true). One module-level registry: tests create many
+// tickers and simply keep counting into it.
+const http = require('node:http')
+const client = require('prom-client')
+
+client.collectDefaultMetrics({ prefix: 'idkcraft_bot_' })
+
+const brainRequests = new client.Counter({
+  name: 'idkcraft_bot_brain_requests_total',
+  help: 'Remote brain calls by source and outcome (ok|timeout|http|invalid|error)',
+  labelNames: ['source', 'outcome']
+})
+const brainDuration = new client.Histogram({
+  name: 'idkcraft_bot_brain_request_duration_seconds',
+  help: 'Remote brain call latency, failures included',
+  labelNames: ['source'],
+  buckets: [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5]
+})
+const disagreements = new client.Counter({
+  name: 'idkcraft_bot_brain_disagreements_total',
+  help: 'Remote brain answer differs from the stub reference',
+  labelNames: ['model', 'stub']
+})
+const decisions = new client.Counter({
+  name: 'idkcraft_bot_decisions_total',
+  help: 'Decisions dispatched to the body, by source and action',
+  labelNames: ['source', 'action']
+})
+const tickDuration = new client.Histogram({
+  name: 'idkcraft_bot_tick_duration_seconds',
+  help: 'Full tick latency (perception + brain + dispatch)',
+  labelNames: ['brain_called'],
+  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5]
+})
+const events = new client.Counter({
+  name: 'idkcraft_bot_events_total',
+  help: 'Body events: death, respawn, reflex_swing, spawn',
+  labelNames: ['event']
+})
+const vitals = new client.Gauge({
+  name: 'idkcraft_bot_state',
+  help: 'Latest perception facts (health, food, distance_to_player, hostile_distance, nearby_hostiles, player_visible)',
+  labelNames: ['fact']
+})
+
+function setVitals(state) {
+  for (const f of ['bot_health', 'bot_food', 'distance_to_player', 'hostile_distance', 'nearby_hostiles']) {
+    const v = state && state[f]
+    if (typeof v === 'number' && Number.isFinite(v)) vitals.set({ fact: f }, v)
+    else vitals.remove({ fact: f })
+  }
+  vitals.set({ fact: 'player_visible' }, state && typeof state.distance_to_player === 'number' ? 1 : 0)
+}
+
+function serve(port) {
+  http.createServer(async (req, res) => {
+    if (req.url !== '/metrics') { res.writeHead(404).end(); return }
+    res.writeHead(200, { 'Content-Type': client.register.contentType })
+    res.end(await client.register.metrics())
+  }).listen(port, () => console.log(`metrics on :${port}/metrics`))
+}
+
+module.exports = { client, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, setVitals, serve }
