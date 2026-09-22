@@ -470,3 +470,34 @@ describe('stub fight end-to-end', () => {
     assert.equal(r.decision.action, 'follow')
   })
 })
+
+describe('melee reflex skip (one swing per tick)', () => {
+  it('exports the swing and equipSword helpers for the tick reflex', () => {
+    assert.equal(typeof fight.swing, 'function')
+    assert.equal(typeof fight.equipSword, 'function')
+  })
+
+  it('skips its own swing when the reflex already swung at the same mob', () => {
+    const bot = mockBot()
+    fight(bot, { lastGoalKey: '', reflexSwungId: 1 }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('swings when the reflex did not fire (stale or other id)', () => {
+    const bot = mockBot()
+    fight(bot, { lastGoalKey: '', reflexSwungId: 99 }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 1)
+    const plain = mockBot()
+    fight(plain, { lastGoalKey: '' }, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(plain.calls.attack, 1) // direct callers set no reflex id
+  })
+
+  it('skips the given-up-branch swing on a same-tick reflex id', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '', fightGivenUpId: 1, reflexSwungId: 1 }
+    bot.entities = { 1: mobEntity(1, 'zombie', 2) }
+    fight(bot, ctx, playerEntity(10), { hostile: mobEntity(1, 'zombie', 2) })
+    assert.equal(bot.calls.attack, 0)
+    assert.equal(ctx.fightGivenUpId, null) // latch still clears for re-engage
+  })
+})

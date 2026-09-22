@@ -65,6 +65,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | `roam` | Player within 6 blocks and standing still, no hostile near (strolls up to 6 blocks, walks back past 6, never > 8) | Brain decision (`action=roam`) | Stand still near bot; bot strolls within 6 blocks of player (walks back if past 6) |
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
+| `melee reflex` | Hostile within 3 blocks of the bot under any brain answer, even with nobody online | Local reflex (no brain cost; the arm, not the body) | Summon a zombie next to the bot while the brain answers `follow`; bot swings within 1-2 ticks with no `action=fight` decision |
 
 ### Reflex Mechanics & Implementation Details
 

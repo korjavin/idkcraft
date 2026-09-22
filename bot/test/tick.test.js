@@ -697,3 +697,84 @@ describe('lead after stop', () => {
     assert.equal(bot.calls.setGoal, 1)
   })
 })
+
+describe('melee reflex', () => {
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function reflexBot() {
+    const bot = mockBot()
+    bot.attackCalls = 0
+    bot.lookAtCalls = 0
+    bot.equipCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => { bot.lookAtCalls++ }
+    bot._items = [{ name: 'iron_sword' }]
+    bot.inventory = { items: () => bot._items }
+    bot.equip = () => { bot.equipCalls++ }
+    return bot
+  }
+
+  function zombie(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  const reflexLines = () => lines.filter((l) => l.includes('reflex swing'))
+
+  it('swings when the brain answers follow with a zombie at 1 block', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow') // brain still owns the body
+    assert.equal(bot.attackCalls, 1) // ...while the arm swings anyway
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('does not swing when the zombie is at 5 blocks', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(bot.attackCalls, 0)
+    assert.deepEqual(reflexLines(), [])
+  })
+
+  it('swings with nobody online (spawn defence)', async () => {
+    const bot = reflexBot()
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    const r = await ticker.tick()
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(bot.attackCalls, 1)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+  })
+
+  it('swings every tick but logs and equips once per target', async () => {
+    const bot = reflexBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 1) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 2)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie'])
+    assert.equal(bot.equipCalls, 1)
+    bot.entities = { 2: zombie(2, 1) } // new mob walks up
+    await ticker.tick()
+    assert.equal(bot.attackCalls, 3)
+    assert.deepEqual(reflexLines(), ['reflex swing zombie', 'reflex swing zombie'])
+    assert.equal(bot.equipCalls, 2)
+  })
+})
