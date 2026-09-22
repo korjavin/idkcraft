@@ -1377,3 +1377,46 @@ describe('melee reflex while parked', () => {
     assert.equal(bot.calls.setGoal, 0) // parked: no body goal issued
   })
 })
+
+describe('kit inventory log line', () => {
+  const { kitLine } = require('../src/index')
+
+  function kitBot(items) {
+    return { inventory: { items: () => items } }
+  }
+
+  it('counts cobblestone 64 + dirt 3 as scaffold=67 with pickaxe and sword', () => {
+    const bot = kitBot([
+      { name: 'cobblestone', count: 64 },
+      { name: 'dirt', count: 3 },
+      { name: 'iron_pickaxe', count: 1 },
+      { name: 'iron_sword', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=67 pickaxe=yes sword=yes')
+  })
+
+  it('ignores non-scaffolding blocks and reports missing tools as no', () => {
+    const bot = kitBot([
+      { name: 'stone', count: 64 },
+      { name: 'iron_sword', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=0 pickaxe=no sword=yes')
+  })
+
+  it('reports sword=no when other items are present but no sword', () => {
+    const bot = kitBot([
+      { name: 'cobblestone', count: 10 },
+      { name: 'iron_pickaxe', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=10 pickaxe=yes sword=no')
+  })
+
+  it('empty inventory still prints zeros', () => {
+    assert.equal(kitLine(kitBot([])), 'kit scaffold=0 pickaxe=no sword=no')
+  })
+
+  it('missing inventory still prints zeros instead of throwing', () => {
+    assert.equal(kitLine({}), 'kit scaffold=0 pickaxe=no sword=no')
+    assert.equal(kitLine({ inventory: { items: () => { throw new Error('not ready') } } }), 'kit scaffold=0 pickaxe=no sword=no')
+  })
+})
