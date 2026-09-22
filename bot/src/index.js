@@ -82,6 +82,19 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     emptyMs = 0
     leaveFired = false
   }
+  // Tear-down for the join loop: after our own quit() the old ticker must
+  // not tick on (it would log stale idle lines, retain the dead bot's
+  // chunks, and a late socket error would fatal-kill the new connection).
+  function destroy() {
+    destroyed = true
+    if (timer) { clearTimeout(timer); timer = null }
+  }
+  // Stand down after a re-check found someone online: re-arm the streak so
+  // the next grace period is measured fresh from here.
+  function rearm() {
+    emptyMs = 0
+    leaveFired = false
+  }
 
   // mineflayer-pathfinder's stop() only sets a stopPathing flag that the
   // next setGoal consumes with the new goal — on an empty path with no goal
@@ -109,9 +122,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
 
+  let timer = null
+  let destroyed = false
   function scheduleNext(fast) {
-    const t = setTimeout(() => { void tick() }, fast ? tickMs : idleTickMs)
-    if (t && typeof t.unref === 'function') t.unref()
+    if (destroyed) return
+    if (timer) { clearTimeout(timer); timer = null }
+    timer = setTimeout(() => { timer = null; void tick() }, fast ? tickMs : idleTickMs)
+    if (timer && typeof timer.unref === 'function') timer.unref()
   }
 
   async function tick() {
@@ -241,6 +258,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setPathReset: (reason) => { ctx.lastPathReset = reason || null },
     start: () => scheduleNext(true),
     setMovements: (m) => { ctx.movements = m; bot.pathfinder.setMovements(m) },
+    destroy,
+    rearm,
     setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; if (name) ctx.paused = false },
     stop: () => {
       ctx.paused = true
@@ -299,10 +318,11 @@ function fatal(where, err) {
 
 // One connection: resolves after our own quit() (the join loop then goes
 // back to polling). An unexpected end/kicked/error still exits — the
-// container restart is the reconnect path there.
-function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName }) {
+// container restart is the reconnect path there. createBot/pingFn are
+// parameters so tests can drive the own-quit vs fatal branches.
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
-    const bot = mineflayer.createBot({
+    const bot = createBot({
       host,
       port,
       username,
@@ -311,13 +331,21 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.loadPlugin(pathfinder)
     let wantQuit = false
     const ticker = createTicker({
-      bot, brain, tickMs, followName, leaveAfterMs,
-      onLeave: () => {
-        console.log('leaving: nobody online')
-        wantQuit = true
-        try { bot.quit('nobody online') } catch (_) { /* already gone */ }
-      }
+      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs,
+      onLeave: () => { void confirmLeave() }
     })
+    // The streak only proves nobody is *visible*. Re-check the world-wide
+    // player count before quitting: a player online-but-far would otherwise
+    // flap join/leave every grace period. Standing down re-arms the streak.
+    async function confirmLeave() {
+      let occupied = false
+      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username) } catch (_) { occupied = false }
+      if (occupied) { ticker.rearm(); return }
+      console.log('leaving: nobody online')
+      wantQuit = true
+      ticker.destroy()
+      try { bot.quit('nobody online') } catch (_) { /* already gone */ }
+    }
 
     bot.once('spawn', () => {
       ticker.setMovements(new Movements(bot))
@@ -339,13 +367,14 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.on('respawn', () => life.onRespawn(bot))
 
     // Our own quit() resolves back into the join loop; anything else is fatal
-    // and the container restart reconnects.
+    // and the container restart reconnects. Late errors on the intentionally
+    // closed connection are ignored so they cannot kill the next one.
     bot.on('end', (reason) => {
-      if (wantQuit) resolve()
+      if (wantQuit) { ticker.destroy(); resolve() }
       else fatal('end', reason || 'disconnected')
     })
-    bot.on('error', (err) => fatal('error', err))
-    bot.on('kicked', (reason) => fatal('kicked', reason))
+    bot.on('error', (err) => { if (!wantQuit) fatal('error', err) })
+    bot.on('kicked', (reason) => { if (!wantQuit) fatal('kicked', reason) })
   })
 }
 
@@ -446,4 +475,4 @@ function createLifecycle() {
   }
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle, parseLeaveAfterMs, waitForPlayers, playersOccupied }
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, deathLine, respawnLine, createLifecycle, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce }

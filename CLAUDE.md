@@ -115,7 +115,6 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); the sidecar needs no key
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
   - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
-  - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
 

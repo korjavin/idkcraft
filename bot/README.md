@@ -40,8 +40,10 @@ MC_HOST=localhost node test/e2e-follow.js    # terminal 3: FakePlayer check
 Cost guards: with no player online the bot makes no brain calls at all (local
 idle decision, slow 10 s poll, at most one log line per minute) and performs no
 scout scans — and after `BOT_LEAVE_AFTER_MS` (default 60 s) with nobody online
-it quits (`leaving: nobody online`) and polls the server ping every 5 s until a
-player appears (`waiting for players`, at most one line per minute). Off the
+it re-checks the server ping and, if still nobody is online, quits
+(`leaving: nobody online`) and polls the server ping every 5 s until a
+player appears (`waiting for players`, at most one line per minute). A player
+online-but-far keeps it idling instead of flapping join/leave. Off the
 server nothing can kill it and no chunks stay loaded for it. `BOT_LEAVE_AFTER_MS=0`
 keeps the old always-on behaviour. While a player is visible the tick stays at
 `BRAIN_TICK_MS`, but an unchanged perception state (distance rounded to 1 block,
