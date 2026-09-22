@@ -94,6 +94,8 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 +-------------------------------------------------------------+
 ```
 
+Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `idle`), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex.
+
 ### Shared Contract (do not rename)
 - **Services:** `mc`, `bot`, `laya`
 - **Compose file:** `docker-compose.yml` at repository root
