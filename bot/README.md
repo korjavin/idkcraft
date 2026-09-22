@@ -51,7 +51,6 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - `fight`: Hostile mob threatening bot or player.
   - `follow`: Player moved away.
   - `idle`: Player is close (<= 3 blocks).
-  - *(roam is being added as a fourth choice in a follow-up).*
   The brain also decides whether to `sprint` when the player is > 8 blocks away (the remote model also checks that the player is moving, while the stub triggers on distance alone).
 - **Execution is local (`src/behaviours/*.js`):** The selected action is dispatched to the corresponding behaviour module via `BEHAVIOURS` in `src/index.js`. Scouting has zero body cost and runs every tick while a player is visible, alongside whatever decision is executing.
 
@@ -75,7 +74,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 - **Scout (`src/behaviours/scout.js`):**
   - Scans loaded chunk blocks in memory every 5 s within a 16-block radius (sees through walls and underground).
   - Valued ores: diamond, emerald, ancient debris, gold, iron, lapis, redstone (deepslate variants grouped under base name; coal and copper excluded).
-  - Reports up to 3 new veins per scan in chat as `<ore> x<count> at <x> <y> <z>`, sorted by priority (highest value first).
+  - Reports at most 3 lines per scan in chat (one per ore type, highest value first) as `<ore> x<count> at <x> <y> <z>`.
   - Deduplicates positions (seen cache capped at 5,000 entries) so the bot never repeats announcements while standing still.
 
 ### Chat Commands
