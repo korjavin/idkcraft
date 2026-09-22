@@ -86,12 +86,12 @@ function follow(bot, ctx, target, state) {
       : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
     console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
 
-    if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
     const angle = Math.random() * Math.PI * 2
     const nx = (bp ? bp.x : 0) + Math.cos(angle) * NUDGE_OFFSET
     const nz = (bp ? bp.z : 0) + Math.sin(angle) * NUDGE_OFFSET
     const ny = bp ? bp.y : 64
     bot.pathfinder.setGoal(new goals.GoalNear(nx, ny, nz, 1), false)
+    if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
     ctx.followNudge = true
     ctx.followIssuedAt = now
   } else {

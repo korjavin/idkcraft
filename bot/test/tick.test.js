@@ -18,6 +18,7 @@ function pos(x, y, z) {
 
 function mockBot() {
   const calls = { setGoal: 0, stop: 0, jump: 0, goals: [] }
+  const controls = {}
   const bot = {
     calls,
     username: 'IdkBot',
@@ -28,14 +29,25 @@ function mockBot() {
     entity: { position: pos(0, 64, 0) },
     pathfinder: {
       goal: null,
-      setGoal: (g) => { calls.setGoal++; calls.goals.push(g); bot.pathfinder.goal = g },
+      setGoal: (g) => {
+        calls.setGoal++
+        calls.goals.push(g)
+        bot.pathfinder.goal = g
+        bot.clearControlStates()
+      },
       stop: () => { calls.stop++ },
       isMoving: () => false,
       setMovements: (m) => { calls.movements = m }
     },
     setControlState: (control, val) => {
-      if (control === 'jump' && val) calls.jump++
+      controls[control] = !!val
+      if (control === 'jump') calls.jump = val ? 1 : 0
     },
+    clearControlStates: () => {
+      for (const k in controls) controls[k] = false
+      calls.jump = 0
+    },
+    getControlState: (control) => !!controls[control],
     chat: () => {}
   }
   return bot
@@ -292,7 +304,7 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(bot.calls.setGoal, 4)
       assert.equal(bot.calls.goals[3].constructor.name, 'GoalFollow')
       assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 1)
-      assert.equal(bot.calls.jump, 1)
+      assert.equal(bot.calls.jump, 0) // jump released after one tick
     } finally {
       console.log = origLog
     }
