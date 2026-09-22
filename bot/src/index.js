@@ -7,6 +7,12 @@ const { findTarget, buildState, stateKey, isFightTarget } = require('./perceptio
 const { makeScout, findNearest } = require('./behaviours/scout')
 
 const fightMod = require('./behaviours/fight')
+const origEquipGear = fightMod.equipGear
+fightMod.equipGear = function(bot) {
+  if (bot && bot._tickerCtx && bot._tickerCtx.eatInFlight) return Promise.resolve()
+  return origEquipGear(bot)
+}
+
 const BEHAVIOURS = {
   fight: fightMod,
   follow: require('./behaviours/follow'),
@@ -37,8 +43,79 @@ const LEAVE_AFTER_MS_DEFAULT = 60000
 const FIGHT_REPROBE_TICKS = 30
 const TARGET_GONE_TICKS = 10
 
+// Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
+// edible item from inventory on the every-tick seam when food < 18 and no
+// hostile is within swing reach. Equips food to hand, consumes, then
+// restores gear via fightMod.equipGear.
+const EDIBLE_FOODS = new Set([
+  'bread',
+  'cooked_beef',
+  'cooked_porkchop',
+  'cooked_chicken',
+  'apple',
+  'carrot',
+  'baked_potato',
+])
+
+function installEquipGuard(bot, ctx) {
+  if (!bot || bot._equipGuardInstalled) return
+  const origEquip = bot.equip
+  if (typeof origEquip !== 'function') return
+  bot._equipGuardInstalled = true
+  bot.equip = function(item, dest, ...args) {
+    if (dest === 'hand' && ctx.eatInFlight && item && typeof item.name === 'string' && item.name.endsWith('_sword')) {
+      return Promise.resolve()
+    }
+    return origEquip.call(this, item, dest, ...args)
+  }
+}
+
+function eatReflex(bot, ctx, state) {
+  installEquipGuard(bot, ctx)
+  if (ctx.eatInFlight) return false
+  if (typeof bot.food !== 'number' || bot.food >= 18) return false
+  if (ctx.reflexSwung) return false
+  const hostile = state && state.hostile
+  if (hostile && hostile.isValid !== false) {
+    let d = typeof state.hostile_distance === 'number' ? state.hostile_distance : null
+    if (d === null) {
+      try { d = bot.entity.position.distanceTo(hostile.position) } catch (_) {}
+    }
+    if (typeof d === 'number' && d <= fightMod.SWING_RANGE) return false
+  }
+  if (!bot.inventory || typeof bot.inventory.items !== 'function') return false
+  let items
+  try { items = bot.inventory.items() } catch (_) { return false }
+  if (!Array.isArray(items)) return false
+  const foodItem = items.find((i) => i && typeof i.name === 'string' && EDIBLE_FOODS.has(i.name))
+  if (!foodItem) return false
+  if (typeof bot.consume !== 'function') return false
+
+  ctx.eatInFlight = true
+  const prevFood = bot.food
+  const doEat = async () => {
+    try {
+      if (typeof bot.equip === 'function') {
+        try { await bot.equip(foodItem, 'hand') } catch (_) {}
+      }
+      await bot.consume()
+      console.log(`eat ${foodItem.name} food=${prevFood}`)
+    } catch (_) {
+    } finally {
+      ctx.eatInFlight = false
+      try { fightMod.equipGear(bot) } catch (_) {}
+    }
+  }
+  void doEat()
+  return true
+}
+
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0 }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false }
+  if (bot) {
+    bot._tickerCtx = ctx
+    installEquipGuard(bot, ctx)
+  }
   let inFlight = false
   let lastTargetPos = null
   let lastVisible = true
@@ -188,8 +265,13 @@ function meleeReflex(bot, ctx, state) {
           if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
           if (ctx.scout) ctx.scout.tick()
           meleeReflex(bot, ctx, state)
+          eatReflex(bot, ctx, state)
         } else {
-          try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+          try {
+            const state = buildState(bot, null)
+            reflexFast = meleeReflex(bot, ctx, state)
+            eatReflex(bot, ctx, state)
+          } catch (_) { /* facts best-effort */ }
           lastTargetPos = null
           lastDecision = null
           lastStateKey = null
@@ -212,7 +294,11 @@ function meleeReflex(bot, ctx, state) {
         stopOnce()
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
-        try { reflexFast = meleeReflex(bot, ctx, buildState(bot, null)) } catch (_) { /* facts best-effort */ }
+        try {
+          const state = buildState(bot, null)
+          reflexFast = meleeReflex(bot, ctx, state)
+          eatReflex(bot, ctx, state)
+        } catch (_) { /* facts best-effort */ }
         if (ctx.lead) {
           ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
           if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
@@ -272,6 +358,7 @@ function meleeReflex(bot, ctx, state) {
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
       if (ctx.scout) ctx.scout.tick()
       meleeReflex(bot, ctx, state)
+      eatReflex(bot, ctx, state)
       const key = stateKey(state)
       let decision
       if (lastDecision && key === lastStateKey) {
@@ -583,6 +670,7 @@ function kitLine(bot) {
   let scaffold = 0
   let pickaxe = false
   let sword = false
+  let food = 0
   try {
     const items = bot.inventory.items()
     if (Array.isArray(items)) {
@@ -591,10 +679,11 @@ function kitLine(bot) {
         if (i.name === 'dirt' || i.name === 'cobblestone') scaffold += typeof i.count === 'number' ? i.count : 1
         if (i.name.endsWith('_pickaxe')) pickaxe = true
         if (i.name.endsWith('_sword')) sword = true
+        if (EDIBLE_FOODS.has(i.name)) food += typeof i.count === 'number' ? i.count : 1
       }
     }
   } catch (_) { /* inventory not ready at spawn: the line must still print */ }
-  return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'}`
+  return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce }
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
