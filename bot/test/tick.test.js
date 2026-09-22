@@ -52,6 +52,8 @@ function playerEntity(x) {
 describe('ticker with no target', () => {
   it('never calls the brain, decides local-idle, stops once', async () => {
     const bot = mockBot()
+    // stop-once needs a real path: an empty path must not stop (see guard test)
+    bot.pathfinder.isMoving = () => true
     const brain = mockBrain()
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     const r1 = await ticker.tick()
@@ -61,6 +63,39 @@ describe('ticker with no target', () => {
     assert.deepEqual(r1.decision, { action: 'idle', sprint: false, source: 'local-idle' })
     assert.deepEqual(r2.decision, { action: 'idle', sprint: false, source: 'local-idle' })
     assert.equal(bot.calls.stop, 1)
+  })
+})
+
+describe('stop guard', () => {
+  it('idle after a stationary goal does not latch stop; the next follow still goals', async () => {
+    // latch mock: mirrors mineflayer-pathfinder — stop() only sets a flag
+    // that the next setGoal consumes along with the new goal.
+    const calls = { setGoal: 0, stop: 0, effectiveGoals: 0 }
+    let latched = false
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.pathfinder.setGoal = () => {
+      calls.setGoal++
+      if (latched) { latched = false; return } // swallowed by a latched stop
+      calls.effectiveGoals++
+    }
+    bot.pathfinder.stop = () => { calls.stop++; latched = true }
+    bot.pathfinder.isMoving = () => false // goal never produced a path
+    const seq = [
+      { action: 'follow', sprint: false, source: 'stub-fallback' },
+      { action: 'idle', sprint: false, source: 'stub-fallback' },
+      { action: 'follow', sprint: false, source: 'stub-fallback' },
+    ]
+    let i = 0
+    const brain = { calls: 0, async decide() { this.calls++; return seq[Math.min(i++, seq.length - 1)] } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    await ticker.tick() // follow: goal issued but never starts moving
+    assert.equal(calls.effectiveGoals, 1)
+    await ticker.tick() // idle on an empty path: must not stop
+    assert.equal(calls.stop, 0)
+    await ticker.tick() // follow again: must not be swallowed
+    assert.equal(calls.setGoal, 2)
+    assert.equal(calls.effectiveGoals, 2)
   })
 })
 
@@ -144,6 +179,8 @@ describe('dispatch table', () => {
     assert.equal(bot.calls.stop, 0)
     const idleBot = mockBot()
     idleBot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    // idle only stops a real path; an empty path must not latch stopPathing
+    idleBot.pathfinder.isMoving = () => true
     const idleTicker = createTicker({ bot: idleBot, brain: mockBrain({ action: 'idle', sprint: false, source: 'jev' }), tickMs: 10, idleTickMs: 10 })
     await idleTicker.tick()
     assert.equal(idleBot.calls.setGoal, 0)
