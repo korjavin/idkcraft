@@ -1,23 +1,13 @@
 {
   "model": "jev-latest",
-  "state": "player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok",
+  "state": "hard=hostile-vs-far-player player=away player_moving=yes hostile=adjacent hostile_near_player=no hostile_reachable=yes health=ok food=ok",
   "questions": {
     "action": {
       "type": "choice",
-      "instructions": "Decide what the companion bot does this second. Fight when hostile is adjacent or near and hostile_reachable is yes and health is ok, or hostile_near_player is yes and health is ok. When hostile_reachable is no, do not fight unless hostile_near_player is yes. Otherwise follow when player is away, or player is far while player_moving is yes or hostile is not none. Otherwise roam when player is near or far, player_moving is no, and hostile is none. Otherwise wait.",
+      "instructions": "The simple rules could not decide this state; choose fight or follow.",
       "criteria": {
-        "fight": "hostile is adjacent or near and hostile_reachable is yes, or hostile_near_player is yes, and health is ok: attack the mob. When hostile_reachable is no, do not fight unless hostile_near_player is yes.",
-        "follow": "Walk toward the player and stay close when player is away, or player is far while player_moving is yes or hostile is not none.",
-        "idle": "Stand still and wait: player is none, player is near and player_moving is yes, or player is near while health is low and hostile is not none.",
-        "roam": "player is near or far, player_moving is no, and hostile is none: walk a few blocks around the player to look at the surroundings."
-      }
-    },
-    "sprint": {
-      "type": "noul",
-      "instructions": "player is away and player_moving is yes, so the bot should sprint to catch up.",
-      "criteria": {
-        "true": "sprint to catch up",
-        "false": "walking is enough"
+        "fight": "hard is crowd and health is ok, or hard is hostile-vs-far-player and hostile is adjacent or near, or hostile_near_player is yes and health is ok: pursue and hit the mob.",
+        "follow": "health is low, or hard is unreachable-hostile, or hard is hostile-vs-far-player and player is away: leave the mob and walk to the player."
       }
     }
   }

@@ -221,15 +221,72 @@ describe('jevBrain', () => {
       seen = { url, opts: { ...opts, body: JSON.parse(opts.body) } }
       return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' }, sprint: { type: 'noul', noul: 0.1 } } }) }
     }
-    await jevBrain('k', spy).decide(state)
+    await jevBrain('k', spy).decide(state, 'crowd')
     assert.equal(seen.url, 'https://api.typesafe.ai/v1/systemone')
     assert.equal(seen.opts.method, 'POST')
     assert.equal(seen.opts.headers.Authorization, 'Bearer k')
     assert.equal(seen.opts.body.model, 'jev-latest')
-    assert.deepEqual(Object.keys(seen.opts.body.questions).sort(), ['action', 'sprint'])
-    assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow', 'idle', 'roam'])
+    assert.deepEqual(Object.keys(seen.opts.body.questions), ['action'])
+    assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow'])
     assert.equal(typeof seen.opts.body.state, 'string')
-    assert.match(seen.opts.body.state, /player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok/)
+    assert.match(seen.opts.body.state, /^hard=crowd player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok$/)
+    assert.equal(seen.opts.body.questions.action.instructions, 'The simple rules could not decide this state; choose fight or follow.')
+    assert.equal(seen.opts.body.questions.action.criteria.fight, 'hard is crowd and health is ok, or hard is hostile-vs-far-player and hostile is adjacent or near, or hostile_near_player is yes and health is ok: pursue and hit the mob.')
+    assert.equal(seen.opts.body.questions.action.criteria.follow, 'health is low, or hard is unreachable-hostile, or hard is hostile-vs-far-player and player is away: leave the mob and walk to the player.')
+  })
+
+  it('defaults to an empty reason on the wire', async () => {
+    let seen = null
+    const spy = async (url, opts) => {
+      seen = JSON.parse(opts.body)
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' } } }) }
+    }
+    await jevBrain('k', spy).decide(state)
+    assert.match(seen.state, /^hard= player=away/)
+  })
+
+  it('laya/test/request.json is byte-equal to what brain.js sends', async () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    let seen = null
+    const spy = async (url, opts) => {
+      seen = JSON.parse(opts.body)
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' } } }) }
+    }
+    const hardState = { distance_to_player: 26.8, player_visible: true, player_moving: true, bot_health: 15.8, bot_food: 20, nearby_hostiles: 1, hostile_distance: 0.7, hostile_near_player: false }
+    await jevBrain('', spy, 1000, 'http://laya:8000/v1/systemone').decide(hardState, 'hostile-vs-far-player')
+    const file = fs.readFileSync(path.join(__dirname, '..', '..', 'laya', 'test', 'request.json'), 'utf8')
+    assert.equal(file, JSON.stringify(seen, null, 2) + '\n')
+  })
+
+  it('sprint comes from the FSM even when the model noul says sprint', async () => {
+    const canned = async () => ({
+      ok: true,
+      json: async () => ({
+        answers: {
+          action: { type: 'choice', choice: 'follow' },
+          sprint: { type: 'noul', noul: 0.95 }
+        }
+      })
+    })
+    // dist 5 moving: FSM says follow without sprint; the 0.95 noul must lose.
+    const decision = await jevBrain('test-key', canned).decide({ distance_to_player: 5, player_moving: true })
+    assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'jev' })
+  })
+
+  it('sprint comes from the FSM even when the model noul says walk', async () => {
+    const canned = async () => ({
+      ok: true,
+      json: async () => ({
+        answers: {
+          action: { type: 'choice', choice: 'follow' },
+          sprint: { type: 'noul', noul: 0.05 }
+        }
+      })
+    })
+    // dist 12: FSM says follow with sprint; the 0.05 noul must lose.
+    const decision = await jevBrain('test-key', canned).decide({ distance_to_player: 12, player_moving: true })
+    assert.deepEqual(decision, { action: 'follow', sprint: true, source: 'jev' })
   })
 
   it('maps a canned remote answer to roam with source jev', async () => {
@@ -359,14 +416,16 @@ describe('configurable brain endpoint (laya sidecar)', () => {
       seen = { url, headers: opts.headers, body: JSON.parse(opts.body) }
       return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' }, sprint: { type: 'noul', noul: 0.9 } } }) }
     }
-    const decision = await jevBrain('', fake, 1000, LAYA).decide(state)
+    const decision = await jevBrain('', fake, 1000, LAYA).decide(state, 'crowd')
     assert.equal(seen.url, LAYA)
     assert.ok(!('Authorization' in seen.headers))
     assert.equal(seen.headers['Content-Type'], 'application/json')
     assert.equal(seen.body.model, 'jev-latest')
-    assert.deepEqual(Object.keys(seen.body.questions).sort(), ['action', 'sprint'])
+    assert.deepEqual(Object.keys(seen.body.questions), ['action'])
     assert.equal(typeof seen.body.state, 'string')
-    assert.deepEqual(decision, { action: 'follow', sprint: true, source: 'laya' })
+    assert.match(seen.body.state, /^hard=crowd /)
+    // dist 5 moving: the FSM walks, so sprint is false despite the 0.9 noul.
+    assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'laya' })
   })
 
   it('(b) makeBrain picks hybrid for BRAIN_URL, stub for empty env', () => {
@@ -509,6 +568,21 @@ describe('hybridBrain', () => {
     assert.match(logs[0], /brain route=hard reason=hostile-vs-far-player model=follow fsm=fight/)
     assert.equal(errs.length, 1)
     assert.match(errs[0], /^brain disagree/)
+  })
+
+  it('passes the isHard reason to the remote brain', async () => {
+    let gotReason = null
+    const remote = {
+      name: 'spy',
+      async decide(state, reason) {
+        gotReason = reason
+        return { action: 'fight', sprint: false, source: 'spy' }
+      }
+    }
+    const brain = hybridBrain(remote)
+    const state = { hostile_distance: 9.5, hostile_near_player: true, bot_health: 4.9, distance_to_player: 9.9 }
+    await brain.decide(state)
+    assert.equal(gotReason, 'low-health-hostile')
   })
 
   it('fallback: fetch rejects -> FSM answer, source stub-fallback, route line carries it', async () => {
