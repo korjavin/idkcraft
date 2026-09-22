@@ -67,6 +67,7 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
 | `melee reflex` | Hostile within 3 blocks of the bot under any brain answer, even with nobody online | Local reflex (no brain cost; the arm, not the body) | Summon a zombie next to the bot while the brain answers `follow`; bot swings within 1-2 ticks with no `action=fight` decision |
+| `eat reflex` | Food < 18 and edible item in inventory, no hostile within 3 blocks | Local reflex (no brain cost; the gut, not the body) | `/give IdkBot bread 64`; bot eats until food >= 18 |
 
 ### Reflex Mechanics & Implementation Details
 
@@ -85,6 +86,11 @@ The bot uses a "one body, many senses" model to handle concurrent activities wit
   - Valued ores: diamond, emerald, ancient debris, gold, iron, lapis, redstone (deepslate variants grouped under base name; coal and copper excluded).
   - Reports at most 3 lines per scan in chat (one per ore type, highest value first) as `<ore> x<count> at <x> <y> <z>`.
   - Deduplicates positions (seen cache capped at 5,000 entries) so the bot never repeats announcements while standing still.
+- **Eat Reflex (`src/index.js`):**
+  - **Trigger:** When `bot.food < 18` and inventory holds an edible item (`bread`, `cooked_beef`, `cooked_porkchop`, `cooked_chicken`, `apple`, `carrot`, `baked_potato` — first match wins).
+  - **Exclusions:** Skips while an eat is already in flight (`ctx.eatInFlight`) or a hostile is within swing range (`SWING_RANGE = 3`).
+  - **Execution:** Equips food item to hand (`bot.equip(item, 'hand')`), consumes it (`bot.consume()`), then restores combat gear via `fightMod.equipGear(bot)`.
+  - **Logging:** Logs `eat <item> food=<n>` per bite.
 
 ### Chat Commands
 
@@ -131,6 +137,7 @@ The bot fights with what it carries. An op hands it an iron kit once;
 /give IdkBot iron_boots
 /give IdkBot cobblestone 64
 /give IdkBot iron_pickaxe
+/give IdkBot bread 64
 ```
 
 - Run `/gamerule keepInventory true` once as op; the flag persists in
@@ -145,6 +152,9 @@ The bot fights with what it carries. An op hands it an iron kit once;
 - Then `/give IdkBot iron_pickaxe`: the pathfinder equips it via
   bestHarvestTool, so stone dig time drops from 7.5 s to 0.4 s and
   dig-through paths become cheap enough for A* to pick.
+- Then `/give IdkBot bread 64`: natural regeneration requires food >= 18;
+  the eat reflex consumes bread when food drops below 18, top up when the
+  log shows `kit food=0`.
 - To op yourself, add your name to the `OPS` env list on the stack and restart.
 
 ## Reading the logs
@@ -186,6 +196,8 @@ Line types:
 | `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results; triggers jump + 2-block sidestep nudge. |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
 | `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). Coords are the respawn destination (world spawn — the bot sets no bed), because the position field still holds the death coords at that instant. Strictly one per death: `respawn` packets from dimension changes are not logged. A death with no respawn after it means the bot never came back. |
+| `kit scaffold=<n> pickaxe=<yes|no> sword=<yes|no> food=<k>` | Inventory summary logged at spawn. |
+| `eat <item> food=<n>` | The bot ate an edible item to sustain natural health regeneration. |
 | `tick error: ...` | The tick threw instead of deciding; the bot retried on the next tick. Frequent lines here point at perception or brain bugs, not at the model. |
 
 ## Online-mode note
