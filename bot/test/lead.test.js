@@ -137,7 +137,7 @@ describe('lead behaviour', () => {
     bot.entity.position = pos(9, 64, 0)
     const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'coal') }
     lead(bot, ctx, playerEntity(9), { distance_to_player: 0 })
-    assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0'])
+    assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0; following you again'])
     assert.equal(ctx.lead, null)
     assert.equal(bot.calls.setGoal, 0)
   })
@@ -150,7 +150,7 @@ describe('lead behaviour', () => {
     bot.entity.position = pos(12.5, 64, 0.5)
     const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'coal') }
     lead(bot, ctx, playerEntity(12), { distance_to_player: 1 })
-    assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0'])
+    assert.deepEqual(bot.calls.chats, ['here: coal at 10 64 0; following you again'])
     assert.equal(ctx.lead, null)
   })
 
@@ -160,7 +160,7 @@ describe('lead behaviour', () => {
     const ctxNear = { lastGoalKey: '', lead: orderAt(10, 64, 0, 'coal') }
     lead(near, ctxNear, playerEntity(8), { distance_to_player: 0 })
     assert.equal(ctxNear.lead, null)
-    assert.deepEqual(near.calls.chats, ['here: coal at 10 64 0'])
+    assert.deepEqual(near.calls.chats, ['here: coal at 10 64 0; following you again'])
     const far = mockBot()
     far.entity.position = pos(7.9, 64, 0)
     const ctxFar = { lastGoalKey: '', lead: orderAt(10, 64, 0, 'coal') }
@@ -178,7 +178,7 @@ describe('lead behaviour', () => {
       if (t < GIVE_UP_TICKS) assert.ok(ctx.lead, `gave up early at tick ${t}`)
     }
     assert.equal(ctx.lead, null)
-    assert.ok(bot.calls.chats.some((l) => l === 'cannot reach diamond_ore at 10 64 0'))
+    assert.ok(bot.calls.chats.some((l) => l === 'cannot reach diamond_ore at 10 64 0; following you again'))
   })
 
   it('moving resets the give-up budget', () => {
@@ -200,7 +200,7 @@ describe('lead behaviour', () => {
       lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
     }
     assert.equal(ctx.lead, null)
-    assert.deepEqual(bot.calls.chats, ['giving up on iron_ore'])
+    assert.deepEqual(bot.calls.chats, ['waiting for you, come to me (15 blocks)', 'giving up on iron_ore; following you again'])
   })
 
   it('resuming before wait budget expires resets the wait budget', () => {
@@ -220,7 +220,39 @@ describe('lead behaviour', () => {
       lead(bot, ctx, playerEntity(20), { distance_to_player: 15 })
     }
     assert.ok(ctx.lead, 'wait budget was not reset after resume')
-    assert.deepEqual(bot.calls.chats, [])
+    assert.deepEqual(bot.calls.chats, [
+      'waiting for you, come to me (15 blocks)',
+      'going on, 10 blocks left',
+      'waiting for you, come to me (15 blocks)',
+    ])
+  })
+
+  it('announces wait and resume transitions once, and throttles progress to ten seconds', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: 'lead:20,64,0', lead: orderAt(20, 64, 0) }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      lead(bot, ctx, playerEntity(15), { distance_to_player: 15 })
+      lead(bot, ctx, playerEntity(15), { distance_to_player: 15 })
+      assert.deepEqual(bot.calls.chats, ['waiting for you, come to me (15 blocks)'])
+
+      lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
+      assert.equal(bot.calls.chats[1], 'going on, 20 blocks left')
+      assert.equal(bot.calls.chats.length, 2)
+
+      now += 9_999
+      lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
+      assert.equal(bot.calls.chats.length, 2)
+      now += 1
+      lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
+      assert.deepEqual(bot.calls.chats.slice(2), ['coal: 20 blocks left'])
+      lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
+      assert.equal(bot.calls.chats.length, 3)
+    } finally {
+      Date.now = originalNow
+    }
   })
 
   it('does nothing without an order or position', () => {
@@ -232,4 +264,3 @@ describe('lead behaviour', () => {
     assert.deepEqual(bot.calls.chats, [])
   })
 })
-

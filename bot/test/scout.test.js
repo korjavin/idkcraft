@@ -313,7 +313,7 @@ describe("chat command 'find me <block>'", () => {
     iron_ore: 15,
   }
 
-  it("replies with '<name> at x y z (N blocks)' when block is found", () => {
+  it("announces the lead order when a block is found", () => {
     const coalPos = pos(6, 64, 8)
     const bot = mockBot({
       registry: REG,
@@ -321,7 +321,7 @@ describe("chat command 'find me <block>'", () => {
       names: { '6,64,8': 'coal_ore' },
     })
     handleChat(bot, null, 'Steve', 'find me coal')
-    assert.deepEqual(bot.lines, ['coal_ore at 6 64 8 (10 blocks)'])
+    assert.deepEqual(bot.lines, ['leading you to coal_ore, 10 blocks, follow me'])
   })
 
   it("replies with 'no <name> within 48 blocks' when none are in range", () => {
@@ -344,7 +344,7 @@ describe("chat command 'find me <block>'", () => {
       names: { '6,64,8': 'coal_ore' },
     })
     handleChat(bot, null, 'Steve', '  FIND ME COAL  ')
-    assert.deepEqual(bot.lines, ['coal_ore at 6 64 8 (10 blocks)'])
+    assert.deepEqual(bot.lines, ['leading you to coal_ore, 10 blocks, follow me'])
   })
 
   it('does not move the bot when answering the command', () => {
