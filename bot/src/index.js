@@ -304,7 +304,7 @@ function main() {
     console.log(`spawned as ${bot.username}`)
     ticker.start()
   })
-  bot.on('spawn', () => fightMod.equipGear(bot))
+  bot.on('spawn', () => { fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
@@ -417,4 +417,29 @@ function createLifecycle(ticker) {
   }
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, createLifecycle, TARGET_GONE_TICKS }
+// Kit line (3nt.20): mineflayer-pathfinder only pillars/bridges when
+// dirt/cobblestone is in inventory (remainingBlocks>0) and digs cheaply
+// with a pickaxe (bestHarvestTool). Logged on every spawn so the next
+// stuck report shows whether the bot could have climbed at all.
+// ponytail: deliberately NOT self-/give on respawn (needs the bot itself
+// as OP); with keepInventory the kit survives death, so a manual /give is
+// enough until blocks run out.
+function kitLine(bot) {
+  let scaffold = 0
+  let pickaxe = false
+  let sword = false
+  try {
+    const items = bot.inventory.items()
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string') continue
+        if (i.name === 'dirt' || i.name === 'cobblestone') scaffold += typeof i.count === 'number' ? i.count : 1
+        if (i.name.endsWith('_pickaxe')) pickaxe = true
+        if (i.name.endsWith('_sword')) sword = true
+      }
+    }
+  } catch (_) { /* inventory not ready at spawn: the line must still print */ }
+  return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'}`
+}
+
+module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS }

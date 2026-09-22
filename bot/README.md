@@ -129,6 +129,8 @@ The bot fights with what it carries. An op hands it an iron kit once;
 /give IdkBot iron_chestplate
 /give IdkBot iron_leggings
 /give IdkBot iron_boots
+/give IdkBot cobblestone 64
+/give IdkBot iron_pickaxe
 ```
 
 - Run `/gamerule keepInventory true` once as op; the flag persists in
@@ -137,6 +139,12 @@ The bot fights with what it carries. An op hands it an iron kit once;
 - Then `/give` the iron set above; the bot equips the sword to hand and
   armor to head/torso/legs/feet on the next spawn and whenever it engages
   a hostile or the melee reflex fires.
+- Then `/give IdkBot cobblestone 64`: the pathfinder only pillars and
+  bridges when dirt/cobblestone is in inventory — 64 covers dozens of
+  climbs, top up when the log shows `kit scaffold=0`.
+- Then `/give IdkBot iron_pickaxe`: the pathfinder equips it via
+  bestHarvestTool, so stone dig time drops from 7.5 s to 0.4 s and
+  dig-through paths become cheap enough for A* to pick.
 - To op yourself, add your name to the `OPS` env list on the stack and restart.
 
 ## Reading the logs
