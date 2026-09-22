@@ -117,6 +117,28 @@ brain disagree source=<source> model=<action> stub=<ref> state=<state-line>
 ```
 Logged to stderr whenever the model output diverges from the reference rules. Note that the disagree log line deliberately retains the numeric `state=` representation (via `numericStateToText`) so downstream tools like `logstats.sh` can parse exact distances and metrics even though the remote model receives categorical words. This provides the owner with an immediate signal on model accuracy, disagreement rate, and edge cases where prompt criteria or classifications may need tuning.
 
+## Ops: gearing the bot
+
+The bot fights with what it carries. An op hands it an iron kit once;
+`keepInventory` keeps the kit through death.
+
+```sh
+/gamerule keepInventory true
+/give IdkBot iron_sword
+/give IdkBot iron_helmet
+/give IdkBot iron_chestplate
+/give IdkBot iron_leggings
+/give IdkBot iron_boots
+```
+
+- Run `/gamerule keepInventory true` once as op; the flag persists in
+  `level.dat`. (Already enabled on the prod world; kept here as a note.)
+  It also spares every player inventory on death — revert if unwanted.
+- Then `/give` the iron set above; the bot equips the sword to hand and
+  armor to head/torso/legs/feet on the next spawn and whenever it engages
+  a hostile or the melee reflex fires.
+- To op yourself, add your name to the `OPS` env list on the stack and restart.
+
 ## Reading the logs
 
 The bot logs one line per tick, so a saved log plus a text search answers

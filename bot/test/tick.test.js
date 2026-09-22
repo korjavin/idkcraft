@@ -1264,11 +1264,13 @@ describe('melee reflex', () => {
     const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve)) // gear batches are chained
     assert.equal(bot.attackCalls, 2)
     assert.deepEqual(reflexLines(), ['reflex swing zombie'])
     assert.equal(bot.equipCalls, 1)
     bot.entities = { 2: zombie(2, 1) } // new mob walks up
     await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.attackCalls, 3)
     assert.deepEqual(reflexLines(), ['reflex swing zombie', 'reflex swing zombie'])
     assert.equal(bot.equipCalls, 2)

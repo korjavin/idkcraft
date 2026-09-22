@@ -85,7 +85,7 @@ function meleeReflex(bot, ctx, state) {
   if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
   if (ctx.reflexTargetId !== hostile.id) {
     ctx.reflexTargetId = hostile.id
-    try { fightMod.equipSword(bot) } catch (_) { /* fists are fine */ }
+    try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
     console.log(`reflex swing ${hostile.name || 'mob'}`)
   }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
@@ -304,6 +304,7 @@ function main() {
     console.log(`spawned as ${bot.username}`)
     ticker.start()
   })
+  bot.on('spawn', () => fightMod.equipGear(bot))
 
   bot.on('chat', (username, message) => handleChat(bot, ticker, username, message))
 
