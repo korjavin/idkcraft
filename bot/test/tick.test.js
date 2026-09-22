@@ -1554,8 +1554,8 @@ describe('eat reflex', () => {
     assert.equal(handEquips[1].item.name, 'iron_sword')
   })
 
-  it('consume failure/rejection resets in-flight state', async () => {
-    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+  it('consume failure/rejection resets in-flight state and restores gear', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] })
     let call = 0
     bot.consume = async () => {
       call++
@@ -1566,9 +1566,40 @@ describe('eat reflex', () => {
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(call, 1)
+    // Sword was restored in finally despite consume throwing
+    const handEquips = bot.equipCalls.filter((c) => c.dest === 'hand')
+    assert.ok(handEquips.length >= 2)
+    assert.equal(handEquips[handEquips.length - 1].item.name, 'iron_sword')
+
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(call, 2)
+  })
+
+  it('installs equip guard lazily when bot.equip is assigned after createTicker', async () => {
+    const bot = mockBot()
+    bot.food = 12
+    bot.inventory = { items: () => [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] }
+    delete bot.equip
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+
+    bot.equipCalls = []
+    bot.equip = (item, dest) => { bot.equipCalls.push({ item, dest }); return Promise.resolve() }
+    let resolveConsume
+    bot.consume = () => {
+      bot.consumeCalls = (bot.consumeCalls || 0) + 1
+      return new Promise((resolve) => { resolveConsume = resolve })
+    }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1)
+    await bot.equip({ name: 'iron_sword' }, 'hand')
+    const handSwords = bot.equipCalls.filter((c) => c.dest === 'hand' && c.item.name === 'iron_sword')
+    assert.equal(handSwords.length, 0) // blocked while eat in flight
+
+    resolveConsume()
+    await new Promise((resolve) => setImmediate(resolve))
   })
 
   it('eats when nobody is online', async () => {

@@ -46,7 +46,21 @@ const EDIBLE_FOODS = new Set([
   'baked_potato',
 ])
 
+function installEquipGuard(bot, ctx) {
+  if (!bot || bot._equipGuardInstalled) return
+  const origEquip = bot.equip
+  if (typeof origEquip !== 'function') return
+  bot._equipGuardInstalled = true
+  bot.equip = function(item, dest, ...args) {
+    if (dest === 'hand' && ctx.eatInFlight && (!item || !EDIBLE_FOODS.has(item.name))) {
+      return Promise.resolve()
+    }
+    return origEquip.call(this, item, dest, ...args)
+  }
+}
+
 function eatReflex(bot, ctx, state) {
+  installEquipGuard(bot, ctx)
   if (ctx.eatInFlight) return false
   if (typeof bot.food !== 'number' || bot.food >= 18) return false
   if (ctx.reflexSwung) return false
@@ -75,11 +89,10 @@ function eatReflex(bot, ctx, state) {
       }
       await bot.consume()
       console.log(`eat ${foodItem.name} food=${prevFood}`)
-      ctx.eatInFlight = false
-      try { origEquipGear(bot) } catch (_) {}
     } catch (_) {
     } finally {
       ctx.eatInFlight = false
+      try { fightMod.equipGear(bot) } catch (_) {}
     }
   }
   void doEat()
@@ -90,15 +103,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, eatInFlight: false }
   if (bot) {
     bot._tickerCtx = ctx
-    const origEquip = bot.equip
-    if (typeof origEquip === 'function') {
-      bot.equip = function(item, dest, ...args) {
-        if (dest === 'hand' && ctx.eatInFlight && (!item || !EDIBLE_FOODS.has(item.name))) {
-          return Promise.resolve()
-        }
-        return origEquip.call(this, item, dest, ...args)
-      }
-    }
+    installEquipGuard(bot, ctx)
   }
   let inFlight = false
   let lastTargetPos = null
