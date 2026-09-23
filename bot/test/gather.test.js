@@ -177,6 +177,21 @@ describe('gather step', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
+  it('progress timer spans the whole step, not each target', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'oak_log' },
+      items: [{ name: 'oak_log', count: 1 }],
+    })
+    const ctx = freshCtx()
+    // Step started 20 s ago: the first search tick already reports progress.
+    ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() - 20000 }
+    gather(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['chopping oak_log 1/14'])
+    gather(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['chopping oak_log 1/14']) // timer restarted: silent again
+  })
+
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.gather, gather)

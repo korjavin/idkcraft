@@ -51,7 +51,7 @@ function say(bot, line) {
 
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
-  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1 }
+  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
   const g = ctx.gather
   // A finished attempt stays finished until the world changes (log count):
   // decide() re-picks the step with status 'running', so re-assert here
@@ -101,7 +101,6 @@ function gather(bot, ctx, target, state) {
     } catch (_) {
       g.name = 'log'
     }
-    g.lastProgressAt = Date.now()
   }
   if (logs > 0 && g.skip.size > 0 && logs !== g.seenLogs) {
     // Drops landed: the world changed, old skips may be stale.
