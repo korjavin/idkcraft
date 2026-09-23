@@ -44,7 +44,7 @@ function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null } = {}) 
 }
 
 const IDS = { oak_log: 17, oak_planks: 18, crafting_table: 58, oak_door: 19 }
-const recipeFor = (name) => ({ result: { name, count: 1 } })
+const recipeFor = (name, count = 1) => ({ result: { name, count } })
 
 function freshCtx(home) {
   return { lastGoalKey: '', stepStatus: 'running', home: home || null }
@@ -56,20 +56,22 @@ async function flush() {
 }
 
 describe('craft step', () => {
-  it('(a) 3 logs -> planks recipe with count=3', async () => {
+  it('(a) 3 logs -> planks recipe with count=3, chat reports items', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_log', count: 3 }],
       ids: IDS,
-      recipes: { oak_planks: recipeFor('oak_planks') },
+      recipes: { oak_planks: recipeFor('oak_planks', 4) },
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
     await flush()
     assert.equal(bot.calls.craft.length, 1)
-    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks'))
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
     assert.equal(bot.calls.craft[0].count, 3)
     assert.equal(bot.calls.craft[0].table, null)
     assert.equal(ctx.stepStatus, 'running')
+    // 3 repetitions x 4 planks: items, not repetitions (mock inventory is static)
+    assert.deepEqual(bot.lines, ['crafted 12 oak_planks (planks 0, logs 3)'])
     bot.restoreError()
   })
 
@@ -137,11 +139,13 @@ describe('craft step', () => {
       ids: IDS,
       recipes: { oak_planks: recipeFor('oak_planks') },
     })
-    bot.craft = () => new Promise((resolve) => { release = resolve })
+    let calls = 0
+    bot.craft = () => new Promise((resolve) => { calls++; release = resolve })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
     craft(bot, ctx, null, {})
     craft(bot, ctx, null, {})
+    assert.equal(calls, 1) // the 2nd and 3rd calls wait on the in-flight guard
     release()
     await flush()
     assert.equal(ctx.craftInFlight, false)

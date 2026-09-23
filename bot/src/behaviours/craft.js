@@ -130,7 +130,8 @@ function craft(bot, ctx, target, state) {
     }
     ctx.craftInFlight = false
     const t = totals(bot)
-    try { bot.chat(`crafted ${op.count} ${op.item} (planks ${t.planks}, logs ${t.logs})`) } catch (_) { /* chat best-effort */ }
+    const made = op.count * ((op.recipe.result && op.recipe.result.count) || 1)
+    try { bot.chat(`crafted ${made} ${op.item} (planks ${t.planks}, logs ${t.logs})`) } catch (_) { /* chat best-effort */ }
   }
   void run()
 }

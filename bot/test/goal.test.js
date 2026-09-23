@@ -91,7 +91,7 @@ describe('goalFacts', () => {
 
   it('goalText is the canonical facts line', () => {
     const facts = { time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
-    assert.equal(goalText(facts), 'time=day logs=3 planks=0 table=0 door=0 home=none inside=no')
+    assert.equal(goalText(facts), 'time=day logs=3 planks=0 table=0 door=0 home=none placed=no inside=no')
   })
 })
 
@@ -232,6 +232,12 @@ describe('decide decision point', () => {
     const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] })
     const r = decide(bot, {})
     assert.equal(r.action, 'rest')
+  })
+
+  it('placed table unlocks craft for the door', () => {
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 6 }] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'craft')
   })
 
   it('full load hands gather to craft', () => {

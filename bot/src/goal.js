@@ -37,7 +37,7 @@ const MENU = {
     // picked-up log would preempt gather with a chat line per log.
     // The door needs a placed table (bot.craft requires the block): without
     // one the step could neither progress nor finish, churning done forever.
-    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0 && facts.tablePlaced),
+    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.planks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
   },
   build: {
@@ -90,14 +90,15 @@ function goalFacts(bot, ctx) {
       bp.y >= interior.min.y && bp.y <= interior.max.y &&
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
-  return { time, logs, planks, table, door, home, inside }
+  const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
+  return { time, logs, planks, table, door, home, tablePlaced, inside }
 }
 
 // Canonical facts text: the decision point fires when it changes (same role
 // as stateKey for the brain).
 function goalText(facts) {
   return `time=${facts.time} logs=${facts.logs} planks=${facts.planks} ` +
-    `table=${facts.table} door=${facts.door} home=${facts.home} inside=${facts.inside}`
+    `table=${facts.table} door=${facts.door} home=${facts.home} placed=${facts.tablePlaced ? 'yes' : 'no'} inside=${facts.inside}`
 }
 
 function goalFsm(facts, feasibleNames) {
