@@ -2,7 +2,7 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { createTicker, handleChat } = require('../src/index')
+const { createTicker, handleChat, parseAutonomous, autonomousEffective } = require('../src/index')
 const { hybridBrain } = require('../src/brain')
 const { AUTONOMOUS_EXPLORE_RADIUS } = require('../src/goal')
 const metrics = require('../src/metrics')
@@ -32,7 +32,7 @@ function mockBot() {
     spawnPoint: pos(0, 64, 0),
     registry: { blocksByName: {}, itemsByName: {} },
     inventory: { items: () => [] },
-    pathfinder: { goal: null, setGoal() {}, stop() {}, isMoving: () => false, setMovements() {} },
+    pathfinder: { goal: null, setGoal(goal) { bot.pathfinder.goal = goal }, stop() {}, isMoving: () => false, setMovements() {} },
     setControlState() {},
     clearControlStates() {},
     quit() { bot.quitCalls++ },
@@ -152,5 +152,48 @@ describe('autonomous mode', () => {
 
   it('exposes the alone-explore radius for atl.1', () => {
     assert.equal(AUTONOMOUS_EXPLORE_RADIUS, 256)
+  })
+
+  it('jev-configured BRAIN_URL downgrades to off, never a paid laya', async () => {
+    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
+    process.env.TYPESAFE_API_KEY = 'k'
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })
+    handleChat(bot, ticker, 'Steve', 'brain jev')
+    handleChat(bot, ticker, 'Steve', 'autonomous on')
+    assert.ok(bot.lines.join(' ').includes('off without players'), `on-reply names off: ${bot.lines}`)
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off', 'paid URL never runs alone')
+  })
+
+  it('chat toggle outlives the ticker via the effective flag', () => {
+    assert.equal(parseAutonomous({}), false)
+    assert.equal(parseAutonomous({ BOT_AUTONOMOUS: '1' }), true)
+    assert.equal(parseAutonomous({ BOT_AUTONOMOUS: 'TRUE' }), true)
+    assert.equal(parseAutonomous({ BOT_AUTONOMOUS: 'yes' }), true)
+    assert.equal(parseAutonomous({ BOT_AUTONOMOUS: '0' }), false)
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'autonomous on')
+    assert.equal(autonomousEffective({}), true, 'chat on wins over empty env')
+    handleChat(bot, ticker, 'Steve', 'autonomous off')
+    assert.equal(autonomousEffective({ BOT_AUTONOMOUS: '1' }), false, 'chat off wins over env')
+    handleChat(bot, ticker, 'Steve', 'autonomous on')
+    assert.equal(autonomousEffective({ BOT_AUTONOMOUS: '1' }), true)
+  })
+
+  it('far-from-spawn restart on an empty server walks home, then works', async () => {
+    const bot = mockBot()
+    bot.entity.position = pos(100, 64, 0)
+    bot.spawnPoint = pos(0, 64, 0)
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, autonomous: true })
+    const c = bot._tickerCtx
+    c.unseenTicks = 10 // spawn pre-arm: far, unseen, no work yet
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.ok((c.unseenTicks || 0) >= 10, `counter accrues alone, got ${c.unseenTicks}`)
+    assert.ok(bot.pathfinder.goal, 'homing walk issued')
   })
 })

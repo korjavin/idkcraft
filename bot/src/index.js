@@ -64,6 +64,20 @@ function parseAutonomous(env) {
   const raw = String((env && env.BOT_AUTONOMOUS) || '').trim().toLowerCase()
   return raw === '1' || raw === 'true' || raw === 'yes'
 }
+// Laya address for the autonomous downgrade (dxl): BRAIN_URL only when it
+// does NOT point at JEV — a JEV-configured BRAIN_URL would keep the paid
+// brain running under a 'laya' label. Null means off.
+function layaUrl() {
+  const env = process.env && process.env.BRAIN_URL
+  return env && sourceForUrl(env) !== 'jev' ? env : null
+}
+// Chat toggle outlives the ticker (dxl major): 'autonomous off' must survive
+// the leave it causes, until container restart. Null = follow the env.
+let autonomousOverride = null
+function autonomousEffective(env) {
+  if (autonomousOverride !== null) return autonomousOverride
+  return parseAutonomous(env)
+}
 // Re-probe ceiling (ticks) for a given-up hostile: the world may change
 // (bridged ravine, opened door), so a pursuit fight abandoned is retried
 // from scratch this often. Lives here, not in fight.js — once the brain
@@ -447,7 +461,7 @@ function fleeReflex(bot, ctx) {
   function autoBrain(rosterOnline) {
     if (!ctx.autonomous) return
     if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
-      const url = (process.env && process.env.BRAIN_URL) || null
+      const url = layaUrl()
       const to = url ? 'laya' : 'off'
       const next = to === 'laya'
         ? hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
@@ -639,7 +653,7 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && rosterOnline && (!ctx.work || followWaiting) && !ctx.bring) {
+      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
@@ -940,11 +954,12 @@ function fleeReflex(bot, ctx) {
     // permanent default is the BOT_AUTONOMOUS env (owner sets it).
     setAutonomous: (on) => {
       ctx.autonomous = !!on
+      autonomousOverride = !!on
       metrics.autonomous.set(ctx.autonomous ? 1 : 0)
       if (!on) return 'autonomous off'
       let r = 'autonomous on — stays without players until restart (permanent: BOT_AUTONOMOUS env)'
       if (brainEngine === 'jev') {
-        r += (process.env && process.env.BRAIN_URL)
+        r += layaUrl()
           ? ' — brain is jev now, laya without players'
           : ' — brain is jev now, off without players (laya not configured)'
       }
@@ -1175,7 +1190,6 @@ async function main() {
   const rawTick = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
   const tickMs = Number.isFinite(rawTick) ? rawTick : 1000
   const leaveAfterMs = parseLeaveAfterMs(process.env)
-  const autonomous = parseAutonomous(process.env)
   const host = process.env.MC_HOST || 'mc'
   const port = parseInt(process.env.MC_PORT || '25565', 10)
   const username = process.env.BOT_USERNAME || 'IdkBot'
@@ -1189,7 +1203,9 @@ async function main() {
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
     // 0 disables the leave: join immediately and stay on, like before.
-    // Autonomous joins an empty server too: staying is the point.
+    // Autonomous joins an empty server too: staying is the point. The chat
+    // toggle (not the env const) decides, so 'autonomous off' lasts.
+    const autonomous = autonomousEffective(process.env)
     if (leaveAfterMs !== 0 && !autonomous) {
       await waitForPlayers({ host, port, pingFn, username })
       await sleep(JOIN_SETTLE_MS)
@@ -1532,4 +1548,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
