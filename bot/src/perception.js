@@ -101,9 +101,19 @@ function stateKey(state) {
 // ('.Steve') while the 'chat' event carries the name without it ('Steve'),
 // so a direct lookup misses. Resolve exact, then '.'+name, then a
 // case-insensitive match ignoring the leading dot.
-function resolvePlayer(bot, name) {
-  if (!name) return name
+function resolvePlayer(bot, name, uuid) {
   const players = (bot && bot.players) || {}
+  // UUID first (idkcraft-8gf): Java 'X' and Bedrock '.X' online together are
+  // indistinguishable by chat name, so the sender UUID from the message
+  // event wins when it matches a roster entry. Dashes/case-insensitive.
+  if (uuid) {
+    const unorm = String(uuid).toLowerCase().replace(/-/g, '')
+    for (const key of Object.keys(players)) {
+      const pu = players[key] && players[key].uuid
+      if (pu && String(pu).toLowerCase().replace(/-/g, '') === unorm) return key
+    }
+  }
+  if (!name) return name
   if (players[name]) return name
   if (players['.' + name]) return '.' + name
   const norm = String(name).replace(/^\./, '').toLowerCase()
