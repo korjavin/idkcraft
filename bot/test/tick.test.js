@@ -884,6 +884,12 @@ describe('work mode (epic rw4)', () => {
         assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued')
         assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
         assert.ok(!lines.some((l) => l.includes('goal step=')), 'work mode not entered')
+        // Arrival resumes the skipped work mode (one-shot).
+        bot.entity.position = pos(-48, 65, -208)
+        lines.length = 0
+        await new Promise((r) => setTimeout(r, 60))
+        assert.equal(bot._tickerCtx.work, true)
+        assert.ok(lines.some((l) => l.includes('goal step=')), 'work resumed on arrival')
       } finally {
         console.log = origLog
       }

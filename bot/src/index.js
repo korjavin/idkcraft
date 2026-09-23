@@ -52,6 +52,8 @@ const TARGET_GONE_TICKS = 10
 // as the lead give-up. Spawn pre-arm uses blocks, not ticks (below).
 const UNSEEN_HOME_TICKS = 10
 const FAR_FROM_SPAWN = 64
+// GoalNear range of the homing walk, and arrival radius for resuming work.
+const RETURN_HOME_RANGE = 2
 
 // Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
 // edible item from inventory on the every-tick seam when food < 18 and no
@@ -208,11 +210,31 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (!sp || !bp) return false
     const key = `return-spawn:${sp.x},${sp.y},${sp.z}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, 2), false)
+      bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), false)
       ctx.lastGoalKey = key
       console.log(`returning to spawn dist=${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))}`)
     }
     return true
+  }
+
+  function homeReached() {
+    const sp = bot.spawnPoint
+    const bp = bot.entity && bot.entity.position
+    return !!(sp && bp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) <= RETURN_HOME_RANGE)
+  }
+
+  // work() body, shared with the homing resume below (one definition, so the
+  // resume cannot drift from the chat command).
+  function startWork() {
+    ctx.work = true
+    ctx.paused = false
+    ctx.lead = null
+    ctx.leadStuck = 0
+    ctx.leadTargetGone = 0
+    followName = ''
+    ctx.lastGoalKey = ''
+    ctx.gather = null
+    ctx.resumeWork = false
   }
 
   function stopOnce() {
@@ -395,8 +417,14 @@ function fleeReflex(bot, ctx) {
       // for an unseen follower; this walks instead once N trips). Pure work
       // mode with nobody waiting keeps running.
       const followWaiting = !target && followName && bot.players && bot.players[followName]
-      if (!target && rosterOnline && (!ctx.work || followWaiting)) ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
-      else ctx.unseenTicks = 0
+      if (homeReached()) {
+        // At spawn there is nothing to walk for. If the spawn handler
+        // skipped work() for the homing walk, resume it now (one-shot).
+        if (ctx.resumeWork && !followName) startWork()
+        ctx.unseenTicks = 0
+      } else if (!target && rosterOnline && (!ctx.work || followWaiting)) {
+        ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
+      } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
       const workAlone = ctx.work && !target && rosterOnline && !homing
       if (workAlone) workTickFast = true
@@ -405,8 +433,11 @@ function fleeReflex(bot, ctx) {
         // locally, stop once, and stay quiet (at most one line per minute).
         // A hissing creeper still moves the body (fast ticks while fleeing).
         const fledAlone = fleeReflex(bot, ctx)
-        if (fledAlone) reflexFast = true
-        else if (!walkHomeTick()) stopOnce()
+        if (fledAlone) {
+          reflexFast = true
+        } else if (!walkHomeTick()) {
+          stopOnce()
+        }
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
         try {
@@ -563,7 +594,7 @@ function fleeReflex(bot, ctx) {
       if (name) ctx.paused = false
     },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
-    work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = ''; ctx.gather = null },
+    work: () => { startWork() },
     stop: () => {
       ctx.paused = true
       ctx.work = false
@@ -688,6 +719,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // tests stay explicit about entering work mode. Exception: a far,
       // unseen start walks home first (see pre-arm below) — working a cave
       // 225 blocks from the player helps no one.
+      if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName) tickCtx.resumeWork = true
       if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
       ticker.start()
     })
