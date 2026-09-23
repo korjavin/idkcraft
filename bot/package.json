@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js"
+    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js test/bedrock-names.test.js test/help.test.js"
   },
   "dependencies": {
     "mineflayer": "4.39.0",

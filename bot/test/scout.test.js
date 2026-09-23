@@ -415,12 +415,14 @@ describe("chat command 'find me <block>'", () => {
     assert.deepEqual(bot.lines, [])
   })
 
-  it('ignores non-matching or multi-word messages', () => {
+  it('hints usage for an incomplete find me, ignores chatter', () => {
     const bot = mockBot({ registry: REG })
     handleChat(bot, null, 'Steve', 'find me coal ore')
     handleChat(bot, null, 'Steve', 'find me')
     handleChat(bot, null, 'Steve', 'hello bot')
-    assert.deepEqual(bot.lines, [])
+    // 'find me coal ore' and bare 'find me' name the command but carry no
+    // usable block (kae): hint instead of silence; chatter stays silent.
+    assert.deepEqual(bot.lines, ['try: find me iron', 'try: find me iron'])
   })
 
   const GREG = { ...REG, gold_ore: 14, deepslate_gold_ore: 15 }

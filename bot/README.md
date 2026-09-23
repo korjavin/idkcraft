@@ -171,12 +171,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
   - **Java Edition:** Press **T** to open the chat window.
 - **NO leading slash:** Type commands directly as plain text (e.g. `follow me`, not `/follow me`). Any message starting with a slash (`/`) is treated by Paper as a server command, so the bot never receives it.
 - **Case-insensitive:** Commands are case-insensitive (`follow me`, `FOLLOW ME`). Block names for search should be in English, snake_case (e.g. `coal_ore`, `diamond_ore`, `iron_block`).
-- **Command list & replies:**
-  - `follow me` — Locks onto you and resumes following, replying with `Following <username>` (e.g. `Following Player`). Cancels work mode.
-  - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply. Cancels work mode.
-  - `go work` (alias `free`) — Releases the bot into autonomous work mode, replying with `on my own; say 'follow me' to call me`. Cancels park.
-  - `status` — Replies with mode, current goal step, logs/planks and home (e.g. `working step=rest logs=0 planks=0 home=none`).
-  - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`; `find me ore` means any valued ore, plurals work — `diamonds` — typos stay `unknown block`) — Searches loaded chunks within 48 blocks, preferring ore with air next to it (walkable, not sealed in rock) and ore level with you. The bot replies with `leading you to <name>, <N> blocks, follow me` (e.g. `leading you to coal_ore, 10 blocks, follow me`), `no <block> within 48 blocks`, or `unknown block: <block>`. A target more than 8 blocks below you is announced, not led to (`gold_ore is 25 blocks down, dig carefully`); say `lead anyway` to walk there regardless.
+- **Command list & replies:** In game, say `help` for the command list and `help <command>` for usage with an example (e.g. `help find me`) — that reply is the source of truth, this file does not duplicate it.
 - **Bot chat & ore reports:** The bot answers command responses in chat; if no reply appears within ~2 s, check the log line `decision source=...` is still flowing. The bot also broadcasts unsolicited ore announcements when its scouting reflex detects veins (e.g. `diamond_ore x4 at -60 12 -180`); these are autonomous scout reflex announcements, not replies to commands.
 
 | Command | Action | Implementation |
