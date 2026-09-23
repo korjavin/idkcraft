@@ -435,11 +435,14 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && rosterOnline && (!ctx.work || followWaiting)) {
+      } else if (!target && rosterOnline && (!ctx.work || followWaiting) && !ctx.bring) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
-      const workAlone = ctx.work && !target && rosterOnline && !homing
+      // An active bring-me owns the body like work-alone: the bot fetches up
+      // to 48 blocks out, past entity-tracking range, so the idle branch must
+      // not park it and the homing walk must not steal it mid-order.
+      const workAlone = (ctx.work || ctx.bring) && !target && rosterOnline && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -654,8 +657,14 @@ function fleeReflex(bot, ctx) {
       const res = findNearest(bot, name, 48)
       if (res === 'unknown') return `unknown block: ${name}`
       if (!res) return `no ${name} within 48 blocks`
+      if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
       if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot)) return `need a stone pickaxe for ${res.name}`
       if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      // A fresh explicit order restarts homing math (a tripped counter would
+      // starve the order) and supersedes a pending spawn work-resume (which
+      // would otherwise cancel the order on the next sighted tick).
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
       ctx.bring = {
         name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
         pos: res.position, phase: 'walk', stalls: 0, lastPos: null,

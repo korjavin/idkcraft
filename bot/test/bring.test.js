@@ -43,7 +43,11 @@ function mockBot({ spots = [], names = {}, items = [], playerPos = null } = {}) 
       goal: null,
       setGoal: (goal) => { calls.setGoal++; calls.goals.push(goal); bot.pathfinder.goal = goal },
       isMoving: () => bot._moving,
+      bestHarvestTool: () => ({ name: 'stone_pickaxe', type: 99 }),
     },
+    held: null,
+    equipped: [],
+    equip: async (item) => { bot.held = item && item.name; bot.equipped.push(bot.held) },
     inventory: { items: () => bot._items },
     findBlocks(opts) {
       const want = new Set(Array.isArray(opts.matching) ? opts.matching : [opts.matching])
@@ -62,7 +66,8 @@ function mockBot({ spots = [], names = {}, items = [], playerPos = null } = {}) 
       bot.digCalls++
       const bp = block && block.position
       if (bp) delete names[`${bp.x},${bp.y},${bp.z}`]
-      bot._items.push({ name: dropFor(block.name), count: 1 })
+      // Drops only land when a pickaxe is held (review: sword-dug ore drops nothing)
+      if (bot.held && bot.held.endsWith('_pickaxe')) bot._items.push({ name: dropFor(block.name), count: 1 })
     },
     toss: async (id, meta, n) => { tossCalls.push([id, meta, n]) },
     chat(line) { lines.push(String(line)) },
@@ -187,7 +192,8 @@ describe('bring me order', () => {
     assert.equal(dropFor('oak_log'), 'oak_log')
     assert.equal(needsPickaxe('coal_ore'), true)
     assert.equal(needsPickaxe('oak_log'), false)
-    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'wooden_pickaxe', count: 1 }] })), true)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })), true)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'wooden_pickaxe', count: 1 }] })), false)
     assert.equal(hasPickaxe(mockBot({ items: [] })), false)
   })
 
@@ -203,6 +209,87 @@ describe('bring me order', () => {
     const r = await ticker.tick()
     assert.equal(r.decision.action, 'bring')
     assert.match(ctx.lastGoalKey, /^bring-return:/)
+  })
+
+  it("non-ore non-log blocks refuse ('bring me stone')", () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'stone' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me stone')
+    assert.deepEqual(bot.lines, ["can't bring stone — ores and logs only"])
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+  })
+
+  it('wooden pickaxe is refused for iron ore', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'iron_ore' },
+      items: [{ name: 'wooden_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    // BLOCKS lacks iron_ore: extend the mock registry for this order
+    bot.registry.blocksByName.iron_ore = { id: 31 }
+    handleChat(bot, tickerFor(bot), 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['need a stone pickaxe for iron_ore'])
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+  })
+
+  it('unseen requester mid-walk: tick still dispatches bring, counter frozen', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'follow me') // follow mode: target is P
+    ctx.bring = {
+      name: 'coal', want: 3, by: 'P', block: 'coal_ore', drop: 'coal',
+      pos: pos(2, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true,
+    }
+    bot.players.P.entity = null // walked past tracking range mid-order
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'bring')
+    assert.equal(ctx.unseenTicks, 0, 'homing math frozen mid-order')
+  })
+
+  it('fight preempts bring; bring beats work', async () => {
+    const fightBot = mockBot({ playerPos: pos(30, 64, 0) })
+    const fightTicker = createTicker({
+      bot: fightBot,
+      brain: { decide: async () => ({ action: 'fight', sprint: false, source: 'jev' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    fightBot._tickerCtx.bring = {
+      name: 'coal', want: 3, by: 'P', block: 'coal_ore', drop: 'coal',
+      pos: pos(2, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true,
+    }
+    assert.equal((await fightTicker.tick()).decision.action, 'fight')
+    const workBot = mockBot({ playerPos: pos(30, 64, 0) })
+    const workTicker = tickerFor(workBot)
+    workBot._tickerCtx.work = true
+    workBot._tickerCtx.bring = {
+      name: 'coal', want: 3, by: 'P', block: 'coal_ore', drop: 'coal',
+      pos: pos(2, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true,
+    }
+    assert.equal((await workTicker.tick()).decision.action, 'bring')
+  })
+
+  it('setBring supersedes a pending spawn work-resume', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    const ticker = tickerFor(bot)
+    bot._tickerCtx.resumeWork = true
+    handleChat(bot, ticker, 'P', 'bring me coal')
+    assert.ok(bot._tickerCtx.bring, 'order created')
+    assert.equal(bot._tickerCtx.resumeWork, false, 'resume cannot cancel the order')
   })
 
   it("'bring me' is in COMMANDS with usage", () => {

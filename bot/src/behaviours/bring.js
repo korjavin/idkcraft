@@ -35,13 +35,23 @@ function dropFor(blockName) {
   return base // coal, diamond, emerald, redstone, quartz, dirt, ...
 }
 
+// Only ores and logs are fetchable (the bead's resources): anything else
+// (stone->cobble, grass->dirt, ...) drops a different item, so the drop
+// count would never grow and the order would mine the area forever.
+function isBringable(blockName) {
+  return blockName.endsWith('_ore') || blockName.endsWith('_log')
+}
+
 function needsPickaxe(blockName) {
   return blockName.endsWith('_ore')
 }
 
+// One rule, one message (bead): ores need stone-or-better. Wooden and
+// golden are refused even for coal — stricter than vanilla, but iron and up
+// need stone anyway and a single gate keeps the refusal honest.
 function hasPickaxe(bot) {
   try {
-    return countItems(bot, (n) => n.endsWith('_pickaxe')) > 0
+    return countItems(bot, (n) => /(stone|iron|diamond|netherite)_pickaxe$/.test(n)) > 0
   } catch (_) {
     return false
   }
@@ -178,7 +188,14 @@ function bring(bot, ctx, target, state) {
     }
     ctx.digInFlight = true
     void (async () => {
-      try { await bot.dig(block) } catch (_) { /* gone or interrupted: pickup anyway */ }
+      try {
+        // Ore dug with the sword in hand drops nothing: hold the best
+        // harvest tool first (guarded: fake bots may lack either method).
+        let tool = null
+        try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
+        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        await bot.dig(block)
+      } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
       o.phase = 'pickup'
     })()
@@ -254,6 +271,7 @@ function bring(bot, ctx, target, state) {
 
 module.exports = bring
 module.exports.dropFor = dropFor
+module.exports.isBringable = isBringable
 module.exports.needsPickaxe = needsPickaxe
 module.exports.hasPickaxe = hasPickaxe
 module.exports.WANT_ORE = WANT_ORE
