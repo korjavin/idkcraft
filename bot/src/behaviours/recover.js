@@ -553,10 +553,17 @@ function release(bot, ctx, how) {
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   if (by === 'follow') ctx.followStalls = 0
-  if (by === 'follow' || by === 'roam' || by === 'gather') {
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home') {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
+    if (by === 'home') {
+      // Homing goals never move, so goal-closeness cannot tell one wedge
+      // from the next: anchor the release point instead. walkHomeTick
+      // re-arms only once the body relocated past HOME_LATCH_CLEAR.
+      const bp = botPos(bot)
+      if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
+    }
   }
   ctx.lastGoalKey = ''
   ctx.stuckResets = 0
@@ -627,7 +634,11 @@ async function decide(bot, ctx, state, target) {
       const names = RECOVER_ORDER.filter((n) => {
         try { return RECOVER_MENU[n].feasible(recoverFacts(bot, ctx, state, target), ctx) } catch (_) { return false }
       })
-      if (names.includes('call_player')) {
+      // A just-failed call_player (nobody online to hear it) must not be
+      // re-picked: feasibility stays true while calledPlayer is false, so
+      // without this the episode loops 'chosen' forever. Falls through to
+      // gave-up below instead.
+      if (names.includes('call_player') && (!rec.last || rec.last.action !== 'call_player')) {
         rec.action = 'call_player'
         rec.source = 'fsm'
         rec.model = null

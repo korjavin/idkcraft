@@ -656,6 +656,47 @@ describe('follow behaviour and unstuck reflex', () => {
     }
   })
 
+  it('three place_error under follow raise the attributed wedge, not the ticker backstop', async () => {
+    // 2oe end-to-end: the streak belongs to follow, so the ticker backstop
+    // must not preempt it with a goal-less fact — the wedge line names the
+    // relief and the fact carries the goal for the menu.
+    const lines = []
+    const origLog = console.log
+    console.log = (line) => { lines.push(String(line)) }
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
+
+      await ticker.tick() // initial GoalFollow
+      assert.equal(bot.calls.setGoal, 1)
+      bot.pathfinder.isMoving = () => true // wedged executor: still "moving"
+      ticker.setPathReset('place_error')
+      await ticker.tick() // 1st: blind, no wedge
+      ticker.setPathReset('place_error')
+      await ticker.tick() // 2nd: blind, no wedge
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
+      ticker.setPathReset('place_error')
+      await ticker.tick() // 3rd: follow wedge with relief names, body untouched
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.jump, 0)
+      assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
+      const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
+      assert.equal(stuckLines.length, 1)
+      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
+
+      await ticker.tick() // episode tick: null + menu sidestep + one-tick jump
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.goals[1], null)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      assert.equal(bot.calls.jump, 1)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+      assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
+    } finally {
+      console.log = origLog
+    }
+  })
+
   it('displacement between two path_reset stuck clears the wedge counter: no nudge', async () => {
     const lines = []
     const origLog = console.log
@@ -974,6 +1015,135 @@ describe('work mode (epic rw4)', () => {
       } finally {
         console.log = origLog
       }
+    })
+
+    it('a home walk going nowhere raises stuck reason=wedge once, arrival clears it', async () => {
+      // 2oe acceptance: walkHomeTick with a motionless body fires the wedge
+      // line + home fact for the menu; standing at spawn is arrival, not a
+      // stall, and clears a stale home fact.
+      const bot = farBot()
+      bot.pathfinder.isMoving = () => true // executor claims motion, body stands still
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 24; i++) await ticker.tick()
+      const wedge = lines.filter((l) => l.includes('stuck reason=wedge'))
+      assert.equal(wedge.length, 1)
+      assert.match(wedge[0], /^stuck reason=wedge pos=-205,39,-35 dist=/)
+      assert.equal(bot._tickerCtx.stuck.by, 'home')
+      assert.deepEqual(bot._tickerCtx.stuck.goal, { x: -48, y: 65, z: -208 })
+      // The idle branch routes the fact to the menu: an episode runs while
+      // homing, then gives up boundedly (latch admits one episode per
+      // situation — no re-fire while the body keeps standing still).
+      for (let i = 0; i < 40; i++) await ticker.tick()
+      } finally {
+        console.log = origLog
+      }
+      assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')), 'episode ran while homing')
+      assert.ok(lines.some((l) => l.includes('outcome=gave-up')), 'episode gave up instead of looping')
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+      assert.equal(bot._tickerCtx.stuck, null)
+      assert.equal(bot._tickerCtx.recoverLatch.by, 'home')
+      bot.entity.position = pos(-48, 65, -208) // arrived
+      for (let i = 0; i < 5; i++) await ticker.tick()
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+      assert.equal(bot._tickerCtx.stuck, null)
+    })
+
+    it('a sidestep that moves the body releases the episode instead of orphaning it', async () => {
+      // The successful-escape path: displacement during a running episode
+      // must keep the fact (it drives the routing) until release clears it.
+      // Clearing it in walkHomeTick would orphan ctx.recovery: no routing,
+      // no release, every detector off.
+      const bot = farBot()
+      bot.pathfinder.isMoving = () => true // executor claims motion, body stands still
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 21; i++) await ticker.tick() // wedge at 20, episode starts at 21
+        assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
+        bot.entity.position = pos(-203, 39, -35) // the sidestep moved the body
+        for (let i = 0; i < 8; i++) await ticker.tick()
+      } finally {
+        console.log = origLog
+      }
+      assert.ok(lines.some((l) => l.includes('outcome=done')), 'sidestep done released the episode')
+      assert.equal(bot._tickerCtx.recovery, null)
+      assert.equal(bot._tickerCtx.stuck, null)
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+    })
+
+    it('a non-home fact does not open an episode while nobody is online', async () => {
+      // Idle-branch cost guard: a pre-existing follow/gather episode pauses
+      // while alone (no brain calls) and resumes on sighting; only the home
+      // fact routes here.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      bot._tickerCtx.stuck = { by: 'follow', goal: { x: 1, y: 64, z: 0 }, key: 'follow:P' }
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 3; i++) await ticker.tick()
+      } finally {
+        console.log = origLog
+      }
+      assert.ok(!lines.some((l) => l.includes('recover action=')), 'no episode while alone')
+      assert.equal(bot._tickerCtx.stuck.by, 'follow', 'fact waits for sighting')
+    })
+
+    it('walking back into the same wedge does not open a second episode', async () => {
+      // Latch semantics: the release anchors its point, so re-wedging next
+      // to it stays blocked — otherwise the walk chats+asks every ~15 ticks
+      // for as long as homing lasts.
+      const bot = farBot()
+      bot.pathfinder.isMoving = () => true // executor claims motion, body stands still
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 21; i++) await ticker.tick() // wedge at 20, episode starts at 21
+        bot.entity.position = pos(-203, 39, -35) // the sidestep moved the body
+        for (let i = 0; i < 8; i++) await ticker.tick() // release done
+        assert.ok(lines.some((l) => l.includes('outcome=done')))
+        bot.entity.position = pos(-205, 39, -35) // walked back into the wedge cell
+        for (let i = 0; i < 22; i++) await ticker.tick() // re-issue + two full stall cycles
+      } finally {
+        console.log = origLog
+      }
+      assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+      assert.equal(lines.filter((l) => l.includes('outcome=chosen')).length, 1)
+      assert.equal(bot._tickerCtx.stuck, null)
+    })
+
+    it('sighting drops a moot home fact instead of opening a spawn episode', async () => {
+      // A hostile on the bot holds the episode off (urgent fight wins), so
+      // the fact is still set when the player appears: homing is over, the
+      // spawn goal is moot, follow/work detectors take over from here.
+      const bot = farBot()
+      bot.pathfinder.isMoving = () => true // executor claims motion, body stands still
+      const zp = pos(-205, 39, -35) // on the bot: urgent fight wins
+      bot.entities = { 9: { id: 9, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 20; i++) await ticker.tick()
+      } finally {
+        console.log = origLog
+      }
+      assert.equal(bot._tickerCtx.stuck.by, 'home')
+      assert.ok(!lines.some((l) => l.includes('recover action=')), 'no episode while fight is urgent')
+      bot.players.P = { username: 'P', entity: playerEntity(10) } // sighted
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.stuck, null)
+      assert.ok(!lines.some((l) => l.includes('recover action=')), 'no spawn episode with player on screen')
     })
 
     it('spawn far from home pre-arms the walk', async () => {

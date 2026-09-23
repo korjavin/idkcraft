@@ -113,3 +113,79 @@ describe('follow wedge line (idkcraft-b50)', () => {
     assert.equal(bot._tickerCtx.lastPathNext, null)
   })
 })
+
+describe('follow place_error streak (idkcraft-2oe)', () => {
+  // Ticker-capable mock with a stationary body: createTicker owns the
+  // counters (setPathReset), follow() is driven per tick like the ticker
+  // drives it, so the test fails until follow counts placeErrors itself.
+  function stillBot() {
+    const bot = {
+      username: 'IdkBot', players: {}, entities: {}, health: 20, food: 20,
+      entity: { position: pos(0, 64, 0) },
+      _moving: false,
+      chat() {}, attack() {}, lookAt() {},
+      pathfinder: {
+        setGoal() {},
+        stop() {},
+        isMoving: () => bot._moving,
+        setMovements() {},
+      },
+      setControlState() {}, clearControlStates: () => {},
+      inventory: { items: () => [] }, equip: async () => {},
+    }
+    return bot
+  }
+
+  it('three place_error with no displacement raise the same wedge', () => {
+    const bot = stillBot()
+    const ticker = createTicker({
+      bot, brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10, idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      follow(bot, ctx, target, { distance_to_player: 20 }) // issues GoalFollow
+      for (let i = 0; i < 3; i++) {
+        ticker.setPathReset('place_error')
+        bot._moving = (i % 2 === 0) // prod blink: moving true/false
+        follow(bot, ctx, target, { distance_to_player: 20 })
+      }
+    } finally {
+      console.log = origLog
+    }
+    const wedge = logs.filter((l) => l.includes('stuck reason=wedge'))
+    assert.equal(wedge.length, 1)
+    assert.match(wedge[0], /^stuck reason=wedge pos=0,64,0 dist=20\.0 /)
+    assert.deepEqual(ctx.stuck, { by: 'follow', goal: { x: 20, y: 64, z: 0 }, key: 'follow:P' })
+  })
+
+  it('a fight tick stealing the body does not reset the stall count', () => {
+    // 68p at follow scale: MAX_STALLS is 2, so the fight must steal every
+    // 2nd tick to prove the reset (every 3rd still leaves two consecutive
+    // follow ticks, which fire even today). Same mechanism as the gather
+    // acceptance (fight every 3rd vs STALL_TICKS 10).
+    const bot = stillBot()
+    const ctx = { lastGoalKey: '', lastPathStatus: 'noPath' }
+    const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    let firedAt = -1
+    try {
+      for (let i = 0; i < 9; i++) {
+        if (i % 2 === 1) ctx.lastGoalKey = 'fight:9' // fight owned this tick
+        follow(bot, ctx, target, { distance_to_player: 20 })
+        if (ctx.stuck) { firedAt = i; break }
+      }
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(firedAt, 4)
+    assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 1)
+    assert.equal(ctx.stuck.by, 'follow')
+  })
+})
