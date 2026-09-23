@@ -176,6 +176,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
   - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply. Cancels work mode.
   - `go work` (alias `free`) — Releases the bot into autonomous work mode, replying with `on my own; say 'follow me' to call me`. Cancels park.
   - `status` — Replies with mode, current goal step, logs/planks and home (e.g. `working step=rest logs=0 planks=0 home=none`).
+  - `build here` — Moves the house site to a flat 4x4 next to you and resumes building there (replies `home already built at <x> <y> <z>` when the house is finished). On spawn the bot adopts a house an earlier run finished (a door within 32 blocks of spawn) and chats `my home is at <x> <y> <z>`.
   - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`; `find me ore` means any valued ore, plurals work — `diamonds` — typos stay `unknown block`) — Searches loaded chunks within 48 blocks, preferring ore with air next to it (walkable, not sealed in rock) and ore level with you. The bot replies with `leading you to <name>, <N> blocks, follow me` (e.g. `leading you to coal_ore, 10 blocks, follow me`), `no <block> within 48 blocks`, or `unknown block: <block>`. A target more than 8 blocks below you is announced, not led to (`gold_ore is 25 blocks down, dig carefully`); say `lead anyway` to walk there regardless.
 - **Bot chat & ore reports:** The bot answers command responses in chat; if no reply appears within ~2 s, check the log line `decision source=...` is still flowing. The bot also broadcasts unsolicited ore announcements when its scouting reflex detects veins (e.g. `diamond_ore x4 at -60 12 -180`); these are autonomous scout reflex announcements, not replies to commands.
 
@@ -185,6 +186,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks; clears work mode |
 | `go work` / `free` | Releases the bot to work on its own goal | Sets work mode, unparks ticker, clears `followName`; replies `on my own; say 'follow me' to call me` |
 | `status` | Reports mode, goal step, logs/planks, home | Replies e.g. `working step=rest logs=0 planks=0 home=none` |
+| `build here` | Moves the house site next to the speaker | Picks a flat 4x4 at radius 6 and resets build progress; refuses when built; spawn adoption chats `my home is at <x> <y> <z>` |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks (exposed ore first, then level with you); replies with `leading you to <name>, <N> blocks, follow me`, `no <block> within 48 blocks`, or `unknown block: <block>`; deep targets warn instead of leading |
 | `lead anyway` | Walks to a warned-about deep target | Replays the held deep offer once, then forgets it (`no deep find on hold` when there is none) |
 

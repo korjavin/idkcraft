@@ -21,6 +21,7 @@ const BEHAVIOURS = {
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
   rest: require('./behaviours/rest'),
+  build: require('./behaviours/build'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -518,6 +519,11 @@ function fleeReflex(bot, ctx) {
     setFollow: (name) => { followName = name; ctx.work = false; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = '' },
+    // Home site (epic rw4.4): 'build here' and spawn adoption replace the
+    // site. Build progress resets with it — old skips/fail counts belong
+    // to the old origin. The facts text (home none->site) re-decides.
+    home: () => ctx.home || null,
+    setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
       ctx.paused = true
       ctx.work = false
@@ -629,6 +635,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // Owner rule (epic rw4): with no follow target the bot works on its
       // own until 'follow me'. createTicker defaults work=false so unit
       // tests stay explicit about entering work mode.
+      // Epic rw4.4: adopt a house an earlier run finished (door near
+      // spawn) before the first decision, so a restart resumes as built.
+      const found = goal.adoptHome(bot)
+      if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
       if (!followName) ticker.work()
       ticker.start()
     })
@@ -713,6 +723,17 @@ function handleChat(bot, ticker, username, message) {
   } else if (msg === 'go work' || msg === 'free') {
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
+  } else if (msg === 'build here') {
+    const speaker = bot.players && bot.players[username] && bot.players[username].entity
+    const pos = speaker && speaker.position
+    if (!pos || typeof pos.x !== 'number') return // speaker out of tracking range: no around
+    const home = ticker && typeof ticker.home === 'function' ? ticker.home() : null
+    if (home && home.built) {
+      const st = home.site || {}
+      bot.chat(`home already built at ${st.x} ${st.y} ${st.z}`)
+      return
+    }
+    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else {

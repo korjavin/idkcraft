@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, siteFor } = require('../src/goal')
 
 function pos(x, y, z) {
   const p = {
@@ -96,7 +96,7 @@ describe('goalFacts', () => {
 })
 
 describe('MENU feasibility gates', () => {
-  const F = (name, facts) => MENU[name].feasible(facts)
+  const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
   const base = { time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
@@ -109,12 +109,12 @@ describe('MENU feasibility gates', () => {
     // feasible until the load is full, then craft/build take over.
     assert.equal(F('gather', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), true)
     assert.equal(F('craft', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), false)
-    // Sufficient material but no site: all work gates closed, rest is the
-    // correct idle (the owner places the site with 'build here').
+    // Sufficient material but no site: build defaults the site to spawn
+    // (bead .4 batch gate); the owner moves it with 'build here'.
     const ready = { ...base, logs: 0, planks: 48, table: 1, door: 1, home: 'none' }
     assert.equal(F('gather', ready), false)
     assert.equal(F('craft', ready), false)
-    assert.equal(F('build', ready), false)
+    assert.equal(F('build', ready, goalBot(), {}), true)
     assert.equal(goalFsm(ready, ['rest']), 'rest')
   })
   it('craft starts on a full load, not on the first log', () => {
@@ -124,11 +124,15 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', { ...base, planks: 5 }), true) // leftovers finish table/door
     assert.equal(F('craft', { ...base, planks: 56, table: 1, door: 1 }), false) // nothing left to craft
   })
-  it('build needs budget, kit and a site — never a finished house', () => {
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'site' }), true)
-    assert.equal(F('build', { ...base, planks: 46, table: 1, door: 1, home: 'site' }), false)
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'built' }), false)
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'none' }), false)
+  it('build works in batches from spawn or a site — never without material', () => {
+    const bot = goalBot() // spawnPoint set; no blockAt: the homeless path scans nothing
+    assert.equal(F('build', { ...base, planks: 48 }, goalBot({ spawn: null }), {}), false) // no home, no spawn
+    assert.equal(F('build', { ...base, planks: 48 }, bot, {}), true) // homeless: defaults the site
+    assert.equal(F('build', { ...base, planks: 16 }, bot, {}), true) // one full batch
+    assert.equal(F('build', { ...base, planks: 15 }, bot, {}), false) // short of a batch
+    const siteCtx = { home: siteFor(bot, pos(0, 64, 0)) } // all cells read missing: full remainder
+    assert.equal(F('build', { ...base, planks: 48, home: 'site' }, bot, siteCtx), true)
+    assert.equal(F('build', { ...base, planks: 15, home: 'site' }, bot, siteCtx), false)
   })
 })
 
@@ -226,8 +230,8 @@ describe('decide decision point', () => {
   })
 
   it('unregistered steps never run even when feasible', () => {
-    // Only rest is plugged into BEHAVIOURS in this bead; gather/craft/build
-    // join in rw4.2-rw4.4 with one require line each, no goal.js change.
+    // Only rest is feasible here (10 logs: gather is feasible but still
+    // unregistered); gather/craft join in rw4.2-4.3, build joined in rw4.4.
     const bot = goalBot({ items: [{ name: 'oak_log', count: 10 }] })
     const r = decide(bot, {})
     assert.equal(r.action, 'rest')
