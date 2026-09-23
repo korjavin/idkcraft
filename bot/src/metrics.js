@@ -55,6 +55,12 @@ const online = new client.Gauge({
   name: 'idkcraft_bot_online',
   help: '1 while the bot is joined; it leaves an empty server (BOT_LEAVE_AFTER_MS)'
 })
+const searchDuration = new client.Histogram({
+  name: 'idkcraft_bot_search_duration_seconds',
+  help: 'findBlocks scan latency per radius stage (amb staged search)',
+  labelNames: ['radius'],
+  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2]
+})
 
 function setVitals(state) {
   for (const f of ['bot_health', 'bot_food', 'distance_to_player', 'hostile_distance', 'nearby_hostiles']) {
@@ -111,4 +117,4 @@ const recover = new client.Counter({
   help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
   labelNames: ['action', 'source', 'outcome']
 })
-module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, setVitals, serve }
+module.exports = { client, online, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, setVitals, serve }

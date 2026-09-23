@@ -284,13 +284,204 @@ describe('findNearest', () => {
     assert.equal(res.distance, 2)
   })
 
-  it('uses default radius 48 and count 64 in findBlocks scan', () => {
+  it('pads the 48 scan to cover the sphere (octahedral section walk), count 64', () => {
     const bot = mockBot({ registry: NAMES })
     let opts = null
     bot.findBlocks = (o) => { opts = o; return [] }
     findNearest(bot, 'coal')
-    assert.equal(opts.maxDistance, 48)
+    // ceil(48*sqrt(3)) = 84: the smallest octahedron containing the 48-sphere
+    assert.equal(opts.maxDistance, 84)
     assert.equal(opts.count, 64)
+  })
+
+  it('finds ore at 100 blocks via the tick-sliced far search (amb)', () => {
+    // Sync 48 is empty; the 96/160 shells run as sub-scans across ticks.
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const ore = pos(100, 64, 0)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [ore],
+      names: {
+        '100,64,0': 'iron_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+    })
+    assert.equal(findNearest(bot, 'iron'), null, 'sync 48 misses it')
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      // Emulate the real client: only hits near the scan center come back.
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    const cursor = startFarSearch(bot, 'iron')
+    assert.ok(cursor && cursor !== 'unknown', 'far search starts')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
+    assert.ok(r.done, 'cursor completes')
+    assert.ok(r.result, 'ore at 100 blocks must be found')
+    assert.equal(r.result.distance, 100)
+  })
+
+  it('filters sync hits beyond the claimed 48 (amb review)', () => {
+    // A hit inside the padded octahedron but outside the 48-sphere must not
+    // count: the stage stays empty and the answer stays honest.
+    const bot = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { '60,64,0': 'iron_ore' } })
+    assert.equal(findNearest(bot, 'iron'), null)
+  })
+
+  it('stops after the 48 stage when a nearby vein exists (no extra scans)', () => {
+    const radii = []
+    const bot = mockBot({ registry: NAMES, spots: [pos(10, 64, 0)], names: { '10,64,0': 'iron_ore' } })
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => { radii.push(o.maxDistance); return inner(o) }
+    const res = findNearest(bot, 'iron')
+    assert.equal(res.distance, 10)
+    assert.deepEqual(radii, [84])
+  })
+
+  it('slices the queue across steps under the tick budget (amb)', () => {
+    // Fake clock: each sub-scan costs 100ms; the 120ms budget fits 2.
+    const { performance } = require('node:perf_hooks')
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const realNow = performance.now
+    let t = 0
+    performance.now = () => t
+    try {
+      const bot = mockBot({
+        registry: NAMES,
+        spots: [],
+        names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      })
+      bot.findBlocks = () => { t += 100; return [] }
+      const cursor = startFarSearch(bot, 'iron')
+      assert.ok(cursor && cursor.queue.length === 78)
+      const r = stepFarSearch(bot, cursor)
+      assert.equal(r.done, false)
+      assert.equal(cursor.at, 2, 'third scan would exceed the budget')
+    } finally {
+      performance.now = realNow
+    }
+  })
+
+  it('stops after ring 70 when a hit within 96 exists (amb)', () => {
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const ore = pos(90, 64, 0)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [ore],
+      names: {
+        '90,64,0': 'iron_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+    })
+    let calls = 0
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      calls++
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    const cursor = startFarSearch(bot, 'iron')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
+    assert.ok(r.done && r.result, 'ore at 90 found')
+    assert.equal(calls, 26, 'ring 110/150 never scanned')
+  })
+
+  it('ends early on one exposed hit, scans on for buried-only (amb)', () => {
+    const { performance } = require('node:perf_hooks')
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const realNow = performance.now
+    const PROBES = { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' }
+    function centerAware(bot) {
+      const inner = bot.findBlocks.bind(bot)
+      bot.findBlocks = (o) => {
+        const c = o.point || { x: 0, y: 64, z: 0 }
+        return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+      }
+    }
+    let t = 0
+    performance.now = () => t
+    try {
+      // Exposed vein at 60: first tick with a hit answers.
+      const open = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { ...PROBES, '60,64,0': 'iron_ore', '61,64,0': 'air' } })
+      centerAware(open)
+      const c1 = startFarSearch(open, 'iron')
+      let r1 = { done: false, result: null }
+      let n1 = 0
+      for (let i = 0; i < 200 && !r1.done; i++) { r1 = stepFarSearch(open, c1); n1++ }
+      assert.ok(r1.done && r1.result, 'exposed vein found')
+      assert.ok(n1 < 13, `early exit, not the full ring (steps=${n1})`)
+      // Buried-only: no early exit, ring 70 runs out, then fast-forward.
+      t = 0
+      const shut = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { ...PROBES, '60,64,0': 'iron_ore' } })
+      let calls = 0
+      const inner = shut.findBlocks.bind(shut)
+      shut.findBlocks = (o) => {
+        calls++
+        t += 100
+        const c = o.point || { x: 0, y: 64, z: 0 }
+        return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+      }
+      const c2 = startFarSearch(shut, 'iron')
+      let r2 = { done: false, result: null }
+      for (let i = 0; i < 200 && !r2.done; i++) r2 = stepFarSearch(shut, c2)
+      assert.ok(r2.done && r2.result, 'buried vein still found')
+      assert.equal(calls, 26, 'full ring 70, then fast-forward past 110/150')
+    } finally {
+      performance.now = realNow
+    }
+  })
+
+  it('unrelated logoff keeps the pending search, asker logoff retires it (amb)', () => {
+    const { createTicker, handlePlayerLeft } = require('../src/index')
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10, idleTickMs: 10,
+    })
+    handleChat(bot, ticker, 'Steve', 'find me diamond')
+    assert.ok(bot._tickerCtx.pendingSearch, 'search pending')
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(bot._tickerCtx.pendingSearch, 'unrelated logoff keeps it')
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'asker logoff retires it')
+  })
+
+  it('pauses far slices while hostiles are near (amb)', () => {
+    const { advancePendingSearch } = require('../src/index')
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    bot._tickerCtx = {}
+    handleChat(bot, { setLead() {} }, 'Steve', 'find me diamond')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.pendingSearch, 'search pending')
+    ctx.lastHostileSnap = { count: 2, name: 'zombie', dist: 5 }
+    advancePendingSearch(bot, {}, ctx)
+    assert.ok(ctx.pendingSearch, 'still pending under hostiles')
+    assert.equal(ctx.pendingSearch.cursor.at, 0, 'no progress under hostiles')
+    ctx.lastHostileSnap = { count: 0, name: null, dist: null }
+    advancePendingSearch(bot, {}, ctx)
+    assert.equal(ctx.pendingSearch, null, 'completes when clear (instant mocks)')
+    assert.ok(bot.lines.includes('no diamond within 160 blocks (loaded area)'), `lines: ${bot.lines}`)
+  })
+
+  it('reports the loaded boundary from blockAt probes', () => {
+    const { loadedSearchRadius } = require('../src/behaviours/scout')
+    const dark = mockBot({ registry: NAMES })
+    assert.equal(loadedSearchRadius(dark), 48) // nothing readable: old behaviour
+    const half = mockBot({ registry: NAMES, names: { '48,64,0': 'stone', '96,64,0': 'stone' } })
+    assert.equal(loadedSearchRadius(half), 96)
+    half.blockAt = () => { throw new Error('unloaded') }
+    assert.equal(loadedSearchRadius(half), 48) // throws: never 0, never throw
   })
 
   it('returns null when no matching blocks are within range', () => {
@@ -372,10 +563,31 @@ describe("chat command 'find me <block>'", () => {
     assert.deepEqual(bot.lines, ['leading you to coal_ore, 10 blocks, follow me'])
   })
 
-  it("replies with 'no <name> within 48 blocks' when none are in range", () => {
+  it("replies with 'no <name> within <r> blocks (loaded area)' when none are in range", () => {
     const bot = mockBot({ registry: REG, spots: [] })
     handleChat(bot, null, 'Steve', 'find me diamond')
-    assert.deepEqual(bot.lines, ['no diamond within 48 blocks'])
+    // Mock world probes unreadable: boundary falls back to 48.
+    assert.deepEqual(bot.lines, ['no diamond within 48 blocks (loaded area)'])
+  })
+
+  it('widens past 48 and answers the loaded boundary after ticks (amb)', () => {
+    const { advancePendingSearch } = require('../src/index')
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    bot._tickerCtx = {}
+    const ticker = { setLead: () => {} }
+    handleChat(bot, ticker, 'Steve', 'find me diamond')
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for diamond…'])
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) {
+      advancePendingSearch(bot, ticker, bot._tickerCtx)
+    }
+    assert.deepEqual(bot.lines, [
+      'nothing within 48, widening the search for diamond…',
+      'no diamond within 160 blocks (loaded area)',
+    ])
   })
 
   it("replies with 'unknown block: <name>' when block name is unrecognized", () => {
