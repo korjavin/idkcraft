@@ -653,6 +653,9 @@ function fleeReflex(bot, ctx) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
+    // Head of the latest plan (b50): the executor works this list from
+    // [0] down, so the wedge line can name the terrain it faces.
+    setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
     // place_error streaks (tower attempts into the same cell while a previous
     // placeBlock still awaits blockUpdate): consecutive only — any other
     // reset reason breaks the streak. Behaviours treat N>=3 with no
@@ -897,7 +900,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // decision line. Registered here in runOnce(), not in createTicker: the test
     // mockBot is a plain object, not an EventEmitter, so only the real
     // mineflayer bot ever reaches this code.
-    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
+    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
     const life = createLifecycle(ticker)
