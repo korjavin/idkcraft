@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { findNearest } = require('./scout')
 const { countItems } = require('../perception')
+const fightMod = require('./fight')
 const metrics = require('../metrics')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
@@ -21,6 +22,7 @@ const metrics = require('../metrics')
 const FIND_RADIUS = 48
 const WANT_ORE = 3
 const WANT_LOGS = 4
+const WANT_FOOD = 3
 const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable target
 const MOVE_TOLERANCE = 0.5
@@ -94,17 +96,101 @@ function clearGoal(bot, ctx) {
   ctx.lastGoalKey = ''
 }
 
+function bringKind(ctx) {
+  return (ctx.bring && ctx.bring.kind) || 'block'
+}
+
 function refuse(bot, ctx, line) {
   say(bot, line)
-  metrics.bring.inc({ outcome: 'refused' })
+  metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   ctx.bring = null
   clearGoal(bot, ctx)
 }
 
 function done(bot, ctx) {
-  metrics.bring.inc({ outcome: 'done' })
+  metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   ctx.bring = null
   clearGoal(bot, ctx)
+}
+
+// Food (idkcraft-n7k): 'bring me food [N]' + 'meat' / 'something to eat'.
+// Inventory first (any edible incl. raw meat), else hunt the nearest passive
+// animal with the fight swing. No cooking, no rescue branches — refusals.
+const FOOD_NAMES = new Set([
+  'bread', 'baked_potato', 'apple', 'carrot',
+  'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'cooked_rabbit',
+  'beef', 'porkchop', 'mutton', 'chicken', 'rabbit',
+])
+const PREY_NAMES = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit'])
+const PREY_DROPS = { cow: 'beef', pig: 'porkchop', sheep: 'mutton', chicken: 'chicken', rabbit: 'rabbit' }
+
+function isFoodRequest(name) {
+  const n = String(name || '').toLowerCase().trim()
+  return n === 'food' || n === 'meat' || n === 'something to eat'
+}
+
+function findEdible(bot) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (i && typeof i.name === 'string' && FOOD_NAMES.has(i.name)) {
+          return { name: i.name, count: typeof i.count === 'number' ? i.count : 1 }
+        }
+      }
+    }
+  } catch (_) { /* no inventory: hunt */ }
+  return null
+}
+
+function animalDist(bp, epos) {
+  try {
+    return typeof bp.distanceTo === 'function'
+      ? bp.distanceTo(epos)
+      : Math.hypot(bp.x - epos.x, bp.y - epos.y, bp.z - epos.z)
+  } catch (_) { return null }
+}
+
+// Nearest passive animal within 48; when drop is set (second+ kill of one
+// order) only animals dropping it, so one order tosses one food kind.
+function findAnimal(bot, drop) {
+  const bp = bot && bot.entity && bot.entity.position
+  if (!bp) return null
+  let best = null
+  let bestDist = Infinity
+  for (const e of Object.values(bot.entities || {})) {
+    if (!e || !e.position || e.isValid === false) continue
+    if (!PREY_NAMES.has(e.name)) continue
+    if (drop && PREY_DROPS[e.name] !== drop) continue
+    const d = animalDist(bp, e.position)
+    if (typeof d !== 'number' || d > FIND_RADIUS) continue
+    if (d < bestDist) { bestDist = d; best = e }
+  }
+  if (!best) return null
+  return { name: best.name, id: best.id, position: best.position, distance: Math.round(bestDist) }
+}
+
+function entityById(bot, id) {
+  for (const e of Object.values(bot.entities || {})) {
+    if (e && e.id === id && e.isValid !== false && e.position) return e
+  }
+  return null
+}
+
+// Fence fact (n7k): log only — whether the prey stands near player fences
+// is a future model choice, never a branch here.
+function fenceFact(bot, animal) {
+  try {
+    const p = animal.position
+    const around = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+    for (const [ox, oy, oz] of around) {
+      const b = bot.blockAt && bot.blockAt({ x: Math.floor(p.x) + ox, y: Math.floor(p.y) + oy, z: Math.floor(p.z) + oz })
+      if (b && typeof b.name === 'string' && b.name.endsWith('_fence')) {
+        console.log(`hunt animal near fences: ${animal.name} at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}`)
+        return
+      }
+    }
+  } catch (_) { /* fact best-effort */ }
 }
 
 // Progress is horizontal displacement or a new standing level — the same
@@ -120,14 +206,108 @@ function atPos(bot) {
   return bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
 }
 
+function findFood(bot, ctx, o) {
+  const res = findAnimal(bot, o.drop || null)
+  if (!res) {
+    refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks')
+    return
+  }
+  o.animal = { name: res.name, id: res.id }
+  o.pos = res.position
+  o.drop = PREY_DROPS[res.name]
+  o.lastPos = { x: res.position.x, y: res.position.y, z: res.position.z }
+  fenceFact(bot, res)
+  if (!o.announced) {
+    o.announced = true
+    say(bot, `going hunting: ${res.name} ${res.distance} blocks away`)
+  }
+  o.phase = 'walk'
+  o.stalls = 0
+  o.armedId = null
+}
+
+function walkFood(bot, ctx, o, bp, grounded) {
+  const ent = o.animal ? entityById(bot, o.animal.id) : null
+  if (!ent) { o.animal = null; o.phase = 'find'; return }
+  o.pos = ent.position
+  o.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
+  const key = `bring-hunt:${Math.round(ent.position.x)},${Math.round(ent.position.y)},${Math.round(ent.position.z)}`
+  const d = animalDist(bp, ent.position)
+  if (d !== null && d <= fightMod.SWING_RANGE) { o.phase = 'kill'; return }
+  if (key !== ctx.lastGoalKey) {
+    bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, 2), false)
+    ctx.lastGoalKey = key
+    o.stalls = 0
+    o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+    return
+  }
+  if (progressed(bp, o.lastBotPos, grounded)) {
+    o.stalls = 0
+    o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+  } else if (++o.stalls >= WALK_STALL_TICKS) {
+    refuse(bot, ctx, `could not reach ${o.animal.name}`)
+  }
+}
+
+function killFood(bot, ctx, o, bp) {
+  const ent = o.animal ? entityById(bot, o.animal.id) : null
+  if (!ent) { // dead or gone: collect whatever dropped at the last spot
+    o.dropPos = o.lastPos
+    o.phase = 'pickup'
+    return
+  }
+  o.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
+  const d = animalDist(bp, ent.position)
+  if (d === null || d > fightMod.SWING_RANGE) { o.phase = 'walk'; return }
+  if (o.armedId !== ent.id) {
+    o.armedId = ent.id
+    try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
+  }
+  try { fightMod.swing(bot, ent) } catch (_) { /* mock bots may lack lookAt/attack */ }
+}
+
+function pickupFood(bot, ctx, o, bp, grounded) {
+  const dp = o.dropPos
+  if (!dp) { o.animal = null; o.phase = 'find'; return }
+  const key = `bring-food-pickup:${Math.round(dp.x)},${Math.round(dp.y)},${Math.round(dp.z)}`
+  if (key !== ctx.lastGoalKey) {
+    bot.pathfinder.setGoal(new goals.GoalNear(dp.x, dp.y, dp.z, 1), false)
+    ctx.lastGoalKey = key
+    o.stalls = 0
+    o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+    return
+  }
+  const d = animalDist(bp, dp)
+  if (d === null || d > 2) {
+    if (progressed(bp, o.lastBotPos, grounded)) {
+      o.stalls = 0
+      o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+    } else if (++o.stalls >= WALK_STALL_TICKS) {
+      refuse(bot, ctx, `could not pick up ${o.drop}`)
+    }
+    return
+  }
+  // Walked over the drops: the inventory count is the truth.
+  o.have = countDrop(bot, o.drop)
+  if (o.have >= o.want) {
+    o.phase = 'return'
+    o.saidWaiting = false
+  } else {
+    o.animal = null
+    o.phase = 'find'
+  }
+}
+
 function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const grounded = !bot.entity || bot.entity.onGround !== false
+  const food = (o.kind || 'block') === 'food'
 
   if (o.phase === 'find') {
+    if (food) { findFood(bot, ctx, o); return }
     const res = findNearest(bot, o.name, FIND_RADIUS)
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
@@ -156,6 +336,7 @@ function bring(bot, ctx, target, state) {
   }
 
   if (o.phase === 'walk') {
+    if (food) { walkFood(bot, ctx, o, bp, grounded); return }
     const key = `bring:${o.pos.x},${o.pos.y},${o.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(o.pos.x, o.pos.y, o.pos.z, 2), false)
@@ -217,7 +398,14 @@ function bring(bot, ctx, target, state) {
     return
   }
 
+  if (o.phase === 'kill') {
+    if (food) { killFood(bot, ctx, o, bp); return }
+    refuse(bot, ctx, `could not bring ${o.block || o.name}`)
+    return
+  }
+
   if (o.phase === 'pickup') {
+    if (food) { pickupFood(bot, ctx, o, bp, grounded); return }
     const key = `bring-pickup:${o.pos.x},${o.pos.y},${o.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalBlock(o.pos.x, o.pos.y, o.pos.z), false)
@@ -292,4 +480,8 @@ module.exports.needsPickaxe = needsPickaxe
 module.exports.hasPickaxe = hasPickaxe
 module.exports.WANT_ORE = WANT_ORE
 module.exports.WANT_LOGS = WANT_LOGS
+module.exports.WANT_FOOD = WANT_FOOD
 module.exports.WANT_MAX = WANT_MAX
+module.exports.isFoodRequest = isFoodRequest
+module.exports.findEdible = findEdible
+module.exports.findAnimal = findAnimal

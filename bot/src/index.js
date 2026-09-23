@@ -241,7 +241,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
-    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -645,7 +645,7 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       const real = resolvePlayer(bot, name)
       followName = real
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
@@ -664,7 +664,7 @@ function fleeReflex(bot, ctx) {
     home: () => ctx.home || null,
     setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -672,7 +672,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
@@ -688,6 +688,28 @@ function fleeReflex(bot, ctx) {
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     setBring: ({ name, want, by }) => {
+      if (bringMod.isFoodRequest(name)) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        const n = want || bringMod.WANT_FOOD
+        const have = bringMod.findEdible(bot)
+        if (have) {
+          const give = Math.min(have.count, n)
+          ctx.bring = {
+            kind: 'food', name: 'food', want: n, by, drop: have.name, have: give,
+            phase: 'return', saidWaiting: false, announced: true,
+          }
+          ctx.paused = false
+          return `coming with ${give} ${have.name}`
+        }
+        ctx.bring = {
+          kind: 'food', name: 'food', want: n, by, drop: null, have: 0,
+          phase: 'find', announced: false, animal: null,
+        }
+        ctx.paused = false
+        return 'looking for animals'
+      }
       const res = findNearest(bot, name, 48)
       if (res === 'unknown') return `unknown block: ${name}`
       if (!res) return `no ${name} within 48 blocks`
@@ -703,7 +725,7 @@ function fleeReflex(bot, ctx) {
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.bring = {
-        name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
+        kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
         pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
         have: 0, announced: true,
       }
@@ -1015,13 +1037,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
-      const m = msg.match(/^bring me\s+(\S+)(?:\s+(\d+))?$/)
+      const m = msg.match(/^bring me\s+(something to eat|\S+)(?:\s+(\d+))?$/)
       if (!m) {
         bot.chat('try: bring me coal')
       } else if (ticker && typeof ticker.setBring === 'function') {
+        const food = bringMod.isFoodRequest(m[1])
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
-          : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)
+          : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
         bot.chat(ticker.setBring({ name: m[1], want, by: playerName }))
       }
     }
