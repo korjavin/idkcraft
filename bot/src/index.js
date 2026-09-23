@@ -32,6 +32,7 @@ const BEHAVIOURS = {
   bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
+  build: require('./behaviours/build'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -366,6 +367,17 @@ function fleeReflex(bot, ctx) {
 
   async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
+    // Spawn adoption races chunk loading (one shot at join sees an empty
+    // world), so retry a few ticks while no home is set. A 'build here'
+    // (setHome) or the build default stops the retries.
+    if (!ctx.home && (ctx.adoptTries || 0) < 6) {
+      ctx.adoptTries = (ctx.adoptTries || 0) + 1
+      try {
+        const foundEarly = goal.adoptHome(bot)
+        // Same resets as setHome below (no ticker handle in this scope).
+        if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
+      } catch (_) { /* try again next tick */ }
+    }
     inFlight = true
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
@@ -646,6 +658,11 @@ function fleeReflex(bot, ctx) {
     },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { startWork() },
+    // Home site (epic rw4.4): 'build here' and spawn adoption replace the
+    // site. Build progress resets with it — old skips/fail counts belong
+    // to the old origin. The facts text (home none->site) re-decides.
+    home: () => ctx.home || null,
+    setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       ctx.paused = true
@@ -800,6 +817,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // unseen start walks home first (see pre-arm below) — working a cave
       // 225 blocks from the player helps no one.
       if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName) tickCtx.resumeWork = true
+      // Epic rw4.4: adopt a house an earlier run finished (door near
+      // spawn) before the first decision, so a restart resumes as built.
+      const found = goal.adoptHome(bot)
+      if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
       if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
       ticker.start()
     })
@@ -912,6 +933,17 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   } else if (msg === 'go work' || msg === 'free') {
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
+  } else if (msg === 'build here') {
+    const speaker = bot.players && bot.players[username] && bot.players[username].entity
+    const pos = speaker && speaker.position
+    if (!pos || typeof pos.x !== 'number') return // speaker out of tracking range: no around
+    const home = ticker && typeof ticker.home === 'function' ? ticker.home() : null
+    if (home && home.built) {
+      const st = home.site || {}
+      bot.chat(`home already built at ${st.x} ${st.y} ${st.z}`)
+      return
+    }
+    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else if (msg === 'brain' || msg.startsWith('brain ')) {

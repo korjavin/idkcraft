@@ -696,9 +696,9 @@ describe('work mode (epic rw4)', () => {
     return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
   }
 
-  it('(a) work + player nearby: rest step, follow never runs', async () => {
+  it('(a) work + player nearby: build step, follow never runs', async () => {
     const bot = workBot()
-    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, rest runs
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, build defaults the site (rw4.4)
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
@@ -707,14 +707,14 @@ describe('work mode (epic rw4)', () => {
     BEHAVIOURS.follow = () => { followRan++ }
     try {
       const r = await ticker.tick()
-      assert.equal(r.decision.action, 'rest')
+      assert.equal(r.decision.action, 'build')
       assert.equal(r.decision.source, 'goal-fsm')
       assert.equal(followRan, 0)
-      assert.ok(bot.calls.setGoal >= 1)
-      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear') // rest strolls around spawn
-      assert.ok(lines.some((l) => l.includes('goal step=rest')))
+      assert.ok(bot.chats.some((m) => m === 'next: building the house (goal-fsm)'))
+      assert.ok(lines.some((l) => l.includes('goal step=build')))
     } finally {
       BEHAVIOURS.follow = origFollow
+      ticker.destroy()
     }
   })
 
@@ -728,6 +728,7 @@ describe('work mode (epic rw4)', () => {
     assert.equal(r.decision.action, 'fight')
     assert.ok(bot.calls.setGoal >= 1) // pursuit goal, not a rest stroll
     assert.equal(bot.attackCalls, 0) // 5 blocks: walking in, out of swing range
+    ticker.destroy()
   })
 
   it('(c) work + no visible target but roster non-empty: working path, fast cadence', async () => {
@@ -736,7 +737,7 @@ describe('work mode (epic rw4)', () => {
     global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
     try {
       const bot = workBot()
-      bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, rest runs
+      bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, build runs
       // Roster player WITHOUT an entity: findTarget is null (nothing
       // visible), but Steve is on the server, so the workAlone path runs.
       // (An entity would make him visible and take the normal path instead.)
@@ -744,8 +745,9 @@ describe('work mode (epic rw4)', () => {
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222, followName: 'Nobody' })
       ticker.work()
       const r = await ticker.tick()
-      assert.equal(r.decision.action, 'rest') // without workAlone this would be idle
+      assert.equal(r.decision.action, 'build') // without workAlone this would be idle
       assert.deepEqual(delays, [111]) // fast ticks while working, not idle cadence
+      ticker.destroy()
     } finally {
       global.setTimeout = orig
     }
@@ -761,6 +763,7 @@ describe('work mode (epic rw4)', () => {
     const r = await ticker.tick()
     assert.equal(r.decision.action, 'follow')
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+    ticker.destroy()
   })
 
   describe('follow me from an unseen player (3a7)', () => {
@@ -987,6 +990,7 @@ describe('work mode (epic rw4)', () => {
     const r = await ticker.tick()
     assert.notDeepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
     assert.equal(r.decision.action, 'gather') // empty hands: gather is the correct first step
+    ticker.destroy()
   })
 
   it('stop during the goal await discards the stale work step', async () => {
@@ -1055,6 +1059,7 @@ describe('work mode (epic rw4)', () => {
         assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
         assert.equal(brain.calls, 0)
         assert.ok(!lines.some((l) => l.includes('goal step=')), 'no goal decision while alone')
+        ticker.destroy()
       }
       assert.ok(delays.every((d) => d === 222), `slow cadence while alone (delays=${delays})`)
     } finally {
@@ -1070,6 +1075,7 @@ describe('work mode (epic rw4)', () => {
     await ticker.tick() // step rest is set
     handleChat(bot, ticker, 'Steve', 'status')
     assert.equal(bot.chats[bot.chats.length - 1], 'working step=gather logs=0 planks=0 home=none')
+    ticker.destroy()
   })
 })
 

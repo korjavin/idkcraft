@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
 
 function pos(x, y, z) {
   const p = {
@@ -96,7 +96,7 @@ describe('goalFacts', () => {
 })
 
 describe('MENU feasibility gates', () => {
-  const F = (name, facts) => MENU[name].feasible(facts)
+  const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
   const base = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no' }
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
@@ -109,12 +109,12 @@ describe('MENU feasibility gates', () => {
     // feasible until the load is full, then craft/build take over.
     assert.equal(F('gather', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), true)
     assert.equal(F('craft', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), false)
-    // Sufficient material but no site: all work gates closed, rest is the
-    // correct idle (the owner places the site with 'build here').
+    // Sufficient material but no site: build defaults the site to spawn
+    // (bead .4 batch gate); the owner moves it with 'build here'.
     const ready = { ...base, logs: 0, planks: 48, table: 1, door: 1, home: 'none' }
     assert.equal(F('gather', ready), false)
     assert.equal(F('craft', ready), false)
-    assert.equal(F('build', ready), false)
+    assert.equal(F('build', ready, goalBot(), {}), true)
     assert.equal(goalFsm(ready, ['rest']), 'rest')
   })
   it('craft starts on a full load, not on the first log', () => {
@@ -124,11 +124,19 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', { ...base, planks: 5, maxPlanks: 5 }), true) // leftovers finish table/door
     assert.equal(F('craft', { ...base, planks: 56, maxPlanks: 56, table: 1, door: 1 }), false) // nothing left to craft
   })
-  it('build needs budget, kit and a site — never a finished house', () => {
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'site' }), true)
-    assert.equal(F('build', { ...base, planks: 46, table: 1, door: 1, home: 'site' }), false)
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'built' }), false)
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'none' }), false)
+  it('build works in batches from spawn or a site — never without material', () => {
+    const bot = goalBot() // spawnPoint set; no blockAt: the homeless path scans nothing
+    assert.equal(F('build', { ...base, planks: 48 }, goalBot({ spawn: null }), {}), false) // no home, no spawn
+    assert.equal(F('build', { ...base, planks: 48 }, bot, {}), true) // homeless: defaults the site
+    assert.equal(F('build', { ...base, planks: 16 }, bot, {}), true) // one full batch
+    assert.equal(F('build', { ...base, planks: 15 }, bot, {}), false) // short of a batch
+    const siteCtx = { home: siteFor(bot, pos(0, 64, 0)) } // all cells read missing: full remainder
+    const kit = { table: 1, door: 1 } // the item gate needs both held for a full remainder
+    assert.equal(F('build', { ...base, ...kit, planks: 48, home: 'site' }, bot, siteCtx), true)
+    assert.equal(F('build', { ...base, ...kit, planks: 15, home: 'site' }, bot, siteCtx), false)
+    // item gate: an unfinished door/table without its item yields (no livelock)
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 0, home: 'site' }, bot, siteCtx), false)
+    assert.equal(F('build', { ...base, planks: 48, table: 0, door: 1, home: 'site' }, bot, siteCtx), false)
   })
 })
 
@@ -225,13 +233,13 @@ describe('decide decision point', () => {
     assert.ok(ctx.goalText.includes('logs=few'))
   })
 
-  it('craft needs a placed table for the door: unplaced table rests', async () => {
-    // A door recipe requires the table block; a table sitting in the
-    // inventory does not unlock it, so the step must not even be picked
-    // (otherwise it would report done forever while still feasible).
+  it('table in inventory does not unlock craft: build lays it', async () => {
+    // A door recipe requires the table block, so craft stays out — but with
+    // build registered (rw4.4) the full kit defaults a site at spawn and
+    // builds instead of resting.
     const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] })
     const r = await decide(bot, {})
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'build')
   })
 
   it('placed table unlocks craft for the door', async () => {
@@ -258,17 +266,16 @@ describe('decide decision point', () => {
     assert.equal(r.action, 'gather')
   })
 
-  it('feasible-but-unregistered build never runs', async () => {
-    // The registration gate in decide(): a full kit on a build site makes
-    // build feasible, but with no behaviour behind it the step must not be
-    // picked (deleting the check would route to stopOnce() every tick).
+  it('full kit on a build site runs build', async () => {
+    // Build joined in rw4.4 and is registered: a full kit on a build site
+    // is feasible AND runs (craft and gather both correctly stay out).
     const bot = goalBot({ items: [
       { name: 'oak_planks', count: 48 },
       { name: 'crafting_table', count: 1 },
       { name: 'oak_door', count: 1 },
     ] })
     const r = await decide(bot, { home: { table: pos(2, 64, 0) } })
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'build')
   })
 
   it('chooseStep single feasible step: only-option, brain not asked', async () => {
