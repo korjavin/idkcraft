@@ -175,7 +175,7 @@ function build(bot, ctx, target, state) {
   // another table placed here earlier (or by anyone) counts the same.
   if (!ctx.home.table && cellDone(bot, ctx.home, BLUEPRINT[0])) {
     const t = BLUEPRINT[0]
-    ctx.home.table = { x: ctx.home.site.x + t.dx, y: ctx.home.site.y + t.dy, z: ctx.home.site.z + t.dz }
+    ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
   }
 
   const idx = nextCellIdx(bot, ctx.home, ctx.buildSkip)

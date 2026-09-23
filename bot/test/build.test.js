@@ -192,7 +192,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     assert.equal(ctx.placeInFlight, false)
     paintHouse(world, ctx.home) // the rest goes up (e.g. between restarts)
     build(bot, ctx, null, null) // tick 3: nothing left -> done
-    assert.deepEqual(ctx.home.table, { x: 10, y: 64, z: 1 }) // table claimed on placement
+    assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, { x: 10, y: 64, z: 1 }) // table claimed on placement
     assert.equal(ctx.home.built, true)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.chats.some((m) => m === 'home done at 6 64 0'))

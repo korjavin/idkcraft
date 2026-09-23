@@ -209,7 +209,7 @@ function adoptHome(bot) {
       const t = BLUEPRINT[0]
       const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
       if (tb && tb.name === 'crafting_table') {
-        home.table = { x: home.site.x + t.dx, y: home.site.y + t.dy, z: home.site.z + t.dz }
+        home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
       }
     } catch (_) { /* unverifiable: leave unclaimed */ }
     let allPresent = true
