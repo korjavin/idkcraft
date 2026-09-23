@@ -245,6 +245,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
+    clearPendingSearch(ctx)
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
@@ -408,11 +409,7 @@ function fleeReflex(bot, ctx) {
     }
     inFlight = true
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    // Paused while hostiles are near (last tick's snapshot): search slices
-    // must not stall the fight reflexes.
-    if (!ctx.lastHostileSnap || ctx.lastHostileSnap.count === 0) {
-      try { advancePendingSearch(bot, { setLead: (order) => { setLeadOrder(ctx, order) } }, ctx) } catch (_) { /* search never breaks the tick */ }
-    }
+    try { advancePendingSearch(bot, { setLead: (order) => { setLeadOrder(ctx, order) } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -684,6 +681,7 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
+      clearPendingSearch(ctx)
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       const real = resolvePlayer(bot, name)
       followName = real
@@ -703,6 +701,7 @@ function fleeReflex(bot, ctx) {
     home: () => ctx.home || null,
     setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
+      clearPendingSearch(ctx)
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
@@ -713,6 +712,7 @@ function fleeReflex(bot, ctx) {
     },
     setLead: (order) => { setLeadOrder(ctx, order) },
     clearLead: (player) => {
+      clearPendingSearch(ctx)
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
       if (ctx.lead && !player) bot.chat('following you again')
@@ -728,6 +728,7 @@ function fleeReflex(bot, ctx) {
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     setBring: ({ name, want, by }) => {
+      clearPendingSearch(ctx)
       if (bringMod.isFoodRequest(name)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
@@ -996,10 +997,14 @@ function answerFound(bot, ticker, playerName, refY, res) {
 
 // One pending far search (amb), advanced once per tick: the 96/160 shells
 // sliced to the per-tick CPU budget. Completion chats the answer (find) or
-// opens the order (bring); a newer request replaces a stale one.
+// opens the order (bring); a newer request replaces a stale one. Slices
+// pause while hostiles are near (last tick's snapshot): search must not
+// stall the fight reflexes. A negative names the cursor's own edge — the
+// radius actually scanned, not a re-probe that may have drifted.
 function advancePendingSearch(bot, ticker, ctx) {
   const p = ctx && ctx.pendingSearch
   if (!p) return
+  if (ctx.lastHostileSnap && ctx.lastHostileSnap.count > 0) return
   const r = stepFarSearch(bot, p.cursor)
   if (!r.done) return
   ctx.pendingSearch = null
@@ -1007,19 +1012,27 @@ function advancePendingSearch(bot, ticker, ctx) {
     bot.chat(`unknown block: ${p.name}`)
     return
   }
+  const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
   if (p.kind === 'bring') {
     if (!r.result) {
-      bot.chat(`no ${p.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      bot.chat(`no ${p.name} within ${edge} blocks (loaded area)`)
       return
     }
     bot.chat(startBlockOrder(bot, ctx, p, r.result))
     return
   }
   if (!r.result) {
-    bot.chat(`no ${p.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+    bot.chat(`no ${p.name} within ${edge} blocks (loaded area)`)
     return
   }
   answerFound(bot, ticker, p.by, p.refY, r.result)
+}
+
+// A pending far search belongs to the order or question that started it:
+// any mode change or death retires it, so a late completion can never
+// override stop, follow, work, or a newer order.
+function clearPendingSearch(ctx) {
+  if (ctx) ctx.pendingSearch = null
 }
 
 function handleChat(bot, ticker, username, message, senderUuid) {
@@ -1114,6 +1127,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
+      if (bot._tickerCtx) clearPendingSearch(bot._tickerCtx)
       const name = m[1]
       const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null

@@ -339,6 +339,121 @@ describe('findNearest', () => {
     assert.deepEqual(radii, [84])
   })
 
+  it('slices the queue across steps under the tick budget (amb)', () => {
+    // Fake clock: each sub-scan costs 100ms; the 120ms budget fits 2.
+    const { performance } = require('node:perf_hooks')
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const realNow = performance.now
+    let t = 0
+    performance.now = () => t
+    try {
+      const bot = mockBot({
+        registry: NAMES,
+        spots: [],
+        names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      })
+      bot.findBlocks = () => { t += 100; return [] }
+      const cursor = startFarSearch(bot, 'iron')
+      assert.ok(cursor && cursor.queue.length === 78)
+      const r = stepFarSearch(bot, cursor)
+      assert.equal(r.done, false)
+      assert.equal(cursor.at, 2, 'third scan would exceed the budget')
+    } finally {
+      performance.now = realNow
+    }
+  })
+
+  it('stops after ring 70 when a hit within 96 exists (amb)', () => {
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const ore = pos(90, 64, 0)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [ore],
+      names: {
+        '90,64,0': 'iron_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+    })
+    let calls = 0
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      calls++
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    const cursor = startFarSearch(bot, 'iron')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
+    assert.ok(r.done && r.result, 'ore at 90 found')
+    assert.equal(calls, 26, 'ring 110/150 never scanned')
+  })
+
+  it('ends early on one exposed hit, scans on for buried-only (amb)', () => {
+    const { performance } = require('node:perf_hooks')
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const realNow = performance.now
+    const PROBES = { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' }
+    function centerAware(bot) {
+      const inner = bot.findBlocks.bind(bot)
+      bot.findBlocks = (o) => {
+        const c = o.point || { x: 0, y: 64, z: 0 }
+        return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+      }
+    }
+    let t = 0
+    performance.now = () => t
+    try {
+      // Exposed vein at 60: first tick with a hit answers.
+      const open = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { ...PROBES, '60,64,0': 'iron_ore', '61,64,0': 'air' } })
+      centerAware(open)
+      const c1 = startFarSearch(open, 'iron')
+      let r1 = { done: false, result: null }
+      let n1 = 0
+      for (let i = 0; i < 200 && !r1.done; i++) { r1 = stepFarSearch(open, c1); n1++ }
+      assert.ok(r1.done && r1.result, 'exposed vein found')
+      assert.ok(n1 < 13, `early exit, not the full ring (steps=${n1})`)
+      // Buried-only: no early exit, ring 70 runs out, then fast-forward.
+      t = 0
+      const shut = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { ...PROBES, '60,64,0': 'iron_ore' } })
+      let calls = 0
+      const inner = shut.findBlocks.bind(shut)
+      shut.findBlocks = (o) => {
+        calls++
+        t += 100
+        const c = o.point || { x: 0, y: 64, z: 0 }
+        return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+      }
+      const c2 = startFarSearch(shut, 'iron')
+      let r2 = { done: false, result: null }
+      for (let i = 0; i < 200 && !r2.done; i++) r2 = stepFarSearch(shut, c2)
+      assert.ok(r2.done && r2.result, 'buried vein still found')
+      assert.equal(calls, 26, 'full ring 70, then fast-forward past 110/150')
+    } finally {
+      performance.now = realNow
+    }
+  })
+
+  it('pauses far slices while hostiles are near (amb)', () => {
+    const { advancePendingSearch } = require('../src/index')
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    bot._tickerCtx = {}
+    handleChat(bot, { setLead() {} }, 'Steve', 'find me diamond')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.pendingSearch, 'search pending')
+    ctx.lastHostileSnap = { count: 2, name: 'zombie', dist: 5 }
+    advancePendingSearch(bot, {}, ctx)
+    assert.ok(ctx.pendingSearch, 'still pending under hostiles')
+    assert.equal(ctx.pendingSearch.cursor.at, 0, 'no progress under hostiles')
+    ctx.lastHostileSnap = { count: 0, name: null, dist: null }
+    advancePendingSearch(bot, {}, ctx)
+    assert.equal(ctx.pendingSearch, null, 'completes when clear (instant mocks)')
+    assert.ok(bot.lines.includes('no diamond within 160 blocks (loaded area)'), `lines: ${bot.lines}`)
+  })
+
   it('reports the loaded boundary from blockAt probes', () => {
     const { loadedSearchRadius } = require('../src/behaviours/scout')
     const dark = mockBot({ registry: NAMES })

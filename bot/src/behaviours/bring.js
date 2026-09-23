@@ -362,7 +362,8 @@ function bring(bot, ctx, target, state) {
       return
     }
     if (!r.result) {
-      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
+      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
       return
     }
     o.pos = r.result.position

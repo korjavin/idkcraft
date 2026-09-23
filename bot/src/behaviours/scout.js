@@ -249,9 +249,11 @@ function rankHits(bot, found, refY = null) {
 // Far search (amb): shells beyond the sync 48, sliced across ticks. A cursor
 // holds ring centers nearest-first; stepFarSearch runs sub-scans until the
 // per-tick CPU budget is spent and returns done + the ranked hit (or null).
-// Coverage is exact by construction: padded sub-scans, merged, deduped,
-// filtered to real distance. Returns null immediately when the loaded edge
-// leaves no ring (unreadable world): the caller answers from sync alone.
+// Coverage: padded sub-scans, merged, deduped, filtered to real distance —
+// the (48..96] shell is exact (sampled 0 misses), the (96..160] shell has
+// small corner gaps between the 26 rays on top of the real (wider) scan
+// spheres. Returns null immediately when the loaded edge leaves no ring
+// (unreadable world): the caller answers from sync alone.
 function farDirs() {
   const dirs = []
   for (const s of [-1, 1]) {
@@ -264,14 +266,14 @@ function farDirs() {
   return dirs
 }
 
-function startFarSearch(bot, blockName, refY = null) {
-  const ids = resolveFindIds(bot, blockName)
-  if (ids.length === 0) return 'unknown'
-  const origin = bot.entity && bot.entity.position
-  if (!origin || typeof origin.x !== 'number') return null
-  const edge = loadedSearchRadius(bot)
+function clonePos(p) {
+  if (!p || typeof p.x !== 'number') return null
+  if (typeof p.clone === 'function') { try { return p.clone() } catch { /* fall through */ } }
+  return { x: p.x, y: p.y, z: p.z }
+}
+
+function buildQueue(origin, edge) {
   const rings = (FAR_RINGS[SEARCH_MAX] || []).filter((ring) => ring <= edge)
-  if (rings.length === 0) return null
   const queue = []
   for (const ring of rings) {
     for (const [dx, dy, dz] of farDirs()) {
@@ -280,13 +282,24 @@ function startFarSearch(bot, blockName, refY = null) {
       queue.push({ ring, dx: dx * k, dy: dy * k, dz: dz * k })
     }
   }
-  return { blockName, ids, refY, queue, at: 0, hits: new Map(), stageMs: {}, stageScans: {} }
+  return queue
+}
+
+function startFarSearch(bot, blockName, refY = null) {
+  const ids = resolveFindIds(bot, blockName)
+  if (ids.length === 0) return 'unknown'
+  const origin = clonePos(bot.entity && bot.entity.position)
+  if (!origin) return null
+  const edge = loadedSearchRadius(bot)
+  const queue = buildQueue(origin, edge)
+  if (queue.length === 0) return null
+  return { blockName, ids, refY, queue, at: 0, hits: new Map(), stageMs: {}, stageScans: {}, edge, origin }
 }
 
 // True once the completed ring's shell holds a hit inside its claim:
 // ring 70 covers (48..96], rings 110/150 the (96..160] shell.
 function farShellDone(cursor, bot, ring) {
-  const origin = bot.entity && bot.entity.position
+  const origin = cursor.origin || (bot.entity && bot.entity.position)
   if (!origin) return false
   const edge = ring === 70 ? 96 : SEARCH_MAX
   for (const q of cursor.hits.values()) {
@@ -296,9 +309,23 @@ function farShellDone(cursor, bot, ring) {
 }
 
 function stepFarSearch(bot, cursor) {
-  if (!cursor || cursor === 'unknown') return { done: true, result: cursor }
-  const origin = bot.entity && bot.entity.position
-  if (!origin) return { done: true, result: null }
+  if (!cursor || cursor === 'unknown') return { done: true, result: cursor, edge: null }
+  const live = bot.entity && bot.entity.position
+  if (!live || typeof live.x !== 'number') return { done: true, result: null, edge: cursor.edge }
+  // Coverage is anchored at the start origin with the start edge. A walked-
+  // off bot or newly streamed chunks invalidate it: rebuild the queue (kept
+  // hits stay valid — blocks don't move) so the claim always matches what
+  // was actually scanned.
+  const edgeNow = loadedSearchRadius(bot)
+  if (!cursor.origin || dist(live, cursor.origin) > SEARCH_FIRST || edgeNow !== cursor.edge) {
+    cursor.origin = clonePos(live) || cursor.origin
+    cursor.edge = edgeNow
+    cursor.queue = buildQueue(cursor.origin, cursor.edge)
+    cursor.at = 0
+    cursor.stageMs = {}
+    cursor.stageScans = {}
+  }
+  const origin = cursor.origin
   const t0 = performance.now()
   let lastRing = cursor.at > 0 ? cursor.queue[cursor.at - 1].ring : null
   while (cursor.at < cursor.queue.length) {
@@ -338,6 +365,8 @@ function stepFarSearch(bot, cursor) {
     // shell already answers the request with an honest distance — nearer
     // unscanned hits stay a best-effort miss, same as the count cap. Buried
     // hits alone never stop the search: a walkable vein may be one tick out.
+    // Distances here anchor at the cursor origin (coverage geometry); the
+    // displayed distance is recomputed live at wrap time.
     const edge = cursor.queue[cursor.at].ring === 70 ? 96 : SEARCH_MAX
     for (const q of cursor.hits.values()) {
       if (dist(q, origin) > edge) continue
@@ -357,8 +386,8 @@ function stepFarSearch(bot, cursor) {
   }
   const within96 = [...cursor.hits.values()].filter((q) => dist(q, origin) <= 96)
   const pool = within96.length > 0 ? within96 : [...cursor.hits.values()]
-  if (pool.length === 0) return { done: true, result: null }
-  return { done: true, result: wrapResult(bot, cursor.blockName, rankHits(bot, pool, cursor.refY)) }
+  if (pool.length === 0) return { done: true, result: null, edge: cursor.edge }
+  return { done: true, result: wrapResult(bot, cursor.blockName, rankHits(bot, pool, cursor.refY)), edge: cursor.edge }
 }
 
 function compareScore(a, b) {
