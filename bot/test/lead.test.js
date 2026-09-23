@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const lead = require('../src/behaviours/lead')
+const recover = require('../src/behaviours/recover')
 const { GIVE_UP_TICKS, WORK_STALL_TICKS } = require('../src/behaviours/lead')
 
 function pos(x, y, z) {
@@ -181,15 +182,18 @@ describe('lead behaviour', () => {
       lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
       assert.ok(ctx.lead, `gave up early at tick ${t}`)
     }
-    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' })
     assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
     assert.ok(!ctx.lead.nudged)
-    // The episode ran and ended without progress (what release() leaves):
-    // the next stall is the second strike and gives up like before.
-    ctx.stuck = null
-    ctx.recovery = null
-    ctx.lead.nudged = true
-    ctx.lead.stuckTicks = 0
+    // The episode ran and ended without progress: drive the real release()
+    // (what the ticker leaves behind), not a hand-made copy.
+    ctx.recovery = { action: 'sidestep', source: 'fsm', model: null, status: 'done' }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.recovery, null)
+    assert.equal(ctx.lead.nudged, true)
+    assert.equal(ctx.lead.nudgedAt, 10, 'release marks the no-gain point')
+    assert.equal(ctx.lead.stuckTicks, 0)
     for (let t = 0; t <= GIVE_UP_TICKS + 1; t++) {
       lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
       if (t < GIVE_UP_TICKS) assert.ok(ctx.lead, `gave up early at tick ${t}`)
@@ -225,15 +229,14 @@ describe('lead behaviour', () => {
         now += 1000
       }
       assert.ok(ctx.lead)
-      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' })
       assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
       assert.deepEqual(bot.calls.controls, [])
       assert.deepEqual(bot.calls.chats, [])
-      // Post-episode with no progress: the second strike gives up.
-      ctx.stuck = null
-      ctx.recovery = null
-      ctx.lead.nudged = true
-      ctx.lead.stuckTicks = 0
+      // Post-episode with no progress (real release): the strike gives up.
+      ctx.recovery = { action: 'sidestep', source: 'fsm', model: null, status: 'done' }
+      recover.release(bot, ctx, 'done')
+      assert.equal(ctx.lead.nudgedAt, 10)
       for (let t = 0; t < GIVE_UP_TICKS + 2 && ctx.lead; t++) {
         lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
         now += 1000
@@ -282,7 +285,7 @@ describe('lead behaviour', () => {
         now += 1000
       }
       assert.ok(ctx.lead)
-      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' })
       assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
       ctx.stuck = null
       ctx.recovery = null
@@ -327,8 +330,31 @@ describe('lead behaviour', () => {
     }
     assert.ok(ctx.lead)
     assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
-    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' })
     assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
+  })
+
+  it('nudged resets only on real gain, not on walking back to the wedge', () => {
+    // M3 regression: clearing nudged on any displacement loops episodes
+    // (sidestep moves -> release -> walk back -> moved=true resets nudged ->
+    // new episode). Only getting closer than the release point re-arms.
+    const recover = require('../src/behaviours/recover')
+    const bot = mockBot()
+    bot.entity.position = pos(0, 64, 0)
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    ctx.lead.lastPos = pos(0, 64, 0)
+    ctx.lead.nudged = true
+    ctx.lead.nudgedAt = 10
+    // Strafe without gain: displacement, but 11 blocks left stays >= 10.
+    bot.entity.position = pos(0, 64, 5)
+    lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    assert.ok(ctx.lead)
+    assert.equal(ctx.lead.nudged, true, 'no gain, no fresh strikes')
+    // Walk past the release mark toward the goal: re-armed.
+    bot.entity.position = pos(5, 64, 0)
+    lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    assert.ok(ctx.lead)
+    assert.equal(ctx.lead.nudged, false, 'real gain re-arms the episode budget')
   })
 
   it('counts horizontal movement while airborne as progress', () => {

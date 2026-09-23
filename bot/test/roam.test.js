@@ -137,7 +137,7 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     }
     assert.equal(bot.calls.setGoal, 0) // detector moves nothing
     assert.equal(bot.controls.jump, undefined)
-    assert.deepEqual(ctx.stuck, { by: 'roam', goal: { x: 1, y: 64, z: 1 } })
+    assert.deepEqual(ctx.stuck, { by: 'roam', goal: { x: 1, y: 64, z: 1 }, key: 'roam' })
     assert.equal(ctx.stuckResets, 0)
     assert.equal(logs.length, 1)
     assert.match(logs[0], /^stuck reason=wedge pos=0,64,0 dist=2\.0$/)

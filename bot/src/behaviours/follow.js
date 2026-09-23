@@ -29,6 +29,7 @@ function follow(bot, ctx, target, state) {
 
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
+    if (!ctx.recoverLatch || ctx.recoverLatch.key !== key) ctx.recoverLatch = null
     ctx.lastGoalKey = key
     ctx.followIssuedAt = now
     ctx.followStalls = 0
@@ -70,7 +71,7 @@ function follow(bot, ctx, target, state) {
         ? state.distance_to_player.toFixed(1)
         : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
       const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
-      if (recover.setStuck(ctx, 'follow', gp)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
+      if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
       ctx.followStalls = 0
       ctx.stuckResets = 0
       ctx.followIssuedAt = now
@@ -105,7 +106,7 @@ function follow(bot, ctx, target, state) {
       ? state.distance_to_player.toFixed(1)
       : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
     const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
-    if (recover.setStuck(ctx, 'follow', gp)) console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
+    if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
     ctx.followStalls = 0
     ctx.followIssuedAt = now
   } else {

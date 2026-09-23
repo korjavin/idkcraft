@@ -377,6 +377,7 @@ function fleeReflex(bot, ctx) {
     ctx.stuck = null
     ctx.recovery = null
     ctx.stuckTicks = 0
+    ctx.recoverLatch = null
   }
 
   function applyDecision(decision, target, state) {
@@ -594,8 +595,16 @@ function fleeReflex(bot, ctx) {
       // skipped — the episode asks the model at decision points only.
       noteDisplacement()
       if (!ctx.recovery && !ctx.stuck) {
-        if ((ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) ctx.stuck = { by: 'place_error', goal: null }
-        else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) ctx.stuck = { by: 'no-displacement', goal: null }
+        // The place_error streak belongs to gather: its own stall logic
+        // skips the column (the yvi fix) and raises the fact at the
+        // unreachable final. A ticker backstop here would starve the skip
+        // and loop episodes on one trunk. Other placers keep the backstop.
+        const gatherOwns = ctx.work && ctx.step === 'gather' && !!ctx.gather
+        if (!gatherOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
+          ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
+        } else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+          ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
+        }
       }
       let decision = null
       if (ctx.stuck && !urgentFight(state)) {

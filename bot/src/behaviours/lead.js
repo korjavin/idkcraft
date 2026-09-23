@@ -106,7 +106,8 @@ function recover(bot, ctx, order, bp, now) {
   // order gives up on the next stall instead of looping episodes.
   if (ctx.recovery) return // episode running: wait for the menu
   const gp = order.pos ? { x: order.pos.x, y: order.pos.y, z: order.pos.z } : null
-  if (recoverMenu.setStuck(ctx, 'lead', gp)) {
+  const gk = order.pos ? `lead:${order.pos.x},${order.pos.y},${order.pos.z}` : 'lead'
+  if (recoverMenu.setStuck(ctx, 'lead', gp, gk)) {
     console.log(`stuck reason=nudge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)}`)
   }
 }
@@ -172,7 +173,10 @@ function lead(bot, ctx, target, state) {
   if (moved) {
     order.stuckTicks = 0
     order.workTicks = 0
-    order.nudged = false // progress since the episode: fresh strikes
+    // Fresh strikes only on real gain toward the goal (ef3): walking back
+    // to the wedge point is displacement, not progress, so nudged stays and
+    // the second strike still gives up instead of looping episodes.
+    if (order.nudged && order.nudgedAt != null && blocksLeft(bp, order.pos) < order.nudgedAt) order.nudged = false
     if (!working && blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
       bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
       order.lastProgressAt = now

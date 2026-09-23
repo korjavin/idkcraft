@@ -306,10 +306,26 @@ describe('recover choice sources', () => {
 })
 
 describe('setStuck transition', () => {
+  it('latch blocks the same situation, a moved goal re-raises', () => {
+    // M4: after an episode the same detector must stay quiet until the
+    // situation changes — otherwise ask+chat every few seconds.
+    const ctx = {}
+    assert.equal(recover.setStuck(ctx, 'follow', { x: 10, y: 64, z: 0 }, 'follow:Steve'), true)
+    ctx.recovery = { action: 'sidestep', status: 'done' }
+    recover.release({ pathfinder: { goal: null }, entity: { position: pos(0, 64, 0) }, username: 'IdkBot' }, ctx, 'done')
+    assert.deepEqual(ctx.recoverLatch, { by: 'follow', key: 'follow:Steve', goal: { x: 10, y: 64, z: 0 } })
+    // Same situation: quiet.
+    assert.equal(recover.setStuck(ctx, 'follow', { x: 10, y: 64, z: 0 }, 'follow:Steve'), false)
+    assert.equal(ctx.stuck, null)
+    // Player walked off: latch clears, fact raises.
+    assert.equal(recover.setStuck(ctx, 'follow', { x: 20, y: 64, z: 0 }, 'follow:Steve'), true)
+    assert.equal(ctx.recoverLatch, null)
+    assert.deepEqual(ctx.stuck.goal, { x: 20, y: 64, z: 0 })
+  })
   it('true on raise, false while set or while an episode runs', () => {
     const ctx = {}
     assert.equal(recover.setStuck(ctx, 'follow', { x: 1, y: 2, z: 3 }), true)
-    assert.deepEqual(ctx.stuck, { by: 'follow', goal: { x: 1, y: 2, z: 3 } })
+    assert.deepEqual(ctx.stuck, { by: 'follow', goal: { x: 1, y: 2, z: 3 }, key: 'follow' })
     assert.equal(recover.setStuck(ctx, 'roam', null), false)
     assert.deepEqual(ctx.stuck.by, 'follow')
     ctx.recovery = { action: 'wait', status: 'running' }
@@ -350,5 +366,82 @@ describe('ticker stuck routing', () => {
     assert.equal(decides, 1, 'brain runs when a fight is urgent')
     assert.equal(r.decision.action, 'follow')
     assert.equal(bot._tickerCtx.stuck.by, 'follow', 'fact waits for the next tick')
+  })
+})
+
+describe('ticker backstops (minor)', () => {
+  function standBot() {
+    const bot = worldBot(new Set([key(0, 60, 0)]), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 64, 0) } } }
+    return bot
+  }
+  it('three place_error resets raise by=place_error and start an episode', async () => {
+    // Deleting the backstop line fails this test (stuck stays null).
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      const bot = standBot()
+      const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+      const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+      ticker.setPathReset('place_error')
+      ticker.setPathReset('place_error')
+      ticker.setPathReset('place_error')
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.stuck.by, 'place_error')
+      assert.ok(lines.some((l) => l.includes('recover action=sidestep') && l.includes('outcome=chosen')),
+        `episode started, got: ${lines.join(' | ')}`)
+    } finally {
+      console.log = origLog
+    }
+  })
+  it('gather owning the step suppresses the place_error backstop (yvi gate)', async () => {
+    const bot = standBot()
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.work = true
+    bot._tickerCtx.step = 'gather'
+    bot._tickerCtx.gather = { pos: null, skip: new Set(), streak: 0 }
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'gather skips the column itself; no episode')
+  })
+  it('thirty still ticks with a moving executor raise by=no-displacement', async () => {
+    // Inverting the moving check fails this (fires while parked); deleting
+    // the line fails the first half (never fires).
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => true
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    // 1 anchor tick + 30 still ticks to trip STUCK_TICKS_ENTRY.
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
+  })
+  it('no backstop while parked (executor idle)', async () => {
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null)
+  })
+})
+
+describe('episode entry drops the stale goal (M2)', () => {
+  it('a live goal is nulled before the primitive runs', async () => {
+    // Without the entry drop the old GoalFollow keeps driving the executor
+    // against the primitive. Deleting the drop fails this test.
+    const bot = worldBot(new Set([key(0, 60, 0)]), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 64, 0) } } }
+    bot.pathfinder.goal = { live: 'GoalFollow' }
+    const brain = { ask: async () => 'wait' }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' }
+    await ticker.tick()
+    assert.equal(bot.pathfinder.goal, null, 'stale goal dropped on entry (wait sets none)')
   })
 })

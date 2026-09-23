@@ -479,11 +479,25 @@ const RECOVER_MENU = {
 // --- episode ---
 
 // Detectors call this instead of moving the body themselves. True on the
-// transition (fact raised), false when an episode already runs or the fact
-// is already set — repeated detector ticks stay quiet.
-function setStuck(ctx, by, goal) {
+// transition (fact raised), false when an episode already runs, the fact is
+// already set, or the latch holds for the same situation (a just-finished
+// episode: re-firing without new information would ask+chat every few
+// seconds). A moved goal clears the latch and raises fresh.
+function goalClose(a, b) {
+  if (!a || !b) return !a && !b
+  if (typeof a.x !== 'number' || typeof b.x !== 'number') return false
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= 2
+}
+function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
-  ctx.stuck = { by: by || 'unknown', goal: goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null }
+  const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
+  const k = key || by || 'unknown'
+  const L = ctx.recoverLatch
+  if (L && L.by === (by || 'unknown') && L.key === k) {
+    if (goalClose(L.goal, g)) return false
+    ctx.recoverLatch = null // same detector, moved situation: fresh episode
+  }
+  ctx.stuck = { by: by || 'unknown', goal: g, key: k }
   return true
 }
 
@@ -507,7 +521,14 @@ function release(bot, ctx, how) {
     // One escape episode per order: a still-stuck order gives up next, like
     // the old second nudge. A gave-up episode clears the order itself. The
     // stall counters restart so the resume gets a fresh give-up window.
+    // nudgedAt marks real gain: only getting closer than the release point
+    // earns fresh strikes (walking back to the wedge is not progress).
     ctx.lead.nudged = true
+    try {
+      const bp = botPos(bot)
+      const t = ctx.lead.pos
+      ctx.lead.nudgedAt = (bp && t) ? Math.round(Math.hypot(t.x - bp.x, t.y - bp.y, t.z - bp.z)) : null
+    } catch (_) { ctx.lead.nudgedAt = null }
     ctx.lead.stuckTicks = 0
     ctx.lead.workTicks = 0
     if (how === 'gave-up') ctx.lead = null
@@ -518,6 +539,11 @@ function release(bot, ctx, how) {
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   if (by === 'follow') ctx.followStalls = 0
+  if (by === 'follow' || by === 'roam' || by === 'gather') {
+    const sk = (ctx.stuck && ctx.stuck.key) || by
+    const sg = ctx.stuck && ctx.stuck.goal
+    ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
+  }
   ctx.lastGoalKey = ''
   ctx.stuckResets = 0
   ctx.placeErrors = 0
@@ -542,6 +568,14 @@ async function decide(bot, ctx, state, target) {
   if (!rec) {
     rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null }
     metrics.routes.inc({ route: 'hard', reason: 'stuck' })
+    // Drop the stale goal first: a live GoalFollow/GoalNear keeps driving
+    // the executor (jump/forward overrides at 20 Hz) and fights every
+    // primitive except sidestep, which sets its own goal afterwards.
+    try {
+      if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
+        bot.pathfinder.setGoal(null)
+      }
+    } catch (_) { /* body best-effort */ }
   } else {
     // A primitive finished: record the outcome, then continue, re-ask, or
     // give up. Terminal states feed the next facts as last=<action>:<outcome>.
