@@ -39,7 +39,7 @@ q 'container_name:idkcraft-bot _time:3h -"waiting for players" | sort by (_time)
 q 'container_name:idkcraft-mc _time:3h | sort by (_time) | fields _time,_msg' | grep -v -E "UUID of|logged in with" > $S/mc.txt
 ```
 
-Keep the full date in the timestamp: sessions cross midnight UTC and a plain `HH:MM` string compare silently mixes days. Sessions are bounded by `spawned as IdkBot` … `leaving: nobody online` in bot.txt and `joined/left the game` in mc.txt. mc.txt `_time` is the log-shipping time and can lag the real event by tens of seconds — order events by bot.txt, use mc.txt for *what* happened (chat, deaths, `/tp`), not for exact latency.
+Keep the full date in the timestamp: sessions cross midnight UTC and a plain `HH:MM` string compare silently mixes days. Sessions are bounded by `spawned as IdkBot` … `leaving: nobody online` in bot.txt and `joined/left the game` in mc.txt. mc.txt `_time` is the log-shipping time and is unreliable: it lags by tens of seconds and the shipper attaches each server message to the PREVIOUS line's timestamp. Use the server's own `[HH:MM:SS INFO]` time inside the message (keep it: drop the `.split("INFO]: ")` when you need times). Order events by bot.txt, use mc.txt for *what* happened (chat, deaths, `/tp`).
 
 Which build was running: `gh run list --limit 10 --json headSha,updatedAt,displayTitle` — the deploy that finished before the session's `spawned` line is the build. Name it (PR numbers) in the report.
 
