@@ -279,6 +279,13 @@ function hybridBrain(remote) {
       }
       const model = await remote.decide(state, reason)
       metrics.routes.inc({ route: 'hard', reason })
+      // Feasibility (idkcraft-dxl): follow walks to the player, so with
+      // nobody online the model's follow is vetoed to the FSM's answer
+      // (which idles without distance_to_player). Source names the veto.
+      if (model.action === 'follow' && (!state || typeof state !== 'object' || typeof state.distance_to_player !== 'number')) {
+        console.log(`brain route=hard reason=${reason} model=follow veto=noplayer fsm=${fsm.action} source=${model.source}`)
+        return { action: fsm.action, sprint: fsm.sprint, source: 'fsm-noplayer' }
+      }
       console.log(`brain route=hard reason=${reason} model=${model.action} fsm=${fsm.action} source=${model.source}`)
       return model
     }
