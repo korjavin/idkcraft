@@ -773,6 +773,31 @@ describe('work mode (epic rw4)', () => {
     assert.equal(r.decision.action, 'rest')
   })
 
+  it('(g) work + empty or self-only roster: idle path, no brain call, slow cadence', async () => {
+    // The workAlone roster guard (anyone but the bot itself) keeps a lone
+    // working bot on the cheap idle path: no brain call, slow ticks, leave
+    // streak ages. Without the self-exclusion it would burn model calls.
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      for (const players of [{}, { IdkBot: { username: 'IdkBot', entity: playerEntity(0) } }]) {
+        const bot = workBot()
+        bot.players = players
+        const brain = mockBrain()
+        const ticker = createTicker({ bot, brain, tickMs: 111, idleTickMs: 222 })
+        ticker.work()
+        const r = await ticker.tick()
+        assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+        assert.equal(brain.calls, 0)
+        assert.ok(!lines.some((l) => l.includes('goal step=')), 'no goal decision while alone')
+      }
+      assert.ok(delays.every((d) => d === 222), `slow cadence while alone (delays=${delays})`)
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
   it('(f) status chats mode, step, inventory and home', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
