@@ -779,12 +779,13 @@ function fleeReflex(bot, ctx) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
           // adopt once before build defaults a fresh site. Readiness needs
-          // positive evidence; bots without a blockAt hook (unit mocks)
-          // count as ready immediately.
+          // positive evidence once a spawn is known; without a spawn yet
+          // (or without a blockAt hook, i.e. unit mocks) adoption no-ops,
+          // so work proceeds and the one shot waits for the spawn below.
           let ready = true
-          try { if (bot.blockAt) ready = !!(bot.spawnPoint && bot.blockAt(bot.spawnPoint)) } catch (_) { ready = true }
+          try { if (bot.blockAt && bot.spawnPoint) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
           if (ready || (ctx.adoptTries = (ctx.adoptTries || 0) + 1) > 60) {
-            ctx.adoptDone = true
+            if (!ctx.adoptDone && bot.spawnPoint) ctx.adoptDone = true
             try {
               const foundEarly = goal.adoptHome(bot)
               // Same resets as setHome below (no ticker handle in this scope).
