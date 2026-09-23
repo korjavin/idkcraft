@@ -414,3 +414,91 @@ describe('rw4.4 (h) build here on a built home refuses', () => {
     assert.deepEqual(bot.chats, [])
   })
 })
+
+describe('cww roof approach must not demolish its own wall', () => {
+  const REG = {
+    oak_planks: { id: 5 },
+    oak_log: { id: 17 },
+    dirt: { id: 3 },
+    oak_door: { id: 64 },
+    crafting_table: { id: 998 },
+  }
+
+  // Fake executor with canDig pathing: on a GoalPlaceBlock it breaks into
+  // the path at once (first solid cell on the straight segment, feet and
+  // head height) — unless the cell's id sits in movements.blocksCantBreak,
+  // mirroring Movements.safeToBreak — then walks one more tick and arrives.
+  // Doors and tables are interacted with, never dug.
+  function diggingSetGoal(bot, world, transit) {
+    return (g) => {
+      bot.calls.goals.push(g)
+      if (!g || g.constructor.name !== 'GoalPlaceBlock' || !g.pos) return
+      const mov = bot.pathfinder.movements
+      const bp = bot.entity.position
+      const solidAt = (x, y, z) => {
+        const name = world.get(x, y, z) ?? (y <= 63 ? 'dirt' : 'air')
+        return name !== 'air' ? name : null
+      }
+      for (let t = 0.05; t < 1; t += 0.05) {
+        const x = Math.floor(bp.x + (g.pos.x - bp.x) * t)
+        const z = Math.floor(bp.z + (g.pos.z - bp.z) * t)
+        for (const y of [Math.floor(bp.y), Math.floor(bp.y) + 1]) {
+          const name = solidAt(x, y, z)
+          if (!name || name.endsWith('_door') || name === 'crafting_table') continue
+          const id = REG[name] != null ? REG[name].id : null
+          if (id != null && mov && mov.blocksCantBreak && mov.blocksCantBreak.has(id)) continue // routes around
+          world.set(x, y, z, 'air')
+          bot.calls.digs.push(name)
+          bot._moving = true
+          transit.n = 1
+          return
+        }
+      }
+      bot._moving = true
+      transit.n = 1
+    }
+  }
+
+  it('build forbids the executor from breaking planks', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.registry = { blocksByName: REG }
+    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    bot.entity.position = pos(10, 64, 2)
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    build(bot, ctx, null, null)
+    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(5), 'planks protected')
+    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(17), 'logs still diggable')
+    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(3), 'dirt still diggable')
+  })
+
+  it('roof completes with walls standing: 24/40 never flaps back', async () => {
+    // Prod state (cww): walls+door+table stand, the bot is outside after the
+    // wall ring, the first roof cell approach used to eat a wall corner and
+    // the rebuild took priority every other tick (23/40<->24/40 for 10+ min).
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.registry = { blocksByName: REG }
+    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    for (const cell of BLUEPRINT) {
+      if (cell.dy === 2) continue // roof not started
+      world.set(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz,
+        cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks')
+    }
+    bot.entity.position = pos(home.site.x + 4, home.site.y, home.site.z + 1)
+    const transit = { n: 0 }
+    bot._moving = false
+    bot.pathfinder.isMoving = () => bot._moving
+    bot.pathfinder.setGoal = diggingSetGoal(bot, world, transit)
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    for (let i = 0; i < 200 && !home.built; i++) {
+      if (transit.n > 0 && --transit.n === 0) bot._moving = false
+      build(bot, ctx, null, null)
+      await settle(2)
+    }
+    assert.equal(home.built, true, 'roof completes')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_planks')), [], 'no wall plank dug')
+  })
+})

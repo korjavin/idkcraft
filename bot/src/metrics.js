@@ -75,8 +75,8 @@ function serve(port) {
 
 const bring = new client.Counter({
   name: 'idkcraft_bot_bring_total',
-  help: 'Bring-me orders by outcome (done|refused|cancelled)',
-  labelNames: ['outcome']
+  help: 'Bring-me orders by outcome (done|refused|cancelled) and kind (block|food)',
+  labelNames: ['outcome', 'kind']
 })
 const goalSteps = new client.Counter({
   name: 'idkcraft_bot_goal_steps_total',
@@ -106,4 +106,9 @@ const escalation = new client.Counter({
   help: 'Escalation events by level transition and reason',
   labelNames: ['from', 'to', 'reason']
 })
-module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, setVitals, serve }
+const recover = new client.Counter({
+  name: 'idkcraft_bot_recover_total',
+  help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
+  labelNames: ['action', 'source', 'outcome']
+})
+module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, setVitals, serve }

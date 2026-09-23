@@ -5,6 +5,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
@@ -18,6 +19,7 @@ function brainTimeoutMs(env) {
 const bringMod = require('./behaviours/bring')
 const homeMod = require('./behaviours/home')
 const goal = require('./goal')
+const recover = require('./behaviours/recover')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
   if (bot && bot._tickerCtx && bot._tickerCtx.eatInFlight) return Promise.resolve()
@@ -36,6 +38,13 @@ const BEHAVIOURS = {
   gohome: homeMod.gohome,
   stay: homeMod.stay,
   build: require('./behaviours/build'),
+  // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
+  pillar_up: (bot, ctx) => recover.run(bot, ctx),
+  dig_up: (bot, ctx) => recover.run(bot, ctx),
+  sidestep: (bot, ctx) => recover.run(bot, ctx),
+  dig_through: (bot, ctx) => recover.run(bot, ctx),
+  wait: (bot, ctx) => recover.run(bot, ctx),
+  call_player: (bot, ctx) => recover.run(bot, ctx),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -67,6 +76,13 @@ const UNSEEN_HOME_TICKS = 10
 const FAR_FROM_SPAWN = 64
 // GoalNear range of the homing walk, and arrival radius for resuming work.
 const RETURN_HOME_RANGE = 2
+// Homing ticks with no displacement before the stuck fact (2oe): the same
+// 10-tick budget as the gather walk stall detector.
+const HOME_STALL_TICKS = 10
+// A homing episode latches its release point; only walking this far from it
+// re-arms another episode. Wider than one sidestep (2): walking back into
+// the same wedge must not chat+ask every ~15 ticks (revmux round 3).
+const HOME_LATCH_CLEAR = 4
 
 // Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
 // edible item from inventory on the every-tick seam when food < 18 and no
@@ -135,10 +151,12 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null }) {
+  // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
+  const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, lastPos: null, homeStalls: 0, homeLastPos: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -200,6 +218,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function destroy() {
     destroyed = true
     if (timer) { clearTimeout(timer); timer = null }
+    try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
   }
   // Stand down after a re-check found someone online: re-arm the streak so
   // the next grace period is measured fresh from here.
@@ -224,10 +243,39 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const bp = bot.entity && bot.entity.position
     if (!sp || !bp) return false
     const key = `return-spawn:${sp.x},${sp.y},${sp.z}`
+    const homePos = { x: bp.x, y: bp.y, z: bp.z }
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), false)
       ctx.lastGoalKey = key
+      ctx.homeStalls = 0
+      ctx.homeLastPos = homePos
       console.log(`returning to spawn dist=${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))}`)
+    } else if (homeReached() || (ctx.homeLastPos && Math.hypot(bp.x - ctx.homeLastPos.x, bp.z - ctx.homeLastPos.z) > 0.5)) {
+      // Standing at spawn is the goal, not a stall (06v holds spawn); real
+      // displacement breaks the streak like the gather walk detector. Either
+      // clears a stale home fact the same way noteDisplacement does.
+      ctx.homeStalls = 0
+      ctx.homeLastPos = homePos
+      // Moved = new situation only when genuinely relocated: the homing
+      // walk itself is displacement, so any 0.5-block move re-arming the
+      // episode loops it on the same wedge. Clear against the release
+      // point the latch carries (lead's nudgedAt pattern).
+      if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') {
+        const at = ctx.recoverLatch.at
+        if (at && Math.hypot(bp.x - at.x, bp.z - at.z) > HOME_LATCH_CLEAR) ctx.recoverLatch = null
+      }
+      // Never under a running episode: clearing the fact while recovery is
+      // set orphans it — no routing, no release, every detector stays off.
+      if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
+    } else if (++ctx.homeStalls >= HOME_STALL_TICKS) {
+      // Detection only (2oe) — the recover menu owns the escape, same as
+      // every other detector. Fires once per episode: setStuck latches.
+      const dist = Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z).toFixed(1)
+      const fx = Number.isInteger(bp.x) ? bp.x : bp.x.toFixed(1)
+      const fy = Number.isInteger(bp.y) ? bp.y : bp.y.toFixed(1)
+      const fz = Number.isInteger(bp.z) ? bp.z : bp.z.toFixed(1)
+      if (recover.setStuck(ctx, 'home', { x: sp.x, y: sp.y, z: sp.z }, key)) console.log(`stuck reason=wedge pos=${fx},${fy},${fz} dist=${dist}`)
+      ctx.homeStalls = 0
     }
     return true
   }
@@ -244,7 +292,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
-    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+    clearStuck()
+    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -336,6 +385,71 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
+  // Stillness fact for the stuck menu: consecutive ticks with no
+  // horizontal displacement while the executor claims to move. Progress
+  // clears a stale detector fact (but never a running episode).
+  function noteDisplacement() {
+    if (ctx.paused) return
+    let bp = null
+    try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
+    let moving = false
+    try {
+      moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
+    } catch (_) { /* stationary default */ }
+    if (bp && ctx.lastPos && moving) {
+      if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+      else {
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuck = null
+      }
+    } else if (!moving) ctx.stuckTicks = 0
+    if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+  }
+
+  // A hostile inside swing reach preempts recovery: the body fights first,
+  // the stuck fact waits for the next tick.
+  function urgentFight(state) {
+    if (!state || !state.hostile || state.hostile.isValid === false) return false
+    const d = state.hostile_distance
+    if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
+    return state.hostile_reachable !== false
+  }
+
+  // A stale stuck fact must not survive a mode change: the goal it names
+  // belongs to the previous order.
+  function clearStuck() {
+    ctx.stuck = null
+    ctx.recovery = null
+    ctx.stuckTicks = 0
+    ctx.recoverLatch = null
+  }
+
+  // Greeting checks (v92): whoever the body approaches — the follow
+  // target, or the bring recipient on the way back — is measured directly;
+  // the module latches the far -> near edge. Only fighting or fleeing
+  // suppress it (near a still player the stub says roam/idle, not follow).
+  function greetCheck(decision) {
+    if (decision.action === 'fight' || decision.action === 'flee') return
+    // No greeting mid-recovery (ef3): the body belongs to the menu, and a
+    // crouch would fight the primitive (jump/place/sneak conflict).
+    if (ctx.stuck || ctx.recovery) return
+    const bringing = decision.action === 'bring' && ctx.bring && ctx.bring.by
+    const name = bringing || followName
+    if (!name) return
+    const ent = bot.players && bot.players[name] && bot.players[name].entity
+    const bp = bot.entity && bot.entity.position
+    if (!ent || !ent.position || !bp) return
+    let d = null
+    try {
+      d = typeof bp.distanceTo === 'function'
+        ? bp.distanceTo(ent.position)
+        : Math.hypot(bp.x - ent.position.x, bp.y - ent.position.y, bp.z - ent.position.z)
+    } catch (_) { return }
+    let standing = false
+    try { standing = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && !bot.pathfinder.isMoving()) } catch (_) { standing = false }
+    greet.greetOnArrival(bot, name, d, standing)
+  }
+
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
@@ -343,6 +457,7 @@ function fleeReflex(bot, ctx) {
     } else {
       stopOnce()
     }
+    greetCheck(decision)
     // sprint stays on the decision line as the brain's opinion only; the
     // body never sprints (see setMovements).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
@@ -439,10 +554,16 @@ function fleeReflex(bot, ctx) {
       // A visible player with skipped work resumes it at once (one-shot):
       // sighting is the normal end of the homing walk, arrival the other.
       if (target && ctx.resumeWork && !followName) startWork()
+      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
       if (homeReached()) {
         // At spawn there is nothing to walk for — unless a follow order is
         // pending: then keep the latch (counter tripped, no work) and stand
         // until the player is visible, instead of oscillating work-vs-home.
+        // Arrived means the homing goal is met, not stuck: drop a stale home
+        // fact (2oe) so the next sighting does not open a pointless episode.
+        // (walkHomeTick never runs past arrival — unseen resets below.)
+        if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
+        if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') ctx.recoverLatch = null
         if (!followWaiting) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
@@ -468,11 +589,29 @@ function fleeReflex(bot, ctx) {
         }
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
+        let idleState = null
         try {
-          const state = buildState(bot, null)
-          if (meleeReflex(bot, ctx, state)) reflexFast = true
-          eatReflex(bot, ctx, state)
+          idleState = buildState(bot, null)
+          if (meleeReflex(bot, ctx, idleState)) reflexFast = true
+          eatReflex(bot, ctx, idleState)
         } catch (_) { /* facts best-effort */ }
+        // Only the home fact: the idle branch is cost-guarded (no brain
+        // calls with nobody online), so a pre-existing follow/gather
+        // episode pauses while alone and resumes on sighting — while a
+        // homing walk that wedged (2oe) reaches the menu here, same
+        // routing as the target path above. After release the walk
+        // re-issues (release clears lastGoalKey) and the latch admits one
+        // episode per situation.
+        if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState)) {
+          try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+          const decision = await recover.decide(bot, ctx, idleState, null)
+          if (ctx.paused) {
+            stopOnce()
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+          }
+          applyDecision(decision, null, idleState)
+          return { decision, calledBrain: false }
+        }
         if (ctx.lead) {
           ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
           if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
@@ -543,8 +682,43 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
         return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
       }
+      // Hard-case stuck (ef3): displacement watch + generic backstops, then
+      // the recover menu owns the body. Detectors in the behaviours raise
+      // ctx.stuck with the goal they pursued; place_error streaks and long
+      // stillness while the executor claims to move raise it here. An urgent
+      // fight skips recovery (safety beats escape) and the brain call is
+      // skipped — the episode asks the model at decision points only.
+      noteDisplacement()
+      if (!ctx.recovery && !ctx.stuck) {
+        // The place_error streak belongs to gather: its own stall logic
+        // skips the column (the yvi fix) and raises the fact at the
+        // unreachable final. A ticker backstop here would starve the skip
+        // and loop episodes on one trunk. Other placers keep the backstop.
+        const gatherOwns = ctx.work && ctx.step === 'gather' && !!ctx.gather
+        // Follow owns its place_error streaks (2oe): its wedge names the
+        // relief and carries the goal, while this backstop would preempt it
+        // with a goal-less fact on the same tick. Other owners keep it.
+        const followOwns = (ctx.lastGoalKey || '').startsWith('follow:')
+        if (!gatherOwns && !followOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
+          ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
+        } else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+          ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
+        }
+      }
+      let decision = null
+      if (ctx.stuck && !urgentFight(state)) {
+        try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+        decision = await recover.decide(bot, ctx, state, target)
+        if (ctx.paused) {
+          // 'stop' landed during the recover await: same stale-decision
+          // guard as after the brain await below.
+          stopOnce()
+          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
+        applyDecision(decision, target, state)
+        return { decision, calledBrain }
+      }
       const key = stateKey(state)
-      let decision
       if (lastDecision && key === lastStateKey) {
         decision = lastDecision
       } else {
@@ -583,6 +757,8 @@ function fleeReflex(bot, ctx) {
       if (ctx.bring && decision.action !== 'fight') {
         const handler = BEHAVIOURS.bring
         if (typeof handler === 'function') handler(bot, ctx, target, state)
+        // Greeting on the way back (v92): the bring arm of the rule.
+        if (ctx.bring && ctx.bring.phase === 'return') greetCheck({ action: 'bring' })
         const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'bring' }, calledBrain }
@@ -643,6 +819,9 @@ function fleeReflex(bot, ctx) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
+    // Head of the latest plan (b50): the executor works this list from
+    // [0] down, so the wedge line can name the terrain it faces.
+    setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
     // place_error streaks (tower attempts into the same cell while a previous
     // placeBlock still awaits blockUpdate): consecutive only — any other
     // reset reason breaks the streak. Behaviours treat N>=3 with no
@@ -665,7 +844,8 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+      clearStuck()
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
@@ -685,7 +865,8 @@ function fleeReflex(bot, ctx) {
     home: () => ctx.home || null,
     setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+      clearStuck()
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -693,22 +874,48 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
+    setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
       if (ctx.lead && !player) bot.chat('following you again')
+      clearStuck()
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
+    cancelGreet: () => { try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ } },
     getFollowName: () => followName,
     getBrainEngine: () => brainEngine,
     setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     setBring: ({ name, want, by }) => {
+      if (bringMod.isFoodRequest(name)) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        const n = want || bringMod.WANT_FOOD
+        const have = bringMod.findEdible(bot)
+        if (have) {
+          const give = Math.min(have.count, n)
+          clearStuck()
+          ctx.bring = {
+            kind: 'food', name: 'food', want: n, by, drop: have.name, have: give,
+            phase: 'return', saidWaiting: false, announced: true,
+          }
+          ctx.paused = false
+          return `coming with ${give} ${have.name}`
+        }
+        clearStuck()
+        ctx.bring = {
+          kind: 'food', name: 'food', want: n, by, drop: null, have: 0,
+          phase: 'find', announced: false, animal: null,
+        }
+        ctx.paused = false
+        return 'looking for animals'
+      }
       const res = findNearest(bot, name, 48)
       if (res === 'unknown') return `unknown block: ${name}`
       if (!res) return `no ${name} within 48 blocks`
@@ -723,8 +930,9 @@ function fleeReflex(bot, ctx) {
       // would otherwise cancel the order on the next sighted tick).
       ctx.unseenTicks = 0
       ctx.resumeWork = false
+      clearStuck()
       ctx.bring = {
-        name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
+        kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
         pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
         have: 0, announced: true,
       }
@@ -865,7 +1073,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // decision line. Registered here in runOnce(), not in createTicker: the test
     // mockBot is a plain object, not an EventEmitter, so only the real
     // mineflayer bot ever reaches this code.
-    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status) })
+    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
     const life = createLifecycle(ticker)
@@ -1036,13 +1244,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
-      const m = msg.match(/^bring me\s+(\S+)(?:\s+(\d+))?$/)
+      const m = msg.match(/^bring me\s+(something to eat|\S+)(?:\s+(\d+))?$/)
       if (!m) {
         bot.chat('try: bring me coal')
       } else if (ticker && typeof ticker.setBring === 'function') {
+        const food = bringMod.isFoodRequest(m[1])
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
-          : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)
+          : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
         bot.chat(ticker.setBring({ name: m[1], want, by: playerName }))
       }
     }
@@ -1094,6 +1303,7 @@ function respawnLine(bot) {
 
 function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
+  if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
 }
 
