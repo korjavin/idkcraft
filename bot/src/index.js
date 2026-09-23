@@ -684,13 +684,17 @@ function handleChat(bot, ticker, username, message) {
       const name = m[1]
       const speaker = bot.players && bot.players[username] && bot.players[username].entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null
-      const res = findNearest(bot, name, 48, speakerY)
+      // No speaker entity (out of tracking range): judge depth from the
+      // bot's own Y, the same fallback the ranking uses — never silently 0.
+      const botY = bot.entity && typeof bot.entity.position?.y === 'number' ? bot.entity.position.y : null
+      const refY = speakerY != null ? speakerY : botY
+      const res = findNearest(bot, name, 48, refY)
       if (res === 'unknown') {
         bot.chat(`unknown block: ${name}`)
       } else if (!res) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
-        const down = speakerY != null ? Math.round(speakerY - res.position.y) : 0
+        const down = refY != null ? Math.round(refY - res.position.y) : 0
         if (down > DEEP_WARN_DROP) {
           bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
           deepOffers.set(username, { name: res.name, pos: res.position, distance: res.distance })

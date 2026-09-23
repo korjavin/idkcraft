@@ -84,10 +84,11 @@ function resolveBlockIds(bot, blockName) {
 // through resolveBlockIds (exact + <base>_ore variants). No fuzzy search:
 // anything still unmatched resolves to no ids ('unknown' downstream).
 function resolveFindIds(bot, name) {
-  if (name === 'ore') return resolveIds(bot, ORE_NAMES)
+  if (name === 'ore' || name === 'ores') return resolveIds(bot, ORE_NAMES)
   let ids = resolveBlockIds(bot, name)
   if (ids.length === 0 && name.length > 1 && name.endsWith('s')) {
-    ids = resolveBlockIds(bot, name.slice(0, -1))
+    const singular = name.slice(0, -1)
+    ids = singular === 'ore' ? resolveIds(bot, ORE_NAMES) : resolveBlockIds(bot, singular)
   }
   return ids
 }
@@ -104,7 +105,7 @@ function isExposed(bot, p) {
         ? p.offset(dx, dy, dz)
         : { x: Math.floor(p.x) + dx, y: Math.floor(p.y) + dy, z: Math.floor(p.z) + dz }
       const b = bot.blockAt(q)
-      if (b && b.name === 'air') return true
+      if (b && (b.name === 'air' || b.name === 'cave_air')) return true
     }
   } catch {
     return false

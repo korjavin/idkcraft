@@ -334,6 +334,16 @@ describe('findNearestBlock exposure ranking', () => {
     assert.deepEqual([best.x, best.y, best.z], [25, 64, 0])
   })
 
+  it("cave air counts as exposed (ravine and carver-cave walls)", () => {
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [pos(2, 60, 0), pos(8, 60, 0)],
+      names: { '2,60,0': 'gold_ore', '8,60,0': 'gold_ore', '9,60,0': 'cave_air' },
+    })
+    const best = findNearestBlock(bot, 'gold')
+    assert.deepEqual([best.x, best.y, best.z], [8, 60, 0])
+  })
+
   it('unreadable neighbours count as buried, never throw', () => {
     const bot = mockBot({ registry: NAMES, spots: [pos(2, 60, 0)], names: { '2,60,0': 'gold_ore' } })
     bot.blockAt = () => { throw new Error('unloaded') }
@@ -461,6 +471,32 @@ describe("chat command 'find me <block>'", () => {
     bot.players = { Steve: { entity: { position: pos(0, 64, 0) } } }
     handleChat(bot, null, 'Steve', 'find me gold')
     assert.deepEqual(bot.lines, ['leading you to gold_ore, 10 blocks, follow me'])
+  })
+
+  it("warns on a deep target even with no speaker entity (bot Y fallback)", () => {
+    const goldPos = pos(6, 35, 0)
+    const bot = mockBot({
+      registry: GREG,
+      spots: [goldPos],
+      names: { '6,35,0': 'gold_ore', '7,35,0': 'air' },
+    })
+    // no bot.players: speaker out of tracking range, bot at y 64
+    const leads = []
+    const ticker = { setLead(order) { leads.push(order) } }
+    handleChat(bot, ticker, 'Steve', 'find me gold')
+    assert.deepEqual(bot.lines, ['gold_ore is 29 blocks down, dig carefully'])
+    assert.deepEqual(leads, [])
+  })
+
+  it("'find me ores' finds ore like 'find me ore'", () => {
+    const oreReg = { diamond_ore: 179, iron_ore: 15 }
+    const bot = mockBot({
+      registry: oreReg,
+      spots: [pos(3, 64, 0)],
+      names: { '3,64,0': 'iron_ore' },
+    })
+    handleChat(bot, null, 'Steve', 'find me ores')
+    assert.deepEqual(bot.lines, ['leading you to iron_ore, 3 blocks, follow me'])
   })
 
   it("'find me ore' finds the nearest ore of any kind", () => {
