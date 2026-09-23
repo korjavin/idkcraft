@@ -258,6 +258,19 @@ describe('decide decision point', () => {
     assert.equal(r.action, 'gather')
   })
 
+  it('feasible-but-unregistered build never runs', () => {
+    // The registration gate in decide(): a full kit on a build site makes
+    // build feasible, but with no behaviour behind it the step must not be
+    // picked (deleting the check would route to stopOnce() every tick).
+    const bot = goalBot({ items: [
+      { name: 'oak_planks', count: 48 },
+      { name: 'crafting_table', count: 1 },
+      { name: 'oak_door', count: 1 },
+    ] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'rest')
+  })
+
   it('full load hands gather to craft', () => {
     // craft joined in rw4.3; build joins in rw4.4. Over a full load
     // (15 logs = 60 plank-equivalent over the 58 budget) gather is done
