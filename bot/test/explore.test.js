@@ -44,29 +44,32 @@ function homeCtx() {
 }
 
 describe('explore target spiral', () => {
-  it('first pick is ring 64 north of home', () => {
+  it('first pick is ring 16 north of home', () => {
+    // Live: a hands-only walker without tools cannot reliably close
+    // 64-block forest legs (trunk clusters wedge every leg), while 16-32
+    // block legs complete. Inner rings first, reach to 512 preserved.
     const bot = mockBot()
     const ctx = homeCtx()
     explore(bot, ctx, null, null)
     const e = ctx.explore
-    assert.deepEqual(e.target, { x: 0, z: -64 })
+    assert.deepEqual(e.target, { x: 0, z: -16 })
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalXZ')
-    assert.ok(bot.chats.some((m) => m === 'exploring north, 64 blocks from home'))
+    assert.ok(bot.chats.some((m) => m === 'exploring north, 16 blocks from home'))
   })
 
   it('ascends rings past visited chunks, never re-enters them', () => {
     const bot = mockBot()
     const ctx = homeCtx()
-    // Mark every ring-64 candidate chunk visited (8 angles).
+    // Mark every ring-16 candidate chunk visited (8 angles).
     ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
     for (let a = 0; a < 8; a++) {
-      const x = Math.round(64 * Math.sin(a * Math.PI / 4))
-      const z = Math.round(-64 * Math.cos(a * Math.PI / 4))
+      const x = Math.round(16 * Math.sin(a * Math.PI / 4))
+      const z = Math.round(-16 * Math.cos(a * Math.PI / 4))
       ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
     }
     explore(bot, ctx, null, null)
-    assert.deepEqual(ctx.explore.target, { x: 0, z: -128 })
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -32 })
   })
 
   it('reports done when every ring to 512 is visited', () => {
@@ -77,7 +80,7 @@ describe('explore target spiral', () => {
     try {
       const ctx = homeCtx()
       ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
-      for (const r of [64, 128, 192, 256, 320, 384, 448, 512]) {
+      for (const r of [16, 32, 64, 128, 192, 256, 320, 384, 448, 512]) {
         for (let a = 0; a < 8; a++) {
           const x = Math.round(r * Math.sin(a * Math.PI / 4))
           const z = Math.round(-r * Math.cos(a * Math.PI / 4))
@@ -104,20 +107,20 @@ describe('explore target spiral', () => {
 describe('explore walk and arrival', () => {
   it('arrival reports done, scans new chunks into memory, one wedge line', () => {
     const bot = mockBot()
-    bot.findBlocks = () => [pos(5, 60, -60)]
+    bot.findBlocks = () => [pos(5, 60, -14)]
     bot.blockAt = (p) => ({ name: p.x === 5 ? 'iron_ore' : 'stone' })
     const lines = []
     const origLog = console.log
     console.log = (m) => lines.push(String(m))
     try {
       const ctx = homeCtx()
-      explore(bot, ctx, null, null) // picks (0,-64)
-      assert.deepEqual(ctx.explore.target, { x: 0, z: -64 })
-      bot.entity.position = pos(0, 64, -63) // walked into arrival range
+      explore(bot, ctx, null, null) // picks (0,-16)
+      assert.deepEqual(ctx.explore.target, { x: 0, z: -16 })
+      bot.entity.position = pos(0, 64, -15) // walked into arrival range
       bot._moving = false
       explore(bot, ctx, null, null)
       assert.equal(ctx.stepStatus, 'done')
-      const wedge = lines.filter((l) => l.includes('explore to 0 -64'))
+      const wedge = lines.filter((l) => l.includes('explore to 0 -16'))
       assert.equal(wedge.length, 1)
       assert.ok(wedge[0].includes('chunks new)'), wedge[0])
       const mem = ctx.resources
@@ -128,20 +131,21 @@ describe('explore walk and arrival', () => {
   })
 
   it('arrival one chunk short still consumes the target', () => {
-    // Target (0,-64) sits in chunk (0,-4); arriving at z=-66 (dist 2) stops
-    // in chunk (0,-5). Without consuming the target chunk on arrival, the
+    // Target (0,-16) sits in chunk (0,-1); arriving at z=-18 (dist 2) stops
+    // in chunk (0,-2). Without consuming the target chunk on arrival, the
     // next dispatch re-picks the same point and dones without moving.
     const bot = mockBot()
     const ctx = homeCtx()
     explore(bot, ctx, null, null)
-    assert.deepEqual(ctx.explore.target, { x: 0, z: -64 })
-    bot.entity.position = pos(0, 64, -66)
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -16 })
+    bot.entity.position = pos(0, 64, -18)
     bot._moving = false
     explore(bot, ctx, null, null)
     assert.equal(ctx.stepStatus, 'done')
     ctx.stepStatus = 'running'
     explore(bot, ctx, null, null)
-    assert.deepEqual(ctx.explore.target, { x: 45, z: -45 })
+    const nt = ctx.explore.target
+    assert.ok(nt.x === 16 && nt.z === 0, `next target ${nt.x},${nt.z}`)
   })
 
   it('stall within near radius arrives: the point is covered, not failed', () => {
@@ -151,18 +155,19 @@ describe('explore walk and arrival', () => {
     // stall inside near radius is an arrival (done + scan), not a failure.
     const bot = mockBot()
     bot._moving = true // executor claims motion, body stands still
-    bot.findBlocks = () => [pos(3, 60, -60)]
+    bot.findBlocks = () => [pos(3, 60, -12)]
     bot.blockAt = (p) => ({ name: p.x === 3 ? 'iron_ore' : 'stone' })
     const ctx = homeCtx()
-    explore(bot, ctx, null, null) // picks (0,-64)
-    bot.entity.position = pos(0, 64, -58) // 6 out: inside near, outside exact
+    explore(bot, ctx, null, null) // picks (0,-16)
+    bot.entity.position = pos(0, 64, -10) // 6 out: inside near, outside exact
     for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.stuck, undefined)
     assert.ok(ctx.resources && ctx.resources.items.size >= 1, 'near arrival scans')
     ctx.stepStatus = 'running'
     explore(bot, ctx, null, null)
-    assert.deepEqual(ctx.explore.target, { x: 45, z: -45 })
+    const nt = ctx.explore.target
+    assert.ok(nt.x === 16 && nt.z === 0, `next target ${nt.x},${nt.z}`)
   })
 
   it('ten still ticks fail unreachable with an explore fact', () => {
@@ -175,12 +180,13 @@ describe('explore walk and arrival', () => {
       const ctx = homeCtx()
       for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
       assert.equal(ctx.stepStatus, 'failed:unreachable')
-      assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 0, y: 64, z: -64 }, key: 'explore:0,-64' })
+      assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 0, y: 64, z: -16 }, key: 'explore:0,-16' })
       // The unreachable point is consumed: the next dispatch advances the
       // spiral instead of walking the same obstacle again.
       ctx.stepStatus = 'running'
       explore(bot, ctx, null, null)
-      assert.deepEqual(ctx.explore.target, { x: 45, z: -45 })
+      const nt = ctx.explore.target
+    assert.ok(nt.x === 16 && nt.z === 0, `next target ${nt.x},${nt.z}`)
     } finally {
       console.log = origLog
     }
@@ -221,7 +227,7 @@ describe('explore walk and arrival', () => {
     explore(bot, ctx, null, null) // pick 1: chats
     assert.equal(bot.chats.length, 1)
     // Arrive instantly and pick again: same 30 s window, silent.
-    bot.entity.position = pos(0, 64, -64)
+    bot.entity.position = pos(0, 64, -16)
     explore(bot, ctx, null, null) // arrival: done
     assert.equal(ctx.stepStatus, 'done')
     ctx.stepStatus = 'running' // atl.2 would re-dispatch; hands just continue

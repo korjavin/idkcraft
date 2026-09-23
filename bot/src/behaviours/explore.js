@@ -18,7 +18,12 @@ const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
 const resources = require('../resources')
 
-const RINGS = [64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
+const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
+// Inner rings first: a hands-only walker without tools closes 16-32
+// block forest legs (live probe: 30 blocks in 12 s) but wedges on nearly
+// every 64-block one (trunk clusters, canopy gaps, rivers). Reach to 512
+// is preserved; near rings also cover home ground first, where atl.2
+// forages.
 const RAY_COUNT = 8 // compass rays per ring, north first
 const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
 const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
@@ -59,7 +64,7 @@ function pickTarget(visited, anchor) {
     for (let a = 0; a < RAY_COUNT; a++) {
       const x = Math.round(anchor.x + r * Math.sin(a * Math.PI / 4))
       const z = Math.round(anchor.z - r * Math.cos(a * Math.PI / 4))
-      if (!visited.has(chunkOf(x, z))) return { x, z }
+      if (!visited.has(chunkOf(x, z))) return { x: x + 0, z: z + 0 } // +0: no -0 keys/logs
     }
   }
   return null
