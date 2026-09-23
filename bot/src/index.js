@@ -907,9 +907,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else if (msg === 'brain' || msg.startsWith('brain ')) {
-    // Brain switch (d75): only the followed player may switch — strangers
-    // get silence, and the engine never changes for them.
-    if (!ticker || typeof ticker.getFollowName !== 'function' || !playerName || playerName !== ticker.getFollowName()) return
+    // Brain switch (d75): with a follow target only they may switch; with
+    // nobody followed (work mode) any roster player may. Others get silence
+    // and the engine never changes for them.
+    const followed = ticker && typeof ticker.getFollowName === 'function' ? ticker.getFollowName() : null
+    const allowed = ticker && playerName && (followed
+      ? playerName === followed
+      : !!(bot.players && bot.players[playerName]))
+    if (!allowed) return
     const arg = msg.slice(5).trim()
     if (!arg) {
       bot.chat(`brain: ${ticker.getBrainEngine()}`)

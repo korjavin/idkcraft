@@ -119,6 +119,22 @@ describe("brain switch (idkcraft-d75)", () => {
     assert.equal((await ticker.tick()).decision.source, 'stub')
   })
 
+  it("work mode with nobody followed: any roster player may switch", async () => {
+    const bot = hardBot()
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10, brainEngine: 'off' })
+    handleChat(bot, ticker, 'Owner', 'brain jev')
+    assert.deepEqual(bot.chats, ['brain: jev'])
+    assert.equal(ticker.getBrainEngine(), 'jev')
+  })
+
+  it("work mode: unknown names still cannot switch", () => {
+    const bot = hardBot()
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10, brainEngine: 'off' })
+    handleChat(bot, ticker, 'Ghost', 'brain jev')
+    assert.deepEqual(bot.chats, [])
+    assert.equal(ticker.getBrainEngine(), 'off')
+  })
+
   it("a stranger cannot switch the brain", async () => {
     const bot = hardBot()
     bot.players.Stranger = { username: 'Stranger', entity: { id: 9, position: pos(12, 64, 0) } }
