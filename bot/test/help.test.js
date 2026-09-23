@@ -68,6 +68,16 @@ describe("help command (idkcraft-kae)", () => {
     assert.deepEqual(missing.chats, ['no help page 99 — say help for the list'])
   })
 
+  it('long topics are capped so the reply stays within 256 chars', () => {
+    const bot = chatBot()
+    handleChat(bot, null, 'Steve', `help ${'x'.repeat(251)}`)
+    assert.equal(bot.chats.length, 1)
+    assert.ok(bot.chats[0].length <= CHAT_LIMIT, `capped reply is ${bot.chats[0].length} chars`)
+    const page = chatBot()
+    handleChat(page, null, 'Steve', `help ${'9'.repeat(251)}`)
+    assert.ok(page.chats[0].length <= CHAT_LIMIT)
+  })
+
   it('unrelated chatter stays silent', () => {
     const bot = chatBot()
     handleChat(bot, null, 'Steve', 'hello bot')

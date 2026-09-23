@@ -834,11 +834,13 @@ function handleChat(bot, ticker, username, message) {
     if (!topic) {
       bot.chat(helpReply(1))
     } else if (/^\d+$/.test(topic)) {
-      bot.chat(helpReply(Number(topic)) || `no help page ${topic} — say help for the list`)
+      bot.chat(helpReply(Number(topic)) || `no help page ${topic.slice(0, 10)} — say help for the list`)
     } else {
       const cmd = lookupCommand(topic)
       if (cmd) bot.chat(detailLine(cmd))
-      else bot.chat(`unknown command: "${topic}" — say help for the list`)
+      // Echo capped: the raw topic is unbounded player text, and an overlong
+      // reply would be split past the 256-char chat cap.
+      else bot.chat(`unknown command: "${topic.slice(0, 30)}" — say help for the list`)
     }
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
