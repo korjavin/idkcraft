@@ -1927,12 +1927,24 @@ describe('kit inventory log line', () => {
 describe('eat reflex', () => {
   let origLog
   let lines
+  // Every tick() arms an unref'd 10 ms re-tick timer. A ticker left alive
+  // re-ticks after its test ends and its late 'eat bread' line lands in the
+  // next test's console capture (flake under load). Track and destroy.
+  const tickers = []
+  function eatTicker(opts) {
+    const ticker = createTicker(opts)
+    tickers.push(ticker)
+    return ticker
+  }
   beforeEach(() => {
     origLog = console.log
     lines = []
     console.log = (line) => { lines.push(String(line)) }
   })
-  afterEach(() => { console.log = origLog })
+  afterEach(() => {
+    console.log = origLog
+    for (const ticker of tickers.splice(0)) ticker.destroy()
+  })
 
   function eatBot({ food = 12, items = [{ name: 'bread', count: 16 }] } = {}) {
     const bot = mockBot()
@@ -1962,7 +1974,7 @@ describe('eat reflex', () => {
       return new Promise((resolve) => { resolveConsume = resolve })
     }
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
 
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
@@ -1986,10 +1998,24 @@ describe('eat reflex', () => {
     assert.equal(bot.consumeCalls, 2)
   })
 
+  it('destroyed ticker never re-ticks (no eat after test end)', async () => {
+    // Regression: the unref'd 10 ms re-tick timer outlives the test and its
+    // late 'eat bread' line lands in the next test's capture (flake under
+    // load). destroy() must disarm it.
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1)
+    ticker.destroy()
+    await new Promise((resolve) => setTimeout(resolve, 30)) // past the 10 ms re-tick
+    assert.equal(bot.consumeCalls, 1)
+  })
+
   it('food 18 -> not called', async () => {
     const bot = eatBot({ food: 18, items: [{ name: 'bread', count: 16 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     assert.equal(bot.consumeCalls, 0)
     assert.deepEqual(eatLines(), [])
@@ -1999,7 +2025,7 @@ describe('eat reflex', () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     bot.entities = { 1: zombie(1, 1) }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     assert.equal(bot.consumeCalls, 0)
     assert.deepEqual(eatLines(), [])
@@ -2009,7 +2035,7 @@ describe('eat reflex', () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     bot.entities = { 1: zombie(1, 5) }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
@@ -2019,7 +2045,7 @@ describe('eat reflex', () => {
   it('no edible food in inventory -> not called', async () => {
     const bot = eatBot({ food: 12, items: [{ name: 'cobblestone', count: 64 }, { name: 'iron_sword', count: 1 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     assert.equal(bot.consumeCalls, 0)
     assert.deepEqual(eatLines(), [])
@@ -2028,7 +2054,7 @@ describe('eat reflex', () => {
   it('consumes other supported edible items (cooked_beef)', async () => {
     const bot = eatBot({ food: 14, items: [{ name: 'cooked_beef', count: 5 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
@@ -2038,7 +2064,7 @@ describe('eat reflex', () => {
   it('re-equips gear after consume finishes', async () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
@@ -2056,7 +2082,7 @@ describe('eat reflex', () => {
       if (call === 1) throw new Error('consume interrupted')
     }
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(call, 1)
@@ -2075,7 +2101,7 @@ describe('eat reflex', () => {
     bot.food = 12
     bot.inventory = { items: () => [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] }
     delete bot.equip
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
 
     bot.equipCalls = []
     bot.equip = (item, dest) => { bot.equipCalls.push({ item, dest }); return Promise.resolve() }
@@ -2099,7 +2125,7 @@ describe('eat reflex', () => {
   it('eats when nobody is online', async () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     lines.length = 0
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
@@ -2110,7 +2136,7 @@ describe('eat reflex', () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     lines.length = 0
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.stop()
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
@@ -2129,7 +2155,7 @@ describe('eat reflex', () => {
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     bot.entities = { 1: zombie(1, 5) }
     const brain = mockBrain({ action: 'fight', sprint: false, source: 'stub' })
-    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
 
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
@@ -2168,7 +2194,7 @@ describe('eat reflex', () => {
       return new Promise((resolve) => { resolveConsume = resolve })
     }
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
 
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
