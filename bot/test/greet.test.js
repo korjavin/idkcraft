@@ -270,4 +270,58 @@ describe('greet wiring (idkcraft-v92)', () => {
     handleDeath(bot, ticker)
     assert.equal(greeter.cancelled, true)
   })
+
+  it('no greeting while the recover menu owns the body', async () => {
+    // Deleting the ctx.stuck/ctx.recovery guard in greetCheck fails this
+    // test (the arrival crouch fires mid-episode and fights the primitive).
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight, no gesture
+    await flush()
+    assert.deepEqual(log, [])
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' }
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // episode starts; arrival must stay silent
+    await flush()
+    assert.ok(bot._tickerCtx.recovery, 'episode running')
+    // The entry cancel may log a redundant sneak release; the gesture
+    // itself (sneak held true) must never start mid-episode.
+    assert.deepEqual(log.filter((v) => v === true), [], 'no sneak while stuck')
+  })
+
+  it('episode entry cancels a greeting in flight', async () => {
+    // Without the cancel in the stuck branch the sneak stays held until
+    // the crouch sleeps resolve. Deleting it fails this test (no false).
+    const log = []
+    const resolvers = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: () => 0, sleep: () => new Promise((r) => resolvers.push(r)) })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight
+    await flush()
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // greet starts, parked on the first sleep
+    await flush()
+    assert.equal(log[0], true)
+    assert.ok(!log.includes(false), 'crouch still holding')
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' }
+    await ticker.tick() // entry cancels the gesture
+    await flush()
+    assert.ok(log.includes(false), 'sneak released on entry')
+    assert.equal(log.filter((v) => v === true).length, 1, 'never re-held')
+    resolvers.splice(0).forEach((r) => r()) // stale sleeps resolve late
+    await flush()
+    assert.equal(log.filter((v) => v === true).length, 1)
+  })
 })

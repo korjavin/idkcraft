@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const recoverMenu = require('./recover')
 
 // Lead: walk the player to the ore named by 'find me <block>'.
 //
@@ -18,7 +19,6 @@ const GIVE_UP_TICKS = 10
 const WORK_STALL_TICKS = GIVE_UP_TICKS * 6
 const RETRY_EVERY_TICKS = 6
 const MOVE_TOLERANCE = 0.5
-const NUDGE_OFFSET = 2
 
 // Wait budget (ticks at BRAIN_TICK_MS, ~120 s at the 1 s default): a player
 // who never comes back within RESUME_DIST must not pin the order forever.
@@ -95,22 +95,22 @@ function finish(bot, ctx, message) {
 
 function recover(bot, ctx, order, bp, now) {
   if (order.nudged) {
+    // A recover episode already ran for this order and the bot still makes
+    // no progress: second strike, give up like before.
     finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
     holdGoal(bot, ctx)
     return
   }
-  const angle = Math.random() * Math.PI * 2
-  const nx = bp.x + Math.cos(angle) * NUDGE_OFFSET
-  const nz = bp.z + Math.sin(angle) * NUDGE_OFFSET
-  bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
-  if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
-  order.nudged = true
-  order.nudgePending = true
-  order.stuckTicks = 0
-  order.workTicks = 0
-  savePosition(order, bp, bot.entity.onGround !== false)
-  order.lastProgressAt = now
-  ctx.lastGoalKey = `lead-nudge:${nx},${bp.y},${nz}`
+  // Detector only (ef3): raise the stuck fact, the recover menu picks the
+  // escape. order.nudged is set by the episode release, so a still-stuck
+  // order gives up on the next stall instead of looping episodes.
+  if (ctx.recovery) return // episode running: wait for the menu
+  const gp = order.pos ? { x: order.pos.x, y: order.pos.y, z: order.pos.z } : null
+  const gk = order.pos ? `lead:${order.pos.x},${order.pos.y},${order.pos.z}` : 'lead'
+  if (recoverMenu.setStuck(ctx, 'lead', gp, gk)) {
+    order.stallDist = blocksLeft(bp, order.pos)
+    console.log(`stuck reason=nudge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)}`)
+  }
 }
 
 function lead(bot, ctx, target, state) {
@@ -154,24 +154,14 @@ function lead(bot, ctx, target, state) {
     return
   }
   const key = `lead:${order.pos.x},${order.pos.y},${order.pos.z}`
-  if (order.nudgePending) {
-    order.nudgePending = false
-    if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
-    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
-    ctx.lastGoalKey = key
-    if (bot.entity.onGround !== false) savePosition(order, bp, true)
-    order.stuckTicks = 0
-    order.workTicks = 0
-    order.lastProgressAt = Date.now()
-    return
-  }
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
     ctx.lastGoalKey = key
     order.stuckTicks = 0
     order.workTicks = 0
     if (bot.entity.onGround !== false) savePosition(order, bp, true)
-    order.nudged = false
+    // NOTE: nudged is NOT reset here — the recover release sets it, and a
+    // re-issue right after the episode must not grant fresh strikes.
     return
   }
   const now = Date.now()
@@ -184,6 +174,10 @@ function lead(bot, ctx, target, state) {
   if (moved) {
     order.stuckTicks = 0
     order.workTicks = 0
+    // Fresh strikes only on real gain toward the goal (ef3): walking back
+    // to the wedge point is displacement, not progress, so nudged stays and
+    // the second strike still gives up instead of looping episodes.
+    if (order.nudged && order.nudgedAt != null && blocksLeft(bp, order.pos) < order.nudgedAt) order.nudged = false
     if (!working && blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
       bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
       order.lastProgressAt = now

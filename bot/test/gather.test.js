@@ -315,6 +315,55 @@ describe('gather step', () => {
     assert.equal(bot.pathfinder.goal, null)
   })
 
+  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, fact at final', async () => {
+    // M1 regression: the ticker place_error backstop must not preempt
+    // gather's own column skip (endless ask-episodes on one trunk). Drives
+    // real ticker.tick() in work mode: skips happen locally, the stuck fact
+    // raises only at the unreachable final, with by=gather (not place_error).
+    const names = {}
+    const spots = []
+    for (const cx of [2, 6, 9]) {
+      for (const cy of [64, 65]) {
+        names[`${cx},${cy},0`] = 'oak_log'
+        spots.push(pos(cx, cy, 0))
+      }
+    }
+    const bot = mockBot({ spots, names })
+    bot.entities = {}
+    bot.username = 'IdkBot'
+    bot.players = { Steve: { username: 'Steve' } } // roster online, target unseen
+    bot._moving = true
+    const { createTicker } = require('../src/index')
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    ctx.work = true // work mode: the goal arbiter dispatches gather
+    let ticks = 0
+    const tick = async () => {
+      bot.entity.position = pos(0, ticks % 2 ? 65.2 : 64, 5)
+      bot.entity.onGround = !(ticks % 2)
+      ticks++
+      ticker.setPathReset('place_error') // what the ticker does on path_reset
+      await ticker.tick()
+    }
+    for (let i = 0; i < 4; i++) await tick()
+    assert.ok(ctx.gather && ctx.gather.skip.has('2,64,0') && ctx.gather.skip.has('2,65,0'),
+      'place_error streak skips the column through the ticker')
+    assert.equal(ctx.stuck, null, 'no backstop episode while gather owns the streak')
+    for (let i = 0; i < 32 && ctx.stepStatus !== 'failed:unreachable'; i++) await tick()
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.ok(bot.lines.includes('cannot reach the trees'))
+    // Asserted on the final tick, not N ticks later: the episode this fact
+    // opens ends (gave-up) and clears it, so a later read pins how long the
+    // escape takes — not who raised the fact. What matters here is the
+    // attribution: by=gather from the detector, not the ticker backstop.
+    assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'fact raised by the detector, not the backstop')
+  })
+
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.gather, gather)
@@ -335,5 +384,50 @@ describe('gather step', () => {
     bot._tickerCtx.gather = { final: 'failed:no-trees', atLogs: 0 }
     ticker.work() // explicit order retries: stale failure forgotten
     assert.equal(bot._tickerCtx.gather, null)
+  })
+})
+
+describe('stuck-detector blind spots (idkcraft-68p)', () => {
+  it('a fight tick every 3rd call still skips the tree within STALL_TICKS walk ticks', () => {
+    // 68p acceptance: motionless body, fight steals the body (flips
+    // lastGoalKey) every 3rd tick. Today the stalls reset each time and the
+    // tree never skips; with the fix the walk continues across the theft.
+    const bot = mockBot({ spots: [pos(10, 64, 0)], names: { '10,64,0': 'oak_log' } })
+    bot._moving = true // walking, body stands still
+    const { createTicker } = require('../src/index')
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    gather(bot, ctx, null, {}) // issues the walk goal
+    let skippedAt = -1
+    for (let i = 1; i <= 10; i++) {
+      if (i % 3 === 0) ctx.lastGoalKey = 'fight:9' // fight owned this tick
+      gather(bot, ctx, null, {})
+      if (ctx.gather.skip.has('10,64,0')) { skippedAt = i; break }
+    }
+    assert.equal(skippedAt, 10)
+  })
+
+  it('chopping line repeats only when the count grows', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'oak_log' },
+      items: [{ name: 'oak_log', count: 1 }],
+    })
+    const ctx = freshCtx()
+    ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() - 20000, progressLogs: -1 }
+    gather(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['chopping oak_log 1/14'])
+    ctx.gather.lastProgressAt = Date.now() - 20000 // interval elapsed, same count
+    gather(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['chopping oak_log 1/14']) // no repeat without growth
+    bot._items[0].count = 2
+    ctx.gather.lastProgressAt = Date.now() - 20000
+    gather(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['chopping oak_log 1/14', 'chopping oak_log 2/14'])
   })
 })
