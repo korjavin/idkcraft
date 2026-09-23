@@ -4,7 +4,7 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
-const { makeScout, findNearest } = require('./behaviours/scout')
+const { makeScout, findNearest, loadedSearchRadius } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
@@ -744,9 +744,9 @@ function fleeReflex(bot, ctx) {
         ctx.paused = false
         return 'looking for animals'
       }
-      const res = findNearest(bot, name, 48)
+      const res = findNearest(bot, name)
       if (res === 'unknown') return `unknown block: ${name}`
-      if (!res) return `no ${name} within 48 blocks`
+      if (!res) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
       if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
       if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
         const tier = bringMod.requiredTier(res.name)
@@ -761,7 +761,7 @@ function fleeReflex(bot, ctx) {
       ctx.bring = {
         kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
         pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
-        have: 0, announced: true,
+        have: 0, announced: true, exposed: res.exposed !== false,
       }
       ctx.paused = false
       return `going for ${want} ${res.name}, ${res.distance} blocks away`
@@ -1053,11 +1053,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       // bot's own Y, the same fallback the ranking uses — never silently 0.
       const botY = bot.entity && typeof bot.entity.position?.y === 'number' ? bot.entity.position.y : null
       const refY = speakerY != null ? speakerY : botY
-      const res = findNearest(bot, name, 48, refY)
+      const res = findNearest(bot, name, undefined, refY)
       if (res === 'unknown') {
         bot.chat(`unknown block: ${name}`)
       } else if (!res) {
-        bot.chat(`no ${name} within 48 blocks`)
+        bot.chat(`no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
       } else {
         const down = refY != null ? Math.round(refY - res.position.y) : 0
         if (down > DEEP_WARN_DROP) {

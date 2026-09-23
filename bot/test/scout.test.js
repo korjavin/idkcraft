@@ -293,6 +293,48 @@ describe('findNearest', () => {
     assert.equal(opts.count, 64)
   })
 
+  it('finds ore at 100 blocks on a later stage (amb)', () => {
+    // Loaded chunks out to 160; the scan honors maxDistance per stage.
+    const ore = pos(100, 64, 0)
+    const radii = []
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [ore],
+      names: {
+        '100,64,0': 'iron_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+    })
+    bot.findBlocks = (o) => {
+      radii.push(o.maxDistance)
+      return o.maxDistance >= 100 ? [ore] : []
+    }
+    const res = findNearest(bot, 'iron')
+    assert.ok(res, 'ore at 100 blocks must be found')
+    assert.equal(res.distance, 100)
+    assert.deepEqual(radii, [48, 96, 160])
+  })
+
+  it('stops after the 48 stage when a nearby vein exists (no extra scans)', () => {
+    const radii = []
+    const bot = mockBot({ registry: NAMES, spots: [pos(10, 64, 0)], names: { '10,64,0': 'iron_ore' } })
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => { radii.push(o.maxDistance); return inner(o) }
+    const res = findNearest(bot, 'iron')
+    assert.equal(res.distance, 10)
+    assert.deepEqual(radii, [48])
+  })
+
+  it('reports the loaded boundary from blockAt probes', () => {
+    const { loadedSearchRadius } = require('../src/behaviours/scout')
+    const dark = mockBot({ registry: NAMES })
+    assert.equal(loadedSearchRadius(dark), 48) // nothing readable: old behaviour
+    const half = mockBot({ registry: NAMES, names: { '48,64,0': 'stone', '96,64,0': 'stone' } })
+    assert.equal(loadedSearchRadius(half), 96)
+    half.blockAt = () => { throw new Error('unloaded') }
+    assert.equal(loadedSearchRadius(half), 48) // throws: never 0, never throw
+  })
+
   it('returns null when no matching blocks are within range', () => {
     const bot = mockBot({ registry: NAMES, spots: [] })
     assert.equal(findNearest(bot, 'diamond'), null)
@@ -372,10 +414,21 @@ describe("chat command 'find me <block>'", () => {
     assert.deepEqual(bot.lines, ['leading you to coal_ore, 10 blocks, follow me'])
   })
 
-  it("replies with 'no <name> within 48 blocks' when none are in range", () => {
+  it("replies with 'no <name> within <r> blocks (loaded area)' when none are in range", () => {
     const bot = mockBot({ registry: REG, spots: [] })
     handleChat(bot, null, 'Steve', 'find me diamond')
-    assert.deepEqual(bot.lines, ['no diamond within 48 blocks'])
+    // Mock world probes unreadable: boundary falls back to 48.
+    assert.deepEqual(bot.lines, ['no diamond within 48 blocks (loaded area)'])
+  })
+
+  it('names the loaded boundary when chunks are loaded out to 160', () => {
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    handleChat(bot, null, 'Steve', 'find me diamond')
+    assert.deepEqual(bot.lines, ['no diamond within 160 blocks (loaded area)'])
   })
 
   it("replies with 'unknown block: <name>' when block name is unrecognized", () => {

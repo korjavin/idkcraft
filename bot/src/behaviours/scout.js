@@ -38,8 +38,41 @@ function rankOf(name) {
   return ORE_NAMES.length
 }
 
+const { performance } = require('node:perf_hooks')
+const metrics = require('../metrics')
+
 function keyOf(p) {
   return `${p.x},${p.y},${p.z}`
+}
+
+// Staged search radii (amb): 48 first (the old cheap scan), 96 next, then
+// the loaded-chunks boundary. Later stages run only when earlier ones are
+// empty, so a nearby vein never pays for a far scan.
+const SEARCH_FIRST = 48
+const SEARCH_MID = 96
+const SEARCH_MAX = 160
+
+// Loaded-chunks boundary: probe bot.blockAt east of the bot until it reads
+// null (unloaded). Real blockAt needs a Vec3 (b50): prefer origin.offset,
+// plain {x,y,z} is the mock-bot fallback. Unreadable world -> 48, the old
+// behaviour, never 0.
+function loadedSearchRadius(bot) {
+  const origin = bot && bot.entity && bot.entity.position
+  if (!origin || typeof origin.x !== 'number') return SEARCH_FIRST
+  const probes = [SEARCH_FIRST, SEARCH_MID, 128, SEARCH_MAX]
+  let radius = SEARCH_FIRST
+  try {
+    for (const d of probes) {
+      const q = (typeof origin.offset === 'function')
+        ? origin.offset(d, 0, 0)
+        : { x: Math.floor(origin.x) + d, y: Math.floor(origin.y), z: Math.floor(origin.z) }
+      const b = bot.blockAt && bot.blockAt(q)
+      if (b) radius = d
+    }
+  } catch {
+    return SEARCH_FIRST
+  }
+  return radius
 }
 
 function dist(a, b) {
@@ -134,14 +167,25 @@ function isExposed(bot, p) {
 // Ranking: exposed ore first (lead the player somewhere walkable, not into
 // solid rock), then closest in height to refY (the requesting player's Y;
 // the bot's own when unknown), then nearest by straight distance.
-function findNearestBlock(bot, blockName, radius = 48, refY = null) {
+function findNearestBlock(bot, blockName, maxRadius = SEARCH_MAX, refY = null) {
   const ids = resolveFindIds(bot, blockName)
   if (ids.length === 0) return 'unknown'
+  const edge = Math.min(loadedSearchRadius(bot), maxRadius)
+  const stages = [SEARCH_FIRST, SEARCH_MID, edge].filter((r, i, a) => r <= edge && a.indexOf(r) === i)
   let found = null
-  try {
-    found = bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 })
-  } catch {
-    return null
+  for (const r of stages) {
+    let t0 = 0
+    try {
+      t0 = performance.now()
+      found = bot.findBlocks({ matching: ids, maxDistance: r, count: 64 })
+    } catch {
+      return null
+    }
+    const tookMs = performance.now() - t0
+    console.log(`search ${blockName} r=${r} took=${tookMs.toFixed(1)}ms found=${(found && found.length) || 0}`)
+    try { metrics.searchDuration.observe({ radius: String(r) }, tookMs / 1000) } catch { /* metrics never break search */ }
+    if (found && found.length > 0) break
+    found = null
   }
   if (!found || found.length === 0) return null
   const origin = bot.entity && bot.entity.position
@@ -173,7 +217,7 @@ function compareScore(a, b) {
   return 0
 }
 
-function findNearest(bot, blockName, radius = 48, refY = null) {
+function findNearest(bot, blockName, radius = SEARCH_MAX, refY = null) {
   const p = findNearestBlock(bot, blockName, radius, refY)
   if (p === 'unknown') return 'unknown'
   if (!p) return null
@@ -186,7 +230,9 @@ function findNearest(bot, blockName, radius = 48, refY = null) {
   } catch {
     name = blockName
   }
-  return { name, position: p, distance }
+  let exposed = false
+  try { exposed = isExposed(bot, p) } catch { exposed = false }
+  return { name, position: p, distance, exposed }
 }
 
 function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000 } = {}) {
@@ -242,4 +288,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, resolveBlockIds, resolveFindIds, isExposed, ORE_NAMES }
+module.exports = { makeScout, findNearestBlock, findNearest, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES }
