@@ -230,9 +230,9 @@ describe('jevBrain', () => {
     assert.deepEqual(Object.keys(seen.opts.body.questions.action.criteria), ['fight', 'follow'])
     assert.equal(typeof seen.opts.body.state, 'string')
     assert.match(seen.opts.body.state, /^hard=crowd player=away player_moving=yes hostile=none hostile_near_player=no hostile_reachable=yes health=ok food=ok$/)
-    assert.equal(seen.opts.body.questions.action.instructions, 'The simple rules could not decide this state; choose fight or follow.')
-    assert.equal(seen.opts.body.questions.action.criteria.fight, 'hard is crowd and health is ok, or hard is hostile-vs-far-player and hostile is adjacent or near, or hostile_near_player is yes and health is ok: pursue and hit the mob.')
-    assert.equal(seen.opts.body.questions.action.criteria.follow, 'health is low, or hard is unreachable-hostile, or hard is hostile-vs-far-player and player is away: leave the mob and walk to the player.')
+    assert.equal(seen.opts.body.questions.action.instructions, 'Choose fight or follow. Health decides: low health always means follow.')
+    assert.equal(seen.opts.body.questions.action.criteria.fight, 'health is ok: attack the mob.')
+    assert.equal(seen.opts.body.questions.action.criteria.follow, 'health is low: walk to the player and stay close.')
   })
 
   it('defaults to an empty reason on the wire', async () => {
@@ -485,8 +485,8 @@ describe('isHard', () => {
   it('hostile-vs-far-player for the prod H3 state', () => {
     assert.equal(isHard({ hostile_distance: 0.7, distance_to_player: 26.8, bot_health: 15.8 }), 'hostile-vs-far-player')
   })
-  it('unreachable-hostile for the H4 latch state', () => {
-    assert.equal(isHard({ hostile_reachable: false, hostile_distance: 4, distance_to_player: 10 }), 'unreachable-hostile')
+  it('unreachable latch with player near is easy (stub follows, model not asked)', () => {
+    assert.equal(isHard({ hostile_reachable: false, hostile_distance: 4, distance_to_player: 5, bot_health: 20 }), null)
   })
   it('null for every existing easy stub case', () => {
     const easies = [

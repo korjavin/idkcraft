@@ -3,8 +3,9 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
-const { findTarget, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
+const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
@@ -48,6 +49,13 @@ const LEAVE_AFTER_MS_DEFAULT = 60000
 // its own counter would never advance.
 const FIGHT_REPROBE_TICKS = 30
 const TARGET_GONE_TICKS = 10
+// Online-but-unseen ticks before walking back to world spawn (return-home):
+// death+respawn at spawn, or walked out of entity range. Same 10-tick scale
+// as the lead give-up. Spawn pre-arm uses blocks, not ticks (below).
+const UNSEEN_HOME_TICKS = 10
+const FAR_FROM_SPAWN = 64
+// GoalNear range of the homing walk, and arrival radius for resuming work.
+const RETURN_HOME_RANGE = 2
 
 // Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
 // edible item from inventory on the every-tick seam when food < 18 and no
@@ -117,7 +125,7 @@ function eatReflex(bot, ctx, state) {
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -193,6 +201,47 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // stationary goal (dynamic follow resting in range) still needs cancelling;
   // setGoal(null) clears it without latching. lastGoalKey still flips to
   // 'idle' for stop-once.
+  // Return-home: after UNSEEN_HOME_TICKS online-but-unseen ticks, walk to
+  // world spawn once (GoalNear keyed, so no re-issue) and keep standing
+  // there until someone is visible. Returns true while homing (caller skips
+  // stopOnce); pure stop otherwise. Fleeing still wins above.
+  function walkHomeTick() {
+    if ((ctx.unseenTicks || 0) < UNSEEN_HOME_TICKS) return false
+    const sp = bot.spawnPoint
+    const bp = bot.entity && bot.entity.position
+    if (!sp || !bp) return false
+    const key = `return-spawn:${sp.x},${sp.y},${sp.z}`
+    if (key !== ctx.lastGoalKey) {
+      bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), false)
+      ctx.lastGoalKey = key
+      console.log(`returning to spawn dist=${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))}`)
+    }
+    return true
+  }
+
+  function homeReached() {
+    // The executor ends GoalNear on the floored block and stops at its
+    // centre, up to ~2.5 blocks (float) from spawnPoint — agreeing with the
+    // goal needs the +1.5 slack, not the raw range.
+    const sp = bot.spawnPoint
+    const bp = bot.entity && bot.entity.position
+    return !!(sp && bp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) <= RETURN_HOME_RANGE + 1.5)
+  }
+
+  // work() body, shared with the homing resume below (one definition, so the
+  // resume cannot drift from the chat command).
+  function startWork() {
+    ctx.work = true
+    ctx.paused = false
+    ctx.lead = null
+    ctx.leadStuck = 0
+    ctx.leadTargetGone = 0
+    followName = ''
+    ctx.lastGoalKey = ''
+    ctx.gather = null
+    ctx.resumeWork = false
+  }
+
   function stopOnce() {
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
@@ -359,20 +408,47 @@ function fleeReflex(bot, ctx) {
       lastVisible = !!target
       if (target) noteSeen()
       else noteEmpty()
+      // A follow order owns the body the moment its player is visible: drop
+      // work so the goal arbiter below cannot hijack the tick.
+      if (target && followName) ctx.work = false
       // Work mode runs without a visible player while anyone is on the
       // server (roster, not visibility — walking out of render distance is
       // normal). Falls through to the normal path with target=null:
       // buildState handles null, and the work check below swaps idle steps.
-      const workAlone = ctx.work && !target && bot.players &&
+      const rosterOnline = bot.players &&
         Object.keys(bot.players).some((n) => n !== bot.username)
+      // A pending follow order beats working alone: the player explicitly
+      // asked the bot to come, so reunion outranks cave work (3a7 keeps work
+      // for an unseen follower; this walks instead once N trips). Pure work
+      // mode with nobody waiting keeps running.
+      const followWaiting = !target && followName && bot.players && bot.players[resolvePlayer(bot, followName)]
+      // A visible player with skipped work resumes it at once (one-shot):
+      // sighting is the normal end of the homing walk, arrival the other.
+      if (target && ctx.resumeWork && !followName) startWork()
+      if (homeReached()) {
+        // At spawn there is nothing to walk for — unless a follow order is
+        // pending: then keep the latch (counter tripped, no work) and stand
+        // until the player is visible, instead of oscillating work-vs-home.
+        if (!followWaiting) {
+          if (ctx.resumeWork && !followName) startWork()
+          ctx.unseenTicks = 0
+        }
+      } else if (!target && rosterOnline && (!ctx.work || followWaiting)) {
+        ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
+      } else ctx.unseenTicks = 0
+      const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
+      const workAlone = ctx.work && !target && rosterOnline && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
         // A hissing creeper still moves the body (fast ticks while fleeing).
         const fledAlone = fleeReflex(bot, ctx)
-        if (fledAlone) reflexFast = true
-        else stopOnce()
+        if (fledAlone) {
+          reflexFast = true
+        } else if (!walkHomeTick()) {
+          stopOnce()
+        }
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
         try {
@@ -506,7 +582,16 @@ function fleeReflex(bot, ctx) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
-    setPathReset: (reason) => { ctx.lastPathReset = reason || null; if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1 },
+    // place_error streaks (tower attempts into the same cell while a previous
+    // placeBlock still awaits blockUpdate): consecutive only — any other
+    // reset reason breaks the streak. Behaviours treat N>=3 with no
+    // displacement as a stall, the shared fact the hard-case stuck menu needs.
+    setPathReset: (reason) => {
+      ctx.lastPathReset = reason || null
+      if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1
+      if (reason === 'place_error') ctx.placeErrors = (ctx.placeErrors || 0) + 1
+      else ctx.placeErrors = 0
+    },
     start: () => scheduleNext(true),
     // ponytail: sprint-jump wedges the bot flush against a 1-block step
     // (sprint speed reaches the face before the queued jump lifts off, so
@@ -518,9 +603,19 @@ function fleeReflex(bot, ctx) {
     setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
-    setFollow: (name) => { followName = name; ctx.work = false; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
+    setFollow: (name) => {
+      const real = resolvePlayer(bot, name)
+      followName = real
+      const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
+      if (!real || seen) ctx.work = false
+      ctx.lastGoalKey = ''
+      ctx.lead = null
+      ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
+      if (real) ctx.paused = false
+    },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
-    work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = ''; ctx.gather = null },
+    work: () => { startWork() },
     // Home site (epic rw4.4): 'build here' and spawn adoption replace the
     // site. Build progress resets with it — old skips/fail counts belong
     // to the old origin. The facts text (home none->site) re-decides.
@@ -634,14 +729,28 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.once('spawn', () => {
       ticker.setMovements(new Movements(bot))
       console.log(`spawned as ${bot.username}`)
+      // Session start far from spawn with nobody visible (quit in a cave):
+      // pre-arm the unseen counter so the tick path walks home at once
+      // instead of standing through N more ticks.
+      const tickCtx = bot._tickerCtx
+      try {
+        const bp = bot.entity && bot.entity.position
+        const sp = bot.spawnPoint
+        if (tickCtx && bp && sp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
+          tickCtx.unseenTicks = UNSEEN_HOME_TICKS
+        }
+      } catch (_) { /* best-effort */ }
       // Owner rule (epic rw4): with no follow target the bot works on its
       // own until 'follow me'. createTicker defaults work=false so unit
-      // tests stay explicit about entering work mode.
+      // tests stay explicit about entering work mode. Exception: a far,
+      // unseen start walks home first (see pre-arm below) — working a cave
+      // 225 blocks from the player helps no one.
+      if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName) tickCtx.resumeWork = true
       // Epic rw4.4: adopt a house an earlier run finished (door near
       // spawn) before the first decision, so a restart resumes as built.
       const found = goal.adoptHome(bot)
       if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
-      if (!followName) ticker.work()
+      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
@@ -704,21 +813,33 @@ const DEEP_WARN_DROP = 8
 
 function handleChat(bot, ticker, username, message) {
   if (username === bot.username) return
+  const playerName = resolvePlayer(bot, username)
   const msg = message.toLowerCase().trim()
   if (msg === 'follow me') {
-    if (ticker) ticker.setFollow(username)
-    bot.chat(`Following ${username}`)
+    if (ticker) ticker.setFollow(playerName)
+    const seen = bot.players && bot.players[playerName] && bot.players[playerName].entity
+    if (seen) {
+      bot.chat(`Following ${playerName}`)
+    } else {
+      // Honest: the server sends no coordinates for an out-of-range player
+      // and the bot is not OP, so it cannot walk there — say where it is.
+      const bp = bot.entity && bot.entity.position
+      const at = bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
+      const sp = bot.spawnPoint
+      const dist = bp && sp ? ` (~${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))} blocks from spawn)` : ''
+      bot.chat(`I can't see you — I'm at ${at}${dist}; come closer or /tp ${bot.username} ${playerName}`)
+    }
   } else if (msg === 'stop') {
     if (ticker) {
       ticker.setFollow('')
       ticker.stop()
     }
   } else if (msg === 'lead anyway') {
-    const offer = deepOffers.get(username)
-    deepOffers.delete(username)
+    const offer = deepOffers.get(playerName)
+    deepOffers.delete(playerName)
     if (offer) {
       bot.chat(`leading you to ${offer.name}, ${offer.distance} blocks, follow me`)
-      if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: offer.name, pos: offer.pos, by: username, lastProgressAt: Date.now() })
+      if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: offer.name, pos: offer.pos, by: playerName, lastProgressAt: Date.now() })
     } else {
       bot.chat('no deep find on hold — ask me to find something first')
     }
@@ -738,11 +859,24 @@ function handleChat(bot, ticker, username, message) {
     if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
+  } else if (msg === 'help' || msg.startsWith('help ')) {
+    const topic = msg.slice(4).trim()
+    if (!topic) {
+      bot.chat(helpReply(1))
+    } else if (/^\d+$/.test(topic)) {
+      bot.chat(helpReply(Number(topic)) || `no help page ${topic.slice(0, 10)} — say help for the list`)
+    } else {
+      const cmd = lookupCommand(topic)
+      if (cmd) bot.chat(detailLine(cmd))
+      // Echo capped: the raw topic is unbounded player text, and an overlong
+      // reply would be split past the 256-char chat cap.
+      else bot.chat(`unknown command: "${topic.slice(0, 30)}" — say help for the list`)
+    }
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
       const name = m[1]
-      const speaker = bot.players && bot.players[username] && bot.players[username].entity
+      const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null
       // No speaker entity (out of tracking range): judge depth from the
       // bot's own Y, the same fallback the ranking uses — never silently 0.
@@ -757,12 +891,14 @@ function handleChat(bot, ticker, username, message) {
         const down = refY != null ? Math.round(refY - res.position.y) : 0
         if (down > DEEP_WARN_DROP) {
           bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
-          deepOffers.set(username, { name: res.name, pos: res.position, distance: res.distance })
+          deepOffers.set(playerName, { name: res.name, pos: res.position, distance: res.distance })
         } else {
           bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
-          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username, lastProgressAt: Date.now() })
+          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: playerName, lastProgressAt: Date.now() })
         }
       }
+    } else if (msg === 'find me' || msg.startsWith('find me ')) {
+      bot.chat('try: find me iron')
     }
   }
 }
@@ -868,4 +1004,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

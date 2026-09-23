@@ -762,6 +762,220 @@ describe('work mode (epic rw4)', () => {
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
   })
 
+  describe('follow me from an unseen player (3a7)', () => {
+    function unseenBot() {
+      const bot = workBot()
+      bot.players = { P: { username: 'P', entity: null } }
+      return bot
+    }
+
+    it("answers honestly with coordinates, not 'Following'", () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      handleChat(bot, ticker, 'P', 'follow me')
+      assert.ok(!bot.chats.some((l) => l.includes('Following P')))
+      assert.ok(bot.chats.some((l) => l.includes("I can't see you")))
+      assert.ok(bot.chats.some((l) => l.includes('0 64 0')))
+      assert.ok(bot.chats.some((l) => l.includes('/tp IdkBot P')))
+    })
+
+    it('keeps working instead of local-idle while the follower is unseen', async () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      const r = await ticker.tick()
+      assert.equal(r.decision.source, 'goal-fsm') // work step continues
+      assert.notEqual(r.decision.action, 'idle')
+    })
+
+    it('follows the first tick the player becomes visible', async () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      bot.players.P = { username: 'P', entity: playerEntity(10) }
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'follow')
+    })
+  })
+
+  describe('return home to an unseen follower (06v)', () => {
+    function farBot() {
+      const bot = workBot()
+      bot.entity.position = pos(-205, 39, -35)
+      bot.spawnPoint = pos(-48, 65, -208)
+      bot.players = { P: { username: 'P', entity: null } }
+      return bot
+    }
+
+    it('walks to spawn after N unseen ticks instead of stopOnce', async () => {
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      handleChat(bot, ticker, 'P', 'follow me') // follow order, honest chat (3a7)
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:-48,65,-208$/)
+      assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalNear')
+      const stops = bot.calls.stop
+      await ticker.tick()
+      await ticker.tick()
+      assert.equal(bot.calls.stop, stops) // homing: no more stopOnce
+    })
+
+    it('a pending follow order beats working alone', async () => {
+      // 3a7 keeps work for an unseen follower; reunion still outranks
+      // cave work, so after N ticks the bot walks instead of working.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:-48,65,-208$/)
+      assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalNear')
+    })
+
+    it('follow+work at spawn stands (no work/home oscillation)', async () => {
+      // 3a7 keeps work for an unseen follower; homing walked it back. Past
+      // arrival the latch must hold: no work step may overwrite the spawn
+      // goal, or the bot ping-pongs work-vs-home every ~10 ticks.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      bot.entity.position = pos(-48, 65, -208) // arrived
+      const lines = []
+      const actions = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 15; i++) actions.push((await ticker.tick()).decision.action)
+      } finally {
+        console.log = origLog
+      }
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      assert.ok(!lines.some((l) => l.includes('goal step=')), 'no work step past arrival')
+      assert.ok(!lines.some((l) => l.includes('returning to spawn')), 'no re-walk past arrival')
+      // The latch holds the body idle: without it the ticks fall through to
+      // the work FSM (gather decisions) while the goal key still reads
+      // return-spawn, so the assertions above cannot see the oscillation.
+      assert.ok(actions.every((a) => a === 'idle'), `stood idle past arrival, got ${actions.join(',')}`)
+    })
+
+    it('sighting mid-walk resumes skipped work', async () => {
+      // No follow order (default deploy): the spawn handler skipped work()
+      // and armed the walk. A player sighted mid-walk ends homing by
+      // resuming work, not by following forever.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      bot._tickerCtx.resumeWork = true // as the spawn handler sets it
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      bot.players.P = { username: 'P', entity: playerEntity(10) } // sighted mid-walk
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.work, true)
+    })
+
+    it('lone bot still stops (no roster, no walk)', async () => {
+      const bot = farBot()
+      bot.players = {}
+      bot.pathfinder.isMoving = () => true // stop latch needs a real path
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      for (let i = 0; i < 12; i++) await ticker.tick()
+      assert.ok(!/^return-spawn:/.test(bot._tickerCtx.lastGoalKey))
+      assert.ok(bot.calls.stop >= 1)
+    })
+
+    it('spawn far from home skips work and walks (default deploy)', async () => {
+      const { runOnce } = require('../src/index')
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      let bot
+      try {
+        const { EventEmitter } = require('node:events')
+        bot = new EventEmitter()
+        bot.username = 'IdkBot'
+        bot.players = { P: { username: 'P', entity: null } }
+        bot.entities = {}
+        bot.health = 20
+        bot.food = 20
+        bot.entity = { position: pos(-205, 39, -35) }
+        bot.spawnPoint = pos(-48, 65, -208)
+        bot.registry = require('minecraft-data')('1.21.1')
+        bot.goals = []
+        bot.pathfinder = {
+          isMoving: () => false,
+          stop: () => {},
+          setGoal: (goal) => { bot.goals.push(goal) },
+          setMovements: (m) => { bot.movements = m },
+        }
+        bot.loadPlugin = () => {}
+        bot.quit = () => {}
+        bot.chat = () => {}
+        // No followName: default deploy. The far, unseen start must walk
+        // home INSTEAD of entering work mode (no 'goal step=' lines).
+        runOnce({
+          host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+          brain: mockBrain(), leaveAfterMs: 60000, followName: '',
+          createBot: () => bot, pingFn: async () => ({ players: { online: 1 } }),
+        }).then(() => {}, () => {})
+        bot.emit('spawn')
+        await new Promise((r) => setTimeout(r, 60))
+        assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued')
+        assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+        assert.ok(!lines.some((l) => l.includes('goal step=')), 'work mode not entered')
+        // Arrival resumes the skipped work mode (one-shot). Edge stop: the
+        // executor ends on the floored block centre, 2.55 out — still home.
+        bot.entity.position = pos(-47.5, 65, -205.5)
+        lines.length = 0
+        await new Promise((r) => setTimeout(r, 60))
+        assert.equal(bot._tickerCtx.work, true)
+        assert.ok(lines.some((l) => l.includes('goal step=')), 'work resumed on arrival')
+      } finally {
+        console.log = origLog
+      }
+    })
+
+    it('spawn far from home pre-arms the walk', async () => {
+      const { runOnce } = require('../src/index')
+      const bot = (function connLike() {
+        const { EventEmitter } = require('node:events')
+        const b = new EventEmitter()
+        b.username = 'IdkBot'
+        b.players = { P: { username: 'P', entity: null } }
+        b.entities = {}
+        b.health = 20
+        b.food = 20
+        b.entity = { position: pos(-205, 39, -35) }
+        b.spawnPoint = pos(-48, 65, -208)
+        b.registry = require('minecraft-data')('1.21.1')
+        b.goals = []
+        b.pathfinder = {
+          isMoving: () => false,
+          stop: () => {},
+          setGoal: (goal) => { b.goals.push(goal) },
+          setMovements: (m) => { b.movements = m },
+        }
+        b.loadPlugin = () => {}
+        b.quit = () => {}
+        b.chat = () => {}
+        return b
+      })()
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 60000, followName: 'P',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 1 } }),
+      }).then(() => {}, () => {})
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(bot._tickerCtx.unseenTicks >= 10, `pre-armed at spawn (unseenTicks=${bot._tickerCtx.unseenTicks})`)
+      assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued on first ticks')
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+    })
+  })
+
   it('(e) go work after stop unpauses into work', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }

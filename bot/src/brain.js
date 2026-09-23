@@ -135,10 +135,18 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
             questions: {
               action: {
                 type: 'choice',
-                instructions: 'The simple rules could not decide this state; choose fight or follow.',
+                // iwb: LAYA matches whole-criterion similarity, so each key gets
+                // one short clause on the decisive fact (health). Measured on
+                // the 13 prod hard-states: 13/13 criteria-match, 10/13 strict
+                // FSM (the 3 idle-want states need an idle key; a 3-key probe
+                // scored worse at 8/20). Every longer variant regressed, so
+                // keep these strings minimal. Known fringe gaps (unreachable
+                // or far hostile at ok health): stub says follow, this says
+                // fight — see the iwb report.
+                instructions: 'Choose fight or follow. Health decides: low health always means follow.',
                 criteria: {
-                  fight: 'hard is crowd and health is ok, or hard is hostile-vs-far-player and hostile is adjacent or near, or hostile_near_player is yes and health is ok: pursue and hit the mob.',
-                  follow: 'health is low, or hard is unreachable-hostile, or hard is hostile-vs-far-player and player is away: leave the mob and walk to the player.'
+                  fight: 'health is ok: attack the mob.',
+                  follow: 'health is low: walk to the player and stay close.'
                 }
               }
             }
@@ -183,14 +191,15 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
 // the route log stays comparable over time. No margin bands: the model answers
 // a constant today, bands would only inject noise at every boundary crossing.
 // H1 low-health-hostile: hostile fact and health < 6 (fight vs follow/survive).
-// H4 unreachable-hostile: hostile_reachable === false (re-probe vs shadow).
 // H2 crowd: nearby_hostiles >= 3 (FSM roams/fights into a crowd).
 // H3 hostile-vs-far-player: hostile fact and distance_to_player > 8 (chase vs run).
+// No unreachable case (was H4): fight already gave up pursuit
+// (fightGivenUpId), so fight is infeasible and the choice is single —
+// the stub follows and the model is never asked.
 function isHard(state) {
   if (!state || typeof state !== 'object') return null
   const hostileFact = typeof state.hostile_distance === 'number' || !!state.hostile_near_player
   if (hostileFact && state.bot_health < 6) return 'low-health-hostile'
-  if (state.hostile_reachable === false) return 'unreachable-hostile'
   if (state.nearby_hostiles >= 3) return 'crowd'
   if (hostileFact && state.distance_to_player > 8) return 'hostile-vs-far-player'
   return null
