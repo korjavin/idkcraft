@@ -16,6 +16,7 @@ const COMMANDS = [
   { names: ['go work', 'free'], usage: 'go work', what: 'releases the bot to work on its own goal', example: 'go work' },
   { names: ['status'], usage: 'status', what: 'reports mode, goal step and home progress', example: 'status' },
   { names: ['find me'], usage: 'find me <block>', what: 'finds the nearest block within 48 blocks and leads you there', example: 'find me iron' },
+  { names: ['bring me'], usage: 'bring me <block> [count]', what: 'fetches blocks alone and drops them at your feet', example: 'bring me coal 5' },
   { names: ['help'], usage: 'help [command]', what: 'lists commands, or explains one in detail', example: 'help find me' },
 ]
 

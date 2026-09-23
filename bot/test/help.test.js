@@ -41,7 +41,7 @@ describe("help command (idkcraft-kae)", () => {
 
   it("'help <unknown>' points at help instead of staying silent", () => {
     const bot = chatBot()
-    handleChat(bot, null, 'Steve', 'help bring')
+    handleChat(bot, null, 'Steve', 'help zzz')
     assert.equal(bot.chats.length, 1)
     assert.ok(bot.chats[0].includes('unknown command'))
     assert.ok(bot.chats[0].includes('say help'))
@@ -122,6 +122,6 @@ describe("help command (idkcraft-kae)", () => {
     for (const head of heads) {
       assert.ok(names.includes(head), `COMMANDS covers handleChat pattern head '${head}'`)
     }
-    assert.ok(lookupCommand('bring') === null, 'no phantom bring entry')
+    assert.ok(lookupCommand('bring me'), 'bring me resolves (prefix included)')
   })
 })

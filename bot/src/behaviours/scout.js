@@ -83,8 +83,22 @@ function resolveBlockIds(bot, blockName) {
 // 's' falls back to the singular (diamonds -> diamond); everything else goes
 // through resolveBlockIds (exact + <base>_ore variants). No fuzzy search:
 // anything still unmatched resolves to no ids ('unknown' downstream).
+// Dynamic *_log ids for 'bring me logs' (gather.js logIds, shared): exact
+// names vary by wood type, so enumerate the registry like the matcher does.
+function resolveLogIds(bot) {
+  const byName = (bot.registry && bot.registry.blocksByName) || {}
+  const ids = []
+  for (const name of Object.keys(byName)) {
+    if (!name.endsWith('_log')) continue
+    const entry = byName[name]
+    if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
+  }
+  return ids
+}
+
 function resolveFindIds(bot, name) {
   if (name === 'ore' || name === 'ores') return resolveIds(bot, ORE_NAMES)
+  if (name === 'log' || name === 'logs') return resolveLogIds(bot)
   let ids = resolveBlockIds(bot, name)
   if (ids.length === 0 && name.length > 1 && name.endsWith('s')) {
     const singular = name.slice(0, -1)

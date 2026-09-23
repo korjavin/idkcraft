@@ -9,6 +9,7 @@ const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const bringMod = require('./behaviours/bring')
 const goal = require('./goal')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -22,6 +23,7 @@ const BEHAVIOURS = {
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
   gather: require('./behaviours/gather'),
+  bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
 }
@@ -230,6 +232,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
+    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -559,6 +562,16 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
       }
+      // Bring-me is an explicit player order like lead: it owns the body
+      // above work, except fight which still preempts. Placed after lead
+      // so the newest order wins its ticks.
+      if (ctx.bring && decision.action !== 'fight') {
+        const handler = BEHAVIOURS.bring
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
+        return { decision: { ...decision, action: 'bring' }, calledBrain }
+      }
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
@@ -603,6 +616,7 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       const real = resolvePlayer(bot, name)
       followName = real
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
@@ -616,6 +630,7 @@ function fleeReflex(bot, ctx) {
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { startWork() },
     stop: () => {
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -623,7 +638,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
@@ -633,9 +648,25 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
+    // Bring-me order creation: find + tool checks answer in this tick (like
+    // find-me); the behaviour only walks, digs, returns and tosses.
+    setBring: ({ name, want, by }) => {
+      const res = findNearest(bot, name, 48)
+      if (res === 'unknown') return `unknown block: ${name}`
+      if (!res) return `no ${name} within 48 blocks`
+      if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot)) return `need a stone pickaxe for ${res.name}`
+      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      ctx.bring = {
+        name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
+        pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
+        have: 0, announced: true,
+      }
+      ctx.paused = false
+      return `going for ${want} ${res.name}, ${res.distance} blocks away`
+    },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
-      const mode = ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following'))
+      const mode = ctx.bring ? 'bringing' : (ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following')))
       bot.chat(`${mode} step=${ctx.step || 'none'} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
     }
   }
@@ -878,6 +909,16 @@ function handleChat(bot, ticker, username, message) {
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
+    } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
+      const m = msg.match(/^bring me\s+(\S+)(?:\s+(\d+))?$/)
+      if (!m) {
+        bot.chat('try: bring me coal')
+      } else if (ticker && typeof ticker.setBring === 'function') {
+        const want = m[2]
+          ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
+          : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)
+        bot.chat(ticker.setBring({ name: m[1], want, by: playerName }))
+      }
     }
   }
 }
