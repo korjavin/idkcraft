@@ -131,8 +131,12 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('build', { ...base, planks: 16 }, bot, {}), true) // one full batch
     assert.equal(F('build', { ...base, planks: 15 }, bot, {}), false) // short of a batch
     const siteCtx = { home: siteFor(bot, pos(0, 64, 0)) } // all cells read missing: full remainder
-    assert.equal(F('build', { ...base, planks: 48, home: 'site' }, bot, siteCtx), true)
-    assert.equal(F('build', { ...base, planks: 15, home: 'site' }, bot, siteCtx), false)
+    const kit = { table: 1, door: 1 } // the item gate needs both held for a full remainder
+    assert.equal(F('build', { ...base, ...kit, planks: 48, home: 'site' }, bot, siteCtx), true)
+    assert.equal(F('build', { ...base, ...kit, planks: 15, home: 'site' }, bot, siteCtx), false)
+    // item gate: an unfinished door/table without its item yields (no livelock)
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 0, home: 'site' }, bot, siteCtx), false)
+    assert.equal(F('build', { ...base, planks: 48, table: 0, door: 1, home: 'site' }, bot, siteCtx), false)
   })
 })
 

@@ -127,6 +127,16 @@ describe('rw4.4 (c) site pick and facts none->site', () => {
     assert.equal(goal.goalFacts(bot, {}).home, 'none')
     assert.equal(goal.goalFacts(bot, { home }).home, 'site')
   })
+  it('rejects an uneven first candidate for the second direction', () => {
+    const world = makeWorld()
+    // raise one column of the first candidate (6,0)+ by 2: outside the
+    // one-block tolerance, so the site moves to the second direction (4,4)
+    world.set(6, 64, 0, 'dirt')
+    world.set(6, 65, 0, 'dirt')
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    assert.deepEqual(home.site, { x: 4, y: 64, z: 4 })
+  })
 })
 
 describe('rw4.4 (d) adoptHome finds the earlier house', () => {
@@ -166,6 +176,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
       { name: 'oak_door', count: 1 },
     ]
     const bot = mockBot(world, { items })
+    bot.entity.position = pos(10, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
     assert.ok(bot.chats.some((m) => m === 'building 0/40'))
@@ -185,6 +196,42 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     assert.equal(ctx.home.built, true)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.chats.some((m) => m === 'home done at 6 64 0'))
+  })
+})
+
+describe('rw4.4 out-of-reach re-approaches instead of refusing', () => {
+  it('no place call, goal reset for a fresh approach', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    // entity stays at spawn (0,65,0): ~11 blocks from the table cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    build(bot, ctx, null, null) // approach goal
+    build(bot, ctx, null, null) // arrived? no — still 11 out: re-approach, no attempt
+    assert.equal(bot.calls.places.length, 0)
+    assert.equal(ctx.buildGoalIdx, -1)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+})
+
+describe('rw4.4 roof above the door avoids the door reference', () => {
+  it('places against the side roof neighbour (doors toggle on right-click)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.entity.position = pos(7, 67, 1) // next to the cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    paintHouse(world, ctx.home)
+    world.set(7, 66, 0, 'air') // only the roof-above-door cell is missing
+    world.set(7, 65, 0, 'oak_door') // the placed door upper half (server-side)
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // place
+    await settle()
+    assert.equal(bot.calls.places.length, 1)
+    const [refBlock] = bot.calls.places[0]
+    assert.deepEqual(
+      { x: refBlock.position.x, y: refBlock.position.y, z: refBlock.position.z },
+      { x: 8, y: 66, z: 0 }, // east roof neighbour, not the door below
+    )
   })
 })
 
@@ -209,6 +256,7 @@ describe('rw4.4 (g) three refusals skip the cell with one log line', () => {
   it('skips after 3 refusals and moves on', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
+    bot.entity.position = pos(6, 64, 1) // next to the first ring cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
     world.set(10, 64, 1, 'crafting_table') // table done: first target is a wall plank
     build(bot, ctx, null, null) // approach
@@ -230,6 +278,52 @@ describe('rw4.4 (g) three refusals skip the cell with one log line', () => {
   })
 })
 
+describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
+  it('a second tick while placing starts no second flight', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    bot.entity.position = pos(10, 64, 2)
+    let release = null
+    const gate = new Promise((res) => { release = res })
+    bot.placeBlock = async (ref, face) => {
+      bot.calls.places.push([ref, face])
+      await gate // hangs: the flight never settles
+    }
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // flight starts, hangs
+    build(bot, ctx, null, null) // must not start another
+    await settle(2)
+    assert.equal(bot.calls.places.length, 1)
+    assert.equal(ctx.placeInFlight, true)
+    release()
+  })
+  it('grass in the cell is dug once, then the retry lands', async () => {
+    const world = makeWorld()
+    world.set(6, 64, 0, 'short_grass') // first lower-ring cell overgrown
+    let attempts = 0
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.entity.position = pos(6, 64, 1)
+    const planted = []
+    bot.placeBlock = async (ref, face) => {
+      bot.calls.places.push([ref, face])
+      attempts++
+      if (attempts === 1) throw new Error('refused')
+      const rp = (ref && ref.position) || ref
+      world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+      planted.push(world.get(6, 64, 0))
+    }
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    world.set(10, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // refuse -> dig -> retry lands
+    await settle()
+    assert.deepEqual(bot.calls.digs, ['short_grass'])
+    assert.deepEqual(planted, ['oak_planks'])
+    assert.equal(ctx.buildFails, 0)
+  })
+})
+
 describe('rw4.4 rest walks a plain-coords home site', () => {
   it('wraps the site in a Vec3 (GoalFollow.hasChanged needs floored)', () => {
     const rest = require('../src/behaviours/rest')
@@ -241,6 +335,28 @@ describe('rw4.4 rest walks a plain-coords home site', () => {
     assert.equal(g.constructor.name, 'GoalFollow')
     const f = g.entity.position.floored() // live crash site: used to throw here
     assert.deepEqual({ x: f.x, y: f.y, z: f.z }, { x: 6, y: 64, z: 0 })
+  })
+})
+
+describe('rw4.4 no solid neighbour skips instead of looping', () => {
+  let origLog
+  let lines
+  beforeEach(() => { origLog = console.log; lines = []; console.log = (l) => { lines.push(String(l)) } })
+  afterEach(() => { console.log = origLog })
+
+  it('three no-ref ticks skip the cell with one log line', () => {
+    const world = makeWorld()
+    // air pocket around the table cell: below, sides and top are all air
+    for (const [x, y, z] of [[10, 63, 1], [9, 64, 1], [11, 64, 1], [10, 64, 0], [10, 64, 2], [10, 65, 1]]) {
+      world.set(x, y, z, 'air')
+    }
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    bot.entity.position = pos(10, 64, 2) // next to the cell (in reach, but nothing to build against)
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let i = 0; i < 8; i++) build(bot, ctx, null, null)
+    assert.equal(ctx.buildSkip.length, 1)
+    const norefs = lines.filter((l) => l.startsWith('build skip') && l.includes('no-ref'))
+    assert.equal(norefs.length, 1)
   })
 })
 

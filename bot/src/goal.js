@@ -73,6 +73,21 @@ const MENU = {
         return false
       }
       if (planks + other <= 0) return false
+      // No livelock: a missing door/table item for an unfinished cell means
+      // build cannot advance — yield so gather/craft (or a new site) run.
+      // Skipped cells are given up and do not gate.
+      try {
+        const skip2 = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
+        for (let i = 0; i < BLUEPRINT.length; i++) {
+          if (skip2.has(i) || BLUEPRINT[i].kind === 'planks') continue
+          if (!buildMod.cellDone(bot, home, BLUEPRINT[i])) {
+            if (BLUEPRINT[i].kind === 'table' && !(facts.table > 0)) return false
+            if (BLUEPRINT[i].kind === 'door' && !(facts.door > 0)) return false
+          }
+        }
+      } catch (_) {
+        return false
+      }
       if (planks > 0) return facts.planks >= Math.min(planks, 16)
       return true
     },

@@ -139,7 +139,8 @@ function findRef(bot, p) {
     try {
       block = bot.blockAt(q)
     } catch (_) { /* treat as open */ }
-    if (block && block.name !== 'air' && block.boundingBox !== 'empty') {
+    if (block && block.name !== 'air' && block.boundingBox !== 'empty' &&
+        !block.name.endsWith('_door') && block.name !== 'crafting_table') {
       return { ref: block, face: new Vec3(-ox, -oy, -oz) }
     }
   }
@@ -222,7 +223,17 @@ function build(bot, ctx, target, state) {
   }
   if (moving) return
 
-  // At the cell (or the walk never started): place.
+  // At the cell (or the walk never started): place — but only in reach.
+  // A preemption that carried the body away (fight, flee, lead, follow me)
+  // leaves a stale buildGoalIdx: attempting from out there burns refusals
+  // and skips a good cell, so force a fresh approach instead.
+  try {
+    const bp = bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number' && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > 5) {
+      ctx.buildGoalIdx = -1
+      return
+    }
+  } catch (_) { /* unverifiable: attempt anyway */ }
   if (cellDone(bot, ctx.home, cell)) return // lagged double-place guard
   let ref
   if (cell.kind === 'door') {
@@ -236,8 +247,16 @@ function build(bot, ctx, target, state) {
     ref = findRef(bot, p)
   }
   if (!ref) {
-    // Nothing solid to build against yet (still arriving): re-approach.
-    ctx.buildGoalIdx = -1
+    // Nothing solid to build against: while still arriving this is
+    // transient, but after three ticks the cell is unplaceable — count it
+    // like a refusal so the skip escape applies instead of looping forever.
+    if (ctx.buildFailIdx !== idx) {
+      ctx.buildFailIdx = idx
+      ctx.buildFails = 0
+    }
+    ctx.buildFails = (ctx.buildFails || 0) + 1
+    if (ctx.buildFails >= 3) skipCell(ctx, idx, p, 'no-ref')
+    else ctx.buildGoalIdx = -1
     return
   }
 
