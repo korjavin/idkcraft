@@ -73,4 +73,9 @@ function serve(port) {
   }).listen(port, () => console.log(`metrics on :${port}/metrics`))
 }
 
-module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, setVitals, serve }
+const bring = new client.Counter({
+  name: 'idkcraft_bot_bring_total',
+  help: 'Bring-me orders by outcome (done|refused|cancelled)',
+  labelNames: ['outcome']
+})
+module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, setVitals, serve }
