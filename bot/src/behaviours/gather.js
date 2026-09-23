@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const recover = require('./recover')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -184,6 +185,9 @@ function gather(bot, ctx, target, state) {
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)
+          // Detector (ef3): the menu gets one shot before the arbiter moves
+          // on. Transition only — re-asserts of the same final stay quiet.
+          recover.setStuck(ctx, 'gather', g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null)
         }
       }
       return

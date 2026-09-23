@@ -17,6 +17,7 @@ function brainTimeoutMs(env) {
 }
 const bringMod = require('./behaviours/bring')
 const goal = require('./goal')
+const recover = require('./behaviours/recover')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
   if (bot && bot._tickerCtx && bot._tickerCtx.eatInFlight) return Promise.resolve()
@@ -32,6 +33,13 @@ const BEHAVIOURS = {
   bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
+  // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
+  pillar_up: (bot, ctx) => recover.run(bot, ctx),
+  dig_up: (bot, ctx) => recover.run(bot, ctx),
+  sidestep: (bot, ctx) => recover.run(bot, ctx),
+  dig_through: (bot, ctx) => recover.run(bot, ctx),
+  wait: (bot, ctx) => recover.run(bot, ctx),
+  call_player: (bot, ctx) => recover.run(bot, ctx),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -134,7 +142,7 @@ function eatReflex(bot, ctx, state) {
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, lastPos: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -240,6 +248,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
+    clearStuck()
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
@@ -331,6 +340,44 @@ function fleeReflex(bot, ctx) {
   }
   return d
 }
+
+  // Stillness fact for the stuck menu: consecutive ticks with no
+  // horizontal displacement while the executor claims to move. Progress
+  // clears a stale detector fact (but never a running episode).
+  function noteDisplacement() {
+    if (ctx.paused) return
+    let bp = null
+    try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
+    let moving = false
+    try {
+      moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
+    } catch (_) { /* stationary default */ }
+    if (bp && ctx.lastPos && moving) {
+      if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+      else {
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuck = null
+      }
+    } else if (!moving) ctx.stuckTicks = 0
+    if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+  }
+
+  // A hostile inside swing reach preempts recovery: the body fights first,
+  // the stuck fact waits for the next tick.
+  function urgentFight(state) {
+    if (!state || !state.hostile || state.hostile.isValid === false) return false
+    const d = state.hostile_distance
+    if (typeof d !== 'number' || d > fightMod.SWING_RANGE) return false
+    return state.hostile_reachable !== false
+  }
+
+  // A stale stuck fact must not survive a mode change: the goal it names
+  // belongs to the previous order.
+  function clearStuck() {
+    ctx.stuck = null
+    ctx.recovery = null
+    ctx.stuckTicks = 0
+  }
 
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
@@ -539,8 +586,30 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
         return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
       }
+      // Hard-case stuck (ef3): displacement watch + generic backstops, then
+      // the recover menu owns the body. Detectors in the behaviours raise
+      // ctx.stuck with the goal they pursued; place_error streaks and long
+      // stillness while the executor claims to move raise it here. An urgent
+      // fight skips recovery (safety beats escape) and the brain call is
+      // skipped — the episode asks the model at decision points only.
+      noteDisplacement()
+      if (!ctx.recovery && !ctx.stuck) {
+        if ((ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) ctx.stuck = { by: 'place_error', goal: null }
+        else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) ctx.stuck = { by: 'no-displacement', goal: null }
+      }
+      let decision = null
+      if (ctx.stuck && !urgentFight(state)) {
+        decision = await recover.decide(bot, ctx, state, target)
+        if (ctx.paused) {
+          // 'stop' landed during the recover await: same stale-decision
+          // guard as after the brain await below.
+          stopOnce()
+          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
+        applyDecision(decision, target, state)
+        return { decision, calledBrain }
+      }
       const key = stateKey(state)
-      let decision
       if (lastDecision && key === lastStateKey) {
         decision = lastDecision
       } else {
@@ -633,6 +702,7 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
+      clearStuck()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       const real = resolvePlayer(bot, name)
       followName = real
@@ -647,6 +717,7 @@ function fleeReflex(bot, ctx) {
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { startWork() },
     stop: () => {
+      clearStuck()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
@@ -655,11 +726,12 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
+    setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
       if (ctx.lead && !player) bot.chat('following you again')
+      clearStuck()
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0

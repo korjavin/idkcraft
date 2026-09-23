@@ -171,12 +171,28 @@ describe('lead behaviour', () => {
     assert.equal(far.calls.setGoal, 1)
   })
 
-  it('sidesteps once, then gives up after a second stationary stretch', () => {
+  it('raises the stuck fact, then gives up after an episode with no progress', () => {
+    // ef3: the first stall is a detector now (no sidestep — the recover menu
+    // moves the body between the strikes). Restoring the nudge fails this
+    // test (a GoalNear fires, no fact).
     const bot = mockBot()
     const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'diamond_ore'), leadStuck: 0 }
-    for (let t = 0; t <= GIVE_UP_TICKS * 2 + 2; t++) {
+    for (let t = 0; t <= GIVE_UP_TICKS + 1; t++) {
       lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
-      if (t < GIVE_UP_TICKS * 2 + 2) assert.ok(ctx.lead, `gave up early at tick ${t}`)
+      assert.ok(ctx.lead, `gave up early at tick ${t}`)
+    }
+    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+    assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
+    assert.ok(!ctx.lead.nudged)
+    // The episode ran and ended without progress (what release() leaves):
+    // the next stall is the second strike and gives up like before.
+    ctx.stuck = null
+    ctx.recovery = null
+    ctx.lead.nudged = true
+    ctx.lead.stuckTicks = 0
+    for (let t = 0; t <= GIVE_UP_TICKS + 1; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+      if (t < GIVE_UP_TICKS) assert.ok(ctx.lead, `gave up early at tick ${t}`)
     }
     assert.equal(ctx.lead, null)
     assert.ok(bot.calls.chats.some((l) => l === 'cannot reach diamond_ore at 10 64 0; following you again'))
@@ -194,7 +210,9 @@ describe('lead behaviour', () => {
     assert.ok(ctx.lead)
   })
 
-  it('nudges once then gives up when isMoving stays true without displacement', () => {
+  it('raises the fact (no nudge) when isMoving stays true without displacement', () => {
+    // ef3: same detector, executor-wedged branch. The jump + GoalNear moved
+    // to the sidestep primitive; the order survives until an episode runs.
     const bot = mockBot()
     bot._moving = true
     const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
@@ -202,15 +220,25 @@ describe('lead behaviour', () => {
     let now = 1000
     Date.now = () => now
     try {
-      for (let t = 0; t < GIVE_UP_TICKS * 2 + 5 && ctx.lead; t++) {
+      for (let t = 0; t < GIVE_UP_TICKS + 2; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.ok(ctx.lead)
+      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
+      assert.deepEqual(bot.calls.controls, [])
+      assert.deepEqual(bot.calls.chats, [])
+      // Post-episode with no progress: the second strike gives up.
+      ctx.stuck = null
+      ctx.recovery = null
+      ctx.lead.nudged = true
+      ctx.lead.stuckTicks = 0
+      for (let t = 0; t < GIVE_UP_TICKS + 2 && ctx.lead; t++) {
         lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
         now += 1000
       }
       assert.equal(ctx.lead, null)
-      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
-      assert.equal(bot.calls.goals.at(-1).rangeSq, 4)
-      assert.deepEqual(bot.calls.controls, [['jump', true], ['jump', false]])
-      assert.equal(bot.calls.chats.filter((line) => line.includes('blocks left')).length, 0)
       assert.deepEqual(bot.calls.chats, ['cannot reach iron_ore at 10 64 0; following you again'])
     } finally {
       Date.now = originalNow
@@ -238,7 +266,9 @@ describe('lead behaviour', () => {
     }
   })
 
-  it('bounds a mining stall and gives up if digging never finishes', () => {
+  it('raises the fact on a mining stall, gives up after an episode with no progress', () => {
+    // ef3: the work-stall strike is a detector too; the episode runs between
+    // the strikes like the idle-stall path.
     const bot = mockBot()
     bot._moving = true
     bot.pathfinder.isMining = () => true
@@ -247,12 +277,22 @@ describe('lead behaviour', () => {
     let now = 1000
     Date.now = () => now
     try {
-      for (let t = 0; t < WORK_STALL_TICKS * 2 + 4 && ctx.lead; t++) {
+      for (let t = 0; t < WORK_STALL_TICKS + 2; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.ok(ctx.lead)
+      assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
+      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
+      ctx.stuck = null
+      ctx.recovery = null
+      ctx.lead.nudged = true
+      ctx.lead.workTicks = 0
+      for (let t = 0; t < WORK_STALL_TICKS + 2 && ctx.lead; t++) {
         lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
         now += 1000
       }
       assert.equal(ctx.lead, null)
-      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
       assert.deepEqual(bot.calls.chats, ['cannot reach iron_ore at 10 64 0; following you again'])
     } finally {
       Date.now = originalNow
@@ -286,7 +326,8 @@ describe('lead behaviour', () => {
       lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
     }
     assert.ok(ctx.lead)
-    assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+    assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 0)
+    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 } })
     assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
   })
 

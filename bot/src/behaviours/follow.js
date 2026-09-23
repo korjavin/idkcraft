@@ -1,12 +1,12 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const recover = require('./recover')
 
 const FOLLOW_RANGE = 3
 const SEARCH_TIMEOUT_MS = 6000
 const MAX_STALLS = 2
 const MOVE_TOLERANCE = 0.5
-const NUDGE_OFFSET = 2
 
 function formatPos(p) {
   if (!p) return 'unknown'
@@ -16,12 +16,11 @@ function formatPos(p) {
   return `${fx},${fy},${fz}`
 }
 
-// Follow behaviour with spaced re-issue and unstuck reflex:
+// Follow behaviour with spaced re-issue and a stuck detector:
 // Avoids tearing down running A* search every tick while stationary.
 // Re-issues GoalFollow only after a terminal path status (noPath/timeout/empty success)
 // or after 6 s without path_update. After 2 terminal results from the same spot,
-// logs 'stuck', jumps and sidesteps (GoalNear with 2-block offset) for one tick, then
-// retries GoalFollow.
+// raises the stuck fact (ef3) and the recover menu picks the escape.
 function follow(bot, ctx, target, state) {
   if (!target) return
   const key = `follow:${target.username || target.id}`
@@ -34,18 +33,7 @@ function follow(bot, ctx, target, state) {
     ctx.followIssuedAt = now
     ctx.followStalls = 0
     ctx.followLastPos = bp ? bp.clone() : null
-    ctx.followNudge = false
     ctx.stuckResets = 0
-    return
-  }
-
-  if (ctx.followNudge) {
-    ctx.followNudge = false
-    ctx.followStalls = 0
-    ctx.stuckResets = 0
-    ctx.followIssuedAt = now
-    if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
-    bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
     return
   }
 
@@ -81,14 +69,8 @@ function follow(bot, ctx, target, state) {
       const dist = typeof state?.distance_to_player === 'number'
         ? state.distance_to_player.toFixed(1)
         : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
-      console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
-      const angle = Math.random() * Math.PI * 2
-      const nx = (bp ? bp.x : 0) + Math.cos(angle) * NUDGE_OFFSET
-      const nz = (bp ? bp.z : 0) + Math.sin(angle) * NUDGE_OFFSET
-      const ny = bp ? bp.y : 64
-      bot.pathfinder.setGoal(new goals.GoalNear(nx, ny, nz, 1), false)
-      if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
-      ctx.followNudge = true
+      const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
+      if (recover.setStuck(ctx, 'follow', gp)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
       ctx.followStalls = 0
       ctx.stuckResets = 0
       ctx.followIssuedAt = now
@@ -122,15 +104,9 @@ function follow(bot, ctx, target, state) {
     const dist = typeof state?.distance_to_player === 'number'
       ? state.distance_to_player.toFixed(1)
       : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
-    console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
-
-    const angle = Math.random() * Math.PI * 2
-    const nx = (bp ? bp.x : 0) + Math.cos(angle) * NUDGE_OFFSET
-    const nz = (bp ? bp.z : 0) + Math.sin(angle) * NUDGE_OFFSET
-    const ny = bp ? bp.y : 64
-    bot.pathfinder.setGoal(new goals.GoalNear(nx, ny, nz, 1), false)
-    if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
-    ctx.followNudge = true
+    const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
+    if (recover.setStuck(ctx, 'follow', gp)) console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
+    ctx.followStalls = 0
     ctx.followIssuedAt = now
   } else {
     bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
