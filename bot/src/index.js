@@ -337,13 +337,14 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
-  // Greeting checks (v92): on a follow dispatch, and on a bring dispatch
-  // carrying back, the approached player (follow target or bring recipient)
-  // is measured directly; the module latches the far -> near edge. Fight
-  // and flee never greet.
+  // Greeting checks (v92): whoever the body approaches — the follow
+  // target, or the bring recipient on the way back — is measured directly;
+  // the module latches the far -> near edge. Only fighting or fleeing
+  // suppress it (near a still player the stub says roam/idle, not follow).
   function greetCheck(decision) {
-    if (decision.action !== 'follow' && decision.action !== 'bring') return
-    const name = decision.action === 'bring' && ctx.bring && ctx.bring.by ? ctx.bring.by : followName
+    if (decision.action === 'fight' || decision.action === 'flee') return
+    const bringing = decision.action === 'bring' && ctx.bring && ctx.bring.by
+    const name = bringing || followName
     if (!name) return
     const ent = bot.players && bot.players[name] && bot.players[name].entity
     const bp = bot.entity && bot.entity.position

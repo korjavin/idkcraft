@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createGreeter, GREET_FAR, GREET_NEAR, COOLDOWN_MS } = require('../src/greet')
 const { createTicker, handleDeath } = require('../src/index')
+const { stubBrain } = require('../src/brain')
 
 function pos(x, y, z) {
   const p = {
@@ -191,6 +192,24 @@ describe('greet wiring (idkcraft-v92)', () => {
     await flush()
     bot.players.P.entity.position = pos(3.4, 64, 0) // where follow really stops
     await ticker.tick()
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('the real stub brain greets on arrival (it says roam up close, not follow)', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: stubBrain, tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10 still: follow, arming sight
+    await flush()
+    assert.deepEqual(log, [])
+    bot.players.P.entity.position = pos(3, 64, 0)
+    await ticker.tick() // P at 3 still: stub says roam — still a greeting
     await flush()
     assert.deepEqual(log, [true, false, true, false])
   })
