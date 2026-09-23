@@ -66,6 +66,22 @@ function snapHostiles(bot) {
   return { count, name, dist }
 }
 
+// Inventory counter for goal facts: sums item counts whose name matches pred
+// (e.g. n => n.endsWith('_log')). Best-effort 0 when the inventory is not ready.
+function countItems(bot, pred) {
+  let n = 0
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string') continue
+        if (pred(i.name)) n += typeof i.count === 'number' ? i.count : 1
+      }
+    }
+  } catch (_) { /* inventory not ready: count 0 */ }
+  return n
+}
+
 // Dedup key: distance rounded to 1 block + same flags => reuse last decision,
 // skip the JEV call. Staleness is at most half a block of travel.
 function stateKey(state) {
@@ -148,4 +164,4 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   return state
 }
 
-module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles }
+module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems }

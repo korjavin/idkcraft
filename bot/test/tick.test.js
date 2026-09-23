@@ -665,6 +665,150 @@ describe('follow behaviour and unstuck reflex', () => {
   })
 })
 
+describe('work mode (epic rw4)', () => {
+  const { handleChat } = require('../src/index')
+  let origLog
+  let lines
+  beforeEach(() => {
+    origLog = console.log
+    lines = []
+    console.log = (line) => { lines.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function workBot() {
+    const bot = mockBot()
+    bot.spawnPoint = pos(0, 64, 0)
+    bot.chats = []
+    bot.chat = (m) => { bot.chats.push(String(m)) }
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    bot._items = []
+    bot.inventory = { items: () => bot._items }
+    bot.equip = async () => {}
+    return bot
+  }
+
+  function zombie(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('(a) work + player nearby: rest step, follow never runs', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const origFollow = BEHAVIOURS.follow
+    let followRan = 0
+    BEHAVIOURS.follow = () => { followRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'rest')
+      assert.equal(r.decision.source, 'goal-fsm')
+      assert.equal(followRan, 0)
+      assert.ok(bot.calls.setGoal >= 1)
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear') // rest strolls around spawn
+      assert.ok(lines.some((l) => l.includes('goal step=rest')))
+    } finally {
+      BEHAVIOURS.follow = origFollow
+    }
+  })
+
+  it('(b) work + hostile at 5 blocks: fight preempts as before', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'fight')
+    assert.ok(bot.calls.setGoal >= 1) // pursuit goal, not a rest stroll
+    assert.equal(bot.attackCalls, 0) // 5 blocks: walking in, out of swing range
+  })
+
+  it('(c) work + no visible target but roster non-empty: working path, fast cadence', async () => {
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = workBot()
+      // Roster player WITHOUT an entity: findTarget is null (nothing
+      // visible), but Steve is on the server, so the workAlone path runs.
+      // (An entity would make him visible and take the normal path instead.)
+      bot.players = { Steve: { username: 'Steve' } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222, followName: 'Nobody' })
+      ticker.work()
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'rest') // without workAlone this would be idle
+      assert.deepEqual(delays, [111]) // fast ticks while working, not idle cadence
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
+  it('(d) follow me in chat resets work: next tick follows', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    handleChat(bot, ticker, 'Steve', 'follow me')
+    assert.ok(bot.chats.some((m) => m.includes('Following Steve')))
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'follow')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+  })
+
+  it('(e) go work after stop unpauses into work', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.stop()
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.ok(bot.chats.some((m) => m.includes('on my own')))
+    const r = await ticker.tick()
+    assert.notDeepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(r.decision.action, 'rest')
+  })
+
+  it('(g) work + empty or self-only roster: idle path, no brain call, slow cadence', async () => {
+    // The workAlone roster guard (anyone but the bot itself) keeps a lone
+    // working bot on the cheap idle path: no brain call, slow ticks, leave
+    // streak ages. Without the self-exclusion it would burn model calls.
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      for (const players of [{}, { IdkBot: { username: 'IdkBot', entity: playerEntity(0) } }]) {
+        const bot = workBot()
+        bot.players = players
+        const brain = mockBrain()
+        const ticker = createTicker({ bot, brain, tickMs: 111, idleTickMs: 222 })
+        ticker.work()
+        const r = await ticker.tick()
+        assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+        assert.equal(brain.calls, 0)
+        assert.ok(!lines.some((l) => l.includes('goal step=')), 'no goal decision while alone')
+      }
+      assert.ok(delays.every((d) => d === 222), `slow cadence while alone (delays=${delays})`)
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
+  it('(f) status chats mode, step, inventory and home', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick() // step rest is set
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.equal(bot.chats[bot.chats.length - 1], 'working step=rest logs=0 planks=0 home=none')
+  })
+})
+
 describe('stateKey', () => {
   const base = { distance_to_player: 12.4, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 0 }
   it('rounds distance to 1 block and covers the flags', () => {
@@ -1191,6 +1335,52 @@ describe('nobody-online leave', () => {
       // are unref'd so the suite still exits cleanly.
     } finally {
       process.exit = realExit
+    }
+  })
+
+  it('runOnce works on first spawn only without BOT_FOLLOW', async () => {
+    const { runOnce } = require('../src/index')
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      // No follow target: first spawn enters work mode, so ticks log goal
+      // steps. Emptying the roster afterwards lets the bot quit itself
+      // (ticker destroyed: silent for the rest of the file).
+      const bot = connBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      let done = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: '',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => { done = true }, () => { done = true })
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(lines.some((l) => l.includes('goal step=rest')), 'work mode entered on first spawn')
+      bot.players = {}
+      await new Promise((r) => setTimeout(r, 300))
+      assert.equal(done, true) // quit itself, ticker destroyed
+      // Pinned follow target: no work mode — brain follow decides instead.
+      const lines2 = []
+      console.log = (l) => { lines2.push(String(l)) }
+      const bot2 = connBot()
+      bot2.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      let done2 = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: 'Steve',
+        createBot: () => bot2, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => { done2 = true }, () => { done2 = true })
+      bot2.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(!lines2.some((l) => l.includes('goal step=')), 'no work mode with BOT_FOLLOW')
+      assert.ok(lines2.some((l) => l.includes('action=follow')), 'brain follow decides instead')
+      bot2.players = {}
+      await new Promise((r) => setTimeout(r, 300))
+      assert.equal(done2, true)
+    } finally {
+      console.log = origLog
     }
   })
 
