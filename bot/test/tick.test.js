@@ -763,6 +763,44 @@ describe('work mode (epic rw4)', () => {
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
   })
 
+  describe('follow me from an unseen player (3a7)', () => {
+    function unseenBot() {
+      const bot = workBot()
+      bot.players = { P: { username: 'P', entity: null } }
+      return bot
+    }
+
+    it("answers honestly with coordinates, not 'Following'", () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      handleChat(bot, ticker, 'P', 'follow me')
+      assert.ok(!bot.chats.some((l) => l.includes('Following P')))
+      assert.ok(bot.chats.some((l) => l.includes("I can't see you")))
+      assert.ok(bot.chats.some((l) => l.includes('0 64 0')))
+      assert.ok(bot.chats.some((l) => l.includes('/tp IdkBot P')))
+    })
+
+    it('keeps working instead of local-idle while the follower is unseen', async () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      const r = await ticker.tick()
+      assert.equal(r.decision.source, 'goal-fsm') // work step continues
+      assert.notEqual(r.decision.action, 'idle')
+    })
+
+    it('follows the first tick the player becomes visible', async () => {
+      const bot = unseenBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      bot.players.P = { username: 'P', entity: playerEntity(10) }
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'follow')
+    })
+  })
+
   it('(e) go work after stop unpauses into work', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
