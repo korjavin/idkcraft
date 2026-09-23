@@ -45,7 +45,8 @@ function roam(bot, ctx, target, state) {
   // only (ef3): raise the stuck fact, the recover menu picks the escape.
   if (bot.pathfinder.isMoving()) {
     if ((ctx.stuckResets || 0) >= 2) {
-      if (recover.setStuck(ctx, 'roam', ctx.roamGoal || null, 'roam')) {
+      const spot = bp ? `spot:${Math.round(bp.x)},${Math.round(bp.z)}` : 'roam'
+      if (recover.setStuck(ctx, 'roam', ctx.roamGoal || null, spot)) {
         console.log(`stuck reason=wedge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)} dist=${distToPlayer.toFixed(1)}`)
       }
       ctx.stuckResets = 0

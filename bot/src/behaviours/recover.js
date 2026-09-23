@@ -494,7 +494,9 @@ function setStuck(ctx, by, goal, key) {
   const k = key || by || 'unknown'
   const L = ctx.recoverLatch
   if (L && L.by === (by || 'unknown') && L.key === k) {
-    if (goalClose(L.goal, g)) return false
+    // spot: keys latch on the key alone (the goal they carry is random or
+    // irrelevant); other keys latch on a close goal (a moved goal is new).
+    if (k.startsWith('spot:') || goalClose(L.goal, g)) return false
     ctx.recoverLatch = null // same detector, moved situation: fresh episode
   }
   ctx.stuck = { by: by || 'unknown', goal: g, key: k }
@@ -527,7 +529,12 @@ function release(bot, ctx, how) {
     try {
       const bp = botPos(bot)
       const t = ctx.lead.pos
-      ctx.lead.nudgedAt = (bp && t) ? Math.round(Math.hypot(t.x - bp.x, t.y - bp.y, t.z - bp.z)) : null
+      const atRelease = (bp && t) ? Math.round(Math.hypot(t.x - bp.x, t.y - bp.y, t.z - bp.z)) : null
+      // The wedge point, not the release point, marks no-gain: a sidestep
+      // away from the goal must not re-arm the budget on the walk back.
+      const atWedge = ctx.lead.stallDist
+      ctx.lead.nudgedAt = (atWedge != null && atRelease != null) ? Math.min(atWedge, atRelease)
+        : (atWedge != null ? atWedge : atRelease)
     } catch (_) { ctx.lead.nudgedAt = null }
     ctx.lead.stuckTicks = 0
     ctx.lead.workTicks = 0

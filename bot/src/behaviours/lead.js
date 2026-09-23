@@ -108,6 +108,7 @@ function recover(bot, ctx, order, bp, now) {
   const gp = order.pos ? { x: order.pos.x, y: order.pos.y, z: order.pos.z } : null
   const gk = order.pos ? `lead:${order.pos.x},${order.pos.y},${order.pos.z}` : 'lead'
   if (recoverMenu.setStuck(ctx, 'lead', gp, gk)) {
+    order.stallDist = blocksLeft(bp, order.pos)
     console.log(`stuck reason=nudge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)}`)
   }
 }

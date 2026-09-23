@@ -334,6 +334,38 @@ describe('lead behaviour', () => {
     assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
   })
 
+  it('a sidestep away does not re-arm: walking back still gives up', () => {
+    // Round-2 minor: nudgedAt is the wedge distance, not the release one.
+    // Wedge at W (10 from the ore), episode ends 2 blocks further out, bot
+    // walks back to W: blocksLeft(W) == stallDist, not below it, so the
+    // next stall is still the second strike. min(stallDist, release) fails
+    // this test if release() uses the release distance (12 < 12 re-arms).
+    const bot = mockBot()
+    bot.entity.position = pos(0, 64, 0)
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    for (let t = 0; t <= GIVE_UP_TICKS + 1; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    assert.deepEqual(ctx.stuck.by, 'lead')
+    assert.equal(ctx.lead.stallDist, 10)
+    // Episode sidesteps away: release 2 blocks further out.
+    bot.entity.position = pos(-2, 64, 0)
+    ctx.recovery = { action: 'sidestep', source: 'fsm', model: null, status: 'done' }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.lead.nudgedAt, 10, 'wedge distance wins over release distance')
+    // Walk back to the wedge point: displacement without gain.
+    bot.entity.position = pos(0, 64, 0)
+    lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    assert.ok(ctx.lead)
+    assert.equal(ctx.lead.nudged, true, 'back at W, still no fresh strikes')
+    // Next stall: second strike gives up.
+    for (let t = 0; t <= GIVE_UP_TICKS + 1 && ctx.lead; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    assert.equal(ctx.lead, null)
+    assert.deepEqual(bot.calls.chats.at(-1), 'cannot reach iron_ore at 10 64 0; following you again')
+  })
+
   it('nudged resets only on real gain, not on walking back to the wedge', () => {
     // M3 regression: clearing nudged on any displacement loops episodes
     // (sidestep moves -> release -> walk back -> moved=true resets nudged ->

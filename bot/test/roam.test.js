@@ -137,7 +137,7 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     }
     assert.equal(bot.calls.setGoal, 0) // detector moves nothing
     assert.equal(bot.controls.jump, undefined)
-    assert.deepEqual(ctx.stuck, { by: 'roam', goal: { x: 1, y: 64, z: 1 }, key: 'roam' })
+    assert.deepEqual(ctx.stuck, { by: 'roam', goal: { x: 1, y: 64, z: 1 }, key: 'spot:0,0' })
     assert.equal(ctx.stuckResets, 0)
     assert.equal(logs.length, 1)
     assert.match(logs[0], /^stuck reason=wedge pos=0,64,0 dist=2\.0$/)
@@ -149,6 +149,37 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(bot.calls.setGoal, 0)
     assert.equal(ctx.stuck || null, null)
+  })
+
+  it('a re-wedge at the same spot stays quiet across a release (spot latch)', () => {
+    // Round-2 major: the latch must key on the bot's own spot, not the
+    // random stroll target — a new random goal at the same wedge must not
+    // start another ask-episode. Latching on roamGoal fails this test.
+    const recover = require('../src/behaviours/recover')
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0), roamGoal: { x: 1, y: 64, z: 1 } }
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      roam(bot, ctx, playerEntity(2), {})
+      assert.deepEqual(ctx.stuck.key, 'spot:0,0')
+      ctx.recovery = { action: 'sidestep', source: 'fsm', model: null, status: 'done' }
+      recover.release(bot, ctx, 'done')
+      assert.deepEqual(ctx.recoverLatch, { by: 'roam', key: 'spot:0,0', goal: { x: 1, y: 64, z: 1 } })
+      // New random stroll target, same wedge spot: quiet.
+      ctx.roamGoal = { x: -3, y: 64, z: 4 }
+      ctx.stuckResets = 2
+      roam(bot, ctx, playerEntity(2), {})
+      assert.equal(ctx.stuck, null, 'same spot, no fresh episode')
+      // Wedge somewhere else (inside the hand-back envelope): raises again.
+      bot.entity.position = pos(4, 64, 3)
+      ctx.roamLastPos = pos(4, 64, 3)
+      ctx.stuckResets = 2
+      roam(bot, ctx, playerEntity(2), {})
+      assert.equal(ctx.stuck && ctx.stuck.by, 'roam')
+    } finally {
+      console.log = origLog
+    }
   })
 
   it('keeps walking on a single stuck reset (no premature nudge)', () => {
