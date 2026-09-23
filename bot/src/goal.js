@@ -35,7 +35,9 @@ const MENU = {
   craft: {
     // Batch gate: a full NEED_LOGS load crafts at once. Starting on the first
     // picked-up log would preempt gather with a chat line per log.
-    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0),
+    // The door needs a placed table (bot.craft requires the block): without
+    // one the step could neither progress nor finish, churning done forever.
+    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
   },
   build: {

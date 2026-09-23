@@ -225,12 +225,21 @@ describe('decide decision point', () => {
     assert.ok(ctx.goalText.includes('logs=3'))
   })
 
-  it('feasible-but-unregistered craft never runs', () => {
-    // gather joined in rw4.2; craft/build join in rw4.3-rw4.4. Over a full
-    // load (15 logs = 60 plank-equivalent over the 58 budget) gather is done
-    // and craft is feasible, but only rest is left to run it.
-    const bot = goalBot({ items: [{ name: 'oak_log', count: 15 }] })
+  it('craft needs a placed table for the door: unplaced table rests', () => {
+    // A door recipe requires the table block; a table sitting in the
+    // inventory does not unlock it, so the step must not even be picked
+    // (otherwise it would report done forever while still feasible).
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] })
     const r = decide(bot, {})
     assert.equal(r.action, 'rest')
+  })
+
+  it('full load hands gather to craft', () => {
+    // craft joined in rw4.3; build joins in rw4.4. Over a full load
+    // (15 logs = 60 plank-equivalent over the 58 budget) gather is done
+    // and craft — now registered — runs instead of rest.
+    const bot = goalBot({ items: [{ name: 'oak_log', count: 15 }] })
+    const r = decide(bot, {})
+    assert.equal(r.action, 'craft')
   })
 })
