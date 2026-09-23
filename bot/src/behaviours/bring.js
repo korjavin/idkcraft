@@ -237,10 +237,11 @@ function walkFood(bot, ctx, o, bp, grounded) {
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, 2), false)
     ctx.lastGoalKey = key
-    o.stalls = 0
-    o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
-    return
   }
+  // Stall accounting runs every tick, not just on a settled key: a
+  // moving-but-unreachable animal (pen, water) re-keys constantly, and only
+  // the bot's own displacement clears the counter — otherwise the body is
+  // held forever, one block per tick.
   if (progressed(bp, o.lastBotPos, grounded)) {
     o.stalls = 0
     o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }

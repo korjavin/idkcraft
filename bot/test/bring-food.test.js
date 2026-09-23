@@ -152,6 +152,18 @@ describe("'bring me food' (idkcraft-n7k)", () => {
     assert.equal(bot.attackCalls.length, 0)
   })
 
+  it('a moving-but-unreachable animal still trips the stall refusal', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me food')
+    for (let i = 0; i < 30 && bot._tickerCtx.bring; i++) {
+      bot.entities[11].position = pos(10 + i, 64, 0) // strolls a block a tick
+      bring(bot, bot._tickerCtx, null, {}) // the body stands still (no path)
+      await flush()
+    }
+    assert.ok(bot.lines.some((l) => l === 'could not reach cow'), `lines: ${bot.lines}`)
+  })
+
   it('stop mid-hunt cancels the order', async () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
     bot._moving = true
