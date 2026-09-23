@@ -5,6 +5,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -615,7 +616,7 @@ function fleeReflex(bot, ctx) {
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
@@ -788,7 +789,19 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
-    bot.on('chat', (chatUsername, message) => handleChat(bot, ticker, chatUsername, message))
+    // Sender UUID cache (idkcraft-8gf): the 'chat' event carries only the
+    // parsed name, but the 'message' event delivers the sender UUID just
+    // before the same text is pattern-matched — prefer it so Java 'X' and
+    // Bedrock '.X' online together never mix up. Name resolution stays the
+    // fallback when the texts do not line up.
+    let lastChatSender = null
+    bot.on('message', (chatMsg, position, senderUuid) => {
+      if (position === 'chat' && senderUuid) lastChatSender = { text: String(chatMsg), uuid: String(senderUuid) }
+    })
+    bot.on('chat', (chatUsername, message) => {
+      const senderUuid = lastChatSender && lastChatSender.text.endsWith(message) ? lastChatSender.uuid : null
+      handleChat(bot, ticker, chatUsername, message, senderUuid)
+    })
 
     // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
     // decision line. Registered here in runOnce(), not in createTicker: the test
@@ -844,9 +857,9 @@ const deepOffers = new Map()
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
 
-function handleChat(bot, ticker, username, message) {
+function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
-  const playerName = resolvePlayer(bot, username)
+  const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
