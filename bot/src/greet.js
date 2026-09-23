@@ -6,7 +6,9 @@
 // the follow/bring dispatch; destroy/death cancel through cancel().
 
 const GREET_FAR = 6
-const GREET_NEAR = 3
+// +1 past FOLLOW_RANGE: follow stops on block distance (GoalFollow.isEnd),
+// so the body stands anywhere up to ~3.5 away; 3 would miss half the arrivals.
+const GREET_NEAR = 4
 const COOLDOWN_MS = 60000
 const SNEAK_MS = 250
 

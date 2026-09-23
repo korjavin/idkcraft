@@ -82,7 +82,7 @@ describe('greet module (idkcraft-v92)', () => {
     const bot = sneakBot(log)
     assert.equal(g.greetOnArrival(bot, 'P', 2, true), false) // never far
     assert.equal(g.greetOnArrival(bot, 'P', 10, true), false) // armed...
-    assert.equal(g.greetOnArrival(bot, 'P', 4, true), false) // ...but never near
+    assert.equal(g.greetOnArrival(bot, 'P', 4.5, true), false) // ...but never near
     assert.equal(g.greetOnArrival(bot, 'P', 2, false), false) // moving at the door
     assert.equal(g.greetOnArrival(bot, '', 2, true), false)
     await flush()
@@ -173,6 +173,24 @@ describe('greet wiring (idkcraft-v92)', () => {
     await flush()
     assert.deepEqual(log, [true, false, true, false])
     await ticker.tick() // still near: no new edge
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('a follow stop at 3.4 blocks still counts as arrival', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight
+    await flush()
+    bot.players.P.entity.position = pos(3.4, 64, 0) // where follow really stops
+    await ticker.tick()
     await flush()
     assert.deepEqual(log, [true, false, true, false])
   })
