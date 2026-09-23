@@ -11,12 +11,13 @@ const { goals } = require('mineflayer-pathfinder')
 const ARRIVE_DIST = 2
 const WAIT_DIST = 12
 const RESUME_DIST = 8
-// Give-up budget (stationary ticks): the pathfinder reports noPath/timeout
-// via path_update, which surfaces here as "same goal, never moving". Retry
-// spaced wider than a search allowance so a slow search is not torn down,
-// then abandon so a walled-off vein never pins the tick.
+// Give-up budget (stationary ticks): count entity displacement because the
+// pathfinder can stay isMoving() during a partial path or a timed-out search.
+// One sidestep/jump gets a second attempt before abandoning the order.
 const GIVE_UP_TICKS = 10
 const RETRY_EVERY_TICKS = 6
+const MOVE_TOLERANCE = 0.5
+const NUDGE_OFFSET = 2
 
 // Wait budget (ticks at BRAIN_TICK_MS, ~120 s at the 1 s default): a player
 // who never comes back within RESUME_DIST must not pin the order forever.
@@ -62,6 +63,10 @@ function blocksLeft(bp, pos) {
   return Math.round(dist(bp, pos))
 }
 
+function snapshot(pos) {
+  return typeof pos.clone === 'function' ? pos.clone() : { x: pos.x, y: pos.y, z: pos.z }
+}
+
 function finish(bot, ctx, message) {
   bot.chat(`${message}; following you again`)
   ctx.lead = null
@@ -82,7 +87,8 @@ function lead(bot, ctx, target, state) {
     if (dp != null && dp <= RESUME_DIST) {
       order.waiting = false
       order.waitTicks = 0
-      ctx.leadStuck = 0
+      order.stuckTicks = 0
+      order.lastPos = snapshot(bp)
       order.lastProgressAt = Date.now()
       bot.chat(`going on, ${blocksLeft(bp, order.pos)} blocks left`)
     } else {
@@ -93,42 +99,72 @@ function lead(bot, ctx, target, state) {
         return
       }
       holdGoal(bot, ctx)
-      ctx.leadStuck = 0
+      order.stuckTicks = 0
       return
     }
   } else if (dp != null && dp > WAIT_DIST) {
     order.waiting = true
     order.waitTicks = 1
+    order.stuckTicks = 0
+    order.lastPos = snapshot(bp)
     order.lastProgressAt = Date.now()
     bot.chat(`waiting for you, come to me (${Math.round(dp)} blocks)`)
     holdGoal(bot, ctx)
     ctx.leadStuck = 0
     return
   }
-  const now = Date.now()
-  if (!Number.isFinite(order.lastProgressAt)) order.lastProgressAt = now
-  if (blocksLeft(bp, order.pos) > ARRIVE_DIST && now - order.lastProgressAt >= PROGRESS_INTERVAL_MS) {
-    bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
-    order.lastProgressAt = now
-  }
   const key = `lead:${order.pos.x},${order.pos.y},${order.pos.z}`
+  if (order.nudgePending) {
+    order.nudgePending = false
+    if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
+    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
+    ctx.lastGoalKey = key
+    order.lastPos = snapshot(bp)
+    order.stuckTicks = 0
+    order.lastProgressAt = Date.now()
+    return
+  }
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
     ctx.lastGoalKey = key
-    ctx.leadStuck = 0
+    order.stuckTicks = 0
+    order.lastPos = snapshot(bp)
+    order.nudged = false
     return
   }
-  if (bot.pathfinder.isMoving()) {
-    ctx.leadStuck = 0
+  const now = Date.now()
+  if (!order.lastPos) order.lastPos = snapshot(bp)
+  const madeProgress = dist(bp, order.lastPos) > MOVE_TOLERANCE
+  if (madeProgress) {
+    order.lastPos = snapshot(bp)
+    order.stuckTicks = 0
+    if (blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
+      bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
+      order.lastProgressAt = now
+    }
     return
   }
-  ctx.leadStuck = (ctx.leadStuck || 0) + 1
-  if (ctx.leadStuck > GIVE_UP_TICKS) {
-    finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
-    holdGoal(bot, ctx)
+  order.stuckTicks = (order.stuckTicks || 0) + 1
+  if (order.stuckTicks > GIVE_UP_TICKS) {
+    if (order.nudged) {
+      finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
+      holdGoal(bot, ctx)
+      return
+    }
+    const angle = Math.random() * Math.PI * 2
+    const nx = bp.x + Math.cos(angle) * NUDGE_OFFSET
+    const nz = bp.z + Math.sin(angle) * NUDGE_OFFSET
+    bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
+    if (typeof bot.setControlState === 'function') bot.setControlState('jump', true)
+    order.nudged = true
+    order.nudgePending = true
+    order.stuckTicks = 0
+    order.lastPos = snapshot(bp)
+    order.lastProgressAt = now
+    ctx.lastGoalKey = `lead-nudge:${nx},${bp.y},${nz}`
     return
   }
-  if (ctx.leadStuck % RETRY_EVERY_TICKS === 0) {
+  if (order.stuckTicks % RETRY_EVERY_TICKS === 0 && !bot.pathfinder.isMoving()) {
     bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
   }
 }
