@@ -101,6 +101,13 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     assert.ok(!ns.some((m) => m.x === 10 && m.y === 64 && m.z === 0), 'no unexecutable 9,62 -> 10,64')
   })
 
+  it('a deep surface node with air head and a +2 bank offers no exit (intended)', () => {
+    const deep = makeNameAt({ bankTop: 63, waterLo: 60, waterHi: 62, extras: false })
+    const movements = wiredMovements(deep)
+    const ns = movements.getNeighbors(new Move(9, 62, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.x === 10 && m.y === 64 && m.z === 0), 'no unexecutable 9,62 -> 10,64')
+  })
+
   it('a submerged node with liquid head keeps the +2 exit', () => {
     const deep = makeNameAt({ bankTop: 62, waterLo: 61, waterHi: 62, extras: false })
     const movements = wiredMovements(deep)

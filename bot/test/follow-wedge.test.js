@@ -13,6 +13,8 @@ function pos(x, y, z) {
     x, y, z,
     distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
     clone() { return pos(p.x, p.y, p.z) },
+    floored() { return pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) },
+    offset(ox, oy, oz) { return pos(p.x + ox, p.y + oy, p.z + oz) },
   }
   return p
 }
@@ -36,7 +38,11 @@ function wedgedBot() {
       isMoving: () => bot._moving,
     },
     blockAt: (p) => {
-      const n = BLOCKS[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+      // Real blockAt calls pos.floored(): plain objects must throw here so
+      // the suite catches a Vec3 regression instead of masking it.
+      if (!p || typeof p.floored !== 'function') throw new Error('pos.floored is not a function')
+      const f = p.floored()
+      const n = BLOCKS[`${f.x},${f.y},${f.z}`]
       return n ? { name: n } : null
     },
   }
@@ -49,7 +55,7 @@ describe('follow wedge line (idkcraft-b50)', () => {
     const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
     const ctx = {
       lastGoalKey: 'follow:P', stuckResets: 2, followLastPos: pos(-40.4, 64.4, -207.7),
-      lastPathNext: { x: -39, y: 64, z: -207 },
+      lastPathNext: pos(-39, 64, -207), // setPathNext stores a Vec3 clone, never a plain object
     }
     const logs = []
     const origLog = console.log

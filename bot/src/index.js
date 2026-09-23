@@ -655,7 +655,7 @@ function fleeReflex(bot, ctx) {
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
     // Head of the latest plan (b50): the executor works this list from
     // [0] down, so the wedge line can name the terrain it faces.
-    setPathNext: (n) => { ctx.lastPathNext = n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null },
+    setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
     // place_error streaks (tower attempts into the same cell while a previous
     // placeBlock still awaits blockUpdate): consecutive only — any other
     // reset reason breaks the streak. Behaviours treat N>=3 with no
