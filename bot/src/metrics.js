@@ -75,8 +75,8 @@ function serve(port) {
 
 const bring = new client.Counter({
   name: 'idkcraft_bot_bring_total',
-  help: 'Bring-me orders by outcome (done|refused|cancelled)',
-  labelNames: ['outcome']
+  help: 'Bring-me orders by outcome (done|refused|cancelled) and kind (block|food)',
+  labelNames: ['outcome', 'kind']
 })
 const goalSteps = new client.Counter({
   name: 'idkcraft_bot_goal_steps_total',
