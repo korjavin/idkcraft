@@ -315,6 +315,51 @@ describe('gather step', () => {
     assert.equal(bot.pathfinder.goal, null)
   })
 
+  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, fact at final', async () => {
+    // M1 regression: the ticker place_error backstop must not preempt
+    // gather's own column skip (endless ask-episodes on one trunk). Drives
+    // real ticker.tick() in work mode: skips happen locally, the stuck fact
+    // raises only at the unreachable final, with by=gather (not place_error).
+    const names = {}
+    const spots = []
+    for (const cx of [2, 6, 9]) {
+      for (const cy of [64, 65]) {
+        names[`${cx},${cy},0`] = 'oak_log'
+        spots.push(pos(cx, cy, 0))
+      }
+    }
+    const bot = mockBot({ spots, names })
+    bot.entities = {}
+    bot.username = 'IdkBot'
+    bot.players = { Steve: { username: 'Steve' } } // roster online, target unseen
+    bot._moving = true
+    const { createTicker } = require('../src/index')
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    ctx.work = true // work mode: the goal arbiter dispatches gather
+    let ticks = 0
+    const tick = async () => {
+      bot.entity.position = pos(0, ticks % 2 ? 65.2 : 64, 5)
+      bot.entity.onGround = !(ticks % 2)
+      ticks++
+      ticker.setPathReset('place_error') // what the ticker does on path_reset
+      await ticker.tick()
+    }
+    for (let i = 0; i < 4; i++) await tick()
+    assert.ok(ctx.gather && ctx.gather.skip.has('2,64,0') && ctx.gather.skip.has('2,65,0'),
+      'place_error streak skips the column through the ticker')
+    assert.equal(ctx.stuck, null, 'no backstop episode while gather owns the streak')
+    for (let i = 0; i < 32; i++) await tick()
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.ok(bot.lines.includes('cannot reach the trees'))
+    assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'fact raised by the detector, not the backstop')
+  })
+
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.gather, gather)

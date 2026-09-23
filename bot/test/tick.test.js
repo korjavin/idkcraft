@@ -345,24 +345,34 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(bot.calls.jump, 0)
       assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 0)
 
-      // Second consecutive terminal result with position unchanged
+      // Second consecutive terminal result with position unchanged: the
+      // detector raises the stuck fact (ef3) — no GoalNear, no jump here.
       await ticker.tick()
-      assert.equal(bot.calls.setGoal, 3)
-      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
-      const g = bot.calls.goals[2]
-      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
-      assert.equal(g.y, 64)
-      assert.equal(bot.calls.jump, 1)
+      assert.equal(bot.calls.setGoal, 2)
+      assert.equal(bot.calls.jump, 0)
+      assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
       const stuckLines = lines.filter((l) => l.includes('stuck reason=noPath'))
       assert.equal(stuckLines.length, 1)
       assert.match(stuckLines[0], /^stuck reason=noPath pos=0,64,0 dist=10\.0$/)
 
-      // Next tick: restores GoalFollow
+      // Next tick: the recover episode starts (FSM picks sidestep on the
+      // mock brain) — the stale GoalFollow is nulled first, then GoalNear
+      // + one-tick jump, like the old nudge.
       await ticker.tick()
       assert.equal(bot.calls.setGoal, 4)
-      assert.equal(bot.calls.goals[3].constructor.name, 'GoalFollow')
+      assert.equal(bot.calls.goals[2], null) // stale goal dropped on entry
+      assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[3]
+      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
+      assert.equal(g.y, 64)
+      assert.equal(bot.calls.jump, 1)
       assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 1)
-      assert.equal(bot.calls.jump, 0) // jump released after one tick
+      assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
+
+      // Following tick: the primitive holds the goal, jump released.
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 4)
+      assert.equal(bot.calls.jump, 0)
     } finally {
       console.log = origLog
     }
@@ -392,14 +402,21 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(bot.calls.jump, 0)
       assert.equal(lines.filter((l) => l.includes('stuck reason=noPath')).length, 0)
 
-      // Second consecutive noPath from (1, 64, 0)
+      // Second consecutive noPath from (1, 64, 0): fact raised, body waits
+      // for the menu.
       await ticker.tick()
-      assert.equal(bot.calls.setGoal, 4)
-      assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
-      assert.equal(bot.calls.jump, 1)
+      assert.equal(bot.calls.setGoal, 3)
+      assert.equal(bot.calls.jump, 0)
+      assert.equal(bot._tickerCtx.stuck.by, 'follow')
       const stuckLines = lines.filter((l) => l.includes('stuck reason=noPath'))
       assert.equal(stuckLines.length, 1)
       assert.match(stuckLines[0], /^stuck reason=noPath pos=1,64,0 dist=/)
+      // Episode tick: stale goal nulled, then sidestep GoalNear + jump.
+      await ticker.tick()
+      assert.equal(bot.calls.setGoal, 5)
+      assert.equal(bot.calls.goals[3], null)
+      assert.equal(bot.calls.goals[4].constructor.name, 'GoalNear')
+      assert.equal(bot.calls.jump, 1)
     } finally {
       console.log = origLog
     }
@@ -438,9 +455,14 @@ describe('follow behaviour and unstuck reflex', () => {
 
     // Minor jitter: 0.3 block movement (<= 0.5)
     bot.entity.position = pos(0.3, 64, 0)
-    await ticker.tick() // stall 2 -> must escalate
+    await ticker.tick() // stall 2 -> fact, no body move yet
+    assert.equal(bot.calls.jump, 0)
+    assert.equal(bot.calls.setGoal, 2)
+    assert.equal(bot._tickerCtx.stuck.by, 'follow')
+    await ticker.tick() // episode -> null + GoalNear sidestep + jump
     assert.equal(bot.calls.jump, 1)
-    assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+    assert.equal(bot.calls.goals[2], null)
+    assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
   })
 
   it('active movement suppresses re-issue and clears stall counter if moved >0.5 block', async () => {
@@ -482,12 +504,16 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(bot.calls.setGoal, 2)
       assert.equal(bot.calls.jump, 0)
 
-      await ticker.tick() // timeout 2 -> escalate
-      assert.equal(bot.calls.setGoal, 3)
-      assert.equal(bot.calls.jump, 1)
-      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      await ticker.tick() // timeout 2 -> fact, body waits for the menu
+      assert.equal(bot.calls.setGoal, 2)
+      assert.equal(bot.calls.jump, 0)
       const stuckLines = lines.filter((l) => l.includes('stuck reason=timeout'))
       assert.equal(stuckLines.length, 1)
+      await ticker.tick() // episode -> null + GoalNear sidestep + jump
+      assert.equal(bot.calls.setGoal, 4)
+      assert.equal(bot.calls.jump, 1)
+      assert.equal(bot.calls.goals[2], null)
+      assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
     } finally {
       console.log = origLog
     }
@@ -504,9 +530,15 @@ describe('follow behaviour and unstuck reflex', () => {
     await ticker.tick() // stall 1
     assert.equal(bot.calls.setGoal, 2)
 
-    await ticker.tick() // stall 2
-    assert.equal(bot.calls.setGoal, 3)
+    await ticker.tick() // stall 2 -> fact, no body move yet
+    assert.equal(bot.calls.setGoal, 2)
+    assert.equal(bot.calls.jump, 0)
+    assert.equal(bot._tickerCtx.stuck.by, 'follow')
+    await ticker.tick() // episode -> null + GoalNear sidestep + jump
+    assert.equal(bot.calls.setGoal, 4)
     assert.equal(bot.calls.jump, 1)
+    assert.equal(bot.calls.goals[2], null)
+    assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
   })
 
   it('resting within follow range does not count as stalled across ticks', async () => {
@@ -601,22 +633,24 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
 
       ticker.setPathReset('stuck')
-      await ticker.tick() // 2nd stuck, no displacement: wedge nudge
-      assert.equal(bot.calls.setGoal, 2) // exactly one goal: the GoalNear sidestep
-      assert.equal(bot.calls.goals[1].constructor.name, 'GoalNear')
-      const g = bot.calls.goals[1]
-      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
-      assert.equal(g.y, 64)
-      assert.equal(bot.calls.jump, 1)
+      await ticker.tick() // 2nd stuck, no displacement: fact, body untouched
+      assert.equal(bot.calls.setGoal, 1)
+      assert.equal(bot.calls.jump, 0)
+      assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
       const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(stuckLines.length, 1)
       assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
 
-      await ticker.tick() // nudge tick: GoalFollow again, jump released
+      await ticker.tick() // episode tick: null + menu sidestep + one-tick jump
       assert.equal(bot.calls.setGoal, 3)
-      assert.equal(bot.calls.goals[2].constructor.name, 'GoalFollow')
-      assert.equal(bot.calls.jump, 0)
+      assert.equal(bot.calls.goals[1], null)
+      assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
+      const g = bot.calls.goals[2]
+      assert.ok(Math.hypot(g.x - 0, g.z - 0) >= 1 && Math.hypot(g.x, g.z) <= 3)
+      assert.equal(g.y, 64)
+      assert.equal(bot.calls.jump, 1)
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
+      assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
     } finally {
       console.log = origLog
     }

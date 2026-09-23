@@ -121,9 +121,12 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     return bot
   }
 
-  it('sidesteps after two stuck resets with no displacement while moving', () => {
+  it('raises the stuck fact after two stuck resets with no displacement while moving', () => {
+    // ef3: the wedge is a detector now — no sidestep here, the recover menu
+    // moves the body (sidestep primitive). Deleting the setStuck call and
+    // restoring the sidestep fails this test (setGoal fires, no fact).
     const bot = wedgedBot()
-    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0) }
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0), roamGoal: { x: 1, y: 64, z: 1 } }
     const origLog = console.log
     const logs = []
     console.log = (m) => logs.push(m)
@@ -132,27 +135,51 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     } finally {
       console.log = origLog
     }
-    assert.equal(bot.calls.setGoal, 1) // fails on the old code: 0 goals, stuck forever
-    const goal = bot.calls.goals[0]
-    assert.equal(goal.constructor.name, 'GoalNear')
-    const d = Math.hypot(goal.x - 0, goal.z - 0)
-    assert.ok(d >= 1 && d <= 3.5, `sidestep ${d.toFixed(2)} blocks from the bot`)
-    assert.equal(bot.calls.dynamic[0], false)
-    assert.equal(bot.controls.jump, true)
-    assert.equal(ctx.roamNudge, true)
+    assert.equal(bot.calls.setGoal, 0) // detector moves nothing
+    assert.equal(bot.controls.jump, undefined)
+    assert.deepEqual(ctx.stuck, { by: 'roam', goal: { x: 1, y: 64, z: 1 }, key: 'spot:0,0' })
     assert.equal(ctx.stuckResets, 0)
-    assert.match(ctx.lastGoalKey, /^roam-nudge:/)
     assert.equal(logs.length, 1)
     assert.match(logs[0], /^stuck reason=wedge pos=0,64,0 dist=2\.0$/)
   })
 
-  it('clears the one-tick jump on the next roam tick', () => {
+  it('stays quiet while a recover episode runs (no fact, no goal)', () => {
     const bot = wedgedBot()
-    const ctx = { lastGoalKey: 'roam-nudge:2,0', stuckResets: 0, roamNudge: true, roamLastPos: pos(0, 64, 0) }
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 5, roamLastPos: pos(0, 64, 0), recovery: { action: 'sidestep', status: 'running' } }
     roam(bot, ctx, playerEntity(2), {})
-    assert.equal(bot.controls.jump, false)
-    assert.equal(ctx.roamNudge, false)
-    assert.equal(bot.calls.setGoal, 0) // still walking the nudge: no new goal
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.stuck || null, null)
+  })
+
+  it('a re-wedge at the same spot stays quiet across a release (spot latch)', () => {
+    // Round-2 major: the latch must key on the bot's own spot, not the
+    // random stroll target — a new random goal at the same wedge must not
+    // start another ask-episode. Latching on roamGoal fails this test.
+    const recover = require('../src/behaviours/recover')
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0), roamGoal: { x: 1, y: 64, z: 1 } }
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      roam(bot, ctx, playerEntity(2), {})
+      assert.deepEqual(ctx.stuck.key, 'spot:0,0')
+      ctx.recovery = { action: 'sidestep', source: 'fsm', model: null, status: 'done' }
+      recover.release(bot, ctx, 'done')
+      assert.deepEqual(ctx.recoverLatch, { by: 'roam', key: 'spot:0,0', goal: { x: 1, y: 64, z: 1 } })
+      // New random stroll target, same wedge spot: quiet.
+      ctx.roamGoal = { x: -3, y: 64, z: 4 }
+      ctx.stuckResets = 2
+      roam(bot, ctx, playerEntity(2), {})
+      assert.equal(ctx.stuck, null, 'same spot, no fresh episode')
+      // Wedge somewhere else (inside the hand-back envelope): raises again.
+      bot.entity.position = pos(4, 64, 3)
+      ctx.roamLastPos = pos(4, 64, 3)
+      ctx.stuckResets = 2
+      roam(bot, ctx, playerEntity(2), {})
+      assert.equal(ctx.stuck && ctx.stuck.by, 'roam')
+    } finally {
+      console.log = origLog
+    }
   })
 
   it('keeps walking on a single stuck reset (no premature nudge)', () => {

@@ -18,7 +18,11 @@ const metrics = require('../metrics')
 //
 // Owner direction: no branching rescue logic. Failure points refuse with a
 // message (the ef3/rw4.6 stuck menu owns the choices); the FSM reserve is a
-// plain refusal.
+// plain refusal. Bring explicitly raises NO stuck facts: a stall refuses and
+// ends the order instead of starting an episode (unlike follow/roam/lead,
+// whose detectors feed the menu, and gather, which reports at its final).
+// The ticker place_error/no-displacement backstops still catch a bring that
+// loops without refusing, and release() resumes ctx.bring untouched.
 const FIND_RADIUS = 48
 const WANT_ORE = 3
 const WANT_LOGS = 4

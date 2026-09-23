@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const recover = require('./recover')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -77,6 +78,7 @@ function gather(bot, ctx, target, state) {
   // decide() re-picks the step with status 'running', so re-assert here
   // instead of rescanning and re-chatting every tick.
   if (g.final) {
+    if (g.atLogs !== logs && ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
     if (g.atLogs === logs) {
       ctx.stepStatus = g.final
       clearGoal(bot, ctx) // no-op once null (acceptance: no setGoal past final)
@@ -130,6 +132,7 @@ function gather(bot, ctx, target, state) {
     // Drops landed: the world changed, old skips may be stale.
     g.skip.clear()
     g.streak = 0
+    if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
   }
   g.seenLogs = logs
   if (logs > 0 && Date.now() - (g.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
@@ -184,6 +187,9 @@ function gather(bot, ctx, target, state) {
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)
+          // Detector (ef3): the menu gets one shot before the arbiter moves
+          // on. Transition only — re-asserts of the same final stay quiet.
+          recover.setStuck(ctx, 'gather', g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null, 'gather')
         }
       }
       return
