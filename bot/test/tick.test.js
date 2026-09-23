@@ -698,7 +698,7 @@ describe('work mode (epic rw4)', () => {
 
   it('(a) work + player nearby: rest step, follow never runs', async () => {
     const bot = workBot()
-    bot._items = [{ name: 'oak_planks', count: 58 }] // material done: gather infeasible, rest runs
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, rest runs
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
@@ -736,7 +736,7 @@ describe('work mode (epic rw4)', () => {
     global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
     try {
       const bot = workBot()
-      bot._items = [{ name: 'oak_planks', count: 58 }] // material done: gather infeasible, rest runs
+      bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, rest runs
       // Roster player WITHOUT an entity: findTarget is null (nothing
       // visible), but Steve is on the server, so the workAlone path runs.
       // (An entity would make him visible and take the normal path instead.)

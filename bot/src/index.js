@@ -21,6 +21,7 @@ const BEHAVIOURS = {
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
   gather: require('./behaviours/gather'),
+  craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
 }
 
