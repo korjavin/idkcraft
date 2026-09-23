@@ -37,7 +37,7 @@ const MENU = {
     verb: 'staying inside',
   },
   gohome: {
-    feasible: (facts) => (facts.time === 'dusk' || facts.time === 'night') && facts.home !== 'none' && facts.inside === 'no',
+    feasible: (facts) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no',
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },

@@ -16,6 +16,7 @@ function brainTimeoutMs(env) {
   return Number.isFinite(raw) ? raw : 1000
 }
 const bringMod = require('./behaviours/bring')
+const homeMod = require('./behaviours/home')
 const goal = require('./goal')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -32,6 +33,8 @@ const BEHAVIOURS = {
   bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
+  gohome: homeMod.gohome,
+  stay: homeMod.stay,
   build: require('./behaviours/build'),
 }
 
@@ -367,17 +370,6 @@ function fleeReflex(bot, ctx) {
 
   async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
-    // Spawn adoption races chunk loading (one shot at join sees an empty
-    // world), so retry a few ticks while no home is set. A 'build here'
-    // (setHome) or the build default stops the retries.
-    if (!ctx.home && (ctx.adoptTries || 0) < 6) {
-      ctx.adoptTries = (ctx.adoptTries || 0) + 1
-      try {
-        const foundEarly = goal.adoptHome(bot)
-        // Same resets as setHome below (no ticker handle in this scope).
-        if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
-      } catch (_) { /* try again next tick */ }
-    }
     inFlight = true
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
@@ -598,7 +590,34 @@ function fleeReflex(bot, ctx) {
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
+      if (ctx.inShelter && decision.action === 'fight') {
+        // Sheltered for the night: no pursuit through our own wall (the
+        // pathfinder would dig it with canDig). The melee reflex above
+        // still swings at anything that gets inside.
+        stopOnce()
+        console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
       if (ctx.work && decision.action !== 'fight') {
+        if (!ctx.home && !ctx.adoptDone) {
+          // Spawn adoption races chunk loading (one shot at join sees an
+          // empty world): hold work until the spawn block is visible, then
+          // adopt once before build defaults a fresh site. Bots without a
+          // blockAt hook (unit mocks) count as ready immediately.
+          let ready = true
+          try { if (bot.spawnPoint && bot.blockAt) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
+          if (ready || (ctx.adoptTries = (ctx.adoptTries || 0) + 1) > 60) {
+            ctx.adoptDone = true
+            try {
+              const foundEarly = goal.adoptHome(bot)
+              // Same resets as setHome below (no ticker handle in this scope).
+              if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
+            } catch (_) { /* no adoptable house; build defaults below */ }
+          } else {
+            if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
@@ -646,6 +665,7 @@ function fleeReflex(bot, ctx) {
     rearm,
     setFollow: (name) => {
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
+      ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
@@ -662,7 +682,7 @@ function fleeReflex(bot, ctx) {
     // site. Build progress resets with it — old skips/fail counts belong
     // to the old origin. The facts text (home none->site) re-decides.
     home: () => ctx.home || null,
-    setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
+    setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       ctx.paused = true

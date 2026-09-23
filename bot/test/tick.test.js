@@ -1077,6 +1077,39 @@ describe('work mode (epic rw4)', () => {
     assert.equal(bot.chats[bot.chats.length - 1], 'working step=gather logs=0 planks=0 home=none')
     ticker.destroy()
   })
+
+  it('(h) work + inShelter + hostile at 5: fight not dispatched', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(bot.calls.setGoal, 0) // no pursuit: the wall stays shut
+      assert.equal(bot.attackCalls, 0) // 5 blocks: out of reflex swing range
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(i) sheltered + hostile at 2: reflex still swings', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 2) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    try {
+      await ticker.tick()
+      assert.ok(bot.attackCalls >= 1) // inside intruder still gets hit
+      assert.equal(bot.calls.setGoal, 0) // but no pursuit through the wall
+    } finally {
+      ticker.destroy()
+    }
+  })
 })
 
 describe('stateKey', () => {

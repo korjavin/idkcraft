@@ -11,7 +11,10 @@ const build = require('../src/behaviours/build')
 const { BLUEPRINT, PLANK_COUNT } = build
 
 function pos(x, y, z) {
-  return { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
+  const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
+  p.clone = () => pos(p.x, p.y, p.z)
+  p.floored = () => pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+  return p
 }
 
 // Fake voxel world: explicit cells plus default terrain (dirt at y<=63,
@@ -165,20 +168,28 @@ describe('rw4.4 (d) adoptHome finds the earlier house', () => {
     assert.equal(goal.adoptHome(bot), null)
     assert.deepEqual(bot.chats, [])
   })
-  it('tick retries adoption until chunks arrive, then stops', async () => {
+  it('work waits for spawn chunks, then adopts once', async () => {
     const world = makeWorld()
-    const doors = [] // spawn handler raced empty chunks
+    const doors = [{ x: 11, y: 64, z: 10 }]
     const bot = mockBot(world, { doors })
     paintHouse(world, { site: { x: 10, y: 64, z: 10 } })
-    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    let chunks = false // spawn handler raced empty chunks
+    const seen = bot.blockAt
+    bot.blockAt = (p) => (chunks ? seen(p) : null)
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(10, 64, 0) } } }
+    bot.health = 20
+    bot.food = 20
+    bot.entities = {}
+    const stubBrain = { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
     try {
+      ticker.work()
       await ticker.tick()
-      await ticker.tick()
-      assert.equal(ticker.home(), null) // still nothing while chunks missing
-      doors.push({ x: 11, y: 64, z: 10 }) // chunks arrive
+      assert.equal(ticker.home(), null) // chunks missing: work held, no default
+      chunks = true // chunks arrive
       await ticker.tick()
       assert.deepEqual(ticker.home().site, { x: 10, y: 64, z: 10 })
-      assert.deepEqual(bot.chats, ['my home is at 10 64 10'])
+      assert.ok(bot.chats.some((m) => m === 'my home is at 10 64 10'))
     } finally {
       ticker.destroy()
     }
