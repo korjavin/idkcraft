@@ -120,6 +120,7 @@ function gather(bot, ctx, target, state) {
     g.lastFound = open
     g.phase = 'walk'
     g.stalls = 0
+    g.issuedKey = null // fresh search, fresh budget (see walk re-issue below)
     g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
     try {
       const b = bot.blockAt && bot.blockAt(best)
@@ -135,19 +136,30 @@ function gather(bot, ctx, target, state) {
     if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
   }
   g.seenLogs = logs
-  if (logs > 0 && Date.now() - (g.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
+  // Progress line only when the count grew (68p): repeating 'chopping
+  // 6/14' every 10 s with no new log reads as a hang.
+  if (logs > 0 && logs !== g.progressLogs && Date.now() - (g.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
     g.lastProgressAt = Date.now()
+    g.progressLogs = logs
     say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
   }
   if (g.phase === 'walk') {
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
+      const prevKey = ctx.lastGoalKey
       ctx.lastGoalKey = key
-      g.stalls = 0
-      ctx.placeErrors = 0
-      g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-      return
+      if (key !== g.issuedKey || prevKey === '' || prevKey === 'idle') {
+        // Another trunk (or an explicit fresh start): fresh stall budget.
+        // The SAME trunk retaken after a fight/bring tick stole the body
+        // (68p) only re-issues the stolen goal above — stalls, placeErrors
+        // and lastPos survive, and the walk continues below this same tick.
+        g.issuedKey = key
+        g.stalls = 0
+        ctx.placeErrors = 0
+        g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+        return
+      }
     }
     let block = null
     try { block = bot.blockAt && bot.blockAt(g.pos) } catch (_) { block = null }
