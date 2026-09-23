@@ -144,6 +144,27 @@ describe('explore walk and arrival', () => {
     assert.deepEqual(ctx.explore.target, { x: 45, z: -45 })
   })
 
+  it('stall within near radius arrives: the point is covered, not failed', () => {
+    // Live (forest world): the exact spiral XZ often sits in a trunk or
+    // water cell, so the walk stalls a few blocks out with nowhere to
+    // stand. The 48-block arrival scan covers the point from there, so a
+    // stall inside near radius is an arrival (done + scan), not a failure.
+    const bot = mockBot()
+    bot._moving = true // executor claims motion, body stands still
+    bot.findBlocks = () => [pos(3, 60, -60)]
+    bot.blockAt = (p) => ({ name: p.x === 3 ? 'iron_ore' : 'stone' })
+    const ctx = homeCtx()
+    explore(bot, ctx, null, null) // picks (0,-64)
+    bot.entity.position = pos(0, 64, -58) // 6 out: inside near, outside exact
+    for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.stuck, undefined)
+    assert.ok(ctx.resources && ctx.resources.items.size >= 1, 'near arrival scans')
+    ctx.stepStatus = 'running'
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 45, z: -45 })
+  })
+
   it('ten still ticks fail unreachable with an explore fact', () => {
     const bot = mockBot()
     bot._moving = true // executor claims motion, body stands still

@@ -4,7 +4,11 @@
 // picks WHEN through the menu. Picks a target on the visited boundary
 // (spiral from home/spawn, rings to ~512), walks it with GoalXZ, scans on
 // arrival into the resource memory. Reports via ctx.stepStatus like every
-// goal step (done on arrival, failed:<reason> otherwise).
+// goal step (done on arrival, failed:<reason> otherwise). A stall inside
+// ARRIVE_NEAR also arrives: exact spiral XZ cells often sit in a trunk or
+// water with nowhere to stand, and the 48-block scan covers the point from
+// a few blocks out — failing there would mark every forest ring
+// unreachable without ever scanning it.
 //
 // Stuck is the existing machinery: a no-displacement stall raises the
 // fact via recover.setStuck and the ef3 menu owns the escape; the ticker
@@ -17,6 +21,7 @@ const resources = require('../resources')
 const RINGS = [64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
 const RAY_COUNT = 8 // compass rays per ring, north first
 const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
+const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = 0.5
 const CHAT_MS = 30000 // departure chat at most this often
@@ -75,6 +80,21 @@ function clearGoal(bot, ctx) {
   ctx.lastGoalKey = ''
 }
 
+// Shared arrival: scan the new chunks into memory, consume the point,
+// report done with the one wedge line.
+function arrive(bot, ctx, e, t) {
+  clearGoal(bot, ctx)
+  try {
+    resources.scan(bot, ctx)
+  } catch (_) { /* scan best-effort */ }
+  const fresh = e.visited.size - (e.markStart || 0)
+  e.visited.add(chunkOf(t.x, t.z)) // scanned: never re-pick this point
+  e.target = null
+  e.issuedKey = null
+  ctx.stepStatus = 'done'
+  console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new)`)
+}
+
 function explore(bot, ctx, target, state) {
   if (!ctx.explore) ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 }
   const e = ctx.explore
@@ -121,20 +141,9 @@ function explore(bot, ctx, target, state) {
     }
   }
 
-  if (Math.hypot(bp.x - t.x, bp.z - t.z) <= ARRIVE_DIST) {
-    // Arrived: the scout scan ingests the new chunks, one wedge line names
-    // the target and how many chunks the walk covered.
-    clearGoal(bot, ctx)
-    let added = 0
-    try {
-      added = resources.scan(bot, ctx).added
-    } catch (_) { /* scan best-effort */ }
-    const fresh = e.visited.size - (e.markStart || 0)
-    e.visited.add(chunkOf(t.x, t.z)) // scanned: never re-pick this point
-    e.target = null
-    e.issuedKey = null
-    ctx.stepStatus = 'done'
-    console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new)`)
+  const dist = Math.hypot(bp.x - t.x, bp.z - t.z)
+  if (dist <= ARRIVE_DIST) {
+    arrive(bot, ctx, e, t)
     return
   }
 
@@ -144,6 +153,10 @@ function explore(bot, ctx, target, state) {
     e.stalls = 0
     e.lastPos = { x: bp.x, y: bp.y, z: bp.z }
   } else if ((e.stalls = (e.stalls || 0) + 1) >= STALL_TICKS) {
+    if (dist <= ARRIVE_NEAR) {
+      arrive(bot, ctx, e, t) // covered: scan it, advance, no stuck fact
+      return
+    }
     clearGoal(bot, ctx)
     e.visited.add(chunkOf(t.x, t.z)) // unreachable: never re-pick this point
     e.target = null
