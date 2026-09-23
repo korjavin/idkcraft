@@ -132,13 +132,14 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `idle` | Player within 3 blocks and moving, low-health retreat within 3 blocks with hostile near, or nobody online / parked | Brain decision (`action=idle`), or local reflex | Stand still near bot; bot stops pathfinding and waits quietly |
 | `scout` | Every 5 s within 16-block radius | Local reflex (no brain cost; runs every tick while player visible) | `/setblock ~2 ~ ~ diamond_ore`; bot announces vein in chat within 5 s |
 | `melee reflex` | Hostile within 3 blocks of the bot under any brain answer, even with nobody online | Local reflex (no brain cost; the arm, not the body) | Summon a zombie next to the bot while the brain answers `follow`; bot swings within 1-2 ticks with no `action=fight` decision |
+| `flee reflex` | Creeper within 6 blocks (the brain never sees creepers) | Local reflex (no brain cost; walks 6 blocks away, never attacks) | Lure a creeper close; bot paths away and logs `reflex flee creeper dist=<d>` |
 | `eat reflex` | Food < 18 and edible item in inventory, no hostile within 3 blocks | Local reflex (no brain cost; the gut, not the body) | `/give IdkBot bread 64`; bot eats until food >= 18 |
 
 ### Reflex Mechanics & Implementation Details
 
 - **Fight (`src/behaviours/fight.js`):**
   - **Candidate Ranges:** Hostile mob within 8 blocks of bot OR 6 blocks of player, with `bot_health >= 6`. The state line adds `hostile_reachable=false` once pursuit is abandoned (see below); the stub and the prompt criteria refuse an unreachable mob unless it is near the player.
-  - **Exclusions:** Creepers are excluded (striking a creeper near the player causes detonations; fleeing is out of scope). Players and passive mobs are never targeted.
+  - **Exclusions:** Creepers are excluded (striking a creeper near the player causes detonations; they are handled by the flee reflex below, never attacked). Players and passive mobs are never targeted.
   - **Sticky Target:** Locks onto current hostile with a 2-block hysteresis margin (`STICKY_MARGIN_BLOCKS = 2`) so the bot does not flip-flop between targets on every tick.
   - **Pursuit Give-Up & Shadow Fallback:** If pathfinding stalls for 18 stationary ticks (`GIVE_UP_TICKS = 18`, retrying pathing every 6 ticks), pursuit is abandoned (e.g. mob trapped behind glass or in a ravine) and the give-up latch is fed back to the brain as `hostile_reachable=false`, so the brain arbitrates the yield to `follow`. The bot shadows the player at 3 blocks as a local safety net while still swinging if the mob wanders within 3 blocks (`SWING_RANGE = 3`). The ticker clears the latch after 30 ticks (`FIGHT_REPROBE_TICKS = 30`) so a changed world gets a fresh pursuit. Shadow mode also activates if the brain returns `fight` when no hostile is reachable.
   - **Equipment & Combat:** Equips the first sword in inventory upon engaging (fists if none). Swings once per second at <= 3 blocks range (`SWING_RANGE = 3`).
@@ -146,11 +147,15 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
   - **Stroll Envelope:** Strolls within 6 blocks of a standing player (`ROAM_RADIUS = 6`). When idle and not already moving, picks a random destination within 6 blocks (`GoalNear(x, y, z, 1)`), ensuring the destination never exceeds 8 blocks from the player.
   - **Walk-Back Past Envelope:** If distance to player exceeds 6 blocks (`HAND_BACK_DIST = 6`), walks back toward the player (`GoalFollow(target, 3)`) rather than standing still, avoiding state-cache freezes and letting the brain re-evaluate on the next tick.
   - **Preemption & Hierarchy:** Follow preempts roam when the player walks away; fight wins over both whenever a hostile mob threatens.
+  - **Wedge Recovery:** After 2 `stuck` path resets with no displacement while the executor still reports moving, roam sidesteps 2 blocks + one jump (same recovery as follow) and picks a fresh stroll target, so two stucks on one goal are impossible. Logs `stuck reason=wedge`.
 - **Scout (`src/behaviours/scout.js`):**
   - Scans loaded chunk blocks in memory every 5 s within a 16-block radius (sees through walls and underground).
   - Valued ores: diamond, emerald, ancient debris, gold, iron, lapis, redstone (deepslate variants grouped under base name; coal and copper excluded).
   - Reports at most 3 lines per scan in chat (one per ore type, highest value first) as `<ore> x<count> at <x> <y> <z>`.
   - Deduplicates positions (seen cache capped at 5,000 entries) so the bot never repeats announcements while standing still.
+- **Creeper flee (`src/index.js`, `fleeReflex`):**
+  - **Trigger:** Nearest creeper within 6 blocks (`CREEPER_FLEE_RANGE = 6`, via `findCreeper`; the brain excludes creepers from hostile facts, so this never routes to the model).
+  - **Execution:** Walks 6 blocks directly away (`CREEPER_FLEE_DIST = 6`, `GoalNear`, re-issued when the creeper changes or the executor stalls — a chasing creeper makes a finished goal stale). Never swings: hitting one next to the player detonates it on the player. Logs `reflex flee creeper dist=<d>` once per creeper.
 - **Eat Reflex (`src/index.js`):**
   - **Trigger:** When `bot.food < 18` and inventory holds an edible item (`bread`, `cooked_beef`, `cooked_porkchop`, `cooked_chicken`, `apple`, `carrot`, `baked_potato` — first match wins).
   - **Exclusions:** Skips while an eat is already in flight (`ctx.eatInFlight`) or a hostile is within swing range (`SWING_RANGE = 3`).
@@ -171,7 +176,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
   - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply. Cancels work mode.
   - `go work` (alias `free`) — Releases the bot into autonomous work mode, replying with `on my own; say 'follow me' to call me`. Cancels park.
   - `status` — Replies with mode, current goal step, logs/planks and home (e.g. `working step=rest logs=0 planks=0 home=none`).
-  - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`) — Searches loaded chunks within 48 blocks. The bot replies with `<block> at <x> <y> <z> (<N> blocks)` (e.g. `coal_ore at -12 64 200 (14 blocks)`), `no <block> within 48 blocks`, or `unknown block: <block>`.
+  - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`; `find me ore` means any valued ore, plurals work — `diamonds` — typos stay `unknown block`) — Searches loaded chunks within 48 blocks, preferring ore with air next to it (walkable, not sealed in rock) and ore level with you. The bot replies with `leading you to <name>, <N> blocks, follow me` (e.g. `leading you to coal_ore, 10 blocks, follow me`), `no <block> within 48 blocks`, or `unknown block: <block>`. A target more than 8 blocks below you is announced, not led to (`gold_ore is 25 blocks down, dig carefully`); say `lead anyway` to walk there regardless.
 - **Bot chat & ore reports:** The bot answers command responses in chat; if no reply appears within ~2 s, check the log line `decision source=...` is still flowing. The bot also broadcasts unsolicited ore announcements when its scouting reflex detects veins (e.g. `diamond_ore x4 at -60 12 -180`); these are autonomous scout reflex announcements, not replies to commands.
 
 | Command | Action | Implementation |
@@ -180,9 +185,10 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks; clears work mode |
 | `go work` / `free` | Releases the bot to work on its own goal | Sets work mode, unparks ticker, clears `followName`; replies `on my own; say 'follow me' to call me` |
 | `status` | Reports mode, goal step, logs/planks, home | Replies e.g. `working step=rest logs=0 planks=0 home=none` |
-| `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks; replies with `<block> at <x> <y> <z> (<N> blocks)`, `no <block> within 48 blocks`, or `unknown block: <block>` |
+| `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks (exposed ore first, then level with you); replies with `leading you to <name>, <N> blocks, follow me`, `no <block> within 48 blocks`, or `unknown block: <block>`; deep targets warn instead of leading |
+| `lead anyway` | Walks to a warned-about deep target | Replays the held deep offer once, then forgets it (`no deep find on hold` when there is none) |
 
-`find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
+`find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind (`waiting for you, come to me (<N> blocks)`) and resumes once within 8 (`going on, <N> blocks left`), announces `here: <block> at <x> <y> <z>` on arrival, gives up with `cannot reach <block> at ...` when the vein stays unreachable or `giving up on <name>` when you never come back. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot. Safety: ore more than 8 blocks below you is never led to blindly — the bot warns (`<name> is <N> blocks down, dig carefully`) and waits for `lead anyway`.
 
 ### Autonomy & chat commands
 
@@ -287,12 +293,50 @@ Line types:
 | `brain route=easy fsm=<a>` / `brain route=hard reason=<r> model=<a> fsm=<b> source=<s>` | One per brain call: which route was taken and both answers on hard states. `route=hard` / all = how often the model is consulted. |
 | `brain disagree source=<s> model=<a> stub=<r> ...` | The model answered differently from the local reference policy (hard states only). A high rate means the prompt criteria and the rules drifted apart. |
 | `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
-| `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results; triggers jump + 2-block sidestep nudge. |
+| `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results, or follow/roam wedged with the executor still reporting moving (`reason=wedge`); triggers jump + 2-block sidestep nudge. |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
 | `respawn at <x> <y> <z>` | The bot reappeared (auto-respawn). Coords are the respawn destination (world spawn — the bot sets no bed), because the position field still holds the death coords at that instant. Strictly one per death: `respawn` packets from dimension changes are not logged. A death with no respawn after it means the bot never came back. |
 | `kit scaffold=<n> pickaxe=<yes|no> sword=<yes|no> food=<k>` | Inventory summary logged at spawn. |
 | `eat <item> food=<n>` | The bot ate an edible item to sustain natural health regeneration. |
 | `tick error: ...` | The tick threw instead of deciding; the bot retried on the next tick. Frequent lines here point at perception or brain bugs, not at the model. |
+| `metrics on :<port>/metrics` | Prometheus endpoint is up (`:9464` on the bot, the sidecar API port on laya). |
+| `reflex flee creeper dist=<d>` | Creeper flee reflex fired (once per creeper). |
+
+### Metrics (Prometheus + Grafana)
+
+Both containers expose Prometheus metrics (compose labels
+`prometheus.scrape: "true"`; the house monitoring stack scrapes them
+into VictoriaMetrics — graph them in Grafana, no log grepping needed):
+
+- Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`.
+- Sidecar `/metrics` on its API port (`laya/shim.py`): `laya_predict_duration_seconds` (model latency), `laya_answers_total{choice}` (fight vs follow + errors).
+
+### Prod acceptance (2026-09-23, owner session on the live stack)
+
+Two sessions (A 23:44–23:53 UTC on the pre-gk6 build; B 00:39–00:43 UTC
+on 2aa98cc): the model is now consulted for real — A saw 16 hard / 327
+easy calls (all `hostile-vs-far-player`), B 14 hard / 117 easy (8
+far-player, 6 low-health-hostile).
+
+- Latency well inside the tick: laya predict p50 0.13 s, p99 0.29 s;
+  bot tick p99 0.36 s; event-loop lag max 0.22 s. No timeouts, no JEV
+  errors — p50 stays far under `BRAIN_TICK_MS` (1000 ms).
+- Disagreement (model vs FSM on hard states): A 3/16 (19%), B 10/14
+  (71%), total 13/30 (43%) — but the direction is mostly wrong against
+  our own criteria: adjacent hostile (1.4–2.0 blocks) with the player
+  9–15 away answered `follow` x7 (criteria say fight when adjacent),
+  low health answered `fight` x6 (criteria say follow when weak). The
+  model discriminates, just not the way the prompt asks.
+- Lead episode: `find me iron` arrived in 3 s; `find me gold` 45 blocks
+  out (ore y 35–41, player ~66, `path=partial`) walked the player
+  underground and the player fell to death at 00:42:43 — this is why
+  deep targets now warn instead of leading. Chat narration
+  (leading/waiting/going on/here) worked throughout.
+- Scout, follow, wedge recovery (`stuck reason=wedge` x3), melee reflex
+  all active; no bot deaths in B. Creeper flee untested (no creeper
+  met). Owner vocabulary misses: `find me ore` fixed after the session (ore
+  alias + plurals like `diamonds`); `rock` and typos such as `diamand`
+  still answer `unknown block` (no fuzzy search, by design).
 
 ## Online-mode note
 
