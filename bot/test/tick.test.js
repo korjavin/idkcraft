@@ -801,6 +801,76 @@ describe('work mode (epic rw4)', () => {
     })
   })
 
+  describe('return home to an unseen follower (06v)', () => {
+    function farBot() {
+      const bot = workBot()
+      bot.entity.position = pos(-205, 39, -35)
+      bot.spawnPoint = pos(-48, 65, -208)
+      bot.players = { P: { username: 'P', entity: null } }
+      return bot
+    }
+
+    it('walks to spawn after N unseen ticks instead of stopOnce', async () => {
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      handleChat(bot, ticker, 'P', 'follow me') // follow order, honest chat (3a7)
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:-48,65,-208$/)
+      assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalNear')
+      const stops = bot.calls.stop
+      await ticker.tick()
+      await ticker.tick()
+      assert.equal(bot.calls.stop, stops) // homing: no more stopOnce
+    })
+
+    it('lone bot still stops (no roster, no walk)', async () => {
+      const bot = farBot()
+      bot.players = {}
+      bot.pathfinder.isMoving = () => true // stop latch needs a real path
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      for (let i = 0; i < 12; i++) await ticker.tick()
+      assert.ok(!/^return-spawn:/.test(bot._tickerCtx.lastGoalKey))
+      assert.ok(bot.calls.stop >= 1)
+    })
+
+    it('spawn far from home pre-arms the walk', async () => {
+      const { runOnce } = require('../src/index')
+      const bot = (function connLike() {
+        const { EventEmitter } = require('node:events')
+        const b = new EventEmitter()
+        b.username = 'IdkBot'
+        b.players = { P: { username: 'P', entity: null } }
+        b.entities = {}
+        b.health = 20
+        b.food = 20
+        b.entity = { position: pos(-205, 39, -35) }
+        b.spawnPoint = pos(-48, 65, -208)
+        b.registry = require('minecraft-data')('1.21.1')
+        b.goals = []
+        b.pathfinder = {
+          isMoving: () => false,
+          stop: () => {},
+          setGoal: (goal) => { b.goals.push(goal) },
+          setMovements: (m) => { b.movements = m },
+        }
+        b.loadPlugin = () => {}
+        b.quit = () => {}
+        b.chat = () => {}
+        return b
+      })()
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 60000, followName: 'P',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 1 } }),
+      }).then(() => {}, () => {})
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(bot._tickerCtx.unseenTicks >= 10, `pre-armed at spawn (unseenTicks=${bot._tickerCtx.unseenTicks})`)
+      assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued on first ticks')
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+    })
+  })
+
   it('(e) go work after stop unpauses into work', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
