@@ -122,7 +122,7 @@ describe('rw4.4 (c) site pick and facts none->site', () => {
     const home = goal.siteFor(bot, pos(0, 64, 0))
     assert.deepEqual(home.site, { x: 6, y: 64, z: 0 })
     assert.deepEqual(home.door, { x: 7, y: 64, z: 0 })
-    assert.deepEqual(home.table, { x: 10, y: 64, z: 1 })
+    assert.equal(home.table, null) // claimed only once the workbench stands (rw4.3 station contract)
     assert.equal(home.built, false)
     assert.equal(goal.goalFacts(bot, {}).home, 'none')
     assert.equal(goal.goalFacts(bot, { home }).home, 'site')
@@ -181,6 +181,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     assert.equal(ctx.placeInFlight, false)
     paintHouse(world, ctx.home) // the rest goes up (e.g. between restarts)
     build(bot, ctx, null, null) // tick 3: nothing left -> done
+    assert.deepEqual(ctx.home.table, { x: 10, y: 64, z: 1 }) // table claimed on placement
     assert.equal(ctx.home.built, true)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.chats.some((m) => m === 'home done at 6 64 0'))

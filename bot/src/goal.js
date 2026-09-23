@@ -41,7 +41,9 @@ const MENU = {
   craft: {
     // Batch gate: a full NEED_LOGS load crafts at once. Starting on the first
     // picked-up log would preempt gather with a chat line per log.
-    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0),
+    // The door needs a placed table (bot.craft requires the block): without
+    // one the step could neither progress nor finish, churning done forever.
+    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
   },
   build: {
@@ -53,7 +55,9 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
-      if (!home) return facts.planks >= Math.min(PLANK_COUNT, 16)
+      // No scannable origin (no home yet, or a home without site): nothing
+      // is verifiable, so the whole wall+roof count counts.
+      if (!home || !home.site) return facts.planks >= Math.min(PLANK_COUNT, 16)
       let planks = 0
       let other = 0
       try {
@@ -101,13 +105,16 @@ const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'rest']
 
 // Home site shape (bead .4): site is the SW-corner origin at ground level,
 // interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
-// workbench cell outside the east wall.
+// workbench cell outside the east wall — null until the workbench is really
+// placed. rw4.3 treats ctx.home.table as a PLACED station (craft walks to it
+// and crafts the door at it), so claiming the coords early would deadlock
+// craft at an empty cell; build claims them the tick the table cell lands.
 function makeHome(ox, oy, oz) {
   return {
     site: { x: ox, y: oy, z: oz },
     interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 2, y: oy + 1, z: oz + 2 } },
     door: { x: ox + 1, y: oy, z: oz },
-    table: { x: ox + 4, y: oy, z: oz + 1 },
+    table: null,
     built: false,
   }
 }
@@ -181,6 +188,15 @@ function adoptHome(bot) {
       if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
     } catch (_) { /* keep as found */ }
     const home = makeHome(dx - 1, dy, dz)
+    // Claim the table coords only when the workbench block is really there
+    // (same placed-station contract as a fresh site).
+    try {
+      const t = BLUEPRINT[0]
+      const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
+      if (tb && tb.name === 'crafting_table') {
+        home.table = { x: home.site.x + t.dx, y: home.site.y + t.dy, z: home.site.z + t.dz }
+      }
+    } catch (_) { /* unverifiable: leave unclaimed */ }
     let allPresent = true
     for (const cell of BLUEPRINT) {
       let name = null
@@ -210,6 +226,21 @@ function goalFacts(bot, ctx) {
   const planks = countItems(bot, (n) => n.endsWith('_planks'))
   const table = countItems(bot, (n) => n === 'crafting_table')
   const door = countItems(bot, (n) => n.endsWith('_door'))
+  // Top single-wood plank count: recipes cannot mix wood types (see above).
+  let maxPlanks = 0
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    const perWood = {}
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string' || !i.name.endsWith('_planks')) continue
+        perWood[i.name] = (perWood[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+      }
+      for (const n of Object.values(perWood)) {
+        if (n > maxPlanks) maxPlanks = n
+      }
+    }
+  } catch (_) { /* inventory not ready: 0 */ }
   const home = !ctx || !ctx.home ? 'none' : ctx.home.built ? 'built' : 'site'
   // ctx.home.interior contract (set by bead .4): { min: {x,y,z}, max: {x,y,z} }.
   let inside = 'no'
@@ -221,14 +252,15 @@ function goalFacts(bot, ctx) {
       bp.y >= interior.min.y && bp.y <= interior.max.y &&
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
-  return { time, logs, planks, table, door, home, inside }
+  const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
+  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside }
 }
 
 // Canonical facts text: the decision point fires when it changes (same role
 // as stateKey for the brain).
 function goalText(facts) {
   return `time=${facts.time} logs=${facts.logs} planks=${facts.planks} ` +
-    `table=${facts.table} door=${facts.door} home=${facts.home} inside=${facts.inside}`
+    `table=${facts.table} door=${facts.door} home=${facts.home} placed=${facts.tablePlaced ? 'yes' : 'no'} inside=${facts.inside}`
 }
 
 function goalFsm(facts, feasibleNames) {

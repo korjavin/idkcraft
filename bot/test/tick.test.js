@@ -696,8 +696,9 @@ describe('work mode (epic rw4)', () => {
     return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
   }
 
-  it('(a) work + player nearby: rest step, follow never runs', async () => {
+  it('(a) work + player nearby: build step, follow never runs', async () => {
     const bot = workBot()
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, build defaults the site (rw4.4)
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
@@ -706,12 +707,11 @@ describe('work mode (epic rw4)', () => {
     BEHAVIOURS.follow = () => { followRan++ }
     try {
       const r = await ticker.tick()
-      assert.equal(r.decision.action, 'rest')
+      assert.equal(r.decision.action, 'build')
       assert.equal(r.decision.source, 'goal-fsm')
       assert.equal(followRan, 0)
-      assert.ok(bot.calls.setGoal >= 1)
-      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear') // rest strolls around spawn
-      assert.ok(lines.some((l) => l.includes('goal step=rest')))
+      assert.ok(bot.chats.some((m) => m === 'on my own: building the house'))
+      assert.ok(lines.some((l) => l.includes('goal step=build')))
     } finally {
       BEHAVIOURS.follow = origFollow
     }
@@ -735,6 +735,7 @@ describe('work mode (epic rw4)', () => {
     global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
     try {
       const bot = workBot()
+      bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] // material + table: gather and craft infeasible, build runs
       // Roster player WITHOUT an entity: findTarget is null (nothing
       // visible), but Steve is on the server, so the workAlone path runs.
       // (An entity would make him visible and take the normal path instead.)
@@ -742,7 +743,7 @@ describe('work mode (epic rw4)', () => {
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222, followName: 'Nobody' })
       ticker.work()
       const r = await ticker.tick()
-      assert.equal(r.decision.action, 'rest') // without workAlone this would be idle
+      assert.equal(r.decision.action, 'build') // without workAlone this would be idle
       assert.deepEqual(delays, [111]) // fast ticks while working, not idle cadence
     } finally {
       global.setTimeout = orig
@@ -770,7 +771,7 @@ describe('work mode (epic rw4)', () => {
     assert.ok(bot.chats.some((m) => m.includes('on my own')))
     const r = await ticker.tick()
     assert.notDeepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
-    assert.equal(r.decision.action, 'rest')
+    assert.equal(r.decision.action, 'gather') // empty hands: gather is the correct first step
   })
 
   it('(g) work + empty or self-only roster: idle path, no brain call, slow cadence', async () => {
@@ -805,7 +806,7 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     await ticker.tick() // step rest is set
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.equal(bot.chats[bot.chats.length - 1], 'working step=rest logs=0 planks=0 home=none')
+    assert.equal(bot.chats[bot.chats.length - 1], 'working step=gather logs=0 planks=0 home=none')
   })
 })
 
@@ -1357,7 +1358,7 @@ describe('nobody-online leave', () => {
       }).then(() => { done = true }, () => { done = true })
       bot.emit('spawn')
       await new Promise((r) => setTimeout(r, 60))
-      assert.ok(lines.some((l) => l.includes('goal step=rest')), 'work mode entered on first spawn')
+      assert.ok(lines.some((l) => l.includes('goal step=gather')), 'work mode entered on first spawn')
       bot.players = {}
       await new Promise((r) => setTimeout(r, 300))
       assert.equal(done, true) // quit itself, ticker destroyed

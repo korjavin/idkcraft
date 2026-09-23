@@ -170,6 +170,12 @@ function build(bot, ctx, target, state) {
   }
   if (ctx.placeInFlight) return
   if (!ctx.home) return
+  // Claim the table coords the moment the workbench stands (see makeHome):
+  // another table placed here earlier (or by anyone) counts the same.
+  if (!ctx.home.table && cellDone(bot, ctx.home, BLUEPRINT[0])) {
+    const t = BLUEPRINT[0]
+    ctx.home.table = { x: ctx.home.site.x + t.dx, y: ctx.home.site.y + t.dy, z: ctx.home.site.z + t.dz }
+  }
 
   const idx = nextCellIdx(bot, ctx.home, ctx.buildSkip)
   if (idx === -1) {

@@ -91,13 +91,13 @@ describe('goalFacts', () => {
 
   it('goalText is the canonical facts line', () => {
     const facts = { time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
-    assert.equal(goalText(facts), 'time=day logs=3 planks=0 table=0 door=0 home=none inside=no')
+    assert.equal(goalText(facts), 'time=day logs=3 planks=0 table=0 door=0 home=none placed=no inside=no')
   })
 })
 
 describe('MENU feasibility gates', () => {
   const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
-  const base = { time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
+  const base = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no' }
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
     assert.equal(F('gather', { ...base, logs: 5 }), true) // mid-load: keep gathering
@@ -121,8 +121,8 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', base), false)
     assert.equal(F('craft', { ...base, logs: 5 }), false) // no per-log preempt churn
     assert.equal(F('craft', { ...base, logs: 14 }), true) // full batch
-    assert.equal(F('craft', { ...base, planks: 5 }), true) // leftovers finish table/door
-    assert.equal(F('craft', { ...base, planks: 56, table: 1, door: 1 }), false) // nothing left to craft
+    assert.equal(F('craft', { ...base, planks: 5, maxPlanks: 5 }), true) // leftovers finish table/door
+    assert.equal(F('craft', { ...base, planks: 56, maxPlanks: 56, table: 1, door: 1 }), false) // nothing left to craft
   })
   it('build works in batches from spawn or a site — never without material', () => {
     const bot = goalBot() // spawnPoint set; no blockAt: the homeless path scans nothing
@@ -170,15 +170,15 @@ describe('decide decision point', () => {
 
   const goalLines = () => lines.filter((l) => l.includes('goal step='))
 
-  it('first decision picks rest, logs and chats once', () => {
+  it('first decision picks gather, logs and chats once', () => {
     const bot = goalBot()
     const ctx = {}
     const r = decide(bot, ctx)
-    assert.deepEqual(r, { action: 'rest', sprint: false, source: 'goal-fsm' })
-    assert.equal(ctx.step, 'rest')
+    assert.deepEqual(r, { action: 'gather', sprint: false, source: 'goal-fsm' })
+    assert.equal(ctx.step, 'gather')
     assert.equal(ctx.stepStatus, 'running')
-    assert.deepEqual(goalLines(), [`goal step=rest prev=none source=goal-fsm facts=${goalText(goalFacts(bot, ctx))}`])
-    assert.deepEqual(bot.chats, ['on my own: resting near spawn'])
+    assert.deepEqual(goalLines(), [`goal step=gather prev=none source=goal-fsm facts=${goalText(goalFacts(bot, ctx))}`])
+    assert.deepEqual(bot.chats, ['on my own: gathering logs'])
   })
 
   it('same facts with a running step: no change, no log, no chat', () => {
@@ -188,7 +188,7 @@ describe('decide decision point', () => {
     lines.length = 0
     bot.chats.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.deepEqual(goalLines(), [])
     assert.deepEqual(bot.chats, [])
   })
@@ -201,7 +201,7 @@ describe('decide decision point', () => {
     lines.length = 0
     bot.chats.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(goalLines(), []) // same step again: silent restart
     assert.deepEqual(bot.chats, [])
@@ -213,7 +213,7 @@ describe('decide decision point', () => {
     decide(bot, ctx)
     ctx.stepStatus = 'failed:no-trees'
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.equal(ctx.stepStatus, 'running')
   })
 
@@ -225,15 +225,61 @@ describe('decide decision point', () => {
     bot.inventory = { items: () => [{ name: 'oak_log', count: 3 }] } // logs 0 -> 3
     lines.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest') // craft feasible but unregistered: only rest can run
+    assert.equal(r.action, 'gather') // craft feasible but unregistered: gather runs now that rw4.2 registered it
     assert.ok(ctx.goalText.includes('logs=3'))
   })
 
-  it('unregistered steps never run even when feasible', () => {
-    // Only rest is feasible here (10 logs: gather is feasible but still
-    // unregistered); gather/craft join in rw4.2-4.3, build joined in rw4.4.
-    const bot = goalBot({ items: [{ name: 'oak_log', count: 10 }] })
+  it('table in inventory does not unlock craft: build lays it', () => {
+    // A door recipe requires the table block, so craft stays out — but with
+    // build registered (rw4.4) the full kit defaults a site at spawn and
+    // builds instead of resting.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] })
     const r = decide(bot, {})
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'build')
+  })
+
+  it('placed table unlocks craft for the door', () => {
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 6 }] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'craft')
+  })
+
+  it('placed table with door done gathers on (table clause needs no table)', () => {
+    // 10 planks are short of the 48 budget, so gather (not rest) is correct
+    // here — but never craft: with the door done only the table clause could
+    // fire, and the placed table guards it. Deleting the guard picks craft.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 10 }, { name: 'oak_door', count: 1 }] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'gather')
+  })
+
+  it('mixed planks from outside gather on (recipes cannot mix woods)', () => {
+    // 2+2 needs more material, so gather (not rest) is correct — but never
+    // craft: total-planks clauses would fire on the mixed 4. Deleting the
+    // per-wood counts picks craft into a done-forever loop.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 2 }] })
+    const r = decide(bot, {})
+    assert.equal(r.action, 'gather')
+  })
+
+  it('full kit on a build site runs build', () => {
+    // Build joined in rw4.4: a full kit on a build site is feasible AND
+    // registered, so it runs (craft and gather both correctly stay out).
+    const bot = goalBot({ items: [
+      { name: 'oak_planks', count: 48 },
+      { name: 'crafting_table', count: 1 },
+      { name: 'oak_door', count: 1 },
+    ] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'build')
+  })
+
+  it('full load hands gather to craft', () => {
+    // craft joined in rw4.3; build joins in rw4.4. Over a full load
+    // (15 logs = 60 plank-equivalent over the 58 budget) gather is done
+    // and craft — now registered — runs instead of rest.
+    const bot = goalBot({ items: [{ name: 'oak_log', count: 15 }] })
+    const r = decide(bot, {})
+    assert.equal(r.action, 'craft')
   })
 })
