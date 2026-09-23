@@ -110,7 +110,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `WHITELIST`: Comma-separated list (Bedrock players prefixed with `.`)
   - `OPS`: Comma-separated operators
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
-  - `BOT_FOLLOW`: Target player to follow (empty = nearest player)
+  - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
   - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); hybrid (FSM primary, model on hard states only); empty = FSM only, the rollback; the sidecar needs no key
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)

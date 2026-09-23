@@ -33,6 +33,9 @@ async function main() {
     await sleep(1000)
   }
   console.log(`IdkBot spotted at dist=${distanceToIdkBot().toFixed(1)}`)
+  // Since epic rw4 the bot spawns into work mode and strolls instead of
+  // following: call it explicitly like a player would.
+  fake.chat('follow me')
 
   // Wait for the world to load: paths computed on empty chunks fail and
   // never retry, which freezes both bots. Chunks are in when the block

@@ -41,7 +41,7 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `MC_HOST` | `mc` | Minecraft server host (`localhost` for local runs) |
 | `MC_PORT` | `25565` | Java server port |
 | `BOT_USERNAME` | `IdkBot` | Bot login name |
-| `BOT_FOLLOW` | `` (nearest player) | Player name to follow |
+| `BOT_FOLLOW` | `` (work mode) | Player name to follow; empty means the bot works on its own goal until `follow me` |
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
 | `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; bogus key still joins, logs `stub-fallback` |
 | `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); when set, the hybrid brain runs: FSM primary, remote model on hard states only. Empty = FSM only (`brain=stub`); that is the rollback. |
@@ -167,18 +167,34 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 - **NO leading slash:** Type commands directly as plain text (e.g. `follow me`, not `/follow me`). Any message starting with a slash (`/`) is treated by Paper as a server command, so the bot never receives it.
 - **Case-insensitive:** Commands are case-insensitive (`follow me`, `FOLLOW ME`). Block names for search should be in English, snake_case (e.g. `coal_ore`, `diamond_ore`, `iron_block`).
 - **Command list & replies:**
-  - `follow me` — Locks onto you and resumes following, replying with `Following <username>` (e.g. `Following Player`).
-  - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply.
+  - `follow me` — Locks onto you and resumes following, replying with `Following <username>` (e.g. `Following Player`). Cancels work mode.
+  - `stop` — Parks the bot in place and cancels movement immediately; stays parked quietly without sending a chat reply. Cancels work mode.
+  - `go work` (alias `free`) — Releases the bot into autonomous work mode, replying with `on my own; say 'follow me' to call me`. Cancels park.
+  - `status` — Replies with mode, current goal step, logs/planks and home (e.g. `working step=rest logs=0 planks=0 home=none`).
   - `find me <block>` (e.g. `find me coal` or `find me diamond_ore`) — Searches loaded chunks within 48 blocks. The bot replies with `<block> at <x> <y> <z> (<N> blocks)` (e.g. `coal_ore at -12 64 200 (14 blocks)`), `no <block> within 48 blocks`, or `unknown block: <block>`.
 - **Bot chat & ore reports:** The bot answers command responses in chat; if no reply appears within ~2 s, check the log line `decision source=...` is still flowing. The bot also broadcasts unsolicited ore announcements when its scouting reflex detects veins (e.g. `diamond_ore x4 at -60 12 -180`); these are autonomous scout reflex announcements, not replies to commands.
 
 | Command | Action | Implementation |
 | --- | --- | --- |
 | `follow me` | Locks onto speaker, resumes movement if parked | Sets `followName` to speaker, unparks ticker, replies `Following <username>` |
-| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks |
+| `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks; clears work mode |
+| `go work` / `free` | Releases the bot to work on its own goal | Sets work mode, unparks ticker, clears `followName`; replies `on my own; say 'follow me' to call me` |
+| `status` | Reports mode, goal step, logs/planks, home | Replies e.g. `working step=rest logs=0 planks=0 home=none` |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks; replies with `<block> at <x> <y> <z> (<N> blocks)`, `no <block> within 48 blocks`, or `unknown block: <block>` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind and resumes once within 8, announces `here: <block> at <x> <y> <z>` on arrival, or gives up with `cannot reach <block> at ...` when the vein stays unreachable. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot.
+
+### Autonomy & chat commands
+
+With no `BOT_FOLLOW` target the bot spawns into work mode and pursues its own
+goal (see `src/goal.js`): each tick the goal arbiter picks one step from the
+menu (`gather`, `craft`, `build`, `gohome`, `stay`, `rest`) and dispatches it
+like a brain action — `fight` still preempts everything. The bot announces
+every step change in chat (`on my own: ...`). `follow me` pulls it back to
+following (clearing work mode); `go work` releases it again; `stop` parks it
+until the next order; `status` reports mode, step, inventory and home. Work
+continues while anyone is on the server (player roster, not visibility), and
+the bot still leaves an empty server after the nobody-online grace.
 
 ### Brain route and disagreement logging
 
