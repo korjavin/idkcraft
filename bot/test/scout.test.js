@@ -524,6 +524,7 @@ describe("chat command 'find me <block>'", () => {
 
   it("handles 'follow me' command by setting follow target on ticker and chatting confirmation", () => {
     const bot = mockBot({ registry: REG })
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(10, 64, 0) } } }
     const calls = []
     const ticker = {
       setFollow(name) { calls.push(['setFollow', name]) },

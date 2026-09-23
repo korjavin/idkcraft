@@ -358,6 +358,9 @@ function fleeReflex(bot, ctx) {
       lastVisible = !!target
       if (target) noteSeen()
       else noteEmpty()
+      // A follow order owns the body the moment its player is visible: drop
+      // work so the goal arbiter below cannot hijack the tick.
+      if (target && followName) ctx.work = false
       // Work mode runs without a visible player while anyone is on the
       // server (roster, not visibility — walking out of render distance is
       // normal). Falls through to the normal path with target=null:
@@ -517,7 +520,16 @@ function fleeReflex(bot, ctx) {
     setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
-    setFollow: (name) => { followName = name; ctx.work = false; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
+    setFollow: (name) => {
+      followName = name
+      const seen = !name || (bot.players && bot.players[name] && bot.players[name].entity)
+      if (!name || seen) ctx.work = false
+      ctx.lastGoalKey = ''
+      ctx.lead = null
+      ctx.leadStuck = 0
+      ctx.leadTargetGone = 0
+      if (name) ctx.paused = false
+    },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = ''; ctx.gather = null },
     stop: () => {
@@ -697,7 +709,18 @@ function handleChat(bot, ticker, username, message) {
   const msg = message.toLowerCase().trim()
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(username)
-    bot.chat(`Following ${username}`)
+    const seen = bot.players && bot.players[username] && bot.players[username].entity
+    if (seen) {
+      bot.chat(`Following ${username}`)
+    } else {
+      // Honest: the server sends no coordinates for an out-of-range player
+      // and the bot is not OP, so it cannot walk there — say where it is.
+      const bp = bot.entity && bot.entity.position
+      const at = bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
+      const sp = bot.spawnPoint
+      const dist = bp && sp ? ` (~${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))} blocks from spawn)` : ''
+      bot.chat(`I can't see you — I'm at ${at}${dist}; come closer or /tp ${bot.username} ${username}`)
+    }
   } else if (msg === 'stop') {
     if (ticker) {
       ticker.setFollow('')
