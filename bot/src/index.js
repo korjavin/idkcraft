@@ -699,9 +699,14 @@ function fleeReflex(bot, ctx) {
         // relief and carries the goal, while this backstop would preempt it
         // with a goal-less fact on the same tick. Other owners keep it.
         const followOwns = (ctx.lastGoalKey || '').startsWith('follow:')
-        if (!gatherOwns && !followOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
+        // Gohome/stay own their approach stalls (rw4.5): walkTo re-issues
+        // and fails the step itself (cannot-reach-home) — a ticker backstop
+        // here sidesteps the body mid-doorway every slow approach and the
+        // arrival starves into an orbit.
+        const nightOwns = ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')
+        if (!gatherOwns && !followOwns && !nightOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
           ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
-        } else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+        } else if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
         }
       }

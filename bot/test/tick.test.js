@@ -847,6 +847,31 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(e) stationary gohome approach never raises the ticker stuck fact', async () => {
+    // rw4.5/recover: the ef3 no-displacement backstop must not hijack a slow
+    // night approach — walkTo owns the stall (cannot-reach-home) and the
+    // arrival. 45 still ticks with the executor claiming motion: no episode.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.time = { timeOfDay: 15000 }
+    bot.pathfinder.isMoving = () => true // executor claims motion, body still
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+    try {
+      for (let i = 0; i < 45; i++) await ticker.tick()
+      assert.equal(ctx.stuck, null, 'no ticker backstop episode during gohome')
+      assert.equal(ctx.recovery, null, 'no recovery owns the body during gohome')
+      assert.equal(ctx.step, 'gohome', 'walkTo failure re-picks gohome silently at night')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(d) follow me in chat resets work: next tick follows', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
