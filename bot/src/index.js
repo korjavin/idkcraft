@@ -5,6 +5,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
@@ -132,7 +133,11 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null }) {
+  // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
+  const greet = greeter || createGreeter()
+  // Last seen distance per approached player, for the far -> near edge.
+  const greetLast = {}
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
@@ -197,6 +202,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function destroy() {
     destroyed = true
     if (timer) { clearTimeout(timer); timer = null }
+    try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
   }
   // Stand down after a re-check found someone online: re-arm the streak so
   // the next grace period is measured fresh from here.
@@ -333,6 +339,31 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
+  // Greeting call site (v92, the only one): on a follow/bring dispatch, a
+  // far -> near edge with the approached player (follow target or bring
+  // recipient) while the body stands starts the crouch-twice gesture.
+  // Fight/flee never reach here with those actions.
+  function greetCheck(decision) {
+    if (decision.action !== 'follow' && decision.action !== 'bring') return
+    const name = decision.action === 'bring' && ctx.bring && ctx.bring.by ? ctx.bring.by : followName
+    if (!name) return
+    const ent = bot.players && bot.players[name] && bot.players[name].entity
+    const bp = bot.entity && bot.entity.position
+    if (!ent || !ent.position || !bp) return
+    let d = null
+    try {
+      d = typeof bp.distanceTo === 'function'
+        ? bp.distanceTo(ent.position)
+        : Math.hypot(bp.x - ent.position.x, bp.y - ent.position.y, bp.z - ent.position.z)
+    } catch (_) { return }
+    const prev = greetLast[name]
+    if (typeof d === 'number') greetLast[name] = d
+    if (typeof prev !== 'number' || typeof d !== 'number') return
+    let standing = false
+    try { standing = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && !bot.pathfinder.isMoving()) } catch (_) { standing = false }
+    greet.greetOnArrival(bot, name, prev, d, standing)
+  }
+
   function applyDecision(decision, target, state) {
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
@@ -340,6 +371,7 @@ function fleeReflex(bot, ctx) {
     } else {
       stopOnce()
     }
+    greetCheck(decision)
     // sprint stays on the decision line as the brain's opinion only; the
     // body never sprints (see setMovements).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
@@ -682,6 +714,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
+    cancelGreet: () => { try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ } },
     getFollowName: () => followName,
     getBrainEngine: () => brainEngine,
     setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
@@ -1096,6 +1129,7 @@ function respawnLine(bot) {
 
 function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
+  if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
 }
 
