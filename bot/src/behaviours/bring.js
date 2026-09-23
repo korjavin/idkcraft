@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./scout')
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const metrics = require('../metrics')
@@ -46,6 +46,55 @@ function dropFor(blockName) {
 // count would never grow and the order would mine the area forever.
 function isBringable(blockName) {
   return blockName.endsWith('_ore') || blockName.endsWith('_log')
+}
+
+// Share keep-list (idkcraft-ah9): tools, weapons, armour, plus a 32-block
+// dirt/cobblestone reserve — without it the bot cannot pillar out (ef3
+// pillar_up). Dirt fills the reserve first, cobblestone the remainder.
+const SHARE_RESERVE = 32
+const SHARE_EXACT_KEEP = new Set(['shears', 'flint_and_steel', 'bow', 'crossbow', 'trident', 'arrow', 'shield'])
+function isShareKeep(name) {
+  if (typeof name !== 'string') return true
+  if (SHARE_EXACT_KEEP.has(name)) return true
+  return /_(pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boots)$/.test(name)
+}
+
+// Inventory items -> toss list in inventory order, keep-list skipped.
+function sharePlan(items) {
+  const list = Array.isArray(items) ? items : []
+  let dirt = 0
+  let cobble = 0
+  for (const i of list) {
+    if (!i || typeof i.name !== 'string') continue
+    if (i.name === 'dirt') dirt += i.count || 0
+    if (i.name === 'cobblestone') cobble += i.count || 0
+  }
+  let keepDirt = Math.min(SHARE_RESERVE, dirt)
+  let keepCobble = Math.min(SHARE_RESERVE - keepDirt, cobble)
+  const toss = []
+  const at = new Map()
+  const add = (name, count) => {
+    if (count <= 0) return
+    if (at.has(name)) toss[at.get(name)].count += count
+    else { at.set(name, toss.length); toss.push({ name, count }) }
+  }
+  for (const i of list) {
+    if (!i || typeof i.name !== 'string') continue
+    if (isShareKeep(i.name)) continue
+    const n = i.count || 0
+    if (i.name === 'dirt') {
+      const k = Math.min(keepDirt, n)
+      keepDirt -= k
+      add(i.name, n - k)
+    } else if (i.name === 'cobblestone') {
+      const k = Math.min(keepCobble, n)
+      keepCobble -= k
+      add(i.name, n - k)
+    } else {
+      add(i.name, n)
+    }
+  }
+  return toss
 }
 
 function needsPickaxe(blockName) {
@@ -313,17 +362,33 @@ function bring(bot, ctx, target, state) {
 
   if (o.phase === 'find') {
     if (food) { findFood(bot, ctx, o); return }
-    const res = findNearest(bot, o.name, FIND_RADIUS)
+    const res = findNearest(bot, o.name)
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
     }
     if (!res) {
-      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `could not reach ${o.block || o.name}`)
+      if (o.have > 0) {
+        refuse(bot, ctx, `only got ${o.have} ${o.drop}`)
+        return
+      }
+      // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb),
+      // one order holds one cursor, no new scan starts while it runs.
+      o.search = startFarSearch(bot, o.name)
+      if (o.search === 'unknown') {
+        refuse(bot, ctx, `unknown block: ${o.name}`)
+        return
+      }
+      if (!o.search) {
+        refuse(bot, ctx, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+        return
+      }
+      o.phase = 'searchfar'
       return
     }
     o.pos = res.position
     o.block = res.name
+    o.exposed = res.exposed !== false
     o.drop = dropFor(res.name)
     if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
       const tier = requiredTier(res.name)
@@ -333,6 +398,39 @@ function bring(bot, ctx, target, state) {
     if (!o.announced) {
       o.announced = true
       say(bot, `going for ${o.want} ${res.name}, ${res.distance} blocks away`)
+    }
+    o.phase = 'walk'
+    o.stalls = 0
+    o.lastPos = null
+    return
+  }
+
+  if (o.phase === 'searchfar') {
+    if (food) { findFood(bot, ctx, o); return }
+    const r = stepFarSearch(bot, o.search)
+    if (!r.done) return
+    o.search = null
+    if (r.result === 'unknown') {
+      refuse(bot, ctx, `unknown block: ${o.name}`)
+      return
+    }
+    if (!r.result) {
+      const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
+      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
+      return
+    }
+    o.pos = r.result.position
+    o.block = r.result.name
+    o.exposed = r.result.exposed !== false
+    o.drop = dropFor(r.result.name)
+    if (needsPickaxe(r.result.name) && !hasPickaxe(bot, r.result.name)) {
+      const tier = requiredTier(r.result.name)
+      refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${r.result.name}`)
+      return
+    }
+    if (!o.announced) {
+      o.announced = true
+      say(bot, `going for ${o.want} ${r.result.name}, ${r.result.distance} blocks away`)
     }
     o.phase = 'walk'
     o.stalls = 0
@@ -367,7 +465,7 @@ function bring(bot, ctx, target, state) {
         o.stalls = 0
         o.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (++o.stalls >= WALK_STALL_TICKS) {
-        refuse(bot, ctx, `could not reach ${o.block}`)
+        refuse(bot, ctx, `could not reach ${o.block}` + (o.exposed === false ? ' (buried, no path in)' : ''))
       }
       return
     }
@@ -436,7 +534,9 @@ function bring(bot, ctx, target, state) {
       // the bot is and hold the drops until the player is back.
       if (!o.saidWaiting) {
         o.saidWaiting = true
-        say(bot, `I can't see you — I'm at ${atPos(bot)} with your ${o.have} ${o.drop}; come closer`)
+        say(bot, o.kind === 'share'
+          ? `I can't see you — I'm at ${atPos(bot)}; come closer`
+          : `I can't see you — I'm at ${atPos(bot)} with your ${o.have} ${o.drop}; come closer`)
       }
       return
     }
@@ -450,6 +550,7 @@ function bring(bot, ctx, target, state) {
     let d = null
     try { d = typeof bp.distanceTo === 'function' ? bp.distanceTo(pp) : Math.hypot(bp.x - pp.x, bp.y - pp.y, bp.z - pp.z) } catch (_) { d = null }
     if (d !== null && d <= RETURN_RANGE + 0.5) {
+      if (o.kind === 'share') { shareToss(bot, ctx, o); return }
       if (o.tossInFlight) return
       let id = null
       try {
@@ -477,6 +578,52 @@ function bring(bot, ctx, target, state) {
   }
 }
 
+// Share toss (idkcraft-ah9): one stack per item in plan order, counted
+// against the live inventory (it may have shifted since the order). Reports
+// what actually left; an empty toss refuses like the single-drop path.
+function shareToss(bot, ctx, o) {
+  if (o.tossInFlight) return
+  let live = []
+  try {
+    live = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+  } catch (_) { live = [] }
+  const items = sharePlan(live)
+  if (items.length === 0) {
+    refuse(bot, ctx, 'nothing to share')
+    return
+  }
+  o.tossInFlight = true
+  void (async () => {
+    const got = []
+    try {
+      for (const item of items) {
+        let id = null
+        try {
+          const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[item.name]
+          id = entry && entry.id
+        } catch (_) { id = null }
+        if (typeof id !== 'number' || typeof bot.toss !== 'function') continue
+        let have = 0
+        try { have = countItems(bot, (n) => n === item.name) } catch (_) { have = 0 }
+        const n = Math.min(have, item.count)
+        if (n <= 0) continue
+        try {
+          await bot.toss(id, null, n)
+          got.push(`${n} ${item.name}`)
+        } catch (_) { /* next item */ }
+      }
+    } finally {
+      o.tossInFlight = false
+    }
+    if (got.length === 0) {
+      refuse(bot, ctx, `could not toss ${(items[0] && items[0].name) || 'items'}`)
+      return
+    }
+    say(bot, `shared: ${got.join(', ')}`)
+    done(bot, ctx)
+  })()
+}
+
 module.exports = bring
 module.exports.dropFor = dropFor
 module.exports.isBringable = isBringable
@@ -490,3 +637,4 @@ module.exports.WANT_MAX = WANT_MAX
 module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
 module.exports.findAnimal = findAnimal
+module.exports.sharePlan = sharePlan
