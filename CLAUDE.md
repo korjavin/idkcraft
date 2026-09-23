@@ -116,7 +116,6 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
   - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `BOT_AUTONOMOUS`: stay and work with nobody online (default empty = off; chat `autonomous on` lasts until restart)
-  - `BOT_AUTONOMOUS`: stay and work with nobody online (default empty = off; chat `autonomous on` lasts until restart)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
 
