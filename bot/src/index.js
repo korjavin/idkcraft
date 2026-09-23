@@ -2,7 +2,7 @@
 
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const { makeBrain } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 const { addSwimExits } = require('./swim')
@@ -10,6 +10,11 @@ const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
+function brainTimeoutMs(env) {
+  const raw = parseInt((env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000', 10)
+  return Number.isFinite(raw) ? raw : 1000
+}
 const bringMod = require('./behaviours/bring')
 const goal = require('./goal')
 const origEquipGear = fightMod.equipGear
@@ -126,7 +131,9 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
+  // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
+  // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
   if (bot) {
     bot._tickerCtx = ctx
@@ -658,6 +665,9 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
+    getFollowName: () => followName,
+    getBrainEngine: () => brainEngine,
+    setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     setBring: ({ name, want, by }) => {
@@ -743,7 +753,7 @@ function fatal(where, err) {
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
-function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
       host,
@@ -754,7 +764,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.loadPlugin(pathfinder)
     let wantQuit = false
     const ticker = createTicker({
-      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs,
+      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine,
       onLeave: () => { void confirmLeave() }
     })
     // The streak only proves nobody is *visible*. Re-check the world-wide
@@ -844,6 +854,10 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
+  // Initial engine label for 'brain' (mirrors makeBrain's choice).
+  const brainEngine = (process.env.BRAIN_URL || process.env.TYPESAFE_API_KEY)
+    ? sourceForUrl(process.env.BRAIN_URL || JEV_ENDPOINT)
+    : 'off'
   metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
@@ -852,7 +866,7 @@ async function main() {
       await waitForPlayers({ host, port, pingFn, username })
       await sleep(JOIN_SETTLE_MS)
     }
-    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName })
+    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine })
   }
 }
 
@@ -900,6 +914,34 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     bot.chat(`on my own; say 'follow me' to call me`)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
+  } else if (msg === 'brain' || msg.startsWith('brain ')) {
+    // Brain switch (d75): with a follow target only they may switch; with
+    // nobody followed (work mode) any roster player may. Others get silence
+    // and the engine never changes for them.
+    const followed = ticker && typeof ticker.getFollowName === 'function' ? ticker.getFollowName() : null
+    const allowed = ticker && playerName && (followed
+      ? playerName === followed
+      : !!(bot.players && bot.players[playerName]))
+    if (!allowed) return
+    const arg = msg.slice(5).trim()
+    if (!arg) {
+      bot.chat(`brain: ${ticker.getBrainEngine()}`)
+      return
+    }
+    if (arg === 'off' || arg === 'laya' || arg === 'jev') {
+      if (arg === 'jev' && !process.env.TYPESAFE_API_KEY) {
+        bot.chat('jev: no api key')
+        return
+      }
+      const from = ticker.getBrainEngine()
+      const url = arg === 'laya' ? (process.env.BRAIN_URL || LAYA_URL_DEFAULT) : JEV_ENDPOINT
+      const next = arg === 'off' ? stubBrain : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
+      ticker.setBrain(next, arg)
+      bot.chat(`brain: ${arg}`)
+      console.log(`brain switch from=${from} to=${arg} by=${playerName}`)
+    } else {
+      bot.chat(`unknown brain: "${arg.slice(0, 30)}" — say help brain`)
+    }
   } else if (msg === 'help' || msg.startsWith('help ')) {
     const topic = msg.slice(4).trim()
     if (!topic) {
