@@ -259,9 +259,11 @@ async function decide(bot, ctx) {
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
     if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)
-    // A stop that landed mid-await parks the step the tick then discards:
-    // announcing it would lie, so a paused bot stays quiet too.
-    if (choice.step !== prev && !ctx.paused) {
+    // An order that landed mid-await ('stop' parks, 'follow me' switches
+    // work off) discards the step the tick then drops: announcing it would
+    // lie, so only an actually-working bot chats. !== false keeps unit-test
+    // {} ctx objects (work undefined) chatting.
+    if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} facts=${text}`)
       const entry = MENU[choice.step]
       const verb = (entry && entry.verb) || choice.step
