@@ -658,7 +658,10 @@ function fleeReflex(bot, ctx) {
       if (res === 'unknown') return `unknown block: ${name}`
       if (!res) return `no ${name} within 48 blocks`
       if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
-      if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot)) return `need a stone pickaxe for ${res.name}`
+      if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+        const tier = bringMod.requiredTier(res.name)
+        return `need ${tier === 'iron' ? 'an' : 'a'} ${tier} pickaxe for ${res.name}`
+      }
       if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
       // A fresh explicit order restarts homing math (a tripped counter would
       // starve the order) and supersedes a pending spawn work-resume (which

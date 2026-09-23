@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
-const { dropFor, needsPickaxe, hasPickaxe } = require('../src/behaviours/bring')
+const { dropFor, needsPickaxe, hasPickaxe, requiredTier } = require('../src/behaviours/bring')
 const { handleChat, createTicker } = require('../src/index')
 const { COMMANDS, lookupCommand } = require('../src/commands')
 
@@ -16,8 +16,8 @@ function pos(x, y, z) {
   return p
 }
 
-const BLOCKS = { coal_ore: 11, oak_log: 12, stone: 1 }
-const ITEMS = { coal: 21, oak_log: 12, stone_pickaxe: 22, wooden_pickaxe: 23 }
+const BLOCKS = { coal_ore: 11, oak_log: 12, stone: 1, iron_ore: 31, gold_ore: 32 }
+const ITEMS = { coal: 21, oak_log: 12, stone_pickaxe: 22, wooden_pickaxe: 23, iron_pickaxe: 24 }
 
 function mockBot({ spots = [], names = {}, items = [], playerPos = null } = {}) {
   const lines = []
@@ -192,8 +192,12 @@ describe('bring me order', () => {
     assert.equal(dropFor('oak_log'), 'oak_log')
     assert.equal(needsPickaxe('coal_ore'), true)
     assert.equal(needsPickaxe('oak_log'), false)
-    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })), true)
-    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'wooden_pickaxe', count: 1 }] })), false)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] }), 'coal_ore'), true)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'wooden_pickaxe', count: 1 }] }), 'coal_ore'), false)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] }), 'gold_ore'), false)
+    assert.equal(hasPickaxe(mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }] }), 'gold_ore'), true)
+    assert.equal(requiredTier('deepslate_diamond_ore'), 'iron')
+    assert.equal(requiredTier('iron_ore'), 'stone')
     assert.equal(hasPickaxe(mockBot({ items: [] })), false)
   })
 
@@ -230,8 +234,6 @@ describe('bring me order', () => {
       items: [{ name: 'wooden_pickaxe', count: 1 }],
       playerPos: pos(30, 64, 0),
     })
-    // BLOCKS lacks iron_ore: extend the mock registry for this order
-    bot.registry.blocksByName.iron_ore = { id: 31 }
     handleChat(bot, tickerFor(bot), 'P', 'bring me iron')
     assert.deepEqual(bot.lines, ['need a stone pickaxe for iron_ore'])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
@@ -290,6 +292,26 @@ describe('bring me order', () => {
     handleChat(bot, ticker, 'P', 'bring me coal')
     assert.ok(bot._tickerCtx.bring, 'order created')
     assert.equal(bot._tickerCtx.resumeWork, false, 'resume cannot cancel the order')
+  })
+
+  it('stone pickaxe is refused for gold ore (iron tier)', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'gold_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me gold')
+    assert.deepEqual(bot.lines, ['need an iron pickaxe for gold_ore'])
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    const rich = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'gold_ore' },
+      items: [{ name: 'iron_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(rich, tickerFor(rich), 'P', 'bring me gold')
+    assert.match(rich.lines[0], /^going for 3 gold_ore, \d+ blocks away$/)
   })
 
   it("'bring me' is in COMMANDS with usage", () => {

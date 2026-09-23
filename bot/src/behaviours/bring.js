@@ -46,15 +46,29 @@ function needsPickaxe(blockName) {
   return blockName.endsWith('_ore')
 }
 
-// One rule, one message (bead): ores need stone-or-better. Wooden and
-// golden are refused even for coal — stricter than vanilla, but iron and up
-// need stone anyway and a single gate keeps the refusal honest.
-function hasPickaxe(bot) {
+// Harvest tiers (vanilla): coal/iron/copper/lapis/quartz need stone or
+// better; gold/diamond/redstone/emerald need iron or better. Wooden and
+// golden are refused for everything. The refusal names the required tier.
+const PICKAXE_RANK = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 }
+function requiredTier(blockName) {
+  const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
+  if (/(gold|diamond|redstone|emerald)$/.test(base)) return 'iron'
+  return 'stone'
+}
+function hasPickaxe(bot, blockName) {
+  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+  let best = -1
   try {
-    return countItems(bot, (n) => /(stone|iron|diamond|netherite)_pickaxe$/.test(n)) > 0
-  } catch (_) {
-    return false
-  }
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    for (const i of items) {
+      const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+      if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
+    }
+  } catch (_) { return false }
+  return best >= need
+}
+function tierArticle(tier) {
+  return tier === 'iron' ? 'an' : 'a'
 }
 
 function say(bot, line) {
@@ -126,8 +140,9 @@ function bring(bot, ctx, target, state) {
     o.pos = res.position
     o.block = res.name
     o.drop = dropFor(res.name)
-    if (needsPickaxe(res.name) && !hasPickaxe(bot)) {
-      refuse(bot, ctx, `need a stone pickaxe for ${res.name}`)
+    if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
+      const tier = requiredTier(res.name)
+      refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${res.name}`)
       return
     }
     if (!o.announced) {
@@ -272,6 +287,7 @@ function bring(bot, ctx, target, state) {
 module.exports = bring
 module.exports.dropFor = dropFor
 module.exports.isBringable = isBringable
+module.exports.requiredTier = requiredTier
 module.exports.needsPickaxe = needsPickaxe
 module.exports.hasPickaxe = hasPickaxe
 module.exports.WANT_ORE = WANT_ORE
