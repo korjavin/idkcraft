@@ -334,8 +334,9 @@ far-player, 6 low-health-hostile).
   (leading/waiting/going on/here) worked throughout.
 - Scout, follow, wedge recovery (`stuck reason=wedge` x3), melee reflex
   all active; no bot deaths in B. Creeper flee untested (no creeper
-  met). Owner vocabulary misses (`find me ore`, `rock`, `diamand` →
-  `unknown block`) fixed after the session (ore alias + plurals).
+  met). Owner vocabulary misses: `find me ore` fixed after the session (ore
+  alias + plurals like `diamonds`); `rock` and typos such as `diamand`
+  still answer `unknown block` (no fuzzy search, by design).
 
 ## Online-mode note
 

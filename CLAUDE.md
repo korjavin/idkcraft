@@ -94,7 +94,7 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 +-------------------------------------------------------------+
 ```
 
-Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `idle`), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex.
+Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex.
 
 ### Shared Contract (do not rename)
 - **Services:** `mc`, `bot`, `laya`
@@ -114,7 +114,6 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
   - `BRAIN_URL`: Remote brain endpoint (default `http://laya:8000/v1/systemone`); hybrid (FSM primary, model on hard states only); empty = FSM only, the rollback; the sidecar needs no key
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
-  - `METRICS_PORT`: Prometheus endpoint port (default `9464`; the sidecar serves `/metrics` on its API port; scraped by the house monitoring stack)
   - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
