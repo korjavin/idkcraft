@@ -124,7 +124,7 @@ function eatReflex(bot, ctx, state) {
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -581,7 +581,16 @@ function fleeReflex(bot, ctx) {
   return {
     tick,
     setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
-    setPathReset: (reason) => { ctx.lastPathReset = reason || null; if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1 },
+    // place_error streaks (tower attempts into the same cell while a previous
+    // placeBlock still awaits blockUpdate): consecutive only — any other
+    // reset reason breaks the streak. Behaviours treat N>=3 with no
+    // displacement as a stall, the shared fact the hard-case stuck menu needs.
+    setPathReset: (reason) => {
+      ctx.lastPathReset = reason || null
+      if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1
+      if (reason === 'place_error') ctx.placeErrors = (ctx.placeErrors || 0) + 1
+      else ctx.placeErrors = 0
+    },
     start: () => scheduleNext(true),
     // ponytail: sprint-jump wedges the bot flush against a 1-block step
     // (sprint speed reaches the face before the queued jump lifts off, so
