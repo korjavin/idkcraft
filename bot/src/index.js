@@ -20,6 +20,7 @@ const BEHAVIOURS = {
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
+  gather: require('./behaviours/gather'),
   rest: require('./behaviours/rest'),
 }
 
@@ -517,7 +518,7 @@ function fleeReflex(bot, ctx) {
     rearm,
     setFollow: (name) => { followName = name; ctx.work = false; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
-    work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = '' },
+    work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = ''; ctx.gather = null },
     stop: () => {
       ctx.paused = true
       ctx.work = false
