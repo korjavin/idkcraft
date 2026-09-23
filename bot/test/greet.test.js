@@ -1,0 +1,327 @@
+'use strict'
+
+// Greeting gesture (idkcraft-v92): crouch twice on a far -> near arrival,
+// 60 s per-player cooldown, sneak always released. Fake clock, no timers.
+
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const { createGreeter, GREET_FAR, GREET_NEAR, COOLDOWN_MS } = require('../src/greet')
+const { createTicker, handleDeath } = require('../src/index')
+const { stubBrain } = require('../src/brain')
+
+function pos(x, y, z) {
+  const p = {
+    x, y, z,
+    distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
+    clone() { return pos(p.x, p.y, p.z) },
+  }
+  return p
+}
+
+const flush = async (n = 8) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
+
+function clock() {
+  let t = 0
+  return { now: () => t, advance: (ms) => { t += ms } }
+}
+
+function sneakBot(log) {
+  return { setControlState: (k, v) => { if (k === 'sneak') log.push(v) } }
+}
+
+describe('greet module (idkcraft-v92)', () => {
+  it('approach from far starts exactly two sneak true/false cycles, ending false', async () => {
+    const c = clock()
+    const log = []
+    const g = createGreeter({ now: c.now, sleep: async () => {} })
+    const bot = sneakBot(log)
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false) // arming sight
+    assert.equal(g.greetOnArrival(bot, 'P', 2, true), true)
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('a gradual approach greets exactly once on arrival', async () => {
+    const c = clock()
+    const log = []
+    const g = createGreeter({ now: c.now, sleep: async () => {} })
+    const bot = sneakBot(log)
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false)
+    assert.equal(g.greetOnArrival(bot, 'P', 7, true), false)
+    assert.equal(g.greetOnArrival(bot, 'P', 4.5, false), false) // mid-way, moving
+    assert.equal(g.greetOnArrival(bot, 'P', 2.5, true), true)
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('re-approach within 60 s is silent, after 60 s greets again', async () => {
+    const c = clock()
+    const log = []
+    const g = createGreeter({ now: c.now, sleep: async () => {} })
+    const bot = sneakBot(log)
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false)
+    assert.equal(g.greetOnArrival(bot, 'P', 2, true), true)
+    await flush()
+    const n = log.length
+    c.advance(10000)
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false) // re-arm far...
+    assert.equal(g.greetOnArrival(bot, 'P', 2, true), false) // ...but cooldown holds
+    await flush()
+    assert.equal(log.length, n)
+    c.advance(51000) // 61 s total
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false)
+    assert.equal(g.greetOnArrival(bot, 'P', 2, true), true)
+    await flush()
+    assert.ok(log.length > n)
+    assert.equal(log[log.length - 1], false)
+  })
+
+  it('no gesture without a fresh far sighting, while moving, or when busy', async () => {
+    const c = clock()
+    const log = []
+    const g = createGreeter({ now: c.now, sleep: async () => {} })
+    const bot = sneakBot(log)
+    assert.equal(g.greetOnArrival(bot, 'P', 2, true), false) // never far
+    assert.equal(g.greetOnArrival(bot, 'P', 10, true), false) // armed...
+    assert.equal(g.greetOnArrival(bot, 'P', 4.5, true), false) // ...but never near
+    assert.equal(g.greetOnArrival(bot, 'P', 2, false), false) // moving at the door
+    assert.equal(g.greetOnArrival(bot, '', 2, true), false)
+    await flush()
+    assert.deepEqual(log, [])
+    const p1 = g.crouchTwice(bot) // running...
+    assert.equal(await g.crouchTwice(bot), false) // ...so this refuses
+    assert.equal(await p1, true)
+  })
+
+  it('cancel releases sneak and frees the next gesture', async () => {
+    const c = clock()
+    const log = []
+    const g = createGreeter({ now: c.now, sleep: async () => {} })
+    const bot = sneakBot(log)
+    const p1 = g.crouchTwice(bot)
+    g.cancel(bot)
+    assert.equal(await p1, false)
+    assert.equal(log[log.length - 1], false)
+    assert.equal(await g.crouchTwice(bot), true)
+  })
+})
+
+describe('greet wiring (idkcraft-v92)', () => {
+  function workBot() {
+    const bot = {
+      username: 'IdkBot',
+      players: { P: { username: 'P', entity: { id: 7, position: pos(10, 64, 0) } } },
+      entities: {},
+      health: 20,
+      food: 20,
+      entity: { position: pos(0, 64, 0) },
+      spawnPoint: pos(0, 64, 0),
+      chats: [],
+      chat(m) { this.chats.push(String(m)) },
+      attackCalls: 0,
+      attack() { this.attackCalls++ },
+      lookAt() {},
+      _moving: false,
+      _items: [],
+      inventory: null,
+      equip: async () => {},
+      pathfinder: {
+        goal: null,
+        setGoal(g) { this.goal = g },
+        stop() {},
+        isMoving: () => bot._moving,
+        setMovements() {},
+      },
+      setControlState() {},
+      clearControlStates() {},
+    }
+    bot.inventory = { items: () => bot._items }
+    return bot
+  }
+
+  function stubGreeter() {
+    return {
+      calls: [],
+      cancelled: false,
+      greetOnArrival(...a) { this.calls.push(a); return true },
+      cancel() { this.cancelled = true },
+    }
+  }
+
+  function mockBrain(decision) {
+    return { async decide() { return decision } }
+  }
+
+  it('follow arrival far -> near sneaks twice through the real greeter', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight, no gesture
+    await flush()
+    assert.deepEqual(log, [])
+    bot.players.P.entity.position = pos(7, 64, 0)
+    await ticker.tick() // gradual: still far
+    await flush()
+    assert.deepEqual(log, [])
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // arrival standing: greet
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+    await ticker.tick() // still near: no new edge
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('a follow stop at 3.4 blocks still counts as arrival', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight
+    await flush()
+    bot.players.P.entity.position = pos(3.4, 64, 0) // where follow really stops
+    await ticker.tick()
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('the real stub brain greets on arrival (it says roam up close, not follow)', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: stubBrain, tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10 still: follow, arming sight
+    await flush()
+    assert.deepEqual(log, [])
+    bot.players.P.entity.position = pos(3, 64, 0)
+    await ticker.tick() // P at 3 still: stub says roam — still a greeting
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('the wiring passes the approached player, edge and standing through', async () => {
+    const bot = workBot()
+    bot._moving = true // body walking: standing=false rides along
+    const greeter = stubGreeter()
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // arming sighting rides along too (the module gates)
+    assert.equal(greeter.calls.length, 1)
+    assert.deepEqual(greeter.calls[0].slice(1), ['P', 10, false])
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick()
+    assert.equal(greeter.calls.length, 2)
+    assert.deepEqual(greeter.calls[1].slice(1), ['P', 2, false])
+  })
+
+  it('bring return measures the recipient and greets on arrival', async () => {
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: '', greeter,
+    })
+    bot.players.P.entity.position = pos(30, 64, 0)
+    bot.registry = { blocksByName: {}, itemsByName: { bread: { id: 41 } } }
+    bot.toss = async () => {}
+    bot._tickerCtx.bring = { kind: 'block', name: 'x', want: 1, by: 'P', drop: 'bread', have: 1, phase: 'return' }
+    await ticker.tick() // far sighting of the recipient
+    await flush()
+    assert.deepEqual(log, [])
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // back at the recipient standing: greet
+    await flush()
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('fight never greets; destroy and death cancel', async () => {
+    const bot = workBot()
+    const greeter = stubGreeter()
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(5, 64, 0), height: 1.95 } }
+    await ticker.tick()
+    assert.equal(greeter.calls.length, 0)
+    ticker.destroy()
+    assert.equal(greeter.cancelled, true)
+    greeter.cancelled = false
+    handleDeath(bot, ticker)
+    assert.equal(greeter.cancelled, true)
+  })
+
+  it('no greeting while the recover menu owns the body', async () => {
+    // Deleting the ctx.stuck/ctx.recovery guard in greetCheck fails this
+    // test (the arrival crouch fires mid-episode and fights the primitive).
+    const c = clock()
+    const log = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: c.now, sleep: async () => {} })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight, no gesture
+    await flush()
+    assert.deepEqual(log, [])
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' }
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // episode starts; arrival must stay silent
+    await flush()
+    assert.ok(bot._tickerCtx.recovery, 'episode running')
+    // The entry cancel may log a redundant sneak release; the gesture
+    // itself (sneak held true) must never start mid-episode.
+    assert.deepEqual(log.filter((v) => v === true), [], 'no sneak while stuck')
+  })
+
+  it('episode entry cancels a greeting in flight', async () => {
+    // Without the cancel in the stuck branch the sneak stays held until
+    // the crouch sleeps resolve. Deleting it fails this test (no false).
+    const log = []
+    const resolvers = []
+    const bot = workBot()
+    bot.setControlState = (k, v) => { if (k === 'sneak') log.push(v) }
+    const greeter = createGreeter({ now: () => 0, sleep: () => new Promise((r) => resolvers.push(r)) })
+    const ticker = createTicker({
+      bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }),
+      tickMs: 10, idleTickMs: 10, followName: 'P', greeter,
+    })
+    await ticker.tick() // P at 10: arming sight
+    await flush()
+    bot.players.P.entity.position = pos(2, 64, 0)
+    await ticker.tick() // greet starts, parked on the first sleep
+    await flush()
+    assert.equal(log[0], true)
+    assert.ok(!log.includes(false), 'crouch still holding')
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' }
+    await ticker.tick() // entry cancels the gesture
+    await flush()
+    assert.ok(log.includes(false), 'sneak released on entry')
+    assert.equal(log.filter((v) => v === true).length, 1, 'never re-held')
+    resolvers.splice(0).forEach((r) => r()) // stale sleeps resolve late
+    await flush()
+    assert.equal(log.filter((v) => v === true).length, 1)
+  })
+})

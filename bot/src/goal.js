@@ -13,6 +13,10 @@
 // fallback and disagreement reference, exactly like hybridBrain.
 
 const { countItems } = require('./perception')
+const Vec3 = require('vec3')
+const buildMod = require('./behaviours/build')
+const BLUEPRINT = buildMod.BLUEPRINT
+const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 
 // House budget (epic rw4): 22 wall planks + 16 roof + door (6) + table (4);
@@ -20,8 +24,10 @@ const metrics = require('./metrics')
 const NEED_LOGS = 14
 const NEED_PLANKS = 48
 
-// Step menu: feasible(facts) means the step can make progress NOW (not just
-// ever). Registration (BEHAVIOURS[name]) is checked separately in decide().
+// Step menu: feasible(facts, bot, ctx) means the step can make progress NOW
+// (not just ever). Most steps read facts only; build also scans the home
+// site through the bot. Registration (BEHAVIOURS[name]) is checked
+// separately in decide().
 // chat() is the one line the bot says on taking the step (owner rule: the
 // bot always announces what it does).
 const MENU = {
@@ -45,7 +51,50 @@ const MENU = {
     verb: 'crafting',
   },
   build: {
-    feasible: (facts) => facts.planks >= NEED_PLANKS && facts.table > 0 && facts.door > 0 && facts.home === 'site',
+    // Batch gate (bead .4): build proceeds in batches — start (or resume)
+    // with a batch of up to 16 planks on hand, then back to gather/craft.
+    // A finished door/table needs its item, not loose planks, so a zero
+    // plank remainder passes with any plank count. Skipped (given-up) cells
+    // count as done, the same as in the build behaviour.
+    feasible: (facts, bot, ctx) => {
+      const home = ctx && ctx.home
+      if (!home && !(bot && bot.spawnPoint)) return false
+      // No scannable origin (no home yet, or a home without site): nothing
+      // is verifiable, so the whole wall+roof count counts.
+      if (!home || !home.site) return facts.planks >= Math.min(PLANK_COUNT, 16)
+      let planks = 0
+      let other = 0
+      try {
+        const skip = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
+        for (let i = 0; i < BLUEPRINT.length; i++) {
+          if (skip.has(i)) continue
+          if (!buildMod.cellDone(bot, home, BLUEPRINT[i])) {
+            if (BLUEPRINT[i].kind === 'planks') planks++
+            else other++
+          }
+        }
+      } catch (_) {
+        return false
+      }
+      if (planks + other <= 0) return false
+      // No livelock: a missing door/table item for an unfinished cell means
+      // build cannot advance — yield so gather/craft (or a new site) run.
+      // Skipped cells are given up and do not gate.
+      try {
+        const skip2 = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
+        for (let i = 0; i < BLUEPRINT.length; i++) {
+          if (skip2.has(i) || BLUEPRINT[i].kind === 'planks') continue
+          if (!buildMod.cellDone(bot, home, BLUEPRINT[i])) {
+            if (BLUEPRINT[i].kind === 'table' && !(facts.table > 0)) return false
+            if (BLUEPRINT[i].kind === 'door' && !(facts.door > 0)) return false
+          }
+        }
+      } catch (_) {
+        return false
+      }
+      if (planks > 0) return facts.planks >= Math.min(planks, 16)
+      return true
+    },
     chat: () => 'on my own: building the house',
     verb: 'building the house',
   },
@@ -75,6 +124,119 @@ const MENU = {
 // Priority order (epic rw4): night steps first, then craft, build, gather,
 // rest last. goalFsm is pure priority over the feasible names it is given.
 const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'rest']
+
+// Home site shape (bead .4): site is the SW-corner origin at ground level,
+// interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
+// workbench cell outside the east wall — null until the workbench is really
+// placed. rw4.3 treats ctx.home.table as a PLACED station (craft walks to it
+// and crafts the door at it), so claiming the coords early would deadlock
+// craft at an empty cell; build claims them the tick the table cell lands.
+function makeHome(ox, oy, oz) {
+  return {
+    site: { x: ox, y: oy, z: oz },
+    interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 2, y: oy + 1, z: oz + 2 } },
+    door: { x: ox + 1, y: oy, z: oz },
+    table: null,
+    built: false,
+  }
+}
+
+// Feet level of the ground column: first non-air block from topY down, plus
+// one. Null when the column never resolves (unloaded chunk).
+function groundY(bot, x, z, topY) {
+  for (let y = topY; y > topY - 32; y--) {
+    let b = null
+    try {
+      b = bot.blockAt(new Vec3(x, y, z))
+    } catch (_) {
+      return null
+    }
+    if (b && b.name && b.name !== 'air') return y + 1
+  }
+  return null
+}
+
+// 8 candidate origins around `around` at radius 6 (bead .4).
+const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
+
+// Pick a flat 4x4 site: all 16 columns resolve and lie within one block.
+// First fit wins; after 8 rejections the first candidate is taken as-is —
+// ponytail: let the house hang or half-bury rather than block the epic.
+function siteFor(bot, around) {
+  if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
+  const cx = Math.floor(around.x)
+  const cz = Math.floor(around.z)
+  const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
+  for (const [dx, dz] of SITE_DIRS) {
+    const ox = cx + dx
+    const oz = cz + dz
+    const ys = []
+    let ok = true
+    for (let ix = 0; ix < 4 && ok; ix++) {
+      for (let iz = 0; iz < 4 && ok; iz++) {
+        const gy = groundY(bot, ox + ix, oz + iz, cy + 8)
+        if (gy == null) { ok = false; break }
+        ys.push(gy)
+      }
+    }
+    if (!ok || ys.length !== 16) continue
+    const y0 = Math.min(...ys)
+    if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz)
+  }
+  const [fx, fz] = SITE_DIRS[0]
+  const fy = groundY(bot, cx + fx, cz + fz, cy + 8)
+  return makeHome(cx + fx, fy == null ? cy : fy, cz + fz)
+}
+
+// Adopt a house built by an earlier run: a door within 32 of spawn means
+// home. Origin = door − (1,0,0); findBlocks may return the UPPER half, so
+// step down when the block below is also a door. built is lax on purpose —
+// presence (non-air) counts; exact repair is the build step's job.
+function adoptHome(bot) {
+  try {
+    const spawn = bot && bot.spawnPoint
+    if (!spawn || typeof spawn.x !== 'number') return null
+    const found = bot.findBlocks({
+      matching: (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_door'),
+      maxDistance: 32,
+      count: 1,
+    })
+    if (!found || !found.length) return null
+    let dx = Math.floor(found[0].x)
+    let dy = Math.floor(found[0].y)
+    let dz = Math.floor(found[0].z)
+    try {
+      const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
+      if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
+    } catch (_) { /* keep as found */ }
+    const home = makeHome(dx - 1, dy, dz)
+    // Claim the table coords only when the workbench block is really there
+    // (same placed-station contract as a fresh site).
+    try {
+      const t = BLUEPRINT[0]
+      const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
+      if (tb && tb.name === 'crafting_table') {
+        home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
+      }
+    } catch (_) { /* unverifiable: leave unclaimed */ }
+    let allPresent = true
+    for (const cell of BLUEPRINT) {
+      let name = null
+      try {
+        const b = bot.blockAt(new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz))
+        name = b && b.name
+      } catch (_) {
+        name = null
+      }
+      if (!name || name === 'air') { allPresent = false; break }
+    }
+    home.built = allPresent
+    try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
+    return home
+  } catch (_) {
+    return null
+  }
+}
 
 function goalFacts(bot, ctx) {
   let timeOfDay = NaN
@@ -244,7 +406,7 @@ async function decide(bot, ctx) {
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
-        return MENU[n].feasible(facts) && registered(n)
+        return MENU[n].feasible(facts, bot, ctx) && registered(n)
       } catch (_) {
         return false
       }
@@ -273,4 +435,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket }
+module.exports = { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
