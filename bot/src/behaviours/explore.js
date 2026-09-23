@@ -2,7 +2,7 @@
 
 // Explore primitive (idkcraft-atl.1): hands only, no decisions — atl.2
 // picks WHEN through the menu. Picks a target on the visited boundary
-// (spiral from home/spawn, rings to ~512), walks it with GoalXZ, scans on
+// (spiral from home/spawn, rings 16..512 capped at MAX_RADIUS (256) by default),
 // arrival into the resource memory. Reports via ctx.stepStatus like every
 // goal step (done on arrival, failed:<reason> otherwise). A stall inside
 // ARRIVE_NEAR also arrives: exact spiral XZ cells often sit in a trunk or
@@ -27,6 +27,7 @@ const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, f
 const RAY_COUNT = 8 // compass rays per ring, north first
 const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
 const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
+const MAX_RADIUS = 256 // spiral reach cap, feet from anchor (dxl: no players)
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = 0.5
 const CHAT_MS = 30000 // departure chat at most this often
@@ -58,9 +59,11 @@ function anchorOf(bot, ctx) {
 }
 
 // First spiral cell whose chunk is still unvisited (rings ascending, north
-// first): the boundary of the visited. Null when explored out to 512.
-function pickTarget(visited, anchor) {
+// first): the boundary of the visited. Null when explored out to maxRadius.
+function pickTarget(visited, anchor, maxRadius) {
+  const cap = typeof maxRadius === 'number' ? maxRadius : MAX_RADIUS
   for (const r of RINGS) {
+    if (r > cap) break
     for (let a = 0; a < RAY_COUNT; a++) {
       const x = Math.round(anchor.x + r * Math.sin(a * Math.PI / 4))
       const z = Math.round(anchor.z - r * Math.cos(a * Math.PI / 4))
@@ -114,10 +117,11 @@ function explore(bot, ctx, target, state) {
   e.visited.add(chunkOf(bp.x, bp.z))
 
   if (!e.target) {
-    const t = pickTarget(e.visited, anchor)
+    if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
+    const t = pickTarget(e.visited, anchor, e.maxRadius)
     if (!t) {
       ctx.stepStatus = 'done' // nowhere new within 512: the outward job is over
-      console.log('explore done: all chunks within 512 blocks visited')
+      console.log('explore done: all chunks within ' + e.maxRadius + ' blocks visited')
       return
     }
     e.target = t
@@ -174,3 +178,4 @@ function explore(bot, ctx, target, state) {
 }
 
 module.exports = explore
+module.exports.MAX_RADIUS = MAX_RADIUS

@@ -58,6 +58,41 @@ describe('explore target spiral', () => {
     assert.ok(bot.chats.some((m) => m === 'exploring north, 16 blocks from home'))
   })
 
+  it('exposes MAX_RADIUS for dxl (default 256)', () => {
+    assert.equal(explore.MAX_RADIUS, 256)
+  })
+
+  it('default cap ends the spiral at 256, ring 320 never picked', () => {
+    const bot = mockBot()
+    const ctx = homeCtx()
+    ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+    for (const r of [16, 32, 64, 128, 192, 256]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(Math.floor(x / 16) + ',' + Math.floor(z / 16))
+      }
+    }
+    explore(bot, ctx, null, null)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.goals.length, 0)
+  })
+
+  it('maxRadius override re-opens outer rings', () => {
+    const bot = mockBot()
+    const ctx = homeCtx()
+    ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0, maxRadius: 512 }
+    for (const r of [16, 32, 64, 128, 192, 256]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(Math.floor(x / 16) + ',' + Math.floor(z / 16))
+      }
+    }
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -320 })
+  })
+
   it('ascends rings past visited chunks, never re-enters them', () => {
     const bot = mockBot()
     const ctx = homeCtx()
