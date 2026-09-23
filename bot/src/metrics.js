@@ -78,4 +78,32 @@ const bring = new client.Counter({
   help: 'Bring-me orders by outcome (done|refused|cancelled)',
   labelNames: ['outcome']
 })
-module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, setVitals, serve }
+const goalSteps = new client.Counter({
+  name: 'idkcraft_bot_goal_steps_total',
+  help: 'Goal step choices by step and choice source (laya|jev|only-option|goal-fsm|fsm-fallback)',
+  labelNames: ['step', 'source']
+})
+const goalStep = new client.Gauge({
+  name: 'idkcraft_bot_goal_step',
+  help: 'Current goal step timeline (1 on the running step, 0 elsewhere)',
+  labelNames: ['step']
+})
+const goalDisagreements = new client.Counter({
+  name: 'idkcraft_bot_goal_disagreements_total',
+  help: 'Model step choice differs from the FSM reference',
+  labelNames: ['model', 'fsm']
+})
+const goalChoiceDuration = new client.Histogram({
+  name: 'idkcraft_bot_goal_choice_duration_seconds',
+  help: 'Step-choice latency (model calls only; brain_request_duration_seconds stays the overall per-source latency)',
+  labelNames: ['source'],
+  buckets: [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5]
+})
+// Escalation ladder (owner direction): every fallback from a consulted model
+// to the FSM reserve is an escalation event. ef3 adds higher levels.
+const escalation = new client.Counter({
+  name: 'idkcraft_bot_escalation_total',
+  help: 'Escalation events by level transition and reason',
+  labelNames: ['from', 'to', 'reason']
+})
+module.exports = { client, online, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, setVitals, serve }

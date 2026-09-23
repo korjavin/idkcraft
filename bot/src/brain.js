@@ -107,20 +107,36 @@ function numericStateToText(state) {
     `hostile_reachable=${state.hostile_reachable === false ? 'false' : 'true'}`
 }
 
+// Situation error streaks: the repeat signal for the escalation ladder
+// (owner direction, ef3 owns the policy). ask() counts consecutive failures
+// per situation key and resets on success; bounded so a chatty caller cannot
+// grow it. chooseStep passes the goal facts text as the situation.
+const askErrors = new Map()
+const ASK_ERROR_KEYS_MAX = 200
+function streakFail(key) {
+  if (!key) return 0
+  const n = (askErrors.get(key) || 0) + 1
+  askErrors.set(key, n)
+  if (askErrors.size > ASK_ERROR_KEYS_MAX) askErrors.delete(askErrors.keys().next().value)
+  return n
+}
+function askErrorStreak(situation) {
+  return (situation && askErrors.get(situation)) || 0
+}
+
 function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   const doFetch = fetchFn || fetch
   const source = sourceForUrl(url)
-  return {
-    name: source,
-    // reason is the hard-case name hybridBrain passes (isHard's answer, the
-    // one fact that distinguishes the hard states); it rides the wire as a
-    // leading hard=<reason> word. Sprint is NOT asked: the model answered
-    // sprint 0.91 for everything, and the FSM rule (d > 8) already gets this
-    // body detail right — the decision below returns the FSM's sprint.
-    async decide(state, reason = '') {
-      // ponytail: one call per tick, no batching/caching — upgrade path is
-      // batching states if JEV cost ever matters ($0.042/M tokens; ~200
-      // tokens/tick -> pennies/day).
+  // Shared ask(): one question to the smart model, label out or throw.
+  // decide() below is one ask() with the combat question; goal.js step
+  // choice calls ask() directly with a per-menu question. ask() never picks
+  // the model (laya vs jev is the URL); it only adapts the menu shape:
+  // laya answers reliably only with <=2 options (iwb stand), so a wider
+  // menu becomes a yes/no chain over the options in order, first yes wins.
+  async function ask({ state, instructions, criteria, labels = null, situation = '' }) {
+    const keys = Object.keys(criteria || {})
+    const valid = Array.isArray(labels) && labels.length ? labels : keys
+    const post = async (bodyState, bodyCriteria, bodyLabels) => {
       const endTimer = metrics.brainDuration.startTimer({ source })
       try {
         const headers = { 'Content-Type': 'application/json' }
@@ -131,33 +147,81 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
           headers,
           body: JSON.stringify({
             model: JEV_MODEL,
-            state: `hard=${reason} ${stateToText(state)}`,
-            questions: {
-              action: {
-                type: 'choice',
-                // iwb: LAYA matches whole-criterion similarity, so each key gets
-                // one short clause on the decisive fact (health). Measured on
-                // the 13 prod hard-states: 13/13 criteria-match, 10/13 strict
-                // FSM (the 3 idle-want states need an idle key; a 3-key probe
-                // scored worse at 8/20). Every longer variant regressed, so
-                // keep these strings minimal. Known fringe gaps (unreachable
-                // or far hostile at ok health): stub says follow, this says
-                // fight — see the iwb report.
-                instructions: 'Choose fight or follow. Health decides: low health always means follow.',
-                criteria: {
-                  fight: 'health is ok: attack the mob.',
-                  follow: 'health is low: walk to the player and stay close.'
-                }
-              }
-            }
+            state: bodyState,
+            questions: { action: { type: 'choice', instructions, criteria: bodyCriteria } }
           })
         })
         if (!res.ok) throw new Error(`jev http ${res.status}`)
         const data = await res.json()
-        let action = parseAction(data && data.answers && data.answers.action)
-        if (!action) throw new Error('jev missing action answer')
+        const choice = data && data.answers && data.answers.action && data.answers.action.choice
+        if (typeof choice !== 'string' || !bodyLabels.includes(choice)) throw new Error('jev missing action answer')
         endTimer()
         metrics.brainRequests.inc({ source, outcome: 'ok' })
+        return choice
+      } catch (err) {
+        // Same outcome vocabulary decide() always used: timeout | http |
+        // invalid | error. A refused chain (all-no) is unusable, hence invalid.
+        endTimer()
+        const msg = String(err && err.message ? err.message : err)
+        const outcome = err && err.name === 'TimeoutError' ? 'timeout'
+          : msg.startsWith('jev http') ? 'http'
+          : (msg.startsWith('jev missing') || msg.includes('chain exhausted')) ? 'invalid'
+          : 'error'
+        metrics.brainRequests.inc({ source, outcome })
+        throw err
+      }
+    }
+    try {
+      if (keys.length === 0) throw new Error('jev missing action answer')
+      // A single option needs no model (and laya 500s on 1-key questions):
+      // answer it directly, like chooseStep's only-option.
+      if (keys.length === 1) {
+        if (situation) askErrors.delete(situation)
+        return keys[0]
+      }
+      if (source !== 'jev' && keys.length > 2) {
+        for (const key of keys) {
+          const answer = await post(`${state} candidate=${key}`, { yes: criteria[key], no: 'another step fits better' }, ['yes', 'no'])
+          if (answer === 'yes') {
+            if (situation) askErrors.delete(situation)
+            return key
+          }
+        }
+        throw new Error('ask chain exhausted (all-no)')
+      }
+      const choice = await post(state, criteria, valid)
+      if (situation) askErrors.delete(situation)
+      return choice
+    } catch (err) {
+      streakFail(situation)
+      throw err
+    }
+  }
+  const self = {
+    name: source,
+    source,
+    ask,
+    // reason is the hard-case name hybridBrain passes (isHard's answer, the
+    // one fact that distinguishes the hard states); it rides the wire as a
+    // leading hard=<reason> word. Sprint is NOT asked: the model answered
+    // sprint 0.91 for everything, and the FSM rule (d > 8) already gets this
+    // body detail right — the decision below returns the FSM's sprint.
+    async decide(state, reason = '') {
+      // ponytail: one call per tick, no batching/caching — upgrade path is
+      // batching states if JEV cost ever matters ($0.042/M tokens; ~200
+      // tokens/tick -> pennies/day).
+      try {
+        const choice = await self.ask({
+          state: `hard=${reason} ${stateToText(state)}`,
+          instructions: 'Choose fight or follow. Health decides: low health always means follow.',
+          criteria: {
+            fight: 'health is ok: attack the mob.',
+            follow: 'health is low: walk to the player and stay close.'
+          },
+          labels: ['fight', 'follow', 'roam', 'idle']
+        })
+        const action = parseAction({ choice })
+        if (!action) throw new Error('jev missing action answer')
         const fsm = stubBrain.decide(state)
         if (fsm.action !== action) {
           metrics.disagreements.inc({ model: action, stub: fsm.action })
@@ -167,13 +231,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
       } catch (err) {
         // 429/529 back off by falling through to the stub; the next tick
         // retries naturally. Never crash the bot because of the brain.
-        endTimer()
-        const msg = String(err && err.message ? err.message : err)
-        const outcome = err && err.name === 'TimeoutError' ? 'timeout'
-          : msg.startsWith('jev http') ? 'http'
-          : msg.startsWith('jev missing') ? 'invalid'
-          : 'error'
-        metrics.brainRequests.inc({ source, outcome })
+        // (ask() already counted the outcome; counting here too would double it.)
         console.error(`brain jev error, stub fallback: ${err && err.message ? err.message : err}`)
         const fallback = stubBrain.decide(state)
         fallback.source = 'stub-fallback'
@@ -181,6 +239,7 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
       }
     }
   }
+  return self
 }
 
 // Hard states are judgement calls where the fixed rule is known to conflict or
@@ -208,6 +267,8 @@ function isHard(state) {
 function hybridBrain(remote) {
   return {
     name: 'hybrid',
+    source: remote && remote.name,
+    ...((remote && typeof remote.ask === 'function') ? { ask: (q) => remote.ask(q) } : {}),
     async decide(state) {
       const fsm = stubBrain.decide(state)
       const reason = isHard(state)
@@ -239,4 +300,4 @@ function makeBrain(env) {
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak }

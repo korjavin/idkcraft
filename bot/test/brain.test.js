@@ -611,3 +611,82 @@ describe('brain metrics', () => {
     assert.match(text, /idkcraft_bot_brain_request_duration_seconds_count\{source="laya"\} [2-9]/)
   })
 })
+
+describe('brain ask', () => {
+  const LAYA = 'http://laya:8000/v1/systemone'
+  const choiceBody = (choice) => ({ answers: { action: { choice } } })
+  const okFetch = (choice, seen) => async (url, opts) => {
+    seen.push(JSON.parse(opts.body))
+    return { ok: true, json: async () => choiceBody(choice) }
+  }
+
+  it('ask returns the label with a mock fetch', async () => {
+    const seen = []
+    const brain = jevBrain('k', okFetch('gather', seen), 1000, LAYA)
+    const label = await brain.ask({
+      state: 'time=day logs=few',
+      instructions: 'Pick',
+      criteria: { gather: 'chop', rest: 'sit' },
+    })
+    assert.equal(label, 'gather')
+    assert.equal(seen.length, 1)
+    assert.deepEqual(Object.keys(seen[0].questions.action.criteria), ['gather', 'rest'])
+  })
+
+  it('ask on laya chains yes/no over 3+ options, first yes wins', async () => {
+    const seen = []
+    const brain = jevBrain('k', async (url, opts) => {
+      const body = JSON.parse(opts.body)
+      seen.push(body)
+      const keys = Object.keys(body.questions.action.criteria)
+      assert.deepEqual(keys, ['yes', 'no'])
+      // First candidate (craft): no. Second (gather): yes.
+      const first = seen.length === 1
+      return { ok: true, json: async () => choiceBody(first ? 'no' : 'yes') }
+    }, 1000, LAYA)
+    const label = await brain.ask({
+      state: 'time=day logs=enough',
+      instructions: 'Pick',
+      criteria: { craft: 'make', gather: 'chop', rest: 'sit' },
+    })
+    assert.equal(label, 'gather')
+    assert.equal(seen.length, 2)
+    assert.ok(seen[0].state.includes('candidate=craft'))
+    assert.ok(seen[1].state.includes('candidate=gather'))
+  })
+
+  it('ask chain all-no throws', async () => {
+    const brain = jevBrain('k', okFetch('no', []), 1000, LAYA)
+    await assert.rejects(
+      brain.ask({
+        state: 'time=day logs=enough',
+        instructions: 'Pick',
+        criteria: { craft: 'make', gather: 'chop', rest: 'sit' },
+      }),
+      /chain exhausted/
+    )
+  })
+
+  it('ask on jev sends the whole menu in one question', async () => {
+    const seen = []
+    const brain = jevBrain('k', okFetch('gather', seen), 1000, 'https://api.typesafe.ai/v1/systemone')
+    const label = await brain.ask({
+      state: 'time=day',
+      instructions: 'Pick',
+      criteria: { craft: 'make', gather: 'chop', rest: 'sit' },
+    })
+    assert.equal(label, 'gather')
+    assert.equal(seen.length, 1, 'no chain for jev')
+  })
+
+  it('ask tracks consecutive errors per situation', async () => {
+    const { askErrorStreak } = require('../src/brain')
+    const down = async () => ({ ok: false, status: 503 })
+    const brain = jevBrain('k', down, 1000, LAYA)
+    const q = { state: 's', instructions: 'Pick', criteria: { a: 'x', b: 'y' }, situation: 'stand-ask-streak-probe' }
+    assert.equal(askErrorStreak('stand-ask-streak-probe'), 0)
+    await assert.rejects(brain.ask(q), /jev http 503/)
+    await assert.rejects(brain.ask(q), /jev http 503/)
+    assert.equal(askErrorStreak('stand-ask-streak-probe'), 2)
+  })
+})

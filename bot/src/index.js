@@ -132,7 +132,9 @@ function eatReflex(bot, ctx, state) {
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
+  // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
+  // decide closure below, so 'brain jev' steers step choice too.
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -585,7 +587,13 @@ function fleeReflex(bot, ctx) {
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
       if (ctx.work && decision.action !== 'fight') {
-        decision = goal.decide(bot, ctx)
+        decision = await goal.decide(bot, ctx)
+        if (ctx.paused || !ctx.work) {
+          // 'stop' (or a mode change) landed during the goal await: same
+          // stale-decision guard as after the brain await above.
+          stopOnce()
+          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
         applyDecision(decision, target, state)
         return { decision, calledBrain }
       }
@@ -659,7 +667,7 @@ function fleeReflex(bot, ctx) {
     getLead: () => ctx.lead,
     getFollowName: () => followName,
     getBrainEngine: () => brainEngine,
-    setBrain: (b, label) => { if (b) { brain = b; if (label) brainEngine = label } },
+    setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     setBring: ({ name, want, by }) => {

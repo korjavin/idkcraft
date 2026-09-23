@@ -135,6 +135,24 @@ describe("brain switch (idkcraft-d75)", () => {
     assert.equal(ticker.getBrainEngine(), 'off')
   })
 
+  it("setBrain refreshes ctx.brain: after 'brain jev' chooseStep asks jev", async () => {
+    // rw4.6+d75 link: setBrain updated only the decide closure, so goal
+    // chooseStep (ctx.brain) kept asking the old brain. Deleting the
+    // ctx.brain refresh fails this test (source falls back to goal-fsm).
+    const { chooseStep } = require('../src/goal')
+    // jev must answer a valid step name for source=jev — the suite-wide
+    // canned 'follow' is a combat answer, not a step, so re-can here.
+    globalThis.fetch = cannedFetch('gather')
+    const bot = hardBot()
+    const ticker = followedTicker(bot)
+    handleChat(bot, ticker, 'Owner', 'brain jev')
+    assert.equal(ticker.getBrainEngine(), 'jev')
+    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no', health: 20, food: 20 }
+    const r = await chooseStep(bot._tickerCtx.brain, facts, ['gather', 'rest'])
+    assert.equal(r.step, 'gather')
+    assert.equal(r.source, 'jev')
+  })
+
   it("a stranger cannot switch the brain", async () => {
     const bot = hardBot()
     bot.players.Stranger = { username: 'Stranger', entity: { id: 9, position: pos(12, 64, 0) } }
