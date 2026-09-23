@@ -19,6 +19,7 @@ const COMMANDS = [
   { names: ['build here'], usage: 'build here', what: 'moves the house site next to you and builds there', example: 'build here' },
   { names: ['bring me'], usage: 'bring me <block> [count]', what: 'fetches blocks alone and drops them at your feet', example: 'bring me coal 5' },
   { names: ['bring me food', 'bring me meat', 'bring me something to eat'], usage: 'bring me food [count]', what: 'brings food from inventory or hunts animals', example: 'bring me food 3' },
+  { names: ['share'], usage: 'share', what: 'hands over everything carried except tools, weapons, armour and 32 support blocks', example: 'share' },
   { names: ['help'], usage: 'help [command]', what: 'lists commands, or explains one in detail', example: 'help find me' },
   { names: ['brain'], usage: 'brain [laya|jev|off]', what: 'switches the remote brain, or reports it', example: 'brain laya' },
 ]

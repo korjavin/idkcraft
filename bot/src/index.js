@@ -878,6 +878,29 @@ function fleeReflex(bot, ctx) {
     setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
+    // Share (idkcraft-ah9): hand over everything carried except tools,
+    // weapons, armour and the 32-block pillar reserve. Same body slot as
+    // bring (priority, stop, metrics) with kind 'share'; the behaviour
+    // walks to the speaker and tosses, like the bring return.
+    setShare: ({ by }) => {
+      clearPendingSearch(ctx)
+      let items = []
+      try {
+        items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+      } catch (_) { items = [] }
+      const plan = bringMod.sharePlan(items)
+      if (plan.length === 0) return 'nothing to share'
+      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
+      clearStuck()
+      ctx.bring = {
+        kind: 'share', name: 'share', by, phase: 'return',
+        items: plan, saidWaiting: false, announced: true,
+      }
+      ctx.paused = false
+      return null
+    },
     setBring: ({ name, want, by }) => {
       clearPendingSearch(ctx)
       if (bringMod.isFoodRequest(name)) {
@@ -1302,6 +1325,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
+    } else if (msg === 'share') {
+      if (ticker && typeof ticker.setShare === 'function') {
+        const r = ticker.setShare({ by: playerName })
+        if (r) bot.chat(r)
+      }
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
       const m = msg.match(/^bring me\s+(something to eat|\S+)(?:\s+(\d+))?$/)
       if (!m) {
