@@ -53,6 +53,21 @@ describe("help command (idkcraft-kae)", () => {
     assert.deepEqual(bot.chats, ['try: find me iron'])
   })
 
+  it("'help 2' pages through handleChat; out-of-range names the list", () => {
+    const keep = COMMANDS.length
+    try {
+      for (let i = 0; i < 30; i++) COMMANDS.push({ names: [`cmd${i}name`], usage: `cmd${i}name`, what: 'filler', example: `cmd${i}name` })
+      const paged = chatBot()
+      handleChat(paged, null, 'Steve', 'help 2')
+      assert.deepEqual(paged.chats, [helpReply(2)])
+    } finally {
+      COMMANDS.length = keep
+    }
+    const missing = chatBot()
+    handleChat(missing, null, 'Steve', 'help 99')
+    assert.deepEqual(missing.chats, ['no help page 99 — say help for the list'])
+  })
+
   it('unrelated chatter stays silent', () => {
     const bot = chatBot()
     handleChat(bot, null, 'Steve', 'hello bot')
