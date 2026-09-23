@@ -485,8 +485,8 @@ describe('isHard', () => {
   it('hostile-vs-far-player for the prod H3 state', () => {
     assert.equal(isHard({ hostile_distance: 0.7, distance_to_player: 26.8, bot_health: 15.8 }), 'hostile-vs-far-player')
   })
-  it('unreachable-hostile for the H4 latch state', () => {
-    assert.equal(isHard({ hostile_reachable: false, hostile_distance: 4, distance_to_player: 10 }), 'unreachable-hostile')
+  it('unreachable latch with player near is easy (stub follows, model not asked)', () => {
+    assert.equal(isHard({ hostile_reachable: false, hostile_distance: 4, distance_to_player: 5, bot_health: 20 }), null)
   })
   it('null for every existing easy stub case', () => {
     const easies = [

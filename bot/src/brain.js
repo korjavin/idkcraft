@@ -191,14 +191,15 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
 // the route log stays comparable over time. No margin bands: the model answers
 // a constant today, bands would only inject noise at every boundary crossing.
 // H1 low-health-hostile: hostile fact and health < 6 (fight vs follow/survive).
-// H4 unreachable-hostile: hostile_reachable === false (re-probe vs shadow).
 // H2 crowd: nearby_hostiles >= 3 (FSM roams/fights into a crowd).
 // H3 hostile-vs-far-player: hostile fact and distance_to_player > 8 (chase vs run).
+// No unreachable case (was H4): fight already gave up pursuit
+// (fightGivenUpId), so fight is infeasible and the choice is single —
+// the stub follows and the model is never asked.
 function isHard(state) {
   if (!state || typeof state !== 'object') return null
   const hostileFact = typeof state.hostile_distance === 'number' || !!state.hostile_near_player
   if (hostileFact && state.bot_health < 6) return 'low-health-hostile'
-  if (state.hostile_reachable === false) return 'unreachable-hostile'
   if (state.nearby_hostiles >= 3) return 'crowd'
   if (hostileFact && state.distance_to_player > 8) return 'hostile-vs-far-player'
   return null
