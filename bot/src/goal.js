@@ -33,15 +33,25 @@ const MENU = {
     chat: () => 'on my own: heading home',
   },
   craft: {
-    feasible: (facts) => facts.logs > 0 || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0),
+    // Batch gate: a full NEED_LOGS load crafts at once. Starting on the first
+    // picked-up log would preempt gather with a chat line per log.
+    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0) || (facts.planks >= 6 && facts.door === 0),
     chat: () => 'on my own: crafting planks and tools',
   },
   build: {
-    feasible: (facts) => facts.planks >= NEED_PLANKS && facts.table > 0 && facts.door > 0 && (facts.home === 'site' || facts.home === 'built'),
+    feasible: (facts) => facts.planks >= NEED_PLANKS && facts.table > 0 && facts.door > 0 && facts.home === 'site',
     chat: () => 'on my own: building the house',
   },
   gather: {
-    feasible: () => true,
+    // Only while material is still missing: plank-equivalent on hand vs the
+    // house budget (table 4 + door 6 + NEED_PLANKS planks), and never once
+    // the house is built — otherwise the bot farms forever and rest is
+    // unreachable after the job is done.
+    feasible: (facts) => {
+      if (facts.home === 'built') return false
+      const missing = (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6) + Math.max(0, NEED_PLANKS - facts.planks)
+      return facts.logs * 4 < missing
+    },
     chat: () => 'on my own: gathering logs',
   },
   rest: {

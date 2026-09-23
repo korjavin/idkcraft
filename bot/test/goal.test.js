@@ -95,6 +95,30 @@ describe('goalFacts', () => {
   })
 })
 
+describe('MENU feasibility gates', () => {
+  const F = (name, facts) => MENU[name].feasible(facts)
+  const base = { time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
+  it('gather runs while material is missing, not once built', () => {
+    assert.equal(F('gather', base), true) // empty hands: gather
+    assert.equal(F('gather', { ...base, logs: 5 }), true) // mid-load: keep gathering
+    assert.equal(F('gather', { ...base, logs: 2, planks: 46, table: 1, door: 1 }), false) // 8 >= 2 missing: enough
+    assert.equal(F('gather', { ...base, home: 'built' }), false) // job done: rest becomes reachable
+  })
+  it('craft starts on a full load, not on the first log', () => {
+    assert.equal(F('craft', base), false)
+    assert.equal(F('craft', { ...base, logs: 5 }), false) // no per-log preempt churn
+    assert.equal(F('craft', { ...base, logs: 14 }), true) // full batch
+    assert.equal(F('craft', { ...base, planks: 5 }), true) // leftovers finish table/door
+    assert.equal(F('craft', { ...base, planks: 56, table: 1, door: 1 }), false) // nothing left to craft
+  })
+  it('build needs budget, kit and a site — never a finished house', () => {
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'site' }), true)
+    assert.equal(F('build', { ...base, planks: 46, table: 1, door: 1, home: 'site' }), false)
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'built' }), false)
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'none' }), false)
+  })
+})
+
 describe('goalFsm priority', () => {
   const day = { time: 'day' }
   it('night inside a built home stays', () => {

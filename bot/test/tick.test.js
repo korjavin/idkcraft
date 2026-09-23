@@ -1312,6 +1312,52 @@ describe('nobody-online leave', () => {
     }
   })
 
+  it('runOnce works on first spawn only without BOT_FOLLOW', async () => {
+    const { runOnce } = require('../src/index')
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      // No follow target: first spawn enters work mode, so ticks log goal
+      // steps. Emptying the roster afterwards lets the bot quit itself
+      // (ticker destroyed: silent for the rest of the file).
+      const bot = connBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      let done = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: '',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => { done = true }, () => { done = true })
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(lines.some((l) => l.includes('goal step=rest')), 'work mode entered on first spawn')
+      bot.players = {}
+      await new Promise((r) => setTimeout(r, 300))
+      assert.equal(done, true) // quit itself, ticker destroyed
+      // Pinned follow target: no work mode — brain follow decides instead.
+      const lines2 = []
+      console.log = (l) => { lines2.push(String(l)) }
+      const bot2 = connBot()
+      bot2.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      let done2 = false
+      runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+        brain: mockBrain(), leaveAfterMs: 10, followName: 'Steve',
+        createBot: () => bot2, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => { done2 = true }, () => { done2 = true })
+      bot2.emit('spawn')
+      await new Promise((r) => setTimeout(r, 60))
+      assert.ok(!lines2.some((l) => l.includes('goal step=')), 'no work mode with BOT_FOLLOW')
+      assert.ok(lines2.some((l) => l.includes('action=follow')), 'brain follow decides instead')
+      bot2.players = {}
+      await new Promise((r) => setTimeout(r, 300))
+      assert.equal(done2, true)
+    } finally {
+      console.log = origLog
+    }
+  })
+
   it('runOnce wires spawn kit log and playerLeft lead clear', async () => {
     const { runOnce } = require('../src/index')
     const lines = []
