@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js test/build.test.js test/bedrock-names.test.js test/help.test.js test/swim.test.js test/uuid-sender.test.js test/bring.test.js test/brain-switch.test.js test/bring-food.test.js test/greet.test.js test/recover.test.js test/follow-wedge.test.js"  },
+    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js test/build.test.js test/bedrock-names.test.js test/help.test.js test/swim.test.js test/uuid-sender.test.js test/bring.test.js test/brain-switch.test.js test/bring-food.test.js test/share.test.js test/greet.test.js test/recover.test.js test/follow-wedge.test.js"  },
   "dependencies": {
     "mineflayer": "4.39.0",
     "minecraft-protocol": "1.68.0",
