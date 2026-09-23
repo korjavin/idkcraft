@@ -651,6 +651,13 @@ async function main() {
   }
 }
 
+// Targets declined as too deep, held per player for an explicit 'lead
+// anyway'. Overwritten by the next deep decline, cleared on use.
+const deepOffers = new Map()
+// A target more than this far below the requesting player is announced, not
+// led to: walking the player down to buried ore is how prod fell to death.
+const DEEP_WARN_DROP = 8
+
 function handleChat(bot, ticker, username, message) {
   if (username === bot.username) return
   const msg = message.toLowerCase().trim()
@@ -662,18 +669,35 @@ function handleChat(bot, ticker, username, message) {
       ticker.setFollow('')
       ticker.stop()
     }
+  } else if (msg === 'lead anyway') {
+    const offer = deepOffers.get(username)
+    deepOffers.delete(username)
+    if (offer) {
+      bot.chat(`leading you to ${offer.name}, ${offer.distance} blocks, follow me`)
+      if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: offer.name, pos: offer.pos, by: username, lastProgressAt: Date.now() })
+    } else {
+      bot.chat('no deep find on hold — ask me to find something first')
+    }
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
       const name = m[1]
-      const res = findNearest(bot, name)
+      const speaker = bot.players && bot.players[username] && bot.players[username].entity
+      const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null
+      const res = findNearest(bot, name, 48, speakerY)
       if (res === 'unknown') {
         bot.chat(`unknown block: ${name}`)
       } else if (!res) {
         bot.chat(`no ${name} within 48 blocks`)
       } else {
-        bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
-        if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username, lastProgressAt: Date.now() })
+        const down = speakerY != null ? Math.round(speakerY - res.position.y) : 0
+        if (down > DEEP_WARN_DROP) {
+          bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
+          deepOffers.set(username, { name: res.name, pos: res.position, distance: res.distance })
+        } else {
+          bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
+          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username, lastProgressAt: Date.now() })
+        }
       }
     }
   }

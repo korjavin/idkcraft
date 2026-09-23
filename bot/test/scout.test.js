@@ -304,6 +304,44 @@ describe('findNearest', () => {
   })
 })
 
+describe('findNearestBlock exposure ranking', () => {
+  const NAMES = { gold_ore: 14, deepslate_gold_ore: 15 }
+
+  it('exposed ore wins over nearer buried ore', () => {
+    const buried = pos(2, 60, 0)
+    const exposed = pos(8, 60, 0)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [buried, exposed],
+      names: { '2,60,0': 'gold_ore', '8,60,0': 'gold_ore', '9,60,0': 'air' },
+    })
+    const best = findNearestBlock(bot, 'gold')
+    assert.deepEqual([best.x, best.y, best.z], [8, 60, 0]) // farther but walkable
+  })
+
+  it('among exposed, closer in height to refY wins over nearer-but-taller', () => {
+    const level = pos(25, 64, 0) // dy 0, dist 25
+    const tall = pos(5, 40, 0) // dy 24, dist ~24.5 (nearer)
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [level, tall],
+      names: {
+        '25,64,0': 'gold_ore', '26,64,0': 'air',
+        '5,40,0': 'gold_ore', '6,40,0': 'air',
+      },
+    })
+    const best = findNearestBlock(bot, 'gold', 48, 64)
+    assert.deepEqual([best.x, best.y, best.z], [25, 64, 0])
+  })
+
+  it('unreadable neighbours count as buried, never throw', () => {
+    const bot = mockBot({ registry: NAMES, spots: [pos(2, 60, 0)], names: { '2,60,0': 'gold_ore' } })
+    bot.blockAt = () => { throw new Error('unloaded') }
+    const best = findNearestBlock(bot, 'gold')
+    assert.deepEqual([best.x, best.y, best.z], [2, 60, 0])
+  })
+})
+
 describe("chat command 'find me <block>'", () => {
   const REG = {
     coal_ore: 10,
@@ -373,6 +411,79 @@ describe("chat command 'find me <block>'", () => {
     handleChat(bot, null, 'Steve', 'find me')
     handleChat(bot, null, 'Steve', 'hello bot')
     assert.deepEqual(bot.lines, [])
+  })
+
+  const GREG = { ...REG, gold_ore: 14, deepslate_gold_ore: 15 }
+
+  it("warns instead of leading when the ore is deep below the player", () => {
+    const goldPos = pos(6, 35, 0)
+    const bot = mockBot({
+      registry: GREG,
+      spots: [goldPos],
+      names: { '6,35,0': 'gold_ore', '7,35,0': 'air' },
+    })
+    bot.players = { Steve: { entity: { position: pos(0, 66, 0) } } }
+    const leads = []
+    const ticker = { setLead(order) { leads.push(order) } }
+    handleChat(bot, ticker, 'Steve', 'find me gold')
+    assert.deepEqual(bot.lines, ['gold_ore is 31 blocks down, dig carefully'])
+    assert.deepEqual(leads, []) // no lead order on a deep target
+  })
+
+  it("leads a deep target only on 'lead anyway', once", () => {
+    const goldPos = pos(6, 35, 0)
+    const bot = mockBot({
+      registry: GREG,
+      spots: [goldPos],
+      names: { '6,35,0': 'gold_ore', '7,35,0': 'air' },
+    })
+    bot.players = { Steve: { entity: { position: pos(0, 66, 0) } } }
+    const leads = []
+    const ticker = { setLead(order) { leads.push(order) } }
+    handleChat(bot, ticker, 'Steve', 'find me gold')
+    assert.equal(leads.length, 0)
+    handleChat(bot, ticker, 'Steve', 'lead anyway')
+    assert.deepEqual(bot.lines[1], 'leading you to gold_ore, 30 blocks, follow me')
+    assert.equal(leads.length, 1)
+    assert.deepEqual([leads[0].pos.x, leads[0].pos.y, leads[0].pos.z], [6, 35, 0])
+    handleChat(bot, ticker, 'Steve', 'lead anyway')
+    assert.deepEqual(bot.lines[2], 'no deep find on hold — ask me to find something first')
+    assert.equal(leads.length, 1) // offer cleared on use
+  })
+
+  it('leads normally at exactly 8 blocks down (boundary)', () => {
+    const goldPos = pos(6, 56, 0)
+    const bot = mockBot({
+      registry: GREG,
+      spots: [goldPos],
+      names: { '6,56,0': 'gold_ore' },
+    })
+    bot.players = { Steve: { entity: { position: pos(0, 64, 0) } } }
+    handleChat(bot, null, 'Steve', 'find me gold')
+    assert.deepEqual(bot.lines, ['leading you to gold_ore, 10 blocks, follow me'])
+  })
+
+  it("'find me ore' finds the nearest ore of any kind", () => {
+    const oreReg = { diamond_ore: 179, iron_ore: 15, gold_ore: 14 }
+    const bot = mockBot({
+      registry: oreReg,
+      spots: [pos(10, 64, 0), pos(3, 64, 0)],
+      names: { '10,64,0': 'diamond_ore', '3,64,0': 'iron_ore' },
+    })
+    handleChat(bot, null, 'Steve', 'find me ore')
+    assert.deepEqual(bot.lines, ['leading you to iron_ore, 3 blocks, follow me'])
+  })
+
+  it("resolves simple plurals ('diamonds') but keeps typos unknown", () => {
+    const bot = mockBot({
+      registry: REG,
+      spots: [pos(4, 64, 0)],
+      names: { '4,64,0': 'diamond_ore' },
+    })
+    handleChat(bot, null, 'Steve', 'find me diamonds')
+    assert.deepEqual(bot.lines, ['leading you to diamond_ore, 4 blocks, follow me'])
+    handleChat(bot, null, 'Steve', 'find me diamand')
+    assert.deepEqual(bot.lines[1], 'unknown block: diamand')
   })
 
   it("handles 'follow me' command by setting follow target on ticker and chatting confirmation", () => {
