@@ -433,6 +433,26 @@ describe('findNearest', () => {
     }
   })
 
+  it('unrelated logoff keeps the pending search, asker logoff retires it (amb)', () => {
+    const { createTicker, handlePlayerLeft } = require('../src/index')
+    const bot = mockBot({
+      registry: REG,
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10, idleTickMs: 10,
+    })
+    handleChat(bot, ticker, 'Steve', 'find me diamond')
+    assert.ok(bot._tickerCtx.pendingSearch, 'search pending')
+    handlePlayerLeft(bot, ticker, { username: 'Alex' })
+    assert.ok(bot._tickerCtx.pendingSearch, 'unrelated logoff keeps it')
+    handlePlayerLeft(bot, ticker, { username: 'Steve' })
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'asker logoff retires it')
+  })
+
   it('pauses far slices while hostiles are near (amb)', () => {
     const { advancePendingSearch } = require('../src/index')
     const bot = mockBot({

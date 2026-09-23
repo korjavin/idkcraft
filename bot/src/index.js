@@ -712,7 +712,9 @@ function fleeReflex(bot, ctx) {
     },
     setLead: (order) => { setLeadOrder(ctx, order) },
     clearLead: (player) => {
-      clearPendingSearch(ctx)
+      // A pending far search dies with the asker (or with the bot, when no
+      // player is named) — never with an unrelated player logging off.
+      if (!player || (ctx.pendingSearch && ctx.pendingSearch.by === player.username)) clearPendingSearch(ctx)
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
       if (ctx.lead && !player) bot.chat('following you again')
