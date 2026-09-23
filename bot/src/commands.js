@@ -36,7 +36,10 @@ function detailLine(cmd) {
 
 // Overview pages: flat alias names packed greedily into CHAT_LIMIT lines.
 // Page 1 carries the details pointer (or the 'help 2' pointer when there
-// are more pages); later pages are headed 'help N'.
+// are more pages); later pages are headed 'help N'. Packing reserves the
+// longest head ('help NNN: ') plus tail (' — say help <command> ...'), so a
+// finished line never exceeds CHAT_LIMIT even on overflow pages.
+const PAGE_OVERHEAD = 43
 function helpPages() {
   const names = COMMANDS.flatMap((c) => c.names)
   const pages = []
@@ -44,7 +47,7 @@ function helpPages() {
   let len = 0
   for (const n of names) {
     const add = (cur.length ? 2 : 0) + n.length
-    if (cur.length && len + add > CHAT_LIMIT) {
+    if (cur.length && len + add > CHAT_LIMIT - PAGE_OVERHEAD) {
       pages.push(cur)
       cur = []
       len = 0

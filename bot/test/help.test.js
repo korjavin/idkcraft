@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const { handleChat } = require('../src/index')
-const { COMMANDS, CHAT_LIMIT, lookupCommand, detailLine, helpReply } = require('../src/commands')
+const { COMMANDS, CHAT_LIMIT, lookupCommand, detailLine, helpPages, helpReply } = require('../src/commands')
 
 function chatBot() {
   return {
@@ -65,17 +65,33 @@ describe("help command (idkcraft-kae)", () => {
       const line = detailLine(cmd)
       assert.ok(line.length <= CHAT_LIMIT, `${cmd.names[0]} detail is ${line.length} chars`)
     }
+    // Overflow path: filler entries forcing 2+ pages must all fit, and
+    // 'help 2' must return the second page.
+    const keep = COMMANDS.length
+    try {
+      for (let i = 0; i < 30; i++) COMMANDS.push({ names: [`cmd${i}name`], usage: `cmd${i}name`, what: 'filler', example: `cmd${i}name` })
+      const pages = helpPages()
+      assert.ok(pages.length > 1, 'fillers force overflow')
+      for (const page of pages) assert.ok(page.length <= CHAT_LIMIT, `page is ${page.length} chars`)
+      assert.equal(helpReply(2), pages[1])
+      assert.equal(helpReply(99), null)
+    } finally {
+      COMMANDS.length = keep
+    }
   })
 
   it('every command handleChat understands is in COMMANDS', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.js'), 'utf8')
     const literals = [...src.matchAll(/msg === '([^']+)'/g)].map((m) => m[1])
-    const heads = [...src.matchAll(/msg\.match\(\/\^([a-z ]+?)\\/g)]
+    const starts = [...src.matchAll(/msg\.startsWith\('([^']+)'\)/g)]
+      .map((m) => m[1].trim())
+      .filter(Boolean)
+    const heads = [...src.matchAll(/msg\.match\(\/\^([a-z ]+)/g)]
       .map((m) => (m[1] || '').trim())
       .filter(Boolean)
     assert.ok(literals.length > 0, 'scanner found exact-match commands')
     const names = COMMANDS.flatMap((c) => c.names)
-    for (const lit of literals) {
+    for (const lit of [...literals, ...starts]) {
       assert.ok(names.includes(lit), `COMMANDS covers handleChat literal '${lit}'`)
     }
     for (const head of heads) {
