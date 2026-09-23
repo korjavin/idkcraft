@@ -112,6 +112,67 @@ describe('roam behaviour', () => {
   })
 })
 
+describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => {
+  function wedgedBot() {
+    const bot = mockBot()
+    bot._moving = true // executor reports moving while the body stands still
+    bot.controls = {}
+    bot.setControlState = (name, value) => { bot.controls[name] = value }
+    return bot
+  }
+
+  it('sidesteps after two stuck resets with no displacement while moving', () => {
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0) }
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => logs.push(m)
+    try {
+      roam(bot, ctx, playerEntity(2), {})
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(bot.calls.setGoal, 1) // fails on the old code: 0 goals, stuck forever
+    const goal = bot.calls.goals[0]
+    assert.equal(goal.constructor.name, 'GoalNear')
+    const d = Math.hypot(goal.x - 0, goal.z - 0)
+    assert.ok(d >= 1 && d <= 3.5, `sidestep ${d.toFixed(2)} blocks from the bot`)
+    assert.equal(bot.calls.dynamic[0], false)
+    assert.equal(bot.controls.jump, true)
+    assert.equal(ctx.roamNudge, true)
+    assert.equal(ctx.stuckResets, 0)
+    assert.match(ctx.lastGoalKey, /^roam-nudge:/)
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /^stuck reason=wedge pos=0,64,0 dist=2\.0$/)
+  })
+
+  it('clears the one-tick jump on the next roam tick', () => {
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam-nudge:2,0', stuckResets: 0, roamNudge: true, roamLastPos: pos(0, 64, 0) }
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.roamNudge, false)
+    assert.equal(bot.calls.setGoal, 0) // still walking the nudge: no new goal
+  })
+
+  it('keeps walking on a single stuck reset (no premature nudge)', () => {
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 1, roamLastPos: pos(0, 64, 0) }
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.stuckResets, 1)
+  })
+
+  it('displacement zeroes the wedge counter (no nudge after real progress)', () => {
+    const bot = wedgedBot()
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0) }
+    bot.entity.position = pos(3, 64, 0) // moved 3 blocks since last tick
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.stuckResets, 0)
+  })
+})
+
 describe('roam stroll end to end (no follow yo-yo)', () => {
   it('sustains roam past 3 blocks and follows back past 6', async () => {
     const { stubBrain } = require('../src/brain')
