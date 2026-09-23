@@ -134,6 +134,13 @@ function lead(bot, ctx, target, state) {
   }
   const now = Date.now()
   if (!order.lastPos) order.lastPos = snapshot(bp)
+  if ((typeof bot.pathfinder.isMining === 'function' && bot.pathfinder.isMining()) ||
+      (typeof bot.pathfinder.isBuilding === 'function' && bot.pathfinder.isBuilding())) {
+    order.lastPos = snapshot(bp)
+    order.stuckTicks = 0
+    order.lastProgressAt = now
+    return
+  }
   const madeProgress = dist(bp, order.lastPos) > MOVE_TOLERANCE
   if (madeProgress) {
     order.lastPos = snapshot(bp)
