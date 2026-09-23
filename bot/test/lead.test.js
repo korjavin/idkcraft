@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const lead = require('../src/behaviours/lead')
-const { GIVE_UP_TICKS } = require('../src/behaviours/lead')
+const { GIVE_UP_TICKS, WORK_STALL_TICKS } = require('../src/behaviours/lead')
 
 function pos(x, y, z) {
   const p = {
@@ -15,7 +15,7 @@ function pos(x, y, z) {
 }
 
 function mockBot() {
-  const calls = { setGoal: 0, stop: 0, goals: [], dynamic: [], chats: [] }
+  const calls = { setGoal: 0, stop: 0, goals: [], dynamic: [], chats: [], controls: [] }
   const bot = {
     calls,
     username: 'IdkBot',
@@ -32,6 +32,7 @@ function mockBot() {
       stop: () => { calls.stop++ },
       isMoving: () => bot._moving,
     },
+    setControlState: (control, value) => { calls.controls.push([control, value]) },
     chat: (line) => { calls.chats.push(line) },
   }
   return bot
@@ -170,12 +171,12 @@ describe('lead behaviour', () => {
     assert.equal(far.calls.setGoal, 1)
   })
 
-  it('gives up after N stationary ticks with cannot-reach and clears', () => {
+  it('sidesteps once, then gives up after a second stationary stretch', () => {
     const bot = mockBot()
     const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'diamond_ore'), leadStuck: 0 }
-    for (let t = 0; t <= GIVE_UP_TICKS; t++) {
+    for (let t = 0; t <= GIVE_UP_TICKS * 2 + 2; t++) {
       lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
-      if (t < GIVE_UP_TICKS) assert.ok(ctx.lead, `gave up early at tick ${t}`)
+      if (t < GIVE_UP_TICKS * 2 + 2) assert.ok(ctx.lead, `gave up early at tick ${t}`)
     }
     assert.equal(ctx.lead, null)
     assert.ok(bot.calls.chats.some((l) => l === 'cannot reach diamond_ore at 10 64 0; following you again'))
@@ -183,11 +184,132 @@ describe('lead behaviour', () => {
 
   it('moving resets the give-up budget', () => {
     const bot = mockBot()
-    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0), leadStuck: 9 }
+    const order = orderAt(10, 64, 0)
+    order.lastPos = pos(-1, 64, 0)
+    order.stuckTicks = 9
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: order }
     bot._moving = true
     lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
-    assert.equal(ctx.leadStuck, 0)
+    assert.equal(order.stuckTicks, 0)
     assert.ok(ctx.lead)
+  })
+
+  it('nudges once then gives up when isMoving stays true without displacement', () => {
+    const bot = mockBot()
+    bot._moving = true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let t = 0; t < GIVE_UP_TICKS * 2 + 5 && ctx.lead; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.equal(ctx.lead, null)
+      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+      assert.equal(bot.calls.goals.at(-1).rangeSq, 4)
+      assert.deepEqual(bot.calls.controls, [['jump', true], ['jump', false]])
+      assert.equal(bot.calls.chats.filter((line) => line.includes('blocks left')).length, 0)
+      assert.deepEqual(bot.calls.chats, ['cannot reach iron_ore at 10 64 0; following you again'])
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it('does not count stationary mining as a lead stall', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.pathfinder.isMining = () => true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let t = 0; t < GIVE_UP_TICKS * 3; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.ok(ctx.lead)
+      assert.equal(bot.calls.goals.some((goal) => goal.rangeSq === 1), false)
+      assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it('bounds a mining stall and gives up if digging never finishes', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.pathfinder.isMining = () => true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let t = 0; t < WORK_STALL_TICKS * 2 + 4 && ctx.lead; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.equal(ctx.lead, null)
+      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+      assert.deepEqual(bot.calls.chats, ['cannot reach iron_ore at 10 64 0; following you again'])
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it('does not carry mining ticks into the idle stall budget', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.pathfinder.isMining = () => true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    for (let t = 0; t < GIVE_UP_TICKS + 5; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    bot.pathfinder.isMining = () => false
+    lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    assert.ok(ctx.lead)
+    assert.equal(bot.calls.goals.some((goal) => goal.rangeSq === 1), false)
+  })
+
+  it('does not treat jumping in place as displacement progress', () => {
+    const bot = mockBot()
+    bot._moving = true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    for (let t = 0; t <= GIVE_UP_TICKS; t++) {
+      bot.entity.onGround = false
+      bot.entity.position = pos(0, 65, 0)
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+      bot.entity.onGround = true
+      bot.entity.position = pos(0, 64, 0)
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    assert.ok(ctx.lead)
+    assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+    assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
+  })
+
+  it('counts horizontal movement while airborne as progress', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.entity.onGround = false
+    const ctx = { lastGoalKey: 'lead:100,64,0', lead: orderAt(100, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let x = 1; x <= 15; x++) {
+        bot.entity.position = pos(x, x % 2 ? 65 : 64, 0)
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.ok(ctx.lead)
+      assert.equal(bot.calls.goals.some((goal) => goal.rangeSq === 1), false)
+      assert.ok(bot.calls.chats.some((line) => line.includes('blocks left')))
+    } finally {
+      Date.now = originalNow
+    }
   })
 
   it('gives up after waiting longer than budget with chat and clears', () => {
@@ -243,11 +365,13 @@ describe('lead behaviour', () => {
       assert.equal(bot.calls.chats.length, 2)
 
       now += 9_999
+      bot.entity.position = pos(1, 64, 0)
       lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
       assert.equal(bot.calls.chats.length, 2)
       now += 1
+      bot.entity.position = pos(2, 64, 0)
       lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
-      assert.deepEqual(bot.calls.chats.slice(2), ['coal: 20 blocks left'])
+      assert.deepEqual(bot.calls.chats.slice(2), ['coal: 18 blocks left'])
       lead(bot, ctx, playerEntity(5), { distance_to_player: 5 })
       assert.equal(bot.calls.chats.length, 3)
     } finally {
