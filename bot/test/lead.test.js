@@ -259,6 +259,20 @@ describe('lead behaviour', () => {
     }
   })
 
+  it('does not carry mining ticks into the idle stall budget', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.pathfinder.isMining = () => true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    for (let t = 0; t < GIVE_UP_TICKS + 5; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    bot.pathfinder.isMining = () => false
+    lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    assert.ok(ctx.lead)
+    assert.equal(bot.calls.goals.some((goal) => goal.rangeSq === 1), false)
+  })
+
   it('does not treat jumping in place as displacement progress', () => {
     const bot = mockBot()
     bot._moving = true
@@ -274,6 +288,28 @@ describe('lead behaviour', () => {
     assert.ok(ctx.lead)
     assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
     assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
+  })
+
+  it('counts horizontal movement while airborne as progress', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.entity.onGround = false
+    const ctx = { lastGoalKey: 'lead:100,64,0', lead: orderAt(100, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let x = 1; x <= 15; x++) {
+        bot.entity.position = pos(x, x % 2 ? 65 : 64, 0)
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.ok(ctx.lead)
+      assert.equal(bot.calls.goals.some((goal) => goal.rangeSq === 1), false)
+      assert.ok(bot.calls.chats.some((line) => line.includes('blocks left')))
+    } finally {
+      Date.now = originalNow
+    }
   })
 
   it('gives up after waiting longer than budget with chat and clears', () => {
