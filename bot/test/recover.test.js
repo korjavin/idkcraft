@@ -445,3 +445,30 @@ describe('episode entry drops the stale goal (M2)', () => {
     assert.equal(bot.pathfinder.goal, null, 'stale goal dropped on entry (wait sets none)')
   })
 })
+
+describe('recover FSM escalation (prod wedges)', () => {
+  it('a just-failed primitive yields to the next feasible one', () => {
+    // 28 of 35 repeat wedges at the same spot: after a failure the FSM must
+    // escalate, not repeat. Removing the exclusion fails this test.
+    const F = (over) => ({ goalDy: 0, ...over })
+    assert.equal(
+      recover.recoverFsm(F({ last: 'sidestep:failed:no-progress' }), ['sidestep', 'dig_through', 'wait']),
+      'dig_through')
+    assert.equal(
+      recover.recoverFsm(F({ last: 'sidestep:failed:no-progress' }), ['sidestep', 'wait']),
+      'wait')
+    assert.equal(
+      recover.recoverFsm(F({ goalDy: 3, last: 'pillar_up:failed:no-apex' }), ['pillar_up', 'dig_up', 'wait']),
+      'dig_up')
+    // No failure (or a single feasible action): order unchanged.
+    assert.equal(
+      recover.recoverFsm(F({ last: 'none' }), ['sidestep', 'dig_through', 'wait']),
+      'sidestep')
+    assert.equal(
+      recover.recoverFsm(F({ last: 'sidestep:done' }), ['sidestep', 'wait']),
+      'sidestep')
+    assert.equal(
+      recover.recoverFsm(F({ last: 'sidestep:failed:no-progress' }), ['sidestep']),
+      'sidestep')
+  })
+})

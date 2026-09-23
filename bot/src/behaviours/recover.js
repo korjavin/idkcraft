@@ -190,14 +190,21 @@ function recoverText(facts) {
 
 // FSM reserve and disagreement reference (bead order verbatim): climb when
 // the goal is above, else sidestep, else dig through, else call, else wait.
-// wait is always feasible so this always returns a menu member.
+// wait is always feasible so this always returns a menu member. Escalation,
+// not repetition (prod 2026-09-23: 28 of 35 repeat wedges at the same spot):
+// after a failure the just-failed primitive yields to the next feasible one
+// (the model sees the same signal via last=<action>:<outcome> in the facts).
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
-  if (facts.goalDy >= 2 && ok.has('pillar_up')) return 'pillar_up'
-  if (facts.goalDy >= 2 && ok.has('dig_up')) return 'dig_up'
-  if (ok.has('sidestep')) return 'sidestep'
-  if (ok.has('dig_through')) return 'dig_through'
-  if (ok.has('call_player')) return 'call_player'
+  let failed = null
+  const m = /^(pillar_up|dig_up|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  if (m && ok.size > 1) failed = m[1]
+  const pick = (n) => n !== failed && ok.has(n)
+  if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
+  if (facts.goalDy >= 2 && pick('dig_up')) return 'dig_up'
+  if (pick('sidestep')) return 'sidestep'
+  if (pick('dig_through')) return 'dig_through'
+  if (pick('call_player')) return 'call_player'
   return 'wait'
 }
 
