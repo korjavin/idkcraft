@@ -8,6 +8,7 @@ const { makeScout, findNearest } = require('./behaviours/scout')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const goal = require('./goal')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
   if (bot && bot._tickerCtx && bot._tickerCtx.eatInFlight) return Promise.resolve()
@@ -19,6 +20,7 @@ const BEHAVIOURS = {
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
+  rest: require('./behaviours/rest'),
 }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
@@ -112,7 +114,7 @@ function eatReflex(bot, ctx, state) {
 }
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -308,6 +310,9 @@ function fleeReflex(bot, ctx) {
     // Fast cadence while the reflex swings with nobody online: those ticks
     // make no brain call, so speeding them up costs nothing.
     let reflexFast = false
+    // Fast cadence while working out of sight (see workAlone below): the
+    // goal arbiter must keep deciding every tick, like a visible player.
+    let workTickFast = false
     try {
       if (ctx.paused) {
         // 'stop' parks the bot: perception + scout keep running while a
@@ -351,7 +356,14 @@ function fleeReflex(bot, ctx) {
       lastVisible = !!target
       if (target) noteSeen()
       else noteEmpty()
-      if (!target) {
+      // Work mode runs without a visible player while anyone is on the
+      // server (roster, not visibility — walking out of render distance is
+      // normal). Falls through to the normal path with target=null:
+      // buildState handles null, and the work check below swaps idle steps.
+      const workAlone = ctx.work && !target && bot.players &&
+        Object.keys(bot.players).some((n) => n !== bot.username)
+      if (workAlone) workTickFast = true
+      if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
         // A hissing creeper still moves the body (fast ticks while fleeing).
@@ -469,6 +481,14 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
       }
+      // Work mode (epic rw4) owns the body like an order: the goal arbiter
+      // picks the step, except fight which still preempts (safety beats work).
+      // Placed after lead so an explicit find-me order wins its ticks.
+      if (ctx.work && decision.action !== 'fight') {
+        decision = goal.decide(bot, ctx)
+        applyDecision(decision, target, state)
+        return { decision, calledBrain }
+      }
       applyDecision(decision, target, state)
       return { decision, calledBrain }
     } catch (err) {
@@ -476,7 +496,7 @@ function fleeReflex(bot, ctx) {
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible || reflexFast)
+      scheduleNext(lastVisible || reflexFast || workTickFast)
     }
   }
 
@@ -495,9 +515,12 @@ function fleeReflex(bot, ctx) {
     setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
-    setFollow: (name) => { followName = name; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
+    setFollow: (name) => { followName = name; ctx.work = false; ctx.lastGoalKey = ''; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; if (name) ctx.paused = false },
+    // Work mode (epic rw4): autonomous goal steps until follow me / stop.
+    work: () => { ctx.work = true; ctx.paused = false; ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0; followName = ''; ctx.lastGoalKey = '' },
     stop: () => {
       ctx.paused = true
+      ctx.work = false
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
@@ -512,7 +535,12 @@ function fleeReflex(bot, ctx) {
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
     },
-    getLead: () => ctx.lead
+    getLead: () => ctx.lead,
+    status: () => {
+      const facts = goal.goalFacts(bot, ctx)
+      const mode = ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following'))
+      bot.chat(`${mode} step=${ctx.step || 'none'} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
+    }
   }
 }
 
@@ -598,6 +626,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.once('spawn', () => {
       ticker.setMovements(new Movements(bot))
       console.log(`spawned as ${bot.username}`)
+      // Owner rule (epic rw4): with no follow target the bot works on its
+      // own until 'follow me'. createTicker defaults work=false so unit
+      // tests stay explicit about entering work mode.
+      if (!followName) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
@@ -662,6 +694,11 @@ function handleChat(bot, ticker, username, message) {
       ticker.setFollow('')
       ticker.stop()
     }
+  } else if (msg === 'go work' || msg === 'free') {
+    if (ticker) ticker.work()
+    bot.chat(`on my own; say 'follow me' to call me`)
+  } else if (msg === 'status') {
+    if (ticker && typeof ticker.status === 'function') ticker.status()
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
