@@ -234,6 +234,25 @@ describe('gather step', () => {
     assert.ok(ctx.gather.skip.has('2,64,0'), 'jump in place = standing still')
   })
 
+  it('a grounded climb to a new level counts as progress', () => {
+    // Genuine pillaring (x/z fixed, standing one block higher each tick)
+    // must not burn stalls: only jumps in place are standing still.
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'oak_log', '6,64,0': 'birch_log' },
+    })
+    bot._moving = true
+    bot.entity.position = pos(0, 64, 5)
+    const ctx = freshCtx()
+    gather(bot, ctx, null, {}) // goal on tree 1
+    for (let i = 0; i <= 10; i++) {
+      bot.entity.position = pos(0, 64 + i, 5)
+      bot.entity.onGround = true
+      gather(bot, ctx, null, {})
+    }
+    assert.ok(!ctx.gather.skip.has('2,64,0'), 'climbing is progress, not a stall')
+  })
+
   it('setPathReset counts consecutive place_error, breaks on other reasons', () => {
     const { createTicker } = require('../src/index')
     const bot = mockBot({})
@@ -280,7 +299,10 @@ describe('gather step', () => {
       ticker.setPathReset('place_error') // what the ticker does on path_reset
       gather(bot, ctx, null, {})
     }
-    for (let i = 0; i < 12; i++) tick()
+    for (let i = 0; i < 4; i++) tick()
+    assert.ok(ctx.gather.skip.has('2,64,0') && ctx.gather.skip.has('2,65,0'),
+      'place_error streak skips the column before STALL_TICKS')
+    for (let i = 0; i < 8; i++) tick()
     assert.ok(ctx.gather.skip.has('2,64,0') && ctx.gather.skip.has('2,65,0'),
       'first column skipped within STALL_TICKS+2 despite jumps')
     for (let i = 0; i < 24; i++) tick()
