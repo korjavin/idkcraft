@@ -97,8 +97,28 @@ function stateKey(state) {
   ].join('|')
 }
 
+// Floodgate (Geyser) prefixes Bedrock names with '.' in bot.players
+// ('.Steve') while the 'chat' event carries the name without it ('Steve'),
+// so a direct lookup misses. Resolve exact, then '.'+name, then a
+// case-insensitive match ignoring the leading dot.
+function resolvePlayer(bot, name) {
+  if (!name) return name
+  const players = (bot && bot.players) || {}
+  if (players[name]) return name
+  if (players['.' + name]) return '.' + name
+  const norm = String(name).replace(/^\./, '').toLowerCase()
+  for (const key of Object.keys(players)) {
+    if (String(key).replace(/^\./, '').toLowerCase() === norm) return key
+  }
+  return name
+}
+
 function findTarget(bot, followName) {
-  if (followName) return (bot.players[followName] && bot.players[followName].entity) || null
+  if (followName) {
+    const real = resolvePlayer(bot, followName)
+    const p = bot.players && bot.players[real]
+    return (p && p.entity) || null
+  }
   let best = null
   let bestDist = Infinity
   for (const player of Object.values(bot.players)) {
@@ -164,4 +184,4 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   return state
 }
 
-module.exports = { findTarget, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems }
+module.exports = { findTarget, resolvePlayer, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems }
