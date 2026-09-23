@@ -17,6 +17,8 @@ const { createTicker } = require('../src/index')
 const { addSwimExits } = require('../src/swim')
 
 function nameAt(x, y, z) {
+  if (x === -2 && y >= 60 && y <= 62) return 'lava' // lava pit in the bank
+  if (x === -4 && (y === 64 || y === 65)) return 'stone' // 2-high wall on land
   const river = x >= 4 && x <= 9
   if (river) {
     if (y <= 59) return 'stone'
@@ -82,11 +84,27 @@ describe("swim primitive (idkcraft-be7)", () => {
 
   it('wrapping twice adds no duplicate exits; land nodes are untouched', () => {
     const bot = worldBot()
+    const plain = new Movements(bot)
     const movements = new Movements(bot)
     addSwimExits(movements)
     addSwimExits(movements)
     const exits = movements.getNeighbors(new Move(9, 62, 0, 0, 0))
       .filter((m) => m.x === 10 && m.y === 64 && m.z === 0)
     assert.equal(exits.length, 1)
+    // The water guard: a dry-land node gets exactly the original neighbors.
+    const hash = (ns) => ns.map((m) => m.hash).sort().join(' ')
+    assert.equal(hash(movements.getNeighbors(new Move(0, 64, 0, 0, 0))), hash(plain.getNeighbors(new Move(0, 64, 0, 0, 0))))
+  })
+
+  it('no phantom exits beside a dry-land wall', () => {
+    const movements = wiredMovements()
+    const ns = movements.getNeighbors(new Move(-3, 64, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.y >= 66), 'no 2-up jump the body cannot make')
+  })
+
+  it('no exits from lava feet', () => {
+    const movements = wiredMovements()
+    const ns = movements.getNeighbors(new Move(-2, 62, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.y >= 64), 'lava never climbs to bank level')
   })
 })
