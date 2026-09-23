@@ -139,7 +139,7 @@ function gohome(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'gohome-walk',
       new goals.GoalNear(out.x, out.y, out.z, 1),
       (bp) => Math.hypot(bp.x - out.x, bp.z - out.z) <= 1.5)
-    if (ctx.stepStatus) return // walkTo failed the step
+    if (ctx.stepStatus && ctx.stepStatus !== 'running') return // walkTo failed the step
     if (arrived) st.phase = 'open'
     else return
   }
@@ -155,7 +155,7 @@ function gohome(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'gohome-enter',
       new goals.GoalBlock(inn.x, inn.y, inn.z),
       () => isInside(bot, home))
-    if (ctx.stepStatus) return
+    if (ctx.stepStatus && ctx.stepStatus !== 'running') return
     if (arrived) st.phase = 'close'
     else return
   }
@@ -219,7 +219,7 @@ function stay(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'stay-exit',
       new goals.GoalNear(out.x, out.y, out.z, 2),
       (bp) => Math.hypot(bp.x - out.x, bp.z - out.z) <= 2.5)
-    if (ctx.stepStatus) return
+    if (ctx.stepStatus && ctx.stepStatus !== 'running') return
     if (arrived) st.phase = 'close'
     else return
   }

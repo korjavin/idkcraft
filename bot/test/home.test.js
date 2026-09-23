@@ -91,6 +91,29 @@ describe('rw4.5 gohome', () => {
     assert.ok(bot.chats.some((m) => m === 'home for the night'))
   })
 
+  it('(f) stepStatus running (live shape) advances walk/open/enter/close to done', async () => {
+    const bot = mockBot({ at: { ...OUTSIDE } })
+    const ctx = { home: ctxHome(), step: 'gohome', stepStatus: 'running' }
+    home.gohome(bot, ctx) // walk arrived -> open, toggle fires despite 'running'
+    await settle()
+    assert.equal(ctx.gohome.phase, 'open')
+    assert.equal(bot.calls.activates, 1)
+    home.gohome(bot, ctx) // door open -> enter, GoalBlock issued despite 'running'
+    assert.equal(ctx.gohome.phase, 'enter')
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g.constructor.name, 'GoalBlock')
+    bot.entity.position = { x: INSIDE.x, y: INSIDE.y, z: INSIDE.z }
+    ctx.gohome.lastToggle = 0 // test ticks are instant; live walking covers the cooldown
+    home.gohome(bot, ctx) // inside -> close, toggle shuts the open door
+    await settle()
+    assert.equal(ctx.gohome.phase, 'close')
+    assert.equal(bot.calls.activates, 2)
+    home.gohome(bot, ctx) // door shut -> done + sheltered
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.inShelter, true)
+    assert.ok(bot.chats.some((m) => m === 'home for the night'))
+  })
+
   it('no site: fails without touching the door', () => {
     const bot = mockBot({ at: { ...OUTSIDE } })
     const ctx = {}
