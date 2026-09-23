@@ -84,6 +84,19 @@ describe('share plan', () => {
     ])
   })
 
+  it('totals split stacks under one name, first-seen order', () => {
+    const items = [
+      { name: 'coal', count: 64 },
+      { name: 'dirt', count: 64 },
+      { name: 'coal', count: 30 },
+      { name: 'dirt', count: 10 },
+    ]
+    assert.deepEqual(sharePlan(items), [
+      { name: 'coal', count: 94 },
+      { name: 'dirt', count: 42 },
+    ])
+  })
+
   it('fills the 32 reserve with cobble when dirt is short', () => {
     const items = [
       { name: 'dirt', count: 10 },
@@ -134,6 +147,33 @@ describe('share order', () => {
     handleChat(bot, tickerFor(bot), 'P', 'share')
     assert.deepEqual(bot.lines, ['nothing to share'])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
+  })
+
+  it('rechecks the reserve at toss time (scaffolding spent on the walk)', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'share')
+    assert.ok(bot._tickerCtx.bring, 'share order created')
+    // The approach walk pillars 10 dirt before arrival.
+    bot._items = [
+      { name: 'dirt', count: 30 },
+      { name: 'coal', count: 5 },
+    ]
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush()
+    }
+    assert.equal(bot._tickerCtx.bring, null, 'order done')
+    const tossed = bot.tossCalls.map(([id, , n]) => [Object.keys(ITEM_IDS).find((k) => ITEM_IDS[k] === id), n])
+    assert.deepEqual(tossed, [['coal', 5]], 'the 30 dirt stay under the reserve')
+    assert.deepEqual(bot.lines, ['shared: 5 coal'], `lines: ${bot.lines}`)
   })
 
   it('unseen player tosses nothing', async () => {

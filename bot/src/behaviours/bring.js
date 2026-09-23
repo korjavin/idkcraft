@@ -72,6 +72,12 @@ function sharePlan(items) {
   let keepDirt = Math.min(SHARE_RESERVE, dirt)
   let keepCobble = Math.min(SHARE_RESERVE - keepDirt, cobble)
   const toss = []
+  const at = new Map()
+  const add = (name, count) => {
+    if (count <= 0) return
+    if (at.has(name)) toss[at.get(name)].count += count
+    else { at.set(name, toss.length); toss.push({ name, count }) }
+  }
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
     if (isShareKeep(i.name)) continue
@@ -79,13 +85,13 @@ function sharePlan(items) {
     if (i.name === 'dirt') {
       const k = Math.min(keepDirt, n)
       keepDirt -= k
-      if (n - k > 0) toss.push({ name: i.name, count: n - k })
+      add(i.name, n - k)
     } else if (i.name === 'cobblestone') {
       const k = Math.min(keepCobble, n)
       keepCobble -= k
-      if (n - k > 0) toss.push({ name: i.name, count: n - k })
-    } else if (n > 0) {
-      toss.push({ name: i.name, count: n })
+      add(i.name, n - k)
+    } else {
+      add(i.name, n)
     }
   }
   return toss
@@ -577,11 +583,20 @@ function bring(bot, ctx, target, state) {
 // what actually left; an empty toss refuses like the single-drop path.
 function shareToss(bot, ctx, o) {
   if (o.tossInFlight) return
+  let live = []
+  try {
+    live = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+  } catch (_) { live = [] }
+  const items = sharePlan(live)
+  if (items.length === 0) {
+    refuse(bot, ctx, 'nothing to share')
+    return
+  }
   o.tossInFlight = true
   void (async () => {
     const got = []
     try {
-      for (const item of o.items || []) {
+      for (const item of items) {
         let id = null
         try {
           const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[item.name]
@@ -601,7 +616,7 @@ function shareToss(bot, ctx, o) {
       o.tossInFlight = false
     }
     if (got.length === 0) {
-      refuse(bot, ctx, `could not toss ${(o.items && o.items[0] && o.items[0].name) || 'items'}`)
+      refuse(bot, ctx, `could not toss ${(items[0] && items[0].name) || 'items'}`)
       return
     }
     say(bot, `shared: ${got.join(', ')}`)
