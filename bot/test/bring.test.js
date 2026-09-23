@@ -155,7 +155,7 @@ describe('bring me order', () => {
     assert.ok(!empty._tickerCtx.bring, 'no order created')
   })
 
-  it('finds a block at 60 blocks via later stages, honest distance (amb)', () => {
+  it('finds a block at 60 blocks via the tick-sliced far search (amb)', async () => {
     const ore = pos(60, 64, 0)
     const bot = mockBot({
       spots: [ore],
@@ -167,10 +167,17 @@ describe('bring me order', () => {
       playerPos: pos(30, 64, 0),
     })
     const inner = bot.findBlocks.bind(bot)
-    bot.findBlocks = (o) => (o.maxDistance >= 60 ? inner(o) : [])
-    handleChat(bot, tickerFor(bot), 'P', 'bring me coal')
-    assert.deepEqual(bot.lines, ['going for 3 coal_ore, 60 blocks away'])
-    assert.ok(bot._tickerCtx.bring, 'order created')
+    bot.findBlocks = (o) => {
+      // Emulate the real client: only hits near the scan center come back.
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me coal')
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for coal…'])
+    for (let i = 0; i < 200 && !bot._tickerCtx.bring; i++) await ticker.tick()
+    assert.ok(bot._tickerCtx.bring, 'order created on far completion')
+    assert.ok(bot.lines.includes('going for 3 coal_ore, 60 blocks away'), `lines: ${bot.lines}`)
     assert.equal(bot._tickerCtx.bring.exposed, false, 'buried ore flagged at find time')
   })
 

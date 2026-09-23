@@ -4,7 +4,7 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
-const { makeScout, findNearest, loadedSearchRadius } = require('./behaviours/scout')
+const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
@@ -407,6 +407,12 @@ function fleeReflex(bot, ctx) {
       } catch (_) { /* try again next tick */ }
     }
     inFlight = true
+    // Far-search slices (amb): at most ~120ms CPU here, completion chats.
+    // Paused while hostiles are near (last tick's snapshot): search slices
+    // must not stall the fight reflexes.
+    if (!ctx.lastHostileSnap || ctx.lastHostileSnap.count === 0) {
+      try { advancePendingSearch(bot, { setLead: (order) => { setLeadOrder(ctx, order) } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -705,7 +711,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
+    setLead: (order) => { setLeadOrder(ctx, order) },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
@@ -746,25 +752,16 @@ function fleeReflex(bot, ctx) {
       }
       const res = findNearest(bot, name)
       if (res === 'unknown') return `unknown block: ${name}`
-      if (!res) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
-      if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
-      if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
-        const tier = bringMod.requiredTier(res.name)
-        return `need ${tier === 'iron' ? 'an' : 'a'} ${tier} pickaxe for ${res.name}`
+      if (!res) {
+        // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb).
+        // A null cursor (unreadable world) answers from sync alone.
+        const search = startFarSearch(bot, name)
+        if (search === 'unknown') return `unknown block: ${name}`
+        if (!search) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+        ctx.pendingSearch = { cursor: search, kind: 'bring', name, want, by }
+        return `nothing within 48, widening the search for ${name}…`
       }
-      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
-      // A fresh explicit order restarts homing math (a tripped counter would
-      // starve the order) and supersedes a pending spawn work-resume (which
-      // would otherwise cancel the order on the next sighted tick).
-      ctx.unseenTicks = 0
-      ctx.resumeWork = false
-      ctx.bring = {
-        kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
-        pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
-        have: 0, announced: true, exposed: res.exposed !== false,
-      }
-      ctx.paused = false
-      return `going for ${want} ${res.name}, ${res.distance} blocks away`
+      return startBlockOrder(bot, ctx, { name, want, by }, res)
     },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
@@ -954,6 +951,77 @@ const deepOffers = new Map()
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
 
+// Lead-order assignment shared by setLead and far-search completion (amb):
+// same lock reset, same bring cancellation accounting.
+function setLeadOrder(ctx, order) {
+  ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false
+  if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
+}
+
+// Shared block-order creation (amb): sync setBring and far-search
+// completion build the same order and announce the honest distance.
+function startBlockOrder(bot, ctx, { name, want, by }, res) {
+  if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
+  if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+    const tier = bringMod.requiredTier(res.name)
+    return `need ${tier === 'iron' ? 'an' : 'a'} ${tier} pickaxe for ${res.name}`
+  }
+  if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+  // A fresh explicit order restarts homing math (a tripped counter would
+  // starve the order) and supersedes a pending spawn work-resume (which
+  // would otherwise cancel the order on the next sighted tick).
+  ctx.unseenTicks = 0
+  ctx.resumeWork = false
+  ctx.bring = {
+    kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
+    pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
+    have: 0, announced: true, exposed: res.exposed !== false,
+  }
+  ctx.paused = false
+  return `going for ${want} ${res.name}, ${res.distance} blocks away`
+}
+
+// Shared found-answer (amb): sync find-me and far-search completion lead to
+// the hit or warn about depth the same way.
+function answerFound(bot, ticker, playerName, refY, res) {
+  const down = refY != null ? Math.round(refY - res.position.y) : 0
+  if (down > DEEP_WARN_DROP) {
+    bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
+    deepOffers.set(playerName, { name: res.name, pos: res.position, distance: res.distance })
+  } else {
+    bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
+    if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: playerName, lastProgressAt: Date.now() })
+  }
+}
+
+// One pending far search (amb), advanced once per tick: the 96/160 shells
+// sliced to the per-tick CPU budget. Completion chats the answer (find) or
+// opens the order (bring); a newer request replaces a stale one.
+function advancePendingSearch(bot, ticker, ctx) {
+  const p = ctx && ctx.pendingSearch
+  if (!p) return
+  const r = stepFarSearch(bot, p.cursor)
+  if (!r.done) return
+  ctx.pendingSearch = null
+  if (r.result === 'unknown') {
+    bot.chat(`unknown block: ${p.name}`)
+    return
+  }
+  if (p.kind === 'bring') {
+    if (!r.result) {
+      bot.chat(`no ${p.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      return
+    }
+    bot.chat(startBlockOrder(bot, ctx, p, r.result))
+    return
+  }
+  if (!r.result) {
+    bot.chat(`no ${p.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+    return
+  }
+  answerFound(bot, ticker, p.by, p.refY, r.result)
+}
+
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
   const playerName = resolvePlayer(bot, username, senderUuid)
@@ -1053,20 +1121,22 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       // bot's own Y, the same fallback the ranking uses — never silently 0.
       const botY = bot.entity && typeof bot.entity.position?.y === 'number' ? bot.entity.position.y : null
       const refY = speakerY != null ? speakerY : botY
-      const res = findNearest(bot, name, undefined, refY)
+      const res = findNearest(bot, name, refY)
       if (res === 'unknown') {
         bot.chat(`unknown block: ${name}`)
       } else if (!res) {
-        bot.chat(`no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
-      } else {
-        const down = refY != null ? Math.round(refY - res.position.y) : 0
-        if (down > DEEP_WARN_DROP) {
-          bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
-          deepOffers.set(playerName, { name: res.name, pos: res.position, distance: res.distance })
+        const search = startFarSearch(bot, name, refY)
+        if (search === 'unknown') {
+          bot.chat(`unknown block: ${name}`)
+        } else if (!search) {
+          bot.chat(`no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
         } else {
-          bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
-          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: playerName, lastProgressAt: Date.now() })
+          const t = ticker && bot._tickerCtx ? bot._tickerCtx : null
+          if (t) t.pendingSearch = { cursor: search, kind: 'find', name, refY, by: playerName }
+          bot.chat(`nothing within 48, widening the search for ${name}…`)
         }
+      } else {
+        answerFound(bot, ticker, playerName, refY, res)
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
@@ -1187,4 +1257,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

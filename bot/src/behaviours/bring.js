@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./scout')
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const metrics = require('../metrics')
@@ -315,7 +315,22 @@ function bring(bot, ctx, target, state) {
       return
     }
     if (!res) {
-      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      if (o.have > 0) {
+        refuse(bot, ctx, `only got ${o.have} ${o.drop}`)
+        return
+      }
+      // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb),
+      // one order holds one cursor, no new scan starts while it runs.
+      o.search = startFarSearch(bot, o.name)
+      if (o.search === 'unknown') {
+        refuse(bot, ctx, `unknown block: ${o.name}`)
+        return
+      }
+      if (!o.search) {
+        refuse(bot, ctx, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+        return
+      }
+      o.phase = 'searchfar'
       return
     }
     o.pos = res.position
@@ -330,6 +345,38 @@ function bring(bot, ctx, target, state) {
     if (!o.announced) {
       o.announced = true
       say(bot, `going for ${o.want} ${res.name}, ${res.distance} blocks away`)
+    }
+    o.phase = 'walk'
+    o.stalls = 0
+    o.lastPos = null
+    return
+  }
+
+  if (o.phase === 'searchfar') {
+    if (food) { findFood(bot, ctx, o); return }
+    const r = stepFarSearch(bot, o.search)
+    if (!r.done) return
+    o.search = null
+    if (r.result === 'unknown') {
+      refuse(bot, ctx, `unknown block: ${o.name}`)
+      return
+    }
+    if (!r.result) {
+      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      return
+    }
+    o.pos = r.result.position
+    o.block = r.result.name
+    o.exposed = r.result.exposed !== false
+    o.drop = dropFor(r.result.name)
+    if (needsPickaxe(r.result.name) && !hasPickaxe(bot, r.result.name)) {
+      const tier = requiredTier(r.result.name)
+      refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${r.result.name}`)
+      return
+    }
+    if (!o.announced) {
+      o.announced = true
+      say(bot, `going for ${o.want} ${r.result.name}, ${r.result.distance} blocks away`)
     }
     o.phase = 'walk'
     o.stalls = 0

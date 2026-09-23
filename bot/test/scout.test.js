@@ -284,19 +284,20 @@ describe('findNearest', () => {
     assert.equal(res.distance, 2)
   })
 
-  it('uses default radius 48 and count 64 in findBlocks scan', () => {
+  it('pads the 48 scan to cover the sphere (octahedral section walk), count 64', () => {
     const bot = mockBot({ registry: NAMES })
     let opts = null
     bot.findBlocks = (o) => { opts = o; return [] }
     findNearest(bot, 'coal')
-    assert.equal(opts.maxDistance, 48)
+    // ceil(48*sqrt(3)) = 84: the smallest octahedron containing the 48-sphere
+    assert.equal(opts.maxDistance, 84)
     assert.equal(opts.count, 64)
   })
 
-  it('finds ore at 100 blocks on a later stage (amb)', () => {
-    // Loaded chunks out to 160; the scan honors maxDistance per stage.
+  it('finds ore at 100 blocks via the tick-sliced far search (amb)', () => {
+    // Sync 48 is empty; the 96/160 shells run as sub-scans across ticks.
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
     const ore = pos(100, 64, 0)
-    const radii = []
     const bot = mockBot({
       registry: NAMES,
       spots: [ore],
@@ -305,14 +306,27 @@ describe('findNearest', () => {
         '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
       },
     })
+    assert.equal(findNearest(bot, 'iron'), null, 'sync 48 misses it')
+    const inner = bot.findBlocks.bind(bot)
     bot.findBlocks = (o) => {
-      radii.push(o.maxDistance)
-      return o.maxDistance >= 100 ? [ore] : []
+      // Emulate the real client: only hits near the scan center come back.
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
     }
-    const res = findNearest(bot, 'iron')
-    assert.ok(res, 'ore at 100 blocks must be found')
-    assert.equal(res.distance, 100)
-    assert.deepEqual(radii, [48, 96, 160])
+    const cursor = startFarSearch(bot, 'iron')
+    assert.ok(cursor && cursor !== 'unknown', 'far search starts')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
+    assert.ok(r.done, 'cursor completes')
+    assert.ok(r.result, 'ore at 100 blocks must be found')
+    assert.equal(r.result.distance, 100)
+  })
+
+  it('filters sync hits beyond the claimed 48 (amb review)', () => {
+    // A hit inside the padded octahedron but outside the 48-sphere must not
+    // count: the stage stays empty and the answer stays honest.
+    const bot = mockBot({ registry: NAMES, spots: [pos(60, 64, 0)], names: { '60,64,0': 'iron_ore' } })
+    assert.equal(findNearest(bot, 'iron'), null)
   })
 
   it('stops after the 48 stage when a nearby vein exists (no extra scans)', () => {
@@ -322,7 +336,7 @@ describe('findNearest', () => {
     bot.findBlocks = (o) => { radii.push(o.maxDistance); return inner(o) }
     const res = findNearest(bot, 'iron')
     assert.equal(res.distance, 10)
-    assert.deepEqual(radii, [48])
+    assert.deepEqual(radii, [84])
   })
 
   it('reports the loaded boundary from blockAt probes', () => {
@@ -421,14 +435,24 @@ describe("chat command 'find me <block>'", () => {
     assert.deepEqual(bot.lines, ['no diamond within 48 blocks (loaded area)'])
   })
 
-  it('names the loaded boundary when chunks are loaded out to 160', () => {
+  it('widens past 48 and answers the loaded boundary after ticks (amb)', () => {
+    const { advancePendingSearch } = require('../src/index')
     const bot = mockBot({
       registry: REG,
       spots: [],
       names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
     })
-    handleChat(bot, null, 'Steve', 'find me diamond')
-    assert.deepEqual(bot.lines, ['no diamond within 160 blocks (loaded area)'])
+    bot._tickerCtx = {}
+    const ticker = { setLead: () => {} }
+    handleChat(bot, ticker, 'Steve', 'find me diamond')
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for diamond…'])
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) {
+      advancePendingSearch(bot, ticker, bot._tickerCtx)
+    }
+    assert.deepEqual(bot.lines, [
+      'nothing within 48, widening the search for diamond…',
+      'no diamond within 160 blocks (loaded area)',
+    ])
   })
 
   it("replies with 'unknown block: <name>' when block name is unrecognized", () => {
