@@ -20,6 +20,7 @@ const BEHAVIOURS = {
   follow: require('./behaviours/follow'),
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
+  gather: require('./behaviours/gather'),
   rest: require('./behaviours/rest'),
 }
 

@@ -166,15 +166,15 @@ describe('decide decision point', () => {
 
   const goalLines = () => lines.filter((l) => l.includes('goal step='))
 
-  it('first decision picks rest, logs and chats once', () => {
+  it('first decision picks gather, logs and chats once', () => {
     const bot = goalBot()
     const ctx = {}
     const r = decide(bot, ctx)
-    assert.deepEqual(r, { action: 'rest', sprint: false, source: 'goal-fsm' })
-    assert.equal(ctx.step, 'rest')
+    assert.deepEqual(r, { action: 'gather', sprint: false, source: 'goal-fsm' })
+    assert.equal(ctx.step, 'gather')
     assert.equal(ctx.stepStatus, 'running')
-    assert.deepEqual(goalLines(), [`goal step=rest prev=none source=goal-fsm facts=${goalText(goalFacts(bot, ctx))}`])
-    assert.deepEqual(bot.chats, ['on my own: resting near spawn'])
+    assert.deepEqual(goalLines(), [`goal step=gather prev=none source=goal-fsm facts=${goalText(goalFacts(bot, ctx))}`])
+    assert.deepEqual(bot.chats, ['on my own: gathering logs'])
   })
 
   it('same facts with a running step: no change, no log, no chat', () => {
@@ -184,7 +184,7 @@ describe('decide decision point', () => {
     lines.length = 0
     bot.chats.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.deepEqual(goalLines(), [])
     assert.deepEqual(bot.chats, [])
   })
@@ -197,7 +197,7 @@ describe('decide decision point', () => {
     lines.length = 0
     bot.chats.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(goalLines(), []) // same step again: silent restart
     assert.deepEqual(bot.chats, [])
@@ -209,7 +209,7 @@ describe('decide decision point', () => {
     decide(bot, ctx)
     ctx.stepStatus = 'failed:no-trees'
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'gather')
     assert.equal(ctx.stepStatus, 'running')
   })
 
@@ -221,14 +221,15 @@ describe('decide decision point', () => {
     bot.inventory = { items: () => [{ name: 'oak_log', count: 3 }] } // logs 0 -> 3
     lines.length = 0
     const r = decide(bot, ctx)
-    assert.equal(r.action, 'rest') // craft feasible but unregistered: only rest can run
+    assert.equal(r.action, 'gather') // craft feasible but unregistered: gather runs now that rw4.2 registered it
     assert.ok(ctx.goalText.includes('logs=3'))
   })
 
-  it('unregistered steps never run even when feasible', () => {
-    // Only rest is plugged into BEHAVIOURS in this bead; gather/craft/build
-    // join in rw4.2-rw4.4 with one require line each, no goal.js change.
-    const bot = goalBot({ items: [{ name: 'oak_log', count: 10 }] })
+  it('feasible-but-unregistered craft never runs', () => {
+    // gather joined in rw4.2; craft/build join in rw4.3-rw4.4. Over a full
+    // load (15 logs = 60 plank-equivalent over the 58 budget) gather is done
+    // and craft is feasible, but only rest is left to run it.
+    const bot = goalBot({ items: [{ name: 'oak_log', count: 15 }] })
     const r = decide(bot, {})
     assert.equal(r.action, 'rest')
   })

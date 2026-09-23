@@ -1,0 +1,189 @@
+'use strict'
+
+const { goals } = require('mineflayer-pathfinder')
+const { NEED_LOGS } = require('../goal')
+const { countItems } = require('../perception')
+
+// gather: chop the nearest trees until NEED_LOGS logs are on hand. One
+// function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
+// 'gather' so the goal arbiter can pick it. Reports via ctx.stepStatus.
+// No mineflayer-collectblock: GoalBreakBlock walks the bot into dig range
+// (it does NOT break — see pathfinder goals.js) and bot.dig does the rest.
+// Upper logs: the executor pillars on its own — movements.scafoldingBlocks
+// already defaults to the kit dirt/cobblestone, the only kit use allowed.
+// Foliage is never a target (matching is *_log only).
+// ponytail: if the pathfinder ever starts chewing through its own future
+// house, gate the blueprint blocks via movements.blocksCantBreak (bead .4).
+const FIND_RADIUS = 48
+const FIND_COUNT = 64
+const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
+const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
+const MOVE_TOLERANCE = 0.5
+const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
+
+function keyOf(p) {
+  return `${p.x},${p.y},${p.z}`
+}
+
+function dist(a, b) {
+  if (a && typeof a.distanceTo === 'function') return a.distanceTo(b)
+  if (b && typeof b.distanceTo === 'function') return b.distanceTo(a)
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+function logIds(bot) {
+  const byName = (bot.registry && bot.registry.blocksByName) || {}
+  const ids = []
+  for (const name of Object.keys(byName)) {
+    if (!name.endsWith('_log')) continue
+    const entry = byName[name]
+    if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
+  }
+  return ids
+}
+
+function say(bot, line) {
+  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
+}
+
+function gather(bot, ctx, target, state) {
+  const logs = countItems(bot, (n) => n.endsWith('_log'))
+  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1 }
+  const g = ctx.gather
+  // A finished attempt stays finished until the world changes (log count):
+  // decide() re-picks the step with status 'running', so re-assert here
+  // instead of rescanning and re-chatting every tick.
+  if (g.final) {
+    if (g.atLogs === logs) {
+      ctx.stepStatus = g.final
+      return
+    }
+    g.final = null
+    g.skip.clear()
+    g.streak = 0
+  }
+  if (logs >= NEED_LOGS) {
+    g.final = 'done'
+    g.atLogs = logs
+    ctx.stepStatus = 'done'
+    say(bot, `got ${NEED_LOGS} logs`)
+    return
+  }
+  const bp = bot.entity && bot.entity.position
+  if (!bp) return
+  if (!g.pos) {
+    let found = []
+    try {
+      found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
+    } catch (_) { found = [] }
+    const open = found.filter((p) => !g.skip.has(keyOf(p)))
+    if (open.length === 0) {
+      g.final = found.length === 0 ? 'failed:no-trees' : 'failed:unreachable'
+      g.atLogs = logs
+      ctx.stepStatus = g.final
+      say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
+      return
+    }
+    let best = open[0]
+    for (const p of open) {
+      if (dist(p, bp) < dist(best, bp)) best = p
+    }
+    g.pos = best
+    g.phase = 'walk'
+    g.stalls = 0
+    g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    try {
+      const b = bot.blockAt && bot.blockAt(best)
+      g.name = (b && b.name) || 'log'
+    } catch (_) {
+      g.name = 'log'
+    }
+    g.lastProgressAt = Date.now()
+  }
+  if (logs > 0 && g.skip.size > 0 && logs !== g.seenLogs) {
+    // Drops landed: the world changed, old skips may be stale.
+    g.skip.clear()
+    g.streak = 0
+  }
+  g.seenLogs = logs
+  if (logs > 0 && Date.now() - (g.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
+    g.lastProgressAt = Date.now()
+    say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
+  }
+  if (g.phase === 'walk') {
+    const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
+    if (key !== ctx.lastGoalKey) {
+      bot.pathfinder.setGoal(new goals.GoalBreakBlock(g.pos.x, g.pos.y, g.pos.z, bot), false)
+      ctx.lastGoalKey = key
+      g.stalls = 0
+      g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+      return
+    }
+    let block = null
+    try { block = bot.blockAt && bot.blockAt(g.pos) } catch (_) { block = null }
+    if (!block) {
+      g.pos = null // chopped by someone else: search again
+      return
+    }
+    if (!bot.pathfinder.isMoving()) {
+      let diggable = true
+      try { diggable = typeof bot.canDigBlock === 'function' ? bot.canDigBlock(block) : true } catch (_) { diggable = false }
+      if (diggable) {
+        g.phase = 'dig'
+        g.block = block
+      }
+    }
+    if (g.phase === 'walk') {
+      // Stall by displacement, not isMoving (follow.js wedge lesson: a
+      // wedged executor keeps reporting moving while the body stands still).
+      if (Math.hypot(bp.x - g.lastPos.x, bp.y - g.lastPos.y, bp.z - g.lastPos.z) > MOVE_TOLERANCE) {
+        g.stalls = 0
+        g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+      } else if (++g.stalls >= STALL_TICKS) {
+        g.skip.add(keyOf(g.pos))
+        g.streak = (g.streak || 0) + 1
+        g.pos = null
+        if (g.streak >= UNREACHABLE_FAILS) {
+          g.final = 'failed:unreachable'
+          g.atLogs = logs
+          ctx.stepStatus = g.final
+          say(bot, 'cannot reach the trees')
+        }
+      }
+      return
+    }
+  }
+  if (g.phase === 'dig') {
+    // Exactly one dig at a time: while it is in flight, wait (mutation:
+    // digging every tick breaks the executor and the count).
+    if (ctx.digInFlight) return
+    if (typeof bot.dig !== 'function') {
+      g.skip.add(keyOf(g.pos))
+      g.pos = null
+      return
+    }
+    ctx.digInFlight = true
+    const block = g.block
+    const run = async () => {
+      try { await bot.dig(block) } catch (_) { /* gone or interrupted: pickup anyway */ }
+      ctx.digInFlight = false
+      g.phase = 'pickup'
+    }
+    void run()
+    return
+  }
+  if (g.phase === 'pickup') {
+    const key = `gather-pickup:${g.pos.x},${g.pos.y},${g.pos.z}`
+    if (key !== ctx.lastGoalKey) {
+      bot.pathfinder.setGoal(new goals.GoalBlock(g.pos.x, g.pos.y, g.pos.z), false)
+      ctx.lastGoalKey = key
+      return
+    }
+    // Reached or gave up getting there: the drop is picked up by proximity
+    // and the inventory count is the truth — move to the next tree.
+    g.pos = null
+    g.phase = 'walk'
+  }
+}
+
+module.exports = gather
