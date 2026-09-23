@@ -400,6 +400,16 @@ async function decide(bot, ctx) {
   const prev = (ctx && ctx.step) || null
   const status = (ctx && ctx.stepStatus) || null
   const finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
+  // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
+  // (walk->open->enter->close). A facts-changed re-decision must not preempt
+  // them mid-phase: stepping inside flips inside, which would hand stay the
+  // step before gohome shuts the door, chats and shelters — and stepping out
+  // flips it back before stay says good morning. The phase machine fails
+  // itself on real trouble (no-home, cannot-reach), which re-arms choice.
+  if (!finished && (prev === 'gohome' || prev === 'stay')) {
+    const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
+    if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
   if (!prev || finished || ctx.goalText !== text) {
     const askKey = `${text}\n${status || ''}`
     if (prev && ctx.askedKey === askKey) return { action: ctx.step, sprint: false, source: 'goal-fsm' }

@@ -197,6 +197,48 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, [])
   })
 
+  it('gohome keeps the step after stepping inside (stay must not preempt close)', async () => {
+    const bot = goalBot({ timeOfDay: 15000, at: pos(11, 64, 21) })
+    const ctx = {
+      step: 'gohome',
+      stepStatus: 'running',
+      gohome: { phase: 'enter', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      goalText: 'stale',
+      home: { site: pos(10, 64, 20), built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } },
+    }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'gohome')
+    assert.equal(ctx.step, 'gohome')
+    assert.deepEqual(goalLines(), [])
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('stay keeps the step after stepping out on a morning exit', async () => {
+    const bot = goalBot({ timeOfDay: 1000, at: pos(11, 64, 19) })
+    const ctx = {
+      step: 'stay',
+      stepStatus: 'running',
+      stay: { phase: 'exit', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      goalText: 'stale',
+      home: { site: pos(10, 64, 20), built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } },
+    }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'stay')
+    assert.deepEqual(goalLines(), [])
+  })
+
+  it('finished night phase re-arms choice (gohome done inside at night -> stay)', async () => {
+    const bot = goalBot({ timeOfDay: 15000, at: pos(11, 64, 21) })
+    const ctx = {
+      step: 'gohome',
+      stepStatus: 'done',
+      gohome: { phase: 'done', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      home: { site: pos(10, 64, 20), built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } },
+    }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'stay')
+  })
+
   it('done step re-decides (logs only on change)', async () => {
     const bot = goalBot()
     const ctx = {}
