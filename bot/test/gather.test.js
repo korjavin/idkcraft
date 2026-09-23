@@ -59,7 +59,7 @@ function freshCtx() {
 }
 
 describe('gather step', () => {
-  it('(a) finds the nearest log and issues GoalBreakBlock', () => {
+  it('(a) finds the nearest log and issues a working GoalNear', () => {
     const bot = mockBot({
       spots: [pos(8, 64, 0), pos(2, 64, 0)],
       names: { '8,64,0': 'oak_log', '2,64,0': 'birch_log' },
@@ -67,7 +67,11 @@ describe('gather step', () => {
     const ctx = freshCtx()
     gather(bot, ctx, null, {})
     assert.equal(bot.calls.setGoal, 1)
-    assert.equal(bot.calls.goals[0].constructor.name, 'GoalBreakBlock')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+    // Regression: GoalBreakBlock.isEnd throws in pathfinder 2.4.5 and would
+    // crash-loop the process on the first executor tick. The issued goal
+    // must answer isEnd on a plain node without throwing.
+    assert.equal(typeof bot.calls.goals[0].isEnd({ x: 0, y: 64, z: 0 }), 'boolean')
     assert.match(ctx.lastGoalKey, /^gather:2,64,0$/)
     assert.equal(ctx.stepStatus, 'running')
   })
@@ -165,7 +169,7 @@ describe('gather step', () => {
     const ctx = freshCtx()
     gather(bot, ctx, null, {}) // goal on tree 1
     assert.match(ctx.lastGoalKey, /^gather:2,64,0$/)
-    delete names['2,64,0'] // someone else chopped it
+    names['2,64,0'] = 'air' // someone else chopped it: reads back as air
     bot._moving = false
     gather(bot, ctx, null, {}) // block gone -> forget it
     gather(bot, ctx, null, {}) // search again
@@ -176,5 +180,22 @@ describe('gather step', () => {
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.gather, gather)
+  })
+
+  it("'go work' clears a stale gather failure so the step retries", () => {
+    const { createTicker } = require('../src/index')
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'oak_log' },
+    })
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    bot._tickerCtx.gather = { final: 'failed:no-trees', atLogs: 0 }
+    ticker.work() // explicit order retries: stale failure forgotten
+    assert.equal(bot._tickerCtx.gather, null)
   })
 })

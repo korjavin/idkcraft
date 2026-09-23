@@ -7,8 +7,11 @@ const { countItems } = require('../perception')
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
 // function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
 // 'gather' so the goal arbiter can pick it. Reports via ctx.stepStatus.
-// No mineflayer-collectblock: GoalBreakBlock walks the bot into dig range
-// (it does NOT break — see pathfinder goals.js) and bot.dig does the rest.
+// No mineflayer-collectblock: GoalNear walks the bot next to the log and
+// bot.dig does the rest. NOT GoalBreakBlock: in the pinned pathfinder 2.4.5
+// its isEnd() calls the inner goal without the node and builds it with the
+// bot as the world, so the first executor tick throws and kills the process
+// (reproduced); GoalNear range 2 stops inside dig reach with pure math.
 // Upper logs: the executor pillars on its own — movements.scafoldingBlocks
 // already defaults to the kit dirt/cobblestone, the only kit use allowed.
 // Foliage is never a target (matching is *_log only).
@@ -113,7 +116,7 @@ function gather(bot, ctx, target, state) {
   if (g.phase === 'walk') {
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalBreakBlock(g.pos.x, g.pos.y, g.pos.z, bot), false)
+      bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
       ctx.lastGoalKey = key
       g.stalls = 0
       g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -121,8 +124,8 @@ function gather(bot, ctx, target, state) {
     }
     let block = null
     try { block = bot.blockAt && bot.blockAt(g.pos) } catch (_) { block = null }
-    if (!block) {
-      g.pos = null // chopped by someone else: search again
+    if (!block || !block.name || !block.name.endsWith('_log')) {
+      g.pos = null // chopped by someone else (reads back as air): search again
       return
     }
     if (!bot.pathfinder.isMoving()) {
