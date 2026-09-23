@@ -5,6 +5,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -599,7 +600,7 @@ function fleeReflex(bot, ctx) {
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
