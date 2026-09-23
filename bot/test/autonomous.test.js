@@ -196,4 +196,16 @@ describe('autonomous mode', () => {
     assert.ok((c.unseenTicks || 0) >= 10, `counter accrues alone, got ${c.unseenTicks}`)
     assert.ok(bot.pathfinder.goal, 'homing walk issued')
   })
+
+  it('alone, explore stays within the autonomous radius', async () => {
+    // dxl x atl.1: with nobody online the spiral must not wander past
+    // AUTONOMOUS_EXPLORE_RADIUS, even mid-explore. Deleting the cap line
+    // fails this test (maxRadius keeps the wider value).
+    const bot = mockBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, autonomous: true })
+    const c = bot._tickerCtx
+    c.explore = { visited: new Set(), maxRadius: 512 }
+    await ticker.tick() // empty roster
+    assert.equal(c.explore.maxRadius, AUTONOMOUS_EXPLORE_RADIUS)
+  })
 })

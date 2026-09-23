@@ -35,6 +35,7 @@ const BEHAVIOURS = {
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
   build: require('./behaviours/build'),
+  explore: require('./behaviours/explore'),
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
@@ -631,6 +632,11 @@ function fleeReflex(bot, ctx) {
       const rosterOnline = bot.players &&
         Object.keys(bot.players).some((n) => n !== bot.username)
       autoBrain(rosterOnline)
+      // Alone-explore cap (dxl x atl.1): with nobody online the spiral must
+      // not wander past AUTONOMOUS_EXPLORE_RADIUS — new chunks bloat the
+      // host disk. explore.js defaults an untouched maxRadius to MAX_RADIUS
+      // (the same 256), so only a live wider explore needs clamping.
+      if (!rosterOnline && ctx.autonomous && ctx.explore) ctx.explore.maxRadius = ctx.exploreAloneRadius
       // A pending follow order beats working alone: the player explicitly
       // asked the bot to come, so reunion outranks cave work (3a7 keeps work
       // for an unseen follower; this walks instead once N trips). Pure work
