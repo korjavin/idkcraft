@@ -79,12 +79,49 @@ function resolveBlockIds(bot, blockName) {
   return ids
 }
 
+// 'find me' name resolution: 'ore' means any scout-listed ore, a trailing
+// 's' falls back to the singular (diamonds -> diamond); everything else goes
+// through resolveBlockIds (exact + <base>_ore variants). No fuzzy search:
+// anything still unmatched resolves to no ids ('unknown' downstream).
+function resolveFindIds(bot, name) {
+  if (name === 'ore' || name === 'ores') return resolveIds(bot, ORE_NAMES)
+  let ids = resolveBlockIds(bot, name)
+  if (ids.length === 0 && name.length > 1 && name.endsWith('s')) {
+    const singular = name.slice(0, -1)
+    ids = singular === 'ore' ? resolveIds(bot, ORE_NAMES) : resolveBlockIds(bot, singular)
+  }
+  return ids
+}
+
+// A position counts as exposed when a confirmed air block touches it on one
+// of the six sides (visible from a cave or the surface). Unloaded (null) or
+// unreadable does not count: only confirmed air.
+function isExposed(bot, p) {
+  if (!bot.blockAt) return false
+  const offs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+  try {
+    for (const [dx, dy, dz] of offs) {
+      const q = (p && typeof p.offset === 'function')
+        ? p.offset(dx, dy, dz)
+        : { x: Math.floor(p.x) + dx, y: Math.floor(p.y) + dy, z: Math.floor(p.z) + dz }
+      const b = bot.blockAt(q)
+      if (b && (b.name === 'air' || b.name === 'cave_air')) return true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
 // Scan helper, exported for the 'find me <block>' chat command:
 // block name -> nearest loaded position; null when the name resolves but
 // nothing is nearby; 'unknown' when the name matches no block at all so the
 // caller can answer 'unknown block'.
-function findNearestBlock(bot, blockName, radius = 48) {
-  const ids = resolveBlockIds(bot, blockName)
+// Ranking: exposed ore first (lead the player somewhere walkable, not into
+// solid rock), then closest in height to refY (the requesting player's Y;
+// the bot's own when unknown), then nearest by straight distance.
+function findNearestBlock(bot, blockName, radius = 48, refY = null) {
+  const ids = resolveFindIds(bot, blockName)
   if (ids.length === 0) return 'unknown'
   let found = null
   try {
@@ -94,17 +131,36 @@ function findNearestBlock(bot, blockName, radius = 48) {
   }
   if (!found || found.length === 0) return null
   const origin = bot.entity && bot.entity.position
+  const y0 = typeof refY === 'number' ? refY
+    : (origin && typeof origin.y === 'number' ? origin.y : null)
   let best = found[0]
-  if (origin) {
-    for (const p of found) {
-      if (dist(p, origin) < dist(best, origin)) best = p
+  let bestScore = scoreOf(found[0])
+  for (const p of found) {
+    const sc = scoreOf(p)
+    if (compareScore(sc, bestScore) < 0) {
+      best = p
+      bestScore = sc
     }
   }
   return best
+
+  function scoreOf(p) {
+    const exposed = isExposed(bot, p) ? 0 : 1
+    const dy = y0 != null && typeof p.y === 'number' ? Math.abs(p.y - y0) : 0
+    const d = origin ? dist(p, origin) : 0
+    return [exposed, dy, d]
+  }
 }
 
-function findNearest(bot, blockName, radius = 48) {
-  const p = findNearestBlock(bot, blockName, radius)
+function compareScore(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i]
+  }
+  return 0
+}
+
+function findNearest(bot, blockName, radius = 48, refY = null) {
+  const p = findNearestBlock(bot, blockName, radius, refY)
   if (p === 'unknown') return 'unknown'
   if (!p) return null
   const origin = bot.entity && bot.entity.position
@@ -172,4 +228,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, resolveBlockIds, ORE_NAMES }
+module.exports = { makeScout, findNearestBlock, findNearest, resolveBlockIds, resolveFindIds, isExposed, ORE_NAMES }
