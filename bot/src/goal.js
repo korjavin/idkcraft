@@ -37,7 +37,7 @@ const MENU = {
     // picked-up log would preempt gather with a chat line per log.
     // The door needs a placed table (bot.craft requires the block): without
     // one the step could neither progress nor finish, churning done forever.
-    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.planks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.planks >= 6 && facts.door === 0 && facts.tablePlaced),
+    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
   },
   build: {
@@ -79,6 +79,21 @@ function goalFacts(bot, ctx) {
   const planks = countItems(bot, (n) => n.endsWith('_planks'))
   const table = countItems(bot, (n) => n === 'crafting_table')
   const door = countItems(bot, (n) => n.endsWith('_door'))
+  // Top single-wood plank count: recipes cannot mix wood types (see above).
+  let maxPlanks = 0
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    const perWood = {}
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string' || !i.name.endsWith('_planks')) continue
+        perWood[i.name] = (perWood[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+      }
+      for (const n of Object.values(perWood)) {
+        if (n > maxPlanks) maxPlanks = n
+      }
+    }
+  } catch (_) { /* inventory not ready: 0 */ }
   const home = !ctx || !ctx.home ? 'none' : ctx.home.built ? 'built' : 'site'
   // ctx.home.interior contract (set by bead .4): { min: {x,y,z}, max: {x,y,z} }.
   let inside = 'no'
@@ -91,7 +106,7 @@ function goalFacts(bot, ctx) {
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
   const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
-  return { time, logs, planks, table, door, home, tablePlaced, inside }
+  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside }
 }
 
 // Canonical facts text: the decision point fires when it changes (same role

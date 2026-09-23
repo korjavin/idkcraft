@@ -97,7 +97,7 @@ describe('goalFacts', () => {
 
 describe('MENU feasibility gates', () => {
   const F = (name, facts) => MENU[name].feasible(facts)
-  const base = { time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no' }
+  const base = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no' }
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
     assert.equal(F('gather', { ...base, logs: 5 }), true) // mid-load: keep gathering
@@ -121,8 +121,8 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', base), false)
     assert.equal(F('craft', { ...base, logs: 5 }), false) // no per-log preempt churn
     assert.equal(F('craft', { ...base, logs: 14 }), true) // full batch
-    assert.equal(F('craft', { ...base, planks: 5 }), true) // leftovers finish table/door
-    assert.equal(F('craft', { ...base, planks: 56, table: 1, door: 1 }), false) // nothing left to craft
+    assert.equal(F('craft', { ...base, planks: 5, maxPlanks: 5 }), true) // leftovers finish table/door
+    assert.equal(F('craft', { ...base, planks: 56, maxPlanks: 56, table: 1, door: 1 }), false) // nothing left to craft
   })
   it('build needs budget, kit and a site — never a finished house', () => {
     assert.equal(F('build', { ...base, planks: 48, table: 1, door: 1, home: 'site' }), true)
@@ -238,6 +238,24 @@ describe('decide decision point', () => {
     const bot = goalBot({ items: [{ name: 'oak_planks', count: 6 }] })
     const r = decide(bot, { home: { table: pos(2, 64, 0) } })
     assert.equal(r.action, 'craft')
+  })
+
+  it('placed table with door done gathers on (table clause needs no table)', () => {
+    // 10 planks are short of the 48 budget, so gather (not rest) is correct
+    // here — but never craft: with the door done only the table clause could
+    // fire, and the placed table guards it. Deleting the guard picks craft.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 10 }, { name: 'oak_door', count: 1 }] })
+    const r = decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'gather')
+  })
+
+  it('mixed planks from outside gather on (recipes cannot mix woods)', () => {
+    // 2+2 needs more material, so gather (not rest) is correct — but never
+    // craft: total-planks clauses would fire on the mixed 4. Deleting the
+    // per-wood counts picks craft into a done-forever loop.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 2 }] })
+    const r = decide(bot, {})
+    assert.equal(r.action, 'gather')
   })
 
   it('full load hands gather to craft', () => {

@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
@@ -27,12 +28,8 @@ function tally(bot, suffix) {
   return m
 }
 
-function topWood(m) {
-  let best = null
-  for (const [wood, n] of m) {
-    if (!best || n > best[1] || (n === best[1] && wood < best[0])) best = [wood, n]
-  }
-  return best
+function sortedWoods(m) {
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
 }
 
 function itemId(bot, name) {
@@ -73,19 +70,18 @@ function craft(bot, ctx, target, state) {
   const planks = tally(bot, '_planks')
   const tablePos = ctx.home && ctx.home.table
   let op = null
-  const top = topWood(logs)
-  if (top) {
-    const name = `${top[0]}_planks`
+  for (const [wood, n] of sortedWoods(logs)) {
+    const name = `${wood}_planks`
     const found = recipes(bot, name, null)
-    if (found.length > 0) op = { item: name, recipe: found[0], count: top[1], table: null }
+    if (found.length > 0) { op = { item: name, recipe: found[0], count: n, table: null }; break }
   }
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
     if (tableCount === 0 && !tablePos) {
-      const topPlanks = topWood(planks)
-      if (topPlanks && topPlanks[1] >= 4) {
+      for (const [wood, n] of sortedWoods(planks)) {
+        if (n < 4) break
         const found = recipes(bot, 'crafting_table', null)
-        if (found.length > 0) op = { item: 'crafting_table', recipe: found[0], count: 1, table: null }
+        if (found.length > 0) { op = { item: 'crafting_table', recipe: found[0], count: 1, table: null }; break }
       }
     }
   }
@@ -95,11 +91,11 @@ function craft(bot, ctx, target, state) {
       let block = null
       try { block = bot.blockAt && bot.blockAt(tablePos) } catch (_) { block = null }
       if (block && dist3(bp, tablePos) <= TABLE_REACH) {
-        const topPlanks = topWood(planks)
-        if (topPlanks && topPlanks[1] >= 6) {
-          const name = `${topPlanks[0]}_door`
+        for (const [wood, n] of sortedWoods(planks)) {
+          if (n < 6) break
+          const name = `${wood}_door`
           const found = recipes(bot, name, block)
-          if (found.length > 0) op = { item: name, recipe: found[0], count: 1, table: block }
+          if (found.length > 0) { op = { item: name, recipe: found[0], count: 1, table: block }; break }
         }
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
@@ -112,6 +108,16 @@ function craft(bot, ctx, target, state) {
     }
   }
   if (!op) {
+    let total = 0
+    let first = null
+    for (const [wood, n] of sortedWoods(logs)) {
+      total += n
+      if (!first) first = wood
+    }
+    if (total >= NEED_LOGS && first) {
+      fail(ctx, `${first}_planks`, new Error('no planks recipe for this wood'))
+      return
+    }
     ctx.stepStatus = 'done'
     return
   }

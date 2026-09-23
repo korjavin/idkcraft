@@ -75,6 +75,35 @@ describe('craft step', () => {
     bot.restoreError()
   })
 
+  it('logs beat planks: 3 logs + 4 planks still crafts planks first', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }, { name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks', 4), crafting_table: recipeFor('crafting_table') },
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
+    bot.restoreError()
+  })
+
+  it('recipe-less logs fail loudly instead of done-churn', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stripped_oak_log', count: 14 }],
+      ids: { ...IDS, stripped_oak_log: 21 },
+      recipes: {},
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:craft-stripped_oak_planks')
+    assert.equal(bot.errs.length, 1)
+    bot.restoreError()
+  })
+
   it('(b) 4 planks and no table -> crafting table', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 4 }],
