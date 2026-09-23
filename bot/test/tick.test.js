@@ -639,7 +639,7 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
       const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(stuckLines.length, 1)
-      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0$/)
+      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
 
       await ticker.tick() // episode tick: null + menu sidestep + one-tick jump
       assert.equal(bot.calls.setGoal, 3)

@@ -8,6 +8,17 @@ const SEARCH_TIMEOUT_MS = 6000
 const MAX_STALLS = 2
 const MOVE_TOLERANCE = 0.5
 
+// Block name at a feet/head/next cell for the wedge line (b50): the prod
+// trap showed position alone never names the relief. Positions must stay
+// Vec3: real blockAt calls pos.floored() and throws on plain {x,y,z}.
+// Guarded: mocks and unloaded cells read '?'.
+function blockNameAt(bot, p) {
+  try {
+    const b = p && typeof p.floored === 'function' && bot.blockAt && bot.blockAt(p)
+    return (b && b.name) || '?'
+  } catch (_) { return '?' }
+}
+
 function formatPos(p) {
   if (!p) return 'unknown'
   const fx = typeof p.x === 'number' ? (Number.isInteger(p.x) ? p.x : p.x.toFixed(1)) : '0'
@@ -70,8 +81,12 @@ function follow(bot, ctx, target, state) {
       const dist = typeof state?.distance_to_player === 'number'
         ? state.distance_to_player.toFixed(1)
         : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
+      const feetP = bp && typeof bp.floored === 'function' ? bp.floored() : null
+      const headP = feetP && typeof feetP.offset === 'function' ? feetP.offset(0, 1, 0) : null
+      const next = ctx.lastPathNext
+      const nextStr = next ? `${next.x},${next.y},${next.z}:${blockNameAt(bot, next)}` : '?:?'
       const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
-      if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
+      if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist} feet=${blockNameAt(bot, feetP)} head=${blockNameAt(bot, headP)} next=${nextStr}`)
       ctx.followStalls = 0
       ctx.stuckResets = 0
       ctx.followIssuedAt = now
