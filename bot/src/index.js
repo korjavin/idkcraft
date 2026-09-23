@@ -5,6 +5,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
@@ -828,6 +829,19 @@ function handleChat(bot, ticker, username, message) {
     bot.chat(`on my own; say 'follow me' to call me`)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
+  } else if (msg === 'help' || msg.startsWith('help ')) {
+    const topic = msg.slice(4).trim()
+    if (!topic) {
+      bot.chat(helpReply(1))
+    } else if (/^\d+$/.test(topic)) {
+      bot.chat(helpReply(Number(topic)) || `no help page ${topic.slice(0, 10)} — say help for the list`)
+    } else {
+      const cmd = lookupCommand(topic)
+      if (cmd) bot.chat(detailLine(cmd))
+      // Echo capped: the raw topic is unbounded player text, and an overlong
+      // reply would be split past the 256-char chat cap.
+      else bot.chat(`unknown command: "${topic.slice(0, 30)}" — say help for the list`)
+    }
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
@@ -853,6 +867,8 @@ function handleChat(bot, ticker, username, message) {
           if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: playerName, lastProgressAt: Date.now() })
         }
       }
+    } else if (msg === 'find me' || msg.startsWith('find me ')) {
+      bot.chat('try: find me iron')
     }
   }
 }
