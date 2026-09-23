@@ -31,7 +31,8 @@ function mockBot({ registry = LOGREG, spots = [], names = {}, items = [] } = {})
     _items: items,
     digCalls: 0,
     pathfinder: {
-      setGoal: (goal, dynamic) => { calls.setGoal++; calls.goals.push(goal) },
+      goal: null,
+      setGoal: (goal, dynamic) => { calls.setGoal++; calls.goals.push(goal); bot.pathfinder.goal = goal },
       isMoving: () => bot._moving,
     },
     inventory: { items: () => bot._items },
@@ -211,6 +212,85 @@ describe('gather step', () => {
     assert.deepEqual(bot.lines, ['chopping oak_log 1/14'])
     gather(bot, ctx, null, {})
     assert.deepEqual(bot.lines, ['chopping oak_log 1/14']) // timer restarted: silent again
+  })
+
+  it('tower jumps in place do not count as displacement', () => {
+    // yvi: the executor pillars (y 64<->65.2, x/z fixed). The old 3D hypot
+    // saw dy ~1.2 > MOVE_TOLERANCE every tick, so stalls never reached
+    // STALL_TICKS and one tree burned ~4.5 min instead of ~10 s.
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'oak_log', '6,64,0': 'birch_log' },
+    })
+    bot._moving = true // wedged executor: claims moving, body jumping in place
+    bot.entity.position = pos(0, 64, 5)
+    const ctx = freshCtx()
+    gather(bot, ctx, null, {}) // goal on tree 1
+    for (let i = 1; i <= 11; i++) {
+      bot.entity.position = pos(0, i % 2 ? 65.2 : 64, 5)
+      bot.entity.onGround = !(i % 2)
+      gather(bot, ctx, null, {})
+    }
+    assert.ok(ctx.gather.skip.has('2,64,0'), 'jump in place = standing still')
+  })
+
+  it('setPathReset counts consecutive place_error, breaks on other reasons', () => {
+    const { createTicker } = require('../src/index')
+    const bot = mockBot({})
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    assert.equal(bot._tickerCtx.placeErrors, 2)
+    ticker.setPathReset('stuck') // any other reason breaks the streak
+    assert.equal(bot._tickerCtx.placeErrors, 0)
+    assert.equal(bot._tickerCtx.stuckResets, 1)
+  })
+
+  it('place_error loop with tower jumps: columns skipped, then failed with goal cleared', () => {
+    // yvi acceptance: upper-log columns, path_reset place_error every tick,
+    // body jumping in place. Columns must skip fast and the dead goal must go.
+    const names = {}
+    const spots = []
+    for (const cx of [2, 6, 9]) {
+      for (const cy of [64, 65]) {
+        names[`${cx},${cy},0`] = 'oak_log'
+        spots.push(pos(cx, cy, 0))
+      }
+    }
+    const bot = mockBot({ spots, names })
+    bot._moving = true
+    const { createTicker } = require('../src/index')
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    let ticks = 0
+    const tick = () => {
+      bot.entity.position = pos(0, ticks % 2 ? 65.2 : 64, 5)
+      bot.entity.onGround = !(ticks % 2)
+      ticks++
+      ticker.setPathReset('place_error') // what the ticker does on path_reset
+      gather(bot, ctx, null, {})
+    }
+    for (let i = 0; i < 12; i++) tick()
+    assert.ok(ctx.gather.skip.has('2,64,0') && ctx.gather.skip.has('2,65,0'),
+      'first column skipped within STALL_TICKS+2 despite jumps')
+    for (let i = 0; i < 24; i++) tick()
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.deepEqual(bot.lines, ['cannot reach the trees'])
+    assert.equal(bot.pathfinder.goal, null)
+    const n = bot.calls.setGoal
+    for (let i = 0; i < 5; i++) tick()
+    assert.equal(bot.calls.setGoal, n, 'no setGoal past final')
+    assert.equal(bot.pathfinder.goal, null)
   })
 
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {

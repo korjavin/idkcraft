@@ -22,6 +22,7 @@ const FIND_COUNT = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const MOVE_TOLERANCE = 0.5
+const PLACE_ERROR_STALLS = 3 // consecutive place_error resets with no displacement count as a stall
 const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
 
 function keyOf(p) {
@@ -49,6 +50,25 @@ function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
 }
 
+// Drop a dead goal like stopOnce, but without stop(): its latch would
+// swallow the next setGoal issued on the same tick.
+function clearGoal(bot, ctx) {
+  try {
+    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
+      bot.pathfinder.setGoal(null)
+    }
+  } catch (_) { /* body best-effort */ }
+  ctx.lastGoalKey = ''
+}
+
+// Progress is horizontal displacement or a new standing level. Tower jumps
+// pump y in place (64<->65.2 with x,z fixed): jumping is standing still.
+function progressed(bp, last, grounded) {
+  if (!last) return true
+  if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
+  return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
+}
+
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
@@ -59,6 +79,7 @@ function gather(bot, ctx, target, state) {
   if (g.final) {
     if (g.atLogs === logs) {
       ctx.stepStatus = g.final
+      clearGoal(bot, ctx) // no-op once null (acceptance: no setGoal past final)
       return
     }
     g.final = null
@@ -70,6 +91,7 @@ function gather(bot, ctx, target, state) {
     g.atLogs = logs
     ctx.stepStatus = 'done'
     say(bot, `got ${NEED_LOGS} logs`)
+    clearGoal(bot, ctx)
     return
   }
   const bp = bot.entity && bot.entity.position
@@ -85,6 +107,7 @@ function gather(bot, ctx, target, state) {
       g.atLogs = logs
       ctx.stepStatus = g.final
       say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
+      clearGoal(bot, ctx)
       return
     }
     let best = open[0]
@@ -119,6 +142,7 @@ function gather(bot, ctx, target, state) {
       bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
       ctx.lastGoalKey = key
       g.stalls = 0
+      ctx.placeErrors = 0
       g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
     }
@@ -139,10 +163,12 @@ function gather(bot, ctx, target, state) {
     if (g.phase === 'walk') {
       // Stall by displacement, not isMoving (follow.js wedge lesson: a
       // wedged executor keeps reporting moving while the body stands still).
-      if (Math.hypot(bp.x - g.lastPos.x, bp.y - g.lastPos.y, bp.z - g.lastPos.z) > MOVE_TOLERANCE) {
+      const grounded = !bot.entity || bot.entity.onGround !== false
+      if (progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
+        ctx.placeErrors = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-      } else if (++g.stalls >= STALL_TICKS) {
+      } else if (++g.stalls >= STALL_TICKS || (ctx.placeErrors || 0) >= PLACE_ERROR_STALLS) {
         // One strike per trunk, not per log: a stalled trunk's mates would
         // each burn 10 ticks and a strike, failing the step with reachable
         // trees nearby. Skip the whole column at once.
@@ -157,6 +183,7 @@ function gather(bot, ctx, target, state) {
           g.atLogs = logs
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
+          clearGoal(bot, ctx)
         }
       }
       return
