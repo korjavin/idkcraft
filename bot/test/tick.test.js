@@ -610,7 +610,7 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(bot.calls.jump, 1)
       const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(stuckLines.length, 1)
-      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0$/)
+      assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
 
       await ticker.tick() // nudge tick: GoalFollow again, jump released
       assert.equal(bot.calls.setGoal, 3)
