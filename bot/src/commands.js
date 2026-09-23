@@ -17,7 +17,9 @@ const COMMANDS = [
   { names: ['status'], usage: 'status', what: 'reports mode, goal step and home progress', example: 'status' },
   { names: ['find me'], usage: 'find me <block>', what: 'finds the nearest block within 48 blocks and leads you there', example: 'find me iron' },
   { names: ['build here'], usage: 'build here', what: 'moves the house site next to you and builds there', example: 'build here' },
+  { names: ['bring me'], usage: 'bring me <block> [count]', what: 'fetches blocks alone and drops them at your feet', example: 'bring me coal 5' },
   { names: ['help'], usage: 'help [command]', what: 'lists commands, or explains one in detail', example: 'help find me' },
+  { names: ['brain'], usage: 'brain [laya|jev|off]', what: 'switches the remote brain, or reports it', example: 'brain laya' },
 ]
 
 // Exact alias match first, then a single prefix match ('help find' -> the

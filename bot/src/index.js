@@ -2,13 +2,20 @@
 
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const { makeBrain } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
+const { addSwimExits } = require('./swim')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
+function brainTimeoutMs(env) {
+  const raw = parseInt((env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000', 10)
+  return Number.isFinite(raw) ? raw : 1000
+}
+const bringMod = require('./behaviours/bring')
 const goal = require('./goal')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -22,6 +29,7 @@ const BEHAVIOURS = {
   roam: require('./behaviours/roam'),
   lead: require('./behaviours/lead'),
   gather: require('./behaviours/gather'),
+  bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
   build: require('./behaviours/build'),
@@ -124,8 +132,10 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now() }) {
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null }
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '' }) {
+  // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
+  // decide closure below, so 'brain jev' steers step choice too.
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -231,6 +241,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
   function startWork() {
+    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -444,11 +455,14 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && rosterOnline && (!ctx.work || followWaiting)) {
+      } else if (!target && rosterOnline && (!ctx.work || followWaiting) && !ctx.bring) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
-      const workAlone = ctx.work && !target && rosterOnline && !homing
+      // An active bring-me owns the body like work-alone: the bot fetches up
+      // to 48 blocks out, past entity-tracking range, so the idle branch must
+      // not park it and the homing walk must not steal it mid-order.
+      const workAlone = (ctx.work || ctx.bring) && !target && rosterOnline && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -571,11 +585,27 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'lead' }, calledBrain }
       }
+      // Bring-me is an explicit player order like lead: it owns the body
+      // above work, except fight which still preempts. Placed after lead
+      // so the newest order wins its ticks.
+      if (ctx.bring && decision.action !== 'fight') {
+        const handler = BEHAVIOURS.bring
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
+        return { decision: { ...decision, action: 'bring' }, calledBrain }
+      }
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
       if (ctx.work && decision.action !== 'fight') {
-        decision = goal.decide(bot, ctx)
+        decision = await goal.decide(bot, ctx)
+        if (ctx.paused || !ctx.work) {
+          // 'stop' (or a mode change) landed during the goal await: same
+          // stale-decision guard as after the brain await above.
+          stopOnce()
+          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
         applyDecision(decision, target, state)
         return { decision, calledBrain }
       }
@@ -611,10 +641,11 @@ function fleeReflex(bot, ctx) {
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) m.allowSprinting = false; ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       const real = resolvePlayer(bot, name)
       followName = real
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
@@ -633,6 +664,7 @@ function fleeReflex(bot, ctx) {
     home: () => ctx.home || null,
     setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -640,7 +672,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false },
+    setLead: (order) => { ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled' }); ctx.bring = null } },
     clearLead: (player) => {
       const targetName = followName || (ctx.lead && ctx.lead.by)
       if (player && targetName && player.username && player.username !== targetName) return
@@ -650,9 +682,37 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
+    getFollowName: () => followName,
+    getBrainEngine: () => brainEngine,
+    setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
+    // Bring-me order creation: find + tool checks answer in this tick (like
+    // find-me); the behaviour only walks, digs, returns and tosses.
+    setBring: ({ name, want, by }) => {
+      const res = findNearest(bot, name, 48)
+      if (res === 'unknown') return `unknown block: ${name}`
+      if (!res) return `no ${name} within 48 blocks`
+      if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
+      if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+        const tier = bringMod.requiredTier(res.name)
+        return `need ${tier === 'iron' ? 'an' : 'a'} ${tier} pickaxe for ${res.name}`
+      }
+      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      // A fresh explicit order restarts homing math (a tripped counter would
+      // starve the order) and supersedes a pending spawn work-resume (which
+      // would otherwise cancel the order on the next sighted tick).
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
+      ctx.bring = {
+        name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
+        pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
+        have: 0, announced: true,
+      }
+      ctx.paused = false
+      return `going for ${want} ${res.name}, ${res.distance} blocks away`
+    },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
-      const mode = ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following'))
+      const mode = ctx.bring ? 'bringing' : (ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following')))
       bot.chat(`${mode} step=${ctx.step || 'none'} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
     }
   }
@@ -710,7 +770,7 @@ function fatal(where, err) {
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
-function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
       host,
@@ -721,7 +781,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.loadPlugin(pathfinder)
     let wantQuit = false
     const ticker = createTicker({
-      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs,
+      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine,
       onLeave: () => { void confirmLeave() }
     })
     // The streak only proves nobody is *visible*. Re-check the world-wide
@@ -766,7 +826,19 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
 
-    bot.on('chat', (chatUsername, message) => handleChat(bot, ticker, chatUsername, message))
+    // Sender UUID cache (idkcraft-8gf): the 'chat' event carries only the
+    // parsed name, but the 'message' event delivers the sender UUID just
+    // before the same text is pattern-matched — prefer it so Java 'X' and
+    // Bedrock '.X' online together never mix up. Name resolution stays the
+    // fallback when the texts do not line up.
+    let lastChatSender = null
+    bot.on('message', (chatMsg, position, senderUuid) => {
+      if (position === 'chat' && senderUuid) lastChatSender = { text: String(chatMsg), uuid: String(senderUuid) }
+    })
+    bot.on('chat', (chatUsername, message) => {
+      const senderUuid = lastChatSender && lastChatSender.text.endsWith(message) ? lastChatSender.uuid : null
+      handleChat(bot, ticker, chatUsername, message, senderUuid)
+    })
 
     // Pathfinder status taps: stored on the ticker ctx, logged per tick on the
     // decision line. Registered here in runOnce(), not in createTicker: the test
@@ -803,6 +875,10 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
+  // Initial engine label for 'brain' (mirrors makeBrain's choice).
+  const brainEngine = (process.env.BRAIN_URL || process.env.TYPESAFE_API_KEY)
+    ? sourceForUrl(process.env.BRAIN_URL || JEV_ENDPOINT)
+    : 'off'
   metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
@@ -811,7 +887,7 @@ async function main() {
       await waitForPlayers({ host, port, pingFn, username })
       await sleep(JOIN_SETTLE_MS)
     }
-    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName })
+    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine })
   }
 }
 
@@ -822,9 +898,9 @@ const deepOffers = new Map()
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
 
-function handleChat(bot, ticker, username, message) {
+function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
-  const playerName = resolvePlayer(bot, username)
+  const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
@@ -870,6 +946,34 @@ function handleChat(bot, ticker, username, message) {
     if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
+  } else if (msg === 'brain' || msg.startsWith('brain ')) {
+    // Brain switch (d75): with a follow target only they may switch; with
+    // nobody followed (work mode) any roster player may. Others get silence
+    // and the engine never changes for them.
+    const followed = ticker && typeof ticker.getFollowName === 'function' ? ticker.getFollowName() : null
+    const allowed = ticker && playerName && (followed
+      ? playerName === followed
+      : !!(bot.players && bot.players[playerName]))
+    if (!allowed) return
+    const arg = msg.slice(5).trim()
+    if (!arg) {
+      bot.chat(`brain: ${ticker.getBrainEngine()}`)
+      return
+    }
+    if (arg === 'off' || arg === 'laya' || arg === 'jev') {
+      if (arg === 'jev' && !process.env.TYPESAFE_API_KEY) {
+        bot.chat('jev: no api key')
+        return
+      }
+      const from = ticker.getBrainEngine()
+      const url = arg === 'laya' ? (process.env.BRAIN_URL || LAYA_URL_DEFAULT) : JEV_ENDPOINT
+      const next = arg === 'off' ? stubBrain : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
+      ticker.setBrain(next, arg)
+      bot.chat(`brain: ${arg}`)
+      console.log(`brain switch from=${from} to=${arg} by=${playerName}`)
+    } else {
+      bot.chat(`unknown brain: "${arg.slice(0, 30)}" — say help brain`)
+    }
   } else if (msg === 'help' || msg.startsWith('help ')) {
     const topic = msg.slice(4).trim()
     if (!topic) {
@@ -910,6 +1014,16 @@ function handleChat(bot, ticker, username, message) {
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
+    } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
+      const m = msg.match(/^bring me\s+(\S+)(?:\s+(\d+))?$/)
+      if (!m) {
+        bot.chat('try: bring me coal')
+      } else if (ticker && typeof ticker.setBring === 'function') {
+        const want = m[2]
+          ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
+          : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)
+        bot.chat(ticker.setBring({ name: m[1], want, by: playerName }))
+      }
     }
   }
 }

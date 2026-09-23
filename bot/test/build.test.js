@@ -79,7 +79,7 @@ function paintHouse(world, home) {
 const settle = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
 
 describe('rw4.4 (a) build step announces itself', () => {
-  it("MENU.build.chat is 'on my own: building the house' and decide picks it", () => {
+  it("MENU.build announces 'building the house' and decide picks it", async () => {
     assert.equal(goal.MENU.build.chat(), 'on my own: building the house')
     const world = makeWorld()
     const bot = mockBot(world, {
@@ -90,9 +90,9 @@ describe('rw4.4 (a) build step announces itself', () => {
       ],
     })
     const ctx = { step: '', stepStatus: null, goalText: null, home: goal.siteFor(bot, pos(0, 64, 0)) }
-    const r = goal.decide(bot, ctx)
+    const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'build')
-    assert.deepEqual(bot.chats, ['on my own: building the house'])
+    assert.deepEqual(bot.chats, ['next: building the house (goal-fsm)'])
   })
 })
 

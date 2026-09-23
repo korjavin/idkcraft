@@ -190,14 +190,21 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 ### Autonomy & chat commands
 
 With no `BOT_FOLLOW` target the bot spawns into work mode and pursues its own
-goal (see `src/goal.js`): each tick the goal arbiter picks one step from the
-menu (`gather`, `craft`, `build`, `gohome`, `stay`, `rest`) and dispatches it
-like a brain action — `fight` still preempts everything. The bot announces
-every step change in chat (`on my own: ...`). `follow me` pulls it back to
+goal (see `src/goal.js`): at each decision point (new step, finished step, or
+changed goal facts) the smart model picks the next step from the feasible menu
+and the FSM stays the fallback and disagreement reference — exactly like the
+hybrid brain. The bot announces every step change in chat
+(`next: chopping wood (laya)`). `follow me` pulls it back to
 following (clearing work mode); `go work` releases it again; `stop` parks it
 until the next order; `status` reports mode, step, inventory and home. Work
 continues while anyone is on the server (player roster, not visibility), and
 the bot still leaves an empty server after the nobody-online grace.
+
+Step choice goes through the shared `ask()` (`src/brain.js`): one question,
+one label back, never a model pick (laya vs jev is the URL). LAYA answers
+reliably only with up to 2 options, so a wider menu becomes a yes/no chain
+over the options in order, first yes wins. A failed ask falls back to the FSM
+step and counts `idkcraft_bot_escalation_total{from,to,reason}`.
 
 ### Brain route and disagreement logging
 

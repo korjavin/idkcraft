@@ -710,7 +710,7 @@ describe('work mode (epic rw4)', () => {
       assert.equal(r.decision.action, 'build')
       assert.equal(r.decision.source, 'goal-fsm')
       assert.equal(followRan, 0)
-      assert.ok(bot.chats.some((m) => m === 'on my own: building the house'))
+      assert.ok(bot.chats.some((m) => m === 'next: building the house (goal-fsm)'))
       assert.ok(lines.some((l) => l.includes('goal step=build')))
     } finally {
       BEHAVIOURS.follow = origFollow
@@ -991,6 +991,54 @@ describe('work mode (epic rw4)', () => {
     assert.notDeepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
     assert.equal(r.decision.action, 'gather') // empty hands: gather is the correct first step
     ticker.destroy()
+  })
+
+  it('stop during the goal await discards the stale work step', async () => {
+    // Mirrors 'stop during the brain await discards the stale follow': the
+    // goal await can span a LAYA yes/no chain, and a stop that lands inside
+    // must not get applyDecision(gather) when it resolves.
+    const bot = workBot() // empty hands: gather and rest feasible, model asked
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    let resolveAsk
+    const brain = {
+      decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
+      ask: () => new Promise((resolve) => { resolveAsk = resolve }),
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const pending = ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    // 'stop' lands while chooseStep awaits the model
+    ticker.stop()
+    bot.chats.length = 0
+    resolveAsk('gather')
+    const r = await pending
+    assert.equal(bot.calls.setGoal, 0)
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(bot.chats.every((m) => !m.includes('next:')), 'no step chat after mid-await stop')
+  })
+
+  it('follow me during the goal await discards the stale work step quietly', async () => {
+    // setFollow switches work off without pausing: same stale-step shape.
+    const bot = workBot() // empty hands: gather and rest feasible, model asked
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    let resolveAsk
+    const brain = {
+      decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
+      ask: () => new Promise((resolve) => { resolveAsk = resolve }),
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const pending = ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    // 'follow me' lands while chooseStep awaits the model
+    ticker.setFollow('Steve')
+    bot.chats.length = 0
+    resolveAsk('gather')
+    const r = await pending
+    assert.equal(bot.calls.setGoal, 0)
+    assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.ok(bot.chats.every((m) => !m.includes('next:')), 'no step chat after mid-await follow')
   })
 
   it('(g) work + empty or self-only roster: idle path, no brain call, slow cadence', async () => {
