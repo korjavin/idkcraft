@@ -239,6 +239,9 @@ async function decide(bot, ctx) {
   const status = (ctx && ctx.stepStatus) || null
   const finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
   if (!prev || finished || ctx.goalText !== text) {
+    const askKey = `${text}\n${status || ''}`
+    if (prev && ctx.askedKey === askKey) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
         return MENU[n].feasible(facts) && registered(n)

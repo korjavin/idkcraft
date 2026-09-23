@@ -581,6 +581,12 @@ function fleeReflex(bot, ctx) {
       // Placed after lead so an explicit find-me order wins its ticks.
       if (ctx.work && decision.action !== 'fight') {
         decision = await goal.decide(bot, ctx)
+        if (ctx.paused || !ctx.work) {
+          // 'stop' (or a mode change) landed during the goal await: same
+          // stale-decision guard as after the brain await above.
+          stopOnce()
+          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
         applyDecision(decision, target, state)
         return { decision, calledBrain }
       }

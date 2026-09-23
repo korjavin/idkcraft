@@ -206,7 +206,7 @@ describe('decide decision point', () => {
   it('failed step re-decides', async () => {
     const bot = goalBot()
     const ctx = {}
-    decide(bot, ctx)
+    await decide(bot, ctx)
     ctx.stepStatus = 'failed:no-trees'
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'gather')
@@ -216,7 +216,7 @@ describe('decide decision point', () => {
   it('changed facts re-decide', async () => {
     const bot = goalBot()
     const ctx = {}
-    decide(bot, ctx)
+    await decide(bot, ctx)
     bot._items = undefined
     bot.inventory = { items: () => [{ name: 'oak_log', count: 3 }] } // logs 0 -> 3
     lines.length = 0
@@ -357,5 +357,27 @@ describe('decide decision point', () => {
     const bot = goalBot({ items: [{ name: 'oak_log', count: 15 }] })
     const r = await decide(bot, {})
     assert.equal(r.action, 'craft')
+  })
+})
+
+describe('decide failed-step dedup (revmux 01 major)', () => {
+  it('a step that fails again with unchanged facts asks once', async () => {
+    // gather re-asserts failed:no-trees while the trees stay missing: the
+    // first failure is a decision point, the repeats reuse the choice.
+    // Deleting the (text, status) gate (ask every tick) fails this test.
+    const bot = goalBot()
+    const brain = { source: 'laya', calls: 0, ask: async function () { this.calls++; return 'gather' } }
+    const ctx = { brain }
+    await decide(bot, ctx)
+    assert.equal(brain.calls, 1)
+    ctx.stepStatus = 'failed:no-trees' // behaviour re-runs, fails identically
+    await decide(bot, ctx)
+    assert.equal(brain.calls, 2, 'first repeat failure still asks')
+    ctx.stepStatus = 'failed:no-trees' // behaviour fails identically again
+    await decide(bot, ctx)
+    ctx.stepStatus = 'failed:no-trees'
+    await decide(bot, ctx)
+    assert.equal(brain.calls, 2, 'further identical failures reuse the choice')
+    assert.equal(ctx.step, 'gather')
   })
 })
