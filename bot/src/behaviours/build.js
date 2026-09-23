@@ -147,6 +147,31 @@ function findRef(bot, p) {
   return null
 }
 
+// Own-wall guard (cww): the GoalPlaceBlock approach paths through our own
+// walls with canDig (movements default) and eats a corner — then the
+// rebuild takes priority by lay order and the roof never starts (the prod
+// 23/40<->24/40 flap). Planks are never a legitimate dig target for any
+// behaviour (gather digs logs via bot.dig, fight/flee path around), so
+// forbid the executor from breaking them. Idempotent per movements object,
+// re-applied if the ticker ever swaps it; a missing movements or registry
+// degrades to today's behavior, never a throw.
+function guardOwnWalls(bot, ctx) {
+  try {
+    const mov = bot && bot.pathfinder && bot.pathfinder.movements
+    if (!mov || !mov.blocksCantBreak || ctx.buildGuardedMov === mov) return
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    let guarded = false
+    for (const name of Object.keys(byName)) {
+      const entry = byName[name]
+      if (typeof name === 'string' && name.endsWith('_planks') && entry && typeof entry.id === 'number') {
+        mov.blocksCantBreak.add(entry.id)
+        guarded = true
+      }
+    }
+    if (guarded) ctx.buildGuardedMov = mov
+  } catch (_) { /* best-effort: approach still walks */ }
+}
+
 function skipCell(ctx, idx, p, why) {
   if (!Array.isArray(ctx.buildSkip)) ctx.buildSkip = []
   if (!ctx.buildSkip.includes(idx)) ctx.buildSkip.push(idx)
@@ -171,6 +196,7 @@ function build(bot, ctx, target, state) {
   }
   if (ctx.placeInFlight) return
   if (!ctx.home) return
+  guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
   // another table placed here earlier (or by anyone) counts the same.
   if (!ctx.home.table && cellDone(bot, ctx.home, BLUEPRINT[0])) {
