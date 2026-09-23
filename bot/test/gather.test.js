@@ -151,6 +151,27 @@ describe('gather step', () => {
     assert.match(ctx.lastGoalKey, /^gather:6,64,0$/)
   })
 
+  it('one stalled trunk spends one strike: mates skipped together', () => {
+    const names = {
+      '2,64,0': 'oak_log', '2,65,0': 'oak_log', '2,66,0': 'oak_log',
+      '8,64,0': 'birch_log',
+    }
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(2, 65, 0), pos(2, 66, 0), pos(8, 64, 0)],
+      names,
+    })
+    bot._moving = true // wedged: body static
+    const ctx = freshCtx()
+    gather(bot, ctx, null, {}) // goal on the trunk base
+    assert.match(ctx.lastGoalKey, /^gather:2,64,0$/)
+    for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
+    assert.deepEqual([...ctx.gather.skip].sort(), ['2,64,0', '2,65,0', '2,66,0'])
+    assert.equal(ctx.gather.streak, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    gather(bot, ctx, null, {}) // next search moves to the second tree
+    assert.match(ctx.lastGoalKey, /^gather:8,64,0$/)
+  })
+
   it('three skipped trees in a row: failed:unreachable, chat once', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0), pos(6, 64, 0), pos(9, 64, 0)],

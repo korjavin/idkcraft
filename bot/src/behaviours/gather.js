@@ -92,6 +92,7 @@ function gather(bot, ctx, target, state) {
       if (dist(p, bp) < dist(best, bp)) best = p
     }
     g.pos = best
+    g.lastFound = open
     g.phase = 'walk'
     g.stalls = 0
     g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -142,6 +143,12 @@ function gather(bot, ctx, target, state) {
         g.stalls = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (++g.stalls >= STALL_TICKS) {
+        // One strike per trunk, not per log: a stalled trunk's mates would
+        // each burn 10 ticks and a strike, failing the step with reachable
+        // trees nearby. Skip the whole column at once.
+        for (const q of g.lastFound || []) {
+          if (q.x === g.pos.x && q.z === g.pos.z) g.skip.add(keyOf(q))
+        }
         g.skip.add(keyOf(g.pos))
         g.streak = (g.streak || 0) + 1
         g.pos = null
