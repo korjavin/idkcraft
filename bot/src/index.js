@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain } = require('./brain')
-const { findTarget, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
+const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest } = require('./behaviours/scout')
 const metrics = require('./metrics')
 
@@ -419,7 +419,7 @@ function fleeReflex(bot, ctx) {
       // asked the bot to come, so reunion outranks cave work (3a7 keeps work
       // for an unseen follower; this walks instead once N trips). Pure work
       // mode with nobody waiting keeps running.
-      const followWaiting = !target && followName && bot.players && bot.players[followName]
+      const followWaiting = !target && followName && bot.players && bot.players[resolvePlayer(bot, followName)]
       // A visible player with skipped work resumes it at once (one-shot):
       // sighting is the normal end of the homing walk, arrival the other.
       if (target && ctx.resumeWork && !followName) startWork()
@@ -593,14 +593,15 @@ function fleeReflex(bot, ctx) {
     destroy,
     rearm,
     setFollow: (name) => {
-      followName = name
-      const seen = !name || (bot.players && bot.players[name] && bot.players[name].entity)
-      if (!name || seen) ctx.work = false
+      const real = resolvePlayer(bot, name)
+      followName = real
+      const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
+      if (!real || seen) ctx.work = false
       ctx.lastGoalKey = ''
       ctx.lead = null
       ctx.leadStuck = 0
       ctx.leadTargetGone = 0
-      if (name) ctx.paused = false
+      if (real) ctx.paused = false
     },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { startWork() },
@@ -792,12 +793,13 @@ const DEEP_WARN_DROP = 8
 
 function handleChat(bot, ticker, username, message) {
   if (username === bot.username) return
+  const playerName = resolvePlayer(bot, username)
   const msg = message.toLowerCase().trim()
   if (msg === 'follow me') {
-    if (ticker) ticker.setFollow(username)
-    const seen = bot.players && bot.players[username] && bot.players[username].entity
+    if (ticker) ticker.setFollow(playerName)
+    const seen = bot.players && bot.players[playerName] && bot.players[playerName].entity
     if (seen) {
-      bot.chat(`Following ${username}`)
+      bot.chat(`Following ${playerName}`)
     } else {
       // Honest: the server sends no coordinates for an out-of-range player
       // and the bot is not OP, so it cannot walk there — say where it is.
@@ -805,7 +807,7 @@ function handleChat(bot, ticker, username, message) {
       const at = bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
       const sp = bot.spawnPoint
       const dist = bp && sp ? ` (~${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))} blocks from spawn)` : ''
-      bot.chat(`I can't see you — I'm at ${at}${dist}; come closer or /tp ${bot.username} ${username}`)
+      bot.chat(`I can't see you — I'm at ${at}${dist}; come closer or /tp ${bot.username} ${playerName}`)
     }
   } else if (msg === 'stop') {
     if (ticker) {
@@ -813,11 +815,11 @@ function handleChat(bot, ticker, username, message) {
       ticker.stop()
     }
   } else if (msg === 'lead anyway') {
-    const offer = deepOffers.get(username)
-    deepOffers.delete(username)
+    const offer = deepOffers.get(playerName)
+    deepOffers.delete(playerName)
     if (offer) {
       bot.chat(`leading you to ${offer.name}, ${offer.distance} blocks, follow me`)
-      if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: offer.name, pos: offer.pos, by: username, lastProgressAt: Date.now() })
+      if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: offer.name, pos: offer.pos, by: playerName, lastProgressAt: Date.now() })
     } else {
       bot.chat('no deep find on hold — ask me to find something first')
     }
@@ -830,7 +832,7 @@ function handleChat(bot, ticker, username, message) {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
       const name = m[1]
-      const speaker = bot.players && bot.players[username] && bot.players[username].entity
+      const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null
       // No speaker entity (out of tracking range): judge depth from the
       // bot's own Y, the same fallback the ranking uses — never silently 0.
@@ -845,10 +847,10 @@ function handleChat(bot, ticker, username, message) {
         const down = refY != null ? Math.round(refY - res.position.y) : 0
         if (down > DEEP_WARN_DROP) {
           bot.chat(`${res.name} is ${down} blocks down, dig carefully`)
-          deepOffers.set(username, { name: res.name, pos: res.position, distance: res.distance })
+          deepOffers.set(playerName, { name: res.name, pos: res.position, distance: res.distance })
         } else {
           bot.chat(`leading you to ${res.name}, ${res.distance} blocks, follow me`)
-          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: username, lastProgressAt: Date.now() })
+          if (ticker && typeof ticker.setLead === 'function') ticker.setLead({ name: res.name, pos: res.position, by: playerName, lastProgressAt: Date.now() })
         }
       }
     }
@@ -956,4 +958,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
