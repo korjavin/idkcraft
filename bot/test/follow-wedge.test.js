@@ -103,8 +103,12 @@ describe('follow wedge line (idkcraft-b50)', () => {
       bot, brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
       tickMs: 10, idleTickMs: 10,
     })
-    ticker.setPathNext({ x: 9, y: 62, z: 0 })
-    assert.deepEqual(bot._tickerCtx.lastPathNext, { x: 9, y: 62, z: 0 })
+    // Prod passes a pathfinder Move (a Vec3): the stored head must stay
+    // blockAt-safe, i.e. carry floored, or the wedge line reads next=...:?
+    ticker.setPathNext(pos(9, 62, 0))
+    const stored = bot._tickerCtx.lastPathNext
+    assert.equal(typeof stored.floored, 'function')
+    assert.deepEqual({ x: stored.x, y: stored.y, z: stored.z }, { x: 9, y: 62, z: 0 })
     ticker.setPathNext(null)
     assert.equal(bot._tickerCtx.lastPathNext, null)
   })
