@@ -218,9 +218,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   function homeReached() {
+    // The executor ends GoalNear on the floored block and stops at its
+    // centre, up to ~2.5 blocks (float) from spawnPoint — agreeing with the
+    // goal needs the +1.5 slack, not the raw range.
     const sp = bot.spawnPoint
     const bp = bot.entity && bot.entity.position
-    return !!(sp && bp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) <= RETURN_HOME_RANGE)
+    return !!(sp && bp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) <= RETURN_HOME_RANGE + 1.5)
   }
 
   // work() body, shared with the homing resume below (one definition, so the
@@ -417,11 +420,17 @@ function fleeReflex(bot, ctx) {
       // for an unseen follower; this walks instead once N trips). Pure work
       // mode with nobody waiting keeps running.
       const followWaiting = !target && followName && bot.players && bot.players[followName]
+      // A visible player with skipped work resumes it at once (one-shot):
+      // sighting is the normal end of the homing walk, arrival the other.
+      if (target && ctx.resumeWork && !followName) startWork()
       if (homeReached()) {
-        // At spawn there is nothing to walk for. If the spawn handler
-        // skipped work() for the homing walk, resume it now (one-shot).
-        if (ctx.resumeWork && !followName) startWork()
-        ctx.unseenTicks = 0
+        // At spawn there is nothing to walk for — unless a follow order is
+        // pending: then keep the latch (counter tripped, no work) and stand
+        // until the player is visible, instead of oscillating work-vs-home.
+        if (!followWaiting) {
+          if (ctx.resumeWork && !followName) startWork()
+          ctx.unseenTicks = 0
+        }
       } else if (!target && rosterOnline && (!ctx.work || followWaiting)) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0

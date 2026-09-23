@@ -835,6 +835,49 @@ describe('work mode (epic rw4)', () => {
       assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalNear')
     })
 
+    it('follow+work at spawn stands (no work/home oscillation)', async () => {
+      // 3a7 keeps work for an unseen follower; homing walked it back. Past
+      // arrival the latch must hold: no work step may overwrite the spawn
+      // goal, or the bot ping-pongs work-vs-home every ~10 ticks.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      bot.entity.position = pos(-48, 65, -208) // arrived
+      const lines = []
+      const actions = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        for (let i = 0; i < 15; i++) actions.push((await ticker.tick()).decision.action)
+      } finally {
+        console.log = origLog
+      }
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      assert.ok(!lines.some((l) => l.includes('goal step=')), 'no work step past arrival')
+      assert.ok(!lines.some((l) => l.includes('returning to spawn')), 'no re-walk past arrival')
+      // The latch holds the body idle: without it the ticks fall through to
+      // the work FSM (gather decisions) while the goal key still reads
+      // return-spawn, so the assertions above cannot see the oscillation.
+      assert.ok(actions.every((a) => a === 'idle'), `stood idle past arrival, got ${actions.join(',')}`)
+    })
+
+    it('sighting mid-walk resumes skipped work', async () => {
+      // No follow order (default deploy): the spawn handler skipped work()
+      // and armed the walk. A player sighted mid-walk ends homing by
+      // resuming work, not by following forever.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      bot._tickerCtx.resumeWork = true // as the spawn handler sets it
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+      bot.players.P = { username: 'P', entity: playerEntity(10) } // sighted mid-walk
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.work, true)
+    })
+
     it('lone bot still stops (no roster, no walk)', async () => {
       const bot = farBot()
       bot.players = {}
@@ -884,8 +927,9 @@ describe('work mode (epic rw4)', () => {
         assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued')
         assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
         assert.ok(!lines.some((l) => l.includes('goal step=')), 'work mode not entered')
-        // Arrival resumes the skipped work mode (one-shot).
-        bot.entity.position = pos(-48, 65, -208)
+        // Arrival resumes the skipped work mode (one-shot). Edge stop: the
+        // executor ends on the floored block centre, 2.55 out — still home.
+        bot.entity.position = pos(-47.5, 65, -205.5)
         lines.length = 0
         await new Promise((r) => setTimeout(r, 60))
         assert.equal(bot._tickerCtx.work, true)
