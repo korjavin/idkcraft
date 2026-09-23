@@ -14,6 +14,7 @@ function createGreeter({ now = () => Date.now(), sleep = (ms) => new Promise((re
   let running = false
   let gen = 0
   const last = new Map() // playerName -> ms of the last greeting
+  const armed = new Map() // playerName -> seen far since the last greeting
 
   function setSneak(bot, v) {
     try {
@@ -51,11 +52,20 @@ function createGreeter({ now = () => Date.now(), sleep = (ms) => new Promise((re
     setSneak(bot, false)
   }
 
-  // Arrival entry: true when a greeting started (fire-and-forget).
-  function greetOnArrival(bot, playerName, prevDist, dist, standing) {
-    if (!bot || !playerName || !standing) return false
-    if (typeof prevDist !== 'number' || typeof dist !== 'number') return false
-    if (!(prevDist > GREET_FAR && dist <= GREET_NEAR)) return false
+  // Arrival entry: true when a greeting started (fire-and-forget). The
+  // far -> near edge is latched per player: only a fresh sighting beyond
+  // GREET_FAR arms it, so a gradual approach still greets exactly once on
+  // arrival. A cooldown-blocked arrival disarms without greeting — standing
+  // nearby is not a new approach.
+  function greetOnArrival(bot, playerName, dist, standing) {
+    if (!bot || !playerName) return false
+    if (typeof dist !== 'number') return false
+    if (dist > GREET_FAR) {
+      armed.set(playerName, true)
+      return false
+    }
+    if (dist > GREET_NEAR || !standing || !armed.get(playerName)) return false
+    armed.set(playerName, false)
     const t = now()
     const prev = last.get(playerName)
     if (typeof prev === 'number' && t - prev < cooldownMs) return false

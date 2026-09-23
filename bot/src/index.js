@@ -136,8 +136,6 @@ function eatReflex(bot, ctx, state) {
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null }) {
   // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
   const greet = greeter || createGreeter()
-  // Last seen distance per approached player, for the far -> near edge.
-  const greetLast = {}
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain }
@@ -339,10 +337,10 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
-  // Greeting call site (v92, the only one): on a follow/bring dispatch, a
-  // far -> near edge with the approached player (follow target or bring
-  // recipient) while the body stands starts the crouch-twice gesture.
-  // Fight/flee never reach here with those actions.
+  // Greeting checks (v92): on a follow dispatch, and on a bring dispatch
+  // carrying back, the approached player (follow target or bring recipient)
+  // is measured directly; the module latches the far -> near edge. Fight
+  // and flee never greet.
   function greetCheck(decision) {
     if (decision.action !== 'follow' && decision.action !== 'bring') return
     const name = decision.action === 'bring' && ctx.bring && ctx.bring.by ? ctx.bring.by : followName
@@ -356,12 +354,9 @@ function fleeReflex(bot, ctx) {
         ? bp.distanceTo(ent.position)
         : Math.hypot(bp.x - ent.position.x, bp.y - ent.position.y, bp.z - ent.position.z)
     } catch (_) { return }
-    const prev = greetLast[name]
-    if (typeof d === 'number') greetLast[name] = d
-    if (typeof prev !== 'number' || typeof d !== 'number') return
     let standing = false
     try { standing = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && !bot.pathfinder.isMoving()) } catch (_) { standing = false }
-    greet.greetOnArrival(bot, name, prev, d, standing)
+    greet.greetOnArrival(bot, name, d, standing)
   }
 
   function applyDecision(decision, target, state) {
@@ -623,6 +618,8 @@ function fleeReflex(bot, ctx) {
       if (ctx.bring && decision.action !== 'fight') {
         const handler = BEHAVIOURS.bring
         if (typeof handler === 'function') handler(bot, ctx, target, state)
+        // Greeting on the way back (v92): the bring arm of the rule.
+        if (ctx.bring && ctx.bring.phase === 'return') greetCheck({ action: 'bring' })
         const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'bring' }, calledBrain }
