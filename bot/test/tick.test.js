@@ -823,6 +823,18 @@ describe('work mode (epic rw4)', () => {
       assert.equal(bot.calls.stop, stops) // homing: no more stopOnce
     })
 
+    it('a pending follow order beats working alone', async () => {
+      // 3a7 keeps work for an unseen follower; reunion still outranks
+      // cave work, so after N ticks the bot walks instead of working.
+      const bot = farBot()
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      handleChat(bot, ticker, 'P', 'follow me')
+      for (let i = 0; i < 10; i++) await ticker.tick()
+      assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:-48,65,-208$/)
+      assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalNear')
+    })
+
     it('lone bot still stops (no roster, no walk)', async () => {
       const bot = farBot()
       bot.players = {}
@@ -831,6 +843,50 @@ describe('work mode (epic rw4)', () => {
       for (let i = 0; i < 12; i++) await ticker.tick()
       assert.ok(!/^return-spawn:/.test(bot._tickerCtx.lastGoalKey))
       assert.ok(bot.calls.stop >= 1)
+    })
+
+    it('spawn far from home skips work and walks (default deploy)', async () => {
+      const { runOnce } = require('../src/index')
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      let bot
+      try {
+        const { EventEmitter } = require('node:events')
+        bot = new EventEmitter()
+        bot.username = 'IdkBot'
+        bot.players = { P: { username: 'P', entity: null } }
+        bot.entities = {}
+        bot.health = 20
+        bot.food = 20
+        bot.entity = { position: pos(-205, 39, -35) }
+        bot.spawnPoint = pos(-48, 65, -208)
+        bot.registry = require('minecraft-data')('1.21.1')
+        bot.goals = []
+        bot.pathfinder = {
+          isMoving: () => false,
+          stop: () => {},
+          setGoal: (goal) => { bot.goals.push(goal) },
+          setMovements: (m) => { bot.movements = m },
+        }
+        bot.loadPlugin = () => {}
+        bot.quit = () => {}
+        bot.chat = () => {}
+        // No followName: default deploy. The far, unseen start must walk
+        // home INSTEAD of entering work mode (no 'goal step=' lines).
+        runOnce({
+          host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+          brain: mockBrain(), leaveAfterMs: 60000, followName: '',
+          createBot: () => bot, pingFn: async () => ({ players: { online: 1 } }),
+        }).then(() => {}, () => {})
+        bot.emit('spawn')
+        await new Promise((r) => setTimeout(r, 60))
+        assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued')
+        assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
+        assert.ok(!lines.some((l) => l.includes('goal step=')), 'work mode not entered')
+      } finally {
+        console.log = origLog
+      }
     })
 
     it('spawn far from home pre-arms the walk', async () => {

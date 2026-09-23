@@ -390,16 +390,16 @@ function fleeReflex(bot, ctx) {
       // buildState handles null, and the work check below swaps idle steps.
       const rosterOnline = bot.players &&
         Object.keys(bot.players).some((n) => n !== bot.username)
-      const workAlone = ctx.work && !target && rosterOnline
-      if (workAlone) workTickFast = true
-      // Someone is online but nobody is visible and no work runs (death +
-      // respawn at spawn, walked out of range, follow-me never sighted):
-      // camping the cave helps no one. Count it; at N the branch below
-      // walks back to world spawn, where players reappear. Work mode and
-      // the lone bot are excluded (they have their own paths); sighting
-      // anyone resets.
-      if (!target && !workAlone && rosterOnline) ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
+      // A pending follow order beats working alone: the player explicitly
+      // asked the bot to come, so reunion outranks cave work (3a7 keeps work
+      // for an unseen follower; this walks instead once N trips). Pure work
+      // mode with nobody waiting keeps running.
+      const followWaiting = !target && followName && bot.players && bot.players[followName]
+      if (!target && rosterOnline && (!ctx.work || followWaiting)) ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       else ctx.unseenTicks = 0
+      const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
+      const workAlone = ctx.work && !target && rosterOnline && !homing
+      if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
         // locally, stop once, and stay quiet (at most one line per minute).
@@ -675,18 +675,20 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
       // instead of standing through N more ticks.
+      const tickCtx = bot._tickerCtx
       try {
         const bp = bot.entity && bot.entity.position
         const sp = bot.spawnPoint
-        const tickCtx = bot._tickerCtx
         if (tickCtx && bp && sp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
           tickCtx.unseenTicks = UNSEEN_HOME_TICKS
         }
       } catch (_) { /* best-effort */ }
       // Owner rule (epic rw4): with no follow target the bot works on its
       // own until 'follow me'. createTicker defaults work=false so unit
-      // tests stay explicit about entering work mode.
-      if (!followName) ticker.work()
+      // tests stay explicit about entering work mode. Exception: a far,
+      // unseen start walks home first (see pre-arm below) — working a cave
+      // 225 blocks from the player helps no one.
+      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
