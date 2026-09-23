@@ -319,19 +319,19 @@ describe('findNearestBlock exposure ranking', () => {
     assert.deepEqual([best.x, best.y, best.z], [8, 60, 0]) // farther but walkable
   })
 
-  it('among exposed, closer in height to refY wins over nearer-but-taller', () => {
-    const level = pos(25, 64, 0) // dy 0, dist 25
-    const tall = pos(5, 40, 0) // dy 24, dist ~24.5 (nearer)
+  it("among exposed, closer in height to the player's Y wins over nearer", () => {
+    const playerLevel = pos(25, 40, 0) // dy 0 to refY, dist ~34.7
+    const botLevel = pos(5, 64, 0) // dy 24 to refY, dist 5 (nearer)
     const bot = mockBot({
       registry: NAMES,
-      spots: [level, tall],
+      spots: [playerLevel, botLevel],
       names: {
-        '25,64,0': 'gold_ore', '26,64,0': 'air',
-        '5,40,0': 'gold_ore', '6,40,0': 'air',
+        '25,40,0': 'gold_ore', '26,40,0': 'air',
+        '5,64,0': 'gold_ore', '6,64,0': 'air',
       },
     })
-    const best = findNearestBlock(bot, 'gold', 48, 64)
-    assert.deepEqual([best.x, best.y, best.z], [25, 64, 0])
+    const best = findNearestBlock(bot, 'gold', 48, 40)
+    assert.deepEqual([best.x, best.y, best.z], [25, 40, 0])
   })
 
   it("cave air counts as exposed (ravine and carver-cave walls)", () => {
