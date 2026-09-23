@@ -15,6 +15,7 @@ const RESUME_DIST = 8
 // pathfinder can stay isMoving() during a partial path or a timed-out search.
 // One sidestep/jump gets a second attempt before abandoning the order.
 const GIVE_UP_TICKS = 10
+const WORK_STALL_TICKS = GIVE_UP_TICKS * 6
 const RETRY_EVERY_TICKS = 6
 const MOVE_TOLERANCE = 0.5
 const NUDGE_OFFSET = 2
@@ -88,7 +89,7 @@ function lead(bot, ctx, target, state) {
       order.waiting = false
       order.waitTicks = 0
       order.stuckTicks = 0
-      order.lastPos = snapshot(bp)
+      if (bot.entity.onGround !== false) order.lastPos = snapshot(bp)
       order.lastProgressAt = Date.now()
       bot.chat(`going on, ${blocksLeft(bp, order.pos)} blocks left`)
     } else {
@@ -106,7 +107,7 @@ function lead(bot, ctx, target, state) {
     order.waiting = true
     order.waitTicks = 1
     order.stuckTicks = 0
-    order.lastPos = snapshot(bp)
+    if (bot.entity.onGround !== false) order.lastPos = snapshot(bp)
     order.lastProgressAt = Date.now()
     bot.chat(`waiting for you, come to me (${Math.round(dp)} blocks)`)
     holdGoal(bot, ctx)
@@ -119,7 +120,7 @@ function lead(bot, ctx, target, state) {
     if (typeof bot.setControlState === 'function') bot.setControlState('jump', false)
     bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
     ctx.lastGoalKey = key
-    order.lastPos = snapshot(bp)
+    if (bot.entity.onGround !== false) order.lastPos = snapshot(bp)
     order.stuckTicks = 0
     order.lastProgressAt = Date.now()
     return
@@ -128,31 +129,29 @@ function lead(bot, ctx, target, state) {
     bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
     ctx.lastGoalKey = key
     order.stuckTicks = 0
-    order.lastPos = snapshot(bp)
+    if (bot.entity.onGround !== false) order.lastPos = snapshot(bp)
     order.nudged = false
     return
   }
   const now = Date.now()
-  if (!order.lastPos) order.lastPos = snapshot(bp)
-  if ((typeof bot.pathfinder.isMining === 'function' && bot.pathfinder.isMining()) ||
-      (typeof bot.pathfinder.isBuilding === 'function' && bot.pathfinder.isBuilding())) {
-    order.lastPos = snapshot(bp)
-    order.stuckTicks = 0
-    order.lastProgressAt = now
-    return
-  }
-  const madeProgress = dist(bp, order.lastPos) > MOVE_TOLERANCE
+  const working = (typeof bot.pathfinder.isMining === 'function' && bot.pathfinder.isMining()) ||
+    (typeof bot.pathfinder.isBuilding === 'function' && bot.pathfinder.isBuilding())
+  // Only grounded positions count as displacement; airborne ticks still age
+  // the stall budget so a jump loop cannot keep an impossible path alive.
+  const airborne = bot.entity.onGround === false
+  if (!airborne && !order.lastPos) order.lastPos = snapshot(bp)
+  const madeProgress = !airborne && order.lastPos && dist(bp, order.lastPos) > MOVE_TOLERANCE
   if (madeProgress) {
     order.lastPos = snapshot(bp)
     order.stuckTicks = 0
-    if (blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
+    if (!working && blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
       bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
       order.lastProgressAt = now
     }
     return
   }
   order.stuckTicks = (order.stuckTicks || 0) + 1
-  if (order.stuckTicks > GIVE_UP_TICKS) {
+  if (order.stuckTicks > (working ? WORK_STALL_TICKS : GIVE_UP_TICKS)) {
     if (order.nudged) {
       finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
       holdGoal(bot, ctx)
@@ -181,6 +180,7 @@ module.exports.ARRIVE_DIST = ARRIVE_DIST
 module.exports.WAIT_DIST = WAIT_DIST
 module.exports.RESUME_DIST = RESUME_DIST
 module.exports.GIVE_UP_TICKS = GIVE_UP_TICKS
+module.exports.WORK_STALL_TICKS = WORK_STALL_TICKS
 module.exports.RETRY_EVERY_TICKS = RETRY_EVERY_TICKS
 module.exports.WAIT_BUDGET_TICKS = WAIT_BUDGET_TICKS
 module.exports.PROGRESS_INTERVAL_MS = PROGRESS_INTERVAL_MS

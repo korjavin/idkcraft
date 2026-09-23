@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const lead = require('../src/behaviours/lead')
-const { GIVE_UP_TICKS } = require('../src/behaviours/lead')
+const { GIVE_UP_TICKS, WORK_STALL_TICKS } = require('../src/behaviours/lead')
 
 function pos(x, y, z) {
   const p = {
@@ -236,6 +236,44 @@ describe('lead behaviour', () => {
     } finally {
       Date.now = originalNow
     }
+  })
+
+  it('bounds a mining stall and gives up if digging never finishes', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.pathfinder.isMining = () => true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    const originalNow = Date.now
+    let now = 1000
+    Date.now = () => now
+    try {
+      for (let t = 0; t < WORK_STALL_TICKS * 2 + 4 && ctx.lead; t++) {
+        lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+        now += 1000
+      }
+      assert.equal(ctx.lead, null)
+      assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+      assert.deepEqual(bot.calls.chats, ['cannot reach iron_ore at 10 64 0; following you again'])
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it('does not treat jumping in place as displacement progress', () => {
+    const bot = mockBot()
+    bot._moving = true
+    const ctx = { lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore') }
+    for (let t = 0; t <= GIVE_UP_TICKS; t++) {
+      bot.entity.onGround = false
+      bot.entity.position = pos(0, 65, 0)
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+      bot.entity.onGround = true
+      bot.entity.position = pos(0, 64, 0)
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+    }
+    assert.ok(ctx.lead)
+    assert.equal(bot.calls.goals.filter((goal) => goal.rangeSq === 1).length, 1)
+    assert.equal(bot.calls.chats.some((line) => line.includes('blocks left')), false)
   })
 
   it('gives up after waiting longer than budget with chat and clears', () => {
