@@ -101,8 +101,21 @@ describe('MENU feasibility gates', () => {
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
     assert.equal(F('gather', { ...base, logs: 5 }), true) // mid-load: keep gathering
-    assert.equal(F('gather', { ...base, logs: 2, planks: 46, table: 1, door: 1 }), false) // 8 >= 2 missing: enough
     assert.equal(F('gather', { ...base, home: 'built' }), false) // job done: rest becomes reachable
+  })
+  it('gather finishes the load instead of deadlocking on rest', () => {
+    // Review state: 1 log + 46 planks + kit. Stopping here strands a
+    // sub-batch craft can never take (batch gate needs 14) — gather stays
+    // feasible until the load is full, then craft/build take over.
+    assert.equal(F('gather', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), true)
+    assert.equal(F('craft', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), false)
+    // Sufficient material but no site: all work gates closed, rest is the
+    // correct idle (the owner places the site with 'build here').
+    const ready = { ...base, logs: 0, planks: 48, table: 1, door: 1, home: 'none' }
+    assert.equal(F('gather', ready), false)
+    assert.equal(F('craft', ready), false)
+    assert.equal(F('build', ready), false)
+    assert.equal(goalFsm(ready, ['rest']), 'rest')
   })
   it('craft starts on a full load, not on the first log', () => {
     assert.equal(F('craft', base), false)

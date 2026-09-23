@@ -46,11 +46,14 @@ const MENU = {
     // Only while material is still missing: plank-equivalent on hand vs the
     // house budget (table 4 + door 6 + NEED_PLANKS planks), and never once
     // the house is built — otherwise the bot farms forever and rest is
-    // unreachable after the job is done.
+    // unreachable after the job is done. A started load is always finished
+    // (logs < NEED_LOGS): stopping mid-load strands sub-batch logs that the
+    // batch craft gate can never take — rest forever with work remaining.
     feasible: (facts) => {
       if (facts.home === 'built') return false
-      const missing = (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6) + Math.max(0, NEED_PLANKS - facts.planks)
-      return facts.logs * 4 < missing
+      const total = facts.planks + facts.logs * 4
+      const need = NEED_PLANKS + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
+      return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS)
     },
     chat: () => 'on my own: gathering logs',
   },

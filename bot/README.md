@@ -41,7 +41,7 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `MC_HOST` | `mc` | Minecraft server host (`localhost` for local runs) |
 | `MC_PORT` | `25565` | Java server port |
 | `BOT_USERNAME` | `IdkBot` | Bot login name |
-| `BOT_FOLLOW` | `` (nearest player) | Player name to follow |
+| `BOT_FOLLOW` | `` (work mode) | Player name to follow; empty means the bot works on its own goal until `follow me` |
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
 | `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; bogus key still joins, logs `stub-fallback` |
 | `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); when set, the hybrid brain runs: FSM primary, remote model on hard states only. Empty = FSM only (`brain=stub`); that is the rollback. |

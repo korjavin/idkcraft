@@ -735,13 +735,14 @@ describe('work mode (epic rw4)', () => {
     global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
     try {
       const bot = workBot()
-      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-      // followName matches nobody: findTarget is null, but Steve is on the roster
+      // Roster player WITHOUT an entity: findTarget is null (nothing
+      // visible), but Steve is on the server, so the workAlone path runs.
+      // (An entity would make him visible and take the normal path instead.)
+      bot.players = { Steve: { username: 'Steve' } }
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222, followName: 'Nobody' })
       ticker.work()
       const r = await ticker.tick()
-      assert.notEqual(r.decision.action, 'local-idle')
-      assert.equal(r.decision.action, 'rest')
+      assert.equal(r.decision.action, 'rest') // without workAlone this would be idle
       assert.deepEqual(delays, [111]) // fast ticks while working, not idle cadence
     } finally {
       global.setTimeout = orig
