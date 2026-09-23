@@ -356,6 +356,17 @@ function fleeReflex(bot, ctx) {
 
   async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
+    // Spawn adoption races chunk loading (one shot at join sees an empty
+    // world), so retry a few ticks while no home is set. A 'build here'
+    // (setHome) or the build default stops the retries.
+    if (!ctx.home && (ctx.adoptTries || 0) < 6) {
+      ctx.adoptTries = (ctx.adoptTries || 0) + 1
+      try {
+        const foundEarly = goal.adoptHome(bot)
+        // Same resets as setHome below (no ticker handle in this scope).
+        if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
+      } catch (_) { /* try again next tick */ }
+    }
     inFlight = true
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false

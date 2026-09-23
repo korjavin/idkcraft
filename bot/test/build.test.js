@@ -165,6 +165,24 @@ describe('rw4.4 (d) adoptHome finds the earlier house', () => {
     assert.equal(goal.adoptHome(bot), null)
     assert.deepEqual(bot.chats, [])
   })
+  it('tick retries adoption until chunks arrive, then stops', async () => {
+    const world = makeWorld()
+    const doors = [] // spawn handler raced empty chunks
+    const bot = mockBot(world, { doors })
+    paintHouse(world, { site: { x: 10, y: 64, z: 10 } })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    try {
+      await ticker.tick()
+      await ticker.tick()
+      assert.equal(ticker.home(), null) // still nothing while chunks missing
+      doors.push({ x: 11, y: 64, z: 10 }) // chunks arrive
+      await ticker.tick()
+      assert.deepEqual(ticker.home().site, { x: 10, y: 64, z: 10 })
+      assert.deepEqual(bot.chats, ['my home is at 10 64 10'])
+    } finally {
+      ticker.destroy()
+    }
+  })
 })
 
 describe('rw4.4 (e) step places the next cell, then completes', () => {
