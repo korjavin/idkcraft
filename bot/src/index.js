@@ -602,10 +602,11 @@ function fleeReflex(bot, ctx) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
-          // adopt once before build defaults a fresh site. Bots without a
-          // blockAt hook (unit mocks) count as ready immediately.
+          // adopt once before build defaults a fresh site. Readiness needs
+          // positive evidence; bots without a blockAt hook (unit mocks)
+          // count as ready immediately.
           let ready = true
-          try { if (bot.spawnPoint && bot.blockAt) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
+          try { if (bot.blockAt) ready = !!(bot.spawnPoint && bot.blockAt(bot.spawnPoint)) } catch (_) { ready = true }
           if (ready || (ctx.adoptTries = (ctx.adoptTries || 0) + 1) > 60) {
             ctx.adoptDone = true
             try {

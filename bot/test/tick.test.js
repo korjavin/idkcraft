@@ -718,6 +718,25 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(a2) work + spawn chunks missing: waits, no adopt, proceeds after 60 ticks', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.blockAt = () => null // world hook present, spawn cell not visible yet
+    const brain = mockBrain()
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    try {
+      const r1 = await ticker.tick()
+      assert.equal(r1.decision.action, 'idle')
+      assert.equal(r1.decision.source, 'local-idle')
+      assert.ok(lines.some((l) => l.includes('waiting for spawn chunks')), 'waiting evidence')
+      for (let i = 0; i < 61; i++) await ticker.tick()
+      assert.ok(brain.calls > 0 || lines.some((l) => l.includes('goal step=')), 'work proceeds after the cap')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(b) work + hostile at 5 blocks: fight preempts as before', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
