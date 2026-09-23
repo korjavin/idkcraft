@@ -864,6 +864,7 @@ describe('work mode (epic rw4)', () => {
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
     try {
       for (let i = 0; i < 45; i++) await ticker.tick()
+      assert.equal(bot.calls.goals.length, 1, 'no goal churn while the executor claims motion')
       assert.equal(ctx.stuck, null, 'no ticker backstop episode during gohome')
       assert.equal(ctx.recovery, null, 'no recovery owns the body during gohome')
       assert.equal(ctx.step, 'gohome', 'walkTo failure re-picks gohome silently at night')

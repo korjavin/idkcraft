@@ -107,7 +107,12 @@ function walkTo(bot, ctx, st, key, goal, arrived) {
   } else if (++st.stalls >= STALL_TICKS) {
     st.stalls = 0
     st.fails = (st.fails || 0) + 1
-    ctx.lastGoalKey = '' // force re-issue below
+    // A still-claiming-motion executor may be mid-plan (slow A* around our
+    // own walls takes ~20 s): a fresh goal restarts planning forever, so
+    // re-issue only a died-silent executor.
+    let idle = true
+    try { idle = !bot.pathfinder.isMoving() } catch (_) { /* retry below */ }
+    if (idle) ctx.lastGoalKey = '' // force re-issue below
     if (st.fails >= MAX_REISSUES) {
       ctx.stepStatus = 'failed:cannot-reach-home'
       return false
