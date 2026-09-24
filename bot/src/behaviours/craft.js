@@ -68,7 +68,17 @@ function craft(bot, ctx, target, state) {
   if (!bp) return
   const logs = tally(bot, '_log')
   const planks = tally(bot, '_planks')
-  const tablePos = ctx.home && ctx.home.table
+  // The equip step's placed station doubles (atl.6): without it a placed
+  // table the menu knows (tablePlaced) still reads as no station here, and
+  // the table branch below rebuilds one from planks every cycle. Verified
+  // once: a ghost claim (mined table) reads as no station, so the table
+  // branch rebuilds instead of the door branch walking to nothing forever.
+  const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
+  let tableBlock = null
+  if (tablePos) {
+    try { tableBlock = bot.blockAt && bot.blockAt(tablePos) } catch (_) { tableBlock = null }
+    if (!tableBlock || tableBlock.name !== 'crafting_table') tableBlock = null
+  }
   let op = null
   for (const [wood, n] of sortedWoods(logs)) {
     const name = `${wood}_planks`
@@ -77,7 +87,7 @@ function craft(bot, ctx, target, state) {
   }
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
-    if (tableCount === 0 && !tablePos) {
+    if (tableCount === 0 && !tableBlock) {
       for (const [wood, n] of sortedWoods(planks)) {
         if (n < 4) break
         const found = recipes(bot, 'crafting_table', null)
@@ -87,15 +97,13 @@ function craft(bot, ctx, target, state) {
   }
   if (!op) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
-    if (doorCount === 0 && tablePos) {
-      let block = null
-      try { block = bot.blockAt && bot.blockAt(tablePos) } catch (_) { block = null }
-      if (block && dist3(bp, tablePos) <= TABLE_REACH) {
+    if (doorCount === 0 && tableBlock) {
+      if (dist3(bp, tablePos) <= TABLE_REACH) {
         for (const [wood, n] of sortedWoods(planks)) {
           if (n < 6) break
           const name = `${wood}_door`
-          const found = recipes(bot, name, block)
-          if (found.length > 0) { op = { item: name, recipe: found[0], count: 1, table: block }; break }
+          const found = recipes(bot, name, tableBlock)
+          if (found.length > 0) { op = { item: name, recipe: found[0], count: 1, table: tableBlock }; break }
         }
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
@@ -143,3 +151,10 @@ function craft(bot, ctx, target, state) {
 }
 
 module.exports = craft
+// Shared crafting primitives for the equip step (atl.6): recipe lookup and
+// the table reach. Same dual-export shape as fight.equipGear.
+module.exports.itemId = itemId
+module.exports.recipes = recipes
+module.exports.tally = tally
+module.exports.sortedWoods = sortedWoods
+module.exports.TABLE_REACH = TABLE_REACH

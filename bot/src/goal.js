@@ -55,6 +55,24 @@ const MENU = {
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
+  equip: {
+    // Starter-kit rebuild (atl.6, owner): pickaxe -> sword first (they need
+    // sticks-or-planks-or-logs plus a table, inventory or placed), scaffold
+    // blocks only once geared (they dig by hand). Blocks alone never preempt
+    // early gather: a fresh bot chops first, digs later.
+    feasible: (facts) => {
+      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
+        if (!equipWant(facts)) return false
+        return (facts.table || 0) > 0 || !!facts.tablePlaced
+      }
+      // Deferred require (same cycle as registered() below): goal.js loads
+      // inside the equip->craft->goal chain, so the mark is read at decide()
+      // time, never at load time.
+      return (facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_LOW
+    },
+    chat: () => 'on my own: rearming tools and blocks',
+    verb: 'rearming',
+  },
   build: {
     // Batch gate (bead .4): build proceeds in batches — start (or resume)
     // with a batch of up to 16 planks on hand, then back to gather/craft.
@@ -154,10 +172,34 @@ const MENU = {
   },
 }
 
-// Priority order (epic rw4 + atl.2): night steps first, then craft, build,
-// gather, then unload (deliver), dig (forage), search (explore), rest last.
+// Which missing tool can actually complete now (atl.6 + revmux round-1):
+// the pickaxe needs 3 rock (cobble or ~5 plank-equivalents, since 2 planks
+// go to sticks) plus 2 sticks-or-material; the sword 2 rock plus 1 stick.
+// Single source for MENU.equip.feasible and the stepWhy wording, in the
+// behaviour's pickaxe-first order (offering the sword while the pickaxe is
+// missing AND uncompletable would fail at once in toolOp).
+function equipWant(facts) {
+  const sticks = facts.sticks || 0
+  const planks = facts.planks || 0
+  const logs = facts.logs || 0
+  const cobble = facts.cobble || 0
+  const equiv = planks + logs * 4
+  const stick2 = sticks >= 2 || planks >= 2 || logs >= 1
+  const stick1 = sticks >= 1 || planks >= 2 || logs >= 1
+  if ((facts.pickaxe || 0) <= 0) {
+    return (cobble >= 3 || equiv >= 5) && stick2 ? 'pickaxe' : null
+  }
+  if ((facts.sword || 0) <= 0) {
+    return (cobble >= 2 || equiv >= 3) && stick1 ? 'sword' : null
+  }
+  return null
+}
+
+// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
+// rearm (equip), build, gather, then unload (deliver), dig (forage), search
+// (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -286,6 +328,11 @@ function goalFacts(bot, ctx) {
   const planks = countItems(bot, (n) => n.endsWith('_planks'))
   const table = countItems(bot, (n) => n === 'crafting_table')
   const door = countItems(bot, (n) => n.endsWith('_door'))
+  const sword = countItems(bot, (n) => n.endsWith('_sword'))
+  const pickaxe = countItems(bot, (n) => n.endsWith('_pickaxe'))
+  const cobble = countItems(bot, (n) => n === 'cobblestone')
+  const sticks = countItems(bot, (n) => n === 'stick')
+  const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
   try {
@@ -312,7 +359,9 @@ function goalFacts(bot, ctx) {
       bp.y >= interior.min.y && bp.y <= interior.max.y &&
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
-  const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
+  // A station the equip step placed also counts (atl.6): otherwise the
+  // craft step rebuilds a table from planks every time equip places one.
+  const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
   let known = 'none'
   try {
     if (forageMod.planForage(bot, ctx)) known = 'near'
@@ -336,7 +385,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside, health, food, known, haul, player }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -410,6 +459,7 @@ const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
+  equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
   forage: 'known is near: walk to the remembered find and dig it',
@@ -498,6 +548,13 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
       if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
       return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
+    case 'equip': {
+      // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
+      // scaffold blocks only once geared.
+      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
+      if (!equipWant(facts)) return 'equip: no materials'
+      return 'equip: no table'
+    }
     case 'build': {
       // Facts-level wording; the exact remainder gate lives in the rule.
       // Item gates run first (the rule yields on a missing item first).
@@ -605,6 +662,14 @@ async function decide(bot, ctx) {
   // step before gohome shuts the door, chats and shelters — and stepping out
   // flips it back before stay says good morning. The phase machine fails
   // itself on real trouble (no-home, cannot-reach), which re-arms choice.
+  // In-flight craft windows (craft/equip) must not be preempted mid-click:
+  // re-deciding on changed facts while the async op runs corrupts the window
+  // cursor (live 26.1 lesson: a table placement flips the facts before the
+  // sword craft lands). The flags reset on completion, so this holds for a
+  // few ticks at most.
+  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight)) {
+    return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
   if (!finished && (prev === 'gohome' || prev === 'stay')) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
@@ -626,6 +691,11 @@ async function decide(bot, ctx) {
     const choice = await chooseStep(ctx && ctx.brain, facts, names)
     const ms = Date.now() - t0
     ctx.step = choice.step
+    // A fresh equip pick starts with fresh run counters (revmux round-1):
+    // stall patience spent by an earlier run must not fail the new one on
+    // its first tick. Station claims (claimedTable) live outside ctx.equip
+    // and survive. Same-name re-picks were already reset by done/failed.
+    if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     ctx.stepStatus = 'running'
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
@@ -660,4 +730,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }

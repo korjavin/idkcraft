@@ -36,6 +36,7 @@ const BEHAVIOURS = {
   gather: require('./behaviours/gather'),
   bring: bringMod,
   craft: require('./behaviours/craft'),
+  equip: require('./behaviours/equip'),
   rest: require('./behaviours/rest'),
   gohome: homeMod.gohome,
   stay: homeMod.stay,
@@ -1496,13 +1497,24 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
   } else if (msg === 'build here') {
-    const speaker = bot.players && bot.players[username] && bot.players[username].entity
+    const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
     const pos = speaker && speaker.position
-    if (!pos || typeof pos.x !== 'number') return // speaker out of tracking range: no around
+    // b2o: out of tracking range is an answer, not silence — the server
+    // sends no coordinates and the bot cannot walk there.
+    if (!pos || typeof pos.x !== 'number') {
+      bot.chat("I can't see you, come closer")
+      return
+    }
     // rpw: always a new site, even over a built home — the owner asked.
     // The new home becomes current (gohome/night go there); old walls stay
     // protected by build.js guardOwnWalls (block-type based, not site).
-    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
+    // b2o: then the same transition as 'go work' — follow drops the body
+    // and the goal loop starts building instead of trailing the owner.
+    const site = goal.siteFor(bot, pos)
+    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site)
+    if (ticker) ticker.work()
+    const st = (site && site.site) || {}
+    bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else if (msg === 'brain' || msg.startsWith('brain ')) {

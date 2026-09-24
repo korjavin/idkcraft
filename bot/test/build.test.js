@@ -104,6 +104,10 @@ describe('rw4.4 (a) build step announces itself', () => {
         { name: 'oak_planks', count: 56 },
         { name: 'crafting_table', count: 1 },
         { name: 'oak_door', count: 1 },
+        // Geared (atl.6): a tool-less kit with a table rearms first.
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'dirt', count: 32 },
       ],
     })
     const ctx = { step: '', stepStatus: null, goalText: null, home: goal.siteFor(bot, pos(0, 64, 0)) }
@@ -411,6 +415,10 @@ describe('rpw build here on a built home starts a new house', () => {
         { name: 'oak_planks', count: 56 },
         { name: 'crafting_table', count: 1 },
         { name: 'oak_door', count: 1 },
+        // Geared (atl.6): a tool-less kit with a table rearms first.
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'dirt', count: 32 },
       ],
     })
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
@@ -423,7 +431,7 @@ describe('rpw build here on a built home starts a new house', () => {
     ticker.setHome(home)
     bot.chats.length = 0
     handleChat(bot, ticker, 'Steve', 'build here')
-    assert.deepEqual(bot.chats, [])
+    assert.deepEqual(bot.chats, ['building a home at 106 64 100'])
     const next = ticker.home()
     assert.deepEqual(next.site, { x: 106, y: 64, z: 100 })
     assert.ok(!next.built, 'a fresh site is not built')
@@ -435,7 +443,44 @@ describe('rpw build here on a built home starts a new house', () => {
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     handleChat(bot, ticker, 'Steve', 'build here')
     assert.deepEqual(ticker.home().site, { x: 106, y: 64, z: 100 })
-    assert.deepEqual(bot.chats, [])
+    assert.deepEqual(bot.chats, ['building a home at 106 64 100'])
+  })
+})
+
+describe('b2o build here answers and starts work', () => {
+  function chatBot() {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
+    return bot
+  }
+  it('in follow: clears follow, sets site, chats coords, goal picks work', async () => {
+    const bot = chatBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('Steve')
+    assert.equal(ticker.getFollowName(), 'Steve')
+    bot.chats.length = 0
+    handleChat(bot, ticker, 'Steve', 'build here')
+    assert.equal(ticker.getFollowName(), '')
+    assert.deepEqual(ticker.home().site, { x: 106, y: 64, z: 100 })
+    assert.deepEqual(bot.chats, ['building a home at 106 64 100'])
+    const r = await goal.decide(bot, { step: '', stepStatus: null, goalText: null, home: ticker.home() })
+    assert.ok(['craft', 'gather', 'build'].includes(r.action), `work step, got ${r.action}`)
+  })
+  it("Bedrock speaker resolves: chat 'Steve' + roster '.Steve' builds", () => {
+    const bot = chatBot()
+    bot.players = { '.Steve': { username: '.Steve', entity: { position: pos(100, 64, 100) } } }
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'build here')
+    assert.deepEqual(bot.chats, ['building a home at 106 64 100'])
+    assert.deepEqual(ticker.home().site, { x: 106, y: 64, z: 100 })
+  })
+  it('speaker out of tracking range gets a reply instead of silence', () => {
+    const bot = chatBot()
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'build here')
+    assert.deepEqual(bot.chats, ["I can't see you, come closer"])
   })
 })
 
