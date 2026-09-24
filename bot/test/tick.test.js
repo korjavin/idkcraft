@@ -933,6 +933,39 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(e4) follow takeover mid-walk gives digging back at once', async () => {
+    // Revmux 8kc round 2: a pending 'follow me' with the player unseen keeps
+    // work; the walk borrows canDig=false; the sighting must restore it on
+    // the takeover tick itself.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve' } } // rostered but unseen
+    bot.time = { timeOfDay: 15000 }
+    const movements = { canDig: true }
+    bot.pathfinder.movements = movements
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.movements = movements
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+    try {
+      await ticker.tick() // work runs, walk borrows no-dig
+      assert.equal(movements.canDig, false)
+      ticker.setFollow('Steve') // pending order, player still unseen: work continues
+      await ticker.tick()
+      assert.equal(ctx.work, true)
+      assert.equal(movements.canDig, false)
+      bot.players.Steve.entity = playerEntity(10) // walks into view
+      await ticker.tick() // takeover: follow owns the body, dig restored
+      assert.equal(ctx.work, false)
+      assert.equal(movements.canDig, true)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(d) follow me in chat resets work: next tick follows', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
