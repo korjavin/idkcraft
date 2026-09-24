@@ -558,47 +558,6 @@ function restWhy(facts, bot, ctx, names) {
   return out.join(', ')
 }
 
-// Rest escalation (idkcraft-atl.7): a rest streak past REST_ESCALATE_MS
-// consults the model once per streak with the reason text. Two labels so
-// laya makes a real call; the answer is observability only (log + metric),
-// never a redirect — no new logic by design.
-const REST_ESCALATE_MS = 10 * 60 * 1000
-const REST_ESCALATION_INSTRUCTIONS = 'Rest is long: confirm it still fits'
-const REST_ESCALATION_CRITERIA = {
-  rest: 'conditions unchanged: keep resting',
-  recheck: 'something may have changed: look again',
-}
-async function escalateRest(bot, ctx, facts) {
-  const brain = ctx && ctx.brain
-  if (!brain || typeof brain.ask !== 'function') return
-  const model = brain.source || brain.name || 'model'
-  let why = 'unknown'
-  try {
-    why = (ctx && ctx.restWhy) || why
-  } catch (_) { /* wording best-effort */ }
-  let text = ''
-  try {
-    text = goalText(facts)
-  } catch (_) { /* wording best-effort */ }
-  try {
-    const answer = await brain.ask({
-      state: `resting long: ${why}`,
-      instructions: REST_ESCALATION_INSTRUCTIONS,
-      criteria: REST_ESCALATION_CRITERIA,
-      situation: text,
-    })
-    metrics.escalation.inc({ from: model, to: 'rest', reason: 'long-rest' })
-    console.error(`rest escalation source=${model} answer=${answer} why=${why}`)
-  } catch (err) {
-    const msg = String((err && err.message) || err)
-    const reason = (err && err.name === 'TimeoutError') ? 'timeout'
-      : msg.startsWith('jev missing') ? 'invalid'
-      : 'error'
-    metrics.escalation.inc({ from: model, to: 'rest', reason })
-    console.error(`rest escalation failed source=${model} reason=${reason} why=${why}`)
-  }
-}
-
 // Registration gate: a step runs only while its behaviour is plugged into
 // BEHAVIOURS (later beads join with one require line each). Deferred require:
 // goal.js loads before index.js finishes, so the table is read at decide()
@@ -650,13 +609,6 @@ async function decide(bot, ctx) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  // A step lifecycle reset outside decide (stop/orders null the step via
-  // resetNightStep) ends any rest streak: drop it lazily here so a fresh
-  // streak cannot inherit an old timestamp or an already-fired flag.
-  if (ctx.step !== 'rest' && (ctx.restSince || ctx.restEscalated)) {
-    ctx.restSince = null
-    ctx.restEscalated = false
-  }
   if (!prev || finished || ctx.goalText !== text) {
     const askKey = `${text}\n${status || ''}`
     if (prev && ctx.askedKey === askKey) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
@@ -704,19 +656,6 @@ async function decide(bot, ctx) {
         try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
       }
     }
-  }
-  // atl.7 escalation: rest chosen every tick past 10 minutes asks the model
-  // with the reason text (rw4.6 shape); the answer is observability only.
-  if (ctx.step === 'rest') {
-    const now = Date.now()
-    if (!ctx.restSince) ctx.restSince = now
-    if (!ctx.restEscalated && now - ctx.restSince >= REST_ESCALATE_MS) {
-      ctx.restEscalated = true
-      await escalateRest(bot, ctx, facts)
-    }
-  } else {
-    ctx.restSince = null
-    ctx.restEscalated = false
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
