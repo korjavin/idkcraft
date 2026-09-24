@@ -25,6 +25,9 @@ const FIND_COUNT = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const MOVE_TOLERANCE = 0.5
+const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
+// not per column — acacia crowns branch into neighbouring x,z-columns, while
+// trunks a full 3 blocks apart still count as different trees
 const PLACE_ERROR_STALLS = 3 // consecutive place_error resets with no displacement count as a stall
 const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
 
@@ -252,11 +255,12 @@ function gather(bot, ctx, target, state) {
         ctx.placeErrors = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (++g.stalls >= STALL_TICKS || (ctx.placeErrors || 0) >= PLACE_ERROR_STALLS) {
-        // One strike per trunk, not per log: a stalled trunk's mates would
-        // each burn 10 ticks and a strike, failing the step with reachable
-        // trees nearby. Skip the whole column at once.
+        // One strike per tree, not per log or column: a stalled trunk's
+        // mates would each burn 10 ticks and a strike, failing the step with
+        // reachable trees nearby — and an acacia crown branches into
+        // neighbouring x,z-columns, so skip the whole crown at once.
         for (const q of g.lastFound || []) {
-          if (q.x === g.pos.x && q.z === g.pos.z) g.skip.add(keyOf(q))
+          if (Math.hypot(q.x - g.pos.x, q.z - g.pos.z) < CROWN_SKIP_RADIUS) g.skip.add(keyOf(q))
         }
         g.skip.add(keyOf(g.pos))
         g.streak = (g.streak || 0) + 1

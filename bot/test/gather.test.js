@@ -198,6 +198,25 @@ describe('gather step', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
+  it('(atl.5) one strike per tree: a stalled acacia crown is skipped whole', () => {
+    // Session case: 3 strikes burned on ONE acacia (diagonal branches, 3
+    // x,z-columns). A stall must skip the whole crown (~3 blocks), so the
+    // next strike is a different tree at 20, not a final.
+    const bot = mockBot({
+      spots: [pos(10, 64, 0), pos(12, 64, 2), pos(11, 64, 2), pos(20, 64, 0)],
+      names: {
+        '10,64,0': 'oak_log', '12,64,2': 'oak_log', '11,64,2': 'oak_log',
+        '20,64,0': 'birch_log',
+      },
+    })
+    bot._moving = true // wedged executor: every trunk stalls
+    const ctx = freshCtx()
+    for (let i = 0; i < 20 && !/^gather:20,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:20,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.gather.streak, 1, 'one strike for the whole crown')
+  })
+
   it('(atl.5) a skipped trunk at 40 does not hide a reachable log at 100', () => {
     // The bead's own case: in-48 trees unreachable, a far tree reachable.
     // The staged search must exclude skipped/in-48 hits, not end on them.
