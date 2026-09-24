@@ -717,9 +717,11 @@ const RECOVER_MENU = {
   pillar_up: {
     // 4jr: a pillar to a level goal is pointless — laya took the first menu
     // item anyway, 29 times in 16 min. Climb prims need the goal above.
-    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked,
+    // p4s: placing is what just failed (3 done / 49 failed:place-error a
+    // day) — after a place-error in this episode pillar_up leaves the menu.
+    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && (facts.resetsPlaceError || 0) <= 0,
     run: pillarUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0,
+    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && (facts.resetsPlaceError || 0) <= 0,
     verb: 'pillaring up',
   },
   dig_up: {

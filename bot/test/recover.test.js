@@ -788,25 +788,20 @@ describe('ticker backstops (minor)', () => {
     bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 61, 0) } } }
     return bot
   }
-  it('three place_error resets raise by=place_error and start an episode', async () => {
-    // Deleting the backstop line fails this test (stuck stays null).
-    const lines = []
-    const origLog = console.log
-    console.log = (l) => { lines.push(String(l)) }
-    try {
-      const bot = standBot()
-      const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
-      const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
-      ticker.setPathReset('place_error')
-      ticker.setPathReset('place_error')
-      ticker.setPathReset('place_error')
-      await ticker.tick()
-      assert.equal(bot._tickerCtx.stuck.by, 'place_error')
-      assert.ok(lines.some((l) => l.includes('recover action=sidestep') && l.includes('outcome=chosen')),
-        `episode started, got: ${lines.join(' | ')}`)
-    } finally {
-      console.log = origLog
-    }
+  it('three place_error resets never start an episode (p4s)', async () => {
+    // Contract change (idkcraft-p4s): the place_error ticker backstop is
+    // gone — the streak stays the step's own signal, the body never goes
+    // to recover on it.
+    const bot = standBot()
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null)
+    assert.equal(bot._tickerCtx.recovery, null)
+    ticker.destroy()
   })
   it('gather owning the step suppresses the place_error backstop (yvi gate)', async () => {
     const bot = standBot()
@@ -1177,5 +1172,24 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     recover.run(bot, ctx)
     assert.ok(bot.getControlState('jump'), 'leap latches at the edge')
     assert.ok(ctx.recovery.st.jumping, 'latch sticks')
+  })
+})
+
+describe('pillar_up after place-error (idkcraft-p4s)', () => {
+  const recover = require('../src/behaviours/recover')
+  function facts(over) {
+    return Object.assign({
+      goalDy: 3, scaffold: 5, headBlocked: false, pickaxe: false, lavaNear: false,
+      digStep: null, hopStep: null, walls: 1, playerOnline: false, playerDist: null,
+      stuckTicks: 0, resetsStuck: 0, resetsPlaceError: 0, last: null, water: false,
+    }, over)
+  }
+  it('pillar_up infeasible after place-errors in the episode', () => {
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({})), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ resetsPlaceError: 3 })), false)
+  })
+  it('pillar_up not repeatable after place-errors in the episode', () => {
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({})), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({ resetsPlaceError: 1 })), false)
   })
 })

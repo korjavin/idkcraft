@@ -128,6 +128,10 @@ function snapshot(bot, ctx, now) {
       visited = visited.slice(-VISITED_MAX)
     }
   } catch (_) { /* visited best-effort */ }
+  let follow = null
+  try {
+    if (ctx && typeof ctx.followName === 'string' && ctx.followName) follow = ctx.followName
+  } catch (_) { /* follow best-effort */ }
   let spots = []
   try {
     const mem = ctx.danger
@@ -142,7 +146,7 @@ function snapshot(bot, ctx, now) {
       spots = spots.slice(-danger.MAX_SPOTS)
     }
   } catch (_) { /* danger best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow }
 }
 
 function readDoc(file) {
@@ -163,7 +167,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    if (!doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length) return false
+    if (!doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow) return false
     f = file || fileFor(process.env, bot && bot.username)
     try {
       const prev = readDoc(f)
@@ -200,7 +204,11 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0 }
+    if (typeof doc.follow === 'string' && doc.follow) {
+      ctx.followName = doc.follow
+      out.follow = 1
+    }
     if (Array.isArray(doc.homes) && doc.homes.length) {
       const h = homeOf(doc.homes[doc.homes.length - 1])
       if (h) {
