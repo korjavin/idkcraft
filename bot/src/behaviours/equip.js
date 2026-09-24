@@ -58,8 +58,25 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// Per-run counters (stall patience, not station claims): a finished run —
+ // done or failed — spends them, so the next pick starts fresh instead of
+// failing on the previous run's budget (revmux round-1: every blocks pick
+// failed dig-stall on its first tick after 2–3 rebuilds).
+function resetRunCounters(ctx) {
+  try {
+    const st = ctx && ctx.equip
+    if (st && typeof st === 'object') {
+      delete st.digs
+      delete st.walkWaits
+      delete st.approachWaits
+      delete st.made
+    }
+  } catch (_) { /* reset best-effort */ }
+}
+
 function fail(ctx, item, err) {
   ctx.stepStatus = `failed:equip-${item}`
+  resetRunCounters(ctx)
   try {
     console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
   } catch (_) { /* logging best-effort */ }
@@ -84,7 +101,7 @@ function tableFor(bot, ctx) {
   const tables = []
   if (ctx.home && ctx.home.table) tables.push(ctx.home.table)
   if (st.tablePos) tables.push(st.tablePos)
-  if (ctx.claimedTable) tables.push(ctx.claimedTable)
+  if (ctx.claimedTable && ctx.claimedTable !== st.tablePos) tables.push(ctx.claimedTable)
   let homeTable = null
   let homeBlock = null
   for (const t of tables) {
@@ -155,10 +172,12 @@ function tableFor(bot, ctx) {
     // in goalFacts): the menu stops rebuilding tables from planks while we
     // arm. Build overwrites the home claim with its own site table when it
     // lands one.
+    // Claim the station WITHOUT touching ctx.home.table: build claims
+    // its blueprint cell only while unset, so a roadside write would shadow
+    // the site table forever and the house never finishes (revmux round-1).
     try {
       st.tablePos = { x: at.x, y: at.y, z: at.z }
       ctx.claimedTable = { x: at.x, y: at.y, z: at.z }
-      if (ctx.home && typeof ctx.home === 'object') ctx.home.table = at
     } catch (_) { /* claim best-effort */ }
     return { block, pos: at }
   }
@@ -198,7 +217,18 @@ function toolOp(bot, kind) {
   // Any planks do: wooden tools share one name whatever the wood (there is
   // no oak_pickaxe — the recipe lookup would miss it).
   const wood = planks.length > 0 && planks[0][1] >= needRock
-  if (!stone && !wood) return { fail: 'no-materials' }
+  if (!stone && !wood) {
+    // Sticks are satisfied but the rock is short: keep converting the
+    // remaining logs instead of failing with material still on hand
+    // (revmux round-1: 2 logs stalled after one planks op).
+    if (logs.size > 0) {
+      const [wood2] = craftMod.sortedWoods(logs)[0]
+      const found = craftMod.recipes(bot, `${wood2}_planks`, null)
+      if (found.length > 0) return { item: `${wood2}_planks`, recipe: found[0], count: 1, table: null }
+      return { fail: 'no-planks-recipe' }
+    }
+    return { fail: 'no-materials' }
+  }
   const tool = kind === 'pickaxe' ? 'pickaxe' : 'sword'
   return { item: stone ? `stone_${tool}` : `wooden_${tool}`, stone, tabled: true }
 }
@@ -218,6 +248,7 @@ function equip(bot, ctx) {
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
       ctx.stepStatus = 'done'
+      resetRunCounters(ctx)
       return
     }
     digTick(bot, ctx, st, bp)

@@ -62,8 +62,7 @@ const MENU = {
     // early gather: a fresh bot chops first, digs later.
     feasible: (facts) => {
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
-        const material = (facts.sticks || 0) >= 1 || (facts.planks || 0) >= 2 || (facts.logs || 0) >= 1
-        if (!material) return false
+        if (!equipWant(facts)) return false
         return (facts.table || 0) > 0 || !!facts.tablePlaced
       }
       // Deferred require (same cycle as registered() below): goal.js loads
@@ -171,6 +170,29 @@ const MENU = {
     chat: (facts) => (facts.home === 'none' ? 'on my own: resting near spawn' : 'on my own: resting at the home site'),
     verb: 'resting',
   },
+}
+
+// Which missing tool can actually complete now (atl.6 + revmux round-1):
+// the pickaxe needs 3 rock (cobble or ~5 plank-equivalents, since 2 planks
+// go to sticks) plus 2 sticks-or-material; the sword 2 rock plus 1 stick.
+// Single source for MENU.equip.feasible and the stepWhy wording, in the
+// behaviour's pickaxe-first order (offering the sword while the pickaxe is
+// missing AND uncompletable would fail at once in toolOp).
+function equipWant(facts) {
+  const sticks = facts.sticks || 0
+  const planks = facts.planks || 0
+  const logs = facts.logs || 0
+  const cobble = facts.cobble || 0
+  const equiv = planks + logs * 4
+  const stick2 = sticks >= 2 || planks >= 2 || logs >= 1
+  const stick1 = sticks >= 1 || planks >= 2 || logs >= 1
+  if ((facts.pickaxe || 0) <= 0) {
+    return (cobble >= 3 || equiv >= 5) && stick2 ? 'pickaxe' : null
+  }
+  if ((facts.sword || 0) <= 0) {
+    return (cobble >= 2 || equiv >= 3) && stick1 ? 'sword' : null
+  }
+  return null
 }
 
 // Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
@@ -530,7 +552,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
       // scaffold blocks only once geared.
       if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
-      if ((facts.sticks || 0) < 1 && (facts.planks || 0) < 2 && (facts.logs || 0) < 1) return 'equip: no materials'
+      if (!equipWant(facts)) return 'equip: no materials'
       return 'equip: no table'
     }
     case 'build': {
@@ -669,6 +691,11 @@ async function decide(bot, ctx) {
     const choice = await chooseStep(ctx && ctx.brain, facts, names)
     const ms = Date.now() - t0
     ctx.step = choice.step
+    // A fresh equip pick starts with fresh run counters (revmux round-1):
+    // stall patience spent by an earlier run must not fail the new one on
+    // its first tick. Station claims (claimedTable) live outside ctx.equip
+    // and survive. Same-name re-picks were already reset by done/failed.
+    if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     ctx.stepStatus = 'running'
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })

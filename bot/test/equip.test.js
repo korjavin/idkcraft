@@ -404,7 +404,9 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
-  it('placed table is claimed as the home station (menu stops rebuilding)', async () => {
+  it('placed table is claimed menu-visibly, never as the home table', async () => {
+    // Revmux round-1: writing ctx.home.table shadowed the blueprint cell
+    // (build claims only while unset) and the house never finished.
     let placed = null
     const bot = mockBot({
       items: [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
@@ -426,7 +428,7 @@ describe('equip step', () => {
     equip(bot, ctx, null, {})
     await flush()
     assert.equal(bot.calls.craft.length, 1)
-    assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, placed)
+    assert.equal(ctx.home.table, undefined) // the blueprint cell stays build's
     assert.deepEqual(ctx.claimedTable, placed) // menu-visible claim, homeless or not
     bot.restoreError()
   })
@@ -467,6 +469,53 @@ describe('equip step', () => {
     assert.equal(bot.calls.dig.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-blocks')
     assert.ok(bot.errs.some((e) => e.includes('dig-unreachable')))
+    bot.restoreError()
+  })
+
+  it('chains leftover logs: sticks satisfied, rock short, logs remain', async () => {
+    // Revmux round-1: 2 logs stalled after one planks op while logs were
+    // still on hand. The consuming mock proves the chain runs to the tool.
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 1 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks', 4), wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    bot.craft = async (recipe, count, table) => {
+      bot.calls.craft.push({ recipe, count, table })
+      if (recipe.result.name.endsWith('_planks')) {
+        const log = bot._items.find((i) => i.name === 'oak_log')
+        if (log) log.count -= 1
+        bot._items.push({ name: 'oak_planks', count: 4 })
+      } else {
+        bot._items.push({ name: recipe.result.name, count: 1 })
+      }
+    }
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 2)
+    assert.deepEqual(bot.calls.craft[1].recipe, recipeFor('wooden_pickaxe'))
+    assert.equal(ctx.stepStatus, 'running') // chained, never failed
+    bot.restoreError()
+  })
+
+  it('finished runs spend their counters: the next pick starts fresh', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [],
+    })
+    const ctx = freshCtx()
+    ctx.equip = { digs: 64, walkWaits: 20, approachWaits: 30, made: { wooden_pickaxe: 2 } }
+    equip(bot, ctx, null, {}) // no dirt: fails, and the stale budget clears
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.deepEqual(ctx.equip, {})
     bot.restoreError()
   })
 

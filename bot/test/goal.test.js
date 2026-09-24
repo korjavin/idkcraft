@@ -750,6 +750,24 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
     assert.equal(F({}), 'equip: no materials')
     assert.equal(F({ planks: 5 }), 'equip: no table')
     assert.equal(F({ planks: 5, table: 1 }), null) // feasible: no reason line
+    // Revmux round-1: a lone stick, 2 planks or 1 log pass no tool — refuse.
+    assert.equal(F({ sticks: 1 }), 'equip: no materials')
+    assert.equal(F({ planks: 2 }), 'equip: no materials')
+    assert.equal(F({ logs: 1 }), 'equip: no materials')
+    assert.equal(F({ cobble: 3 }), 'equip: no materials') // rock without sticks
+  })
+  it('fresh equip picks start with fresh run counters', async () => {
+    // Revmux round-1: stall patience spent by an earlier run must not fail
+    // the new pick on its first tick. Station claims live outside ctx.equip.
+    const bot = kit([{ name: 'oak_planks', count: 48 }, { name: 'oak_door', count: 1 }])
+    const ctx = {
+      home: { table: pos(2, 64, 0) }, step: 'rest', stepStatus: 'done', goalText: 'old',
+      equip: { digs: 64, walkWaits: 20, made: { x: 1 } }, claimedTable: { x: 9, y: 64, z: 9 },
+    }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'equip')
+    assert.deepEqual(ctx.equip, {})
+    assert.deepEqual(ctx.claimedTable, { x: 9, y: 64, z: 9 })
   })
   it('in-flight craft windows hold the step across changed facts', async () => {
     // Live 26.1: a table placement flips the facts before the sword craft
