@@ -884,3 +884,298 @@ describe('recover FSM escalation (prod wedges)', () => {
       'sidestep')
   })
 })
+
+describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
+  // Prod 2026-09-24: executor wedges on a straight cardinal +1 (path=success,
+  // reset=stuck x8) with a level follow goal; the menu offers sidestep/wait
+  // but no plain mount, so the +1 never gets climbed. hop_step hops it.
+  function stepWorld() {
+    // Floor + one STONE step east with air above: no dig_step (above is air
+    // but the stone never digs by hand — findDigStepDir still fires, so the
+    // FSM must prefer the no-dig hop on a level goal).
+    return new Set([key(0, 60, 0), key(1, 61, 0)])
+  }
+  function stepBot() {
+    const bot = worldBot(stepWorld(), [])
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 61, 0)) {
+        return { ...b, name: 'stone' }
+      }
+      return b
+    }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    bot._yaw = 0
+    bot.look = (yaw) => { bot._yaw = yaw }
+    return bot
+  }
+
+  it('level goal, stone +1 east, air above: hop_step in the menu, FSM picks it', async () => {
+    const bot = stepBot()
+    const seen = []
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return 'hop_step' } },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen.length === 1, 'asked once')
+    assert.ok(seen[0].includes('hop_step'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'hop_step', `got ${r.action}`)
+    // FSM reserve, no model: the hop line fires before sidestep.
+    const bot2 = stepBot()
+    const ctx2 = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const r2 = await recover.decide(bot2, ctx2, null, null)
+    assert.equal(r2.action, 'hop_step', `fsm got ${r2.action}`)
+  })
+
+  it('hop_step run mounts the step and ends the episode', async () => {
+    const bot = stepBot()
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const first = []
+    const stepBody = () => {
+      const bp = bot.entity.position
+      if (bot.getControlState('forward')) {
+        const yaw = bot._yaw || 0
+        bot.entity.position = pos(bp.x - Math.sin(yaw) * 0.4, bp.y, bp.z - Math.cos(yaw) * 0.4)
+      } else {
+        const g = bot.pathfinder.goal
+        if (g && typeof g.x === 'number') {
+          const dx = g.x - bp.x
+          const dz = g.z - bp.z
+          const d = Math.hypot(dx, dz)
+          if (d >= 0.05) {
+            const s = Math.min(0.4, d) / d
+            bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+          }
+        }
+      }
+      const st = ctx.recovery && ctx.recovery.st
+      const cap = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      if (bot.getControlState('jump') && bot.entity.position.y < cap) bot.entity.position.y += 0.5
+    }
+    for (let t = 0; t < 60 && (ctx.stuck || ctx.recovery); t++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+        if (ctx.recovery && ctx.recovery.action && first.length === 0) first.push(ctx.recovery.action)
+      } else {
+        recover.run(bot, ctx)
+        stepBody()
+      }
+      await flush()
+    }
+    assert.equal(first[0], 'hop_step', `first choice, got ${first}`)
+    assert.ok(Math.floor(bot.entity.position.y) >= 62, `mounted, y=${bot.entity.position.y}`)
+    assert.equal(ctx.stuck, null, 'episode over')
+  })
+
+  it('stone cap above the step: hop stays out, sidestep keeps its turn', async () => {
+    // The 4jr pin: hop must not steal the menu where no mount exists.
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 62, 0)) {
+        return { ...b, name: 'stone', boundingBox: 'block' }
+      }
+      return b
+    }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'sidestep', `got ${r.action}`)
+  })
+
+  it('lava above the step vetoes the hop', async () => {
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 62, 0)) {
+        return { ...b, name: 'lava', boundingBox: 'block' }
+      }
+      return b
+    }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.notEqual(r.action, 'hop_step', `got ${r.action}`)
+  })
+
+  it('hop mid-air above the step is not done', () => {
+    const bot = stepBot()
+    bot.entity.position = pos(1.0, 62.0, 0.5)
+    bot.entity.onGround = false
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
+  })
+
+  it('hop latches at the physical flush distance (0.8), walks farther out', () => {
+    // Round-1 major: flush contact is exactly half-block plus half-body, so
+    // a strict < 0.8 latch never fires and the primitive always times out.
+    const bot = stepBot()
+    bot.entity.position = pos(0.7, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('jump'), 'leap latches at exactly 0.8')
+  })
+
+  it('hop leaves no control pressed after the mount', () => {
+    // Round-1 major (dismissed as stated, pinned anyway): done must clear
+    // forward as well as jump, or the body walks on after release.
+    const bot = stepBot()
+    bot.entity.position = pos(1.5, 62, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.ok(!bot.getControlState('forward'), 'forward released')
+    assert.ok(!bot.getControlState('jump'), 'jump released')
+  })
+
+  it('overhang above the step (step+2 solid): hop stays out', async () => {
+    // Round-1 minor: the head ends two above the step base, so a cap there
+    // makes the mount unstandable.
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 63, 0)) {
+        return { ...b, name: 'stone', boundingBox: 'block' }
+      }
+      return b
+    }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'sidestep', `got ${r.action}`)
+  })
+
+  it('done wins under a ceiling; airborne over the top settles thrust', async () => {
+    // Round-2 minor: the done-first reorder needs a pin — a mount into a
+    // 2-high passage must report done, not head-blocked.
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 64, 0)) {
+        return { ...b, name: 'stone', boundingBox: 'block' }
+      }
+      return b
+    }
+    bot.entity.position = pos(1.5, 62, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true, settled: false },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'mount under ceiling is done')
+    // Same column mid-air: cut thrust, keep running for the grounded sample.
+    bot.entity.position = pos(1.5, 62.4, 0.5)
+    bot.entity.onGround = false
+    ctx.recovery.status = 'running'
+    ctx.recovery.st.settled = false
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(!bot.getControlState('jump'), 'thrust cut over the top')
+    assert.ok(!bot.getControlState('forward'), 'no walk-off while settling')
+    assert.ok(ctx.recovery.st.settled, 'settle latched')
+  })
+
+  it('settled hop that falls back fails out instead of waiting forever', async () => {
+    // Round-3 major: the settle has no episode timeout behind it, so a body
+    // knocked off the top must fail inside the mount budget, not hang.
+    const bot = stepBot()
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true, settled: true },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    let status = 'running'
+    for (let t = 0; t < 16 && status === 'running'; t++) {
+      recover.run(bot, ctx)
+      status = ctx.recovery.status
+      await flush()
+    }
+    assert.equal(status, 'failed:no-progress', `settled fell back, got ${status}`)
+    assert.ok(!bot.getControlState('forward'), 'forward released on the way out')
+    assert.ok(!bot.getControlState('jump'), 'jump released on the way out')
+  })
+
+  it('hop walks to the edge first, leaps inside jump range', () => {
+    const bot = stepBot()
+    bot.entity.position = pos(-1.5, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('forward'), 'walking to the edge')
+    assert.ok(!bot.getControlState('jump'), 'no early leap from 3m out')
+    bot.entity.position = pos(0.9, 61, 0.5)
+    recover.run(bot, ctx)
+    assert.ok(bot.getControlState('jump'), 'leap latches at the edge')
+    assert.ok(ctx.recovery.st.jumping, 'latch sticks')
+  })
+})
