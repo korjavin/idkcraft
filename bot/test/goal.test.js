@@ -318,6 +318,17 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
   })
 })
 
+describe('atl.4 exemptions: self-advancing failures never hold', () => {
+  it('explore is re-picked after its own failure: the point is consumed', async () => {
+    // Holding explore would deadlock the spiral after one river: the failed
+    // point is visited and the next pick is a new target by construction.
+    const bot = goalBot()
+    const ctx = { home: { built: true }, brain: {}, step: 'explore', stepStatus: 'failed:unreachable' }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'explore')
+  })
+})
+
 describe('decide decision point', () => {
   let origLog
   let lines

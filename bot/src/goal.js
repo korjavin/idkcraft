@@ -368,8 +368,16 @@ function goalText(facts) {
 // New facts or relocation release the step for a fresh try. Per-step map:
 // alternating failures must not release each other.
 const REFAIL_DIST = 32
+// Steps whose failure advances their own situation never hold: explore
+// consumes the failed point (the next pick is a new target by
+// construction), gohome/stay retry from a fresh record through door
+// phases (rw4.5 owns their trouble). Holding them would deadlock the
+// spiral after one river and strand the night walk. The guard bars the
+// steps that would otherwise replay the failure identically.
+const SELF_ADVANCING = { explore: true, gohome: true, stay: true }
 function failHolds(ctx, name, text, bot) {
   try {
+    if (SELF_ADVANCING[name]) return false
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
     if (!sf || sf.text !== text) return false
     if (!sf.pos) return true
