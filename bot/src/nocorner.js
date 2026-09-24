@@ -25,6 +25,13 @@ function cutsCorner(movements, node, m) {
   const dx = m.x - node.x
   const dz = m.z - node.z
   if (Math.abs(dx) !== 1 || Math.abs(dz) !== 1) return false
+  // h04: a diagonal descent into safe water forgives the brush — the body
+  // lands liquid, nothing wedges. Without this the only lip entries into
+  // water are dives (the level diagonals graze the bank-top block), the
+  // plan arrives deep at the far bank, and rising while pressing the face
+  // gets every move packet rejected. Lava stays vetoed (never safe).
+  const landing = movements.getBlock(node, dx, m.y - node.y, dz)
+  if (landing && landing.liquid && landing.safe) return false
   const broken = new Set((m.toBreak || []).map((p) => `${p.x},${p.y},${p.z}`))
   const lo = Math.min(0, m.y - node.y)
   const hi = Math.max(0, m.y - node.y) + 1
