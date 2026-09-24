@@ -1197,6 +1197,18 @@ function fatal(where, err) {
   process.exit(1)
 }
 
+// Disk memory (idkcraft-hlk): a bot-container stop arrives as SIGTERM with
+// no mineflayer event at all. Armed once per process (never per connection,
+// so reconnects cannot stack listeners); each runOnce registers its live
+// saver. The default SIGTERM death becomes an explicit save-then-exit.
+let termSaver = null
+try {
+  process.once('SIGTERM', () => {
+    try { if (termSaver) termSaver() } catch (_) { /* exit anyway */ }
+    process.exit(143)
+  })
+} catch (_) { /* no process object in some harnesses */ }
+
 // One connection: resolves after our own quit() (the join loop then goes
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
@@ -1290,6 +1302,11 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // Our own quit() resolves back into the join loop; anything else is fatal
     // and the container restart reconnects. Late errors on the intentionally
     // closed connection are ignored so they cannot kill the next one.
+    // Disk memory (idkcraft-hlk): the live saver for this connection.
+    // Cleared on settle so a later SIGTERM never writes through a dead
+    // ticker; the next runOnce registers its own.
+    const thisSaver = () => { try { return ticker.saveMemory() } catch (_) { return false } }
+    termSaver = thisSaver
     bot.on('end', (reason) => {
       metrics.online.set(0)
       metrics.setVitals(null)
@@ -1297,11 +1314,15 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // connection (join loop or container restart) restores it. Fatal ends
       // save too: the container restart is the reconnect path there.
       if (ticker && typeof ticker.saveMemory === 'function') ticker.saveMemory()
+      if (termSaver === thisSaver) termSaver = null
       if (wantQuit) { ticker.destroy(); resolve() }
       else fatal('end', reason || 'disconnected')
     })
-    bot.on('error', (err) => { if (!wantQuit) fatal('error', err) })
-    bot.on('kicked', (reason) => { if (!wantQuit) fatal('kicked', reason) })
+    // A Paper shutdown/redeploy arrives as 'kicked', a socket reset as
+    // 'error' — both fatal() past the 'end' save above, so save first
+    // (revmux 01-review). Sync fs: safe before the synchronous exit.
+    bot.on('error', (err) => { if (!wantQuit) { thisSaver(); fatal('error', err) } })
+    bot.on('kicked', (reason) => { if (!wantQuit) { thisSaver(); fatal('kicked', reason) } })
   })
 }
 

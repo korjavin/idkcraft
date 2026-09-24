@@ -10,6 +10,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const Vec3 = require('vec3')
 const resources = require('./resources')
 const danger = require('./danger')
 
@@ -28,8 +29,7 @@ function fileFor(env, username) {
   try {
     const e = env || {}
     if (typeof e.BOT_MEMORY_FILE === 'string' && e.BOT_MEMORY_FILE) return e.BOT_MEMORY_FILE
-    const dir = typeof e.BOT_MEMORY_DIR === 'string' && e.BOT_MEMORY_DIR ? e.BOT_MEMORY_DIR : DIR_DEFAULT
-    return path.join(dir, `${safeName(username)}.json`)
+    return path.join(DIR_DEFAULT, `${safeName(username)}.json`)
   } catch (_) {
     return path.join(DIR_DEFAULT, 'IdkBot.json')
   }
@@ -67,15 +67,24 @@ function pt(p) {
   return x === null || y === null || z === null ? null : { x, y, z }
 }
 
+// Revive to Vec3 (revmux 01-review): producers (adoptHome, build) store
+// home coords as Vec3 and consumers (craft's blockAt(table)) need the
+// methods — a plain {x,y,z} throws inside prismarine-world and craft then
+// walks to the table forever instead of crafting.
+function v3(p) {
+  const q = pt(p)
+  return q ? new Vec3(q.x, q.y, q.z) : null
+}
+
 function homeOf(h) {
   if (!h || !h.site) return null
-  const site = pt(h.site)
+  const site = v3(h.site)
   if (!site) return null
-  const out = { site, interior: null, door: pt(h.door), table: pt(h.table), built: h.built === true }
+  const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true }
   try {
     if (h.interior && h.interior.min && h.interior.max) {
-      const min = pt(h.interior.min)
-      const max = pt(h.interior.max)
+      const min = v3(h.interior.min)
+      const max = v3(h.interior.max)
       if (min && max) out.interior = { min, max }
     }
   } catch (_) { /* interior best-effort */ }
@@ -151,6 +160,10 @@ function save(bot, ctx, file, now) {
   try {
     const doc = snapshot(bot, ctx, now)
     if (!doc) return false
+    // An empty snapshot carries no information (revmux 01-review): writing
+    // it would clobber a real file with nothing — e.g. an 'end' before the
+    // spawn handler ever restored. Skip the write entirely.
+    if (!doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length) return false
     f = file || fileFor(process.env, bot && bot.username)
     try {
       const prev = readDoc(f)
@@ -244,7 +257,11 @@ function saveThrottled(bot, ctx, now) {
     const t = typeof now === 'number' ? now : Date.now()
     const f = fileFor(process.env, bot && bot.username)
     if (f === lastSave.path && t - lastSave.at < SAVE_MIN_MS) return false
-    return save(bot, ctx, f, t)
+    const ok = save(bot, ctx, f, t)
+    // A failed save (no world key, missing dir, empty snapshot) retries at
+    // most once per window instead of once per tick.
+    if (!ok) lastSave = { at: t, path: f }
+    return ok
   } catch (_) {
     return false
   }
