@@ -5,14 +5,16 @@ A hobby Minecraft stack: Paper server (`mc`), a Node 22 mineflayer bot (`bot/src
 "System-1" brain sidecar (`laya/shim.py`, FastAPI-shaped REST). Deployed by GitOps to Portainer.
 The owner treats it as a learning project: changes should be readable and explain themselves.
 
-## What a real failure looks like
-- The bot crash-loops, disconnects, or stops ticking (`BRAIN_TICK_MS` loop stalls, unhandled
-  promise rejection, mineflayer event never handled).
-- The bot spams the remote brain when no player is online (cost guard in README is deliberate).
-- A behaviour steals the tick from another one (follow stops while scouting, fight never yields).
-- Secrets, hostnames, domains or IPs land in the repo (privacy rule in CLAUDE.md) — **critical**.
-- A change to `docker-compose.yml` service names, env var names or the `laya` REST shape breaks the
-  deployed stack (shared contract in CLAUDE.md, "do not rename").
+## What a real failure looks like (from prod, 2026-09-22..24)
+- The bot stands still forever while each tick re-decides the same step: failed step re-picked by the
+  arbiter, stall counter that never reaches its limit, give-up that leaves the pathfinder goal set.
+- State wrong after a mode switch or a one-tick preemption (fight/bring wiping gather/follow counters,
+  `follow me` with the player out of tracking range treated as "nobody online").
+- A shared `Movements` tweak for one behaviour breaking pathing for all of them.
+- A new behaviour/env var/command that tests reach but prod never wires (`BEHAVIOURS`, compose).
+- laya offered a long menu and always picking the same option.
+- Secrets, hostnames, domains or IPs in the repo (privacy rule in CLAUDE.md) — **critical**.
+- A renamed service, env var or `laya` REST field (shared contract in CLAUDE.md) — breaks the live stack.
 
 ## Blast radius
 One private server, a handful of players. Wrong bot behaviour is annoying, not dangerous. A leaked
