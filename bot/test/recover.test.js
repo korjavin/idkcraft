@@ -247,6 +247,44 @@ describe('recover sidestep in a pit is not done (fja)', () => {
     assert.match(calls[0], /\/tp IdkBot Steve/)
   })
 
+  it('level-goal sidestep that walks free reports done, no call_player', async () => {
+    // Flat wedge (follow at the same height): walking 2 blocks sideways is
+    // a genuine escape — failing it would burn strikes toward dig/call.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 10, y: 61, z: 0 }, key: 'follow:Steve' },
+      brain: { source: 'stub', ask: async () => 'sidestep' },
+    }
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (!g || typeof g.x !== 'number') return
+      const bp = bot.entity.position
+      const dx = g.x - bp.x
+      const dz = g.z - bp.z
+      const d = Math.hypot(dx, dz)
+      if (d < 0.05) return
+      const s = Math.min(0.4, d) / d
+      bot.entity.position = pos(bp.x + dx * s, 61, bp.z + dz * s)
+    }
+    for (let t = 0; t < 30 && (ctx.stuck || ctx.recovery); t++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+      } else {
+        recover.run(bot, ctx)
+        stepBody()
+      }
+    }
+    assert.equal(ctx.stuck, null, 'episode done, mode resumed')
+    assert.equal(ctx.recovery, null, 'episode done, mode resumed')
+    assert.deepEqual(bot.chats.filter((m) => m.startsWith("I'm stuck at")), [], 'no call_player')
+  })
+
   it('one sidestep done episode counts outcome=done exactly once', async () => {
     const bot = worldBot(pitSolids(), [])
     const before = (await metricText()).match(/idkcraft_bot_recover_total\{action="sidestep",source="fsm",outcome="done"\} ([0-9.]+)/)

@@ -375,15 +375,20 @@ function sidestepRun(bot, ctx) {
     if (sides.free.length === 0) return 'failed:boxed'
     st.dir = sides.free[Math.floor(Math.random() * sides.free.length)]
   }
-  // Done only when the situation really changed (fja): climbed a full block,
-  // or — with the goal high above — walked notably closer to it. Shuffling
-  // on the pit floor is not an escape; the timeout below fails it instead.
+  // Done only when the situation really changed (fja). The strict rule
+  // applies to goal-less backstop episodes (the session pit: nothing to
+  // resume toward, shuffling proves nothing) and high goals (a climb
+  // situation). A level goal keeps the old displacement done: a wedge that
+  // walks 2 blocks sideways is genuinely free and the mode resumes pathing
+  // — failing that would burn strikes and misroute to dig/call_player.
+  const strict = !st.goal0 || (st.goal0.y - st.start.y) >= 2
   const climbed = Math.floor(bp.y) > Math.floor(st.start.y)
   let gained = false
-  if (st.goal0 && (st.goal0.y - st.start.y) >= 2 && typeof st.goalDist0 === 'number') {
+  if (strict && st.goal0 && (st.goal0.y - st.start.y) >= 2 && typeof st.goalDist0 === 'number') {
     gained = st.goalDist0 - Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) > 1
   }
-  if (climbed || gained) {
+  const freed = !strict && Math.hypot(bp.x - st.start.x, bp.z - st.start.z) > PROGRESS_TOLERANCE
+  if (climbed || gained || freed) {
     setJump(bot, false)
     return 'done'
   }
