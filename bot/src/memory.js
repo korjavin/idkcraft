@@ -167,10 +167,11 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    if (!doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow) return false
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow
     f = file || fileFor(process.env, bot && bot.username)
+    let prev = null
     try {
-      const prev = readDoc(f)
+      prev = readDoc(f)
       if (prev && prev.v === VERSION && prev.world === doc.world && Array.isArray(prev.homes)) {
         const cur = doc.homes[doc.homes.length - 1]
         const merged = prev.homes.filter((h) => homeOf(h) && (cur ? !sameSite(h, cur) : true))
@@ -178,6 +179,10 @@ function save(bot, ctx, file, now) {
         doc.homes = merged.slice(-HOMES_MAX)
       }
     } catch (_) { /* first save, corrupt or other world: fresh list */ }
+    // A follow revocation is information too: when the file still names a
+    // target the empty snapshot must go through to clear it (p4s minor).
+    const prevFollow = prev && typeof prev.follow === 'string' && prev.follow ? prev.follow : null
+    if (empty && !(prevFollow && !doc.follow)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)

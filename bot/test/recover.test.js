@@ -1175,6 +1175,47 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
   })
 })
 
+describe('pillar_up place-error at runtime (idkcraft-p4s)', () => {
+  it('a rejected placement takes pillar off the menu for the episode', async () => {
+    // Not by construction: a real failed:place-error outcome must flip the
+    // episode flag (revmux 01 dinged the synthetic-counter version). Choices
+    // read off the decision lines, like the episode test below.
+    const bot = worldBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const brain = {
+      source: 'stub',
+      ask: async () => 'pillar_up',
+      decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }),
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    let places = 0
+    bot.placeBlock = async () => { places++; throw new Error('placement rejected') }
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 0, y: 64, z: 0 } }
+    const step = harness(bot)
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      for (let i = 0; i < 80; i++) {
+        await ticker.tick()
+        await flush()
+        step()
+        const climbed = lines.some((l) => l.includes('action=pillar_up'))
+        const movedOn = lines.some((l) => /action=(sidestep|dig_up|dig_through|hop_step|dig_step|call_player|wait)/.test(l))
+        if (places >= 1 && movedOn) break
+      }
+      assert.ok(lines.some((l) => l.includes('action=pillar_up')), 'first choice climbs')
+      assert.ok(places >= 1, 'pillar placed once and failed')
+      assert.ok(lines.some((l) => /action=(sidestep|dig_up|dig_through|hop_step|dig_step|call_player|wait)/.test(l)),
+        'menu moves on after the place-error')
+      assert.equal(places, 1, 'pillar never retried in the episode')
+    } finally {
+      console.log = origLog
+      ticker.destroy()
+    }
+  })
+})
+
 describe('pillar_up after place-error (idkcraft-p4s)', () => {
   const recover = require('../src/behaviours/recover')
   function facts(over) {
@@ -1184,12 +1225,12 @@ describe('pillar_up after place-error (idkcraft-p4s)', () => {
       stuckTicks: 0, resetsStuck: 0, resetsPlaceError: 0, last: null, water: false,
     }, over)
   }
-  it('pillar_up infeasible after place-errors in the episode', () => {
+  it('pillar_up infeasible once the episode placed and failed', () => {
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({})), true)
-    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ resetsPlaceError: 3 })), false)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ placeError: true })), false)
   })
-  it('pillar_up not repeatable after place-errors in the episode', () => {
+  it('pillar_up not repeatable once the episode placed and failed', () => {
     assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({})), true)
-    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({ resetsPlaceError: 1 })), false)
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({ placeError: true })), false)
   })
 })

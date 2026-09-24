@@ -3133,6 +3133,25 @@ describe('place_error backstop removal (idkcraft-p4s)', () => {
   })
 })
 
+describe('go work revokes persisted follow (idkcraft-p4s)', () => {
+  it('work() clears the closure and the ctx copy', async () => {
+    const bot = mockBot()
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    try {
+      const ctx = bot._tickerCtx
+      ticker.setFollow('Steve')
+      assert.equal(ticker.getFollowName(), 'Steve')
+      assert.equal(ctx.followName, 'Steve')
+      ticker.work()
+      assert.equal(ticker.getFollowName(), '')
+      assert.equal(ctx.followName, null)
+    } finally {
+      ticker.destroy()
+    }
+  })
+})
+
 describe('startup follow adoption (idkcraft-p4s)', () => {
   const { startupFollow } = require('../src/index')
   function rosterBot(names) {

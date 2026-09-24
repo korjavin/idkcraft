@@ -368,6 +368,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.leadStuck = 0
     ctx.leadTargetGone = 0
     followName = ''
+    // p4s: 'go work'/'free'/'build here' revoke the follow order — the disk
+    // copy goes with it, or a restart resurrects an order the owner cancelled.
+    try { ctx.followName = null } catch (_) { /* follow best-effort */ }
+    try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     ctx.lastGoalKey = ''
     ctx.gather = null
     ctx.forage = null // fresh episode: stale skips/finals must not veto it

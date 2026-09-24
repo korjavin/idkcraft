@@ -389,6 +389,14 @@ describe('followName persistence (idkcraft-p4s)', () => {
     assert.equal(back.follow, 1)
   })
 
+  it('an empty snapshot still clears a stored follow (p4s minor)', () => {
+    assert.equal(memory.save(botAt(SPAWN_A), { followName: 'Gone' }, file, 1000), true)
+    assert.equal(memory.save(botAt(SPAWN_A), {}, file, 2000), true, 'clearing write goes through')
+    const ctx = {}
+    memory.restore(botAt(SPAWN_A), ctx, file, 2000)
+    assert.equal(ctx.followName, undefined)
+  })
+
   it('follow-only snapshot still saves (no home/resources needed)', () => {
     assert.equal(memory.save(botAt(SPAWN_A), { followName: 'Solo' }, file, 1000), true)
     const ctx2 = {}
