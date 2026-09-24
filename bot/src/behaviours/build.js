@@ -62,6 +62,18 @@ function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
 
+// Blueprint invariant (8si): the doorway column (dx 1, dz 0, both halves)
+// and the 2x2 interior (dx/dz 1..2, wall heights) are never plank targets —
+// planks walled in there break adopt and churn the rebuild. Checked for
+// planks cells before every placement, not just at plan authorship.
+function isDoorwayOrInterior(cell) {
+  if (!cell || typeof cell.dx !== 'number') return false
+  // Doorway column is the two wall heights only: the roof above the door
+  // (dy 2) is a legit planks cell.
+  if (cell.dx === 1 && cell.dz === 0 && cell.dy <= 1) return true
+  return cell.dx >= 1 && cell.dx <= 2 && cell.dz >= 1 && cell.dz <= 2 && cell.dy <= 1
+}
+
 function blockNameAt(bot, p) {
   try {
     const b = bot.blockAt(p)
@@ -147,14 +159,16 @@ function findRef(bot, p) {
   return null
 }
 
-// Own-wall guard (cww): the GoalPlaceBlock approach paths through our own
-// walls with canDig (movements default) and eats a corner — then the
+// Own-home guard (cww, 8si): the GoalPlaceBlock approach paths through our
+// own walls with canDig (movements default) and eats a corner — then the
 // rebuild takes priority by lay order and the roof never starts (the prod
-// 23/40<->24/40 flap). Planks are never a legitimate dig target for any
-// behaviour (gather digs logs via bot.dig, fight/flee path around), so
-// forbid the executor from breaking them. Idempotent per movements object,
-// re-applied if the ticker ever swaps it; a missing movements or registry
-// degrades to today's behavior, never a throw.
+// 23/40<->24/40 flap). Live the approach also ate the oak door, which broke
+// adopt (no door near spawn) and each rebuild drifted fresh walls over the
+// old doorway. Planks, doors and the workbench are never a legitimate dig
+// target for any behaviour (gather digs logs via bot.dig, fight/flee path
+// around), so forbid the executor from breaking them. Idempotent per
+// movements object, re-applied if the ticker ever swaps it; a missing
+// movements or registry degrades to today's behavior, never a throw.
 function guardOwnWalls(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -163,7 +177,8 @@ function guardOwnWalls(bot, ctx) {
     let guarded = false
     for (const name of Object.keys(byName)) {
       const entry = byName[name]
-      if (typeof name === 'string' && name.endsWith('_planks') && entry && typeof entry.id === 'number') {
+      if (typeof name !== 'string' || !entry || typeof entry.id !== 'number') continue
+      if (name.endsWith('_planks') || name.endsWith('_door') || name === 'crafting_table') {
         mov.blocksCantBreak.add(entry.id)
         guarded = true
       }
@@ -214,6 +229,10 @@ function build(bot, ctx, target, state) {
   }
   const cell = BLUEPRINT[idx]
   const p = cellAbs(ctx.home, cell)
+  if (cell.kind === 'planks' && isDoorwayOrInterior(cell)) {
+    skipCell(ctx, idx, p, 'doorway-interior')
+    return
+  }
 
   // Progress line, at most one per 10 s.
   const total = BLUEPRINT.length
@@ -318,6 +337,7 @@ function build(bot, ctx, target, state) {
 module.exports = build
 module.exports.BLUEPRINT = BLUEPRINT
 module.exports.PLANK_COUNT = PLANK_COUNT
+module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
