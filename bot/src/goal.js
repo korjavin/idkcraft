@@ -482,6 +482,117 @@ async function chooseStep(brain, facts, feasible) {
   }
 }
 
+// Rest reasons (idkcraft-atl.7): words only, no new logic. When rest is
+// chosen, restWhy phrases every infeasible non-rest step from the grounds
+// decide() already used: failHolds plus the facts behind each feasible()
+// rule (re-checked first, so phrasing can never drift from the rule).
+// Feasible steps the choice passed over are marked ready — under the FSM
+// that never happens (priority order), so a ready marker always means the
+// model declined it. Unregistered steps are marked off; a parallel step
+// the switch does not know (atl.6) falls back to 'not feasible'. The
+// 'model choice' line below is unreachable-but-safe (STEP_ORDER always
+// holds other steps).
+function stepWhy(name, facts, bot, ctx, text) {
+  try {
+    if (failHolds(ctx, name, text, bot)) return `${name} holds after failure`
+  } catch (_) { /* wording best-effort */ }
+  if (name === 'gather') {
+    // atl.4 inline hold (not via failHolds): same final, same log count.
+    try {
+      const g = ctx && ctx.gather
+      if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) {
+        return 'gather holds after failure'
+      }
+    } catch (_) { /* fall through to facts */ }
+  }
+  let feasible = false
+  try {
+    feasible = !!(MENU[name] && MENU[name].feasible(facts, bot, ctx))
+  } catch (_) {
+    return `${name}: not feasible`
+  }
+  if (feasible) return null
+  switch (name) {
+    case 'stay':
+      if (facts.time === 'day') return 'stay: daytime'
+      if (facts.home !== 'built') return 'stay: home not built'
+      return 'stay: not inside'
+    case 'gohome':
+      if (facts.time !== 'dusk' && facts.time !== 'night') return 'gohome: daytime'
+      if (facts.home !== 'built') return 'gohome: home not built'
+      return 'gohome: already inside'
+    case 'craft':
+      if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
+      if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
+      if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
+      return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
+    case 'equip': {
+      // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
+      // scaffold blocks only once geared.
+      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
+      if ((facts.sticks || 0) < 1 && (facts.planks || 0) < 2 && (facts.logs || 0) < 1) return 'equip: no materials'
+      return 'equip: no table'
+    }
+    case 'build': {
+      // Facts-level wording; the exact remainder gate lives in the rule.
+      // Item gates run first (the rule yields on a missing item first).
+      if (facts.home === 'built') return 'build: home built'
+      if (facts.table === 0 || facts.door === 0) return 'build: need table/door item'
+      if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
+      return 'build: nothing left to build'
+    }
+    case 'gather':
+      if (facts.home === 'built') return 'gather: home built'
+      return 'gather: load full'
+    case 'deliver':
+      if (facts.haul !== 'waiting') return 'deliver: nothing waiting'
+      return 'deliver: nobody to deliver to'
+    case 'forage':
+      if (facts.known !== 'near') return 'forage: nothing known nearby'
+      return 'forage: known find unreachable'
+    case 'explore':
+      if (facts.home !== 'built') return 'explore: house not built yet'
+      return 'explore: nowhere new to go'
+    default:
+      return `${name}: not feasible`
+  }
+}
+
+function restWhy(facts, bot, ctx, names) {
+  const ok = new Set(Array.isArray(names) ? names : [])
+  let text = ''
+  try {
+    text = goalText(facts)
+  } catch (_) { /* wording best-effort */ }
+  const out = []
+  for (const n of STEP_ORDER) {
+    if (n === 'rest') continue
+    let on = false
+    try {
+      on = registered(n)
+    } catch (_) {
+      on = false
+    }
+    if (!on) {
+      out.push(`${n}: off`)
+      continue
+    }
+    if (ok.has(n)) {
+      out.push(`${n}: ready`)
+      continue
+    }
+    let w = null
+    try {
+      w = stepWhy(n, facts, bot, ctx, text)
+    } catch (_) {
+      w = null
+    }
+    out.push(w || `${n}: not feasible`)
+  }
+  if (out.length === 0) return 'model choice'
+  return out.join(', ')
+}
+
 // Registration gate: a step runs only while its behaviour is plugged into
 // BEHAVIOURS (later beads join with one require line each). Deferred require:
 // goal.js loads before index.js finishes, so the table is read at decide()
@@ -563,18 +674,33 @@ async function decide(bot, ctx) {
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
     if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)
+    // atl.7: rest explains itself — reasons stored on every rest choice
+    // (even repeats, so status stays fresh), chatted only on a step change.
+    if (choice.step === 'rest') {
+      try {
+        ctx.restWhy = restWhy(facts, bot, ctx, names)
+      } catch (_) {
+        ctx.restWhy = 'unknown'
+      }
+    } else if (choice.step !== prev) {
+      ctx.restWhy = null
+    }
     // An order that landed mid-await ('stop' parks, 'follow me' switches
     // work off) discards the step the tick then drops: announcing it would
     // lie, so only an actually-working bot chats. !== false keeps unit-test
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} facts=${text}`)
-      const entry = MENU[choice.step]
-      const verb = (entry && entry.verb) || choice.step
-      try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      if (choice.step === 'rest') {
+        try { bot.chat(`resting: ${ctx.restWhy} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      } else {
+        const entry = MENU[choice.step]
+        const verb = (entry && entry.verb) || choice.step
+        try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      }
     }
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }

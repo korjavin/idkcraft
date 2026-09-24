@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
 const resources = require('../src/resources')
 const home = require('../src/behaviours/home')
 
@@ -655,7 +655,6 @@ describe('decide failed-step dedup (revmux 01 major)', () => {
     assert.equal(ctx.step, 'rest')
   })
 })
-
 describe('atl.6 menu: equip rearms the starter kit before build', () => {
   const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
   const kit = (items) => goalBot({ items })
@@ -744,6 +743,14 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
   it('criterion is a short clause', () => {
     assert.ok(STEP_CRITERIA.equip.includes('blocks are low'))
   })
+  it('equip reasons mirror the feasible gates branch for branch', () => {
+    const bot = goalBot({})
+    const F = (facts) => stepWhy('equip', { sword: 0, pickaxe: 0, sticks: 0, planks: 0, logs: 0, cobble: 0, scaffold: 0, table: 0, tablePlaced: false, ...facts }, bot, {}, 'text')
+    assert.equal(F({ sword: 1, pickaxe: 1, scaffold: 32 }), 'equip: kit complete')
+    assert.equal(F({}), 'equip: no materials')
+    assert.equal(F({ planks: 5 }), 'equip: no table')
+    assert.equal(F({ planks: 5, table: 1 }), null) // feasible: no reason line
+  })
   it('in-flight craft windows hold the step across changed facts', async () => {
     // Live 26.1: a table placement flips the facts before the sword craft
     // lands — re-deciding mid-click corrupts the window cursor. While the
@@ -755,5 +762,72 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
     const ctx2 = { home: { table: pos(2, 64, 0) }, step: 'craft', stepStatus: 'running', goalText: 'old', craftInFlight: true }
     const r2 = await decide(bot, ctx2)
     assert.deepEqual(r2, { action: 'craft', sprint: false, source: 'goal-fsm' })
+  })
+})
+
+describe('atl.7 rest explains itself', () => {
+  function siteHome() {
+    return { site: { x: 0, y: 64, z: 0 }, table: { x: 4, y: 64, z: 1 }, built: false }
+  }
+  function ladenBot() {
+    // Geared (atl.6): a tool-less kit with a placed table would rearm first.
+    return goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'oak_door', count: 1 },
+      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] })
+  }
+  const ALL_OUT = [
+    'stay: daytime',
+    'gohome: daytime',
+    'craft: nothing to craft',
+    'equip: kit complete',
+    'build: need table/door item',
+    'gather: load full',
+    'deliver: nothing waiting',
+    'forage: nothing known nearby',
+    'explore: house not built yet',
+  ]
+  it('FSM rest chats every infeasible step with its reason', async () => {
+    const bot = ladenBot()
+    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'rest')
+    const line = bot.chats.find((l) => l.startsWith('resting: '))
+    assert.ok(line && line.endsWith('(only-option)'), `chats: ${bot.chats}`)
+    assert.equal(line, `resting: ${ctx.restWhy} (only-option)`)
+    for (const frag of ALL_OUT) assert.ok(line.includes(frag), `missing ${frag} in: ${line}`)
+  })
+  it('rest repeats stay silent but refresh the stored reason', async () => {
+    const bot = ladenBot()
+    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
+    await decide(bot, ctx)
+    const n = bot.chats.length
+    assert.ok(n > 0)
+    await decide(bot, ctx)
+    assert.equal(bot.chats.length, n)
+    assert.ok(ctx.restWhy && ctx.restWhy.includes('gather: load full'))
+  })
+  it('model-chosen rest skips the feasible steps', async () => {
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }] })
+    const brain = { source: 'test', ask: async () => 'rest' }
+    const ctx = { step: '', stepStatus: null, goalText: null, home: { site: { x: 6, y: 64, z: 0 }, built: true }, brain }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'rest')
+    assert.ok(ctx.restWhy.includes('gather: home built'), `why: ${ctx.restWhy}`)
+    assert.ok(ctx.restWhy.includes('explore: ready'), `declined ready step marked: ${ctx.restWhy}`)
+    assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(test)')), `chats: ${bot.chats}`)
+  })
+  it('held steps report the hold, not the facts', async () => {
+    const bot = ladenBot()
+    const facts = goalFacts(bot, { home: siteHome() })
+    const ctx = { gather: { final: 'failed:unreachable', atLogs: facts.logs } }
+    const why = restWhy(facts, bot, ctx, ['rest'])
+    assert.ok(why.includes('gather holds after failure'), `why: ${why}`)
+    assert.ok(!why.includes('gather: load full'), `no stale facts wording: ${why}`)
+  })
+  it('leaving rest clears the stored reason', async () => {
+    const bot = goalBot({}) // empty hands: gather is feasible again
+    const ctx = { step: 'rest', stepStatus: 'running', goalText: null, restWhy: 'old', home: null }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'gather')
+    assert.equal(ctx.restWhy, null)
   })
 })
