@@ -179,3 +179,4 @@ function explore(bot, ctx, target, state) {
 
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
+module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking

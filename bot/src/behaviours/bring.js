@@ -1,9 +1,10 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds } = require('./scout')
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
+const exploreMod = require('./explore')
 const metrics = require('../metrics')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
@@ -31,6 +32,20 @@ const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable target
 const MOVE_TOLERANCE = 0.5
 const RETURN_RANGE = 2
+
+// Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
+// first (time is the intended real limit). The 22 legs out to ring-128
+// walk ~770 blocks (~3 min open-ground + re-finds), so they fit the cap
+// on easy terrain; stalls and stuck episodes bind it earlier in forest.
+// Plain constants — the values never change at runtime (not forwarded in
+// compose); tests stub them through the module export below.
+const SEARCH_BUDGET = { legs: 24, minutes: 5 }
+function searchLegs() {
+  return SEARCH_BUDGET.legs
+}
+function searchMinutes() {
+  return SEARCH_BUDGET.minutes
+}
 
 function dropFor(blockName) {
   if (blockName.endsWith('_log')) return blockName
@@ -259,10 +274,160 @@ function atPos(bot) {
   return bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
 }
 
-function findFood(bot, ctx, o) {
+// Per-leg model choice (ef3/rw4.6 shape): exactly two labels — laya answers
+// reliably only with <=2 options (brain.js ask). give_up refuses honestly
+// with the legs covered; the FSM reserve is search_more until K.
+const SEARCH_INSTRUCTIONS = 'Choose whether the bring order keeps searching'
+const SEARCH_CRITERIA = {
+  search_more: 'legs remain: walk another area and look again',
+  give_up: 'no hope nearby: refuse with the areas covered',
+}
+
+function searchText(o, s) {
+  const what = (o.kind || 'block') === 'food' ? 'food' : (o.name || 'block')
+  return `search=${what} legs=${s.legs}/${searchLegs()} last=${s.last || 'empty'}`
+}
+
+// Model leg choice with the FSM as fallback and disagreement reference,
+// exactly like recover chooseRecovery: { action, source, fsm, model }.
+async function chooseBringSearch(brain, text, legsLeft) {
+  const feasible = legsLeft > 0 ? ['search_more', 'give_up'] : ['give_up']
+  const fsm = legsLeft > 0 ? 'search_more' : 'give_up'
+  if (feasible.length <= 1) return { action: 'give_up', source: 'only-option', fsm, model: null }
+  if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
+  const model = brain.source || brain.name || 'model'
+  const criteria = {}
+  for (const n of feasible) criteria[n] = SEARCH_CRITERIA[n]
+  const fail = (reason) => {
+    metrics.escalation.inc({ from: model, to: 'fsm', reason })
+    return { action: fsm, source: 'fsm-fallback', fsm, model }
+  }
+  try {
+    const label = await brain.ask({ state: text, instructions: SEARCH_INSTRUCTIONS, criteria, situation: text })
+    if (label !== fsm) {
+      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=bring-search facts=${text}`)
+    }
+    if (!feasible.includes(label)) return fail('invalid')
+    return { action: label, source: model, fsm, model }
+  } catch (err) {
+    const msg = String((err && err.message) || err)
+    const reason = (err && err.name === 'TimeoutError') ? 'timeout'
+      : msg.startsWith('jev missing') ? 'invalid'
+      : 'error'
+    return fail(reason)
+  }
+}
+
+// Honest end of a spent search: the legs walked, then what was found.
+function refuseExhausted(bot, ctx, o) {
+  const n = o.searchLegs ? o.searchLegs.legs : 0
+  const food = (o.kind || 'block') === 'food'
+  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (food ? 'no animals' : `no ${o.name}`)
+  refuse(bot, ctx, `searched ${n} areas, ${base}`)
+}
+
+// Drop a cancelled mid-leg explore pursuit (stop/follow/work/lead): the
+// visited memory stays (shared exploration), the stale target must not leak
+// into the next owner's walk.
+function clearSearchLeg(ctx) {
+  try {
+    if (ctx && ctx.explore && typeof ctx.explore === 'object') {
+      ctx.explore.target = null
+      ctx.explore.issuedKey = null
+    }
+  } catch (_) { /* cleanup best-effort */ }
+}
+
+// atl.8: an empty find opens search legs instead of refusing. Async: the
+// per-leg model choice awaits ask(); the tick (index.js) awaits bring.
+// legacy is today's refusal line, kept for anchorless worlds (no spiral
+// without home or spawn — production always has spawn).
+// Anchor probe for order creation (index.js setBring): legs need a spiral.
+function canSearch(bot, ctx) {
+  try {
+    return !!exploreMod.anchorOf(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
+
+// Bringability gate for leg orders opened without a candidate in hand
+// (setBring / pending-search completion): the find-hit path assumes creation
+// checked isBringable, and an unbringable target would mine forever.
+function canBringName(bot, name) {
+  try {
+    const ids = resolveFindIds(bot, name)
+    if (!Array.isArray(ids) || ids.length === 0) return false
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    const byId = {}
+    for (const [n, e] of Object.entries(byName)) {
+      if (e && typeof e.id === 'number' && !(e.id in byId)) byId[e.id] = n
+    }
+    return ids.some((id) => isBringable(byId[id] || ''))
+  } catch (_) {
+    return false
+  }
+}
+
+async function enterSearch(bot, ctx, o, legacy) {
+  const s = o.searchLegs || (o.searchLegs = { legs: 0, startedAt: Date.now(), announced: false, last: 'empty' })
+  if (!exploreMod.anchorOf(bot, ctx)) {
+    refuse(bot, ctx, legacy)
+    return
+  }
+  if (s.legs >= searchLegs() || Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) {
+    refuseExhausted(bot, ctx, o)
+    return
+  }
+  const text = searchText(o, s)
+  const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs() - s.legs)
+  if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-ask: touch nothing
+  if (c.action !== 'search_more') {
+    refuseExhausted(bot, ctx, o)
+    return
+  }
+  if (!s.announced) {
+    s.announced = true
+    say(bot, (o.kind || 'block') === 'food' ? 'no animals nearby, searching…' : `no ${o.name} nearby, searching…`)
+  }
+  o.phase = 'searchwalk'
+  ctx.stepStatus = 'running'
+}
+
+// One search leg: drive the explore primitive, count the finished leg
+// (arrival or failure) and re-find. The status sentinel keeps a stale
+// recover done from ever reading as an arrival.
+function walkSearch(bot, ctx, o) {
+  const hadTarget = !!(ctx.explore && ctx.explore.target)
+  ctx.stepStatus = 'running'
+  try {
+    exploreMod(bot, ctx, null, {})
+  } catch (_) {
+    ctx.stepStatus = 'failed:bring-search'
+  }
+  const st = ctx.stepStatus
+  if (st === 'done' && !hadTarget && !(ctx.explore && ctx.explore.target)) {
+    // Spiral exhausted (no leg was or is in progress): no new ground
+    // exists, so no further leg could walk either — end honestly now
+    // instead of burning K instant legs.
+    ctx.stepStatus = null
+    refuseExhausted(bot, ctx, o)
+    return
+  }
+  if (st === 'done' || (typeof st === 'string' && st.indexOf('failed') === 0)) {
+    ctx.stepStatus = null
+    if (o.searchLegs) {
+      o.searchLegs.legs += 1
+      o.searchLegs.last = st === 'done' ? 'empty' : 'failed'
+    }
+    o.phase = 'find'
+  }
+}
+
+async function findFood(bot, ctx, o) {
   const res = findAnimal(bot, o.drop || null)
   if (!res) {
-    refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks')
+    await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks')
     return
   }
   o.animal = { name: res.name, id: res.id }
@@ -352,7 +517,7 @@ function pickupFood(bot, ctx, o, bp, grounded) {
   }
 }
 
-function bring(bot, ctx, target, state) {
+async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
   const bp = bot.entity && bot.entity.position
@@ -360,8 +525,15 @@ function bring(bot, ctx, target, state) {
   const grounded = !bot.entity || bot.entity.onGround !== false
   const food = (o.kind || 'block') === 'food'
 
+  if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
+
   if (o.phase === 'find') {
-    if (food) { findFood(bot, ctx, o); return }
+    if (food) { await findFood(bot, ctx, o); return }
+    if (o.searchSkipFar) { // pending far search just came up empty: skip the re-scan
+      o.searchSkipFar = false
+      await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      return
+    }
     const res = findNearest(bot, o.name)
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
@@ -369,7 +541,7 @@ function bring(bot, ctx, target, state) {
     }
     if (!res) {
       if (o.have > 0) {
-        refuse(bot, ctx, `only got ${o.have} ${o.drop}`)
+        await enterSearch(bot, ctx, o, `only got ${o.have} ${o.drop}`)
         return
       }
       // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb),
@@ -380,7 +552,8 @@ function bring(bot, ctx, target, state) {
         return
       }
       if (!o.search) {
-        refuse(bot, ctx, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+        // No wider shell to scan (edge 48): legs still walk new ground.
+        await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
         return
       }
       o.phase = 'searchfar'
@@ -406,7 +579,7 @@ function bring(bot, ctx, target, state) {
   }
 
   if (o.phase === 'searchfar') {
-    if (food) { findFood(bot, ctx, o); return }
+    if (food) { await findFood(bot, ctx, o); return }
     const r = stepFarSearch(bot, o.search)
     if (!r.done) return
     o.search = null
@@ -416,7 +589,7 @@ function bring(bot, ctx, target, state) {
     }
     if (!r.result) {
       const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
-      refuse(bot, ctx, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
+      await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
       return
     }
     o.pos = r.result.position
@@ -638,3 +811,10 @@ module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
 module.exports.findAnimal = findAnimal
 module.exports.sharePlan = sharePlan
+module.exports.chooseBringSearch = chooseBringSearch
+module.exports.clearSearchLeg = clearSearchLeg
+module.exports.canSearch = canSearch
+module.exports.canBringName = canBringName
+module.exports.SEARCH_BUDGET = SEARCH_BUDGET
+module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
+module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA

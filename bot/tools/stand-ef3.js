@@ -32,7 +32,7 @@ const VARIANTS = {
 function F(over) {
   return {
     by: 'stand', goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, water: false,
-    headBlocked: false, walls: 0, freeSides: [[1, 0]], lavaNear: false,
+    headBlocked: false, digStep: null, walls: 0, freeSides: [[1, 0]], lavaNear: false,
     playerOnline: false, playerDist: null, playerName: null, stuckTicks: 12,
     resetsStuck: 2, resetsPlaceError: 0, last: 'none', ...over,
   }
@@ -49,6 +49,8 @@ const STATES = [
   ['boxed-alone', F({ walls: 4 })],
   ['open-field', F({ walls: 0 })],
   ['repeat-fail', F({ walls: 2, playerOnline: true, playerDist: 6, playerName: 'Steve', last: 'sidestep:failed' })],
+  ['pit-dirt-hand', F({ goalDy: 3, goalDist: 6, walls: 2, digStep: [0, 1] })],
+  ['pit-stone-online', F({ goalDy: 3, goalDist: 6, walls: 3, playerOnline: true, playerDist: 6, playerName: 'Steve' })],
 ]
 
 function feasibleNames(facts) {
