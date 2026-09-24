@@ -153,6 +153,19 @@ describe("brain switch (idkcraft-d75)", () => {
     assert.equal(r.source, 'jev')
   })
 
+  it("'brain laya' with a JEV BRAIN_URL runs free, never jev", async () => {
+    // dxl round 2: 'brain laya' built its client from BRAIN_URL verbatim,
+    // so on a JEV-configured deployment the engine said 'laya' while the
+    // client billed JEV — and autonomous mode never downgraded it.
+    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
+    const bot = hardBot()
+    const ticker = followedTicker(bot)
+    handleChat(bot, ticker, 'Owner', 'brain laya')
+    assert.equal(ticker.getBrainEngine(), 'laya')
+    bot.players.Owner.entity.position = pos(11, 64, 0)
+    assert.equal((await ticker.tick()).decision.source, 'laya')
+  })
+
   it("a stranger cannot switch the brain", async () => {
     const bot = hardBot()
     bot.players.Stranger = { username: 'Stranger', entity: { id: 9, position: pos(12, 64, 0) } }

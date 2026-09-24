@@ -11,7 +11,10 @@ const build = require('../src/behaviours/build')
 const { BLUEPRINT, PLANK_COUNT } = build
 
 function pos(x, y, z) {
-  return { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
+  const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
+  p.clone = () => pos(p.x, p.y, p.z)
+  p.floored = () => pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+  return p
 }
 
 // Fake voxel world: explicit cells plus default terrain (dirt at y<=63,
@@ -165,20 +168,28 @@ describe('rw4.4 (d) adoptHome finds the earlier house', () => {
     assert.equal(goal.adoptHome(bot), null)
     assert.deepEqual(bot.chats, [])
   })
-  it('tick retries adoption until chunks arrive, then stops', async () => {
+  it('work waits for spawn chunks, then adopts once', async () => {
     const world = makeWorld()
-    const doors = [] // spawn handler raced empty chunks
+    const doors = [{ x: 11, y: 64, z: 10 }]
     const bot = mockBot(world, { doors })
     paintHouse(world, { site: { x: 10, y: 64, z: 10 } })
-    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    let chunks = false // spawn handler raced empty chunks
+    const seen = bot.blockAt
+    bot.blockAt = (p) => (chunks ? seen(p) : null)
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(10, 64, 0) } } }
+    bot.health = 20
+    bot.food = 20
+    bot.entities = {}
+    const stubBrain = { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
     try {
+      ticker.work()
       await ticker.tick()
-      await ticker.tick()
-      assert.equal(ticker.home(), null) // still nothing while chunks missing
-      doors.push({ x: 11, y: 64, z: 10 }) // chunks arrive
+      assert.equal(ticker.home(), null) // chunks missing: work held, no default
+      chunks = true // chunks arrive
       await ticker.tick()
       assert.deepEqual(ticker.home().site, { x: 10, y: 64, z: 10 })
-      assert.deepEqual(bot.chats, ['my home is at 10 64 10'])
+      assert.ok(bot.chats.some((m) => m === 'my home is at 10 64 10'))
     } finally {
       ticker.destroy()
     }
@@ -401,6 +412,127 @@ describe('rw4.4 (h) build here on a built home refuses', () => {
     handleChat(bot, ticker, 'Steve', 'build here')
     assert.deepEqual(ticker.home().site, { x: 106, y: 64, z: 100 })
     assert.deepEqual(bot.chats, [])
+  })
+})
+
+describe('8si the approach must not eat the door or the workbench', () => {
+  const REG = {
+    oak_planks: { id: 5 },
+    oak_log: { id: 17 },
+    dirt: { id: 3 },
+    oak_door: { id: 64 },
+    crafting_table: { id: 998 },
+  }
+
+  // Hostile executor: the real one digs anything breakable on the segment
+  // (cww's harness exempted doors/tables — live the door got eaten).
+  // Guarded ids route around.
+  function hostileSetGoal(bot, world, transit) {
+    return (g) => {
+      bot.calls.goals.push(g)
+      if (!g || g.constructor.name !== 'GoalPlaceBlock' || !g.pos) return
+      const mov = bot.pathfinder.movements
+      const bp = bot.entity.position
+      const solidAt = (x, y, z) => {
+        const name = world.get(x, y, z) ?? (y <= 63 ? 'dirt' : 'air')
+        return name !== 'air' ? name : null
+      }
+      for (let t = 0.05; t < 1; t += 0.05) {
+        const x = Math.floor(bp.x + (g.pos.x - bp.x) * t)
+        const z = Math.floor(bp.z + (g.pos.z - bp.z) * t)
+        for (const y of [Math.floor(bp.y), Math.floor(bp.y) + 1]) {
+          const name = solidAt(x, y, z)
+          if (!name) continue
+          const id = REG[name] != null ? REG[name].id : null
+          if (id != null && mov && mov.blocksCantBreak && mov.blocksCantBreak.has(id)) continue // routes around
+          world.set(x, y, z, 'air')
+          bot.calls.digs.push(name)
+          bot._moving = true
+          transit.n = 1
+          return
+        }
+      }
+      // Arrived: the mock body overshoots two east (inside the build
+      // 5-block reach), so later segments cross the standing house — past
+      // the table cell and the door, which a static bot never threatens.
+      bot.entity.position = pos(Math.floor(g.pos.x) + 2, g.pos.y, Math.floor(g.pos.z))
+      bot._moving = true
+      transit.n = 1
+    }
+  }
+
+  function driveHouse() {
+    const world = makeWorld()
+    const bot = mockBot(world, {
+      items: [
+        { name: 'oak_planks', count: 40 },
+        { name: 'crafting_table', count: 1 },
+        { name: 'oak_door', count: 1 },
+      ],
+    })
+    bot.registry = { blocksByName: REG }
+    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    bot.entity.position = pos(home.site.x + 4, home.site.y, home.site.z + 1)
+    const transit = { n: 0 }
+    bot._moving = false
+    bot.pathfinder.isMoving = () => bot._moving
+    bot.pathfinder.setGoal = hostileSetGoal(bot, world, transit)
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    return { world, bot, home, ctx, transit }
+  }
+
+  it('build guards door and workbench ids like planks', () => {
+    const { bot } = driveHouse()
+    bot.entity.position = pos(10, 64, 2)
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    build(bot, ctx, null, null)
+    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(64), 'door protected')
+    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(998), 'workbench protected')
+    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(5), 'planks still protected')
+    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(3), 'dirt still diggable')
+  })
+
+  it('full drive: door stands, doorway and interior stay plank-free, adopt stable', async () => {
+    const { world, bot, home, ctx, transit } = driveHouse()
+    for (let i = 0; i < 400 && !home.built; i++) {
+      if (transit.n > 0 && --transit.n === 0) bot._moving = false
+      build(bot, ctx, null, null)
+      await settle(2)
+    }
+    assert.equal(home.built, true, 'house completes')
+    assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_door') || n === 'crafting_table'), [], 'door and workbench never dug')
+    const s = home.site
+    assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door', 'doorway holds the door')
+    for (const [dx, dz] of [[1, 1], [1, 2], [2, 1], [2, 2]]) {
+      assert.ok(world.get(s.x + dx, s.y, s.z + dz) !== 'oak_planks', `interior ${dx},${dz} plank-free`)
+      assert.ok(world.get(s.x + dx, s.y + 1, s.z + dz) !== 'oak_planks', `interior ${dx},${dz}+1 plank-free`)
+    }
+    bot.spawnPoint = pos(s.x, s.y, s.z)
+    bot.findBlocks = () => {
+      const out = []
+      for (const [x, y, z] of [[s.x + 1, s.y, s.z], [s.x + 1, s.y + 1, s.z]]) {
+        if (String(world.get(x, y, z) || '').endsWith('_door')) out.push(pos(x, y, z))
+      }
+      return out
+    }
+    const adopted = goal.adoptHome(bot)
+    assert.ok(adopted, 'adopt finds the house after the drive')
+    assert.equal(adopted.built, true, 'adopt sees it complete')
+  })
+
+  it('no BLUEPRINT planks cell targets the doorway or the interior', () => {
+    for (const cell of BLUEPRINT) {
+      if (cell.kind !== 'planks') continue
+      assert.ok(!build.isDoorwayOrInterior(cell), `planks at ${cell.dx},${cell.dy},${cell.dz}`)
+    }
+    // Predicate shape, doorway branch included: a killed doorway check must
+    // fail here, not slip a future plan edit through.
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 0 }), true, 'door lower')
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 1, dz: 0 }), true, 'door upper')
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 1 }), true, 'interior')
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 2, dz: 0 }), false, 'roof above the door is legit')
+    assert.equal(build.isDoorwayOrInterior({ dx: 0, dy: 0, dz: 0 }), false, 'wall')
   })
 })
 

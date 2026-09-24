@@ -44,15 +44,19 @@ function noteSpots(ctx, spots, now) {
 }
 
 // Nearest stored find to (x, y, z), optionally restricted to exact type
-// names. Null when empty or nothing matches.
-function nearest(ctx, p, kinds) {
+// names. exclude(item) skips entries (atl.5: gather's skip set — nearest
+// alone returns one point, so one skipped memory point would hide the rest).
+// Null when empty or nothing matches.
+function nearest(ctx, p, kinds, exclude) {
   const mem = ctx && ctx.resources
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
   const want = Array.isArray(kinds) && kinds.length > 0 ? new Set(kinds) : null
+  const skip = typeof exclude === 'function' ? exclude : null
   let best = null
   let bestD = Infinity
   for (const item of mem.items.values()) {
     if (want && !want.has(item.name)) continue
+    if (skip && skip(item)) continue
     const d = Math.hypot(item.x - p.x, item.y - p.y, item.z - p.z)
     if (d < bestD) {
       bestD = d

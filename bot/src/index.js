@@ -17,6 +17,7 @@ function brainTimeoutMs(env) {
   return Number.isFinite(raw) ? raw : 1000
 }
 const bringMod = require('./behaviours/bring')
+const homeMod = require('./behaviours/home')
 const goal = require('./goal')
 const recover = require('./behaviours/recover')
 const origEquipGear = fightMod.equipGear
@@ -34,6 +35,8 @@ const BEHAVIOURS = {
   bring: bringMod,
   craft: require('./behaviours/craft'),
   rest: require('./behaviours/rest'),
+  gohome: homeMod.gohome,
+  stay: homeMod.stay,
   build: require('./behaviours/build'),
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
@@ -62,6 +65,25 @@ const JOIN_POLL_MS = 2000
 // ~5.5 s after the first player (up to ~6.5 s worst case).
 const JOIN_SETTLE_MS = 4500
 const LEAVE_AFTER_MS_DEFAULT = 60000
+const STAY_LOG_MS = 600000
+function parseAutonomous(env) {
+  const raw = String((env && env.BOT_AUTONOMOUS) || '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes'
+}
+// Laya address for the autonomous downgrade (dxl): BRAIN_URL only when it
+// does NOT point at JEV — a JEV-configured BRAIN_URL would keep the paid
+// brain running under a 'laya' label. Null means off.
+function layaUrl() {
+  const env = process.env && process.env.BRAIN_URL
+  return env && sourceForUrl(env) !== 'jev' ? env : null
+}
+// Chat toggle outlives the ticker (dxl major): 'autonomous off' must survive
+// the leave it causes, until container restart. Null = follow the env.
+let autonomousOverride = null
+function autonomousEffective(env) {
+  if (autonomousOverride !== null) return autonomousOverride
+  return parseAutonomous(env)
+}
 // Re-probe ceiling (ticks) for a given-up hostile: the world may change
 // (bridged ravine, opened door), so a pursuit fight abandoned is retried
 // from scratch this often. Lives here, not in fight.js — once the brain
@@ -151,13 +173,19 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
-function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null }) {
+function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null, autonomous = false }) {
   // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
   const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, lastPos: null, homeStalls: 0, homeLastPos: null }
   ctx.greeter = greet // deliver greets arrivals through the same latch
+  ctx.autonomous = !!autonomous
+  ctx.manualBrain = null
+  ctx.brainRestore = null
+  ctx.rosterWasOnline = false
+  ctx.exploreAloneRadius = goal.AUTONOMOUS_EXPLORE_RADIUS
+  metrics.autonomous.set(ctx.autonomous ? 1 : 0)
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
@@ -212,6 +240,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function noteSeen() {
     emptySince = null
     leaveFired = false
+  }
+  // Autonomous stay (dxl): with nobody to see, the bot does not arm a leave
+  // at all — one log line per 10 minutes, wall-clocked on the same
+  // injectable clock as the leave streak so fake-clock tests can observe it.
+  let lastStayLog = -STAY_LOG_MS
+  function noteStay() {
+    const t = now()
+    if (t - lastStayLog >= STAY_LOG_MS) {
+      lastStayLog = t
+      console.log('nobody online, staying (autonomous)')
+    }
+  }
+  function noteGone() {
+    if (ctx.autonomous) noteStay()
+    else noteEmpty()
   }
   // Tear-down for the join loop: after our own quit() the old ticker must
   // not tick on (it would log stale idle lines, retain the dead bot's
@@ -292,9 +335,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
+  // Night-step reset (rw4.5, revmux 01-review loop+goal-4): a stale
+  // gohome/stay record (or shelter) must not survive an order, stop or fresh
+  // work — the next decide re-arms from facts.
+  function resetNightStep() {
+    ctx.step = null
+    ctx.stepStatus = null
+    ctx.gohome = null
+    ctx.stay = null
+    ctx.inShelter = false
+  }
   function startWork() {
     clearPendingSearch(ctx)
     clearStuck()
+    resetNightStep()
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
@@ -311,6 +365,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
       else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
+      // Manual control states too (rw4.5 doorway sneak): the pathfinder
+      // never clears them itself, so a parked bot would keep walking.
+      try { bot.clearControlStates() } catch (_) { /* park best-effort */ }
       ctx.lastGoalKey = 'idle'
     }
   }
@@ -417,6 +474,39 @@ function fleeReflex(bot, ctx) {
     return state.hostile_reachable !== false
   }
 
+  // Autonomous brain policy (dxl): alone, only free brains run. A jev
+  // brain with an empty roster steps down to laya (BRAIN_URL) or off when
+  // laya is not configured; a manually chosen jev returns on the next
+  // roster join. Downgrade fires once per empty period (brainRestore latch),
+  // restore clears the latch on every join.
+  function autoBrain(rosterOnline) {
+    if (!ctx.autonomous) return
+    if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
+      const url = layaUrl()
+      const to = url ? 'laya' : 'off'
+      const next = to === 'laya'
+        ? hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
+        : stubBrain
+      ctx.brainRestore = { from: 'jev', manual: ctx.manualBrain === 'jev' }
+      doSetBrain(next, to)
+      console.log(`brain auto to=${to} (nobody online)`)
+      return
+    }
+    if (rosterOnline && !ctx.rosterWasOnline) {
+      if (ctx.brainRestore && ctx.brainRestore.manual) {
+        const next = hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), JEV_ENDPOINT))
+        doSetBrain(next, 'jev')
+        console.log('brain auto to=jev (player joined)')
+      }
+      ctx.brainRestore = null
+    }
+    ctx.rosterWasOnline = rosterOnline
+  }
+
+  function doSetBrain(b, label) {
+    if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label }
+  }
+
   // A stale stuck fact must not survive a mode change: the goal it names
   // belongs to the previous order.
   function clearStuck() {
@@ -487,17 +577,6 @@ function fleeReflex(bot, ctx) {
 
   async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
-    // Spawn adoption races chunk loading (one shot at join sees an empty
-    // world), so retry a few ticks while no home is set. A 'build here'
-    // (setHome) or the build default stops the retries.
-    if (!ctx.home && (ctx.adoptTries || 0) < 6) {
-      ctx.adoptTries = (ctx.adoptTries || 0) + 1
-      try {
-        const foundEarly = goal.adoptHome(bot)
-        // Same resets as setHome below (no ticker handle in this scope).
-        if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
-      } catch (_) { /* try again next tick */ }
-    }
     inFlight = true
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
@@ -518,7 +597,7 @@ function fleeReflex(bot, ctx) {
         const target = findTarget(bot, followName)
         lastVisible = !!target
         if (target) noteSeen()
-        else noteEmpty()
+        else noteGone()
         if (target) {
           const state = buildState(bot, target, lastTargetPos)
           lastTargetPos = state._lastTargetPos
@@ -551,7 +630,7 @@ function fleeReflex(bot, ctx) {
       const target = findTarget(bot, followName)
       lastVisible = !!target
       if (target) noteSeen()
-      else noteEmpty()
+      else noteGone()
       // A follow order owns the body the moment its player is visible: drop
       // work so the goal arbiter below cannot hijack the tick.
       if (target && followName) ctx.work = false
@@ -561,6 +640,12 @@ function fleeReflex(bot, ctx) {
       // buildState handles null, and the work check below swaps idle steps.
       const rosterOnline = bot.players &&
         Object.keys(bot.players).some((n) => n !== bot.username)
+      autoBrain(rosterOnline)
+      // Alone-explore cap (dxl x atl.1): with nobody online the spiral must
+      // not wander past AUTONOMOUS_EXPLORE_RADIUS — new chunks bloat the
+      // host disk. explore.js defaults an untouched maxRadius to MAX_RADIUS
+      // (the same 256), so only a live wider explore needs clamping.
+      if (!rosterOnline && ctx.autonomous && ctx.explore) ctx.explore.maxRadius = ctx.exploreAloneRadius
       // A pending follow order beats working alone: the player explicitly
       // asked the bot to come, so reunion outranks cave work (3a7 keeps work
       // for an unseen follower; this walks instead once N trips). Pure work
@@ -583,14 +668,14 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && rosterOnline && (!ctx.work || followWaiting) && !ctx.bring) {
+      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
       // An active bring-me owns the body like work-alone: the bot fetches up
       // to 48 blocks out, past entity-tracking range, so the idle branch must
       // not park it and the homing walk must not steal it mid-order.
-      const workAlone = (ctx.work || ctx.bring) && !target && rosterOnline && !homing
+      const workAlone = (ctx.work || ctx.bring) && !target && (rosterOnline || ctx.autonomous) && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -714,9 +799,14 @@ function fleeReflex(bot, ctx) {
         // relief and carries the goal, while this backstop would preempt it
         // with a goal-less fact on the same tick. Other owners keep it.
         const followOwns = (ctx.lastGoalKey || '').startsWith('follow:')
-        if (!gatherOwns && !followOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
+        // Gohome/stay own their approach stalls (rw4.5): walkTo re-issues
+        // and fails the step itself (cannot-reach-home) — a ticker backstop
+        // here sidesteps the body mid-doorway every slow approach and the
+        // arrival starves into an orbit.
+        const nightOwns = ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')
+        if (!gatherOwns && !followOwns && !nightOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
           ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
-        } else if ((ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+        } else if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
         }
       }
@@ -781,7 +871,36 @@ function fleeReflex(bot, ctx) {
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
+      if (ctx.inShelter && decision.action === 'fight') {
+        // Sheltered for the night: no pursuit through our own wall (the
+        // pathfinder would dig it with canDig). The melee reflex above
+        // still swings at anything that gets inside.
+        stopOnce()
+        console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
       if (ctx.work && decision.action !== 'fight') {
+        if (!ctx.home && !ctx.adoptDone) {
+          // Spawn adoption races chunk loading (one shot at join sees an
+          // empty world): hold work until the spawn block is visible, then
+          // adopt once before build defaults a fresh site. Readiness needs
+          // positive evidence once a spawn is known; without a spawn yet
+          // (or without a blockAt hook, i.e. unit mocks) adoption no-ops,
+          // so work proceeds and the one shot waits for the spawn below.
+          let ready = true
+          try { if (bot.blockAt && bot.spawnPoint) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
+          if (ready || (ctx.adoptTries = (ctx.adoptTries || 0) + 1) > 60) {
+            if (!ctx.adoptDone && bot.spawnPoint) ctx.adoptDone = true
+            try {
+              const foundEarly = goal.adoptHome(bot)
+              // Same resets as setHome below (no ticker handle in this scope).
+              if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
+            } catch (_) { /* no adoptable house; build defaults below */ }
+          } else {
+            if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
@@ -833,7 +952,9 @@ function fleeReflex(bot, ctx) {
     setFollow: (name) => {
       clearPendingSearch(ctx)
       clearStuck()
+      resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
+      ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
@@ -850,10 +971,11 @@ function fleeReflex(bot, ctx) {
     // site. Build progress resets with it — old skips/fail counts belong
     // to the old origin. The facts text (home none->site) re-decides.
     home: () => ctx.home || null,
-    setHome: (home) => { ctx.home = home || null; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
+    setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
     stop: () => {
       clearPendingSearch(ctx)
       clearStuck()
+      resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
@@ -862,7 +984,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
+    setLead: (order) => { clearStuck(); resetNightStep(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
@@ -879,7 +1001,22 @@ function fleeReflex(bot, ctx) {
     cancelGreet: () => { try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ } },
     getFollowName: () => followName,
     getBrainEngine: () => brainEngine,
-    setBrain: (b, label) => { if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label } },
+    setBrain: (b, label) => { doSetBrain(b, label) },
+    // Autonomous toggle (dxl): chat lives until container restart, the
+    // permanent default is the BOT_AUTONOMOUS env (owner sets it).
+    setAutonomous: (on) => {
+      ctx.autonomous = !!on
+      autonomousOverride = !!on
+      metrics.autonomous.set(ctx.autonomous ? 1 : 0)
+      if (!on) return 'autonomous off'
+      let r = 'autonomous on — stays without players until restart (permanent: BOT_AUTONOMOUS env)'
+      if (brainEngine === 'jev') {
+        r += layaUrl()
+          ? ' — brain is jev now, laya without players'
+          : ' — brain is jev now, off without players (laya not configured)'
+      }
+      return r
+    },
     // Bring-me order creation: find + tool checks answer in this tick (like
     // find-me); the behaviour only walks, digs, returns and tosses.
     // Share (idkcraft-ah9): hand over everything carried except tools,
@@ -888,6 +1025,7 @@ function fleeReflex(bot, ctx) {
     // walks to the speaker and tosses, like the bring return.
     setShare: ({ by }) => {
       clearPendingSearch(ctx)
+      resetNightStep()
       let items = []
       try {
         items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -907,6 +1045,7 @@ function fleeReflex(bot, ctx) {
     },
     setBring: ({ name, want, by }) => {
       clearPendingSearch(ctx)
+      resetNightStep()
       if (bringMod.isFoodRequest(name)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
@@ -1005,7 +1144,7 @@ function fatal(where, err) {
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
-function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
       host,
@@ -1016,7 +1155,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.loadPlugin(pathfinder)
     let wantQuit = false
     const ticker = createTicker({
-      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine,
+      bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine, autonomous,
       onLeave: () => { void confirmLeave() }
     })
     // The streak only proves nobody is *visible*. Re-check the world-wide
@@ -1118,11 +1257,14 @@ async function main() {
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
     // 0 disables the leave: join immediately and stay on, like before.
-    if (leaveAfterMs !== 0) {
+    // Autonomous joins an empty server too: staying is the point. The chat
+    // toggle (not the env const) decides, so 'autonomous off' lasts.
+    const autonomous = autonomousEffective(process.env)
+    if (leaveAfterMs !== 0 && !autonomous) {
       await waitForPlayers({ host, port, pingFn, username })
       await sleep(JOIN_SETTLE_MS)
     }
-    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine })
+    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous })
   }
 }
 
@@ -1278,9 +1420,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         return
       }
       const from = ticker.getBrainEngine()
-      const url = arg === 'laya' ? (process.env.BRAIN_URL || LAYA_URL_DEFAULT) : JEV_ENDPOINT
+      const url = arg === 'laya' ? (layaUrl() || LAYA_URL_DEFAULT) : JEV_ENDPOINT
       const next = arg === 'off' ? stubBrain : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
       ticker.setBrain(next, arg)
+      if (bot._tickerCtx) bot._tickerCtx.manualBrain = arg
       bot.chat(`brain: ${arg}`)
       console.log(`brain switch from=${from} to=${arg} by=${playerName}`)
     } else {
@@ -1333,6 +1476,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       if (ticker && typeof ticker.setShare === 'function') {
         const r = ticker.setShare({ by: playerName })
         if (r) bot.chat(r)
+      }
+    } else if (msg === 'autonomous' || msg.startsWith('autonomous ')) {
+      const m = msg.match(/^autonomous(?:\s+(on|off))?$/)
+      if (!m) {
+        bot.chat('try: autonomous on')
+      } else if (ticker && typeof ticker.setAutonomous === 'function') {
+        if (!m[1]) bot.chat(`autonomous is ${bot._tickerCtx && bot._tickerCtx.autonomous ? 'on' : 'off'}`)
+        else bot.chat(ticker.setAutonomous(m[1] === 'on'))
       }
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
       const m = msg.match(/^bring me\s+(something to eat|\S+)(?:\s+(\d+))?$/)
@@ -1451,4 +1602,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

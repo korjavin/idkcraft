@@ -34,12 +34,15 @@ const NEED_PLANKS = 48
 // bot always announces what it does).
 const MENU = {
   stay: {
-    feasible: (facts) => facts.time === 'night' && facts.home === 'built' && facts.inside === 'yes',
+    // Dusk counts, not just night: a gohome that finishes at dusk must hand
+    // off to stay, never to a rest that roams out of the closed house
+    // (revmux 01-review loop+goal-3).
+    feasible: (facts) => facts.time !== 'day' && facts.home === 'built' && facts.inside === 'yes',
     chat: () => 'on my own: staying inside till morning',
     verb: 'staying inside',
   },
   gohome: {
-    feasible: (facts) => (facts.time === 'dusk' || facts.time === 'night') && facts.home !== 'none' && facts.inside === 'no',
+    feasible: (facts) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no',
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -155,6 +158,10 @@ const MENU = {
 // gather, then unload (deliver), dig (forage), search (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
 const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
+// Alone-explore cap (idkcraft-dxl): without players the bot must not wander
+// past this many blocks from home — new chunks bloat the host disk. Read by
+// atl.1 explore.js when it lands; until then no behaviour consumes it.
+const AUTONOMOUS_EXPLORE_RADIUS = 256
 
 // Home site shape (bead .4): site is the SW-corner origin at ground level,
 // interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
@@ -379,7 +386,7 @@ function goalFsm(facts, feasibleNames) {
   const t = facts && facts.time
   for (const name of STEP_ORDER) {
     if (!ok.has(name)) continue
-    if (name === 'stay' && t !== 'night') continue // stay is night-only; dusk goes home
+    if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
     return name
   }
@@ -388,7 +395,7 @@ function goalFsm(facts, feasibleNames) {
 
 // One question for the smart model. Short clauses on the bucket words,
 // exactly like the iwb combat criteria: every longer variant regressed on
-// the stand. All six steps are named here so build/gohome/stay plug in with
+// the stand. All steps are named here so new behaviours plug in with
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
@@ -396,10 +403,10 @@ const STEP_CRITERIA = {
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
-  stay: 'inside is yes and time is night: wait inside',
   deliver: 'haul is waiting: carry it to the player',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
+  stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',
 }
 
@@ -461,6 +468,10 @@ function registered(name) {
 // CHANGE, so a running step with steady facts stays silent.
 async function decide(bot, ctx) {
   const facts = goalFacts(bot, ctx)
+  // Shelter is a night concept: a sticky gohome that finishes after sunrise
+  // leaves inShelter true with no stay step to clear it, suppressing fight
+  // all day (revmux 01-review loop+goal-3).
+  if (ctx && facts.time === 'day') ctx.inShelter = false
   const text = goalText(facts)
   const prev = (ctx && ctx.step) || null
   const status = (ctx && ctx.stepStatus) || null
@@ -471,6 +482,16 @@ async function decide(bot, ctx) {
       const bp = bot && bot.entity && bot.entity.position
       ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
     } catch (_) { /* guard best-effort */ }
+  }
+  // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
+  // (walk->open->enter->close). A facts-changed re-decision must not preempt
+  // them mid-phase: stepping inside flips inside, which would hand stay the
+  // step before gohome shuts the door, chats and shelters — and stepping out
+  // flips it back before stay says good morning. The phase machine fails
+  // itself on real trouble (no-home, cannot-reach), which re-arms choice.
+  if (!finished && (prev === 'gohome' || prev === 'stay')) {
+    const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
+    if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   if (!prev || finished || ctx.goalText !== text) {
     const askKey = `${text}\n${status || ''}`
@@ -508,4 +529,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
