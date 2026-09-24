@@ -181,7 +181,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks; clears work mode |
 | `go work` / `free` | Releases the bot to work on its own goal | Sets work mode, unparks ticker, clears `followName`; replies `on my own; say 'follow me' to call me` |
 | `status` | Reports mode, goal step, logs/planks, home | Replies e.g. `working step=rest logs=0 planks=0 home=none` |
-| `build here` | Moves the house site next to the speaker | Picks a flat 4x4 at radius 6 and resets build progress; refuses when built; spawn adoption chats `my home is at <x> <y> <z>` |
+| `build here` | Moves the house site next to the speaker and starts a new house | Picks a flat 4x4 at radius 6 and resets build progress, even over a built home; spawn adoption chats `my home is at <x> <y> <z>` |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks (exposed ore first, then level with you); replies with `leading you to <name>, <N> blocks, follow me`, `no <block> within 48 blocks`, or `unknown block: <block>`; deep targets warn instead of leading |
 | `lead anyway` | Walks to a warned-about deep target | Replays the held deep offer once, then forgets it (`no deep find on hold` when there is none) |
 
