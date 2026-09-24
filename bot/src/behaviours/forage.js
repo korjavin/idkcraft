@@ -251,11 +251,12 @@ function strikeCell(ctx, f, p) {
 // stall-outs on the same id fail the step instead. A new animal, a kill in
 // reach, or banked progress resets (fresh situation, not the same loop).
 function replanFoodStall(bot, ctx, f, bp) {
-  const oldId = f.target && f.target.kind === 'food' ? f.target.id : null
   if (!replan(bot, ctx, f, bp)) return false
   const t = f.target
-  if (t && t.kind === 'food' && oldId != null && t.id === oldId) f.foodStreak = (f.foodStreak || 0) + 1
-  else f.foodStreak = 0
+  // Every stall-out counts, whatever animal is nearest now: in a grazing
+  // herd the id flips constantly, which used to zero the streak forever
+  // (round-2 minor). Kill range and pickup still reset (fresh situation).
+  if (t && t.kind === 'food') f.foodStreak = (f.foodStreak || 0) + 1
   if (t && t.kind === 'food' && (f.foodStreak || 0) >= UNREACHABLE_STRIKES) {
     finish(bot, ctx, f, false, 'unreachable')
     return false
@@ -338,8 +339,19 @@ function forage(bot, ctx, target, state) {
       if (key !== ctx.lastGoalKey) {
         bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), false)
         ctx.lastGoalKey = key
-        f.stalls = 0
+        // No stall reset and no early return here: a grazing animal moves
+        // every tick, which used to zero the counter (then skip counting
+        // entirely) forever. Stalls reset only on the bot's own displacement
+        // below, counted every tick.
         f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+      }
+      let verdict = null
+      try { verdict = ctx.lastPathStatus } catch (_) { verdict = null }
+      if (verdict === 'noPath') {
+        // Unreachable herd across water/a fence: the streak is the strike
+        // counter, same as the ore walk (round-2 minor).
+        try { ctx.lastPathStatus = 'none' } catch (_) { /* status best-effort */ }
+        if (!replanFoodStall(bot, ctx, f, bp)) return
         return
       }
       if (bring.progressed(bp, f.lastBotPos, grounded)) {

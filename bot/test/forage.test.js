@@ -198,12 +198,31 @@ describe('forage behaviour', () => {
     const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
     bot.blocks['40,60,0'] = 'iron_ore'
     bot._moving = true
+    forage(bot, ctx, null, {}) // issue the walk goal first (consumes any verdict)
     ctx.lastPathStatus = 'timeout'
     for (let i = 0; i < 3; i++) forage(bot, ctx, null, {})
     assert.ok(!(ctx.forageSkip && ctx.forageSkip.has('40,60,0')), 'no strike on timeout')
     assert.equal((ctx.forage && ctx.forage.streak) || 0, 0)
     for (let i = 0; i < 12; i++) forage(bot, ctx, null, {})
     assert.ok(ctx.forageSkip && ctx.forageSkip.has('40,60,0'), 'ten still ticks still strike via displacement')
+  })
+  it('a grazing unreachable herd fails out instead of chasing forever', async () => {
+    // Round-2 minor: the hunt goal key follows the animal, which used to
+    // zero the stall counter on every move while the id flip zeroed the
+    // streak — minutes at the fence, never failed.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    const cow = { id: 7, name: 'cow', position: pos(10, 64, 0) }
+    bot.entities = { 7: cow }
+    let n = 0
+    for (let i = 0; i < 80 && !ctx.stepStatus.startsWith('failed:') && !ctx.stepStatus.startsWith('done'); i++) {
+      n++
+      cow.position = pos(10 + (i % 3), 64, 0) // graze: re-issues the goal
+      forage(bot, ctx, null, {})
+      await tick()
+    }
+    assert.equal(ctx.stepStatus, 'failed:unreachable', `herd failed out after ${n} ticks`)
+    assert.ok(n < 80, 'bounded, not forever')
   })
   it('registers in BEHAVIOURS under forage', () => {
     const { BEHAVIOURS } = require('../src/index')
