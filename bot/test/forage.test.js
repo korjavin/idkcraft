@@ -150,14 +150,19 @@ describe('forage behaviour', () => {
     assert.deepEqual(ctx.forage.target.name, 'coal_ore')
   })
 
-  it('ten still ticks forget the cell and fail clean with an empty haul', () => {
+  it('ten still ticks strike the cell and fail unreachable with an empty haul', () => {
+    // Contract change (reviewer atl.2): a stall-out is one strike on the
+    // point — skip it, memory intact — not a forget (forget flips known and
+    // defeats the atl.4 hold, looping forage->explore->forage on rescan).
     const bot = mockBot()
     bot.inv.push({ name: 'stone_pickaxe', count: 1 })
     const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
     bot.blocks['40,60,0'] = 'iron_ore'
     bot._moving = true // executor claims motion, body stands still
     for (let i = 0; i < 14; i++) forage(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-known')
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('40,60,0'))
+    assert.equal(resources.count(ctx), 1)
     assert.equal(ctx.stuck, undefined)
     assert.deepEqual(ctx.haul, {})
   })
@@ -165,5 +170,80 @@ describe('forage behaviour', () => {
   it('registers in BEHAVIOURS under forage', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.forage, forage)
+  })
+})
+
+describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => {
+  const { decide } = require('../src/goal')
+  const CELL = { x: 50, y: 60, z: 0, name: 'oak_log' }
+
+  // Deep-ore fake: the cell is remembered but never loads, never diggable,
+  // the body never moves — the live iron-ore trap in miniature.
+  function deepBot() {
+    const bot = mockBot()
+    bot.blockAt = () => null
+    bot.canDigBlock = () => false
+    bot.entity.position = pos(0, 64, 0)
+    bot.time = { timeOfDay: 6000 }
+    return bot
+  }
+  function deepCtx() {
+    const ctx = { lastGoalKey: '', home: { built: true }, brain: null, step: null, stepStatus: null }
+    resources.noteSpots(ctx, [CELL], 1000)
+    return ctx
+  }
+  async function runStep(bot, ctx, cap) {
+    for (let i = 0; i < (cap || 40); i++) {
+      forage(bot, ctx, null, {})
+      await tick()
+      const s = ctx.stepStatus
+      if (typeof s === 'string' && (s === 'done' || s.startsWith('failed:'))) return s
+    }
+    return ctx.stepStatus
+  }
+
+  it('explore rescan does not revive a struck point: <=3 forage picks, then explore', async () => {
+    const bot = deepBot()
+    const ctx = deepCtx()
+    let foragePicks = 0
+    let last = null
+    for (let c = 0; c < 10; c++) {
+      const r = await decide(bot, ctx)
+      last = r.action
+      if (r.action === 'forage') {
+        foragePicks++
+        await runStep(bot, ctx)
+      } else {
+        resources.noteSpots(ctx, [CELL], 2000 + c) // explore arrival scan re-adds the deep ore
+      }
+    }
+    assert.ok(foragePicks <= 3, `forage re-picked ${foragePicks}x to the same dead point`)
+    assert.equal(last, 'explore') // honest switch, not a silent rest
+    assert.ok(ctx.stepFail && ctx.stepFail.forage, 'stepFail recorded for forage')
+    assert.equal(ctx.stepFail.forage.status, 'failed:unreachable')
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('50,60,0'), 'the point was skipped, not forgotten')
+    assert.equal(resources.count(ctx), 1, 'memory intact across strikes and rescans')
+  })
+
+  it('noPath on the live goal strikes at once, memory intact', async () => {
+    const bot = deepBot()
+    const ctx = deepCtx()
+    forage(bot, ctx, null, {}) // plan + issue the walk goal
+    ctx.lastPathStatus = 'noPath' // pathfinder verdict on the live goal
+    const end = await runStep(bot, ctx, 6)
+    assert.equal(end, 'failed:unreachable')
+    assert.equal(resources.count(ctx), 1)
+    assert.deepEqual(ctx.haul, {})
+    assert.equal(ctx.stuck, undefined)
+  })
+
+  it('a skipped cell loses to the next one: replan takes another point', () => {
+    const bot = deepBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = deepCtx()
+    resources.noteSpots(ctx, [{ x: 8, y: 64, z: 0, name: 'coal_ore' }], 1001)
+    ctx.forageSkip = new Set(['50,60,0'])
+    const p = forage.planForage(bot, ctx)
+    assert.equal(p.name, 'coal_ore')
   })
 })

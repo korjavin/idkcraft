@@ -13,8 +13,11 @@
 // hasPickaxe/findAnimal/progressed/entityById/PREY_* (pure helpers). The
 // phase machine itself is forage-shaped (memory target, batch haul, no
 // return leg — deliver owns that), so walk/dig/pickup run here on the
-// same patterns. Like bring, forage raises NO stuck facts: a stalled leg
-// forgets its cell and replans; the ticker backstops catch a looping step.
+// same patterns. Like bring, forage raises NO stuck facts: a stalled or
+// no-path leg STRIKES its cell (ctx.forageSkip, gather atl.5 pattern) and
+// replans to another point; three strikes fail the step unreachable. Skip,
+// never forget: forgetting flips known=near to none, which defeats the
+// atl.4 hold and loops forage->explore->forage on every rescan.
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
@@ -26,6 +29,7 @@ const { countItems } = require('../perception')
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
 const WALK_RANGE = 2
+const UNREACHABLE_STRIKES = 3 // struck cells before failed:unreachable, like gather
 
 // Memory value rank: lower is better. Unknown ores rank with coal-tier;
 // anything not ore/log ranks below logs (never picked: only ore/log/food
@@ -57,14 +61,31 @@ function dist(a, b) {
 // Best diggable memory cell: lowest rank, then nearest. Ore without the
 // right pickaxe is skipped (bring.js tier check). Pure: no movement, no
 // ctx writes — goal.js feasible() shares this.
+function skipSet(ctx) {
+  try {
+    if (!ctx.forageSkip) ctx.forageSkip = new Set()
+    if (typeof ctx.forageSkip.has !== 'function') ctx.forageSkip = new Set()
+    return ctx.forageSkip
+  } catch (_) {
+    return null
+  }
+}
+
+function cellKey(p) {
+  return `${p.x},${p.y},${p.z}`
+}
+
 function bestMemoryCell(bot, ctx, bp) {
   const mem = ctx && ctx.resources
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
+  let skip = null
+  try { skip = (ctx && ctx.forageSkip) || null } catch (_) { skip = null }
   let best = null
   let bestRank = Infinity
   let bestDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
+    if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
     if (rank <= 2 && !bring.hasPickaxe(bot, item.name)) continue
@@ -108,6 +129,17 @@ function countDrop(bot, drop) {
   } catch (_) {
     return 0
   }
+}
+
+function snapWorld(bot, ctx) {
+  let mem = -1
+  let haul = -1
+  try { mem = resources.count(ctx) } catch (_) { /* no memory */ }
+  try {
+    const h = (ctx && ctx.haul) || {}
+    haul = Object.keys(h).reduce((s, n) => s + (h[n] || 0), 0)
+  } catch (_) { /* no haul */ }
+  return { mem, haul }
 }
 
 function snapInventory(bot) {
@@ -159,9 +191,13 @@ function finish(bot, ctx, f, ok, reason) {
       ctx.haul[d] = (ctx.haul[d] || 0) + gains[d]
       banked += gains[d]
     }
+    if (banked > 0) ctx.forageSkip = null // drops landed: the world changed, old skips may be stale
   } catch (_) { /* haul best-effort */ }
   ctx.forage = null
   clearGoal(bot, ctx)
+  try {
+    ctx.forageFinal = banked > 0 ? null : { status: `failed:${reason || 'no-known'}`, world: snapWorld(bot, ctx) }
+  } catch (_) { /* final best-effort */ }
   if (banked > 0) {
     ctx.stepStatus = 'done'
     console.log(`forage done: banked ${Object.keys(gains).map((d) => `${gains[d]} ${d}`).join(', ')}${ok ? '' : ` (${reason})`}`)
@@ -175,6 +211,16 @@ function trackDrop(f, drop) {
   f.drops[drop] = true
 }
 
+// One strike on a memory cell: skip it (never forget — the atl.4 hold
+// needs stable memory) and count it. Three strikes fail the step.
+function strikeCell(ctx, f, p) {
+  try {
+    const skip = skipSet(ctx)
+    if (skip && p && typeof p.x === 'number') skip.add(cellKey(p))
+  } catch (_) { /* skip best-effort */ }
+  f.streak = (f.streak || 0) + 1
+}
+
 function replan(bot, ctx, f, bp) {
   f.target = planForage(bot, ctx)
   f.phase = null
@@ -182,7 +228,7 @@ function replan(bot, ctx, f, bp) {
   f.lastBotPos = bp ? { x: bp.x, y: bp.y, z: bp.z } : null
   f.armedId = null
   if (!f.target) {
-    finish(bot, ctx, f, false, 'no-known')
+    finish(bot, ctx, f, false, (f.streak || 0) > 0 ? 'unreachable' : 'no-known')
     return false
   }
   f.phase = f.target.kind === 'food' ? 'find' : 'walk'
@@ -190,8 +236,23 @@ function replan(bot, ctx, f, bp) {
 }
 
 function forage(bot, ctx, target, state) {
+  // A finished failure stays finished until the world changes (memory
+  // count or banked haul): the tick after a fail re-runs this function
+  // before decide() re-picks, and restarting would clobber unreachable
+  // with a fresh no-known (gather's final rule, same shape).
+  try {
+    const FF = ctx && ctx.forageFinal
+    if (FF && typeof FF.status === 'string' && FF.status.startsWith('failed:')) {
+      const w = snapWorld(bot, ctx)
+      if (FF.world && w.mem === FF.world.mem && w.haul === FF.world.haul) {
+        ctx.stepStatus = FF.status
+        return
+      }
+      ctx.forageFinal = null
+    }
+  } catch (_) { /* gate best-effort */ }
   if (!ctx.forage) {
-    ctx.forage = { phase: 'plan', target: null, stalls: 0, lastBotPos: null, startInv: null, drops: {}, announced: false }
+    ctx.forage = { phase: 'plan', target: null, stalls: 0, streak: 0, lastBotPos: null, startInv: null, drops: {}, announced: false }
   }
   const f = ctx.forage
   const bp = botPos(bot)
@@ -305,28 +366,59 @@ function forage(bot, ctx, target, state) {
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, WALK_RANGE), false)
       ctx.lastGoalKey = key
+      // Consume the previous goal's verdict: only a noPath/timeout that
+      // arrives AFTER this issue strikes (same attribution follow.js uses
+      // for its terminal statuses, without touching its counters).
+      try { ctx.lastPathStatus = 'none' } catch (_) { /* status best-effort */ }
       f.stalls = 0
       f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
       return
     }
+    let verdict = null
+    try { verdict = ctx.lastPathStatus } catch (_) { verdict = null }
+    if (verdict === 'noPath' || verdict === 'timeout') {
+      // One failure on this point is one strike: the cell is skipped (not
+      // forgotten) and the next point is tried, or the step fails.
+      strikeCell(ctx, f, p)
+      if ((f.streak || 0) >= UNREACHABLE_STRIKES) {
+        finish(bot, ctx, f, false, 'unreachable')
+        return
+      }
+      if (!replan(bot, ctx, f, bp)) return
+      return
+    }
     let block = null
     try { block = blockAt(bot, p.x, p.y, p.z) } catch (_) { block = null }
-    if (!block || block.name !== t.name) {
+    if (block && (!block.name || block.name !== t.name)) {
+      // Loaded and different: dug out or a ghost — forget the fact, no
+      // strike (gather's stale-point rule).
       try { resources.forget(ctx, p.x, p.y, p.z) } catch (_) { /* memory best-effort */ }
       if (!replan(bot, ctx, f, bp)) return
       return
     }
+    // Unloaded (blockAt null) is not gone: a deep point keeps its walk
+    // while chunks stream in, with stall counting below as the backstop
+    // (gather's unloaded-far rule).
     if (!bot.pathfinder.isMoving()) {
+      // Stationary but out of digging reach is not a settle: fall through
+      // to stall counting below (a loaded-but-far point froze here forever,
+      // the live deep-ore trap). Diggable settles to dig.
       let diggable = true
       try { diggable = typeof bot.canDigBlock === 'function' ? bot.canDigBlock(block) : true } catch (_) { diggable = false }
-      if (diggable) f.phase = 'dig'
-      return
+      if (diggable) {
+        f.phase = 'dig'
+        return
+      }
     }
     if (bring.progressed(bp, f.lastBotPos, grounded)) {
       f.stalls = 0
       f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++f.stalls >= WALK_STALL_TICKS) {
-      try { resources.forget(ctx, p.x, p.y, p.z) } catch (_) { /* memory best-effort */ }
+      strikeCell(ctx, f, p)
+      if ((f.streak || 0) >= UNREACHABLE_STRIKES) {
+        finish(bot, ctx, f, false, 'unreachable')
+        return
+      }
       if (!replan(bot, ctx, f, bp)) return
     }
     return

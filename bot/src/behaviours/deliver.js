@@ -154,6 +154,19 @@ function deliver(bot, ctx, target, state) {
 
   if (ps.entity) {
     // Visible: follow walks (GoalFollow 3 + its wedge facts), toss in range.
+    // Follow already solved no-path attribution with its own counters and
+    // raises the stuck fact past its stall budget: a stuck-by-follow player
+    // is unreachable, so fail (haul kept) instead of pacing forever — the
+    // atl.4 hold plus a facts change or a move re-arms the retry.
+    const st = ctx && ctx.stuck
+    if (st && st.by === 'follow') {
+      ctx.deliver = null
+      clearGoal(bot, ctx)
+      ctx.stepStatus = 'failed:no-path'
+      const what = Object.keys(live.items).map((n) => `${live.items[n]} ${n}`).join(', ')
+      say(bot, `can't reach ${ps.name} — holding your ${what}`)
+      return
+    }
     f.saidWaiting = false
     follow(bot, ctx, ps.entity, state)
     let d = null

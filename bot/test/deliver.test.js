@@ -172,3 +172,19 @@ describe('deliver behaviour', () => {
     assert.equal(BEHAVIOURS.deliver, deliver)
   })
 })
+
+describe('reviewer atl.2: unreachable player fails, haul kept', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('follow-stuck visible player -> failed:no-path, haul kept for retry', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 5 })
+    bot.players.P = { username: 'P', entity: { position: pos(30, 64, 0) } }
+    const ctx = ctxWithHaul({ coal: 5 })
+    assert.equal(recover.setStuck(ctx, 'follow', { x: 30, y: 64, z: 0 }, 'follow:P'), true)
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-path')
+    assert.deepEqual(ctx.haul, { coal: 5 })
+    assert.ok(bot.chats.join(' ').match(/holding|can't reach/), 'owner hears the hold')
+  })
+})
