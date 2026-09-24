@@ -18,6 +18,13 @@ const { countItems } = require('../perception')
 
 const DELIVER_RANGE = 3
 const TOSS_RANGE = DELIVER_RANGE + 0.5
+// Ticks walking at a visible player with no displacement before the step
+// admits defeat. Past follow's own budget (2 stalls over terminal statuses
+// and timeouts) plus a recovery escape: only a genuinely unreachable player
+// survives this long (revmux 01: ctx.stuck never reaches a goal step — the
+// ticker routes stuck ticks to recover — so a deliver-side counter owns it).
+const NO_PATH_TICKS = 20
+const MOVE_TOLERANCE = 0.5
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
@@ -154,18 +161,34 @@ function deliver(bot, ctx, target, state) {
 
   if (ps.entity) {
     // Visible: follow walks (GoalFollow 3 + its wedge facts), toss in range.
-    // Follow already solved no-path attribution with its own counters and
-    // raises the stuck fact past its stall budget: a stuck-by-follow player
-    // is unreachable, so fail (haul kept) instead of pacing forever — the
-    // atl.4 hold plus a facts change or a move re-arms the retry.
-    const st = ctx && ctx.stuck
-    if (st && st.by === 'follow') {
-      ctx.deliver = null
-      clearGoal(bot, ctx)
-      ctx.stepStatus = 'failed:no-path'
-      const what = Object.keys(live.items).map((n) => `${live.items[n]} ${n}`).join(', ')
-      say(bot, `can't reach ${ps.name} — holding your ${what}`)
-      return
+    // Unreachable player: follow raises stuck, recover escapes, the latch
+    // then blocks re-fire and follow re-issues forever — so the step counts
+    // its own fruitless walk ticks (frozen while recover owns the body) and
+    // fails with the haul kept. Progress (a chase) or toss range resets.
+    let d0 = null
+    try { d0 = dist(bp, ps.entity.position) } catch (_) { d0 = null }
+    if (d0 !== null && d0 > TOSS_RANGE) {
+      let moved = false
+      try {
+        const lp = f.lastPos
+        moved = !!(lp && Math.hypot(bp.x - lp.x, bp.z - lp.z) > MOVE_TOLERANCE)
+      } catch (_) { moved = false }
+      try { f.lastPos = { x: bp.x, y: bp.y, z: bp.z } } catch (_) { /* pos best-effort */ }
+      if (moved) {
+        f.noPathTicks = 0
+      } else {
+        f.noPathTicks = (f.noPathTicks || 0) + 1
+        if (f.noPathTicks >= NO_PATH_TICKS) {
+          ctx.deliver = null
+          clearGoal(bot, ctx)
+          ctx.stepStatus = 'failed:no-path'
+          const what = Object.keys(live.items).map((n) => `${live.items[n]} ${n}`).join(', ')
+          say(bot, `can't reach ${ps.name} — holding your ${what}`)
+          return
+        }
+      }
+    } else {
+      f.noPathTicks = 0
     }
     f.saidWaiting = false
     follow(bot, ctx, ps.entity, state)

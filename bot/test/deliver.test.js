@@ -173,18 +173,32 @@ describe('deliver behaviour', () => {
   })
 })
 
-describe('reviewer atl.2: unreachable player fails, haul kept', () => {
-  const recover = require('../src/behaviours/recover')
-
-  it('follow-stuck visible player -> failed:no-path, haul kept for retry', () => {
+describe('reviewer atl.2 r2: unreachable player fails, haul kept', () => {
+  // Real path, no constructed stuck fact (revmux 01: ctx.stuck never reaches
+  // a goal step — the ticker routes stuck ticks to recover). Static body,
+  // visible player out of toss range: follow paces, the step counts its own
+  // fruitless ticks and fails with the haul kept.
+  it('20 fruitless walk ticks -> failed:no-path, haul kept for retry', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 5 })
     bot.players.P = { username: 'P', entity: { position: pos(30, 64, 0) } }
     const ctx = ctxWithHaul({ coal: 5 })
-    assert.equal(recover.setStuck(ctx, 'follow', { x: 30, y: 64, z: 0 }, 'follow:P'), true)
-    deliver(bot, ctx, null, {})
+    for (let i = 0; i < 25; i++) deliver(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-path')
     assert.deepEqual(ctx.haul, { coal: 5 })
     assert.ok(bot.chats.join(' ').match(/holding|can't reach/), 'owner hears the hold')
+  })
+
+  it('a chase never trips it: displacement resets the count', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 5 })
+    bot.players.P = { username: 'P', entity: { position: pos(30, 64, 0) } }
+    const ctx = ctxWithHaul({ coal: 5 })
+    for (let i = 0; i < 25; i++) {
+      bot.entity.position = pos(i + 1, 64, 0) // closing on the player
+      deliver(bot, ctx, null, {})
+      if (ctx.stepStatus && ctx.stepStatus.startsWith('failed:')) break
+    }
+    assert.ok(!ctx.stepStatus || !ctx.stepStatus.startsWith('failed:'), 'chase keeps running')
   })
 })

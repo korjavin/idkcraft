@@ -131,10 +131,33 @@ function countDrop(bot, drop) {
   }
 }
 
+// Memory fingerprint: count alone pins at the 256 cap (oldest-out
+// eviction keeps it there while explore swaps cells underneath), so a
+// count-only snapshot would hold a failure forever after a relocation
+// (revmux 01). Content hash releases on genuinely new cells and stays put
+// when a rescan merely re-notes the same points.
+function memPrint(ctx) {
+  try {
+    const mem = ctx && ctx.resources
+    if (!mem || !(mem.items instanceof Map)) return 'none'
+    const parts = []
+    for (const item of mem.items.values()) {
+      if (item && typeof item.x === 'number') parts.push(`${item.x},${item.y},${item.z}:${item.name}`)
+    }
+    parts.sort()
+    let h = 5381
+    const s = parts.join('|')
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0
+    return `${parts.length}#${h.toString(36)}`
+  } catch (_) {
+    return 'none'
+  }
+}
+
 function snapWorld(bot, ctx) {
   let mem = -1
   let haul = -1
-  try { mem = resources.count(ctx) } catch (_) { /* no memory */ }
+  try { mem = memPrint(ctx) } catch (_) { /* no memory */ }
   try {
     const h = (ctx && ctx.haul) || {}
     haul = Object.keys(h).reduce((s, n) => s + (h[n] || 0), 0)
@@ -221,6 +244,23 @@ function strikeCell(ctx, f, p) {
   f.streak = (f.streak || 0) + 1
 }
 
+// Food stall replan with a same-animal streak: an unreachable cow across
+// a ravine replans onto itself forever (revmux 01) — three consecutive
+// stall-outs on the same id fail the step instead. A new animal, a kill in
+// reach, or banked progress resets (fresh situation, not the same loop).
+function replanFoodStall(bot, ctx, f, bp) {
+  const oldId = f.target && f.target.kind === 'food' ? f.target.id : null
+  if (!replan(bot, ctx, f, bp)) return false
+  const t = f.target
+  if (t && t.kind === 'food' && oldId != null && t.id === oldId) f.foodStreak = (f.foodStreak || 0) + 1
+  else f.foodStreak = 0
+  if (t && t.kind === 'food' && (f.foodStreak || 0) >= UNREACHABLE_STRIKES) {
+    finish(bot, ctx, f, false, 'unreachable')
+    return false
+  }
+  return true
+}
+
 function replan(bot, ctx, f, bp) {
   f.target = planForage(bot, ctx)
   f.phase = null
@@ -291,7 +331,7 @@ function forage(bot, ctx, target, state) {
         return
       }
       const d = dist(bp, ent.position)
-      if (d !== null && d <= fightMod.SWING_RANGE) { f.phase = 'kill'; return }
+      if (d !== null && d <= fightMod.SWING_RANGE) { f.phase = 'kill'; f.foodStreak = 0; return }
       const key = `forage-hunt:${Math.round(ent.position.x)},${Math.round(ent.position.y)},${Math.round(ent.position.z)}`
       if (key !== ctx.lastGoalKey) {
         bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), false)
@@ -304,7 +344,7 @@ function forage(bot, ctx, target, state) {
         f.stalls = 0
         f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (++f.stalls >= WALK_STALL_TICKS) {
-        if (!replan(bot, ctx, f, bp)) return
+        if (!replanFoodStall(bot, ctx, f, bp)) return
       }
       return
     }
@@ -342,7 +382,7 @@ function forage(bot, ctx, target, state) {
           f.stalls = 0
           f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
         } else if (++f.stalls >= WALK_STALL_TICKS) {
-          if (!replan(bot, ctx, f, bp)) return
+          if (!replanFoodStall(bot, ctx, f, bp)) return
         }
         return
       }

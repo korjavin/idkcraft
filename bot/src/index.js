@@ -358,6 +358,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     followName = ''
     ctx.lastGoalKey = ''
     ctx.gather = null
+    ctx.forage = null // fresh episode: stale skips/finals must not veto it
+    ctx.forageSkip = null
+    ctx.forageFinal = null
     ctx.resumeWork = false
   }
 

@@ -237,6 +237,31 @@ describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => 
     assert.equal(ctx.stuck, undefined)
   })
 
+  it('same unreachable animal three stall-outs -> failed:unreachable', async () => {
+    // Food fallback loop (revmux 01): one cow across a ravine replanned onto
+    // itself forever. Empty memory so the hunt is the only plan.
+    const bot = deepBot()
+    bot.entities = { 5: { id: 5, name: 'cow', position: pos(40, 64, 0) } }
+    const ctx = { lastGoalKey: '', stepStatus: 'running' }
+    assert.equal(await runStep(bot, ctx, 60), 'failed:unreachable')
+  })
+
+  it('swapped memory releases the final: new cells get a fresh try', async () => {
+    // 256-cap shape (revmux 01): same count, different content. Count-only
+    // snapshots hold the failure forever; the content print must release.
+    const bot = deepBot()
+    const ctx = deepCtx()
+    assert.equal(await runStep(bot, ctx), 'failed:unreachable')
+    resources.forget(ctx, 50, 60, 0)
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'oak_log' }], 3000)
+    assert.equal(resources.count(ctx), 1)
+    ctx.stepStatus = 'running' // decide re-picked after relocation
+    forage(bot, ctx, null, {})
+    assert.ok(ctx.forage && ctx.forage.target, 'fresh step started, final released')
+    assert.equal(ctx.forage.target.pos.x, 60)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
   it('a skipped cell loses to the next one: replan takes another point', () => {
     const bot = deepBot()
     bot.inv.push({ name: 'stone_pickaxe', count: 1 })
