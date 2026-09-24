@@ -19,6 +19,7 @@ const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
+const danger = require('../danger')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -719,6 +720,12 @@ function release(bot, ctx, how) {
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
+  }
+  if (how === 'gave-up') {
+    // Pit memory (mnx): the release point stays dangerous, so explore and
+    // gather do not lead back into it. call_player ends here too
+    // (endEpisode -> gave-up), same mark.
+    try { danger.mark(ctx, botPos(bot)) } catch (_) { /* memory best-effort */ }
   }
   ctx.lastGoalKey = ''
   ctx.stuckResets = 0

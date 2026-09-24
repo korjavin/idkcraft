@@ -8,6 +8,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, BEHAVIOURS } = require('../src/index')
 const explore = require('../src/behaviours/explore')
+const danger = require('../src/danger')
 
 function pos(x, y, z) {
   return {
@@ -44,6 +45,16 @@ function homeCtx() {
 }
 
 describe('explore target spiral', () => {
+  it('(mnx) skips spiral points within a gave-up spot', () => {
+    // First pick (0,-16) is banned -> next unvisited point (11,-11).
+    const bot = mockBot()
+    const ctx = homeCtx()
+    danger.mark(ctx, { x: 0, y: 64, z: -16 })
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 11, z: -11 })
+    assert.equal(bot.calls.goals.length, 1)
+  })
+
   it('first pick is ring 16 north of home', () => {
     // Live: a hands-only walker without tools cannot reliably close
     // 64-block forest legs (trunk clusters wedge every leg), while 16-32
