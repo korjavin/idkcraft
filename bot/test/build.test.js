@@ -82,6 +82,19 @@ function paintHouse(world, home) {
 
 const settle = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
 
+// Mirror of Movements.safeToBreak's break veto (cjq): session-global ids
+// plus the position-scoped exclusion closures the narrowed guard installs.
+function breakVetoed(mov, name, id, x, y, z) {
+  if (id != null && mov && mov.blocksCantBreak && mov.blocksCantBreak.has(id)) return true
+  if (mov && Array.isArray(mov.exclusionAreasBreak)) {
+    const block = { type: id, name, position: { x, y, z } }
+    for (const f of mov.exclusionAreasBreak) {
+      try { if (f(block) >= 100) return true } catch (_) { /* veto best-effort */ }
+    }
+  }
+  return false
+}
+
 describe('rw4.4 (a) build step announces itself', () => {
   it("MENU.build announces 'building the house' and decide picks it", async () => {
     assert.equal(goal.MENU.build.chat(), 'on my own: building the house')
@@ -455,7 +468,7 @@ describe('8si the approach must not eat the door or the workbench', () => {
           const name = solidAt(x, y, z)
           if (!name) continue
           const id = REG[name] != null ? REG[name].id : null
-          if (id != null && mov && mov.blocksCantBreak && mov.blocksCantBreak.has(id)) continue // routes around
+          if (breakVetoed(mov, name, id, x, y, z)) continue // routes around
           world.set(x, y, z, 'air')
           bot.calls.digs.push(name)
           bot._moving = true
@@ -482,7 +495,7 @@ describe('8si the approach must not eat the door or the workbench', () => {
       ],
     })
     bot.registry = { blocksByName: REG }
-    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
     const home = goal.siteFor(bot, pos(0, 64, 0))
     bot.entity.position = pos(home.site.x + 4, home.site.y, home.site.z + 1)
     const transit = { n: 0 }
@@ -493,15 +506,21 @@ describe('8si the approach must not eat the door or the workbench', () => {
     return { world, bot, home, ctx, transit }
   }
 
-  it('build guards door and workbench ids like planks', () => {
+  it('build guards door and workbench cells like wall cells, strays stay diggable', () => {
+    // cjq: the guard is blueprint-scoped now, not a session id ban — the
+    // bead orders strays diggable, the box cells keep the cww protection.
     const { bot } = driveHouse()
     bot.entity.position = pos(10, 64, 2)
-    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null)
-    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(64), 'door protected')
-    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(998), 'workbench protected')
-    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(5), 'planks still protected')
-    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(3), 'dirt still diggable')
+    const mov = bot.pathfinder.movements
+    const st = home.site
+    assert.ok(breakVetoed(mov, 'oak_door', 64, st.x + 1, st.y, st.z), 'door cell protected')
+    assert.ok(breakVetoed(mov, 'crafting_table', 998, st.x + 4, st.y, st.z + 1), 'workbench cell protected')
+    assert.ok(breakVetoed(mov, 'oak_planks', 5, st.x, st.y, st.z), 'wall cell protected')
+    assert.ok(!breakVetoed(mov, 'oak_planks', 5, st.x + 40, st.y, st.z), 'stray planks diggable')
+    assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt inside the box diggable')
   })
 
   it('full drive: door stands, doorway and interior stay plank-free, adopt stable', async () => {
@@ -578,7 +597,7 @@ describe('cww roof approach must not demolish its own wall', () => {
           const name = solidAt(x, y, z)
           if (!name || name.endsWith('_door') || name === 'crafting_table') continue
           const id = REG[name] != null ? REG[name].id : null
-          if (id != null && mov && mov.blocksCantBreak && mov.blocksCantBreak.has(id)) continue // routes around
+          if (breakVetoed(mov, name, id, x, y, z)) continue // routes around
           world.set(x, y, z, 'air')
           bot.calls.digs.push(name)
           bot._moving = true
@@ -591,17 +610,23 @@ describe('cww roof approach must not demolish its own wall', () => {
     }
   }
 
-  it('build forbids the executor from breaking planks', () => {
+  it('build forbids the executor from breaking the house, not strays', () => {
+    // cjq: same scope change — the box keeps the cww roof protection, a
+    // plank pile two chunks over is a legitimate dig target again.
     const world = makeWorld()
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
     bot.registry = { blocksByName: REG }
-    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
     bot.entity.position = pos(10, 64, 2)
-    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null)
-    assert.ok(bot.pathfinder.movements.blocksCantBreak.has(5), 'planks protected')
-    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(17), 'logs still diggable')
-    assert.ok(!bot.pathfinder.movements.blocksCantBreak.has(3), 'dirt still diggable')
+    const mov = bot.pathfinder.movements
+    const st = home.site
+    assert.ok(breakVetoed(mov, 'oak_planks', 5, st.x, st.y, st.z), 'house planks protected')
+    assert.ok(!breakVetoed(mov, 'oak_planks', 5, st.x + 40, st.y, st.z + 40), 'stray planks diggable')
+    assert.ok(!breakVetoed(mov, 'oak_log', 17, st.x, st.y, st.z), 'logs still diggable')
+    assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt still diggable')
   })
 
   it('roof completes with walls standing: 24/40 never flaps back', async () => {
@@ -611,7 +636,7 @@ describe('cww roof approach must not demolish its own wall', () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
     bot.registry = { blocksByName: REG }
-    bot.pathfinder.movements = { blocksCantBreak: new Set() }
+    bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
     const home = goal.siteFor(bot, pos(0, 64, 0))
     for (const cell of BLUEPRINT) {
       if (cell.dy === 2) continue // roof not started
@@ -632,5 +657,53 @@ describe('cww roof approach must not demolish its own wall', () => {
     assert.equal(home.built, true, 'roof completes')
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_planks')), [], 'no wall plank dug')
+  })
+})
+
+describe('cjq guardOwnWalls is blueprint-scoped, not session-global', () => {
+  const REG = {
+    oak_planks: { id: 5 },
+    oak_log: { id: 17 },
+    dirt: { id: 3 },
+    oak_door: { id: 64 },
+    crafting_table: { id: 998 },
+  }
+  const vetoed = (mov, name, x, y, z) => breakVetoed(mov, name, REG[name].id, x, y, z)
+  function guardedBot() {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.registry = { blocksByName: REG }
+    bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    return { world, bot, home }
+  }
+
+  it('stray planks outside the blueprint box stay diggable', () => {
+    const { bot, home } = guardedBot()
+    bot.entity.position = pos(10, 64, 2)
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    build(bot, ctx, null, null)
+    const s = home.site
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 1, s.y, s.z), true, 'wall cell guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_door', s.x + 1, s.y, s.z), true, 'door cell guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'crafting_table', s.x + 4, s.y, s.z + 1), true, 'table cell guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 40, s.y, s.z + 40), false, 'stray planks diggable')
+    assert.equal(vetoed(bot.pathfinder.movements, 'dirt', s.x + 1, s.y, s.z), false, 'dirt inside the box diggable')
+  })
+
+  it('moving home re-guards the new box and frees the old one', () => {
+    const { bot, home } = guardedBot()
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
+    build(bot, ctx, null, null)
+    const s = home.site
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 1, s.y, s.z), true)
+    const nClosures = bot.pathfinder.movements.exclusionAreasBreak.length
+    build(bot, ctx, null, null)
+    assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, nClosures, 'one closure per movements')
+    ctx.home = goal.siteFor(bot, pos(100, 64, 100))
+    build(bot, ctx, null, null)
+    const n2 = ctx.home.site
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', n2.x + 1, n2.y, n2.z), true, 'new box guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 1, s.y, s.z), false, 'old box freed')
   })
 })

@@ -28,6 +28,9 @@ const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
 const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
+const HOP_BACK_TICKS = 8 // back-up run-up before the mount jump
+const HOP_MOUNT_TICKS = 14 // walk to the edge plus the leap
+const HOP_JUMP_DIST = 0.8 // leap once the step anchor is this close
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
@@ -35,7 +38,7 @@ const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
 // --- world scan helpers (all best-effort: nulls read as free/safe) ---
 
@@ -130,6 +133,31 @@ function findDigStepDir(bot) {
   return null
 }
 
+// A plain +1 mount (cjq): the side cell at feet level is solid, the cell
+// above it is air (never a dig — the dig_step staircase owns dug mounts),
+// the head has room to jump, neither cell is lava. Sides read goalward
+// first so the mount walks toward the stuck goal, not away. Returns the
+// side [dx, dz] or null.
+function findHopStepDir(bot, gp) {
+  if (solid(cellAt(bot, 0, 2, 0))) return null
+  const bp = botPos(bot)
+  let gx = 0
+  let gz = 0
+  if (gp && typeof gp.x === 'number' && bp) {
+    gx = Math.sign(gp.x - bp.x)
+    gz = Math.sign(gp.z - bp.z)
+  }
+  const sides = SIDES.slice().sort((a, b) => (b[0] * gx + b[1] * gz) - (a[0] * gx + a[1] * gz))
+  for (const [dx, dz] of sides) {
+    const step = cellAt(bot, dx, 0, dz)
+    if (!solid(step) || isLava(step)) continue
+    const above = cellAt(bot, dx, 1, dz)
+    if (above && (solid(above) || isLava(above))) continue
+    return [dx, dz]
+  }
+  return null
+}
+
 function lavaNearAt(bot) {
   for (let dx = -1; dx <= 1; dx++) {
     for (let dy = -1; dy <= 1; dy++) {
@@ -152,6 +180,12 @@ function hasPickaxe(bot) {
 function setJump(bot, on) {
   try {
     if (typeof bot.setControlState === 'function') bot.setControlState('jump', !!on)
+  } catch (_) { /* control best-effort */ }
+}
+
+function setForward(bot, on) {
+  try {
+    if (typeof bot.setControlState === 'function') bot.setControlState('forward', !!on)
   } catch (_) { /* control best-effort */ }
 }
 
@@ -196,6 +230,7 @@ function recoverFacts(bot, ctx, state, target) {
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
     digStep: findDigStepDir(bot),
+    hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
@@ -235,7 +270,7 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
@@ -247,6 +282,10 @@ function recoverFsm(facts, names) {
   // gain and free the wedge, which the fja rule counts as done.
   if (facts.goalDy >= 2 && facts.playerOnline && facts.walls >= 3 && pick('call_player') &&
     !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('dig_step')) return 'call_player'
+  // Level goal with a mountable +1 next to the body: hopping it beats a
+  // sideways shuffle (cjq: the executor wedges on straight +1 steps with
+  // path=success, and sidestep displacement just re-queues the same wedge).
+  if (Math.abs(facts.goalDy) <= 1 && pick('hop_step')) return 'hop_step'
   if (pick('sidestep')) return 'sidestep'
   if (pick('dig_through')) return 'dig_through'
   if (pick('call_player')) return 'call_player'
@@ -265,6 +304,7 @@ const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high, pickaxe on hand — dig above your head and climb',
   dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
+  hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
   dig_through: 'tunnel: pickaxe on hand, no lava near — dig 1-wide 2-tall toward the goal',
   wait: 'wait: the blockage looks temporary — stand still',
@@ -285,7 +325,7 @@ async function chooseRecovery(brain, facts, feasible) {
   // Kept when it is the only option; the FSM fallback below still sees it.
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
-  const failedM = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
@@ -329,7 +369,7 @@ function pillarUpRun(bot, ctx) {
   if (!bp) return 'failed:no-pos'
   // Runtime veto double-check: feasibility said yes, the world may disagree.
   if (scaffoldCount(bot) === 0) { setJump(bot, false); return 'failed:no-scaffold' }
-  if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
+  if (headBlockedAt(bot)) { setJump(bot, false); setForward(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
     if (bp.y >= st.startFloor + PILLAR_APEX) {
@@ -422,7 +462,7 @@ function digStepRun(bot, ctx) {
   // pit floor is not an escape. (The step column itself is not required: a
   // natural +1 ledge nearby is genuine progress too.)
   const grounded = !bot.entity || !!bot.entity.onGround
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
   if (!st.dir) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
@@ -458,6 +498,80 @@ function digStepRun(bot, ctx) {
   }
   setJump(bot, true)
   if (++st.waited > DIG_STEP_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
+  return 'running'
+}
+
+// Hop a plain +1 step (cjq): no digging, level goal only. The executor's
+// walk-jump from a standstill flush against the face rises and falls back,
+// and its per-tick re-simulation cuts forward mid-air — a player backs up
+// first and leaps at the edge, so this does too: phase 'back' walks ~1
+// block away from the step (executor GoalNear, no jump), phase 'hop' drives
+// the body directly (face the anchor, walk, leap inside HOP_JUMP_DIST — the
+// lib leaves controls alone with no goal, so no fight). Done on a grounded
+// floor rise, same apex-sampling guard as dig_step. Single shot, never
+// repeatable: one mount ends the episode and the mode resumes from the top.
+function hopStepRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { dir: null, stepPos: null, phase: 'back', waited: 0, startFloor: null, backStart: null, jumping: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
+  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (!st.dir) {
+    const gp = ctx.stuck && ctx.stuck.goal
+    st.dir = findHopStepDir(bot, gp)
+    if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
+    // Absolute anchor: the relative cell goes stale the moment the body
+    // walks (floor(bp) shifts), so the mount target is fixed once here.
+    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
+    const q = step && step.position
+    if (!q) { st.dir = null; setJump(bot, false); return 'failed:no-step' }
+    st.stepPos = { x: q.x, y: q.y, z: q.z }
+    st.backStart = { x: bp.x, y: bp.y, z: bp.z }
+    try {
+      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
+        bot.pathfinder.setGoal(new goals.GoalNear(bp.x - st.dir[0] * 1.5, bp.y, bp.z - st.dir[1] * 1.5, 1), false)
+      }
+    } catch (_) { /* goal best-effort */ }
+  }
+  if (st.phase === 'back') {
+    const moved = Math.hypot(bp.x - st.backStart.x, bp.z - st.backStart.z)
+    if (moved >= 0.5 || ++st.waited > HOP_BACK_TICKS) {
+      st.phase = 'hop'
+      st.waited = 0
+      // Direct drive from here: drop the back goal so the executor stops
+      // pulling (setGoal(null) never latches, unlike stop()).
+      try {
+        if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+      } catch (_) { /* goal best-effort */ }
+    } else {
+      setJump(bot, false)
+      return 'running'
+    }
+  }
+  let step = null
+  try {
+    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+  } catch (_) { /* anchor read best-effort */ }
+
+  if (!solid(step)) {
+    st.dir = null; st.stepPos = null; st.phase = 'back'; st.jumping = false
+    setJump(bot, false); setForward(bot, false)
+    return 'running'
+  }
+  const sx = st.stepPos.x + 0.5
+  const sz = st.stepPos.z + 0.5
+  const dx = sx - bp.x
+  const dz = sz - bp.z
+  try {
+    if (typeof bot.look === 'function') bot.look(Math.atan2(-dx, -dz), 0)
+  } catch (_) { /* facing best-effort */ }
+  setForward(bot, true)
+  if (!st.jumping && Math.hypot(dx, dz) < HOP_JUMP_DIST) st.jumping = true
+  setJump(bot, st.jumping)
+  if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   return 'running'
 }
 
@@ -595,6 +709,11 @@ const RECOVER_MENU = {
     run: digStepRun,
     repeatable: (facts) => facts.goalDy >= 1 && facts.digStep != null,
     verb: 'digging a step',
+  },
+  hop_step: {
+    feasible: (facts) => facts.hopStep != null && Math.abs(facts.goalDy) <= 1 && !facts.lavaNear,
+    run: hopStepRun,
+    verb: 'hopping the step',
   },
   sidestep: {
     feasible: (facts) => facts.walls < 4,
