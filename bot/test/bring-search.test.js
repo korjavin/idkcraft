@@ -192,7 +192,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.deepEqual(bot.tossCalls, [[ITEMS.coal, null, 1]])
   })
 
-  it('blocks with nothing anywhere: honest refusal after 4 legs', async () => {
+  it('blocks with nothing anywhere: honest refusal after the default 24 legs', async () => {
     const bot = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }], playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     anchor(bot._tickerCtx)
