@@ -458,9 +458,12 @@ async function chooseStep(brain, facts, feasible) {
 // chosen, restWhy phrases every infeasible non-rest step from the grounds
 // decide() already used: failHolds plus the facts behind each feasible()
 // rule (re-checked first, so phrasing can never drift from the rule).
-// Feasible steps are skipped; unregistered ones are marked off; a parallel
-// step the switch does not know (atl.6) falls back to 'not feasible'.
-// Model-chosen rest over ready steps reports 'model choice'.
+// Feasible steps the choice passed over are marked ready — under the FSM
+// that never happens (priority order), so a ready marker always means the
+// model declined it. Unregistered steps are marked off; a parallel step
+// the switch does not know (atl.6) falls back to 'not feasible'. The
+// 'model choice' line below is unreachable-but-safe (STEP_ORDER always
+// holds other steps).
 function stepWhy(name, facts, bot, ctx, text) {
   try {
     if (failHolds(ctx, name, text, bot)) return `${name} holds after failure`
@@ -491,14 +494,16 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.home !== 'built') return 'gohome: home not built'
       return 'gohome: already inside'
     case 'craft':
-      if (facts.table > 0 && facts.door > 0) return 'craft: nothing to craft'
-      if (facts.maxPlanks >= 4 && facts.table === 0 && facts.tablePlaced) return 'craft: table already placed'
-      if (facts.maxPlanks >= 6 && facts.door === 0 && !facts.tablePlaced) return 'craft: need table placed'
+      if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
+      if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
+      if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
       return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
     case 'build': {
+      // Facts-level wording; the exact remainder gate lives in the rule.
+      // Item gates run first (the rule yields on a missing item first).
       if (facts.home === 'built') return 'build: home built'
-      if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       if (facts.table === 0 || facts.door === 0) return 'build: need table/door item'
+      if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       return 'build: nothing left to build'
     }
     case 'gather':
@@ -537,7 +542,10 @@ function restWhy(facts, bot, ctx, names) {
       out.push(`${n}: off`)
       continue
     }
-    if (ok.has(n)) continue
+    if (ok.has(n)) {
+      out.push(`${n}: ready`)
+      continue
+    }
     let w = null
     try {
       w = stepWhy(n, facts, bot, ctx, text)
@@ -579,14 +587,14 @@ async function escalateRest(bot, ctx, facts) {
       criteria: REST_ESCALATION_CRITERIA,
       situation: text,
     })
-    metrics.escalation.inc({ from: 'rest', to: 'model', reason: 'long-rest' })
+    metrics.escalation.inc({ from: model, to: 'rest', reason: 'long-rest' })
     console.error(`rest escalation source=${model} answer=${answer} why=${why}`)
   } catch (err) {
     const msg = String((err && err.message) || err)
     const reason = (err && err.name === 'TimeoutError') ? 'timeout'
       : msg.startsWith('jev missing') ? 'invalid'
       : 'error'
-    metrics.escalation.inc({ from: 'model', to: 'rest', reason })
+    metrics.escalation.inc({ from: model, to: 'rest', reason })
     console.error(`rest escalation failed source=${model} reason=${reason} why=${why}`)
   }
 }
@@ -641,6 +649,13 @@ async function decide(bot, ctx) {
   if (!finished && (prev === 'gohome' || prev === 'stay')) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
+  // A step lifecycle reset outside decide (stop/orders null the step via
+  // resetNightStep) ends any rest streak: drop it lazily here so a fresh
+  // streak cannot inherit an old timestamp or an already-fired flag.
+  if (ctx.step !== 'rest' && (ctx.restSince || ctx.restEscalated)) {
+    ctx.restSince = null
+    ctx.restEscalated = false
   }
   if (!prev || finished || ctx.goalText !== text) {
     const askKey = `${text}\n${status || ''}`

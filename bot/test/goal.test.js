@@ -655,7 +655,7 @@ describe('atl.7 rest explains itself', () => {
   const ALL_OUT = [
     'stay: daytime',
     'gohome: daytime',
-    'craft: table already placed',
+    'craft: nothing to craft',
     'build: need table/door item',
     'gather: load full',
     'deliver: nothing waiting',
@@ -689,7 +689,7 @@ describe('atl.7 rest explains itself', () => {
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
     assert.ok(ctx.restWhy.includes('gather: home built'), `why: ${ctx.restWhy}`)
-    assert.ok(!ctx.restWhy.includes('explore:'), `explore is feasible here: ${ctx.restWhy}`)
+    assert.ok(ctx.restWhy.includes('explore: ready'), `declined ready step marked: ${ctx.restWhy}`)
     assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(test)')), `chats: ${bot.chats}`)
   })
   it('held steps report the hold, not the facts', async () => {
@@ -715,6 +715,52 @@ describe('atl.7 rest explains itself', () => {
     assert.ok(seen[0].state.includes('gather: load full'), `reason rides along: ${seen[0].state}`)
     await decide(bot, ctx)
     assert.equal(seen.length, 1)
+  })
+  it('escalation labels follow from=<source> on every path', async () => {
+    const metrics = require('../src/metrics')
+    async function esc(reason) {
+      const text = await metrics.client.register.metrics()
+      const m = text.match(new RegExp(`idkcraft_bot_escalation_total\\{from="test",to="rest",reason="${reason}"\\} (\\d+)`))
+      return m ? parseInt(m[1], 10) : 0
+    }
+    async function streakWith(brain) {
+      const bot = ladenBot()
+      const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome(), brain }
+      await decide(bot, ctx)
+      ctx.restSince = Date.now() - 11 * 60 * 1000
+      await decide(bot, ctx)
+      return ctx
+    }
+    const good = { source: 'test', ask: async () => 'rest' }
+    const beforeOk = await esc('long-rest')
+    await streakWith(good)
+    assert.equal(await esc('long-rest'), beforeOk + 1)
+    const slow = { source: 'test', ask: async () => { const e = new Error('late'); e.name = 'TimeoutError'; throw e } }
+    const beforeTimeout = await esc('timeout')
+    await streakWith(slow)
+    assert.equal(await esc('timeout'), beforeTimeout + 1)
+    const bad = { source: 'test', ask: async () => { throw new Error('jev missing action answer') } }
+    const beforeInvalid = await esc('invalid')
+    await streakWith(bad)
+    assert.equal(await esc('invalid'), beforeInvalid + 1)
+    const beforeStub = await esc('long-rest')
+    const bot = ladenBot()
+    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
+    await decide(bot, ctx)
+    ctx.restSince = Date.now() - 11 * 60 * 1000
+    await decide(bot, ctx) // stub brain: silent, no throw, no metric
+    assert.equal(await esc('long-rest'), beforeStub)
+  })
+  it('a reset step drops the stale streak on the next decide', async () => {
+    let asked = 0
+    const brain = { source: 'test', ask: async () => { asked++; return 'rest' } }
+    const bot = ladenBot()
+    const ctx = { step: null, stepStatus: null, goalText: null, restSince: 1, restEscalated: true, restWhy: 'old', home: siteHome(), brain }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'rest')
+    assert.ok(ctx.restSince > 1, 'fresh streak timestamp')
+    assert.equal(ctx.restEscalated, false)
+    assert.equal(asked, 0)
   })
   it('leaving rest clears the streak and the stored reason', async () => {
     const bot = goalBot({}) // empty hands: gather is feasible again
