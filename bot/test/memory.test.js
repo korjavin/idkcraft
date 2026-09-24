@@ -296,4 +296,82 @@ describe('disk memory', () => {
       process.exit = realExit
     }
   })
+
+  it("runOnce saves before fatal on 'kicked' (Paper shutdown)", async () => {
+    const { EventEmitter } = require('node:events')
+    const index = require('../src/index')
+    function connBot(spawn) {
+      const bot = new EventEmitter()
+      bot.username = 'MemBot'
+      bot.spawnPoint = { ...spawn }
+      bot.players = {}
+      bot.entity = { position: { x: spawn.x, y: spawn.y, z: spawn.z } }
+      bot.registry = require('minecraft-data')('1.21.1')
+      bot.pathfinder = { isMoving: () => false, stop: () => {}, setGoal: () => {}, setMovements: () => {} }
+      bot.loadPlugin = () => {}
+      bot.quit = () => {}
+      bot.chat = () => {}
+      return bot
+    }
+    const brain = { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } }
+    const realExit = process.exit
+    process.exit = () => { throw new Error('exit') }
+    try {
+      const bot = connBot(SPAWN_A)
+      index.runOnce({
+        host: 'x', port: 1, username: 'MemBot', tickMs: 60000, idleTickMs: 60000,
+        brain, leaveAfterMs: 0, followName: '',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => {}, () => {})
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 50))
+      bot._tickerCtx.home = homeAt(7, 64, 9)
+      // A deploy shutdown arrives as kicked and fatal() would skip 'end':
+      // the save must land before the exit.
+      assert.throws(() => bot.emit('kicked', 'shutdown'), /exit/)
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      assert.equal(raw.homes[raw.homes.length - 1].site.x, 7)
+    } finally {
+      process.exit = realExit
+    }
+  })
+
+  it('runOnce SIGTERM handler saves the live connection', async () => {
+    const { EventEmitter } = require('node:events')
+    const index = require('../src/index')
+    function connBot(spawn) {
+      const bot = new EventEmitter()
+      bot.username = 'MemBot'
+      bot.spawnPoint = { ...spawn }
+      bot.players = {}
+      bot.entity = { position: { x: spawn.x, y: spawn.y, z: spawn.z } }
+      bot.registry = require('minecraft-data')('1.21.1')
+      bot.pathfinder = { isMoving: () => false, stop: () => {}, setGoal: () => {}, setMovements: () => {} }
+      bot.loadPlugin = () => {}
+      bot.quit = () => {}
+      bot.chat = () => {}
+      return bot
+    }
+    const brain = { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } }
+    const realExit = process.exit
+    process.exit = () => { throw new Error('exit') }
+    try {
+      const bot = connBot(SPAWN_A)
+      index.runOnce({
+        host: 'x', port: 1, username: 'MemBot', tickMs: 60000, idleTickMs: 60000,
+        brain, leaveAfterMs: 0, followName: '',
+        createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => {}, () => {})
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 50))
+      bot._tickerCtx.home = homeAt(7, 64, 9)
+      // Container stop: no mineflayer event, only the process handler.
+      // (Consumes index.js's once-per-process SIGTERM listener.)
+      assert.throws(() => process.emit('SIGTERM'), /exit/)
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      assert.equal(raw.homes[raw.homes.length - 1].site.x, 7)
+    } finally {
+      process.exit = realExit
+    }
+  })
 })

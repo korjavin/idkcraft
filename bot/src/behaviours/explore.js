@@ -122,6 +122,12 @@ function explore(bot, ctx, target, state) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
     const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.near(ctx, { x, z }))
     if (!t) {
+      // Spiral exhausted (hlk: persisted visited makes this permanent
+      // across restarts, a done-log every tick forever): start over from
+      // the current chunk — rescans refresh the resource memory, danger
+      // bans still apply on the re-pick. This step still reports done.
+      e.visited = new Set([chunkOf(bp.x, bp.z)])
+      e.markStart = e.visited.size
       ctx.stepStatus = 'done' // nowhere new within 512: the outward job is over
       console.log('explore done: all chunks within ' + e.maxRadius + ' blocks visited')
       return
