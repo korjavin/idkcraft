@@ -864,7 +864,9 @@ describe('work mode (epic rw4)', () => {
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
     try {
       for (let i = 0; i < 45; i++) await ticker.tick()
-      assert.equal(bot.calls.goals.length, 1, 'no goal churn while the executor claims motion')
+      // 8kc: the re-armed walk replans once (fail ~31, re-issue ~32); no
+      // churn mid-episode while the executor claims motion.
+      assert.equal(bot.calls.goals.length, 2, 'one replan on re-arm, no churn after')
       assert.equal(ctx.stuck, null, 'no ticker backstop episode during gohome')
       assert.equal(ctx.recovery, null, 'no recovery owns the body during gohome')
       assert.equal(ctx.step, 'gohome', 'walkTo failure re-picks gohome silently at night')
@@ -899,6 +901,97 @@ describe('work mode (epic rw4)', () => {
       assert.equal(ctx.step, null)
       assert.equal(ctx.stay, null)
       assert.equal(ctx.inShelter, false)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(e3) order during gohome walk gives digging back', async () => {
+    // Revmux 8kc: the walk borrows canDig=false on the shared Movements; an
+    // order that ends the walk mid-phase must restore it.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.time = { timeOfDay: 15000 }
+    const movements = { canDig: true }
+    bot.pathfinder.movements = movements
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.movements = movements
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+    try {
+      await ticker.tick()
+      assert.equal(ctx.gohome.phase, 'walk')
+      assert.equal(movements.canDig, false, 'walk borrows no-dig')
+      ticker.stop()
+      assert.equal(movements.canDig, true, 'stop during walk restores digging')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(e4) follow takeover mid-walk gives digging back at once', async () => {
+    // Revmux 8kc round 2: a pending 'follow me' with the player unseen keeps
+    // work; the walk borrows canDig=false; the sighting must restore it on
+    // the takeover tick itself.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve' } } // rostered but unseen
+    bot.time = { timeOfDay: 15000 }
+    const movements = { canDig: true }
+    bot.pathfinder.movements = movements
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.movements = movements
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+    try {
+      await ticker.tick() // work runs, walk borrows no-dig
+      assert.equal(movements.canDig, false)
+      ticker.setFollow('Steve') // pending order, player still unseen: work continues
+      await ticker.tick()
+      assert.equal(ctx.work, true)
+      assert.equal(movements.canDig, false)
+      bot.players.Steve.entity = playerEntity(10) // walks into view
+      await ticker.tick() // takeover: follow owns the body, dig restored
+      assert.equal(ctx.work, false)
+      assert.equal(movements.canDig, true)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(e5) homing takeover mid-walk gives digging back', async () => {
+    // Revmux 8kc round 3: pending follow + unseen player -> after
+    // UNSEEN_HOME_TICKS the homing walk owns the body; the night step must
+    // end there so the borrowed canDig=false does not leak into it.
+    const bot = workBot()
+    bot.entity.position = pos(200, 64, 200) // far from spawn: homing walks
+    bot.players = { Steve: { username: 'Steve' } } // rostered but unseen
+    bot.time = { timeOfDay: 15000 }
+    const movements = { canDig: true }
+    bot.pathfinder.movements = movements
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.movements = movements
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+    try {
+      await ticker.tick() // work runs, walk borrows no-dig
+      assert.equal(movements.canDig, false)
+      ticker.setFollow('Steve') // pending order, player still unseen
+      for (let i = 0; i < 10; i++) await ticker.tick() // unseen accrues
+      assert.match(ctx.lastGoalKey, /^return-spawn:/, 'homing walks to spawn')
+      assert.equal(movements.canDig, true, 'homing takeover restores digging')
+      assert.equal(ctx.step, null, 'night step ended at takeover')
     } finally {
       ticker.destroy()
     }

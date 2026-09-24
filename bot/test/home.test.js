@@ -24,6 +24,7 @@ function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false } = {
     time: { timeOfDay },
     pathfinder: {
       goal: null,
+      movements: { canDig: true },
       isMoving: () => moving,
       setGoal: (g) => { calls.goals.push(g); bot.pathfinder.goal = g },
       stop: () => {},
@@ -103,6 +104,70 @@ describe('rw4.5 gohome', () => {
     assert.deepEqual(bot.calls.goals, [])
   })
 
+  it('the walk forbids digging and restores it after', () => {
+    // Live 8kc: A* tunneled through dirt beside the unbreakable walls (and
+    // timed out into wall-pushing partial paths) instead of routing around.
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 } })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(bot.pathfinder.movements.canDig, false)
+    bot.entity.position = { ...OUTSIDE }
+    home.gohome(bot, ctx) // arrived -> open restores digging for other steps
+    assert.equal(ctx.gohome.phase, 'open')
+    assert.equal(bot.pathfinder.movements.canDig, true)
+  })
+
+  it('a re-armed walk replans instead of latch-skipping the stale goal', () => {
+    // Live 8kc: a pushing executor at fail time never cleared lastGoalKey,
+    // so every re-armed walk skipped setGoal and spun on the dead path.
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, moving: true })
+    const ctx = {
+      home: ctxHome(), step: 'gohome', stepStatus: 'failed:cannot-reach-home',
+      lastGoalKey: 'gohome-walk',
+      gohome: { phase: 'failed', stalls: 0, fails: 3, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(bot.calls.goals.length, 1, 'fresh walk issues a new goal despite the latch')
+  })
+
+  it('a stalled leg backs up instead of pushing forever', () => {
+    // Live 8kc: the doorway sneak scraped the frame with zero progress.
+    const bot = mockBot({ at: { ...OUTSIDE }, doorOpen: true })
+    const ctx = {
+      home: ctxHome(), step: 'gohome', stepStatus: 'running',
+      gohome: { phase: 'enter', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 1, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }
+    for (let i = 0; i < 12; i++) home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'enter')
+    assert.notEqual(ctx.stepStatus, 'failed:cannot-reach-home')
+    assert.ok(bot.calls.controls.some(([n, v]) => n === 'forward' && v === true), 'leg drove first')
+    assert.ok(bot.calls.controls.some(([n, v]) => n === 'back' && v === true), 'stalled leg backs up')
+    for (let i = 0; i < 8; i++) home.gohome(bot, ctx) // backing window (mock never moves)
+    assert.equal(ctx.gohome.phase, 'enter')
+    for (let i = 0; i < 9; i++) { // steady back-up motion: window expires
+      const at = bot.entity.position
+      bot.entity.position = { x: at.x, y: at.y, z: at.z - 0.2 }
+      home.gohome(bot, ctx)
+    }
+    // progress: drive resumes, back released
+    const backs = bot.calls.controls.filter(([n]) => n === 'back')
+    assert.deepEqual(backs[backs.length - 1], ['back', false], 'back released when driving resumes')
+    assert.equal(ctx.gohome.phase, 'enter')
+  })
+
+  it('enter stages through the door centre', () => {
+    const bot = mockBot({ at: { x: OUTSIDE.x + 0.5, y: OUTSIDE.y, z: OUTSIDE.z + 0.5 }, doorOpen: true })
+    const ctx = {
+      home: ctxHome(), step: 'gohome', stepStatus: 'running',
+      gohome: { phase: 'enter', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }
+    home.gohome(bot, ctx)
+    const look = bot.calls.looks[bot.calls.looks.length - 1]
+    assert.deepEqual([look.x, look.z], [DOOR.x + 0.5, DOOR.z + 0.5])
+  })
+
   it('a doorway leg that never arrives fails the step and drops control', () => {
     // Revmux 02-review: A* cannot cross the unbreakable door, so the legs
     // must still fail safe (tick cap, no displacement stall to false-fire).
@@ -173,6 +238,17 @@ describe('rw4.5 gohome', () => {
     assert.equal(ctx.gohome.phase, 'done')
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.inShelter, true)
+  })
+
+  it('no site: fails without touching the door and restores digging', () => {
+    const bot = mockBot({ at: { ...OUTSIDE } })
+    bot.pathfinder.movements.canDig = false // leaked from a previous walk
+    const ctx = {}
+    home.gohome(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-home')
+    assert.equal(bot.pathfinder.movements.canDig, true)
+    assert.equal(bot.calls.activates, 0)
+    assert.equal(bot.calls.goals.length, 0)
   })
 
   it('no site: fails without touching the door', () => {
