@@ -167,8 +167,13 @@ function gather(bot, ctx, target, state) {
       // atl.5: the sync 48 is empty — next tree from resource memory
       // (atl.1) or the amb staged far search, before any final.
       const names = logNames(bot)
-      const mem = names.length > 0 ? resources.nearest(ctx, bp, names) : null
-      if (mem && !g.skip.has(keyOf(mem))) {
+      // Nearest unskipped log: one skipped memory point must not hide the
+      // rest (the bead's unreachable case: trunk at 40 skipped, log at 200
+      // remembered).
+      const mem = names.length > 0
+        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)))
+        : null
+      if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else {
