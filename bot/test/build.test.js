@@ -1,7 +1,8 @@
 'use strict'
 
 // Bead rw4.4 acceptance (a)-(h): blueprint, site, adopt, cell stepping,
-// material failure, skip-after-3, build-here refusal.
+// material failure, skip-after-3, build-here. rpw: build here always
+// starts a new house, even over a built home.
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
@@ -389,22 +390,32 @@ describe('rw4.4 no solid neighbour skips instead of looping', () => {
   })
 })
 
-describe('rw4.4 (h) build here on a built home refuses', () => {
+describe('rpw build here on a built home starts a new house', () => {
   function chatBot() {
     const world = makeWorld()
-    const bot = mockBot(world)
+    const bot = mockBot(world, {
+      items: [
+        { name: 'oak_planks', count: 56 },
+        { name: 'crafting_table', count: 1 },
+        { name: 'oak_door', count: 1 },
+      ],
+    })
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
     return bot
   }
-  it("refuses with 'home already built at x y z' and keeps the home", () => {
+  it('replaces a built home with a fresh site and goal picks build', async () => {
     const bot = chatBot()
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     const home = { site: { x: 6, y: 64, z: 0 }, built: true }
     ticker.setHome(home)
     bot.chats.length = 0
     handleChat(bot, ticker, 'Steve', 'build here')
-    assert.deepEqual(bot.chats, ['home already built at 6 64 0'])
-    assert.equal(ticker.home(), home)
+    assert.deepEqual(bot.chats, [])
+    const next = ticker.home()
+    assert.deepEqual(next.site, { x: 106, y: 64, z: 100 })
+    assert.ok(!next.built, 'a fresh site is not built')
+    const r = await goal.decide(bot, { step: '', stepStatus: null, goalText: null, home: next })
+    assert.equal(r.action, 'build')
   })
   it('sets a fresh site near the speaker otherwise', () => {
     const bot = chatBot()

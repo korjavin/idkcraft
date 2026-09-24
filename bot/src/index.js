@@ -1415,12 +1415,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     const speaker = bot.players && bot.players[username] && bot.players[username].entity
     const pos = speaker && speaker.position
     if (!pos || typeof pos.x !== 'number') return // speaker out of tracking range: no around
-    const home = ticker && typeof ticker.home === 'function' ? ticker.home() : null
-    if (home && home.built) {
-      const st = home.site || {}
-      bot.chat(`home already built at ${st.x} ${st.y} ${st.z}`)
-      return
-    }
+    // rpw: always a new site, even over a built home — the owner asked.
+    // The new home becomes current (gohome/night go there); old walls stay
+    // protected by build.js guardOwnWalls (block-type based, not site).
     if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
