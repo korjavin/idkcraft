@@ -576,8 +576,8 @@ function fleeReflex(bot, ctx) {
       stopOnce()
     }
     greetCheck(decision)
-    // sprint stays on the decision line as the brain's opinion only; the
-    // body never sprints (see setMovements).
+    // sprint stays on the decision line as the brain's opinion; the body
+    // sprints only on flat follow pursuit (see follow.js).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
@@ -618,6 +618,17 @@ function fleeReflex(bot, ctx) {
         if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
       } catch (_) { /* default best-effort */ }
     }
+    // Sprint belongs to flat follow pursuit alone (5vv): any tick follow
+    // does not own gets the shared default back, so a stolen body
+    // (fight/bring) or a mode switch (work/stop) cannot inherit it and
+    // sprint-jump into a +1 step (3nt.24).
+    try {
+      const smov = ctx.movements
+      if (smov && typeof smov.allowSprinting === 'boolean') smov.allowSprinting = false
+      // Planning rides the same object (5vv): a sprint window with parkour
+      // on would plan 3-4 gap jumps the next sprint-off tick cannot run.
+      if (smov && typeof smov.allowParkour === 'boolean') smov.allowParkour = true
+    } catch (_) { /* default best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } ctx.step = null; ctx.stepStatus = null; ctx.gohome = null; ctx.stay = null; ctx.inShelter = false; try { const mov = ctx.movements; if (mov && typeof mov.canDig === 'boolean') mov.canDig = true } catch (_) { /* reset best-effort */ } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
@@ -978,6 +989,9 @@ function fleeReflex(bot, ctx) {
     // Head of the latest plan (b50): the executor works this list from
     // [0] down, so the wedge line can name the terrain it faces.
     setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
+    // Sprint lookahead window (5vv): the first nodes of the latest plan,
+    // plain coords — follow reads numbers only. Cleared on a new goal.
+    setPathNodes: (arr) => { ctx.lastPathNodes = Array.isArray(arr) ? arr.slice(0, 8).map((n) => (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null)).filter(Boolean) : null },
     // place_error streaks (tower attempts into the same cell while a previous
     // placeBlock still awaits blockUpdate): consecutive only — any other
     // reset reason breaks the streak. Behaviours treat N>=3 with no
@@ -995,7 +1009,8 @@ function fleeReflex(bot, ctx) {
     // fire). Hold the flag off here — the single write site — so neither
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
-    // only on flat segments needs a hook inside the pathfinder executor.
+    // only on flat segments: follow.js toggles it per tick on far level
+    // pursuit (5vv), and runTick restores the default on every other tick.
     setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m); addSnowGround(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
@@ -1330,7 +1345,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // decision line. Registered here in runOnce(), not in createTicker: the test
     // mockBot is a plain object, not an EventEmitter, so only the real
     // mineflayer bot ever reaches this code.
-    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]) })
+    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
     const life = createLifecycle(ticker)

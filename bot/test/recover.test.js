@@ -618,6 +618,9 @@ describe('recover feasibility veto', () => {
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, headBlocked: true })), false)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3 })), true)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 0 })), false, '4jr: no pillar to a level goal')
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar apex in water')
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar repeat in water')
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3 })), true)
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2 })), true)
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 0 })), false, '4jr: no dig-up to a level goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({})), false) // no scaffold

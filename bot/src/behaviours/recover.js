@@ -720,9 +720,11 @@ const RECOVER_MENU = {
     // item anyway, 29 times in 16 min. Climb prims need the goal above.
     // p4s: placing is what just failed (3 done / 49 failed:place-error a
     // day) — after a place-error in this episode pillar_up leaves the menu.
-    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError,
+    // 5vv: jumping to the apex in water is pointless — swim exits and
+    // sidestep own the escape, not the scaffold.
+    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
     run: pillarUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.placeError,
+    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
   },
   dig_up: {
