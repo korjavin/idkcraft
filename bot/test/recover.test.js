@@ -360,8 +360,222 @@ describe('recover sidestep in a pit is not done (fja)', () => {
   })
 })
 
+describe('recover dig_step climbs a dirt pit by hand (9sh)', () => {
+  // Bead 9sh: scaffold=0, pickaxe=no after death — no climb primitive, yet
+  // dirt walls dig by hand. dig_step must be in the menu and climb out.
+  function dirtPit() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
+      solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
+    }
+    // Natural notch: without one irregularity a uniform 4-pit is
+    // hand-inescapable by physics (no headroom above any second step).
+    solids.delete(key(0, 64, 1))
+    return solids
+  }
+
+  it('offline dirt pit: dig_step chosen first, bot climbs out itself', async () => {
+    const bot = worldBot(dirtPit(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {} // autonomous: call_player infeasible, self-exit only
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: null, // FSM reserve picks
+    }
+    const first = []
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (g && typeof g.x === 'number') {
+        const bp = bot.entity.position
+        const dx = g.x - bp.x
+        const dz = g.z - bp.z
+        const d = Math.hypot(dx, dz)
+        if (d >= 0.05) {
+          const s = Math.min(0.4, d) / d
+          bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+        }
+      }
+      // Honest jump: at most one block above the cycle start floor — each
+      // new height needs a freshly dug step, not a free elevator.
+      const st = ctx.recovery && ctx.recovery.st
+      const cap = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      if (bot.getControlState('jump') && bot.entity.position.y < cap) bot.entity.position.y += 0.5
+    }
+    for (let t = 0; t < 200 && (ctx.stuck || ctx.recovery); t++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+        if (ctx.recovery && ctx.recovery.action && first.length === 0) first.push(ctx.recovery.action)
+      } else {
+        recover.run(bot, ctx)
+        stepBody()
+      }
+      await flush()
+    }
+    assert.equal(first[0], 'dig_step', `first choice, got ${first}`)
+    assert.ok(Math.floor(bot.entity.position.y) >= 65, `climbed out, y=${bot.entity.position.y}`)
+    assert.equal(ctx.stuck, null, 'episode over')
+    assert.deepEqual(bot.chats.filter((m) => m.startsWith("I'm stuck at")), [], 'no call_player needed')
+  })
+
+  it('enclosed stone shaft, player online, high goal: call_player beats sidestep', async () => {
+    // 1-wide shaft open to the east only: sidestep is feasible (one free
+    // side) but futile, stone digs by hand nowhere. Help goes first.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      solids.add(key(-1, y, 0)); solids.add(key(0, y, -1)); solids.add(key(0, y, 1))
+    }
+    // Stone walls under a prod-shaped bot (canDigBlock always true):
+    // nothing digs by hand, so dig_step must stay out of the menu.
+    const bot = worldBot(solids, [])
+    bot.canDigBlock = () => true
+    bot.blockAt = ((raw) => (p) => {
+      const b = raw(p)
+      if (b && b.name === 'dirt' && Math.floor(p.y) >= 61) return { ...b, name: 'stone' }
+      return b
+    })(bot.blockAt)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: null,
+    }
+    await recover.decide(bot, ctx, null, null)
+    assert.equal(ctx.recovery.action, 'call_player', 'help before sideways shuffle')
+    for (let t = 0; t < 10 && ctx.recovery; t++) {
+      recover.run(bot, ctx)
+      if (ctx.recovery && ctx.recovery.status !== 'running') await recover.decide(bot, ctx, null, null)
+      await flush()
+    }
+    assert.ok(bot.chats.some((m) => m.startsWith("I'm stuck at")), `chats: ${bot.chats}`)
+    assert.ok(!bot.chats.some((m) => m.includes('sidestepping')), 'sidestep never tried first')
+  })
+})
+
+describe('recover menu: no climb prims on level goals, no failed repeats (4jr)', () => {
+  // Prod 2026-09-24: laya always took the first menu item (pillar_up) on
+  // level goals and repeated it after place-error fails. 29 pillar_ups in
+  // 16 min, ~20 s standing per attempt.
+  function levelWorld() {
+    // Floor + one dirt wall with a stone cap: walls=1, but no dig_step
+    // (the cap never digs by hand), so the menu is the 4jr case exactly.
+    const solids = new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)])
+    return { solids, cap: key(1, 62, 0) }
+  }
+  function levelBot(cap) {
+    const w = levelWorld()
+    const bot = worldBot(w.solids, kit)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === cap) {
+        return { ...b, name: 'stone' }
+      }
+      return b
+    }
+    return bot
+  }
+  const kit = [{ name: 'dirt', count: 5 }, { name: 'iron_pickaxe', count: 1 }]
+
+  it('level goal: ask menu lacks pillar_up/dig_up, first label gets sidestep', async () => {
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const seen = []
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen.length === 1, 'asked once')
+    assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+    assert.ok(!seen[0].includes('dig_up'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'sidestep')
+  })
+
+  it('after pillar_up failed:place-error the next ask lacks pillar_up', async () => {
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const seen = []
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen.length === 1, 'asked once')
+    assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'dig_up', `falls to the next climb prim, got ${r.action}`)
+  })
+  it('a stubborn model repeating the failed prim is overruled to the FSM pick', async () => {
+    // 4jr prod case: laya answered pillar_up after pillar_up:failed. The
+    // excluded label must read invalid and fall back to FSM escalation.
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: { source: 'stub', ask: async () => 'pillar_up' },
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'dig_up', `escalated past the repeat, got ${r.action}`)
+    assert.equal(r.source, 'stub-fallback')
+  })
+})
+
+describe('recover BEHAVIOURS wiring (round-1 finding 3)', () => {
+  it('every RECOVER_ORDER name dispatches through the ticker', () => {
+    // dig_step chose fine but froze live: BEHAVIOURS had no entry, so
+    // applyDecision stopOnce()d every tick and digStepRun never ran.
+    const { BEHAVIOURS } = require('../src/index')
+    for (const n of recover.RECOVER_ORDER) {
+      assert.equal(typeof BEHAVIOURS[n], 'function', n)
+    }
+  })
+
+  it('dig_step mid-air above the step is not done', () => {
+    // Jump apex samples y+1 while airborne: done needs ground, not rise.
+    const bot = worldBot(new Set([key(0, 60, 0)]), [])
+    bot.entity.position = pos(0.5, 62.0, 1.0)
+    bot.entity.onGround = false
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      recovery: {
+        action: 'dig_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [0, 1], phase: 'step', waited: 0, digInFlight: false, digError: false, startFloor: 61 },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'grounded on the step is')
+  })
+})
+
 describe('recover no-exit episode (acceptance 3)', () => {
-  it('3 sidestep fails -> exactly one call_player chat, goal dropped', async () => {
+  it('stubborn stub overruled -> exactly one call_player chat, goal dropped', async () => {
+    // 4jr: the stub repeats the failed sidestep, so the ask menu excludes it
+    // and the invalid answer falls back to FSM escalation (source
+    // stub-fallback, not fsm) — same single chat, dropped goal, gave-up.
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
     // Wedged executor: still "moving" at release, so only the release's own
     // setGoal(null) drops the goal (stopOnce would merely stop). Deleting it
@@ -385,8 +599,8 @@ describe('recover no-exit episode (acceptance 3)', () => {
     assert.match(calls[0], /\/tp IdkBot Steve/)
     assert.equal(bot.pathfinder.goal, null, 'goal dropped after the episode')
     const text = await metricText()
-    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="fsm",outcome="chosen"\} [1-9]/)
-    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="fsm",outcome="gave-up"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="stub-fallback",outcome="chosen"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="stub-fallback",outcome="gave-up"\} [1-9]/)
   })
 })
 
@@ -401,7 +615,10 @@ describe('recover feasibility veto', () => {
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, lavaNear: true })), false)
     assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true })), true)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, headBlocked: true })), false)
-    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3 })), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3 })), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 0 })), false, '4jr: no pillar to a level goal')
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2 })), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 0 })), false, '4jr: no dig-up to a level goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({})), false) // no scaffold
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 4 })), false)
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 3 })), true)
@@ -439,6 +656,14 @@ describe('recover choice sources', () => {
   it('single feasible action: only-option, brain never asked', async () => {
     const boom = { source: 'x', ask: async () => { throw new Error('must not ask') } }
     const r = await recover.chooseRecovery(boom, facts, ['wait'])
+    assert.deepEqual(r, { action: 'wait', source: 'only-option', fsm: 'wait', model: null })
+  })
+  it('failed exclusion shrinking the menu to one: only-option, brain never asked', async () => {
+    // Round-2 minors: asking a one-answer question wastes a brain call and
+    // up to BRAIN_TIMEOUT_MS on the tick path, up to MAX_FAILS-1 times.
+    const boom = { source: 'x', ask: async () => { throw new Error('must not ask') } }
+    const failed = { ...facts, last: 'sidestep:failed:no-progress' }
+    const r = await recover.chooseRecovery(boom, failed, ['sidestep', 'wait'])
     assert.deepEqual(r, { action: 'wait', source: 'only-option', fsm: 'wait', model: null })
   })
   it('brain without ask: FSM directly, source fsm', async () => {
@@ -511,7 +736,9 @@ describe('ticker stuck routing', () => {
     let decides = 0
     const brain = { async decide() { decides++; return { action: 'follow', sprint: false, source: 'stub' } } }
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
-    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 } }
+    // Level goal: 9sh puts call_player before sidestep on high goals with
+    // no climb primitive, so this routing test stays level to keep sidestep.
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 61, z: 0 } }
     const r = await ticker.tick()
     assert.equal(decides, 0, 'no brain call on the stuck tick')
     assert.equal(r.calledBrain, false)
@@ -537,7 +764,9 @@ describe('ticker backstops (minor)', () => {
   function standBot() {
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
     bot.entity.position = pos(0.5, 61, 0.5)
-    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 64, 0) } } }
+    // Level player: 9sh puts call_player before sidestep on high goals with
+    // no climb primitive, and these backstop tests pin the sidestep start.
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 61, 0) } } }
     return bot
   }
   it('three place_error resets raise by=place_error and start an episode', async () => {
