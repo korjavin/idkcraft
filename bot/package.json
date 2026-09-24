@@ -13,7 +13,7 @@
   "dependencies": {
     "mineflayer": "4.39.0",
     "minecraft-protocol": "1.68.0",
-    "mineflayer-pathfinder": "2.4.5",
+    "mineflayer-pathfinder": "https://codeload.github.com/PrismarineJS/mineflayer-pathfinder/tar.gz/6f5c26bf79e7861d20e0fbc735059db51e4d8f77",
     "prom-client": "15.1.3"
   }
 }
