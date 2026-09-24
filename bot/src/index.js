@@ -20,6 +20,7 @@ function brainTimeoutMs(env) {
 const bringMod = require('./behaviours/bring')
 const homeMod = require('./behaviours/home')
 const goal = require('./goal')
+const memory = require('./memory')
 const recover = require('./behaviours/recover')
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -582,6 +583,11 @@ function fleeReflex(bot, ctx) {
   async function tick() {
     const endTimer = metrics.tickDuration.startTimer()
     const r = await runTick()
+    // Disk memory (idkcraft-hlk): one throttled write per window covers
+    // every in-place store mutation (table claim, build done, arrival
+    // scans, danger marks) with no per-store hooks. No world key (unit
+    // mocks) or missing dir means a silent skip.
+    try { memory.saveThrottled(bot, ctx) } catch (_) { /* memory best-effort */ }
     if (r.decision) {
       endTimer({ brain_called: String(r.calledBrain) })
       metrics.decisions.inc({ source: r.decision.source, action: r.decision.action })
@@ -925,7 +931,7 @@ function fleeReflex(bot, ctx) {
             try {
               const foundEarly = goal.adoptHome(bot)
               // Same resets as setHome below (no ticker handle in this scope).
-              if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 }
+              if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ } }
             } catch (_) { /* no adoptable house; build defaults below */ }
           } else {
             if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
@@ -1002,7 +1008,11 @@ function fleeReflex(bot, ctx) {
     // site. Build progress resets with it — old skips/fail counts belong
     // to the old origin. The facts text (home none->site) re-decides.
     home: () => ctx.home || null,
-    setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1 },
+    setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ } },
+    // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
+    // save-on-exit; the periodic tick save covers the rest.
+    loadMemory: () => { try { return memory.restore(bot, ctx) } catch (_) { return null } },
+    saveMemory: () => { try { return memory.save(bot, ctx) } catch (_) { return false } },
     stop: () => {
       clearPendingSearch(ctx)
       clearStuck()
@@ -1238,9 +1248,13 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // unseen start walks home first (see pre-arm below) — working a cave
       // 225 blocks from the player helps no one.
       if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName) tickCtx.resumeWork = true
+      // Disk memory (idkcraft-hlk): restore before adopting — a saved
+      // home (e.g. an unfinished new site) wins over re-adopting the old
+      // door near spawn. Adopt only when memory holds no home.
+      if (tickCtx && ticker && typeof ticker.loadMemory === 'function') ticker.loadMemory()
       // Epic rw4.4: adopt a house an earlier run finished (door near
       // spawn) before the first decision, so a restart resumes as built.
-      const found = goal.adoptHome(bot)
+      const found = (!tickCtx || !tickCtx.home) ? goal.adoptHome(bot) : null
       if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
       if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
       ticker.start()
@@ -1279,6 +1293,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     bot.on('end', (reason) => {
       metrics.online.set(0)
       metrics.setVitals(null)
+      // Disk memory (idkcraft-hlk): persist on the way out — the next
+      // connection (join loop or container restart) restores it. Fatal ends
+      // save too: the container restart is the reconnect path there.
+      if (ticker && typeof ticker.saveMemory === 'function') ticker.saveMemory()
       if (wantQuit) { ticker.destroy(); resolve() }
       else fatal('end', reason || 'disconnected')
     })
