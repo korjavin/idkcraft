@@ -104,6 +104,10 @@ describe('rw4.4 (a) build step announces itself', () => {
         { name: 'oak_planks', count: 56 },
         { name: 'crafting_table', count: 1 },
         { name: 'oak_door', count: 1 },
+        // Geared (atl.6): a tool-less kit with a table rearms first.
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'dirt', count: 32 },
       ],
     })
     const ctx = { step: '', stepStatus: null, goalText: null, home: goal.siteFor(bot, pos(0, 64, 0)) }
@@ -411,6 +415,10 @@ describe('rpw build here on a built home starts a new house', () => {
         { name: 'oak_planks', count: 56 },
         { name: 'crafting_table', count: 1 },
         { name: 'oak_door', count: 1 },
+        // Geared (atl.6): a tool-less kit with a table rearms first.
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'dirt', count: 32 },
       ],
     })
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }

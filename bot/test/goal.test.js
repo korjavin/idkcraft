@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
 const resources = require('../src/resources')
 const home = require('../src/behaviours/home')
 
@@ -36,13 +36,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(NEED_PLANKS, 48)
   })
 
-  it('menu has all nine steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay'])
+  it('menu has all ten steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -222,7 +222,9 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     // Full kit but nowhere to build (no home, no spawn origin): rw4 steps
     // all refuse, explore stays gated, rest fills the gap.
     const bot = goalBot({
-      items: [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }],
+      // Geared (atl.6): a tool-less kit with a table would rearm first.
+      items: [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
+        { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }],
       spawn: null,
     })
     const ctx = {}
@@ -494,7 +496,9 @@ describe('decide decision point', () => {
     // A door recipe requires the table block, so craft stays out — but with
     // build registered (rw4.4) the full kit defaults a site at spawn and
     // builds instead of resting.
-    const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }] })
+    // Geared (atl.6): a tool-less kit with a table would rearm first.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 },
+      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] })
     const r = await decide(bot, {})
     assert.equal(r.action, 'build')
   })
@@ -509,7 +513,9 @@ describe('decide decision point', () => {
     // 10 planks are short of the 48 budget, so gather (not rest) is correct
     // here — but never craft: with the door done only the table clause could
     // fire, and the placed table guards it. Deleting the guard picks craft.
-    const bot = goalBot({ items: [{ name: 'oak_planks', count: 10 }, { name: 'oak_door', count: 1 }] })
+    // Geared (atl.6): a tool-less kit with a placed table would rearm first.
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 10 }, { name: 'oak_door', count: 1 },
+      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] })
     const r = await decide(bot, { home: { table: pos(2, 64, 0) } })
     assert.equal(r.action, 'gather')
   })
@@ -526,10 +532,14 @@ describe('decide decision point', () => {
   it('full kit on a build site runs build', async () => {
     // Build joined in rw4.4 and is registered: a full kit on a build site
     // is feasible AND runs (craft and gather both correctly stay out).
+    // Geared (atl.6): a tool-less kit with a placed table would rearm first.
     const bot = goalBot({ items: [
       { name: 'oak_planks', count: 48 },
       { name: 'crafting_table', count: 1 },
       { name: 'oak_door', count: 1 },
+      { name: 'stone_sword', count: 1 },
+      { name: 'stone_pickaxe', count: 1 },
+      { name: 'dirt', count: 32 },
     ] })
     const r = await decide(bot, { home: { table: pos(2, 64, 0) } })
     assert.equal(r.action, 'build')
@@ -645,17 +655,148 @@ describe('decide failed-step dedup (revmux 01 major)', () => {
     assert.equal(ctx.step, 'rest')
   })
 })
+describe('atl.6 menu: equip rearms the starter kit before build', () => {
+  const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
+  const kit = (items) => goalBot({ items })
+  it('facts read sword, pickaxe, sticks, cobble and scaffold', () => {
+    const facts = goalFacts(kit([
+      { name: 'stone_sword', count: 1 }, { name: 'wooden_pickaxe', count: 1 },
+      { name: 'stick', count: 4 }, { name: 'cobblestone', count: 10 }, { name: 'dirt', count: 5 },
+    ]), {})
+    assert.equal(facts.sword, 1)
+    assert.equal(facts.pickaxe, 1)
+    assert.equal(facts.sticks, 4)
+    assert.equal(facts.cobble, 10)
+    assert.equal(facts.scaffold, 15)
+  })
+  it('no sword + planks + table: feasible', () => {
+    const bot = kit([{ name: 'oak_planks', count: 5 }, { name: 'crafting_table', count: 1 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), true)
+  })
+  it('logs count as material, placed table counts as access', () => {
+    const bot = kit([{ name: 'oak_log', count: 3 }])
+    const ctx = { home: { table: pos(2, 64, 0) } }
+    assert.equal(F('equip', goalFacts(bot, ctx), bot, ctx), true)
+  })
+  it('cobble + sticks + table: feasible (stone path)', () => {
+    const bot = kit([{ name: 'cobblestone', count: 4 }, { name: 'stick', count: 2 }, { name: 'crafting_table', count: 1 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), true)
+  })
+  it('geared kit with blocks: infeasible', () => {
+    const bot = kit([{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), false)
+  })
+  it('no materials: infeasible, no eternal loop (atl.4)', () => {
+    const bot = kit([{ name: 'crafting_table', count: 1 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), false)
+  })
+  it('no table anywhere: infeasible', () => {
+    const bot = kit([{ name: 'oak_planks', count: 5 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), false)
+  })
+  it('geared but low on blocks: feasible (dig phase needs no table)', () => {
+    const bot = kit([{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 5 }])
+    assert.equal(F('equip', goalFacts(bot, {}), bot, {}), true)
+  })
+  it('blocks alone never preempt early gather: fresh bot chops first', () => {
+    // No tools, no table, nothing to arm with: equip stays out even though
+    // scaffold is 0, so gather (not dirt-digging) owns the fresh bot.
+    const bot = kit([{ name: 'oak_log', count: 3 }])
+    const facts = goalFacts(bot, {})
+    assert.equal(F('equip', facts, bot, {}), false)
+    assert.equal(F('gather', facts, bot, {}), true)
+  })
+  it('fsm ranks equip after craft, before build and gather', () => {
+    // Tool-less full load with a placed table: craft (batch) tops equip.
+    const bot = kit([{ name: 'oak_log', count: 14 }])
+    const ctx = { home: { site: pos(10, 64, 10), table: pos(12, 64, 10) } }
+    const facts = goalFacts(bot, ctx)
+    const names = STEP_ORDER.filter((n) => {
+      try { return MENU[n].feasible(facts, bot, ctx) } catch (_) { return false }
+    })
+    assert.ok(names.includes('craft') && names.includes('equip'))
+    assert.equal(goalFsm(facts, names), 'craft')
+    // Same kit once crafted (planks + door, no batch logs): equip is feasible
+    // and outranks build and gather in the order (build needs a scannable
+    // world, so rank is pinned directly).
+    const bot2 = kit([{ name: 'oak_planks', count: 48 }, { name: 'oak_door', count: 1 }])
+    const facts2 = goalFacts(bot2, ctx)
+    assert.equal(MENU.equip.feasible(facts2, bot2, ctx), true)
+    assert.equal(goalFsm(facts2, ['equip', 'build', 'gather', 'rest']), 'equip')
+  })
+  it('decide rearms a tool-less kit before building', async () => {
+    const bot = kit([{ name: 'oak_planks', count: 48 }, { name: 'oak_door', count: 1 }])
+    const r = await decide(bot, { home: { table: pos(2, 64, 0) } })
+    assert.equal(r.action, 'equip')
+  })
+  it('claimed station counts as placed: craft stops rebuilding tables', () => {
+    // atl.6 ping-pong: equip places the inventory table, craft must not
+    // rebuild another from planks while it stands. 5 planks isolate the
+    // table clause (6+ would legitimately fire the door clause instead).
+    const bot = kit([{ name: 'oak_planks', count: 5 }])
+    assert.equal(goalFacts(bot, {}).tablePlaced, false)
+    assert.equal(MENU.craft.feasible(goalFacts(bot, {}), bot, {}), true)
+    const claimed = { home: null, claimedTable: { x: 1, y: 64, z: 0 } }
+    assert.equal(goalFacts(bot, claimed).tablePlaced, true)
+    assert.equal(MENU.craft.feasible(goalFacts(bot, claimed), bot, claimed), false)
+  })
+  it('criterion is a short clause', () => {
+    assert.ok(STEP_CRITERIA.equip.includes('blocks are low'))
+  })
+  it('equip reasons mirror the feasible gates branch for branch', () => {
+    const bot = goalBot({})
+    const F = (facts) => stepWhy('equip', { sword: 0, pickaxe: 0, sticks: 0, planks: 0, logs: 0, cobble: 0, scaffold: 0, table: 0, tablePlaced: false, ...facts }, bot, {}, 'text')
+    assert.equal(F({ sword: 1, pickaxe: 1, scaffold: 32 }), 'equip: kit complete')
+    assert.equal(F({}), 'equip: no materials')
+    assert.equal(F({ planks: 5 }), 'equip: no table')
+    assert.equal(F({ planks: 5, table: 1 }), null) // feasible: no reason line
+    // Revmux round-1: a lone stick, 2 planks or 1 log pass no tool — refuse.
+    assert.equal(F({ sticks: 1 }), 'equip: no materials')
+    assert.equal(F({ planks: 2 }), 'equip: no materials')
+    assert.equal(F({ logs: 1 }), 'equip: no materials')
+    assert.equal(F({ cobble: 3 }), 'equip: no materials') // rock without sticks
+  })
+  it('fresh equip picks start with fresh run counters', async () => {
+    // Revmux round-1: stall patience spent by an earlier run must not fail
+    // the new pick on its first tick. Station claims live outside ctx.equip.
+    const bot = kit([{ name: 'oak_planks', count: 48 }, { name: 'oak_door', count: 1 }])
+    const ctx = {
+      home: { table: pos(2, 64, 0) }, step: 'rest', stepStatus: 'done', goalText: 'old',
+      equip: { digs: 64, walkWaits: 20, made: { x: 1 } }, claimedTable: { x: 9, y: 64, z: 9 },
+    }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'equip')
+    assert.deepEqual(ctx.equip, {})
+    assert.deepEqual(ctx.claimedTable, { x: 9, y: 64, z: 9 })
+  })
+  it('in-flight craft windows hold the step across changed facts', async () => {
+    // Live 26.1: a table placement flips the facts before the sword craft
+    // lands — re-deciding mid-click corrupts the window cursor. While the
+    // async op runs the step sticks; completion re-arms choice as usual.
+    const bot = kit([{ name: 'oak_planks', count: 48 }, { name: 'oak_door', count: 1 }])
+    const ctx = { home: { table: pos(2, 64, 0) }, step: 'equip', stepStatus: 'running', goalText: 'old', equipInFlight: true }
+    const r = await decide(bot, ctx)
+    assert.deepEqual(r, { action: 'equip', sprint: false, source: 'goal-fsm' })
+    const ctx2 = { home: { table: pos(2, 64, 0) }, step: 'craft', stepStatus: 'running', goalText: 'old', craftInFlight: true }
+    const r2 = await decide(bot, ctx2)
+    assert.deepEqual(r2, { action: 'craft', sprint: false, source: 'goal-fsm' })
+  })
+})
+
 describe('atl.7 rest explains itself', () => {
   function siteHome() {
     return { site: { x: 0, y: 64, z: 0 }, table: { x: 4, y: 64, z: 1 }, built: false }
   }
   function ladenBot() {
-    return goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'oak_door', count: 1 }] })
+    // Geared (atl.6): a tool-less kit with a placed table would rearm first.
+    return goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'oak_door', count: 1 },
+      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] })
   }
   const ALL_OUT = [
     'stay: daytime',
     'gohome: daytime',
     'craft: nothing to craft',
+    'equip: kit complete',
     'build: need table/door item',
     'gather: load full',
     'deliver: nothing waiting',

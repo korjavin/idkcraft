@@ -152,6 +152,38 @@ describe('craft step', () => {
     far.restoreError()
   })
 
+  it('(c2) claimed station crafts the door; ghost claim rebuilds', async () => {
+    // atl.6: the equip step's placed table doubles for the door branch, and
+    // a mined (ghost) claim reads as no station so the table branch heals.
+    const doorBot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    doorBot.blockAt = () => ({ name: 'crafting_table' })
+    const doorCtx = freshCtx()
+    doorCtx.claimedTable = { x: 1, y: 64, z: 0 }
+    craft(doorBot, doorCtx, null, {})
+    await flush()
+    assert.equal(doorBot.calls.craft.length, 1)
+    assert.deepEqual(doorBot.calls.craft[0].recipe, recipeFor('oak_door'))
+    doorBot.restoreError()
+    const ghostBot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    ghostBot.blockAt = () => ({ name: 'air' })
+    const ghostCtx = freshCtx()
+    ghostCtx.claimedTable = { x: 1, y: 64, z: 0 }
+    craft(ghostBot, ghostCtx, null, {})
+    await flush()
+    assert.equal(ghostBot.calls.craft.length, 1)
+    assert.deepEqual(ghostBot.calls.craft[0].recipe, recipeFor('crafting_table'))
+    assert.equal(ghostBot.calls.setGoal, 0) // rebuilds, never walks to the ghost
+    ghostBot.restoreError()
+  })
+
   it('(d) nothing to craft -> done', () => {
     const bot = mockBot({ items: [], ids: IDS, recipes: {} })
     const ctx = freshCtx()
