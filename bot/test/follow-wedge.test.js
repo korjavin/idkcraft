@@ -163,29 +163,130 @@ describe('follow place_error streak (idkcraft-2oe)', () => {
     assert.deepEqual(ctx.stuck, { by: 'follow', goal: { x: 20, y: 64, z: 0 }, key: 'follow:P' })
   })
 
-  it('a fight tick stealing the body does not reset the stall count', () => {
-    // 68p at follow scale: MAX_STALLS is 2, so the fight must steal every
-    // 2nd tick to prove the reset (every 3rd still leaves two consecutive
-    // follow ticks, which fire even today). Same mechanism as the gather
-    // acceptance (fight every 3rd vs STALL_TICKS 10).
+  it('stale plans re-issue to the player, never raise stuck (idkcraft-5vv)', () => {
+    // Owner decision: follow never gives up. A stale noPath/timeout plan
+    // is re-issued to the player's current position; the recover menu
+    // opens only for a real wedge (moving executor, no displacement).
     const bot = stillBot()
+    bot.lastGoal = null
+    const seen = []
+    const origSet = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { seen.push(g && g.constructor && g.constructor.name); return origSet(g) }
     const ctx = { lastGoalKey: '', lastPathStatus: 'noPath' }
     const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
     const logs = []
     const origLog = console.log
     console.log = (m) => logs.push(String(m))
-    let firedAt = -1
     try {
       for (let i = 0; i < 9; i++) {
         if (i % 2 === 1) ctx.lastGoalKey = 'fight:9' // fight owned this tick
         follow(bot, ctx, target, { distance_to_player: 20 })
-        if (ctx.stuck) { firedAt = i; break }
+        if (ctx.stuck) break
       }
     } finally {
       console.log = origLog
     }
-    assert.equal(firedAt, 4)
-    assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 1)
-    assert.equal(ctx.stuck.by, 'follow')
+    assert.equal(ctx.stuck, undefined)
+    assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 0)
+    assert.ok(seen.length >= 4, `re-issued ${seen.length}x`)
+    assert.ok(seen.every((n) => n === 'GoalFollow'), seen.join(','))
+  })
+})
+describe('follow sprint on flat pursuit (idkcraft-5vv)', () => {
+  function sprintBot() {
+    const bot = wedgedBot()
+    bot.entity.position = pos(0, 64.4, 0)
+    return bot
+  }
+  function sprintCtx(nodes) {
+    return {
+      lastGoalKey: 'follow:P', followLastPos: pos(0, 64.4, 0),
+      movements: { allowSprinting: false, allowParkour: true },
+      lastPathNodes: nodes,
+    }
+  }
+  const N = (x, y, z) => pos(x, y, z)
+  const target = { username: 'P', id: 7, position: pos(12, 64, 0) }
+  it('dist 12 with level nodes in the window sprints, parkour off', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx([N(3, 64, 0), N(6, 64, 0)])
+    follow(bot, ctx, target, { distance_to_player: 12 })
+    assert.equal(ctx.movements.allowSprinting, true)
+    assert.equal(ctx.movements.allowParkour, false)
+  })
+  it('a +1 node inside the window kills the sprint', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx([N(3, 64, 0), N(5, 65, 0)]) // step inside the 6-block window
+    follow(bot, ctx, target, { distance_to_player: 12 })
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(ctx.movements.allowParkour, true)
+  })
+  it('a +1 beyond the window is ignored', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx([N(3, 64, 0), N(10, 65, 0)]) // unreachable this tick
+    follow(bot, ctx, target, { distance_to_player: 12 })
+    assert.equal(ctx.movements.allowSprinting, true)
+  })
+  it('no plan nodes yet means no sprint', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx(null)
+    follow(bot, ctx, target, { distance_to_player: 12 })
+    assert.equal(ctx.movements.allowSprinting, false)
+  })
+  it('close pursuit never sprints', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx([N(3, 64, 0)])
+    follow(bot, ctx, { username: 'P', id: 7, position: pos(5, 64, 0) }, { distance_to_player: 5 })
+    assert.equal(ctx.movements.allowSprinting, false)
+  })
+  it('a new pursuit clears the previous goal nodes', () => {
+    const bot = sprintBot()
+    const ctx = sprintCtx([N(3, 64, 0)])
+    ctx.lastGoalKey = 'follow:Q' // different key: fresh setGoal below
+    follow(bot, ctx, target, { distance_to_player: 12 })
+    assert.equal(ctx.lastPathNodes, null)
+    assert.equal(ctx.movements.allowSprinting, false)
+  })
+})
+describe('follow never gives up (idkcraft-5vv)', () => {
+  const { goals } = require('mineflayer-pathfinder')
+  function planBot() {
+    const bot = wedgedBot()
+    bot._moving = false
+    bot.entity.position = pos(0, 64, 0)
+    bot.lastGoal = null
+    const origSet = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { bot.lastGoal = g; return origSet(g) }
+    return bot
+  }
+  function quiet(fn) {
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try { fn() } finally { console.log = origLog }
+    return logs
+  }
+  const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
+  it('a stale noPath plan re-issues GoalFollow, never a stuck fact', () => {
+    const bot = planBot()
+    const ctx = { lastGoalKey: 'follow:P', followLastPos: pos(0, 64, 0), lastPathStatus: 'noPath', followIssuedAt: Date.now() - 7000 }
+    const logs = quiet(() => follow(bot, ctx, target, { distance_to_player: 20 }))
+    assert.equal(bot.calls.setGoal, 1)
+    assert.ok(bot.lastGoal instanceof goals.GoalFollow)
+    assert.equal(ctx.stuck, undefined)
+    assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 0)
+  })
+  it('a fresh stuck reset while moving replans, only the wedge opens the menu', () => {
+    const bot = wedgedBot()
+    bot.entity.position = pos(0, 64.4, 0)
+    const ctx = {
+      lastGoalKey: 'follow:P', stuckResets: 1, followSeenStuck: 0,
+      followLastPos: pos(0, 64.4, 0),
+    }
+    const logs = quiet(() => follow(bot, ctx, target, { distance_to_player: 20 }))
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(ctx.stuck, undefined)
+    assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 0)
+    assert.equal(ctx.followSeenStuck, 1)
   })
 })

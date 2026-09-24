@@ -5,7 +5,8 @@ const recover = require('./recover')
 
 const FOLLOW_RANGE = 3
 const SEARCH_TIMEOUT_MS = 6000
-const MAX_STALLS = 2
+const FOLLOW_SPRINT_DIST = 8 // far pursuit: walking (4.3 b/s) bleeds ~1.4 b/s against a runner (5.6 b/s)
+const FOLLOW_SPRINT_LOOKAHEAD = 6 // blocks covered in one sprint tick: every node inside must be level
 const MOVE_TOLERANCE = 0.5
 const PLACE_ERROR_STALLS = 3 // consecutive place_error resets with no displacement count as a stall (same counter gather.js uses)
 
@@ -30,9 +31,12 @@ function formatPos(p) {
 
 // Follow behaviour with spaced re-issue and a stuck detector:
 // Avoids tearing down running A* search every tick while stationary.
-// Re-issues GoalFollow only after a terminal path status (noPath/timeout/empty success)
-// or after 6 s without path_update. After 2 terminal results from the same spot,
-// raises the stuck fact (ef3) and the recover menu picks the escape.
+// Re-issues GoalFollow after a terminal path status (noPath/timeout/empty
+// success) or after 6 s without path_update — follow never gives up on the
+// player (5vv owner decision): no stuck fact, no recover menu, no
+// call_player on a stale plan. The recover menu opens only for a real
+// wedge: the executor reports moving while 'stuck'/place_error resets
+// pile up with no displacement.
 function follow(bot, ctx, target, state) {
   if (!target) return
   const key = `follow:${target.username || target.id}`
@@ -40,6 +44,7 @@ function follow(bot, ctx, target, state) {
   const bp = bot.entity && bot.entity.position
 
   if (key !== ctx.lastGoalKey) {
+    ctx.lastPathNodes = null
     bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
     if (!ctx.recoverLatch || ctx.recoverLatch.key !== key) ctx.recoverLatch = null
     const prevKey = ctx.lastGoalKey
@@ -47,24 +52,49 @@ function follow(bot, ctx, target, state) {
     ctx.followIssuedAt = now
     if (key !== ctx.followIssuedKey || prevKey === '' || prevKey === 'idle') {
       // A new pursuit (another target, or an explicit fresh order after
-      // stop/work): fresh stall budget. Retaking the SAME target after a
+      // stop/work): fresh wedge budget. Retaking the SAME target after a
       // fight/bring tick stole the body (68p) only re-issues the stolen
-      // goal — stalls, stuckResets, placeErrors and lastPos survive, so the
+      // goal — stuckResets, seen-stuck, placeErrors and lastPos survive, so the
       // reset happens on displacement or a new goal, never on a key flip.
       ctx.followIssuedKey = key
-      ctx.followStalls = 0
+      ctx.followSeenStuck = 0
       ctx.followLastPos = bp ? bp.clone() : null
       ctx.stuckResets = 0
       ctx.placeErrors = 0
     }
     return
   }
+  // Flat-pursuit sprint (5vv): sprint only when far and every plan node
+  // within one sprint tick is level with the feet; a +1 anywhere in the
+  // window kills it before the sprint-jump can wedge against the step face
+  // (3nt.24, revmux 5vv round 1: the head alone is stale and too narrow).
+  // Planning rides the same movements object, so the window also holds
+  // parkour off — a maxD=4 plan would strand the next sprint-off tick.
+  // runTick restores both defaults on every tick follow does not own.
+  try {
+    const mov = ctx && ctx.movements
+    if (mov && typeof mov.allowSprinting === 'boolean') {
+      const d = typeof state?.distance_to_player === 'number'
+        ? state.distance_to_player
+        : (bp && target.position ? bp.distanceTo(target.position) : null)
+      const nodes = ctx.lastPathNodes
+      const flat = !!(bp && Array.isArray(nodes) && nodes.length > 0 && nodes.every((n) => {
+        if (!n || typeof n.y !== 'number') return false
+        if (typeof n.x === 'number' && typeof n.z === 'number' &&
+          Math.hypot(n.x - bp.x, n.z - bp.z) > FOLLOW_SPRINT_LOOKAHEAD) return true
+        return Math.floor(n.y) === Math.floor(bp.y)
+      }))
+      const sprint = d !== null && d > FOLLOW_SPRINT_DIST && flat
+      mov.allowSprinting = sprint
+      if (typeof mov.allowParkour === 'boolean') mov.allowParkour = !sprint
+    }
+  } catch (_) { /* sprint best-effort */ }
 
   const isMoving = bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' ? bot.pathfinder.isMoving() : false
 
   if (ctx.followLastPos && bp) {
     if (bp.distanceTo(ctx.followLastPos) > MOVE_TOLERANCE) {
-      ctx.followStalls = 0
+      ctx.followSeenStuck = 0
       ctx.stuckResets = 0
       ctx.placeErrors = 0
       ctx.followLastPos = bp.clone()
@@ -101,9 +131,18 @@ function follow(bot, ctx, target, state) {
       const nextStr = next ? `${next.x},${next.y},${next.z}:${blockNameAt(bot, next)}` : '?:?'
       const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
       if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist} feet=${blockNameAt(bot, feetP)} head=${blockNameAt(bot, headP)} next=${nextStr}`)
-      ctx.followStalls = 0
+      ctx.followSeenStuck = 0
       ctx.stuckResets = 0
       ctx.placeErrors = 0
+      ctx.followIssuedAt = now
+      return
+    }
+    // A fresh 'stuck' reset while the executor still moves is a passing
+    // knock, not a wedge (a walking player re-anchors GoalFollow faster
+    // than the 3.5 s window): just replan to their current position.
+    if ((ctx.stuckResets || 0) > (ctx.followSeenStuck || 0)) {
+      ctx.followSeenStuck = ctx.stuckResets || 0
+      bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
       ctx.followIssuedAt = now
       return
     }
@@ -116,7 +155,6 @@ function follow(bot, ctx, target, state) {
   const node = bp && (typeof bp.floored === 'function' ? bp.floored() : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) })
   const satisfied = node && target.position ? new goals.GoalFollow(target, FOLLOW_RANGE).isEnd(node) : false
   if (satisfied) {
-    ctx.followStalls = 0
     return
   }
 
@@ -128,21 +166,11 @@ function follow(bot, ctx, target, state) {
     return
   }
 
-  const reason = isTerminal ? status : 'timeout'
-  ctx.followStalls = (ctx.followStalls || 0) + 1
-
-  if (ctx.followStalls >= MAX_STALLS) {
-    const dist = typeof state?.distance_to_player === 'number'
-      ? state.distance_to_player.toFixed(1)
-      : (bp && target.position ? bp.distanceTo(target.position).toFixed(1) : 'none')
-    const gp = target.position ? { x: target.position.x, y: target.position.y, z: target.position.z } : null
-    if (recover.setStuck(ctx, 'follow', gp, `follow:${target.username || target.id}`)) console.log(`stuck reason=${reason} pos=${formatPos(bp)} dist=${dist}`)
-    ctx.followStalls = 0
-    ctx.followIssuedAt = now
-  } else {
-    bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
-    ctx.followIssuedAt = now
-  }
+  // Stale plan, no movement: re-issue GoalFollow to the player's
+  // current position. Follow never raises stuck here — the recover menu
+  // (and call_player at its end) is reserved for the real wedge above.
+  bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
+  ctx.followIssuedAt = now
 }
 
 module.exports = follow
