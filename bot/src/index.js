@@ -1079,6 +1079,7 @@ function fleeReflex(bot, ctx) {
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
           if (!bringMod.canSearch(bot, ctx)) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          if (!bringMod.canBringName(bot, name)) return `can't bring ${name} — ores and logs only`
           if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
           ctx.resumeWork = false
@@ -1345,6 +1346,10 @@ function advancePendingSearch(bot, ticker, ctx) {
     if (!r.result) {
       // atl.8: open the order instead of refusing — the first tick walks
       // search legs (the far shells just came up empty, skip the re-scan).
+      if (!bringMod.canBringName(bot, p.name)) {
+        bot.chat(`can't bring ${p.name} — ores and logs only`)
+        return
+      }
       ctx.bring = {
         kind: 'block', name: p.name, want: p.want, by: p.by, phase: 'find',
         have: 0, announced: false, searchSkipFar: true,

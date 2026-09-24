@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds } = require('./scout')
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
@@ -350,6 +350,24 @@ function canSearch(bot, ctx) {
   }
 }
 
+// Bringability gate for leg orders opened without a candidate in hand
+// (setBring / pending-search completion): the find-hit path assumes creation
+// checked isBringable, and an unbringable target would mine forever.
+function canBringName(bot, name) {
+  try {
+    const ids = resolveFindIds(bot, name)
+    if (!Array.isArray(ids) || ids.length === 0) return false
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    const byId = {}
+    for (const [n, e] of Object.entries(byName)) {
+      if (e && typeof e.id === 'number' && !(e.id in byId)) byId[e.id] = n
+    }
+    return ids.some((id) => isBringable(byId[id] || ''))
+  } catch (_) {
+    return false
+  }
+}
+
 async function enterSearch(bot, ctx, o, legacy) {
   const s = o.searchLegs || (o.searchLegs = { legs: 0, startedAt: Date.now(), announced: false, last: 'empty' })
   if (!exploreMod.anchorOf(bot, ctx)) {
@@ -362,6 +380,7 @@ async function enterSearch(bot, ctx, o, legacy) {
   }
   const text = searchText(o, s)
   const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs() - s.legs)
+  if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-ask: touch nothing
   if (c.action !== 'search_more') {
     refuseExhausted(bot, ctx, o)
     return
@@ -785,5 +804,6 @@ module.exports.sharePlan = sharePlan
 module.exports.chooseBringSearch = chooseBringSearch
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
+module.exports.canBringName = canBringName
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
