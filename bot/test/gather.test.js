@@ -124,6 +124,128 @@ describe('gather step', () => {
     assert.deepEqual(bot.lines, [`got ${NEED_LOGS} logs`]) // stays done, chats once
   })
 
+  it('(atl.5) empty 48 with a remembered log at 90: walks to memory, not final', () => {
+    // Session 2026-09-24: trees past 48 read as 'no trees within 48 blocks'.
+    // A resources-memory log must become the next target before any final.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'oak_log' } })
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.match(ctx.lastGoalKey, /^gather:90,64,0$/)
+    assert.ok(!bot.lines.some((l) => l.includes('48 blocks')), `lines: ${bot.lines}`)
+  })
+
+  it('(atl.5) empty 48 and empty memory with a log at 100 in loaded chunks: far search walks there', () => {
+    // No memory: the amb staged search (96 shell) must find it before final.
+    const bot = mockBot({
+      spots: [pos(100, 64, 0)],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '100,64,0': 'oak_log' },
+    })
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => {
+      const origin = opts.point || bot.entity.position
+      const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+      return rawFind(opts).filter((q) => Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) <= maxD)
+    }
+    const ctx = freshCtx()
+    for (let i = 0; i < 10 && !/^gather:100,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:100,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(atl.5) a stale memory point is skipped once, search still ends in final', () => {
+    // The remembered log is already gone (loaded chunk reads air): re-taking
+    // it forever would hang the step — it must join skip and the search must
+    // conclude.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'air' } })
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
+    assert.ok(ctx.gather.skip.has('90,64,0'), `skip: ${[...ctx.gather.skip]}`)
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+  })
+
+  it('(atl.5) a remembered log in an unloaded chunk keeps the walk, never skip', () => {
+    // Memory's value is trees past view: blockAt null means unloaded, not
+    // chopped. The bot must hold the goal and stay running, not skip+final.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'oak_log' } })
+    bot.blockAt = () => null // nothing loaded, not even the memory point
+    bot.canDigBlock = (b) => !!b // like the real one: nothing diggable unloaded
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    for (let i = 0; i < 5; i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:90,64,0$/)
+    assert.ok(!ctx.gather.skip.has('90,64,0'), `skip: ${[...ctx.gather.skip]}`)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(atl.5) a skipped memory trunk does not hide a farther remembered log', () => {
+    // Bead case: trunk at 40 stalled and skipped, memory holds it plus a
+    // log at 200 — the walk must go to 200, not to far search or final.
+    const bot = mockBot({
+      spots: [pos(40, 64, 0)],
+      names: { '40,64,0': 'oak_log' },
+    })
+    bot._moving = true
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([
+      ['40,64,0', { x: 40, y: 64, z: 0, name: 'oak_log', at: 1 }],
+      ['200,64,0', { x: 200, y: 64, z: 0, name: 'oak_log', at: 2 }],
+    ]) }
+    for (let i = 0; i < 20 && !/^gather:200,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:200,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(atl.5) one strike per tree: a stalled acacia crown is skipped whole', () => {
+    // Session case: 3 strikes burned on ONE acacia (diagonal branches, 3
+    // x,z-columns). A stall must skip the whole crown (~3 blocks), so the
+    // next strike is a different tree at 20, not a final.
+    const bot = mockBot({
+      spots: [pos(10, 64, 0), pos(12, 64, 2), pos(11, 64, 2), pos(20, 64, 0)],
+      names: {
+        '10,64,0': 'oak_log', '12,64,2': 'oak_log', '11,64,2': 'oak_log',
+        '20,64,0': 'birch_log',
+      },
+    })
+    bot._moving = true // wedged executor: every trunk stalls
+    const ctx = freshCtx()
+    for (let i = 0; i < 20 && !/^gather:20,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:20,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.gather.streak, 1, 'one strike for the whole crown')
+  })
+
+  it('(atl.5) a skipped trunk at 40 does not hide a reachable log at 100', () => {
+    // The bead's own case: in-48 trees unreachable, a far tree reachable.
+    // The staged search must exclude skipped/in-48 hits, not end on them.
+    const bot = mockBot({
+      spots: [pos(40, 64, 0), pos(100, 64, 0)],
+      names: {
+        '40,64,0': 'oak_log', '41,64,0': 'air',
+        '48,64,0': 'stone', '96,64,0': 'stone', '100,64,0': 'oak_log',
+      },
+    })
+    bot._moving = true // wedged executor: the 40-trunk stalls and is skipped
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => {
+      const origin = opts.point || bot.entity.position
+      const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+      return rawFind(opts).filter((q) => Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) <= maxD)
+    }
+    const ctx = freshCtx()
+    for (let i = 0; i < 30 && !/^gather:100,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:100,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+    // The 100-log stalls too (wedged body): the next far search excludes
+    // both skipped hits, finds nothing, and the final stays unreachable —
+    // not no-trees, since the sync scan still sees the trees.
+    for (let i = 0; i < 40 && !String(ctx.stepStatus).startsWith('failed'); i++) gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.equal(bot.lines[bot.lines.length - 1], 'cannot reach the trees')
+  })
+
   it('(e) no trees: failed:no-trees with one chat line', () => {
     const bot = mockBot({ spots: [] })
     const ctx = freshCtx()
