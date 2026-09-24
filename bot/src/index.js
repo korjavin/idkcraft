@@ -35,6 +35,7 @@ const BEHAVIOURS = {
   gather: require('./behaviours/gather'),
   bring: bringMod,
   craft: require('./behaviours/craft'),
+  equip: require('./behaviours/equip'),
   rest: require('./behaviours/rest'),
   gohome: homeMod.gohome,
   stay: homeMod.stay,

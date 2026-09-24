@@ -55,6 +55,25 @@ const MENU = {
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
+  equip: {
+    // Starter-kit rebuild (atl.6, owner): pickaxe -> sword first (they need
+    // sticks-or-planks-or-logs plus a table, inventory or placed), scaffold
+    // blocks only once geared (they dig by hand). Blocks alone never preempt
+    // early gather: a fresh bot chops first, digs later.
+    feasible: (facts) => {
+      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
+        const material = (facts.sticks || 0) >= 1 || (facts.planks || 0) >= 2 || (facts.logs || 0) >= 1
+        if (!material) return false
+        return (facts.table || 0) > 0 || !!facts.tablePlaced
+      }
+      // Deferred require (same cycle as registered() below): goal.js loads
+      // inside the equip->craft->goal chain, so the mark is read at decide()
+      // time, never at load time.
+      return (facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_LOW
+    },
+    chat: () => 'on my own: rearming tools and blocks',
+    verb: 'rearming',
+  },
   build: {
     // Batch gate (bead .4): build proceeds in batches — start (or resume)
     // with a batch of up to 16 planks on hand, then back to gather/craft.
@@ -154,10 +173,11 @@ const MENU = {
   },
 }
 
-// Priority order (epic rw4 + atl.2): night steps first, then craft, build,
-// gather, then unload (deliver), dig (forage), search (explore), rest last.
+// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
+// rearm (equip), build, gather, then unload (deliver), dig (forage), search
+// (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -286,6 +306,11 @@ function goalFacts(bot, ctx) {
   const planks = countItems(bot, (n) => n.endsWith('_planks'))
   const table = countItems(bot, (n) => n === 'crafting_table')
   const door = countItems(bot, (n) => n.endsWith('_door'))
+  const sword = countItems(bot, (n) => n.endsWith('_sword'))
+  const pickaxe = countItems(bot, (n) => n.endsWith('_pickaxe'))
+  const cobble = countItems(bot, (n) => n === 'cobblestone')
+  const sticks = countItems(bot, (n) => n === 'stick')
+  const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
   try {
@@ -336,7 +361,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside, health, food, known, haul, player }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -410,6 +435,7 @@ const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
+  equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
   forage: 'known is near: walk to the remembered find and dig it',
@@ -501,6 +527,14 @@ async function decide(bot, ctx) {
   // step before gohome shuts the door, chats and shelters — and stepping out
   // flips it back before stay says good morning. The phase machine fails
   // itself on real trouble (no-home, cannot-reach), which re-arms choice.
+  // In-flight craft windows (craft/equip) must not be preempted mid-click:
+  // re-deciding on changed facts while the async op runs corrupts the window
+  // cursor (live 26.1 lesson: a table placement flips the facts before the
+  // sword craft lands). The flags reset on completion, so this holds for a
+  // few ticks at most.
+  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight)) {
+    return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
   if (!finished && (prev === 'gohome' || prev === 'stay')) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }

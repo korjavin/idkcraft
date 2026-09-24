@@ -143,3 +143,10 @@ function craft(bot, ctx, target, state) {
 }
 
 module.exports = craft
+// Shared crafting primitives for the equip step (atl.6): recipe lookup and
+// the table reach. Same dual-export shape as fight.equipGear.
+module.exports.itemId = itemId
+module.exports.recipes = recipes
+module.exports.tally = tally
+module.exports.sortedWoods = sortedWoods
+module.exports.TABLE_REACH = TABLE_REACH
