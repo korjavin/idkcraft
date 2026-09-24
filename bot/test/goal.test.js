@@ -5,6 +5,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const home = require('../src/behaviours/home')
 
 function pos(x, y, z) {
   const p = {
@@ -124,6 +125,15 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', { ...base, planks: 5, maxPlanks: 5 }), true) // leftovers finish table/door
     assert.equal(F('craft', { ...base, planks: 56, maxPlanks: 56, table: 1, door: 1 }), false) // nothing left to craft
   })
+  it('stay holds at dusk and night inside a built home, never by day', () => {
+    // Revmux 01-review loop+goal-3.
+    const indoors = { ...base, home: 'built', inside: 'yes' }
+    assert.equal(F('stay', { ...indoors, time: 'dusk' }), true)
+    assert.equal(F('stay', { ...indoors, time: 'night' }), true)
+    assert.equal(F('stay', { ...indoors, time: 'day' }), false)
+    assert.equal(F('stay', { ...base, time: 'dusk', home: 'built', inside: 'no' }), false)
+    assert.equal(F('stay', { ...base, time: 'night', home: 'none', inside: 'yes' }), false)
+  })
   it('build works in batches from spawn or a site — never without material', () => {
     const bot = goalBot() // spawnPoint set; no blockAt: the homeless path scans nothing
     assert.equal(F('build', { ...base, planks: 48 }, goalBot({ spawn: null }), {}), false) // no home, no spawn
@@ -147,6 +157,11 @@ describe('goalFsm priority', () => {
   })
   it('dusk with a site goes home before crafting', () => {
     assert.equal(goalFsm({ time: 'dusk' }, ['gohome', 'craft', 'gather', 'rest']), 'gohome')
+  })
+  it('dusk inside a built home stays (gohome hands off to stay, not roaming rest)', () => {
+    // Revmux 01-review loop+goal-3: stay used to be night-only.
+    assert.equal(goalFsm({ time: 'dusk' }, ['stay', 'gohome', 'craft', 'rest']), 'stay')
+    assert.equal(goalFsm({ time: 'night' }, ['stay', 'gohome', 'craft', 'rest']), 'stay')
   })
   it('day: craft > build > gather > rest', () => {
     assert.equal(goalFsm(day, ['craft', 'build', 'gather', 'rest']), 'craft')
@@ -227,6 +242,39 @@ describe('decide decision point', () => {
     assert.deepEqual(goalLines(), [])
   })
 
+  it('day decide clears a leftover shelter flag', async () => {
+    // Revmux 01-review loop+goal-3: a sticky gohome finishing after sunrise
+    // leaves inShelter true with no stay step to clear it.
+    const bot = goalBot({ timeOfDay: 1000 })
+    const ctx = { inShelter: true }
+    await decide(bot, ctx)
+    assert.equal(ctx.inShelter, false)
+  })
+  it('re-armed gohome survives the inside transition (stale failed status)', async () => {
+    // Revmux 03-review: with a stale failed status decide early-returns and
+    // dispatches gohome; the re-arm restores 'running' so the sticky guard
+    // holds the phase machine through enter->close instead of handing stay
+    // the step the tick the bot steps inside.
+    const house = { site: pos(10, 64, 20), built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } }
+    const bot = goalBot({ timeOfDay: 15000, at: pos(11, 64, 19) }) // outside the door
+    const ctx = {
+      step: 'gohome',
+      stepStatus: 'failed:cannot-reach-home',
+      gohome: { phase: 'failed', stalls: 0, fails: 3, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0 },
+      home: house,
+    }
+    ctx.goalText = goalText(goalFacts(bot, ctx))
+    ctx.askedKey = `${ctx.goalText}\n${ctx.stepStatus}` // same facts: decide early-returns
+    const r1 = await decide(bot, ctx)
+    assert.equal(r1.action, 'gohome')
+    home.gohome(bot, ctx) // re-arm: walk arrived at the door, enter leg runs, status restored
+    assert.equal(ctx.gohome.phase, 'enter')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.entity.position = pos(11, 64, 21) // physics carries the bot inside
+    const r2 = await decide(bot, ctx)
+    assert.equal(r2.action, 'gohome') // sticky holds; stay must not preempt close
+    assert.deepEqual(goalLines(), [])
+  })
   it('finished night phase re-arms choice (gohome done inside at night -> stay)', async () => {
     const bot = goalBot({ timeOfDay: 15000, at: pos(11, 64, 21) })
     const ctx = {

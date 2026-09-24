@@ -332,9 +332,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   // work() body, shared with the homing resume below (one definition, so the
   // resume cannot drift from the chat command).
+  // Night-step reset (rw4.5, revmux 01-review loop+goal-4): a stale
+  // gohome/stay record (or shelter) must not survive an order, stop or fresh
+  // work — the next decide re-arms from facts.
+  function resetNightStep() {
+    ctx.step = null
+    ctx.stepStatus = null
+    ctx.gohome = null
+    ctx.stay = null
+    ctx.inShelter = false
+  }
   function startWork() {
     clearPendingSearch(ctx)
     clearStuck()
+    resetNightStep()
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
     ctx.work = true
     ctx.paused = false
@@ -351,6 +362,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
       else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
+      // Manual control states too (rw4.5 doorway sneak): the pathfinder
+      // never clears them itself, so a parked bot would keep walking.
+      try { bot.clearControlStates() } catch (_) { /* park best-effort */ }
       ctx.lastGoalKey = 'idle'
     }
   }
@@ -935,6 +949,7 @@ function fleeReflex(bot, ctx) {
     setFollow: (name) => {
       clearPendingSearch(ctx)
       clearStuck()
+      resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
@@ -957,6 +972,7 @@ function fleeReflex(bot, ctx) {
     stop: () => {
       clearPendingSearch(ctx)
       clearStuck()
+      resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
       ctx.paused = true
       ctx.work = false
@@ -965,7 +981,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
+    setLead: (order) => { clearStuck(); resetNightStep(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
@@ -1006,6 +1022,7 @@ function fleeReflex(bot, ctx) {
     // walks to the speaker and tosses, like the bring return.
     setShare: ({ by }) => {
       clearPendingSearch(ctx)
+      resetNightStep()
       let items = []
       try {
         items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -1025,6 +1042,7 @@ function fleeReflex(bot, ctx) {
     },
     setBring: ({ name, want, by }) => {
       clearPendingSearch(ctx)
+      resetNightStep()
       if (bringMod.isFoodRequest(name)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0

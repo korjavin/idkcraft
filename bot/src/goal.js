@@ -32,7 +32,10 @@ const NEED_PLANKS = 48
 // bot always announces what it does).
 const MENU = {
   stay: {
-    feasible: (facts) => facts.time === 'night' && facts.home === 'built' && facts.inside === 'yes',
+    // Dusk counts, not just night: a gohome that finishes at dusk must hand
+    // off to stay, never to a rest that roams out of the closed house
+    // (revmux 01-review loop+goal-3).
+    feasible: (facts) => facts.time !== 'day' && facts.home === 'built' && facts.inside === 'yes',
     chat: () => 'on my own: staying inside till morning',
     verb: 'staying inside',
   },
@@ -321,7 +324,7 @@ function goalFsm(facts, feasibleNames) {
   const t = facts && facts.time
   for (const name of STEP_ORDER) {
     if (!ok.has(name)) continue
-    if (name === 'stay' && t !== 'night') continue // stay is night-only; dusk goes home
+    if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
     return name
   }
@@ -338,7 +341,7 @@ const STEP_CRITERIA = {
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
-  stay: 'inside is yes and time is night: wait inside',
+  stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',
 }
 
@@ -400,6 +403,10 @@ function registered(name) {
 // CHANGE, so a running step with steady facts stays silent.
 async function decide(bot, ctx) {
   const facts = goalFacts(bot, ctx)
+  // Shelter is a night concept: a sticky gohome that finishes after sunrise
+  // leaves inShelter true with no stay step to clear it, suppressing fight
+  // all day (revmux 01-review loop+goal-3).
+  if (ctx && facts.time === 'day') ctx.inShelter = false
   const text = goalText(facts)
   const prev = (ctx && ctx.step) || null
   const status = (ctx && ctx.stepStatus) || null

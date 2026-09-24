@@ -868,6 +868,37 @@ describe('work mode (epic rw4)', () => {
       assert.equal(ctx.stuck, null, 'no ticker backstop episode during gohome')
       assert.equal(ctx.recovery, null, 'no recovery owns the body during gohome')
       assert.equal(ctx.step, 'gohome', 'walkTo failure re-picks gohome silently at night')
+      assert.ok((ctx.gohome.fails || 0) < 3, 'walkTo failure re-arms a fresh record instead of stranding')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(e2) work/stop clear a stale night step so the next decide re-arms', () => {
+    // Revmux 01-review loop+goal-4: follow->work, stop and fresh work must
+    // not inherit a stale gohome/stay record or shelter flag.
+    const bot = workBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ctx = bot._tickerCtx
+    const stale = () => {
+      ctx.step = 'stay'
+      ctx.stepStatus = 'running'
+      ctx.inShelter = true
+      ctx.stay = { phase: 'hold', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+      ctx.gohome = { phase: 'walk', stalls: 0, fails: 2, lastPos: null, lastToggle: 0 }
+    }
+    try {
+      stale()
+      ticker.work()
+      assert.equal(ctx.step, null)
+      assert.equal(ctx.stay, null)
+      assert.equal(ctx.gohome, null)
+      assert.equal(ctx.inShelter, false)
+      stale()
+      ticker.stop()
+      assert.equal(ctx.step, null)
+      assert.equal(ctx.stay, null)
+      assert.equal(ctx.inShelter, false)
     } finally {
       ticker.destroy()
     }
