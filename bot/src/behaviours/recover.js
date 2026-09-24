@@ -363,12 +363,27 @@ function sidestepRun(bot, ctx) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
   if (!st.start) {
-    st.start = { x: bp.x, z: bp.z }
+    st.start = { x: bp.x, y: bp.y, z: bp.z }
+    // Snapshot the goal for the approach check below (fja): a flat shuffle
+    // toward a far goal is not an escape. Null for the generic backstop.
+    const gp = ctx.stuck && ctx.stuck.goal
+    st.goal0 = gp && typeof gp.x === 'number' && typeof gp.y === 'number' && typeof gp.z === 'number'
+      ? { x: gp.x, y: gp.y, z: gp.z }
+      : null
+    st.goalDist0 = st.goal0 ? Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) : null
     const sides = scanSides(bot)
     if (sides.free.length === 0) return 'failed:boxed'
     st.dir = sides.free[Math.floor(Math.random() * sides.free.length)]
   }
-  if (Math.hypot(bp.x - st.start.x, bp.z - st.start.z) > PROGRESS_TOLERANCE) {
+  // Done only when the situation really changed (fja): climbed a full block,
+  // or — with the goal high above — walked notably closer to it. Shuffling
+  // on the pit floor is not an escape; the timeout below fails it instead.
+  const climbed = Math.floor(bp.y) > Math.floor(st.start.y)
+  let gained = false
+  if (st.goal0 && (st.goal0.y - st.start.y) >= 2 && typeof st.goalDist0 === 'number') {
+    gained = st.goalDist0 - Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) > 1
+  }
+  if (climbed || gained) {
     setJump(bot, false)
     return 'done'
   }
@@ -510,8 +525,29 @@ function setStuck(ctx, by, goal, key) {
   return true
 }
 
-function logRecover(bot, action, source, outcome) {
-  console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}`)
+function blockNameOf(b) {
+  try {
+    return (b && typeof b.name === 'string' && b.name) || '?'
+  } catch (_) { return '?' }
+}
+
+// Chosen lines (fja) carry the facts text plus feet/head/next block names
+// (b50 wedge-line style), so a pit, water and a wall read apart in prod
+// logs. facts is null on terminal/continue lines: pos alone there.
+function logRecover(bot, ctx, action, source, outcome, facts) {
+  let extra = ''
+  if (facts) {
+    let next = '?:?'
+    try {
+      const n = ctx && ctx.lastPathNext
+      if (n && typeof n.x === 'number') {
+        next = `${n.x},${n.y},${n.z}:${blockNameOf(bot.blockAt && bot.blockAt(n))}`
+      }
+    } catch (_) { /* next best-effort */ }
+    extra = ` facts=${recoverText(facts)} feet=${blockNameOf(cellAt(bot, 0, 0, 0))} ` +
+      `head=${blockNameOf(cellAt(bot, 0, 1, 0))} next=${next}`
+  }
+  console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
 // Episode end: drop the pathfinder goal (a stale goal re-wedges the next
@@ -571,8 +607,11 @@ function release(bot, ctx, how) {
   ctx.stuckTicks = 0
   ctx.stuck = null
   ctx.recovery = null
-  metrics.recover.inc({ action: rec.action || 'none', source: rec.source || 'fsm', outcome: how })
-  logRecover(bot, rec.action || 'none', rec.source || 'fsm', how)
+  // Terminal dones are already counted by decide() per finished primitive;
+  // counting here too doubled outcome=done in prod (fja). gave-up is only
+  // ever recorded here.
+  if (how !== 'done') metrics.recover.inc({ action: rec.action || 'none', source: rec.source || 'fsm', outcome: how })
+  logRecover(bot, ctx, rec.action || 'none', rec.source || 'fsm', how)
   return { action: 'idle', sprint: false, source: rec.source || 'fsm' }
 }
 
@@ -620,7 +659,7 @@ async function decide(bot, ctx, state, target) {
         rec.lastDy = fresh.goalDy
         rec.status = 'running'
         rec.st = null
-        logRecover(bot, prev, source, 'continue')
+        logRecover(bot, ctx, prev, source, 'continue')
         return { action: prev, sprint: false, source }
       }
       return release(bot, ctx, 'done')
@@ -646,7 +685,7 @@ async function decide(bot, ctx, state, target) {
         rec.st = null
         rec.attempts = (rec.attempts || 0) + 1
         metrics.recover.inc({ action: 'call_player', source: 'fsm', outcome: 'chosen' })
-        logRecover(bot, 'call_player', 'fsm', 'chosen')
+        logRecover(bot, ctx, 'call_player', 'fsm', 'chosen')
         return { action: 'call_player', sprint: false, source: 'fsm' }
       }
       return release(bot, ctx, 'gave-up')
@@ -664,7 +703,7 @@ async function decide(bot, ctx, state, target) {
   rec.st = null
   rec.attempts = (rec.attempts || 0) + 1
   metrics.recover.inc({ action: choice.action, source: choice.source, outcome: 'chosen' })
-  logRecover(bot, choice.action, choice.source, 'chosen')
+  logRecover(bot, ctx, choice.action, choice.source, 'chosen', facts)
   if (choice.action !== 'call_player' && (!rec.last || rec.last.action !== choice.action)) {
     try { bot.chat(`stuck, trying ${RECOVER_MENU[choice.action].verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
   }

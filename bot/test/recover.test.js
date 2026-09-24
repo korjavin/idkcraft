@@ -196,6 +196,96 @@ describe('recover invalid label (acceptance 2)', () => {
   })
 })
 
+describe('recover sidestep in a pit is not done (fja)', () => {
+  // Session 2026-09-24: a 0.9-block shuffle on the pit floor counted as an
+  // escape, fails never grew, call_player never came. Pit 1x3, floor y=60,
+  // no scaffold/pickaxe, player online: walking the floor must fail, and
+  // after 3 fails the bot must chat /tp.
+  function pitSolids() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
+      solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
+    }
+    return solids
+  }
+
+  it('floor shuffling fails, 3 fails -> /tp chat, done counted once', async () => {
+    const bot = worldBot(pitSolids(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: null, key: 'pit' },
+      brain: { source: 'stub', ask: async () => 'sidestep' },
+    }
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (!g || typeof g.x !== 'number') return
+      const bp = bot.entity.position
+      const dx = g.x - bp.x
+      const dz = g.z - bp.z
+      const d = Math.hypot(dx, dz)
+      if (d < 0.05) return
+      const s = Math.min(0.4, d) / d
+      bot.entity.position = pos(bp.x + dx * s, 61, bp.z + dz * s)
+    }
+    for (let t = 0; t < 120 && (ctx.stuck || ctx.recovery); t++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+      } else {
+        recover.run(bot, ctx)
+        stepBody()
+      }
+    }
+    assert.equal(ctx.stuck, null, 'episode over')
+    assert.equal(ctx.recovery, null, 'episode over')
+    const calls = bot.chats.filter((m) => m.startsWith("I'm stuck at"))
+    assert.equal(calls.length, 1, `exactly one /tp chat, got: ${bot.chats.join(' | ')}`)
+    assert.match(calls[0], /\/tp IdkBot Steve/)
+  })
+
+  it('one sidestep done episode counts outcome=done exactly once', async () => {
+    const bot = worldBot(pitSolids(), [])
+    const before = (await metricText()).match(/idkcraft_bot_recover_total\{action="sidestep",source="fsm",outcome="done"\} ([0-9.]+)/)
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: null, key: 'pit' },
+      recovery: {
+        action: 'sidestep', source: 'fsm', model: null, status: 'done',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    await recover.decide(bot, ctx, null, null)
+    assert.equal(ctx.recovery, null, 'released')
+    const after = (await metricText()).match(/idkcraft_bot_recover_total\{action="sidestep",source="fsm",outcome="done"\} ([0-9.]+)/)
+    const delta = Number(after && after[1] || 0) - Number(before && before[1] || 0)
+    assert.equal(delta, 1, 'done counted once per episode')
+  })
+
+  it("chosen line carries facts= and feet=", async () => {
+    const bot = worldBot(pitSolids(), [])
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: null, key: 'pit' },
+      brain: { source: 'stub', ask: async () => 'sidestep' },
+    }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => lines.push(String(m))
+    try {
+      await recover.decide(bot, ctx, null, null)
+    } finally {
+      console.log = orig
+    }
+    const chosen = lines.filter((l) => l.includes('outcome=chosen'))
+    assert.equal(chosen.length, 1)
+    assert.ok(chosen[0].includes('facts='), chosen[0])
+    assert.ok(chosen[0].includes('feet='), chosen[0])
+  })
+})
+
 describe('recover no-exit episode (acceptance 3)', () => {
   it('3 sidestep fails -> exactly one call_player chat, goal dropped', async () => {
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
