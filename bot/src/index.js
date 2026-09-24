@@ -40,6 +40,8 @@ const BEHAVIOURS = {
   stay: homeMod.stay,
   build: require('./behaviours/build'),
   explore: require('./behaviours/explore'),
+  forage: require('./behaviours/forage'),
+  deliver: require('./behaviours/deliver'),
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
@@ -180,6 +182,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, lastPos: null, homeStalls: 0, homeLastPos: null }
+  ctx.greeter = greet // deliver greets arrivals through the same latch
   ctx.autonomous = !!autonomous
   ctx.manualBrain = null
   ctx.brainRestore = null
@@ -365,6 +368,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     followName = ''
     ctx.lastGoalKey = ''
     ctx.gather = null
+    ctx.forage = null // fresh episode: stale skips/finals must not veto it
+    ctx.forageSkip = null
+    ctx.forageFinal = null
+    ctx.stepFail = {} // atl.4 hold is per-episode too: a stale failure must not veto the ordered retry
     ctx.resumeWork = false
   }
 

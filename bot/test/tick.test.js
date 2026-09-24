@@ -1035,6 +1035,7 @@ describe('work mode (epic rw4)', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.source, 'goal-fsm') // work step continues
       assert.notEqual(r.decision.action, 'idle')
+      ticker.destroy() // background chain would rotate a failing step (atl.4)
     })
 
     it('follows the first tick the player becomes visible', async () => {
@@ -1045,6 +1046,7 @@ describe('work mode (epic rw4)', () => {
       bot.players.P = { username: 'P', entity: playerEntity(10) }
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'follow')
+      ticker.destroy() // no background tail past the test
     })
   })
 
@@ -1123,6 +1125,8 @@ describe('work mode (epic rw4)', () => {
       bot.players.P = { username: 'P', entity: playerEntity(10) } // sighted mid-walk
       await ticker.tick()
       assert.equal(bot._tickerCtx.work, true)
+      ticker.destroy() // manual ticks arm background chains; a failing step
+      // would otherwise rotate (atl.4) and spray goal lines into later tests
     })
 
     it('lone bot still stops (no roster, no walk)', async () => {
@@ -1353,6 +1357,18 @@ describe('work mode (epic rw4)', () => {
     })
   })
 
+  it('(e2) go work clears the menu-wide hold for the ordered retry', async () => {
+    // Round-1 major/minor: startWork resets stale skips/finals but left
+    // ctx.stepFail, so the atl.4 hold vetoed the fresh episode.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
+    ticker.stop()
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.deepEqual(bot._tickerCtx.stepFail, {})
+    ticker.destroy()
+  })
   it('(e) go work after stop unpauses into work', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }

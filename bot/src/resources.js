@@ -75,6 +75,13 @@ function clear(ctx) {
   if (ctx && ctx.resources && ctx.resources.items instanceof Map) ctx.resources.items.clear()
 }
 
+// Drop one cell (mined out or picked clean): true when something was there.
+function forget(ctx, x, y, z) {
+  const mem = ctx && ctx.resources
+  if (!mem || !(mem.items instanceof Map)) return false
+  return mem.items.delete(x + ',' + y + ',' + z)
+}
+
 // Arrival scan: ores + trees around the bot into memory. Returns
 // { added, total }. Best-effort like every other perception seam.
 function scan(bot, ctx, opts) {
@@ -112,4 +119,4 @@ function scan(bot, ctx, opts) {
   return { added, total: count(ctx) }
 }
 
-module.exports = { noteSpots, nearest, count, clear, scan, MAX_ITEMS, SCAN_RADIUS }
+module.exports = { noteSpots, nearest, count, clear, forget, scan, MAX_ITEMS, SCAN_RADIUS }
