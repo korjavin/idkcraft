@@ -341,6 +341,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.gohome = null
     ctx.stay = null
     ctx.inShelter = false
+    // The gohome walk borrows canDig=false on this shared object; an order,
+    // stop or fresh work that ends the walk mid-phase must give it back, or
+    // every other behaviour loses digging until rejoin (revmux 8kc).
+    try {
+      const mov = ctx.movements
+      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+    } catch (_) { /* reset best-effort */ }
   }
   function startWork() {
     clearPendingSearch(ctx)
