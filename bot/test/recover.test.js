@@ -1131,6 +1131,32 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.ok(ctx.recovery.st.settled, 'settle latched')
   })
 
+  it('settled hop that falls back fails out instead of waiting forever', async () => {
+    // Round-3 major: the settle has no episode timeout behind it, so a body
+    // knocked off the top must fail inside the mount budget, not hang.
+    const bot = stepBot()
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true, settled: true },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    let status = 'running'
+    for (let t = 0; t < 16 && status === 'running'; t++) {
+      recover.run(bot, ctx)
+      status = ctx.recovery.status
+      await flush()
+    }
+    assert.equal(status, 'failed:no-progress', `settled fell back, got ${status}`)
+    assert.ok(!bot.getControlState('forward'), 'forward released on the way out')
+    assert.ok(!bot.getControlState('jump'), 'jump released on the way out')
+  })
+
   it('hop walks to the edge first, leaps inside jump range', () => {
     const bot = stepBot()
     bot.entity.position = pos(-1.5, 61, 0.5)

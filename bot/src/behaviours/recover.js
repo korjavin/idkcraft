@@ -521,7 +521,13 @@ function hopStepRun(bot, ctx) {
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
   if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
-  if (st.settled) return 'running' // thrust cut, waiting for the grounded sample
+  // Settled waits inside the same mount budget: a body knocked or coasted
+  // off the top (overshoot, fight borrow, knockback) must fail out instead
+  // of waiting for a grounded sample that never comes (no episode timeout).
+  if (st.settled) {
+    if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
+    return 'running'
+  }
   if (st.stepPos && Math.floor(bp.y) > st.startFloor &&
       Math.hypot(bp.x - (st.stepPos.x + 0.5), bp.z - (st.stepPos.z + 0.5)) < 0.5) {
     // Over the top (airborne or landed): cut thrust and settle. Holding jump
@@ -529,6 +535,7 @@ function hopStepRun(bot, ctx) {
     // back off the ledge. Not released on floor rise alone: mid-leap over
     // the face still needs forward to carry over.
     st.settled = true
+    st.waited = 0 // fresh landing window inside the same bound
     setJump(bot, false); setForward(bot, false)
     return 'running'
   }
