@@ -454,6 +454,143 @@ async function chooseStep(brain, facts, feasible) {
   }
 }
 
+// Rest reasons (idkcraft-atl.7): words only, no new logic. When rest is
+// chosen, restWhy phrases every infeasible non-rest step from the grounds
+// decide() already used: failHolds plus the facts behind each feasible()
+// rule (re-checked first, so phrasing can never drift from the rule).
+// Feasible steps are skipped; unregistered ones are marked off; a parallel
+// step the switch does not know (atl.6) falls back to 'not feasible'.
+// Model-chosen rest over ready steps reports 'model choice'.
+function stepWhy(name, facts, bot, ctx, text) {
+  try {
+    if (failHolds(ctx, name, text, bot)) return `${name} holds after failure`
+  } catch (_) { /* wording best-effort */ }
+  if (name === 'gather') {
+    // atl.4 inline hold (not via failHolds): same final, same log count.
+    try {
+      const g = ctx && ctx.gather
+      if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) {
+        return 'gather holds after failure'
+      }
+    } catch (_) { /* fall through to facts */ }
+  }
+  let feasible = false
+  try {
+    feasible = !!(MENU[name] && MENU[name].feasible(facts, bot, ctx))
+  } catch (_) {
+    return `${name}: not feasible`
+  }
+  if (feasible) return null
+  switch (name) {
+    case 'stay':
+      if (facts.time === 'day') return 'stay: daytime'
+      if (facts.home !== 'built') return 'stay: home not built'
+      return 'stay: not inside'
+    case 'gohome':
+      if (facts.time !== 'dusk' && facts.time !== 'night') return 'gohome: daytime'
+      if (facts.home !== 'built') return 'gohome: home not built'
+      return 'gohome: already inside'
+    case 'craft':
+      if (facts.table > 0 && facts.door > 0) return 'craft: nothing to craft'
+      if (facts.maxPlanks >= 4 && facts.table === 0 && facts.tablePlaced) return 'craft: table already placed'
+      if (facts.maxPlanks >= 6 && facts.door === 0 && !facts.tablePlaced) return 'craft: need table placed'
+      return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
+    case 'build': {
+      if (facts.home === 'built') return 'build: home built'
+      if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
+      if (facts.table === 0 || facts.door === 0) return 'build: need table/door item'
+      return 'build: nothing left to build'
+    }
+    case 'gather':
+      if (facts.home === 'built') return 'gather: home built'
+      return 'gather: load full'
+    case 'deliver':
+      if (facts.haul !== 'waiting') return 'deliver: nothing waiting'
+      return 'deliver: nobody to deliver to'
+    case 'forage':
+      if (facts.known !== 'near') return 'forage: nothing known nearby'
+      return 'forage: known find unreachable'
+    case 'explore':
+      if (facts.home !== 'built') return 'explore: house not built yet'
+      return 'explore: nowhere new to go'
+    default:
+      return `${name}: not feasible`
+  }
+}
+
+function restWhy(facts, bot, ctx, names) {
+  const ok = new Set(Array.isArray(names) ? names : [])
+  let text = ''
+  try {
+    text = goalText(facts)
+  } catch (_) { /* wording best-effort */ }
+  const out = []
+  for (const n of STEP_ORDER) {
+    if (n === 'rest') continue
+    let on = false
+    try {
+      on = registered(n)
+    } catch (_) {
+      on = false
+    }
+    if (!on) {
+      out.push(`${n}: off`)
+      continue
+    }
+    if (ok.has(n)) continue
+    let w = null
+    try {
+      w = stepWhy(n, facts, bot, ctx, text)
+    } catch (_) {
+      w = null
+    }
+    out.push(w || `${n}: not feasible`)
+  }
+  if (out.length === 0) return 'model choice'
+  return out.join(', ')
+}
+
+// Rest escalation (idkcraft-atl.7): a rest streak past REST_ESCALATE_MS
+// consults the model once per streak with the reason text. Two labels so
+// laya makes a real call; the answer is observability only (log + metric),
+// never a redirect — no new logic by design.
+const REST_ESCALATE_MS = 10 * 60 * 1000
+const REST_ESCALATION_INSTRUCTIONS = 'Rest is long: confirm it still fits'
+const REST_ESCALATION_CRITERIA = {
+  rest: 'conditions unchanged: keep resting',
+  recheck: 'something may have changed: look again',
+}
+async function escalateRest(bot, ctx, facts) {
+  const brain = ctx && ctx.brain
+  if (!brain || typeof brain.ask !== 'function') return
+  const model = brain.source || brain.name || 'model'
+  let why = 'unknown'
+  try {
+    why = (ctx && ctx.restWhy) || why
+  } catch (_) { /* wording best-effort */ }
+  let text = ''
+  try {
+    text = goalText(facts)
+  } catch (_) { /* wording best-effort */ }
+  try {
+    const answer = await brain.ask({
+      state: `resting long: ${why}`,
+      instructions: REST_ESCALATION_INSTRUCTIONS,
+      criteria: REST_ESCALATION_CRITERIA,
+      situation: text,
+    })
+    metrics.escalation.inc({ from: 'rest', to: 'model', reason: 'long-rest' })
+    console.error(`rest escalation source=${model} answer=${answer} why=${why}`)
+  } catch (err) {
+    const msg = String((err && err.message) || err)
+    const reason = (err && err.name === 'TimeoutError') ? 'timeout'
+      : msg.startsWith('jev missing') ? 'invalid'
+      : 'error'
+    metrics.escalation.inc({ from: 'model', to: 'rest', reason })
+    console.error(`rest escalation failed source=${model} reason=${reason} why=${why}`)
+  }
+}
+
 // Registration gate: a step runs only while its behaviour is plugged into
 // BEHAVIOURS (later beads join with one require line each). Deferred require:
 // goal.js loads before index.js finishes, so the table is read at decide()
@@ -527,18 +664,46 @@ async function decide(bot, ctx) {
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
     if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)
+    // atl.7: rest explains itself — reasons stored on every rest choice
+    // (even repeats, so status stays fresh), chatted only on a step change.
+    if (choice.step === 'rest') {
+      try {
+        ctx.restWhy = restWhy(facts, bot, ctx, names)
+      } catch (_) {
+        ctx.restWhy = 'unknown'
+      }
+    } else if (choice.step !== prev) {
+      ctx.restWhy = null
+    }
     // An order that landed mid-await ('stop' parks, 'follow me' switches
     // work off) discards the step the tick then drops: announcing it would
     // lie, so only an actually-working bot chats. !== false keeps unit-test
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} facts=${text}`)
-      const entry = MENU[choice.step]
-      const verb = (entry && entry.verb) || choice.step
-      try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      if (choice.step === 'rest') {
+        try { bot.chat(`resting: ${ctx.restWhy} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      } else {
+        const entry = MENU[choice.step]
+        const verb = (entry && entry.verb) || choice.step
+        try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+      }
     }
+  }
+  // atl.7 escalation: rest chosen every tick past 10 minutes asks the model
+  // with the reason text (rw4.6 shape); the answer is observability only.
+  if (ctx.step === 'rest') {
+    const now = Date.now()
+    if (!ctx.restSince) ctx.restSince = now
+    if (!ctx.restEscalated && now - ctx.restSince >= REST_ESCALATE_MS) {
+      ctx.restEscalated = true
+      await escalateRest(bot, ctx, facts)
+    }
+  } else {
+    ctx.restSince = null
+    ctx.restEscalated = false
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
