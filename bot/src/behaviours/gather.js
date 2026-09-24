@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
 const resources = require('../resources')
+const danger = require('../danger')
 const { startFarSearch, stepFarSearch } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
@@ -130,13 +131,15 @@ function gather(bot, ctx, target, state) {
   }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  // mnx pit memory: no target within a gave-up spot's radius.
+  const banned = (p) => danger.near(ctx, p)
   if (!g.pos) {
     // A running staged search resolves before any new sync scan: the 48
     // below stays empty while the 96/160 shells stream in across ticks.
     if (g.phase === 'searchfar') {
       // Skipped trunks and the sync-48 shell must neither stop the search
       // nor win it: the point of going far is trees the sync scan rejected.
-      const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS
+      const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS || banned(q)
       const r = stepFarSearch(bot, g.search, { exclude })
       if (!r.done) return
       g.search = null
@@ -153,7 +156,7 @@ function gather(bot, ctx, target, state) {
     try {
       found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
     } catch (_) { found = [] }
-    const open = found.filter((p) => !g.skip.has(keyOf(p)))
+    const open = found.filter((p) => !g.skip.has(keyOf(p)) && !banned(p))
     if (open.length > 0) {
       let best = open[0]
       for (const p of open) {
@@ -174,7 +177,7 @@ function gather(bot, ctx, target, state) {
       // rest (the bead's unreachable case: trunk at 40 skipped, log at 200
       // remembered).
       const mem = names.length > 0
-        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)))
+        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it))
         : null
       if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)

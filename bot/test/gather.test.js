@@ -4,6 +4,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const gather = require('../src/behaviours/gather')
 const { NEED_LOGS } = require('../src/goal')
+const danger = require('../src/danger')
 
 function pos(x, y, z) {
   const p = {
@@ -60,6 +61,19 @@ function freshCtx() {
 }
 
 describe('gather step', () => {
+  it('(mnx) skips logs within a gave-up spot', () => {
+    // Acceptance: gave-up at X -> no target within R of X.
+    const bot = mockBot({
+      spots: [pos(12, 64, 0), pos(2, 64, 0)],
+      names: { '12,64,0': 'oak_log', '2,64,0': 'birch_log' },
+    })
+    const ctx = freshCtx()
+    danger.mark(ctx, { x: 2, y: 64, z: 0 })
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:12,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
   it('(a) finds the nearest log and issues a working GoalNear', () => {
     const bot = mockBot({
       spots: [pos(8, 64, 0), pos(2, 64, 0)],

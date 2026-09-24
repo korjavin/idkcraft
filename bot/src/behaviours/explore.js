@@ -17,6 +17,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
 const resources = require('../resources')
+const danger = require('../danger')
 
 const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
 // Inner rings first: a hands-only walker without tools closes 16-32
@@ -60,14 +61,15 @@ function anchorOf(bot, ctx) {
 
 // First spiral cell whose chunk is still unvisited (rings ascending, north
 // first): the boundary of the visited. Null when explored out to maxRadius.
-function pickTarget(visited, anchor, maxRadius) {
+// banned(x, z) skips gave-up spots (mnx pit memory).
+function pickTarget(visited, anchor, maxRadius, banned) {
   const cap = typeof maxRadius === 'number' ? maxRadius : MAX_RADIUS
   for (const r of RINGS) {
     if (r > cap) break
     for (let a = 0; a < RAY_COUNT; a++) {
       const x = Math.round(anchor.x + r * Math.sin(a * Math.PI / 4))
       const z = Math.round(anchor.z - r * Math.cos(a * Math.PI / 4))
-      if (!visited.has(chunkOf(x, z))) return { x: x + 0, z: z + 0 } // +0: no -0 keys/logs
+      if (!visited.has(chunkOf(x, z)) && !(banned && banned(x, z))) return { x: x + 0, z: z + 0 } // +0: no -0 keys/logs
     }
   }
   return null
@@ -118,7 +120,7 @@ function explore(bot, ctx, target, state) {
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    const t = pickTarget(e.visited, anchor, e.maxRadius)
+    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.near(ctx, { x, z }))
     if (!t) {
       ctx.stepStatus = 'done' // nowhere new within 512: the outward job is over
       console.log('explore done: all chunks within ' + e.maxRadius + ' blocks visited')

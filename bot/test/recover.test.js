@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const recover = require('../src/behaviours/recover')
+const danger = require('../src/danger')
 const { createTicker } = require('../src/index')
 const metrics = require('../src/metrics')
 
@@ -691,6 +692,24 @@ describe('recover choice sources', () => {
     assert.deepEqual(r, { action: 'sidestep', source: 'stub-fallback', fsm: 'sidestep', model: 'laya' })
     const text = await metricText()
     assert.match(text, /idkcraft_bot_escalation_total\{from="laya",to="fsm",reason="timeout"\} [1-9]/)
+  })
+})
+
+describe('gave-up marks danger (mnx)', () => {
+  it('release gave-up marks the spot; release done leaves no mark', () => {
+    // Acceptance: the gave-up point itself is what later steps avoid.
+    const bot = { pathfinder: { goal: null }, entity: { position: pos(10, 64, 0) }, username: 'IdkBot' }
+    const ctx = {}
+    recover.setStuck(ctx, 'follow', { x: 10, y: 64, z: 0 }, 'follow:Steve')
+    ctx.recovery = { action: 'sidestep', status: 'done' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(danger.near(ctx, { x: 10, y: 64, z: 0 }), true)
+    assert.equal(danger.near(ctx, { x: 100, y: 64, z: 100 }), false)
+    const ctx2 = {}
+    recover.setStuck(ctx2, 'follow', { x: 10, y: 64, z: 0 }, 'follow:Steve')
+    ctx2.recovery = { action: 'sidestep', status: 'done' }
+    recover.release(bot, ctx2, 'done')
+    assert.equal(danger.count(ctx2), 0)
   })
 })
 
