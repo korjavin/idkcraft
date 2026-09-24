@@ -214,7 +214,9 @@ function finish(bot, ctx, f, ok, reason) {
       ctx.haul[d] = (ctx.haul[d] || 0) + gains[d]
       banked += gains[d]
     }
-    if (banked > 0) ctx.forageSkip = null // drops landed: the world changed, old skips may be stale
+    // Skips survive a bank: struck unreachable cells come back otherwise,
+    // spending the next batch's strikes on them before reachable points are
+    // tried (round-1 minor). startWork is the reset point for a fresh episode.
   } catch (_) { /* haul best-effort */ }
   ctx.forage = null
   clearGoal(bot, ctx)
@@ -416,7 +418,11 @@ function forage(bot, ctx, target, state) {
     }
     let verdict = null
     try { verdict = ctx.lastPathStatus } catch (_) { verdict = null }
-    if (verdict === 'noPath' || verdict === 'timeout') {
+    // noPath only: a pathfinder 'timeout' returns the best partial path,
+    // which the bot walks while A* recomputes — far is not unreachable.
+    // Striking on timeout drops a progressing walk (round-1 minor); the
+    // displacement stall counter below stays the backstop.
+    if (verdict === 'noPath') {
       // One failure on this point is one strike: the cell is skipped (not
       // forgotten) and the next point is tried, or the step fails.
       strikeCell(ctx, f, p)

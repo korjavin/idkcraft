@@ -304,6 +304,19 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     const second = await decide(bot, ctx)
     assert.equal(second.action, 'craft')
   })
+  it('a done step retires its own hold: the next identical failure re-arms fresh', async () => {
+    // Round-1 major: records never expired, so a stale failure re-armed
+    // hours later. A success deletes its own record.
+    const bot = logsBot(14)
+    const ctx = { home: { site: pos(10, 64, 10) }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
+    await decide(bot, ctx) // records + holds craft
+    assert.ok(ctx.stepFail && ctx.stepFail.craft, 'recorded')
+    ctx.step = 'craft' // the step runs again and finishes done
+    ctx.stepStatus = 'done'
+    const r = await decide(bot, ctx)
+    assert.equal(ctx.stepFail.craft, undefined, 'retired by the success')
+    assert.equal(r.action, 'craft')
+  })
   it('new facts release the hold without moving', async () => {
     const bot = logsBot(14)
     const ctx = { home: { built: true }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }

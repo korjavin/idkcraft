@@ -490,6 +490,10 @@ async function decide(bot, ctx) {
       const bp = bot && bot.entity && bot.entity.position
       ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
     } catch (_) { /* guard best-effort */ }
+  } else if (finished && prev && status === 'done' && ctx.stepFail && typeof ctx.stepFail === 'object') {
+    // A success retires its own hold: tomorrow's identical failure re-arms
+    // from scratch instead of inheriting a stale record (round-1 major).
+    try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
   }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt

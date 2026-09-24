@@ -167,6 +167,44 @@ describe('forage behaviour', () => {
     assert.deepEqual(ctx.haul, {})
   })
 
+  it('a banked batch keeps struck cells skipped', async () => {
+    // Round-1 minor: finish() cleared the skip set on any bank, reviving
+    // dead high-rank cells for the next batch's strikes.
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const cells = []
+    for (let i = 0; i < 8; i++) {
+      cells.push({ x: 10 + i * 2, y: 60, z: 0, name: 'iron_ore' })
+      bot.blocks[`${10 + i * 2},60,0`] = 'iron_ore'
+    }
+    const ctx = memCtx(cells)
+    ctx.forageSkip = new Set(['99,60,0'])
+    bot.dig = async (block) => {
+      bot.calls.digs++
+      bot.inv.push({ name: 'raw_iron', count: 1 })
+    }
+    for (let i = 0; i < 200 && !ctx.stepStatus.startsWith('done') && !ctx.stepStatus.startsWith('failed:'); i++) {
+      forage(bot, ctx, null, {})
+      await tick()
+    }
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('99,60,0'), 'struck cell stays skipped across the bank')
+  })
+  it('a pathfinder timeout walks on: no instant strike, stall backstop intact', () => {
+    // Round-1 minor: timeout returns a partial path the bot walks while A*
+    // recomputes — only noPath strikes at once.
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    bot.blocks['40,60,0'] = 'iron_ore'
+    bot._moving = true
+    ctx.lastPathStatus = 'timeout'
+    for (let i = 0; i < 3; i++) forage(bot, ctx, null, {})
+    assert.ok(!(ctx.forageSkip && ctx.forageSkip.has('40,60,0')), 'no strike on timeout')
+    assert.equal((ctx.forage && ctx.forage.streak) || 0, 0)
+    for (let i = 0; i < 12; i++) forage(bot, ctx, null, {})
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('40,60,0'), 'ten still ticks still strike via displacement')
+  })
   it('registers in BEHAVIOURS under forage', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.forage, forage)

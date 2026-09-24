@@ -371,6 +371,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.forage = null // fresh episode: stale skips/finals must not veto it
     ctx.forageSkip = null
     ctx.forageFinal = null
+    ctx.stepFail = {} // atl.4 hold is per-episode too: a stale failure must not veto the ordered retry
     ctx.resumeWork = false
   }
 

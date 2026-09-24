@@ -1357,6 +1357,18 @@ describe('work mode (epic rw4)', () => {
     })
   })
 
+  it('(e2) go work clears the menu-wide hold for the ordered retry', async () => {
+    // Round-1 major/minor: startWork resets stale skips/finals but left
+    // ctx.stepFail, so the atl.4 hold vetoed the fresh episode.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
+    ticker.stop()
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.deepEqual(bot._tickerCtx.stepFail, {})
+    ticker.destroy()
+  })
   it('(e) go work after stop unpauses into work', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
