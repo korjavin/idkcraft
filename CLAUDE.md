@@ -134,3 +134,14 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - **Simplicity (Ponytail rules):**
   - Smallest diff that meets acceptance criteria, no speculative abstractions beyond the single brain interface.
   - Server runs `ONLINE_MODE=false` + `ENFORCE_WHITELIST=TRUE` in iteration 1 so the bot does not need a Microsoft account.
+
+## Review (revmux)
+
+- Privacy pre-check, zero tokens, before any round (must print nothing):
+  `git diff origin/master...HEAD | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\b|(api[_-]?key|secret|token)\s*[:=]\s*\S{8,})'`
+- Default: `revmux --task <bead> --run 01-review --profile idkcraft --no-tui --no-synthesis` (one agent).
+- Use `--profile idkcraft-risky` when the diff touches `bot/src/index.js` ticker/`setMovements`, `goal.js`,
+  `brain.js`, `behaviours/recover.js`, any `Movements`/pathfinder settings, or `laya/`.
+- Compose/Dockerfile/CI/env-only diffs: `--lenses wiring`.
+- Rounds 2+: only if a critical/major was fixed; scope = the fix delta (`git diff <reviewed-sha>..HEAD`)
+  plus the previous `findings.json` in context, same profile. Minors never trigger another round.
