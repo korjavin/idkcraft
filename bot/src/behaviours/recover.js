@@ -30,7 +30,7 @@ const SIDESTEP_TIMEOUT_TICKS = 8
 const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
 const HOP_BACK_TICKS = 8 // back-up run-up before the mount jump
 const HOP_MOUNT_TICKS = 14 // walk to the edge plus the leap
-const HOP_JUMP_DIST = 0.8 // leap once the step anchor is this close
+const HOP_JUMP_DIST = 1.0 // leap once the step anchor is this close (flush contact is exactly 0.8: half block plus half body)
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
@@ -153,6 +153,9 @@ function findHopStepDir(bot, gp) {
     if (!solid(step) || isLava(step)) continue
     const above = cellAt(bot, dx, 1, dz)
     if (above && (solid(above) || isLava(above))) continue
+    // Headroom after the mount: the head ends two above the step base.
+    const head = cellAt(bot, dx, 2, dz)
+    if (head && (solid(head) || isLava(head))) continue
     return [dx, dz]
   }
   return null
@@ -369,7 +372,7 @@ function pillarUpRun(bot, ctx) {
   if (!bp) return 'failed:no-pos'
   // Runtime veto double-check: feasibility said yes, the world may disagree.
   if (scaffoldCount(bot) === 0) { setJump(bot, false); return 'failed:no-scaffold' }
-  if (headBlockedAt(bot)) { setJump(bot, false); setForward(bot, false); return 'failed:head-blocked' }
+  if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
     if (bp.y >= st.startFloor + PILLAR_APEX) {
@@ -462,7 +465,7 @@ function digStepRun(bot, ctx) {
   // pit floor is not an escape. (The step column itself is not required: a
   // natural +1 ledge nearby is genuine progress too.)
   const grounded = !bot.entity || !!bot.entity.onGround
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
   if (!st.dir) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
@@ -515,19 +518,22 @@ function hopStepRun(bot, ctx) {
   const st = rec.st || (rec.st = { dir: null, stepPos: null, phase: 'back', waited: 0, startFloor: null, backStart: null, jumping: false })
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
-  if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  // Head veto only before the leap latches: a mount that lands under a
+  // 2-high ceiling is still an escape, and killing jump mid-air drops the
+  // body back off the step.
+  if (!st.jumping && headBlockedAt(bot)) { setJump(bot, false); setForward(bot, false); return 'failed:head-blocked' }
   if (!st.dir) {
     const gp = ctx.stuck && ctx.stuck.goal
     st.dir = findHopStepDir(bot, gp)
-    if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
+    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
     // Absolute anchor: the relative cell goes stale the moment the body
     // walks (floor(bp) shifts), so the mount target is fixed once here.
     const step = cellAt(bot, st.dir[0], 0, st.dir[1])
     const q = step && step.position
-    if (!q) { st.dir = null; setJump(bot, false); return 'failed:no-step' }
+    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
     st.stepPos = { x: q.x, y: q.y, z: q.z }
     st.backStart = { x: bp.x, y: bp.y, z: bp.z }
     try {

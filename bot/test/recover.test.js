@@ -1030,6 +1030,68 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
   })
 
+  it('hop latches at the physical flush distance (0.8), walks farther out', () => {
+    // Round-1 major: flush contact is exactly half-block plus half-body, so
+    // a strict < 0.8 latch never fires and the primitive always times out.
+    const bot = stepBot()
+    bot.entity.position = pos(0.7, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('jump'), 'leap latches at exactly 0.8')
+  })
+
+  it('hop leaves no control pressed after the mount', () => {
+    // Round-1 major (dismissed as stated, pinned anyway): done must clear
+    // forward as well as jump, or the body walks on after release.
+    const bot = stepBot()
+    bot.entity.position = pos(1.5, 62, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.ok(!bot.getControlState('forward'), 'forward released')
+    assert.ok(!bot.getControlState('jump'), 'jump released')
+  })
+
+  it('overhang above the step (step+2 solid): hop stays out', async () => {
+    // Round-1 minor: the head ends two above the step base, so a cap there
+    // makes the mount unstandable.
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 63, 0)) {
+        return { ...b, name: 'stone', boundingBox: 'block' }
+      }
+      return b
+    }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'sidestep', `got ${r.action}`)
+  })
+
   it('hop walks to the edge first, leaps inside jump range', () => {
     const bot = stepBot()
     bot.entity.position = pos(-1.5, 61, 0.5)
