@@ -33,10 +33,12 @@ const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable t
 const MOVE_TOLERANCE = 0.5
 const RETURN_RANGE = 2
 
-// Search budget (idkcraft-atl.9): K=24 legs or 5 minutes. Inner-ring legs
-// are short, so the 22 legs out to ring-128 fit. Plain constants — the
-// values never change at runtime (not forwarded in compose); tests stub
-// them through the module export below.
+// Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
+// first (time is the intended real limit). The 22 legs out to ring-128
+// walk ~770 blocks (~3 min open-ground + re-finds), so they fit the cap
+// on easy terrain; stalls and stuck episodes bind it earlier in forest.
+// Plain constants — the values never change at runtime (not forwarded in
+// compose); tests stub them through the module export below.
 const SEARCH_BUDGET = { legs: 24, minutes: 5 }
 function searchLegs() {
   return SEARCH_BUDGET.legs
