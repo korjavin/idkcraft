@@ -592,7 +592,7 @@ function fleeReflex(bot, ctx) {
       } catch (_) { /* default best-effort */ }
     }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } ctx.step = null; ctx.stepStatus = null; ctx.gohome = null; ctx.stay = null; ctx.inShelter = false; try { const mov = ctx.movements; if (mov && typeof mov.canDig === 'boolean') mov.canDig = true } catch (_) { /* reset best-effort */ } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
