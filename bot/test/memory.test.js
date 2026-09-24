@@ -389,9 +389,22 @@ describe('followName persistence (idkcraft-p4s)', () => {
     assert.equal(back.follow, 1)
   })
 
-  it('an empty snapshot still clears a stored follow (p4s minor)', () => {
+  it('an unrestored pre-spawn save never wipes a stored follow (p4s majors)', () => {
+    // Failing-first: end/kicked/error savers run before spawn restores, with
+    // an empty ctx — that write must not clobber the file.
+    const full = {}
+    fillCtx(full, 1000)
+    full.followName = 'Gone'
+    assert.equal(memory.save(botAt(SPAWN_A), full, file, 1000), true)
+    assert.equal(memory.save(botAt(SPAWN_A), {}, file, 2000), false, 'unrestored empty write blocked')
+    const ctx = {}
+    memory.restore(botAt(SPAWN_A), ctx, file, 2000)
+    assert.equal(ctx.followName, 'Gone')
+  })
+
+  it('an explicit null revoke clears a stored follow (p4s)', () => {
     assert.equal(memory.save(botAt(SPAWN_A), { followName: 'Gone' }, file, 1000), true)
-    assert.equal(memory.save(botAt(SPAWN_A), {}, file, 2000), true, 'clearing write goes through')
+    assert.equal(memory.save(botAt(SPAWN_A), { followName: null }, file, 2000), true, 'revoke writes')
     const ctx = {}
     memory.restore(botAt(SPAWN_A), ctx, file, 2000)
     assert.equal(ctx.followName, undefined)

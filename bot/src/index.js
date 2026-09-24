@@ -367,11 +367,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.lead = null
     ctx.leadStuck = 0
     ctx.leadTargetGone = 0
+    // p4s: 'go work'/'free'/'build here' revoke a HELD follow order — the
+    // disk copy goes with it, or a restart resurrects an order the owner
+    // cancelled. Only the live closure counts as held: a merely remembered
+    // (restored, unadopted) name stays on disk for the next restart.
+    const held = followName
     followName = ''
-    // p4s: 'go work'/'free'/'build here' revoke the follow order — the disk
-    // copy goes with it, or a restart resurrects an order the owner cancelled.
-    try { ctx.followName = null } catch (_) { /* follow best-effort */ }
-    try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    if (held) {
+      try { ctx.followName = null } catch (_) { /* follow best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    }
     ctx.lastGoalKey = ''
     ctx.gather = null
     ctx.forage = null // fresh episode: stale skips/finals must not veto it
@@ -1223,21 +1228,17 @@ try {
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
 // Follow target adoption at (re)start (idkcraft-p4s): the env order wins
-// (already the ticker's name, so this only runs when it is empty) — then the
-// name disk memory kept across the deploy, but only while that player is
-// online; then, with nobody to prefer, the single online player. Pure:
-// roster reads only, so unit tests pin every branch.
+// (already the ticker's name, so this only runs when it is empty) — then
+// ONLY the name disk memory kept across the deploy, and only while that
+// player is online. Never the single online player: the owner may want
+// autonomous work, and that is their command, not the restart's decision.
+// Pure: roster reads only, so unit tests pin every branch.
 function startupFollow(bot, memName) {
   try {
     const players = (bot && bot.players) || {}
     if (typeof memName === 'string' && memName) {
       const real = resolvePlayer(bot, memName)
       if (real && players[real]) return real
-    }
-    const others = Object.keys(players).filter((k) => k !== bot.username && players[k])
-    if (others.length === 1) {
-      const p = players[others[0]]
-      return (p && p.username) || others[0]
     }
   } catch (_) { /* roster best-effort */ }
   return ''

@@ -1178,37 +1178,47 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
 describe('pillar_up place-error at runtime (idkcraft-p4s)', () => {
   it('a rejected placement takes pillar off the menu for the episode', async () => {
     // Not by construction: a real failed:place-error outcome must flip the
-    // episode flag (revmux 01 dinged the synthetic-counter version). Choices
-    // read off the decision lines, like the episode test below.
-    const bot = worldBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    // episode flag (revmux 02 minor: the 4jr last-exclusion already covers
+    // the FIRST choice after a failure, so only the second post-failure
+    // choice proves the flag). Open ground by a tall crag, high goal: pillar
+    // stays feasible at any jump drift. dig_step is picked second (column
+    // beside the feet) and fails fast without a dig function, so the third
+    // choice is the first one the 4jr last-exclusion does not cover —
+    // without the flag it re-picks pillar (places 2).
+    const solids = new Set()
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) solids.add(`${x},60,${z}`)
+    for (let y = 61; y <= 70; y++) solids.add(`1,${y},0`)
+    const bot = worldBot(solids, [{ name: 'dirt', count: 10 }])
+    bot.dig = undefined
     bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    let asks = 0
     const brain = {
       source: 'stub',
-      ask: async () => 'pillar_up',
+      ask: async () => { asks++; return 'pillar_up' },
       decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }),
     }
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     let places = 0
     bot.placeBlock = async () => { places++; throw new Error('placement rejected') }
-    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 0, y: 64, z: 0 } }
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 0, y: 70, z: 0 } }
     const step = harness(bot)
     const lines = []
     const origLog = console.log
     console.log = (l) => { lines.push(String(l)) }
+    const chosen = () => lines.filter((l) => l.includes('outcome=chosen'))
+      .map((l) => (l.match(/action=(\w+)/) || [])[1]).filter(Boolean)
     try {
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 150 && !(places >= 1 && asks >= 3 && chosen().length >= 3); i++) {
         await ticker.tick()
         await flush()
         step()
-        const climbed = lines.some((l) => l.includes('action=pillar_up'))
-        const movedOn = lines.some((l) => /action=(sidestep|dig_up|dig_through|hop_step|dig_step|call_player|wait)/.test(l))
-        if (places >= 1 && movedOn) break
       }
-      assert.ok(lines.some((l) => l.includes('action=pillar_up')), 'first choice climbs')
+      const actions = chosen()
+      assert.equal(actions[0], 'pillar_up', 'first choice climbs')
       assert.ok(places >= 1, 'pillar placed once and failed')
-      assert.ok(lines.some((l) => /action=(sidestep|dig_up|dig_through|hop_step|dig_step|call_player|wait)/.test(l)),
-        'menu moves on after the place-error')
-      assert.equal(places, 1, 'pillar never retried in the episode')
+      assert.ok(asks >= 3, 'menu re-asked past both failures')
+      assert.ok(actions.length >= 3, 'third choice happened: ' + actions.join(','))
+      assert.notEqual(actions[2], 'pillar_up', 'flag keeps pillar off the later choice: ' + actions.join(','))
     } finally {
       console.log = origLog
       ticker.destroy()

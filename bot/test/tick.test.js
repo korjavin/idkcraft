@@ -1178,16 +1178,13 @@ describe('work mode (epic rw4)', () => {
         assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued')
         assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
         assert.ok(!lines.some((l) => l.includes('goal step=')), 'work mode not entered')
-        // Arrival with the adopted (unseen) player online: stand by for
-        // them (followWaiting), do not resume work (contract change p4s —
-        // reunion outranks cave work). Edge stop: the executor ends on the
-        // floored block centre, 2.55 out — still home.
+        // Arrival resumes the skipped work mode (one-shot). Edge stop: the
+        // executor ends on the floored block centre, 2.55 out — still home.
         bot.entity.position = pos(-47.5, 65, -205.5)
         lines.length = 0
         await new Promise((r) => setTimeout(r, 60))
-        assert.equal(bot._tickerCtx.followName, 'P', 'single player adopted')
-        assert.equal(bot._tickerCtx.work, false, 'no work while the followed player is unseen')
-        assert.ok(!lines.some((l) => l.includes('goal step=')), 'work not resumed on arrival')
+        assert.equal(bot._tickerCtx.work, true)
+        assert.ok(lines.some((l) => l.includes('goal step=')), 'work resumed on arrival')
       } finally {
         console.log = origLog
       }
@@ -2046,18 +2043,14 @@ describe('nobody-online leave', () => {
     }
   })
 
-  it('runOnce adopts the single online player without BOT_FOLLOW', async () => {
-    // Contract change (idkcraft-p4s, bead acceptance a): one player online
-    // and no BOT_FOLLOW adopts follow instead of entering work mode — the
-    // deploy-mid-session case that used to strand the bot in rest 60 blocks
-    // from the owner.
+  it('runOnce works on first spawn only without BOT_FOLLOW', async () => {
     const { runOnce } = require('../src/index')
     const lines = []
     const origLog = console.log
     console.log = (l) => { lines.push(String(l)) }
     try {
-      // Single online player: first spawn follows, so ticks log follow, no
-      // goal steps. Emptying the roster afterwards lets the bot quit itself
+      // No follow target: first spawn enters work mode, so ticks log goal
+      // steps. Emptying the roster afterwards lets the bot quit itself
       // (ticker destroyed: silent for the rest of the file).
       const bot = connBot()
       bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
@@ -2069,9 +2062,7 @@ describe('nobody-online leave', () => {
       }).then(() => { done = true }, () => { done = true })
       bot.emit('spawn')
       await new Promise((r) => setTimeout(r, 60))
-      assert.ok(!lines.some((l) => l.includes('goal step=')), 'no work mode with adopted follow')
-      assert.ok(lines.some((l) => l.includes('action=follow')), 'adopted follow decides instead')
-      assert.equal(bot._tickerCtx.followName, 'Steve', 'adoption recorded on ctx')
+      assert.ok(lines.some((l) => l.includes('goal step=gather')), 'work mode entered on first spawn')
       bot.players = {}
       await new Promise((r) => setTimeout(r, 300))
       assert.equal(done, true) // quit itself, ticker destroyed
@@ -3134,6 +3125,23 @@ describe('place_error backstop removal (idkcraft-p4s)', () => {
 })
 
 describe('go work revokes persisted follow (idkcraft-p4s)', () => {
+  it('work() with a remembered-but-offline name keeps it on ctx', async () => {
+    // Round-02 minor: restore() may set ctx.followName for an offline player
+    // the spawn did not adopt — work() must not erase it for next restart.
+    const bot = mockBot()
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    try {
+      const ctx = bot._tickerCtx
+      ctx.followName = 'Absent'
+      ticker.work()
+      assert.equal(ticker.getFollowName(), '')
+      assert.equal(ctx.followName, 'Absent')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('work() clears the closure and the ctx copy', async () => {
     const bot = mockBot()
     bot.chat = () => {}
@@ -3162,11 +3170,11 @@ describe('startup follow adoption (idkcraft-p4s)', () => {
   it('saved follow online wins', () => {
     assert.equal(startupFollow(rosterBot(['LoptiFriend']), 'LoptiFriend'), 'LoptiFriend')
   })
-  it('saved follow offline falls back to the single online player', () => {
-    assert.equal(startupFollow(rosterBot(['Solo']), 'Gone'), 'Solo')
+  it('saved follow offline adopts nobody (AGY correction)', () => {
+    assert.equal(startupFollow(rosterBot(['Solo']), 'Gone'), '')
   })
-  it('no saved follow, single online player follows them', () => {
-    assert.equal(startupFollow(rosterBot(['Solo']), ''), 'Solo')
+  it('no saved follow, single online player: no adoption (AGY correction)', () => {
+    assert.equal(startupFollow(rosterBot(['Solo']), ''), '')
   })
   it('no saved follow, several players: no adoption', () => {
     assert.equal(startupFollow(rosterBot(['A', 'B']), ''), '')

@@ -128,9 +128,12 @@ function snapshot(bot, ctx, now) {
       visited = visited.slice(-VISITED_MAX)
     }
   } catch (_) { /* visited best-effort */ }
-  let follow = null
+  // Tri-state (p4s): a remembered name, null for an explicit revoke, and
+  // undefined for a ctx that never restored — only the revoke may clear.
+  let follow
   try {
     if (ctx && typeof ctx.followName === 'string' && ctx.followName) follow = ctx.followName
+    else if (ctx && ctx.followName === null) follow = null
   } catch (_) { /* follow best-effort */ }
   let spots = []
   try {
@@ -179,10 +182,11 @@ function save(bot, ctx, file, now) {
         doc.homes = merged.slice(-HOMES_MAX)
       }
     } catch (_) { /* first save, corrupt or other world: fresh list */ }
-    // A follow revocation is information too: when the file still names a
-    // target the empty snapshot must go through to clear it (p4s minor).
+    // A follow revocation is information too: an explicit null clears the
+    // stored target, but an unrestored ctx (undefined) never wipes the file
+    // on a pre-spawn end/kicked/error save (p4s majors).
     const prevFollow = prev && typeof prev.follow === 'string' && prev.follow ? prev.follow : null
-    if (empty && !(prevFollow && !doc.follow)) return false
+    if (empty && !(prevFollow && doc.follow === null)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)
