@@ -1467,6 +1467,19 @@ describe('work mode (epic rw4)', () => {
     ticker.destroy()
   })
 
+  it('(f2) status names the rest reason when resting', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    bot._tickerCtx.step = 'rest'
+    bot._tickerCtx.restWhy = 'gather: load full, explore: house not built yet'
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.equal(bot.chats[bot.chats.length - 1], 'working step=rest resting because gather: load full, explore: house not built yet logs=0 planks=0 home=none')
+    ticker.destroy()
+  })
+
   it('(h) work + inShelter + hostile at 5: fight not dispatched', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
