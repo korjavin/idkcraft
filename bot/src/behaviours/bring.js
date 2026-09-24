@@ -33,17 +33,18 @@ const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable t
 const MOVE_TOLERANCE = 0.5
 const RETURN_RANGE = 2
 
-// Search legs (idkcraft-atl.8): when the local find comes up empty the
-// order walks explore legs (primitive atl.1) instead of refusing, re-finding
-// after each arrival — up to K legs or N minutes, then an honest refusal.
-// The bead's defaults; env tunes the stand and the far-find test.
+// Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
+// first (time is the intended real limit). The 22 legs out to ring-128
+// walk ~770 blocks (~3 min open-ground + re-finds), so they fit the cap
+// on easy terrain; stalls and stuck episodes bind it earlier in forest.
+// Plain constants — the values never change at runtime (not forwarded in
+// compose); tests stub them through the module export below.
+const SEARCH_BUDGET = { legs: 24, minutes: 5 }
 function searchLegs() {
-  const raw = parseInt((process.env && process.env.BRING_SEARCH_LEGS) || '4', 10)
-  return Number.isFinite(raw) && raw >= 0 ? raw : 4
+  return SEARCH_BUDGET.legs
 }
 function searchMinutes() {
-  const raw = parseFloat((process.env && process.env.BRING_SEARCH_MINUTES) || '3')
-  return Number.isFinite(raw) && raw > 0 ? raw : 3
+  return SEARCH_BUDGET.minutes
 }
 
 function dropFor(blockName) {
@@ -814,5 +815,6 @@ module.exports.chooseBringSearch = chooseBringSearch
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
+module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA

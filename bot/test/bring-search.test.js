@@ -5,7 +5,7 @@
 // two-option menu search_more / give_up (FSM reserve: search_more until K);
 // exhaustion refuses honestly; stop mid-search cancels the order.
 
-const { describe, it, beforeEach, afterEach } = require('node:test')
+const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
 const { chooseBringSearch } = bring
@@ -138,15 +138,10 @@ async function drive(bot, ctx, onKill, maxTicks = 600, stats = null) {
   }
 }
 
-beforeEach(() => { delete process.env.BRING_SEARCH_LEGS; delete process.env.BRING_SEARCH_MINUTES })
-afterEach(() => { delete process.env.BRING_SEARCH_LEGS; delete process.env.BRING_SEARCH_MINUTES })
 
 describe('bring-me search legs (idkcraft-atl.8)', () => {
   it('cow at 120: explore legs, hunt, toss', async () => {
-    // K raised: the spiral reaches ring-128 north around leg 25 with
-    // teleports, past the default K=4 (~80 blocks of reach with real
-    // walking). Defaults are covered by the one-leg-out test below.
-    process.env.BRING_SEARCH_LEGS = '30'
+    // Defaults (atl.9: K=24): the spiral reaches ring-128 north at leg 22.
     const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 0, 64, -120)] })
     bot._moving = true
     const ticker = tickerFor(bot)
@@ -162,13 +157,13 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'no animals nearby, searching…'), `lines: ${bot.lines}`)
     assert.ok(bot.calls.goals.some((g) => g && g.constructor && g.constructor.name === 'GoalXZ'), 'walked explore legs')
-    assert.ok(stats.legs > 4, `walked past the default K: ${stats.legs} legs`)
+    assert.ok(stats.legs >= 22, `reached ring-128: ${stats.legs} legs`)
     assert.ok(bot.lines.some((l) => /^going hunting: cow \d+ blocks away$/.test(l)), `lines: ${bot.lines}`)
     assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.beef, null, 1]])
   })
 
-  it('empty world: honest refusal after the default 4 legs', async () => {
+  it('empty world: honest refusal after the default 24 legs', async () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     anchor(bot._tickerCtx)
@@ -176,7 +171,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'no animals nearby, searching…'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'searched 4 areas, no animals'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no animals'), `lines: ${bot.lines}`)
     assert.equal(bot.attackCalls.length, 0)
   })
 
@@ -197,7 +192,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.deepEqual(bot.tossCalls, [[ITEMS.coal, null, 1]])
   })
 
-  it('blocks with nothing anywhere: honest refusal after 4 legs', async () => {
+  it('blocks with nothing anywhere: honest refusal after the default 24 legs', async () => {
     const bot = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }], playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     anchor(bot._tickerCtx)
@@ -207,7 +202,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     }
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
-    assert.ok(bot.lines.some((l) => l === 'searched 4 areas, no coal_ore'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no coal_ore'), `lines: ${bot.lines}`)
   })
 
   it('model give_up refuses at once with no legs walked', async () => {
@@ -243,9 +238,9 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     handleChat(bot, ticker, 'P', 'bring me food')
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
-    assert.equal(calls, 4)
-    assert.ok(brains[0].startsWith('search=food legs=0/4'), `first ask: ${brains[0]}`)
-    assert.ok(bot.lines.some((l) => l === 'searched 4 areas, no animals'), `lines: ${bot.lines}`)
+    assert.equal(calls, 24)
+    assert.ok(brains[0].startsWith('search=food legs=0/24'), `first ask: ${brains[0]}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no animals'), `lines: ${bot.lines}`)
   })
 
   it('stop mid-search cancels the order and drops the leg', async () => {
@@ -314,7 +309,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     bot._tickerCtx.bring = {
       kind: 'food', name: 'food', want: 1, by: 'P', phase: 'find',
       have: 0, announced: false,
-      searchLegs: { legs: 0, startedAt: Date.now() - 4 * 60 * 1000, announced: false, last: 'empty' },
+      searchLegs: { legs: 0, startedAt: Date.now() - 6 * 60 * 1000, announced: false, last: 'empty' },
     }
     await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null)
@@ -334,7 +329,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.equal(o && o.searchSkipFar, true)
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
-    assert.ok(bot.lines.some((l) => l === 'searched 4 areas, no coal_ore'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no coal_ore'), `lines: ${bot.lines}`)
 
     const stoneBot = mockBot({ playerPos: pos(30, 64, 0) })
     const stoneTicker = tickerFor(stoneBot)
@@ -359,7 +354,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.ok(!bot.lines.some((l) => l.includes('within 160 blocks')), `no far refusal: ${bot.lines}`)
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
-    assert.ok(bot.lines.some((l) => l === 'searched 4 areas, no coal'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no coal'), `lines: ${bot.lines}`)
   })
 
   it('stop mid-ask touches nothing: no chat, no refuse', async () => {
@@ -424,6 +419,23 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.equal(bot._tickerCtx.bring, null)
     assert.equal(bot.calls.goals.length, 0)
     assert.ok(bot.lines.some((l) => l === 'searched 0 areas, no animals'), `lines: ${bot.lines}`)
+  })
+  it('budget stubbed through the module export shortens the search', async () => {
+    const budget = bring.SEARCH_BUDGET
+    assert.deepEqual(budget, { legs: 24, minutes: 5 })
+    budget.legs = 1
+    try {
+      const bot = mockBot({ playerPos: pos(30, 64, 0) })
+      const ticker = tickerFor(bot)
+      anchor(bot._tickerCtx)
+      handleChat(bot, ticker, 'P', 'bring me food')
+      await drive(bot, bot._tickerCtx, null)
+      assert.equal(bot._tickerCtx.bring, null)
+      assert.ok(bot.lines.some((l) => l === 'searched 1 areas, no animals'), `lines: ${bot.lines}`)
+    } finally {
+      budget.legs = 24
+    }
+    assert.equal(bring.SEARCH_BUDGET.legs, 24)
   })
 
 })
