@@ -658,6 +658,14 @@ describe('recover choice sources', () => {
     const r = await recover.chooseRecovery(boom, facts, ['wait'])
     assert.deepEqual(r, { action: 'wait', source: 'only-option', fsm: 'wait', model: null })
   })
+  it('failed exclusion shrinking the menu to one: only-option, brain never asked', async () => {
+    // Round-2 minors: asking a one-answer question wastes a brain call and
+    // up to BRAIN_TIMEOUT_MS on the tick path, up to MAX_FAILS-1 times.
+    const boom = { source: 'x', ask: async () => { throw new Error('must not ask') } }
+    const failed = { ...facts, last: 'sidestep:failed:no-progress' }
+    const r = await recover.chooseRecovery(boom, failed, ['sidestep', 'wait'])
+    assert.deepEqual(r, { action: 'wait', source: 'only-option', fsm: 'wait', model: null })
+  })
   it('brain without ask: FSM directly, source fsm', async () => {
     const r = await recover.chooseRecovery({ source: 'stub' }, facts, feasible)
     assert.deepEqual(r, { action: 'sidestep', source: 'fsm', fsm: 'sidestep', model: null })

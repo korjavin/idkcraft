@@ -279,14 +279,16 @@ async function chooseRecovery(brain, facts, feasible) {
   const names = RECOVER_ORDER.filter((n) => feasible.includes(n))
   const text = recoverText(facts)
   const fsm = recoverFsm(facts, names)
-  if (names.length <= 1) return { action: names[0] || 'wait', source: 'only-option', fsm, model: null }
-  if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
-  const model = (brain.source || brain.name || 'model')
   // The just-failed primitive is out of the MODEL menu (4jr): the FSM
   // already escalates past it, but laya repeated pillar_up to MAX_FAILS.
   // Kept when it is the only option; the FSM fallback below still sees it.
+  // Decided on askNames, not names (round-2 minors): a menu shrunk to one
+  // answer must not cost a brain call on the tick path.
   const failedM = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
+  if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
+  const model = (brain.source || brain.name || 'model')
   const criteria = {}
   for (const n of askNames) criteria[n] = RECOVER_CRITERIA[n]
   const fail = (reason) => {
