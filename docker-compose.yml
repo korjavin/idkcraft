@@ -101,6 +101,11 @@ services:
       prometheus.scrape: "true"
       prometheus.port: "9464"
     networks: [default, monitoring]
+    volumes:
+      # Bot disk memory (idkcraft-hlk): one JSON file per BOT_USERNAME at
+      # /app/memory, surviving restarts and redeploys. Named volume — no
+      # host path, so Portainer git stacks resolve it anywhere.
+      - bot-memory:/app/memory
     logging:
       driver: json-file
       options:
@@ -143,6 +148,11 @@ networks:
   monitoring:
     external: true
     name: ${MONITORING_NETWORK:-monitoring_internal}
+
+volumes:
+  # Bot disk memory (idkcraft-hlk): homes, resource finds, explored chunks
+  # and danger spots. Named volume, no host bind.
+  bot-memory:
 
 configs:
   # Inline patch definition (no bind mount: Portainer git stacks resolve

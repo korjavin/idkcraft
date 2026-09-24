@@ -148,6 +148,33 @@ describe('explore target spiral', () => {
     explore(bot, ctx, null, null)
     assert.equal(ctx.stepStatus, 'failed:no-anchor')
   })
+
+  it('(hlk) exhausted spiral restarts from the current chunk instead of done-forever', () => {
+    const bot = mockBot()
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => lines.push(String(m))
+    try {
+      const ctx = homeCtx()
+      ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+      for (const r of [16, 32, 64, 128, 192, 256]) {
+        for (let a = 0; a < 8; a++) {
+          const x = Math.round(r * Math.sin(a * Math.PI / 4))
+          const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+          ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+        }
+      }
+      explore(bot, ctx, null, null)
+      assert.equal(ctx.stepStatus, 'done')
+      assert.deepEqual([...ctx.explore.visited], ['0,0']) // only the current chunk kept
+      ctx.stepStatus = 'running'
+      explore(bot, ctx, null, null) // next step re-picks instead of done-looping
+      assert.deepEqual(ctx.explore.target, { x: 0, z: -16 })
+      assert.equal(bot.calls.goals.length, 1)
+    } finally {
+      console.log = origLog
+    }
+  })
 })
 
 describe('explore walk and arrival', () => {
