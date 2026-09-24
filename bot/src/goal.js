@@ -337,7 +337,9 @@ function goalFacts(bot, ctx) {
       bp.y >= interior.min.y && bp.y <= interior.max.y &&
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
-  const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
+  // A station the equip step placed also counts (atl.6): otherwise the
+  // craft step rebuilds a table from planks every time equip places one.
+  const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
   let known = 'none'
   try {
     if (forageMod.planForage(bot, ctx)) known = 'near'

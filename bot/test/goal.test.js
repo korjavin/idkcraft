@@ -730,6 +730,17 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
     const r = await decide(bot, { home: { table: pos(2, 64, 0) } })
     assert.equal(r.action, 'equip')
   })
+  it('claimed station counts as placed: craft stops rebuilding tables', () => {
+    // atl.6 ping-pong: equip places the inventory table, craft must not
+    // rebuild another from planks while it stands. 5 planks isolate the
+    // table clause (6+ would legitimately fire the door clause instead).
+    const bot = kit([{ name: 'oak_planks', count: 5 }])
+    assert.equal(goalFacts(bot, {}).tablePlaced, false)
+    assert.equal(MENU.craft.feasible(goalFacts(bot, {}), bot, {}), true)
+    const claimed = { home: null, claimedTable: { x: 1, y: 64, z: 0 } }
+    assert.equal(goalFacts(bot, claimed).tablePlaced, true)
+    assert.equal(MENU.craft.feasible(goalFacts(bot, claimed), bot, claimed), false)
+  })
   it('criterion is a short clause', () => {
     assert.ok(STEP_CRITERIA.equip.includes('blocks are low'))
   })

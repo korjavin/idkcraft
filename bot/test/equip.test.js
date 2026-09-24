@@ -375,11 +375,13 @@ describe('equip step', () => {
       blockAtImpl: () => ({ name: 'air' }),
     })
     const ctx = freshCtx({ table: { x: 50, y: 64, z: 50 } })
+    ctx.claimedTable = { x: 50, y: 64, z: 50 } // stale: retract so craft rebuilds
     equip(bot, ctx, null, {})
     await flush()
     assert.equal(bot.calls.craft.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
     assert.ok(bot.errs.some((e) => e.includes('no-table')))
+    assert.equal(ctx.claimedTable, undefined)
     bot.restoreError()
   })
 
@@ -425,6 +427,7 @@ describe('equip step', () => {
     await flush()
     assert.equal(bot.calls.craft.length, 1)
     assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, placed)
+    assert.deepEqual(ctx.claimedTable, placed) // menu-visible claim, homeless or not
     bot.restoreError()
   })
 

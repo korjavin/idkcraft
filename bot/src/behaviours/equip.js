@@ -77,12 +77,14 @@ function tableFor(bot, ctx) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return nope('no-table')
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
-  // Our own placed station doubles as the home table when homeless (the
-  // claim above only sticks while ctx.home exists). Ghost entries (mined
-  // away) fall through to the inventory branch instead of shadowing it.
+  // Candidate stations: the home table, our own placed one, the menu
+  // claim. Ghost entries (mined away) fall through to the inventory branch
+  // instead of shadowing it — and a fully-ghosted claim is retracted so the
+  // craft step rebuilds again instead of starving us.
   const tables = []
   if (ctx.home && ctx.home.table) tables.push(ctx.home.table)
   if (st.tablePos) tables.push(st.tablePos)
+  if (ctx.claimedTable) tables.push(ctx.claimedTable)
   let homeTable = null
   let homeBlock = null
   for (const t of tables) {
@@ -106,6 +108,13 @@ function tableFor(bot, ctx) {
     if (st.walkWaits > 20) return nope('table-unreachable')
     return Promise.resolve(null) // walking: retry on a later tick
   }
+  // No station standing: our claim (if any) lies — retract it so craft
+  // rebuilds from planks instead of deadlocking the kit. ctx.home.table is
+  // never retracted here: an unloaded chunk reads the same as a mined table,
+  // and build owns that claim.
+  try {
+    if (ctx.claimedTable) delete ctx.claimedTable
+  } catch (_) { /* retract best-effort */ }
   const tableItem = itemsOf(bot).find((i) => i && i.name === 'crafting_table')
   if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table')
   // Beside the body, not under it: the feet cell collides with the bot and
@@ -142,11 +151,13 @@ function tableFor(bot, ctx) {
     let block = null
     try { block = bot.blockAt(at) } catch (_) { block = null }
     if (!block || block.name !== 'crafting_table') throw new Error('table-place')
-    // Claim the placed station (craft-step contract): the menu's table
-    // clause sees it and stops rebuilding tables from planks while we arm.
-    // Build overwrites the claim with its own site table when it lands one.
+    // Claim the placed station (craft-step contract, read by tablePlaced
+    // in goalFacts): the menu stops rebuilding tables from planks while we
+    // arm. Build overwrites the home claim with its own site table when it
+    // lands one.
     try {
       st.tablePos = { x: at.x, y: at.y, z: at.z }
+      ctx.claimedTable = { x: at.x, y: at.y, z: at.z }
       if (ctx.home && typeof ctx.home === 'object') ctx.home.table = at
     } catch (_) { /* claim best-effort */ }
     return { block, pos: at }
