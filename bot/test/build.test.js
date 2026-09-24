@@ -441,6 +441,10 @@ describe('8si the approach must not eat the door or the workbench', () => {
           return
         }
       }
+      // Arrived: the mock body overshoots two east (inside the build
+      // 5-block reach), so later segments cross the standing house — past
+      // the table cell and the door, which a static bot never threatens.
+      bot.entity.position = pos(Math.floor(g.pos.x) + 2, g.pos.y, Math.floor(g.pos.z))
       bot._moving = true
       transit.n = 1
     }
