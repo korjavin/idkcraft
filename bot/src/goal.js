@@ -124,6 +124,10 @@ const MENU = {
 // Priority order (epic rw4): night steps first, then craft, build, gather,
 // rest last. goalFsm is pure priority over the feasible names it is given.
 const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'rest']
+// Alone-explore cap (idkcraft-dxl): without players the bot must not wander
+// past this many blocks from home — new chunks bloat the host disk. Read by
+// atl.1 explore.js when it lands; until then no behaviour consumes it.
+const AUTONOMOUS_EXPLORE_RADIUS = 256
 
 // Home site shape (bead .4): site is the SW-corner origin at ground level,
 // interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
@@ -445,4 +449,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }

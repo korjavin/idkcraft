@@ -151,8 +151,134 @@ describe('bring me order', () => {
     assert.ok(!weird._tickerCtx.bring, 'no order created')
     const empty = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
     handleChat(empty, tickerFor(empty), 'P', 'bring me coal')
-    assert.deepEqual(empty.lines, ['no coal within 48 blocks'])
+    assert.deepEqual(empty.lines, ['no coal within 48 blocks (loaded area)'])
     assert.ok(!empty._tickerCtx.bring, 'no order created')
+  })
+
+  it('finds a block at 60 blocks via the tick-sliced far search (amb)', async () => {
+    const ore = pos(60, 64, 0)
+    const bot = mockBot({
+      spots: [ore],
+      names: {
+        '60,64,0': 'coal_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      // Emulate the real client: only hits near the scan center come back.
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me coal')
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for coal…'])
+    for (let i = 0; i < 200 && !bot._tickerCtx.bring; i++) await ticker.tick()
+    assert.ok(bot._tickerCtx.bring, 'order created on far completion')
+    assert.ok(bot.lines.includes('going for 3 coal_ore, 60 blocks away'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring.exposed, false, 'buried ore flagged at find time')
+  })
+
+  it('walk stall on buried ore names it (amb session note)', () => {
+    const bot = mockBot({
+      spots: [pos(10, 64, 0)],
+      names: { '10,64,0': 'iron_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true // pathfinder working but the body never displaces
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = {
+      name: 'iron', want: 3, by: 'P', block: 'iron_ore', drop: 'iron',
+      pos: pos(10, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true, exposed: false,
+    }
+    for (let i = 0; i < 12 && c.bring; i++) bring(bot, c, null, {})
+    assert.equal(c.bring, null, 'order refused')
+    assert.ok(bot.lines.includes('could not reach iron_ore (buried, no path in)'), `lines: ${bot.lines}`)
+  })
+
+  it('walk stall on exposed ore keeps the plain refusal', () => {
+    const bot = mockBot({
+      spots: [pos(10, 64, 0)],
+      names: { '10,64,0': 'iron_ore', '11,64,0': 'air' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = {
+      name: 'iron', want: 3, by: 'P', block: 'iron_ore', drop: 'iron',
+      pos: pos(10, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true, exposed: true,
+    }
+    for (let i = 0; i < 12 && c.bring; i++) bring(bot, c, null, {})
+    assert.equal(c.bring, null, 'order refused')
+    assert.ok(bot.lines.includes('could not reach iron_ore'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('buried')), `lines: ${bot.lines}`)
+  })
+
+  it('searchfar finds far ore over bring ticks (amb)', () => {
+    const ore = pos(60, 64, 0)
+    const bot = mockBot({
+      spots: [ore],
+      names: {
+        '60,64,0': 'coal_ore',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = { name: 'coal', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    bring(bot, c, null, {})
+    assert.equal(c.bring.phase, 'searchfar', 'sync miss parks a far cursor')
+    for (let i = 0; i < 200 && c.bring.phase === 'searchfar'; i++) bring(bot, c, null, {})
+    assert.equal(c.bring.phase, 'walk', 'far completion walks')
+    assert.deepEqual([c.bring.pos.x, c.bring.pos.y, c.bring.pos.z], [60, 64, 0])
+  })
+
+  it('searchfar refuses honestly when nothing is out there (amb)', () => {
+    const bot = mockBot({
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = { name: 'coal', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    for (let i = 0; i < 200 && c.bring; i++) bring(bot, c, null, {})
+    assert.equal(c.bring, null, 'order refused')
+    assert.ok(bot.lines.includes('no coal within 160 blocks (loaded area)'), `lines: ${bot.lines}`)
+  })
+
+  it('stop retires a pending far search, no late order (amb)', async () => {
+    const bot = mockBot({
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me coal')
+    assert.ok(bot._tickerCtx.pendingSearch, 'far search pending')
+    assert.ok(!bot._tickerCtx.bring, 'no order yet')
+    handleChat(bot, ticker, 'P', 'stop')
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'stop retires the search')
+    for (let i = 0; i < 5; i++) await ticker.tick()
+    assert.ok(!bot._tickerCtx.bring, 'no late order after stop')
+    assert.ok(bot._tickerCtx.paused, 'still parked')
   })
 
   it("'stop' mid-order cancels", () => {
