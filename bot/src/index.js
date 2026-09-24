@@ -367,7 +367,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.lead = null
     ctx.leadStuck = 0
     ctx.leadTargetGone = 0
+    // p4s: 'go work'/'free'/'build here' revoke a HELD follow order — the
+    // disk copy goes with it, or a restart resurrects an order the owner
+    // cancelled. Only the live closure counts as held: a merely remembered
+    // (restored, unadopted) name stays on disk for the next restart.
+    const held = followName
     followName = ''
+    if (held) {
+      try { ctx.followName = null } catch (_) { /* follow best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    }
     ctx.lastGoalKey = ''
     ctx.gather = null
     ctx.forage = null // fresh episode: stale skips/finals must not veto it
@@ -840,9 +849,11 @@ function fleeReflex(bot, ctx) {
         // here sidesteps the body mid-doorway every slow approach and the
         // arrival starves into an orbit.
         const nightOwns = ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')
-        if (!gatherOwns && !followOwns && !nightOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
-          ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
-        } else if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+        // p4s: no place_error backstop — a placement-error streak is the
+        // step's own signal (follow/gather count it toward their stalls), and
+        // handing the body to recover on it turned rest/roam traps into long
+        // sidestep/dig/call episodes. Only the no-displacement backstop stays.
+        if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
         }
       }
@@ -995,6 +1006,8 @@ function fleeReflex(bot, ctx) {
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
+      try { ctx.followName = real || null } catch (_) { /* follow best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
       if (!real || seen) ctx.work = false
       ctx.lastGoalKey = ''
@@ -1214,6 +1227,23 @@ try {
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
+// Follow target adoption at (re)start (idkcraft-p4s): the env order wins
+// (already the ticker's name, so this only runs when it is empty) — then
+// ONLY the name disk memory kept across the deploy, and only while that
+// player is online. Never the single online player: the owner may want
+// autonomous work, and that is their command, not the restart's decision.
+// Pure: roster reads only, so unit tests pin every branch.
+function startupFollow(bot, memName) {
+  try {
+    const players = (bot && bot.players) || {}
+    if (typeof memName === 'string' && memName) {
+      const real = resolvePlayer(bot, memName)
+      if (real && players[real]) return real
+    }
+  } catch (_) { /* roster best-effort */ }
+  return ''
+}
+
 function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
@@ -1265,11 +1295,18 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // home (e.g. an unfinished new site) wins over re-adopting the old
       // door near spawn. Adopt only when memory holds no home.
       if (tickCtx && ticker && typeof ticker.loadMemory === 'function') ticker.loadMemory()
+      // idkcraft-p4s: follow survives the deploy — adopt the remembered (or
+      // sole) target before the first decision, so work mode never starts.
+      if (tickCtx && ticker && !followName && typeof ticker.setFollow === 'function') {
+        const adopted = startupFollow(bot, tickCtx.followName)
+        if (adopted) ticker.setFollow(adopted)
+      }
       // Epic rw4.4: adopt a house an earlier run finished (door near
       // spawn) before the first decision, so a restart resumes as built.
       const found = (!tickCtx || !tickCtx.home) ? goal.adoptHome(bot) : null
       if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
-      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
+      const followedNow = ticker && typeof ticker.getFollowName === 'function' && ticker.getFollowName()
+      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
@@ -1719,4 +1756,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

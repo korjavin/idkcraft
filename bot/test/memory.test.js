@@ -375,3 +375,46 @@ describe('disk memory', () => {
     }
   })
 })
+
+describe('followName persistence (idkcraft-p4s)', () => {
+  it('round-trips the follow target through save/restore', () => {
+    const ctx1 = {}
+    fillCtx(ctx1, 1000)
+    ctx1.followName = 'LoptiFriend'
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, 1000), true)
+    const ctx2 = {}
+    const back = memory.restore(botAt(SPAWN_A), ctx2, file, 1000)
+    assert.ok(back, 'restore works')
+    assert.equal(ctx2.followName, 'LoptiFriend')
+    assert.equal(back.follow, 1)
+  })
+
+  it('an unrestored pre-spawn save never wipes a stored follow (p4s majors)', () => {
+    // Failing-first: end/kicked/error savers run before spawn restores, with
+    // an empty ctx — that write must not clobber the file.
+    const full = {}
+    fillCtx(full, 1000)
+    full.followName = 'Gone'
+    assert.equal(memory.save(botAt(SPAWN_A), full, file, 1000), true)
+    assert.equal(memory.save(botAt(SPAWN_A), {}, file, 2000), false, 'unrestored empty write blocked')
+    const ctx = {}
+    memory.restore(botAt(SPAWN_A), ctx, file, 2000)
+    assert.equal(ctx.followName, 'Gone')
+  })
+
+  it('an explicit null revoke clears a stored follow (p4s)', () => {
+    assert.equal(memory.save(botAt(SPAWN_A), { followName: 'Gone' }, file, 1000), true)
+    assert.equal(memory.save(botAt(SPAWN_A), { followName: null }, file, 2000), true, 'revoke writes')
+    const ctx = {}
+    memory.restore(botAt(SPAWN_A), ctx, file, 2000)
+    assert.equal(ctx.followName, undefined)
+  })
+
+  it('follow-only snapshot still saves (no home/resources needed)', () => {
+    assert.equal(memory.save(botAt(SPAWN_A), { followName: 'Solo' }, file, 1000), true)
+    const ctx2 = {}
+    const back = memory.restore(botAt(SPAWN_A), ctx2, file, 1000)
+    assert.ok(back, 'restore works')
+    assert.equal(ctx2.followName, 'Solo')
+  })
+})

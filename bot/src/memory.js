@@ -128,6 +128,13 @@ function snapshot(bot, ctx, now) {
       visited = visited.slice(-VISITED_MAX)
     }
   } catch (_) { /* visited best-effort */ }
+  // Tri-state (p4s): a remembered name, null for an explicit revoke, and
+  // undefined for a ctx that never restored — only the revoke may clear.
+  let follow
+  try {
+    if (ctx && typeof ctx.followName === 'string' && ctx.followName) follow = ctx.followName
+    else if (ctx && ctx.followName === null) follow = null
+  } catch (_) { /* follow best-effort */ }
   let spots = []
   try {
     const mem = ctx.danger
@@ -142,7 +149,7 @@ function snapshot(bot, ctx, now) {
       spots = spots.slice(-danger.MAX_SPOTS)
     }
   } catch (_) { /* danger best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow }
 }
 
 function readDoc(file) {
@@ -163,10 +170,11 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    if (!doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length) return false
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow
     f = file || fileFor(process.env, bot && bot.username)
+    let prev = null
     try {
-      const prev = readDoc(f)
+      prev = readDoc(f)
       if (prev && prev.v === VERSION && prev.world === doc.world && Array.isArray(prev.homes)) {
         const cur = doc.homes[doc.homes.length - 1]
         const merged = prev.homes.filter((h) => homeOf(h) && (cur ? !sameSite(h, cur) : true))
@@ -174,6 +182,11 @@ function save(bot, ctx, file, now) {
         doc.homes = merged.slice(-HOMES_MAX)
       }
     } catch (_) { /* first save, corrupt or other world: fresh list */ }
+    // A follow revocation is information too: an explicit null clears the
+    // stored target, but an unrestored ctx (undefined) never wipes the file
+    // on a pre-spawn end/kicked/error save (p4s majors).
+    const prevFollow = prev && typeof prev.follow === 'string' && prev.follow ? prev.follow : null
+    if (empty && !(prevFollow && doc.follow === null)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)
@@ -200,7 +213,11 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0 }
+    if (typeof doc.follow === 'string' && doc.follow) {
+      ctx.followName = doc.follow
+      out.follow = 1
+    }
     if (Array.isArray(doc.homes) && doc.homes.length) {
       const h = homeOf(doc.homes[doc.homes.length - 1])
       if (h) {

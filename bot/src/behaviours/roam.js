@@ -1,7 +1,6 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const recover = require('./recover')
 
 // Roam: stroll within a few blocks of a standing player. The brain only
 // picks roam when the player is close and still with no hostile near, so
@@ -15,6 +14,10 @@ const HAND_BACK_DIST = 6
 
 function roam(bot, ctx, target, state) {
   if (!target || !target.position) return
+  // A running recover episode owns the body — never fight it with a fresh
+  // stroll goal (the ticker routes episode ticks to recover anyway; this
+  // guards direct calls too).
+  if (ctx && ctx.recovery) return
   const pp = target.position
   const bp = bot.entity && bot.entity.position
   if (!bp) return
@@ -39,20 +42,13 @@ function roam(bot, ctx, target, state) {
     if (bp.distanceTo(ctx.roamLastPos) > 0.5) ctx.stuckResets = 0
   }
   if (typeof bp.clone === 'function') ctx.roamLastPos = bp.clone()
-  // Already strolling: keep walking until the pathfinder stops — unless the
-  // executor is wedged (isMoving while stuck resets pile up with no
-  // displacement; prod: 10 ticks at dist=4.6 with 3x reset=stuck). Detector
-  // only (ef3): raise the stuck fact, the recover menu picks the escape.
-  if (bot.pathfinder.isMoving()) {
-    if ((ctx.stuckResets || 0) >= 2) {
-      const spot = bp ? `spot:${Math.round(bp.x)},${Math.round(bp.z)}` : 'roam'
-      if (recover.setStuck(ctx, 'roam', ctx.roamGoal || null, spot)) {
-        console.log(`stuck reason=wedge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)} dist=${distToPlayer.toFixed(1)}`)
-      }
-      ctx.stuckResets = 0
-    }
-    return
-  }
+  // Already strolling: keep walking until the pathfinder stops. A wedged
+  // executor (isMoving with piling stuck resets and no displacement) just
+  // takes another point below — p4s: handing the body to recover here turned
+  // every 3.5 s pathfinder stop into 10-20 s of sidestep/dig/call menus that
+  // walk back into the same trap. No stuck fact from roam, ever.
+  if (bot.pathfinder.isMoving() && (ctx.stuckResets || 0) < 2) return
+  ctx.stuckResets = 0
   const angle = Math.random() * Math.PI * 2
   const r = Math.random() * ROAM_RADIUS
   const x = pp.x + Math.cos(angle) * r

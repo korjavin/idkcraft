@@ -3103,3 +3103,83 @@ describe('eat reflex', () => {
     await new Promise((resolve) => setImmediate(resolve))
   })
 })
+
+describe('place_error backstop removal (idkcraft-p4s)', () => {
+  it('place_error streaks never raise the ticker stuck fact', async () => {
+    const bot = mockBot()
+    bot.chat = () => {}
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'rest', sprint: false, source: 'test' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.placeErrors = 3
+    ctx.lastGoalKey = 'roam:1,64,0'
+    try {
+      await ticker.tick()
+      assert.equal(ctx.stuck, null, 'no recover handover on placement errors')
+      assert.equal(ctx.recovery, null, 'body stays with the step')
+    } finally {
+      ticker.destroy()
+    }
+  })
+})
+
+describe('go work revokes persisted follow (idkcraft-p4s)', () => {
+  it('work() with a remembered-but-offline name keeps it on ctx', async () => {
+    // Round-02 minor: restore() may set ctx.followName for an offline player
+    // the spawn did not adopt — work() must not erase it for next restart.
+    const bot = mockBot()
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    try {
+      const ctx = bot._tickerCtx
+      ctx.followName = 'Absent'
+      ticker.work()
+      assert.equal(ticker.getFollowName(), '')
+      assert.equal(ctx.followName, 'Absent')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('work() clears the closure and the ctx copy', async () => {
+    const bot = mockBot()
+    bot.chat = () => {}
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    try {
+      const ctx = bot._tickerCtx
+      ticker.setFollow('Steve')
+      assert.equal(ticker.getFollowName(), 'Steve')
+      assert.equal(ctx.followName, 'Steve')
+      ticker.work()
+      assert.equal(ticker.getFollowName(), '')
+      assert.equal(ctx.followName, null)
+    } finally {
+      ticker.destroy()
+    }
+  })
+})
+
+describe('startup follow adoption (idkcraft-p4s)', () => {
+  const { startupFollow } = require('../src/index')
+  function rosterBot(names) {
+    const players = {}
+    for (const n of names) players[n] = { username: n, entity: { position: pos(10, 64, 0) } }
+    return { username: 'IdkBot', players }
+  }
+  it('saved follow online wins', () => {
+    assert.equal(startupFollow(rosterBot(['LoptiFriend']), 'LoptiFriend'), 'LoptiFriend')
+  })
+  it('saved follow offline adopts nobody (AGY correction)', () => {
+    assert.equal(startupFollow(rosterBot(['Solo']), 'Gone'), '')
+  })
+  it('no saved follow, single online player: no adoption (AGY correction)', () => {
+    assert.equal(startupFollow(rosterBot(['Solo']), ''), '')
+  })
+  it('no saved follow, several players: no adoption', () => {
+    assert.equal(startupFollow(rosterBot(['A', 'B']), ''), '')
+  })
+  it('nobody online: no adoption', () => {
+    assert.equal(startupFollow(rosterBot([]), ''), '')
+  })
+})
