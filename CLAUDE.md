@@ -94,7 +94,7 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 +-------------------------------------------------------------+
 ```
 
-Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex.
+Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`, or the work-mode goal arbiter `stay` | `gohome` | `craft` | `equip` | `build` | `gather` | `deliver` | `forage` | `explore` | `rest` when nobody is followed), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex. Bot disk memory (homes, finds, chunks, danger) lives in `/app/memory/<BOT_USERNAME>.json` on the `bot-memory` named volume — do not rename the path or the volume.
 
 ### Shared Contract (do not rename)
 - **Services:** `mc`, `bot`, `laya`

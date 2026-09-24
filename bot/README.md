@@ -47,6 +47,8 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); when set, the hybrid brain runs: FSM primary, remote model on hard states only. Empty = FSM only (`brain=stub`); that is the rollback. |
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
+| `BOT_AUTONOMOUS` | `` (off) | `1`/`true` = stay and work with nobody online (free brain only); chat `autonomous on` does the same until restart |
+| `BOT_MEMORY_FILE` | `/app/memory/<name>.json` | Override for the disk-memory file (tests point it at a tmp file) |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
 idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
@@ -181,9 +183,14 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `stop` | Parks the bot in place | Clears `followName`, pauses ticker, stops pathfinder; perception and scout continue running while a player is visible, and the melee reflex still swings at a hostile within 3 blocks; clears work mode |
 | `go work` / `free` | Releases the bot to work on its own goal | Sets work mode, unparks ticker, clears `followName`; replies `on my own; say 'follow me' to call me` |
 | `status` | Reports mode, goal step, logs/planks, home | Replies e.g. `working step=rest logs=0 planks=0 home=none` |
-| `build here` | Moves the house site next to the speaker and starts a new house | Picks a flat 4x4 at radius 6 and resets build progress, even over a built home; spawn adoption chats `my home is at <x> <y> <z>` |
+| `build here` | Starts a new house next to the speaker and works on it | Always a new site (flat 4x4 at radius 6), even over a built home; replies `building a home at <x> <y> <z>` (`I can't see you, come closer` when the speaker is out of range) |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks (exposed ore first, then level with you); replies with `leading you to <name>, <N> blocks, follow me`, `no <block> within 48 blocks`, or `unknown block: <block>`; deep targets warn instead of leading |
 | `lead anyway` | Walks to a warned-about deep target | Replays the held deep offer once, then forgets it (`no deep find on hold` when there is none) |
+| `bring me <block> [count]` | Fetches blocks alone, drops them at your feet | Sync 48 scan, then sliced 96/160 far search (24 legs / 5 min budget); ores and logs only |
+| `bring me food [count]` | Brings food from inventory or hunts animals | Second+ kill of one animal reuses the spot; `only got <n> <name>` when short |
+| `autonomous on\|off` | Stays and works with nobody online (free brain only) | Chat toggle lasts until restart; permanent default is `BOT_AUTONOMOUS` |
+| `share` | Hands over everything carried except gear | Keeps tools, weapons, armour and the 32-block pillar reserve |
+| `brain [laya\|jev\|off]` | Switches the remote brain, or reports it | With a follow target only they may switch; `jev` needs `TYPESAFE_API_KEY` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind (`waiting for you, come to me (<N> blocks)`) and resumes once within 8 (`going on, <N> blocks left`), announces `here: <block> at <x> <y> <z>` on arrival, gives up with `cannot reach <block> at ...` when the vein stays unreachable or `giving up on <name>` when you never come back. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot. Safety: ore more than 8 blocks below you is never led to blindly — the bot warns (`<name> is <N> blocks down, dig carefully`) and waits for `lead anyway`.
 
@@ -198,13 +205,70 @@ hybrid brain. The bot announces every step change in chat
 following (clearing work mode); `go work` releases it again; `stop` parks it
 until the next order; `status` reports mode, step, inventory and home. Work
 continues while anyone is on the server (player roster, not visibility), and
-the bot still leaves an empty server after the nobody-online grace.
+the bot still leaves an empty server after the nobody-online grace
+(unless autonomous mode below keeps it on).
 
 Step choice goes through the shared `ask()` (`src/brain.js`): one question,
 one label back, never a model pick (laya vs jev is the URL). LAYA answers
 reliably only with up to 2 options, so a wider menu becomes a yes/no chain
 over the options in order, first yes wins. A failed ask falls back to the FSM
 step and counts `idkcraft_bot_escalation_total{from,to,reason}`.
+
+#### Work-mode menu (priority order)
+
+| Step | Says | Does |
+| --- | --- | --- |
+| `stay` | `staying inside` | Night shelter: holds inside the house till morning |
+| `gohome` | `heading home` | Walks to the door, opens it, steps inside, closes it |
+| `craft` | `crafting` | Planks, then the table and door at the placed table |
+| `equip` | `rearming` | Rebuilds the starter kit (pickaxe, sword, ~32 blocks) |
+| `build` | `building the house` | Places blueprint cells at the site; `home done at <x> <y> <z>` when finished |
+| `gather` | `chopping wood` | Logs: nearby trees first, then resource-memory finds, then staged far search |
+| `deliver` | `delivering` | Carries the haul to the nearest visible player and tosses it (keeps it when nobody is around) |
+| `forage` | `foraging` | Ores and trees via the resource memory; banks the haul for `deliver` |
+| `explore` | `exploring` | Outward spiral (rings 16–256) into new chunks; arrivals scan ores/trees into memory |
+| `rest` | `resting` | Waits and names its reasons (`resting: <why> (<source>)`) — one reason per infeasible step |
+
+`fight` still preempts every step. A failed step leaves the menu until the
+situation moves; `status` prints the current step.
+
+#### Recovery menu
+
+A no-displacement stall raises a stuck fact and the recover menu owns the
+escape (`src/behaviours/recover.js`): the model picks from a
+feasibility-gated menu of body primitives (`pillar_up`, `dig_up`,
+`sidestep`, `dig_through`, `wait`, `call_player`) through the shared
+`ask()`, with the FSM as reserve. Gave-up spots are recorded as danger
+memory and `explore`/`gather` route around them afterwards.
+
+#### Bring orders
+
+`bring me <block> [count]` fetches alone and drops at your feet: sync
+48-block scan first, then sliced 96/160 far-search shells across ticks
+(budget 24 legs or 5 minutes). `bring me food` takes it from inventory or
+hunts passive animals. `share` hands over everything carried except tools,
+weapons, armour and the pillar reserve. Deep targets warn instead of
+leading (`<name> is <N> blocks down, dig carefully`); `lead anyway`
+walks them once.
+
+#### Bot memory (named volume)
+
+Homes, resource finds, explored chunks and danger spots survive
+restart/redeploy in one JSON file, `/app/memory/<BOT_USERNAME>.json`
+(`src/memory.js`) on the `bot-memory` named volume — no host path, so it
+works on any host. Saved atomically (tmp + rename): immediately on
+`setHome`/adopt, throttled to one write per 45 s on the tick, and on every
+exit (including kick and container stop). Loaded at spawn before adoption,
+so a saved home wins over re-adopting the old door. The file is keyed by
+world spawn — a different world starts with empty memory, never a crash.
+
+#### Autonomous mode
+
+`BOT_AUTONOMOUS=1` (or chat `autonomous on`, which lasts until restart):
+the bot stays and works with nobody online and never quits on the grace.
+Alone only free brains run — a `jev` brain steps down to laya (or off when
+laya is not configured) and returns on the next join. Alone-explore is
+capped at 256 blocks from home so new chunks do not bloat the host disk.
 
 ### Brain route and disagreement logging
 
@@ -312,8 +376,21 @@ Both containers expose Prometheus metrics (compose labels
 `prometheus.scrape: "true"`; the house monitoring stack scrapes them
 into VictoriaMetrics — graph them in Grafana, no log grepping needed):
 
-- Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`.
+- Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`, `idkcraft_bot_recover_total{action,source,outcome}` (stuck-escape menu), `idkcraft_bot_bring_total{outcome,kind}`.
+- Work-mode goal metrics (same endpoint): `idkcraft_bot_goal_steps_total{step,source}` (choices by step and chooser), `idkcraft_bot_goal_step{step}` (gauge: 1 on the running step, 0 elsewhere — the state-timeline), `idkcraft_bot_goal_disagreements_total{model,fsm}` (model vs FSM step choice), `idkcraft_bot_goal_choice_duration_seconds{source}` (step-choice latency, model calls only).
 - Sidecar `/metrics` on its API port (`laya/shim.py`): `laya_predict_duration_seconds` (model latency), `laya_answers_total{choice}` (fight vs follow + errors).
+
+Goal panel queries (no dashboard JSON lives in this repo — the Grafana
+instance belongs to the house monitoring stack, so build the panel there):
+
+```promql
+# state-timeline: one series per step, 1 while running
+max_over_time(idkcraft_bot_goal_step[5m])
+# choices and latency per source over the night
+sum by (step, source) (rate(idkcraft_bot_goal_steps_total[5m]))
+histogram_quantile(0.5, sum by (le, source) (rate(idkcraft_bot_goal_choice_duration_seconds_bucket[5m])))
+sum by (model, fsm) (rate(idkcraft_bot_goal_disagreements_total[5m]))
+```
 
 ### Prod acceptance (2026-09-23, owner session on the live stack)
 
