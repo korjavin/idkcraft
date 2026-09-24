@@ -159,31 +159,69 @@ function findRef(bot, p) {
   return null
 }
 
-// Own-home guard (cww, 8si): the GoalPlaceBlock approach paths through our
-// own walls with canDig (movements default) and eats a corner — then the
-// rebuild takes priority by lay order and the roof never starts (the prod
-// 23/40<->24/40 flap). Live the approach also ate the oak door, which broke
-// adopt (no door near spawn) and each rebuild drifted fresh walls over the
-// old doorway. Planks, doors and the workbench are never a legitimate dig
-// target for any behaviour (gather digs logs via bot.dig, fight/flee path
-// around), so forbid the executor from breaking them. Idempotent per
-// movements object, re-applied if the ticker ever swaps it; a missing
-// movements or registry degrades to today's behavior, never a throw.
+// Own-home guard (cww, 8si, narrowed cjq): the GoalPlaceBlock approach
+// paths through our own walls with canDig (movements default) and eats a
+// corner — then the rebuild takes priority by lay order and the roof never
+// starts (the prod 23/40<->24/40 flap). Live the approach also ate the oak
+// door, which broke adopt (no door near spawn) and each rebuild drifted
+// fresh walls over the old doorway. So the executor must not break the
+// house — but only the house: the old session-global id ban (every
+// *_planks/*_door/crafting_table anywhere, for every behaviour) also locked
+// the planner out of digging stray planks far from home, which funnels
+// paths into the guarded corners the 4ac filter then has to route around.
+// blocksCantBreak is id-global by lib design, so the box lives in
+// exclusionAreasBreak instead: 100 inside the blueprint box for guarded
+// kinds, 0 outside. Refreshed on movements swap or home move (the old
+// closure is detached); a missing movements, exclusion list or home
+// degrades to no guard, never a throw.
 function guardOwnWalls(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
-    if (!mov || !mov.blocksCantBreak || ctx.buildGuardedMov === mov) return
+    if (!mov || !Array.isArray(mov.exclusionAreasBreak)) return
+    const home = ctx && ctx.home
+    const site = home && home.site
+    if (!site || typeof site.x !== 'number') return
+    const key = `${site.x},${site.y},${site.z}`
+    if (ctx.buildGuardedMov === mov && ctx.buildGuardKey === key) return
+    if (ctx.buildGuardFn) {
+      const prev = ctx.buildGuardedMov
+      if (prev && Array.isArray(prev.exclusionAreasBreak)) {
+        prev.exclusionAreasBreak = prev.exclusionAreasBreak.filter((f) => f !== ctx.buildGuardFn)
+      }
+      if (prev !== mov) {
+        mov.exclusionAreasBreak = mov.exclusionAreasBreak.filter((f) => f !== ctx.buildGuardFn)
+      }
+      ctx.buildGuardFn = null
+    }
     const byName = (bot.registry && bot.registry.blocksByName) || {}
-    let guarded = false
+    const ids = new Set()
     for (const name of Object.keys(byName)) {
       const entry = byName[name]
       if (typeof name !== 'string' || !entry || typeof entry.id !== 'number') continue
       if (name.endsWith('_planks') || name.endsWith('_door') || name === 'crafting_table') {
-        mov.blocksCantBreak.add(entry.id)
-        guarded = true
+        ids.add(entry.id)
       }
     }
-    if (guarded) ctx.buildGuardedMov = mov
+    if (ids.size === 0) return
+    const box = { x0: site.x, x1: site.x + 4, y0: site.y, y1: site.y + 2, z0: site.z, z1: site.z + 3 }
+    const idOf = (b) => {
+      if (b && typeof b.type === 'number') return b.type
+      const e = b && byName[b.name]
+      return e && typeof e.id === 'number' ? e.id : -1
+    }
+    const fn = (block) => {
+      try {
+        if (!ids.has(idOf(block))) return 0
+        const q = block && block.position
+        if (!q) return 0
+        return (q.x >= box.x0 && q.x <= box.x1 && q.y >= box.y0 && q.y <= box.y1 &&
+          q.z >= box.z0 && q.z <= box.z1) ? 100 : 0
+      } catch (_) { return 0 }
+    }
+    mov.exclusionAreasBreak.push(fn)
+    ctx.buildGuardFn = fn
+    ctx.buildGuardedMov = mov
+    ctx.buildGuardKey = key
   } catch (_) { /* best-effort: approach still walks */ }
 }
 
@@ -335,6 +373,7 @@ function build(bot, ctx, target, state) {
 }
 
 module.exports = build
+module.exports.guardOwnWalls = guardOwnWalls
 module.exports.BLUEPRINT = BLUEPRINT
 module.exports.PLANK_COUNT = PLANK_COUNT
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
