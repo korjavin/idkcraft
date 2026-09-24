@@ -73,6 +73,47 @@ describe('snow ground', () => {
     assert.equal(b.physical, true)
   })
 
+  it('fences stay non-physical (snow-only scope)', () => {
+    // movements.js deliberately keeps fences/walls non-physical (shapes
+    // taller than 1) so the planner never walks on them: the wrapper
+    // must not touch them even though they have collision shapes.
+    const bot = worldBot(8)
+    const fenceId = mcData.blocksByName.oak_fence.minStateId
+    const realBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const fp = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+      if (fp.x === 2 && fp.z === 0 && fp.y === 63) {
+        const b = Block.fromStateId(fenceId, 0)
+        b.position = fp
+        return b
+      }
+      return realBlockAt(p)
+    }
+    const { Movements } = require('mineflayer-pathfinder')
+    const mov = new Movements(bot)
+    addSnowGround(mov)
+    const fence = mov.getBlock({ x: 2, y: 63, z: 1, remainingBlocks: 0 }, 0, 0, -1)
+    assert.equal(fence.name, 'oak_fence')
+    assert.equal(fence.physical, false)
+    const snow = mov.getBlock(node, 0, 0, -1)
+    assert.equal(snow.physical, true)
+  })
+
+  it('production setMovements installs the wrapper', () => {
+    // The 9sh class: the fix must run in prod, not just in this file.
+    const { createTicker } = require('../src/index')
+    const bot = worldBot(8)
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const { Movements } = require('mineflayer-pathfinder')
+    const mov = new Movements(bot)
+    ticker.setMovements(mov)
+    assert.equal(mov._snowGroundInstalled, true)
+    assert.equal(mov.allowSprinting, false)
+    const b = mov.getBlock(node, 0, 0, -1)
+    assert.equal(b.name, 'snow')
+    assert.equal(b.physical, true)
+  })
+
   it('ignores non-Movements mocks', () => {
     assert.doesNotThrow(() => addSnowGround(null))
     assert.doesNotThrow(() => addSnowGround({ allowSprinting: false }))
