@@ -448,6 +448,25 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  it('an approach that never arrives fails dig-unreachable', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 3, y: 64, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 31; i++) {
+      equip(bot, ctx, null, {})
+      await flush()
+      if (ctx.stepStatus !== 'running') break
+    }
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs.some((e) => e.includes('dig-unreachable')))
+    bot.restoreError()
+  })
+
   it('registers in BEHAVIOURS under equip', () => {
     const { BEHAVIOURS } = require('../src/index')
     assert.equal(BEHAVIOURS.equip, equip)

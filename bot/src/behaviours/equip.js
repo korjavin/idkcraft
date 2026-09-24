@@ -14,8 +14,8 @@ const fightMod = require('./fight')
 // Registered in BEHAVIOURS under 'equip' so the goal arbiter can pick it.
 // Reports via ctx.stepStatus, one op per tick with ctx.equipInFlight (same
 // shape as craft). Recipes come from bot.recipesFor/bot.craft through the
-// shared craft.js helpers; a table from the inventory is placed at the feet,
-// a placed ctx.home.table is walked to like the craft step does.
+// shared craft.js helpers; a table from the inventory is placed beside the
+// body, a placed station is walked to like the craft step does.
 
 const TABLE_REACH = craftMod.TABLE_REACH
 const DIG_REACH = 4
@@ -78,28 +78,33 @@ function tableFor(bot, ctx) {
   if (!bp) return nope('no-table')
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
   // Our own placed station doubles as the home table when homeless (the
-  // claim above only sticks while ctx.home exists).
-  const homeTable = (ctx.home && ctx.home.table) || (st.tablePos)
-  if (homeTable) {
+  // claim above only sticks while ctx.home exists). Ghost entries (mined
+  // away) fall through to the inventory branch instead of shadowing it.
+  const tables = []
+  if (ctx.home && ctx.home.table) tables.push(ctx.home.table)
+  if (st.tablePos) tables.push(st.tablePos)
+  let homeTable = null
+  let homeBlock = null
+  for (const t of tables) {
     let block = null
-    try { block = bot.blockAt && bot.blockAt(homeTable) } catch (_) { block = null }
-    if (block && block.name === 'crafting_table' && dist3(bp, homeTable) <= TABLE_REACH) {
+    try { block = bot.blockAt && bot.blockAt(t) } catch (_) { block = null }
+    if (block && block.name === 'crafting_table') { homeTable = t; homeBlock = block; break }
+  }
+  if (homeTable) {
+    if (dist3(bp, homeTable) <= TABLE_REACH) {
       st.walkWaits = 0
-      return Promise.resolve({ block, pos: homeTable })
+      return Promise.resolve({ block: homeBlock, pos: homeTable })
     }
-    if (block && block.name === 'crafting_table') {
-      const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
-      if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-        bot.pathfinder.setGoal(new goals.GoalNear(homeTable.x, homeTable.y, homeTable.z, 3), false)
-        ctx.lastGoalKey = key
-      }
-      st.walkWaits = (st.walkWaits || 0) + 1
-      // Walking that never arrives is a stall, not progress: fail so the
-      // menu holds us instead of idling here forever.
-      if (st.walkWaits > 20) return nope('table-unreachable')
-      return Promise.resolve(null) // walking: retry on a later tick
+    const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
+    if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
+      bot.pathfinder.setGoal(new goals.GoalNear(homeTable.x, homeTable.y, homeTable.z, 3), false)
+      ctx.lastGoalKey = key
     }
-    // Ghost table (mined away): fall through to the inventory branch.
+    st.walkWaits = (st.walkWaits || 0) + 1
+    // Walking that never arrives is a stall, not progress: fail so the
+    // menu holds us instead of idling here forever.
+    if (st.walkWaits > 20) return nope('table-unreachable')
+    return Promise.resolve(null) // walking: retry on a later tick
   }
   const tableItem = itemsOf(bot).find((i) => i && i.name === 'crafting_table')
   if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table')
@@ -321,24 +326,29 @@ function digTick(bot, ctx, st, bp) {
     return
   }
   const block = pick.v
-  if (pick.d > DIG_REACH) {
-    const key = `equip-dig:${Math.floor(block.x)},${Math.floor(block.y)},${Math.floor(block.z)}`
+  // Approach walks share one patience budget with the table walk above: a
+  // goal the body never reaches is a stall, failed loudly for the atl.4
+  // hold instead of idled on forever. A dig attempt resets it.
+  const approach = (key, range) => {
     if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(new goals.GoalNear(block.x, block.y, block.z, 3), false)
+      bot.pathfinder.setGoal(new goals.GoalNear(block.x, block.y, block.z, range), false)
       ctx.lastGoalKey = key
     }
-    return // walk into reach, then dig on a later tick
+    st.approachWaits = (st.approachWaits || 0) + 1
+    if (st.approachWaits > 30) fail(ctx, 'blocks', new Error('dig-unreachable'))
+  }
+  if (pick.d > DIG_REACH) {
+    // Walk into reach, then dig on a later tick.
+    approach(`equip-dig:${Math.floor(block.x)},${Math.floor(block.y)},${Math.floor(block.z)}`, 3)
+    return
   }
   if (pick.d > PICKUP_REACH) {
     // Close enough to dig, too far to collect: step in so the drops land
     // at the feet (see PICKUP_REACH above).
-    const key = `equip-pickup:${Math.floor(block.x)},${Math.floor(block.y)},${Math.floor(block.z)}`
-    if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(new goals.GoalNear(block.x, block.y, block.z, 1), false)
-      ctx.lastGoalKey = key
-    }
+    approach(`equip-pickup:${Math.floor(block.x)},${Math.floor(block.y)},${Math.floor(block.z)}`, 1)
     return
   }
+  st.approachWaits = 0
   if (ctx.equipDigInFlight || typeof bot.dig !== 'function') return
   ctx.equipDigInFlight = true
   st.digs++
