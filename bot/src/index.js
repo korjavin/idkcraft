@@ -8,6 +8,7 @@ const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearc
 const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
+const { addSnowGround } = require('./snow')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -995,7 +996,7 @@ function fleeReflex(bot, ctx) {
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m); addSnowGround(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
