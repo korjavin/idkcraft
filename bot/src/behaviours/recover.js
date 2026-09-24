@@ -19,6 +19,7 @@ const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
+const danger = require('../danger')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -26,6 +27,7 @@ const WAIT_TICKS = 10
 const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
+const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
@@ -33,7 +35,7 @@ const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
 // --- world scan helpers (all best-effort: nulls read as free/safe) ---
 
@@ -80,6 +82,26 @@ function headBlockedAt(bot) {
   return solid(cellAt(bot, 0, 1, 0)) || solid(cellAt(bot, 0, 2, 0))
 }
 
+// Blocks a bare hand breaks fast (9sh): pit dirt/grass/sand/gravel walls.
+// canDigBlock with an empty hand is the arbiter where available; the name
+// set is the fallback (unit mocks, unreadable registry).
+const HAND_DIG = new Set([
+  'dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
+  'mud', 'muddy_mangrove_roots', 'sand', 'red_sand', 'suspicious_sand',
+  'gravel', 'suspicious_gravel', 'clay', 'snow', 'snow_block', 'moss_block',
+])
+function handDiggable(bot, b) {
+  // Round-1 finding 1: mineflayer canDigBlock checks only diggable+reach,
+  // never the tool — trusting it alone calls stone hand-diggable in prod.
+  // The name set governs; canDigBlock only confirms reach where present.
+  if (!b || typeof b.name !== 'string' || b.name === 'air') return false
+  if (!HAND_DIG.has(b.name) && !b.name.endsWith('_leaves')) return false
+  try {
+    if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
+  } catch (_) { /* reach check best-effort */ }
+  return true
+}
+
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 function scanSides(bot) {
@@ -91,6 +113,21 @@ function scanSides(bot) {
     else free.push([dx, dz])
   }
   return { walls, free }
+}
+
+// A hand-dug staircase cycle (9sh): the side cell at feet level stays as
+// the step to mount, the side cell above it is air or digs by hand, and the
+// head has room to jump. Returns the side [dx, dz] or null.
+function findDigStepDir(bot) {
+  if (solid(cellAt(bot, 0, 2, 0))) return null
+  for (const [dx, dz] of SIDES) {
+    const step = cellAt(bot, dx, 0, dz)
+    if (!solid(step)) continue
+    const above = cellAt(bot, dx, 1, dz)
+    if (above && solid(above) && !handDiggable(bot, above)) continue
+    return [dx, dz]
+  }
+  return null
 }
 
 function lavaNearAt(bot) {
@@ -158,6 +195,7 @@ function recoverFacts(bot, ctx, state, target) {
     pickaxe: hasPickaxe(bot),
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
+    digStep: findDigStepDir(bot),
     walls: sides.walls,
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
@@ -197,11 +235,18 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
   if (facts.goalDy >= 2 && pick('dig_up')) return 'dig_up'
+  if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
+  // High goal, no climb primitive, enclosed pit, player online: asking beats
+  // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
+  // the open (walls < 3) sidestep keeps its turn: walking goalward can still
+  // gain and free the wedge, which the fja rule counts as done.
+  if (facts.goalDy >= 2 && facts.playerOnline && facts.walls >= 3 && pick('call_player') &&
+    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('dig_step')) return 'call_player'
   if (pick('sidestep')) return 'sidestep'
   if (pick('dig_through')) return 'dig_through'
   if (pick('call_player')) return 'call_player'
@@ -219,6 +264,7 @@ const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high, pickaxe on hand — dig above your head and climb',
+  dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
   dig_through: 'tunnel: pickaxe on hand, no lava near — dig 1-wide 2-tall toward the goal',
   wait: 'wait: the blockage looks temporary — stand still',
@@ -234,11 +280,18 @@ async function chooseRecovery(brain, facts, feasible) {
   const names = RECOVER_ORDER.filter((n) => feasible.includes(n))
   const text = recoverText(facts)
   const fsm = recoverFsm(facts, names)
-  if (names.length <= 1) return { action: names[0] || 'wait', source: 'only-option', fsm, model: null }
+  // The just-failed primitive is out of the MODEL menu (4jr): the FSM
+  // already escalates past it, but laya repeated pillar_up to MAX_FAILS.
+  // Kept when it is the only option; the FSM fallback below still sees it.
+  // Decided on askNames, not names (round-2 minors): a menu shrunk to one
+  // answer must not cost a brain call on the tick path.
+  const failedM = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const criteria = {}
-  for (const n of names) criteria[n] = RECOVER_CRITERIA[n]
+  for (const n of askNames) criteria[n] = RECOVER_CRITERIA[n]
   const fail = (reason) => {
     metrics.escalation.inc({ from: model, to: 'fsm', reason })
     return { action: fsm, source: 'stub-fallback', fsm, model }
@@ -251,7 +304,7 @@ async function chooseRecovery(brain, facts, feasible) {
     if (label !== fsm) {
       console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck facts=${text}`)
     }
-    if (!names.includes(label)) return fail('invalid')
+    if (!askNames.includes(label)) return fail('invalid')
     return { action: label, source: model, fsm, model }
   } catch (err) {
     const msg = String((err && err.message) || err)
@@ -351,6 +404,60 @@ function digUpRun(bot, ctx) {
   void (async () => {
     try { await bot.dig(cell) } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
+  return 'running'
+}
+
+// Dig a step by hand and mount it (9sh): no scaffold, no pickaxe, dirt
+// pit. One cycle digs the wall above the side step, then jumps onto the
+// step top — done on floor rise, repeatable to the mouth. st.dir re-scans
+// when its step collapses mid-cycle.
+function digStepRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { dir: null, phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: null })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
+  // Round-1 finding 2: a 1 Hz tick sampling the jump apex reads y+1 while
+  // airborne. Done needs ground under the risen feet — landing back on the
+  // pit floor is not an escape. (The step column itself is not required: a
+  // natural +1 ledge nearby is genuine progress too.)
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (!st.dir) {
+    st.dir = findDigStepDir(bot)
+    if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
+  }
+  const above = cellAt(bot, st.dir[0], 1, st.dir[1])
+  if (above && solid(above)) {
+    if (!handDiggable(bot, above)) { st.dir = null; return 'running' }
+    if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
+    if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
+    if (st.digInFlight) {
+      if (++st.waited > DIG_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:dig-timeout' }
+      return 'running'
+    }
+    if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+    st.digInFlight = true
+    void (async () => {
+      try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    })()
+    return 'running'
+  }
+  // Headroom dug: mount the step. The step collapsing under us re-scans.
+  const step = cellAt(bot, st.dir[0], 0, st.dir[1])
+  if (!solid(step)) { st.dir = null; return 'running' }
+  if (st.phase !== 'step') {
+    st.phase = 'step'
+    st.waited = 0
+    try {
+      const p = step.position
+      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function' && p) {
+        bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y + 1, p.z, 1), false)
+      }
+    } catch (_) { /* goal best-effort */ }
+  }
+  setJump(bot, true)
+  if (++st.waited > DIG_STEP_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
   return 'running'
 }
 
@@ -470,16 +577,24 @@ function callPlayerRun(bot, ctx) {
 
 const RECOVER_MENU = {
   pillar_up: {
-    feasible: (facts) => facts.scaffold > 0 && !facts.headBlocked,
+    // 4jr: a pillar to a level goal is pointless — laya took the first menu
+    // item anyway, 29 times in 16 min. Climb prims need the goal above.
+    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked,
     run: pillarUpRun,
     repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0,
     verb: 'pillaring up',
   },
   dig_up: {
-    feasible: (facts) => facts.pickaxe && !facts.lavaNear,
+    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear,
     run: digUpRun,
     repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe,
     verb: 'digging up',
+  },
+  dig_step: {
+    feasible: (facts) => facts.digStep != null && !facts.lavaNear,
+    run: digStepRun,
+    repeatable: (facts) => facts.goalDy >= 1 && facts.digStep != null,
+    verb: 'digging a step',
   },
   sidestep: {
     feasible: (facts) => facts.walls < 4,
@@ -606,6 +721,12 @@ function release(bot, ctx, how) {
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
   }
+  if (how === 'gave-up') {
+    // Pit memory (mnx): the release point stays dangerous, so explore and
+    // gather do not lead back into it. call_player ends here too
+    // (endEpisode -> gave-up), same mark.
+    try { danger.mark(ctx, botPos(bot)) } catch (_) { /* memory best-effort */ }
+  }
   ctx.lastGoalKey = ''
   ctx.stuckResets = 0
   ctx.placeErrors = 0
@@ -648,6 +769,10 @@ async function decide(bot, ctx, state, target) {
     const outcome = rec.status
     const source = rec.source || 'fsm'
     rec.last = { action: prev, outcome }
+    // The choice below must see the just-recorded outcome: facts was built
+    // before it, so FSM escalation and the model-menu exclusion would both
+    // read the previous last (4jr: the model repeated pillar_up live).
+    facts.last = `${prev}:${outcome}`
     metrics.recover.inc({ action: prev, source, outcome: outcome === 'done' ? 'done' : outcome })
     if (outcome === 'done') {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {

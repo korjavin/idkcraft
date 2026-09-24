@@ -143,6 +143,11 @@ function walkTo(bot, ctx, st, key, goal, arrived) {
 // on arrival. The tick cap is purely anti-hang — no displacement stall, so
 // there is no false-fail mode on fast ticks.
 const DOOR_LEG_TICKS = 60
+// Unstick: a 1-wide doorway scrapes the frame with no lateral room, so a
+// leg that makes no displacement progress backs straight up (keeping its
+// alignment) instead of pushing forever (live 8kc).
+const UNSTICK_TICKS = 8
+const UNSTICK_TOLERANCE = 0.1
 
 function legMet(bp, t) {
   return Math.hypot(bp.x - (t.x + 0.5), bp.z - (t.z + 0.5)) <= 0.6
@@ -154,19 +159,37 @@ function stepThrough(bot, ctx, st, legs, arrived) {
   if (arrived(bp)) {
     st.legIdx = 0
     st.legTicks = 0
+    st.legPos = null
+    st.legStall = 0
+    st.backing = 0
     try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
     return true
   }
   let idx = st.legIdx || 0
-  if (idx < legs.length && legMet(bp, legs[idx])) idx++
+  if (idx < legs.length && legMet(bp, legs[idx])) {
+    idx++
+    st.legStall = 0
+    st.backing = 0
+  }
   st.legIdx = idx
   if ((st.legTicks = (st.legTicks || 0) + 1) > DOOR_LEG_TICKS) {
     st.legIdx = 0
     st.legTicks = 0
+    st.legPos = null
+    st.legStall = 0
+    st.backing = 0
     try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
     st.phase = 'failed'
     ctx.stepStatus = 'failed:cannot-reach-home'
     return false
+  }
+  const last = st.legPos
+  if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > UNSTICK_TOLERANCE) {
+    st.legPos = { x: bp.x, z: bp.z }
+    st.legStall = 0
+  } else if (++st.legStall >= UNSTICK_TICKS && !(st.backing > 0)) {
+    st.backing = UNSTICK_TICKS
+    st.legStall = 0
   }
   const leg = legs[Math.min(idx, legs.length - 1)]
   // Kill any live path so the executor doesn't fight manual control (the
@@ -176,22 +199,47 @@ function stepThrough(bot, ctx, st, legs, arrived) {
     else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
   } catch (_) { /* body best-effort */ }
   ctx.lastGoalKey = 'home-door'
+  if (st.backing > 0) {
+    st.backing--
+    try {
+      bot.setControlState('forward', false)
+      bot.setControlState('back', true)
+      bot.setControlState('sneak', true)
+    } catch (_) { /* retry next tick */ }
+    return false
+  }
   try {
     bot.lookAt(new Vec3(leg.x + 0.5, bp.y + 1.62, leg.z + 0.5))
+    // Back must be released too: forward+back cancel in physics, so a leg
+    // that backed out of frame contact would never drive again (revmux 8kc).
+    bot.setControlState('back', false)
     bot.setControlState('forward', true)
     bot.setControlState('sneak', true)
   } catch (_) { /* retry next tick */ }
   return false
 }
 
-function freshGo() {
-  return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0 }
+// The gohome walk never digs: with the house unbreakable, A* prefers
+// tunneling through dirt beside the walls over routing around (and the dig
+// branches blow the search budget into timeout partial-paths that push into
+// the wall). The bot that digs a 2-deep pit beside the door can never climb
+// out. canDig is restored whenever the walk ends (live 8kc).
+function setWalkDig(bot, allow) {
+  try {
+    const mov = bot && bot.pathfinder && bot.pathfinder.movements
+    if (mov && typeof mov.canDig === 'boolean') mov.canDig = allow
+  } catch (_) { /* approach best-effort */ }
 }
+function freshGo() {
+  return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+}
+
 
 function gohome(bot, ctx, target, state) {
   const home = ctx && ctx.home
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
+    setWalkDig(bot, true) // walk never owned the drill past this return
     return
   }
   if (!ctx.gohome || ctx.gohome.phase === 'done' || ctx.gohome.phase === 'failed') {
@@ -202,19 +250,22 @@ function gohome(bot, ctx, target, state) {
     ctx.gohome = freshGo()
     ctx.gohome.phase = isInside(bot, home) ? 'close' : 'walk'
     ctx.stepStatus = 'running'
+    ctx.lastGoalKey = '' // fresh walk must replan, not latch-skip (live 8kc)
   }
   const st = ctx.gohome
   const out = outsidePos(home)
   const inn = insidePos(home)
   if (st.phase === 'walk') {
+    setWalkDig(bot, false)
     const arrived = walkTo(bot, ctx, st, 'gohome-walk',
       new goals.GoalNear(out.x, out.y, out.z, 1),
       nearOut(out, 1))
-    if (st.phase === 'failed') return // walkTo failed the step
+    if (st.phase === 'failed') { setWalkDig(bot, true);    return } // walkTo failed the step
     if (arrived) st.phase = 'open'
-    else return
+    else {    return }
   }
   if (st.phase === 'open') {
+    setWalkDig(bot, true)
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'enter'
     else {
@@ -225,11 +276,12 @@ function gohome(bot, ctx, target, state) {
   if (st.phase === 'enter') {
     // One-sided: the whole 0.6-wide body past the door plane, so 'close'
     // cannot shut the panel into the bot (revmux 03-review).
-    const through = stepThrough(bot, ctx, st, [out, inn],
+    const door = doorPos(home)
+    const through = stepThrough(bot, ctx, st, [out, door, inn],
       (bp) => isInside(bot, home) && bp.z >= inn.z + 0.3)
-    if (st.phase === 'failed') return // stepThrough failed the step
+    if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
-    else return
+    else {    return }
   }
   if (st.phase === 'close') {
     const door = doorBlock(bot, home)
@@ -242,6 +294,7 @@ function gohome(bot, ctx, target, state) {
     }
     tryToggle(bot, st, door)
   }
+
 }
 
 function holdStill(bot, ctx) {
@@ -307,10 +360,11 @@ function stay(bot, ctx, target, state) {
     // sneak legs cannot meet arrival in place.
     // One-sided like enter: arrival only with the whole body north of the
     // door cell, never standing in the doorway (revmux 03-review).
-    const through = stepThrough(bot, ctx, st, [inn, out], (bp) => bp.z <= out.z + 0.7)
-    if (st.phase === 'failed') return // stepThrough failed the step
+    const door = doorPos(home)
+    const through = stepThrough(bot, ctx, st, [inn, door, out], (bp) => bp.z <= out.z + 0.7)
+    if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
-    else return
+    else {    return }
   }
   if (st.phase === 'close') {
     const door = doorBlock(bot, home)
@@ -323,6 +377,7 @@ function stay(bot, ctx, target, state) {
     }
     tryToggle(bot, st, door)
   }
+
 }
 
 module.exports = { gohome, stay }

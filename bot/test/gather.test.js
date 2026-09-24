@@ -4,6 +4,8 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const gather = require('../src/behaviours/gather')
 const { NEED_LOGS } = require('../src/goal')
+const danger = require('../src/danger')
+const resources = require('../src/resources')
 
 function pos(x, y, z) {
   const p = {
@@ -60,6 +62,43 @@ function freshCtx() {
 }
 
 describe('gather step', () => {
+  it('(mnx) skips logs within a gave-up spot', () => {
+    // Acceptance: gave-up at X -> no target within R of X.
+    const bot = mockBot({
+      spots: [pos(12, 64, 0), pos(2, 64, 0)],
+      names: { '12,64,0': 'oak_log', '2,64,0': 'birch_log' },
+    })
+    const ctx = freshCtx()
+    danger.mark(ctx, { x: 2, y: 64, z: 0 })
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:12,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(mnx) remembered logs within a gave-up spot are skipped', () => {
+    const bot = mockBot({ spots: [], names: {} })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 2, y: 64, z: 0, name: 'oak_log' }, { x: 30, y: 64, z: 0, name: 'oak_log' }])
+    danger.mark(ctx, { x: 2, y: 64, z: 0 })
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:30,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(mnx) far-search hits within a gave-up spot are refused', () => {
+    // Stone at the probe points so the loaded-radius edge reaches ring 70.
+    const bot = mockBot({ spots: [pos(60, 64, 0)], names: { '60,64,0': 'oak_log', '48,64,0': 'stone', '96,64,0': 'stone' } })
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => (opts && opts.point ? rawFind(opts) : []) // sync empty, far sees it
+    const ctx = freshCtx()
+    danger.mark(ctx, { x: 60, y: 64, z: 0 })
+    gather(bot, ctx, null, {}) // sync + memory empty -> far search starts
+    assert.equal(ctx.gather.phase, 'searchfar')
+    gather(bot, ctx, null, {}) // search completes, banned hit refused
+    assert.equal(bot.calls.setGoal, 0)
+    assert.match(ctx.stepStatus, /^failed:/)
+  })
+
   it('(a) finds the nearest log and issues a working GoalNear', () => {
     const bot = mockBot({
       spots: [pos(8, 64, 0), pos(2, 64, 0)],

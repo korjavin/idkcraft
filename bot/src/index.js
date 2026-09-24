@@ -7,6 +7,7 @@ const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCree
 const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
+const { addNoCornerCut } = require('./nocorner')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -44,6 +45,7 @@ const BEHAVIOURS = {
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
+  dig_step: (bot, ctx) => recover.run(bot, ctx),
   sidestep: (bot, ctx) => recover.run(bot, ctx),
   dig_through: (bot, ctx) => recover.run(bot, ctx),
   wait: (bot, ctx) => recover.run(bot, ctx),
@@ -344,12 +346,19 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.gohome = null
     ctx.stay = null
     ctx.inShelter = false
+    // The gohome walk borrows canDig=false on this shared object; an order,
+    // stop or fresh work that ends the walk mid-phase must give it back, or
+    // every other behaviour loses digging until rejoin (revmux 8kc).
+    try {
+      const mov = ctx.movements
+      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+    } catch (_) { /* reset best-effort */ }
   }
   function startWork() {
     clearPendingSearch(ctx)
     clearStuck()
     resetNightStep()
-    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
+    if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -528,7 +537,7 @@ function fleeReflex(bot, ctx) {
     // No greeting mid-recovery (ef3): the body belongs to the menu, and a
     // crouch would fight the primitive (jump/place/sneak conflict).
     if (ctx.stuck || ctx.recovery) return
-    const bringing = decision.action === 'bring' && ctx.bring && ctx.bring.by
+    const bringing = decision.action === 'bring' && (decision.by || (ctx.bring && ctx.bring.by))
     const name = bringing || followName
     if (!name) return
     const ent = bot.players && bot.players[name] && bot.players[name].entity
@@ -581,8 +590,17 @@ function fleeReflex(bot, ctx) {
   async function runTick() {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
+    // canDig belongs to the gohome walk alone: any tick it does not own the
+    // body gets the shared default back, so a mid-walk preemption (orders,
+    // homing, death) cannot leak no-dig into other behaviours (revmux 8kc).
+    if (!(ctx.work && ctx.step === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk')) {
+      try {
+        const mov = ctx.movements
+        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+      } catch (_) { /* default best-effort */ }
+    }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } ctx.step = null; ctx.stepStatus = null; ctx.gohome = null; ctx.stay = null; ctx.inShelter = false; try { const mov = ctx.movements; if (mov && typeof mov.canDig === 'boolean') mov.canDig = true } catch (_) { /* reset best-effort */ } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -635,8 +653,10 @@ function fleeReflex(bot, ctx) {
       if (target) noteSeen()
       else noteGone()
       // A follow order owns the body the moment its player is visible: drop
-      // work so the goal arbiter below cannot hijack the tick.
-      if (target && followName) ctx.work = false
+      // work so the goal arbiter below cannot hijack the tick. A transition
+      // out of work also ends any night step at once (same reset as an
+      // order), so a borrowed canDig=false never survives the tick.
+      if (target && followName && ctx.work) { ctx.work = false; resetNightStep() }
       // Work mode runs without a visible player while anyone is on the
       // server (roster, not visibility — walking out of render distance is
       // normal). Falls through to the normal path with target=null:
@@ -687,8 +707,12 @@ function fleeReflex(bot, ctx) {
         const fledAlone = fleeReflex(bot, ctx)
         if (fledAlone) {
           reflexFast = true
-        } else if (!walkHomeTick()) {
-          stopOnce()
+        } else {
+          // Homing owns the body now: end any night step at once (same
+          // reset as an order), or the walk's borrowed canDig=false leaks
+          // onto the shared Movements until someone comes into view.
+          if (ctx.work && ctx.step === 'gohome') resetNightStep()
+          if (!walkHomeTick()) stopOnce()
         }
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
@@ -864,9 +888,11 @@ function fleeReflex(bot, ctx) {
       // so the newest order wins its ticks.
       if (ctx.bring && decision.action !== 'fight') {
         const handler = BEHAVIOURS.bring
-        if (typeof handler === 'function') handler(bot, ctx, target, state)
-        // Greeting on the way back (v92): the bring arm of the rule.
-        if (ctx.bring && ctx.bring.phase === 'return') greetCheck({ action: 'bring' })
+        // Greeting on the way back (v92): snapshot before awaiting — the
+        // toss lands on a microtask and clears ctx.bring before the check.
+        const bringBy = ctx.bring.phase === 'return' ? ctx.bring.by : null
+        if (typeof handler === 'function') await handler(bot, ctx, target, state)
+        if (bringBy) greetCheck({ action: 'bring', by: bringBy })
         const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'bring' }, calledBrain }
@@ -949,14 +975,14 @@ function fleeReflex(bot, ctx) {
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
@@ -979,7 +1005,7 @@ function fleeReflex(bot, ctx) {
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
-      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null }
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -987,7 +1013,7 @@ function fleeReflex(bot, ctx) {
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); resetNightStep(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null } },
+    setLead: (order) => { clearStuck(); resetNightStep(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
@@ -1077,10 +1103,24 @@ function fleeReflex(bot, ctx) {
       if (res === 'unknown') return `unknown block: ${name}`
       if (!res) {
         // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb).
-        // A null cursor (unreadable world) answers from sync alone.
+        // A null cursor (unreadable world) answers from sync alone — unless
+        // an anchor exists, when the order opens and search legs walk (atl.8).
         const search = startFarSearch(bot, name)
         if (search === 'unknown') return `unknown block: ${name}`
-        if (!search) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+        if (!search) {
+          if (!bringMod.canSearch(bot, ctx)) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          if (!bringMod.canBringName(bot, name)) return `can't bring ${name} — ores and logs only`
+          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+          ctx.unseenTicks = 0
+          ctx.resumeWork = false
+          clearStuck()
+          ctx.bring = {
+            kind: 'block', name, want, by, phase: 'find',
+            have: 0, announced: false, searchSkipFar: true,
+          }
+          ctx.paused = false
+          return `nothing within 48, searching for ${name}…`
+        }
         ctx.pendingSearch = { cursor: search, kind: 'bring', name, want, by }
         return `nothing within 48, widening the search for ${name}…`
       }
@@ -1334,10 +1374,32 @@ function advancePendingSearch(bot, ticker, ctx) {
   const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
   if (p.kind === 'bring') {
     if (!r.result) {
-      bot.chat(`no ${p.name} within ${edge} blocks (loaded area)`)
+      // atl.8: open the order instead of refusing — the first tick walks
+      // search legs (the far shells just came up empty, skip the re-scan).
+      if (!bringMod.canBringName(bot, p.name)) {
+        bot.chat(`can't bring ${p.name} — ores and logs only`)
+        return
+      }
+      ctx.bring = {
+        kind: 'block', name: p.name, want: p.want, by: p.by, phase: 'find',
+        have: 0, announced: false, searchSkipFar: true,
+      }
+      ctx.paused = false
       return
     }
     if (ticker && typeof ticker.clearStuck === 'function') ticker.clearStuck()
+    // Bring owns the body now: end any night step at once (module scope has
+    // no resetNightStep, so inline it). Otherwise the walk's borrowed
+    // canDig=false leaks onto the shared Movements for the whole bring.
+    ctx.step = null
+    ctx.stepStatus = null
+    ctx.gohome = null
+    ctx.stay = null
+    ctx.inShelter = false
+    try {
+      const mov = ctx.movements
+      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+    } catch (_) { /* reset best-effort */ }
     bot.chat(startBlockOrder(bot, ctx, p, r.result))
     return
   }
@@ -1394,12 +1456,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     const speaker = bot.players && bot.players[username] && bot.players[username].entity
     const pos = speaker && speaker.position
     if (!pos || typeof pos.x !== 'number') return // speaker out of tracking range: no around
-    const home = ticker && typeof ticker.home === 'function' ? ticker.home() : null
-    if (home && home.built) {
-      const st = home.site || {}
-      bot.chat(`home already built at ${st.x} ${st.y} ${st.z}`)
-      return
-    }
+    // rpw: always a new site, even over a built home — the owner asked.
+    // The new home becomes current (gohome/night go there); old walls stay
+    // protected by build.js guardOwnWalls (block-type based, not site).
     if (ticker && typeof ticker.setHome === 'function') ticker.setHome(goal.siteFor(bot, pos))
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
