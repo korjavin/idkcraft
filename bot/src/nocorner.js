@@ -7,9 +7,11 @@
 // all by the plank home where guardOwnWalls also forbids digging the corner
 // through). Drops single-step diagonals whose side column holds a solid
 // block at body levels — the same getNeighbors wrap shape as addSwimExits.
-// Kept: diagonals the executor digs first (side block in move.toBreak — the
-// corner is open after digging) and openable blocks (doors, gates, trapdoors
-// — the executor opens them head-on, today's behavior there is unchanged).
+// Kept: diagonals the executor digs first (every solid side cell in
+// move.toBreak — the corner is open after digging) and openable blocks.
+// Note the lib's openable set is gate-named blocks only (fence gates are
+// already non-physical): doors and trapdoors count as solid here and their
+// diagonals are dropped, which is conservative while canOpenDoors=false.
 function addNoCornerCut(movements) {
   // setMovements also accepts plain movement-like objects (unit mocks carry
   // only flags): wrap only a real Movements with getNeighbors.

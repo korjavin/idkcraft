@@ -177,3 +177,20 @@ describe('no-corner-cut guard (idkcraft-4ac fix)', () => {
     const ns = movements.getNeighbors(new Move(0, 63, 0, 0, 0))
     assert.ok(ns.some((m) => m.y === 64 && Math.abs(m.x) + Math.abs(m.z) === 1), 'a cardinal +1 exit leaves the pit')
   })
+
+describe('toBreak keep-branch (idkcraft-4ac)', () => {
+  it('a diagonal the executor digs first is kept', () => {
+    const dirt = makeNameAt({ post: false })
+    const withDirt = (x, y, z) => (x === 1 && (y === 64 || y === 65) && z === 0 ? 'dirt' : dirt(x, y, z))
+    const movements = wiredMovements(withDirt, { unbreakable: false })
+    // Price the free side out of the search so the planner takes the dig
+    // passage and slates the dirt corner for breaking first.
+    movements.exclusionAreasStep.push((b) => (
+      b.position.x === 0 && (b.position.y === 64 || b.position.y === 65) && b.position.z === 1 ? 100 : 0))
+    const ns = movements.getNeighbors(new Move(0, 64, 0, 0, 0))
+    const diag = ns.find((m) => m.x === 1 && m.y === 64 && m.z === 1)
+    assert.ok(diag, 'diagonal past a corner dug first is kept')
+    assert.ok((diag.toBreak || []).some((q) => q.x === 1 && q.y === 64 && q.z === 0),
+      'the solid side cell is slated for digging first')
+  })
+})
