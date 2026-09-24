@@ -131,15 +131,18 @@ function gather(bot, ctx, target, state) {
     // A running staged search resolves before any new sync scan: the 48
     // below stays empty while the 96/160 shells stream in across ticks.
     if (g.phase === 'searchfar') {
-      const r = stepFarSearch(bot, g.search)
+      // Skipped trunks and the sync-48 shell must neither stop the search
+      // nor win it: the point of going far is trees the sync scan rejected.
+      const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS
+      const r = stepFarSearch(bot, g.search, { exclude })
       if (!r.done) return
       g.search = null
       const hit = r.result && r.result !== 'unknown' ? r.result : null
-      if (hit && hit.position && !g.skip.has(keyOf(hit.position))) {
+      if (hit && hit.position && !exclude(hit.position)) {
         commitTarget(g, bp, hit.position, hit.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else {
-        failFinal(bot, ctx, g, logs, 'failed:no-trees')
+        failFinal(bot, ctx, g, logs, g.farUnreachable ? 'failed:unreachable' : 'failed:no-trees')
       }
       return
     }
@@ -174,6 +177,7 @@ function gather(bot, ctx, target, state) {
         if (search && search !== 'unknown') {
           g.search = search
           g.phase = 'searchfar'
+          g.farUnreachable = found.length > 0
           return
         }
         failFinal(bot, ctx, g, logs, found.length === 0 ? 'failed:no-trees' : 'failed:unreachable')
@@ -215,9 +219,12 @@ function gather(bot, ctx, target, state) {
     }
     let block = null
     try { block = bot.blockAt && bot.blockAt(g.pos) } catch (_) { block = null }
-    if (!block || !block.name || !block.name.endsWith('_log')) {
-      // A stale memory/far point joins skip: without this the next fallback
-      // re-takes the same gone point instead of moving on to the final.
+    // Unloaded (blockAt null) is not gone: a memory/far point past view
+    // keeps its walk while chunks stream in, with stall counting below as
+    // the backstop. Only a loaded non-log is stale — it joins skip so the
+    // next fallback takes another, not it.
+    const unloadedFar = !block && g.far && g.pos
+    if (!unloadedFar && (!block || !block.name || !block.name.endsWith('_log'))) {
       if (g.far && g.pos) g.skip.add(keyOf(g.pos))
       g.pos = null // chopped by someone else (reads back as air): search again
       g.far = false

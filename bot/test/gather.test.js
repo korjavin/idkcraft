@@ -155,14 +155,52 @@ describe('gather step', () => {
   })
 
   it('(atl.5) a stale memory point is skipped once, search still ends in final', () => {
-    // The remembered log is already gone: re-taking it forever would hang
-    // the step — it must join skip and the search must conclude.
-    const bot = mockBot({ spots: [] })
+    // The remembered log is already gone (loaded chunk reads air): re-taking
+    // it forever would hang the step — it must join skip and the search must
+    // conclude.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'air' } })
     const ctx = freshCtx()
     ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
     for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
     assert.ok(ctx.gather.skip.has('90,64,0'), `skip: ${[...ctx.gather.skip]}`)
     assert.equal(ctx.stepStatus, 'failed:no-trees')
+  })
+
+  it('(atl.5) a remembered log in an unloaded chunk keeps the walk, never skip', () => {
+    // Memory's value is trees past view: blockAt null means unloaded, not
+    // chopped. The bot must hold the goal and stay running, not skip+final.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'oak_log' } })
+    bot.blockAt = () => null // nothing loaded, not even the memory point
+    bot.canDigBlock = (b) => !!b // like the real one: nothing diggable unloaded
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    for (let i = 0; i < 5; i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:90,64,0$/)
+    assert.ok(!ctx.gather.skip.has('90,64,0'), `skip: ${[...ctx.gather.skip]}`)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(atl.5) a skipped trunk at 40 does not hide a reachable log at 100', () => {
+    // The bead's own case: in-48 trees unreachable, a far tree reachable.
+    // The staged search must exclude skipped/in-48 hits, not end on them.
+    const bot = mockBot({
+      spots: [pos(40, 64, 0), pos(100, 64, 0)],
+      names: {
+        '40,64,0': 'oak_log', '41,64,0': 'air',
+        '48,64,0': 'stone', '96,64,0': 'stone', '100,64,0': 'oak_log',
+      },
+    })
+    bot._moving = true // wedged executor: the 40-trunk stalls and is skipped
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => {
+      const origin = opts.point || bot.entity.position
+      const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+      return rawFind(opts).filter((q) => Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) <= maxD)
+    }
+    const ctx = freshCtx()
+    for (let i = 0; i < 30 && !/^gather:100,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:100,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
   })
 
   it('(e) no trees: failed:no-trees with one chat line', () => {

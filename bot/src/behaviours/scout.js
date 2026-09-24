@@ -308,8 +308,12 @@ function farShellDone(cursor, bot, ring) {
   return false
 }
 
-function stepFarSearch(bot, cursor) {
+// opts.exclude(q): hits to ignore (atl.5: gather's skipped trunks and the
+// sync-48 shell). Excluded hits are never collected, never stop the search
+// early, never win ranking. Omitted by bring.js: behaviour unchanged there.
+function stepFarSearch(bot, cursor, opts) {
   if (!cursor || cursor === 'unknown') return { done: true, result: cursor, edge: null }
+  const excluded = opts && typeof opts.exclude === 'function' ? opts.exclude : null
   const live = bot.entity && bot.entity.position
   if (!live || typeof live.x !== 'number') return { done: true, result: null, edge: cursor.edge }
   // Coverage is anchored at the start origin with the start edge. A walked-
@@ -355,6 +359,7 @@ function stepFarSearch(bot, cursor) {
     cursor.stageScans[c.ring] = (cursor.stageScans[c.ring] || 0) + 1
     for (const q of scanned) {
       if (dist(q, origin) > SEARCH_MAX) continue
+      if (excluded && excluded(q)) continue
       const key = keyOf(q)
       if (!cursor.hits.has(key)) cursor.hits.set(key, q)
     }
@@ -370,6 +375,7 @@ function stepFarSearch(bot, cursor) {
     const edge = cursor.queue[cursor.at].ring === 70 ? 96 : SEARCH_MAX
     for (const q of cursor.hits.values()) {
       if (dist(q, origin) > edge) continue
+      if (excluded && excluded(q)) continue
       let exposed = false
       try { exposed = isExposed(bot, q) } catch { exposed = false }
       if (exposed) {
@@ -384,8 +390,9 @@ function stepFarSearch(bot, cursor) {
     console.log(`search ${cursor.blockName} r=${edge} took=${cursor.stageMs[ring].toFixed(1)}ms found=${cursor.hits.size} scans=${cursor.stageScans[ring]}`)
     try { metrics.searchDuration.observe({ radius: String(edge) }, cursor.stageMs[ring] / 1000) } catch { /* never break search */ }
   }
-  const within96 = [...cursor.hits.values()].filter((q) => dist(q, origin) <= 96)
-  const pool = within96.length > 0 ? within96 : [...cursor.hits.values()]
+  const kept = excluded ? [...cursor.hits.values()].filter((q) => !excluded(q)) : [...cursor.hits.values()]
+  const within96 = kept.filter((q) => dist(q, origin) <= 96)
+  const pool = within96.length > 0 ? within96 : kept
   if (pool.length === 0) return { done: true, result: null, edge: cursor.edge }
   return { done: true, result: wrapResult(bot, cursor.blockName, rankHits(bot, pool, cursor.refY)), edge: cursor.edge }
 }
