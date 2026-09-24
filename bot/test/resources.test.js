@@ -45,6 +45,16 @@ describe('resource memory', () => {
     assert.equal(resources.nearest(ctx, pos(0, 64, 0)).x >= 300 - 256, true)
   })
 
+  it('forget drops a mined-out cell by coords', () => {
+    const ctx = {}
+    resources.noteSpots(ctx, [{ x: 1, y: 2, z: 3, name: 'iron_ore' }], 1000)
+    assert.equal(resources.count(ctx), 1)
+    assert.equal(resources.forget(ctx, 1, 2, 3), true)
+    assert.equal(resources.count(ctx), 0)
+    assert.equal(resources.forget(ctx, 1, 2, 3), false)
+    assert.equal(resources.forget(null, 1, 2, 3), false)
+  })
+
   it('scan ingests ores and logs around the bot', () => {
     const spots = [
       { p: pos(10, 60, 0), id: 1 },

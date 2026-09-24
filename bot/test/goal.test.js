@@ -5,6 +5,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const resources = require('../src/resources')
 
 function pos(x, y, z) {
   const p = {
@@ -34,13 +35,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(NEED_PLANKS, 48)
   })
 
-  it('menu has all six steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'gather', 'gohome', 'rest', 'stay'])
+  it('menu has all nine steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'build', 'gather', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -90,8 +91,8 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', health: 20, food: 20 }), 'time=day logs=few planks=none table=no door=no home=none inside=no health=ok food=ok')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', health: 4, food: 3 }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes health=low food=hungry')
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no health=ok food=ok known=none haul=none player=none')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes health=low food=hungry known=near haul=waiting player=near')
   })
 })
 
@@ -162,6 +163,146 @@ describe('goalFsm priority', () => {
   })
 })
 
+describe('atl.2 menu: forage/deliver/explore priority', () => {
+  const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
+  // Names exactly like decide() computes them: MENU filter, then FSM rank.
+  const feasibleNames = (facts, bot, ctx) => STEP_ORDER.filter((n) => {
+    try { return MENU[n].feasible(facts, bot, ctx) } catch (_) { return false }
+  })
+  const memCtx = (cells, items) => {
+    const bot = goalBot({ items: items || [] })
+    const ctx = { home: { built: true } }
+    resources.noteSpots(ctx, cells, 1000)
+    return { bot, ctx }
+  }
+  it('known ore routes to forage', () => {
+    const { bot, ctx } = memCtx([{ x: 5, y: 60, z: 0, name: 'iron_ore' }], [{ name: 'stone_pickaxe', count: 1 }])
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.known, 'near')
+    assert.equal(F('forage', facts), true)
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'forage')
+  })
+  it('waiting haul plus player routes to deliver first', () => {
+    const { bot, ctx } = memCtx(
+      [{ x: 5, y: 60, z: 0, name: 'iron_ore' }],
+      [{ name: 'stone_pickaxe', count: 1 }, { name: 'raw_iron', count: 8 }])
+    ctx.haul = { raw_iron: 8 }
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.haul, 'waiting')
+    assert.equal(facts.player, 'near')
+    assert.equal(F('deliver', facts), true)
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'deliver')
+  })
+  it('nothing known routes to explore once built', () => {
+    const bot = goalBot()
+    const ctx = { home: { built: true } }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.known, 'none')
+    assert.equal(F('explore', facts), true)
+    assert.equal(F('forage', facts), false)
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'explore')
+  })
+  it('pre-house gaps rest: explore waits for the house', () => {
+    // Full kit but nowhere to build (no home, no spawn origin): rw4 steps
+    // all refuse, explore stays gated, rest fills the gap.
+    const bot = goalBot({
+      items: [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }],
+      spawn: null,
+    })
+    const ctx = {}
+    const facts = goalFacts(bot, ctx)
+    assert.equal(F('explore', facts), false)
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'rest')
+  })
+  it('night safety beats a waiting haul', () => {
+    const bot = goalBot({ timeOfDay: 15000, items: [{ name: 'coal', count: 8 }] })
+    const ctx = { home: { built: true }, haul: { coal: 8 } }
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.time, 'night')
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'gohome')
+  })
+  it('nobody online parks deliver: the forage loop continues (dxl)', () => {
+    const { bot, ctx } = memCtx(
+      [{ x: 5, y: 60, z: 0, name: 'iron_ore' }],
+      [{ name: 'stone_pickaxe', count: 1 }, { name: 'raw_iron', count: 8 }])
+    ctx.haul = { raw_iron: 8 }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.player, 'none')
+    assert.equal(F('deliver', facts), false)
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'forage')
+  })
+  it('criteria name one fact each', () => {
+    assert.ok(STEP_CRITERIA.forage.includes('known is near'))
+    assert.ok(STEP_CRITERIA.deliver.includes('haul is waiting'))
+    assert.ok(STEP_CRITERIA.explore.includes('known is none'))
+  })
+  it('decide picks forage when a find is known', async () => {
+    const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = { home: { built: true }, brain: {} }
+    resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
+    const r = await decide(bot, ctx)
+    assert.deepEqual(r, { action: 'forage', sprint: false, source: 'goal-fsm' })
+    assert.equal(ctx.step, 'forage')
+  })
+})
+
+describe('atl.4 livelock guard: a holding failure bars its step', () => {
+  const logsBot = (n, at) => {
+    const items = []
+    for (let i = 0; i < n; i++) items.push({ name: 'oak_log', count: 1 })
+    return goalBot({ items, at: at || pos(0, 64, 0) })
+  }
+  it('failed gather is infeasible while the log count stands, decide rests', async () => {
+    // Bead-literal: no house yet, so explore is gated too — rest, not gather.
+    const bot = logsBot(9)
+    const ctx = { home: { site: pos(10, 64, 10) }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.logs, 9)
+    assert.equal(MENU.gather.feasible(facts, bot, ctx), false)
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'rest')
+  })
+  it('failed gather routes to explore once the house stands', async () => {
+    // atl.2 menu: the atLogs final outlives the home transition, so the
+    // FSM takes explore instead of re-picking gather or idling on rest.
+    const bot = logsBot(9)
+    const ctx = { home: { built: true }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'explore')
+  })
+  it('new logs release gather: the final no longer holds', async () => {
+    const bot = logsBot(10)
+    const ctx = { home: { site: pos(10, 64, 10) }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(MENU.gather.feasible(facts, bot, ctx), true)
+  })
+  it('any failed step holds until the situation moves: craft waits, relocation releases', async () => {
+    const bot = logsBot(14) // craft feasible on a full load
+    const ctx = { home: { site: pos(10, 64, 10) }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
+    const first = await decide(bot, ctx)
+    assert.equal(first.action, 'gather') // craft held at the failure point
+    // Gather fails away from the point: craft's hold releases by distance.
+    bot.entity.position = pos(40, 64, 0)
+    ctx.stepStatus = 'failed:away'
+    const second = await decide(bot, ctx)
+    assert.equal(second.action, 'craft')
+  })
+  it('new facts release the hold without moving', async () => {
+    const bot = logsBot(14)
+    const ctx = { home: { built: true }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
+    await decide(bot, ctx) // craft held under these facts
+    ctx.haul = { coal: 5 } // banked haul flips the facts line; no player, so deliver stays out
+    bot.inventory = { items: () => [{ name: 'oak_log', count: 14 }, { name: 'coal', count: 5 }] }
+    ctx.step = 'gather'
+    ctx.stepStatus = 'running'
+    ctx.goalText = 'stale'
+    const r = await decide(bot, ctx)
+    assert.equal(r.action, 'craft')
+  })
+})
+
 describe('decide decision point', () => {
   let origLog
   let lines
@@ -211,13 +352,15 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, [])
   })
 
-  it('failed step re-decides', async () => {
+  it('failed step moves on (atl.4)', async () => {
+    // Re-picking the just-failed step with an unchanged situation was the
+    // gather livelock: the guard routes to rest instead.
     const bot = goalBot()
     const ctx = {}
     await decide(bot, ctx)
     ctx.stepStatus = 'failed:no-trees'
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'gather')
+    assert.equal(r.action, 'rest')
     assert.equal(ctx.stepStatus, 'running')
   })
 
@@ -369,9 +512,10 @@ describe('decide decision point', () => {
 
 describe('decide failed-step dedup (revmux 01 major)', () => {
   it('a step that fails again with unchanged facts asks once', async () => {
-    // gather re-asserts failed:no-trees while the trees stay missing: the
-    // first failure is a decision point, the repeats reuse the choice.
-    // Deleting the (text, status) gate (ask every tick) fails this test.
+    // atl.4: the failed step leaves the menu, so the repeat re-decides to
+    // rest without asking (only-option); further ticks reuse the choice.
+    // Deleting the (text, status) gate (ask every tick) still fails this
+    // test: a fresh multi-option point would ask on every tick.
     const bot = goalBot()
     const brain = { source: 'laya', calls: 0, ask: async function () { this.calls++; return 'gather' } }
     const ctx = { brain }
@@ -379,12 +523,11 @@ describe('decide failed-step dedup (revmux 01 major)', () => {
     assert.equal(brain.calls, 1)
     ctx.stepStatus = 'failed:no-trees' // behaviour re-runs, fails identically
     await decide(bot, ctx)
-    assert.equal(brain.calls, 2, 'first repeat failure still asks')
-    ctx.stepStatus = 'failed:no-trees' // behaviour fails identically again
+    assert.equal(brain.calls, 1, 'repeat failure re-decides without asking')
+    assert.equal(ctx.step, 'rest')
     await decide(bot, ctx)
-    ctx.stepStatus = 'failed:no-trees'
     await decide(bot, ctx)
-    assert.equal(brain.calls, 2, 'further identical failures reuse the choice')
-    assert.equal(ctx.step, 'gather')
+    assert.equal(brain.calls, 1, 'further ticks reuse the choice')
+    assert.equal(ctx.step, 'rest')
   })
 })

@@ -638,3 +638,7 @@ module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
 module.exports.findAnimal = findAnimal
 module.exports.sharePlan = sharePlan
+module.exports.progressed = progressed
+module.exports.entityById = entityById
+module.exports.PREY_NAMES = PREY_NAMES
+module.exports.PREY_DROPS = PREY_DROPS

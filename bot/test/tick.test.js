@@ -866,6 +866,7 @@ describe('work mode (epic rw4)', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.source, 'goal-fsm') // work step continues
       assert.notEqual(r.decision.action, 'idle')
+      ticker.destroy() // background chain would rotate a failing step (atl.4)
     })
 
     it('follows the first tick the player becomes visible', async () => {
@@ -876,6 +877,7 @@ describe('work mode (epic rw4)', () => {
       bot.players.P = { username: 'P', entity: playerEntity(10) }
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'follow')
+      ticker.destroy() // no background tail past the test
     })
   })
 
@@ -954,6 +956,8 @@ describe('work mode (epic rw4)', () => {
       bot.players.P = { username: 'P', entity: playerEntity(10) } // sighted mid-walk
       await ticker.tick()
       assert.equal(bot._tickerCtx.work, true)
+      ticker.destroy() // manual ticks arm background chains; a failing step
+      // would otherwise rotate (atl.4) and spray goal lines into later tests
     })
 
     it('lone bot still stops (no roster, no walk)', async () => {

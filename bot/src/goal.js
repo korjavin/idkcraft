@@ -15,6 +15,8 @@
 const { countItems } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
+const forageMod = require('./behaviours/forage')
+const deliverMod = require('./behaviours/deliver')
 const BLUEPRINT = buildMod.BLUEPRINT
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
@@ -105,7 +107,14 @@ const MENU = {
     // unreachable after the job is done. A started load is always finished
     // (logs < NEED_LOGS): stopping mid-load strands sub-batch logs that the
     // batch craft gate can never take — rest forever with work remaining.
-    feasible: (facts) => {
+    // atl.4: a still-holding gather failure is not feasible — the behaviour
+    // replays the same final while the log count stands (decide's stepFail
+    // is the menu-wide twin of this gate).
+    feasible: (facts, bot, ctx) => {
+      try {
+        const g = ctx && ctx.gather
+        if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) return false
+      } catch (_) { /* fall through to facts */ }
       if (facts.home === 'built') return false
       const total = facts.planks + facts.logs * 4
       const need = NEED_PLANKS + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
@@ -114,6 +123,27 @@ const MENU = {
     chat: () => 'on my own: gathering logs',
     verb: 'chopping wood',
   },
+  deliver: {
+    // Unload first: a waiting haul goes to the nearest online player
+    // before the next forage leg. Nobody online (dxl) -> infeasible.
+    feasible: (facts) => facts.haul === 'waiting' && facts.player !== 'none',
+    chat: () => 'on my own: delivering the haul',
+    verb: 'delivering',
+  },
+  forage: {
+    // Known valuable find nearby (planForage: value rank, pickaxe gate).
+    // Nothing known -> explore finds more.
+    feasible: (facts) => facts.known === 'near',
+    chat: () => 'on my own: foraging resources',
+    verb: 'foraging',
+  },
+  explore: {
+    // Blind search only once the house stands: pre-house gaps rest (rw4
+    // owns the body until built), night pre-house never wanders.
+    feasible: (facts) => facts.home === 'built',
+    chat: () => 'on my own: exploring outward',
+    verb: 'exploring',
+  },
   rest: {
     feasible: () => true,
     chat: (facts) => (facts.home === 'none' ? 'on my own: resting near spawn' : 'on my own: resting at the home site'),
@@ -121,9 +151,10 @@ const MENU = {
   },
 }
 
-// Priority order (epic rw4): night steps first, then craft, build, gather,
-// rest last. goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'rest']
+// Priority order (epic rw4 + atl.2): night steps first, then craft, build,
+// gather, then unload (deliver), dig (forage), search (explore), rest last.
+// goalFsm is pure priority over the feasible names it is given.
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
 
 // Home site shape (bead .4): site is the SW-corner origin at ground level,
 // interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
@@ -275,6 +306,18 @@ function goalFacts(bot, ctx) {
       bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
   const tablePlaced = !!(ctx && ctx.home && ctx.home.table)
+  let known = 'none'
+  try {
+    if (forageMod.planForage(bot, ctx)) known = 'near'
+  } catch (_) { /* no plan: explore owns that */ }
+  let haul = 'none'
+  try {
+    if (deliverMod.haulTotal(bot, ctx) > 0) haul = 'waiting'
+  } catch (_) { /* no haul */ }
+  let player = 'none'
+  try {
+    player = deliverMod.playerStatus(bot).level
+  } catch (_) { /* nobody online */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
   try {
@@ -286,7 +329,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside, health, food }
+  return { time, logs, planks, maxPlanks, table, door, home, tablePlaced, inside, health, food, known, haul, player }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -309,7 +352,26 @@ function goalText(facts) {
   const health = facts.health < 6 ? 'low' : 'ok'
   const food = facts.food < 6 ? 'hungry' : 'ok'
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
-    `table=${table} door=${door} home=${facts.home} inside=${facts.inside} health=${health} food=${food}`
+    `table=${table} door=${door} home=${facts.home} inside=${facts.inside} health=${health} food=${food} ` +
+    `known=${facts.known} haul=${facts.haul} player=${facts.player}`
+}
+
+// atl.4 livelock guard: a recorded step failure holds while the facts text
+// is unchanged and the body stays within REFAIL_DIST of the failure point.
+// New facts or relocation release the step for a fresh try. Per-step map:
+// alternating failures must not release each other.
+const REFAIL_DIST = 32
+function failHolds(ctx, name, text, bot) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail[name]
+    if (!sf || sf.text !== text) return false
+    if (!sf.pos) return true
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return true
+    return Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) <= REFAIL_DIST
+  } catch (_) {
+    return false
+  }
 }
 
 function goalFsm(facts, feasibleNames) {
@@ -328,13 +390,16 @@ function goalFsm(facts, feasibleNames) {
 // exactly like the iwb combat criteria: every longer variant regressed on
 // the stand. All six steps are named here so build/gohome/stay plug in with
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
-const ASK_INSTRUCTIONS = 'Pick the next step toward building and keeping a home'
+const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   stay: 'inside is yes and time is night: wait inside',
+  deliver: 'haul is waiting: carry it to the player',
+  forage: 'known is near: walk to the remembered find and dig it',
+  explore: 'known is none: walk the visited boundary',
   rest: 'nothing else fits: rest near home',
 }
 
@@ -400,16 +465,24 @@ async function decide(bot, ctx) {
   const prev = (ctx && ctx.step) || null
   const status = (ctx && ctx.stepStatus) || null
   const finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
+  if (finished && prev && typeof status === 'string' && status.startsWith('failed:')) {
+    try {
+      if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
+      const bp = bot && bot.entity && bot.entity.position
+      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
+    } catch (_) { /* guard best-effort */ }
+  }
   if (!prev || finished || ctx.goalText !== text) {
     const askKey = `${text}\n${status || ''}`
     if (prev && ctx.askedKey === askKey) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
-        return MENU[n].feasible(facts, bot, ctx) && registered(n)
+        if (!MENU[n].feasible(facts, bot, ctx) || !registered(n)) return false
       } catch (_) {
         return false
       }
+      return !failHolds(ctx, n, text, bot)
     })
     const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : 'facts-changed'
     const t0 = Date.now()
