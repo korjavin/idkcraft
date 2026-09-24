@@ -515,12 +515,23 @@ function digStepRun(bot, ctx) {
 // repeatable: one mount ends the episode and the mode resumes from the top.
 function hopStepRun(bot, ctx) {
   const rec = ctx.recovery
-  const st = rec.st || (rec.st = { dir: null, stepPos: null, phase: 'back', waited: 0, startFloor: null, backStart: null, jumping: false })
+  const st = rec.st || (rec.st = { dir: null, stepPos: null, phase: 'back', waited: 0, startFloor: null, backStart: null, jumping: false, settled: false })
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
   if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  if (st.settled) return 'running' // thrust cut, waiting for the grounded sample
+  if (st.stepPos && Math.floor(bp.y) > st.startFloor &&
+      Math.hypot(bp.x - (st.stepPos.x + 0.5), bp.z - (st.stepPos.z + 0.5)) < 0.5) {
+    // Over the top (airborne or landed): cut thrust and settle. Holding jump
+    // bunny-hops past the top while the anchor-facing look walks the body
+    // back off the ledge. Not released on floor rise alone: mid-leap over
+    // the face still needs forward to carry over.
+    st.settled = true
+    setJump(bot, false); setForward(bot, false)
+    return 'running'
+  }
   // Head veto only before the leap latches: a mount that lands under a
   // 2-high ceiling is still an escape, and killing jump mid-air drops the
   // body back off the step.
@@ -563,7 +574,7 @@ function hopStepRun(bot, ctx) {
   } catch (_) { /* anchor read best-effort */ }
 
   if (!solid(step)) {
-    st.dir = null; st.stepPos = null; st.phase = 'back'; st.jumping = false
+    st.dir = null; st.stepPos = null; st.phase = 'back'; st.jumping = false; st.settled = false
     setJump(bot, false); setForward(bot, false)
     return 'running'
   }

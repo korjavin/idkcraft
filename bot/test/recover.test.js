@@ -1092,6 +1092,45 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.equal(r.action, 'sidestep', `got ${r.action}`)
   })
 
+  it('done wins under a ceiling; airborne over the top settles thrust', async () => {
+    // Round-2 minor: the done-first reorder needs a pin — a mount into a
+    // 2-high passage must report done, not head-blocked.
+    const bot = stepBot()
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 64, 0)) {
+        return { ...b, name: 'stone', boundingBox: 'block' }
+      }
+      return b
+    }
+    bot.entity.position = pos(1.5, 62, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true, settled: false },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'mount under ceiling is done')
+    // Same column mid-air: cut thrust, keep running for the grounded sample.
+    bot.entity.position = pos(1.5, 62.4, 0.5)
+    bot.entity.onGround = false
+    ctx.recovery.status = 'running'
+    ctx.recovery.st.settled = false
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(!bot.getControlState('jump'), 'thrust cut over the top')
+    assert.ok(!bot.getControlState('forward'), 'no walk-off while settling')
+    assert.ok(ctx.recovery.st.settled, 'settle latched')
+  })
+
   it('hop walks to the edge first, leaps inside jump range', () => {
     const bot = stepBot()
     bot.entity.position = pos(-1.5, 61, 0.5)
