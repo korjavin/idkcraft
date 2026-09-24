@@ -699,8 +699,12 @@ function fleeReflex(bot, ctx) {
         const fledAlone = fleeReflex(bot, ctx)
         if (fledAlone) {
           reflexFast = true
-        } else if (!walkHomeTick()) {
-          stopOnce()
+        } else {
+          // Homing owns the body now: end any night step at once (same
+          // reset as an order), or the walk's borrowed canDig=false leaks
+          // onto the shared Movements until someone comes into view.
+          if (ctx.work && ctx.step === 'gohome') resetNightStep()
+          if (!walkHomeTick()) stopOnce()
         }
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
@@ -1350,6 +1354,18 @@ function advancePendingSearch(bot, ticker, ctx) {
       return
     }
     if (ticker && typeof ticker.clearStuck === 'function') ticker.clearStuck()
+    // Bring owns the body now: end any night step at once (module scope has
+    // no resetNightStep, so inline it). Otherwise the walk's borrowed
+    // canDig=false leaks onto the shared Movements for the whole bring.
+    ctx.step = null
+    ctx.stepStatus = null
+    ctx.gohome = null
+    ctx.stay = null
+    ctx.inShelter = false
+    try {
+      const mov = ctx.movements
+      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+    } catch (_) { /* reset best-effort */ }
     bot.chat(startBlockOrder(bot, ctx, p, r.result))
     return
   }
