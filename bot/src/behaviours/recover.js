@@ -278,8 +278,13 @@ async function chooseRecovery(brain, facts, feasible) {
   if (names.length <= 1) return { action: names[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
+  // The just-failed primitive is out of the MODEL menu (4jr): the FSM
+  // already escalates past it, but laya repeated pillar_up to MAX_FAILS.
+  // Kept when it is the only option; the FSM fallback below still sees it.
+  const failedM = /^(pillar_up|dig_up|dig_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   const criteria = {}
-  for (const n of names) criteria[n] = RECOVER_CRITERIA[n]
+  for (const n of askNames) criteria[n] = RECOVER_CRITERIA[n]
   const fail = (reason) => {
     metrics.escalation.inc({ from: model, to: 'fsm', reason })
     return { action: fsm, source: 'stub-fallback', fsm, model }
@@ -292,7 +297,7 @@ async function chooseRecovery(brain, facts, feasible) {
     if (label !== fsm) {
       console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck facts=${text}`)
     }
-    if (!names.includes(label)) return fail('invalid')
+    if (!askNames.includes(label)) return fail('invalid')
     return { action: label, source: model, fsm, model }
   } catch (err) {
     const msg = String((err && err.message) || err)
@@ -560,13 +565,15 @@ function callPlayerRun(bot, ctx) {
 
 const RECOVER_MENU = {
   pillar_up: {
-    feasible: (facts) => facts.scaffold > 0 && !facts.headBlocked,
+    // 4jr: a pillar to a level goal is pointless — laya took the first menu
+    // item anyway, 29 times in 16 min. Climb prims need the goal above.
+    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked,
     run: pillarUpRun,
     repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0,
     verb: 'pillaring up',
   },
   dig_up: {
-    feasible: (facts) => facts.pickaxe && !facts.lavaNear,
+    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear,
     run: digUpRun,
     repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe,
     verb: 'digging up',
@@ -744,6 +751,10 @@ async function decide(bot, ctx, state, target) {
     const outcome = rec.status
     const source = rec.source || 'fsm'
     rec.last = { action: prev, outcome }
+    // The choice below must see the just-recorded outcome: facts was built
+    // before it, so FSM escalation and the model-menu exclusion would both
+    // read the previous last (4jr: the model repeated pillar_up live).
+    facts.last = `${prev}:${outcome}`
     metrics.recover.inc({ action: prev, source, outcome: outcome === 'done' ? 'done' : outcome })
     if (outcome === 'done') {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {

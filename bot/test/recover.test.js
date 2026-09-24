@@ -456,6 +456,87 @@ describe('recover dig_step climbs a dirt pit by hand (9sh)', () => {
   })
 })
 
+describe('recover menu: no climb prims on level goals, no failed repeats (4jr)', () => {
+  // Prod 2026-09-24: laya always took the first menu item (pillar_up) on
+  // level goals and repeated it after place-error fails. 29 pillar_ups in
+  // 16 min, ~20 s standing per attempt.
+  function levelWorld() {
+    // Floor + one dirt wall with a stone cap: walls=1, but no dig_step
+    // (the cap never digs by hand), so the menu is the 4jr case exactly.
+    const solids = new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)])
+    return { solids, cap: key(1, 62, 0) }
+  }
+  function levelBot(cap) {
+    const w = levelWorld()
+    const bot = worldBot(w.solids, kit)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === cap) {
+        return { ...b, name: 'stone' }
+      }
+      return b
+    }
+    return bot
+  }
+  const kit = [{ name: 'dirt', count: 5 }, { name: 'iron_pickaxe', count: 1 }]
+
+  it('level goal: ask menu lacks pillar_up/dig_up, first label gets sidestep', async () => {
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const seen = []
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen.length === 1, 'asked once')
+    assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+    assert.ok(!seen[0].includes('dig_up'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'sidestep')
+  })
+
+  it('after pillar_up failed:place-error the next ask lacks pillar_up', async () => {
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const seen = []
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen.length === 1, 'asked once')
+    assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'dig_up', `falls to the next climb prim, got ${r.action}`)
+  })
+  it('a stubborn model repeating the failed prim is overruled to the FSM pick', async () => {
+    // 4jr prod case: laya answered pillar_up after pillar_up:failed. The
+    // excluded label must read invalid and fall back to FSM escalation.
+    const bot = levelBot(levelWorld().cap)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: { source: 'stub', ask: async () => 'pillar_up' },
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'dig_up', `escalated past the repeat, got ${r.action}`)
+    assert.equal(r.source, 'stub-fallback')
+  })
+})
+
 describe('recover no-exit episode (acceptance 3)', () => {
   it('3 sidestep fails -> exactly one call_player chat, goal dropped', async () => {
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
@@ -497,7 +578,10 @@ describe('recover feasibility veto', () => {
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, lavaNear: true })), false)
     assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true })), true)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, headBlocked: true })), false)
-    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3 })), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3 })), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 0 })), false, '4jr: no pillar to a level goal')
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2 })), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 0 })), false, '4jr: no dig-up to a level goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({})), false) // no scaffold
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 4 })), false)
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 3 })), true)
