@@ -431,8 +431,10 @@ describe('recover dig_step climbs a dirt pit by hand (9sh)', () => {
     for (let y = 61; y <= 64; y++) {
       solids.add(key(-1, y, 0)); solids.add(key(0, y, -1)); solids.add(key(0, y, 1))
     }
-    // Stone walls: nothing digs by hand (floor stays dirt).
+    // Stone walls under a prod-shaped bot (canDigBlock always true):
+    // nothing digs by hand, so dig_step must stay out of the menu.
     const bot = worldBot(solids, [])
+    bot.canDigBlock = () => true
     bot.blockAt = ((raw) => (p) => {
       const b = raw(p)
       if (b && b.name === 'dirt' && Math.floor(p.y) >= 61) return { ...b, name: 'stone' }
@@ -537,8 +539,43 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
   })
 })
 
+describe('recover BEHAVIOURS wiring (round-1 finding 3)', () => {
+  it('every RECOVER_ORDER name dispatches through the ticker', () => {
+    // dig_step chose fine but froze live: BEHAVIOURS had no entry, so
+    // applyDecision stopOnce()d every tick and digStepRun never ran.
+    const { BEHAVIOURS } = require('../src/index')
+    for (const n of recover.RECOVER_ORDER) {
+      assert.equal(typeof BEHAVIOURS[n], 'function', n)
+    }
+  })
+
+  it('dig_step mid-air above the step is not done', () => {
+    // Jump apex samples y+1 while airborne: done needs ground, not rise.
+    const bot = worldBot(new Set([key(0, 60, 0)]), [])
+    bot.entity.position = pos(0.5, 62.0, 1.0)
+    bot.entity.onGround = false
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      recovery: {
+        action: 'dig_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [0, 1], phase: 'step', waited: 0, digInFlight: false, digError: false, startFloor: 61 },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'grounded on the step is')
+  })
+})
+
 describe('recover no-exit episode (acceptance 3)', () => {
-  it('3 sidestep fails -> exactly one call_player chat, goal dropped', async () => {
+  it('stubborn stub overruled -> exactly one call_player chat, goal dropped', async () => {
+    // 4jr: the stub repeats the failed sidestep, so the ask menu excludes it
+    // and the invalid answer falls back to FSM escalation (source
+    // stub-fallback, not fsm) — same single chat, dropped goal, gave-up.
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
     // Wedged executor: still "moving" at release, so only the release's own
     // setGoal(null) drops the goal (stopOnce would merely stop). Deleting it
@@ -562,8 +599,8 @@ describe('recover no-exit episode (acceptance 3)', () => {
     assert.match(calls[0], /\/tp IdkBot Steve/)
     assert.equal(bot.pathfinder.goal, null, 'goal dropped after the episode')
     const text = await metricText()
-    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="fsm",outcome="chosen"\} [1-9]/)
-    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="fsm",outcome="gave-up"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="stub-fallback",outcome="chosen"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_recover_total\{action="call_player",source="stub-fallback",outcome="gave-up"\} [1-9]/)
   })
 })
 

@@ -90,11 +90,15 @@ const HAND_DIG = new Set([
   'gravel', 'suspicious_gravel', 'clay', 'snow', 'snow_block', 'moss_block',
 ])
 function handDiggable(bot, b) {
+  // Round-1 finding 1: mineflayer canDigBlock checks only diggable+reach,
+  // never the tool — trusting it alone calls stone hand-diggable in prod.
+  // The name set governs; canDigBlock only confirms reach where present.
   if (!b || typeof b.name !== 'string' || b.name === 'air') return false
+  if (!HAND_DIG.has(b.name) && !b.name.endsWith('_leaves')) return false
   try {
     if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
-  } catch (_) { /* fall back to the name set */ }
-  return HAND_DIG.has(b.name) || b.name.endsWith('_leaves')
+  } catch (_) { /* reach check best-effort */ }
+  return true
 }
 
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
@@ -410,7 +414,12 @@ function digStepRun(bot, ctx) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
-  if (Math.floor(bp.y) > st.startFloor) { setJump(bot, false); return 'done' }
+  // Round-1 finding 2: a 1 Hz tick sampling the jump apex reads y+1 while
+  // airborne. Done needs ground under the risen feet — landing back on the
+  // pit floor is not an escape. (The step column itself is not required: a
+  // natural +1 ledge nearby is genuine progress too.)
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
   if (!st.dir) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
