@@ -290,15 +290,23 @@ function craftOne(bot, ctx, op) {
   }
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
   ctx.equipInFlight = true
+  // Exactly-once settlement: a hung window (live ghost reads) must fail
+  // loudly on a deadline, never freeze the menu with the flag stuck.
+  let settled = false
+  const finish = (fn) => {
+    if (settled) return
+    settled = true
+    ctx.equipInFlight = false
+    if (typeof fn === 'function') fn()
+  }
   const run = async () => {
     try {
       await bot.craft(op.recipe, op.count, op.table)
     } catch (err) {
-      ctx.equipInFlight = false
-      fail(ctx, op.item, err)
+      finish(() => fail(ctx, op.item, err))
       return
     }
-    ctx.equipInFlight = false
+    finish()
     const strikes = (st.made && st.made[op.item]) || 0
     const landed = op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
       : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
@@ -318,7 +326,13 @@ function craftOne(bot, ctx, op) {
     }
     try { bot.chat(`equipped ${op.item}`) } catch (_) { /* chat best-effort */ }
   }
-  void run()
+  const timeout = new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new Error('craft-timeout')), 30000)
+    if (t && typeof t.unref === 'function') t.unref()
+  })
+  void Promise.race([run(), timeout]).catch((err) => {
+    finish(() => fail(ctx, op.item, err))
+  })
 }
 
 function digTick(bot, ctx, st, bp) {
