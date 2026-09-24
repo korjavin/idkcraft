@@ -793,6 +793,25 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(a2) work + spawn chunks missing: waits, no adopt, proceeds after 60 ticks', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.blockAt = () => null // world hook present, spawn cell not visible yet
+    const brain = mockBrain()
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    try {
+      const r1 = await ticker.tick()
+      assert.equal(r1.decision.action, 'idle')
+      assert.equal(r1.decision.source, 'local-idle')
+      assert.ok(lines.some((l) => l.includes('waiting for spawn chunks')), 'waiting evidence')
+      for (let i = 0; i < 61; i++) await ticker.tick()
+      assert.ok(brain.calls > 0 || lines.some((l) => l.includes('goal step=')), 'work proceeds after the cap')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(b) work + hostile at 5 blocks: fight preempts as before', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
@@ -825,6 +844,63 @@ describe('work mode (epic rw4)', () => {
       ticker.destroy()
     } finally {
       global.setTimeout = orig
+    }
+  })
+
+  it('(e) stationary gohome approach never raises the ticker stuck fact', async () => {
+    // rw4.5/recover: the ef3 no-displacement backstop must not hijack a slow
+    // night approach — walkTo owns the stall (cannot-reach-home) and the
+    // arrival. 45 still ticks with the executor claiming motion: no episode.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.time = { timeOfDay: 15000 }
+    bot.pathfinder.isMoving = () => true // executor claims motion, body still
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    ctx.step = 'gohome'
+    ctx.stepStatus = 'running'
+    ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+    try {
+      for (let i = 0; i < 45; i++) await ticker.tick()
+      assert.equal(bot.calls.goals.length, 1, 'no goal churn while the executor claims motion')
+      assert.equal(ctx.stuck, null, 'no ticker backstop episode during gohome')
+      assert.equal(ctx.recovery, null, 'no recovery owns the body during gohome')
+      assert.equal(ctx.step, 'gohome', 'walkTo failure re-picks gohome silently at night')
+      assert.ok((ctx.gohome.fails || 0) < 3, 'walkTo failure re-arms a fresh record instead of stranding')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(e2) work/stop clear a stale night step so the next decide re-arms', () => {
+    // Revmux 01-review loop+goal-4: follow->work, stop and fresh work must
+    // not inherit a stale gohome/stay record or shelter flag.
+    const bot = workBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ctx = bot._tickerCtx
+    const stale = () => {
+      ctx.step = 'stay'
+      ctx.stepStatus = 'running'
+      ctx.inShelter = true
+      ctx.stay = { phase: 'hold', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+      ctx.gohome = { phase: 'walk', stalls: 0, fails: 2, lastPos: null, lastToggle: 0 }
+    }
+    try {
+      stale()
+      ticker.work()
+      assert.equal(ctx.step, null)
+      assert.equal(ctx.stay, null)
+      assert.equal(ctx.gohome, null)
+      assert.equal(ctx.inShelter, false)
+      stale()
+      ticker.stop()
+      assert.equal(ctx.step, null)
+      assert.equal(ctx.stay, null)
+      assert.equal(ctx.inShelter, false)
+    } finally {
+      ticker.destroy()
     }
   })
 
@@ -1280,6 +1356,39 @@ describe('work mode (epic rw4)', () => {
     handleChat(bot, ticker, 'Steve', 'status')
     assert.equal(bot.chats[bot.chats.length - 1], 'working step=gather logs=0 planks=0 home=none')
     ticker.destroy()
+  })
+
+  it('(h) work + inShelter + hostile at 5: fight not dispatched', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(bot.calls.setGoal, 0) // no pursuit: the wall stays shut
+      assert.equal(bot.attackCalls, 0) // 5 blocks: out of reflex swing range
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(i) sheltered + hostile at 2: reflex still swings', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 2) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    try {
+      await ticker.tick()
+      assert.ok(bot.attackCalls >= 1) // inside intruder still gets hit
+      assert.equal(bot.calls.setGoal, 0) // but no pursuit through the wall
+    } finally {
+      ticker.destroy()
+    }
   })
 })
 
