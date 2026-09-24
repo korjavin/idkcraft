@@ -397,6 +397,7 @@ async function enterSearch(bot, ctx, o, legacy) {
 // (arrival or failure) and re-find. The status sentinel keeps a stale
 // recover done from ever reading as an arrival.
 function walkSearch(bot, ctx, o) {
+  const hadTarget = !!(ctx.explore && ctx.explore.target)
   ctx.stepStatus = 'running'
   try {
     exploreMod(bot, ctx, null, {})
@@ -404,6 +405,14 @@ function walkSearch(bot, ctx, o) {
     ctx.stepStatus = 'failed:bring-search'
   }
   const st = ctx.stepStatus
+  if (st === 'done' && !hadTarget && !(ctx.explore && ctx.explore.target)) {
+    // Spiral exhausted (no leg was or is in progress): no new ground
+    // exists, so no further leg could walk either — end honestly now
+    // instead of burning K instant legs.
+    ctx.stepStatus = null
+    refuseExhausted(bot, ctx, o)
+    return
+  }
   if (st === 'done' || (typeof st === 'string' && st.indexOf('failed') === 0)) {
     ctx.stepStatus = null
     if (o.searchLegs) {

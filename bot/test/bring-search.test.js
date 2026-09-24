@@ -405,4 +405,25 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.ok(!fresh.searchLegs, 'stale answer wrote nothing')
     assert.deepEqual(bot.lines, ['looking for animals'])
   })
+  it('exhausted spiral refuses at once without walking', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    anchor(bot._tickerCtx)
+    bot._tickerCtx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+    for (const r of [16, 32, 64, 128, 192, 256]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+        bot._tickerCtx.explore.visited.add(Math.floor(x / 16) + ',' + Math.floor(z / 16))
+      }
+    }
+    handleChat(bot, ticker, 'P', 'bring me food')
+    await bring(bot, bot._tickerCtx, null, {}) // find -> searchwalk
+    assert.equal(bot._tickerCtx.bring.phase, 'searchwalk')
+    await bring(bot, bot._tickerCtx, null, {}) // leg finds no new ground
+    assert.equal(bot._tickerCtx.bring, null)
+    assert.equal(bot.calls.goals.length, 0)
+    assert.ok(bot.lines.some((l) => l === 'searched 0 areas, no animals'), `lines: ${bot.lines}`)
+  })
+
 })
