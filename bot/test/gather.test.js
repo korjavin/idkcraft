@@ -124,6 +124,47 @@ describe('gather step', () => {
     assert.deepEqual(bot.lines, [`got ${NEED_LOGS} logs`]) // stays done, chats once
   })
 
+  it('(atl.5) empty 48 with a remembered log at 90: walks to memory, not final', () => {
+    // Session 2026-09-24: trees past 48 read as 'no trees within 48 blocks'.
+    // A resources-memory log must become the next target before any final.
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'oak_log' } })
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.match(ctx.lastGoalKey, /^gather:90,64,0$/)
+    assert.ok(!bot.lines.some((l) => l.includes('48 blocks')), `lines: ${bot.lines}`)
+  })
+
+  it('(atl.5) empty 48 and empty memory with a log at 100 in loaded chunks: far search walks there', () => {
+    // No memory: the amb staged search (96 shell) must find it before final.
+    const bot = mockBot({
+      spots: [pos(100, 64, 0)],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '100,64,0': 'oak_log' },
+    })
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => {
+      const origin = opts.point || bot.entity.position
+      const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+      return rawFind(opts).filter((q) => Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) <= maxD)
+    }
+    const ctx = freshCtx()
+    for (let i = 0; i < 10 && !/^gather:100,64,0$/.test(ctx.lastGoalKey); i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:100,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(atl.5) a stale memory point is skipped once, search still ends in final', () => {
+    // The remembered log is already gone: re-taking it forever would hang
+    // the step — it must join skip and the search must conclude.
+    const bot = mockBot({ spots: [] })
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
+    assert.ok(ctx.gather.skip.has('90,64,0'), `skip: ${[...ctx.gather.skip]}`)
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+  })
+
   it('(e) no trees: failed:no-trees with one chat line', () => {
     const bot = mockBot({ spots: [] })
     const ctx = freshCtx()

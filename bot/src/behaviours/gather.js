@@ -2,6 +2,8 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
+const resources = require('../resources')
+const { startFarSearch, stepFarSearch } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -36,6 +38,11 @@ function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+function logNames(bot) {
+  const byName = (bot.registry && bot.registry.blocksByName) || {}
+  return Object.keys(byName).filter((n) => n.endsWith('_log'))
+}
+
 function logIds(bot) {
   const byName = (bot.registry && bot.registry.blocksByName) || {}
   const ids = []
@@ -62,12 +69,34 @@ function clearGoal(bot, ctx) {
   ctx.lastGoalKey = ''
 }
 
+// Commit a walk target: shared init for the sync-48 hit, a resource-memory
+// point and a far-search hit. far marks a fallback origin: if it reads back
+// as gone, the point joins skip so the next fallback takes another, not it.
+function commitTarget(g, bp, p, name, far) {
+  g.pos = p
+  g.name = name || 'log'
+  g.far = !!far
+  g.lastFound = [p]
+  g.phase = 'walk'
+  g.stalls = 0
+  g.issuedKey = null // fresh search, fresh budget (see walk re-issue below)
+  g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+}
+
 // Progress is horizontal displacement or a new standing level. Tower jumps
 // pump y in place (64<->65.2 with x,z fixed): jumping is standing still.
 function progressed(bp, last, grounded) {
   if (!last) return true
   if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
   return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
+}
+
+function failFinal(bot, ctx, g, logs, final) {
+  g.final = final
+  g.atLogs = logs
+  ctx.stepStatus = g.final
+  say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
+  clearGoal(bot, ctx)
 }
 
 function gather(bot, ctx, target, state) {
@@ -99,34 +128,57 @@ function gather(bot, ctx, target, state) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   if (!g.pos) {
+    // A running staged search resolves before any new sync scan: the 48
+    // below stays empty while the 96/160 shells stream in across ticks.
+    if (g.phase === 'searchfar') {
+      const r = stepFarSearch(bot, g.search)
+      if (!r.done) return
+      g.search = null
+      const hit = r.result && r.result !== 'unknown' ? r.result : null
+      if (hit && hit.position && !g.skip.has(keyOf(hit.position))) {
+        commitTarget(g, bp, hit.position, hit.name, true)
+        say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
+      } else {
+        failFinal(bot, ctx, g, logs, 'failed:no-trees')
+      }
+      return
+    }
     let found = []
     try {
       found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
     } catch (_) { found = [] }
     const open = found.filter((p) => !g.skip.has(keyOf(p)))
-    if (open.length === 0) {
-      g.final = found.length === 0 ? 'failed:no-trees' : 'failed:unreachable'
-      g.atLogs = logs
-      ctx.stepStatus = g.final
-      say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
-      clearGoal(bot, ctx)
-      return
-    }
-    let best = open[0]
-    for (const p of open) {
-      if (dist(p, bp) < dist(best, bp)) best = p
-    }
-    g.pos = best
-    g.lastFound = open
-    g.phase = 'walk'
-    g.stalls = 0
-    g.issuedKey = null // fresh search, fresh budget (see walk re-issue below)
-    g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-    try {
-      const b = bot.blockAt && bot.blockAt(best)
-      g.name = (b && b.name) || 'log'
-    } catch (_) {
-      g.name = 'log'
+    if (open.length > 0) {
+      let best = open[0]
+      for (const p of open) {
+        if (dist(p, bp) < dist(best, bp)) best = p
+      }
+      let name = 'log'
+      try {
+        const b = bot.blockAt && bot.blockAt(best)
+        name = (b && b.name) || 'log'
+      } catch (_) { /* name best-effort */ }
+      commitTarget(g, bp, best, name, false)
+      g.lastFound = open
+    } else {
+      // atl.5: the sync 48 is empty — next tree from resource memory
+      // (atl.1) or the amb staged far search, before any final.
+      const names = logNames(bot)
+      const mem = names.length > 0 ? resources.nearest(ctx, bp, names) : null
+      if (mem && !g.skip.has(keyOf(mem))) {
+        commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
+        say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
+      } else {
+        let search = null
+        try { search = startFarSearch(bot, 'logs') } catch (_) { search = null }
+        if (search && search !== 'unknown') {
+          g.search = search
+          g.phase = 'searchfar'
+          return
+        }
+        failFinal(bot, ctx, g, logs, found.length === 0 ? 'failed:no-trees' : 'failed:unreachable')
+        return
+      }
     }
   }
   if (logs > 0 && g.skip.size > 0 && logs !== g.seenLogs) {
@@ -164,7 +216,11 @@ function gather(bot, ctx, target, state) {
     let block = null
     try { block = bot.blockAt && bot.blockAt(g.pos) } catch (_) { block = null }
     if (!block || !block.name || !block.name.endsWith('_log')) {
+      // A stale memory/far point joins skip: without this the next fallback
+      // re-takes the same gone point instead of moving on to the final.
+      if (g.far && g.pos) g.skip.add(keyOf(g.pos))
       g.pos = null // chopped by someone else (reads back as air): search again
+      g.far = false
       return
     }
     if (!bot.pathfinder.isMoving()) {
