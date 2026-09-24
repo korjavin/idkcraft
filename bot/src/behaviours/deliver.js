@@ -113,6 +113,22 @@ function playerStatus(bot) {
   return { level: 'none', name: null, entity: null }
 }
 
+// Follow's own arrival verdict (follow.js:116-121): the floored node within
+// GoalFollow range (3, same literal follow.js uses). A satisfied follow parked
+// the body on purpose — neither a no-path situation for the counter nor a
+// reason to withhold the toss when true distance reads just past TOSS_RANGE.
+function followSatisfied(bp, entity) {
+  try {
+    const node = bp && (typeof bp.floored === 'function'
+      ? bp.floored()
+      : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) })
+    if (!node || !entity || !entity.position) return false
+    return new goals.GoalFollow(entity, 3).isEnd(node)
+  } catch (_) {
+    return false
+  }
+}
+
 // Drop a live pathfinder goal without stop() (explore/gather lesson).
 function clearGoal(bot, ctx) {
   try {
@@ -167,7 +183,8 @@ function deliver(bot, ctx, target, state) {
     // fails with the haul kept. Progress (a chase) or toss range resets.
     let d0 = null
     try { d0 = dist(bp, ps.entity.position) } catch (_) { d0 = null }
-    if (d0 !== null && d0 > TOSS_RANGE) {
+    const arrived = followSatisfied(bp, ps.entity)
+    if (d0 !== null && d0 > TOSS_RANGE && !arrived) {
       let moved = false
       try {
         const lp = f.lastPos
@@ -202,7 +219,7 @@ function deliver(bot, ctx, target, state) {
         g.greetOnArrival(bot, ps.name, d, !moving)
       }
     } catch (_) { /* greeting best-effort */ }
-    if (d === null || d > TOSS_RANGE) return
+    if (d === null || (d > TOSS_RANGE && !arrived)) return
     if (f.tossInFlight) return
     f.tossInFlight = true
     void (async () => {

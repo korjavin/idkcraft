@@ -189,6 +189,24 @@ describe('reviewer atl.2 r2: unreachable player fails, haul kept', () => {
     assert.ok(bot.chats.join(' ').match(/holding|can't reach/), 'owner hears the hold')
   })
 
+  it('follow-parked at 3.6 neither fails nor waits: satisfied follow tosses', async () => {
+    // Revmux 02: GoalFollow(3) satisfaction is floored-cell based, so the
+    // executor can legitimately rest at true distance ~3.6 > TOSS_RANGE.
+    // That is arrival, not no-path: toss and done, never failed:no-path.
+    const bot = mockBot()
+    bot.entity.position = pos(7.3, 64, 0)
+    bot.inv.push({ name: 'coal', count: 5 })
+    bot.players.P = { username: 'P', entity: { position: pos(10.9, 64, 0.5) } }
+    const ctx = ctxWithHaul({ coal: 5 })
+    for (let i = 0; i < 25; i++) {
+      deliver(bot, ctx, null, {})
+      await tick()
+      if (ctx.stepStatus && ctx.stepStatus !== 'running') break
+    }
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.join(' ').includes('brought 5 coal'))
+  })
+
   it('a chase never trips it: displacement resets the count', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 5 })
