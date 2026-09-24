@@ -360,6 +360,102 @@ describe('recover sidestep in a pit is not done (fja)', () => {
   })
 })
 
+describe('recover dig_step climbs a dirt pit by hand (9sh)', () => {
+  // Bead 9sh: scaffold=0, pickaxe=no after death — no climb primitive, yet
+  // dirt walls dig by hand. dig_step must be in the menu and climb out.
+  function dirtPit() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
+      solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
+    }
+    // Natural notch: without one irregularity a uniform 4-pit is
+    // hand-inescapable by physics (no headroom above any second step).
+    solids.delete(key(0, 64, 1))
+    return solids
+  }
+
+  it('offline dirt pit: dig_step chosen first, bot climbs out itself', async () => {
+    const bot = worldBot(dirtPit(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {} // autonomous: call_player infeasible, self-exit only
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: null, // FSM reserve picks
+    }
+    const first = []
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (g && typeof g.x === 'number') {
+        const bp = bot.entity.position
+        const dx = g.x - bp.x
+        const dz = g.z - bp.z
+        const d = Math.hypot(dx, dz)
+        if (d >= 0.05) {
+          const s = Math.min(0.4, d) / d
+          bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+        }
+      }
+      // Honest jump: at most one block above the cycle start floor — each
+      // new height needs a freshly dug step, not a free elevator.
+      const st = ctx.recovery && ctx.recovery.st
+      const cap = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      if (bot.getControlState('jump') && bot.entity.position.y < cap) bot.entity.position.y += 0.5
+    }
+    for (let t = 0; t < 200 && (ctx.stuck || ctx.recovery); t++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+        if (ctx.recovery && ctx.recovery.action && first.length === 0) first.push(ctx.recovery.action)
+      } else {
+        recover.run(bot, ctx)
+        stepBody()
+      }
+      await flush()
+    }
+    assert.equal(first[0], 'dig_step', `first choice, got ${first}`)
+    assert.ok(Math.floor(bot.entity.position.y) >= 65, `climbed out, y=${bot.entity.position.y}`)
+    assert.equal(ctx.stuck, null, 'episode over')
+    assert.deepEqual(bot.chats.filter((m) => m.startsWith("I'm stuck at")), [], 'no call_player needed')
+  })
+
+  it('enclosed stone shaft, player online, high goal: call_player beats sidestep', async () => {
+    // 1-wide shaft open to the east only: sidestep is feasible (one free
+    // side) but futile, stone digs by hand nowhere. Help goes first.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      solids.add(key(-1, y, 0)); solids.add(key(0, y, -1)); solids.add(key(0, y, 1))
+    }
+    // Stone walls: nothing digs by hand (floor stays dirt).
+    const bot = worldBot(solids, [])
+    bot.blockAt = ((raw) => (p) => {
+      const b = raw(p)
+      if (b && b.name === 'dirt' && Math.floor(p.y) >= 61) return { ...b, name: 'stone' }
+      return b
+    })(bot.blockAt)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: null,
+    }
+    await recover.decide(bot, ctx, null, null)
+    assert.equal(ctx.recovery.action, 'call_player', 'help before sideways shuffle')
+    for (let t = 0; t < 10 && ctx.recovery; t++) {
+      recover.run(bot, ctx)
+      if (ctx.recovery && ctx.recovery.status !== 'running') await recover.decide(bot, ctx, null, null)
+      await flush()
+    }
+    assert.ok(bot.chats.some((m) => m.startsWith("I'm stuck at")), `chats: ${bot.chats}`)
+    assert.ok(!bot.chats.some((m) => m.includes('sidestepping')), 'sidestep never tried first')
+  })
+})
+
 describe('recover no-exit episode (acceptance 3)', () => {
   it('3 sidestep fails -> exactly one call_player chat, goal dropped', async () => {
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
@@ -511,7 +607,9 @@ describe('ticker stuck routing', () => {
     let decides = 0
     const brain = { async decide() { decides++; return { action: 'follow', sprint: false, source: 'stub' } } }
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
-    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 64, z: 0 } }
+    // Level goal: 9sh puts call_player before sidestep on high goals with
+    // no climb primitive, so this routing test stays level to keep sidestep.
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 10, y: 61, z: 0 } }
     const r = await ticker.tick()
     assert.equal(decides, 0, 'no brain call on the stuck tick')
     assert.equal(r.calledBrain, false)
@@ -537,7 +635,9 @@ describe('ticker backstops (minor)', () => {
   function standBot() {
     const bot = worldBot(new Set([key(0, 60, 0)]), [])
     bot.entity.position = pos(0.5, 61, 0.5)
-    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 64, 0) } } }
+    // Level player: 9sh puts call_player before sidestep on high goals with
+    // no climb primitive, and these backstop tests pin the sidestep start.
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 61, 0) } } }
     return bot
   }
   it('three place_error resets raise by=place_error and start an episode', async () => {
