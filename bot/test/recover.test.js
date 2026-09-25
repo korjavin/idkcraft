@@ -618,6 +618,9 @@ describe('recover feasibility veto', () => {
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, headBlocked: true })), false)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3 })), true)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 0 })), false, '4jr: no pillar to a level goal')
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar apex in water')
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar repeat in water')
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3 })), true)
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2 })), true)
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 0 })), false, '4jr: no dig-up to a level goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({})), false) // no scaffold
@@ -788,25 +791,20 @@ describe('ticker backstops (minor)', () => {
     bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 61, 0) } } }
     return bot
   }
-  it('three place_error resets raise by=place_error and start an episode', async () => {
-    // Deleting the backstop line fails this test (stuck stays null).
-    const lines = []
-    const origLog = console.log
-    console.log = (l) => { lines.push(String(l)) }
-    try {
-      const bot = standBot()
-      const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
-      const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
-      ticker.setPathReset('place_error')
-      ticker.setPathReset('place_error')
-      ticker.setPathReset('place_error')
-      await ticker.tick()
-      assert.equal(bot._tickerCtx.stuck.by, 'place_error')
-      assert.ok(lines.some((l) => l.includes('recover action=sidestep') && l.includes('outcome=chosen')),
-        `episode started, got: ${lines.join(' | ')}`)
-    } finally {
-      console.log = origLog
-    }
+  it('three place_error resets never start an episode (p4s)', async () => {
+    // Contract change (idkcraft-p4s): the place_error ticker backstop is
+    // gone — the streak stays the step's own signal, the body never goes
+    // to recover on it.
+    const bot = standBot()
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    ticker.setPathReset('place_error')
+    await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null)
+    assert.equal(bot._tickerCtx.recovery, null)
+    ticker.destroy()
   })
   it('gather owning the step suppresses the place_error backstop (yvi gate)', async () => {
     const bot = standBot()
@@ -1177,5 +1175,75 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     recover.run(bot, ctx)
     assert.ok(bot.getControlState('jump'), 'leap latches at the edge')
     assert.ok(ctx.recovery.st.jumping, 'latch sticks')
+  })
+})
+
+describe('pillar_up place-error at runtime (idkcraft-p4s)', () => {
+  it('a rejected placement takes pillar off the menu for the episode', async () => {
+    // Not by construction: a real failed:place-error outcome must flip the
+    // episode flag (revmux 02 minor: the 4jr last-exclusion already covers
+    // the FIRST choice after a failure, so only the second post-failure
+    // choice proves the flag). Open ground by a tall crag, high goal: pillar
+    // stays feasible at any jump drift. dig_step is picked second (column
+    // beside the feet) and fails fast without a dig function, so the third
+    // choice is the first one the 4jr last-exclusion does not cover —
+    // without the flag it re-picks pillar (places 2).
+    const solids = new Set()
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) solids.add(`${x},60,${z}`)
+    for (let y = 61; y <= 70; y++) solids.add(`1,${y},0`)
+    const bot = worldBot(solids, [{ name: 'dirt', count: 10 }])
+    bot.dig = undefined
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    let asks = 0
+    const brain = {
+      source: 'stub',
+      ask: async () => { asks++; return 'pillar_up' },
+      decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }),
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    let places = 0
+    bot.placeBlock = async () => { places++; throw new Error('placement rejected') }
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 0, y: 70, z: 0 } }
+    const step = harness(bot)
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    const chosen = () => lines.filter((l) => l.includes('outcome=chosen'))
+      .map((l) => (l.match(/action=(\w+)/) || [])[1]).filter(Boolean)
+    try {
+      for (let i = 0; i < 150 && !(places >= 1 && asks >= 3 && chosen().length >= 3); i++) {
+        await ticker.tick()
+        await flush()
+        step()
+      }
+      const actions = chosen()
+      assert.equal(actions[0], 'pillar_up', 'first choice climbs')
+      assert.ok(places >= 1, 'pillar placed once and failed')
+      assert.ok(asks >= 3, 'menu re-asked past both failures')
+      assert.ok(actions.length >= 3, 'third choice happened: ' + actions.join(','))
+      assert.notEqual(actions[2], 'pillar_up', 'flag keeps pillar off the later choice: ' + actions.join(','))
+    } finally {
+      console.log = origLog
+      ticker.destroy()
+    }
+  })
+})
+
+describe('pillar_up after place-error (idkcraft-p4s)', () => {
+  const recover = require('../src/behaviours/recover')
+  function facts(over) {
+    return Object.assign({
+      goalDy: 3, scaffold: 5, headBlocked: false, pickaxe: false, lavaNear: false,
+      digStep: null, hopStep: null, walls: 1, playerOnline: false, playerDist: null,
+      stuckTicks: 0, resetsStuck: 0, resetsPlaceError: 0, last: null, water: false,
+    }, over)
+  }
+  it('pillar_up infeasible once the episode placed and failed', () => {
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({})), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ placeError: true })), false)
+  })
+  it('pillar_up not repeatable once the episode placed and failed', () => {
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({})), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({ placeError: true })), false)
   })
 })

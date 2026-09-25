@@ -2,16 +2,18 @@
 
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
 const { addSwimExits } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
+const { addSnowGround } = require('./snow')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const retreatMod = require('./behaviours/retreat')
 const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
 function brainTimeoutMs(env) {
   const raw = parseInt((env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000', 10)
@@ -44,6 +46,8 @@ const BEHAVIOURS = {
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
+  retreat: retreatMod.retreat,
+  pillar: retreatMod.pillar,
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
@@ -367,7 +371,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.lead = null
     ctx.leadStuck = 0
     ctx.leadTargetGone = 0
+    // p4s: 'go work'/'free'/'build here' revoke a HELD follow order — the
+    // disk copy goes with it, or a restart resurrects an order the owner
+    // cancelled. Only the live closure counts as held: a merely remembered
+    // (restored, unadopted) name stays on disk for the next restart.
+    const held = followName
     followName = ''
+    if (held) {
+      try { ctx.followName = null } catch (_) { /* follow best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    }
     ctx.lastGoalKey = ''
     ctx.gather = null
     ctx.forage = null // fresh episode: stale skips/finals must not veto it
@@ -530,6 +543,7 @@ function fleeReflex(bot, ctx) {
     ctx.recovery = null
     ctx.stuckTicks = 0
     ctx.recoverLatch = null
+    ctx.retreat = null // orders end a retreat episode like any other step
   }
 
   // Greeting checks (v92): whoever the body approaches — the follow
@@ -537,7 +551,7 @@ function fleeReflex(bot, ctx) {
   // the module latches the far -> near edge. Only fighting or fleeing
   // suppress it (near a still player the stub says roam/idle, not follow).
   function greetCheck(decision) {
-    if (decision.action === 'fight' || decision.action === 'flee') return
+    if (decision.action === 'fight' || decision.action === 'flee' || decision.action === 'retreat') return
     // No greeting mid-recovery (ef3): the body belongs to the menu, and a
     // crouch would fight the primitive (jump/place/sneak conflict).
     if (ctx.stuck || ctx.recovery) return
@@ -566,8 +580,8 @@ function fleeReflex(bot, ctx) {
       stopOnce()
     }
     greetCheck(decision)
-    // sprint stays on the decision line as the brain's opinion only; the
-    // body never sprints (see setMovements).
+    // sprint stays on the decision line as the brain's opinion; the body
+    // sprints only on flat follow pursuit (see follow.js).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }
@@ -608,6 +622,17 @@ function fleeReflex(bot, ctx) {
         if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
       } catch (_) { /* default best-effort */ }
     }
+    // Sprint belongs to flat follow pursuit alone (5vv): any tick follow
+    // does not own gets the shared default back, so a stolen body
+    // (fight/bring) or a mode switch (work/stop) cannot inherit it and
+    // sprint-jump into a +1 step (3nt.24).
+    try {
+      const smov = ctx.movements
+      if (smov && typeof smov.allowSprinting === 'boolean') smov.allowSprinting = false
+      // Planning rides the same object (5vv): a sprint window with parkour
+      // on would plan 3-4 gap jumps the next sprint-off tick cannot run.
+      if (smov && typeof smov.allowParkour === 'boolean') smov.allowParkour = true
+    } catch (_) { /* default best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } ctx.step = null; ctx.stepStatus = null; ctx.gohome = null; ctx.stay = null; ctx.inShelter = false; try { const mov = ctx.movements; if (mov && typeof mov.canDig === 'boolean') mov.canDig = true } catch (_) { /* reset best-effort */ } }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
@@ -840,9 +865,11 @@ function fleeReflex(bot, ctx) {
         // here sidesteps the body mid-doorway every slow approach and the
         // arrival starves into an orbit.
         const nightOwns = ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')
-        if (!gatherOwns && !followOwns && !nightOwns && (ctx.placeErrors || 0) >= recover.PLACE_ERROR_ENTRY) {
-          ctx.stuck = { by: 'place_error', goal: null, key: 'ticker' }
-        } else if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
+        // p4s: no place_error backstop — a placement-error streak is the
+        // step's own signal (follow/gather count it toward their stalls), and
+        // handing the body to recover on it turned rest/roam traps into long
+        // sidestep/dig/call episodes. Only the no-displacement backstop stays.
+        if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
         }
       }
@@ -857,6 +884,9 @@ function fleeReflex(bot, ctx) {
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
         applyDecision(decision, target, state)
+        // Stuck recovery taking the tick ends a retreat episode like any
+        // other non-chain dispatch (same release as the goal path).
+        if (!ctx.paused) ctx.retreat = null
         return { decision, calledBrain }
       }
       const key = stateKey(state)
@@ -939,6 +969,25 @@ function fleeReflex(bot, ctx) {
             return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
           }
         }
+        // Retreat chain (1tj): a vetoed follow at low health with a hostile
+        // on the bot means the FSM idles and the bot dies standing (gat).
+        // The model picks a retreat primitive through a yes/no chain; a
+        // miss falls through to goal.decide, i.e. the old behaviour.
+        if (decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') {
+          const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
+          if (retreat) {
+            if (ctx.paused || !ctx.work) {
+              // 'stop' (or a mode change) landed during the chain await:
+              // same stale-decision guard as after the goal await below.
+              stopOnce()
+              return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+            }
+            const rd = { action: retreat.action, sprint: false, source: retreat.source }
+            ctx.step = retreat.action
+            applyDecision(rd, target, state)
+            return { decision: rd, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
@@ -947,9 +996,16 @@ function fleeReflex(bot, ctx) {
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
         applyDecision(decision, target, state)
+        // The chain owns ctx.retreat only across its own dispatches: any other
+        // step taking the tick ends the episode, so the next veto re-chains
+        // instead of holding a stale pick (live 1tj: an unfinished flee
+        // survived into rest, then held and pillar was never asked).
+        if (!ctx.paused && ctx.work) ctx.retreat = null
         return { decision, calledBrain }
       }
       applyDecision(decision, target, state)
+      // Non-chain dispatch releases retreat ownership (see goal path).
+      if (!ctx.paused) ctx.retreat = null
       return { decision, calledBrain }
     } catch (err) {
       console.error(`tick error: ${err && err.message ? err.message : err}`)
@@ -966,6 +1022,9 @@ function fleeReflex(bot, ctx) {
     // Head of the latest plan (b50): the executor works this list from
     // [0] down, so the wedge line can name the terrain it faces.
     setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
+    // Sprint lookahead window (5vv): the first nodes of the latest plan,
+    // plain coords — follow reads numbers only. Cleared on a new goal.
+    setPathNodes: (arr) => { ctx.lastPathNodes = Array.isArray(arr) ? arr.slice(0, 8).map((n) => (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null)).filter(Boolean) : null },
     // place_error streaks (tower attempts into the same cell while a previous
     // placeBlock still awaits blockUpdate): consecutive only — any other
     // reset reason breaks the streak. Behaviours treat N>=3 with no
@@ -983,8 +1042,9 @@ function fleeReflex(bot, ctx) {
     // fire). Hold the flag off here — the single write site — so neither
     // applyDecision nor the lead branch can re-enable it per tick; sprint on
     // the decision line stays the brain's opinion only. Upgrade path: sprint
-    // only on flat segments needs a hook inside the pathfinder executor.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    // only on flat segments: follow.js toggles it per tick on far level
+    // pursuit (5vv), and runTick restores the default on every other tick.
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m); addSnowGround(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
@@ -995,6 +1055,8 @@ function fleeReflex(bot, ctx) {
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
+      try { ctx.followName = real || null } catch (_) { /* follow best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
       if (!real || seen) ctx.work = false
       ctx.lastGoalKey = ''
@@ -1214,6 +1276,23 @@ try {
 // back to polling). An unexpected end/kicked/error still exits — the
 // container restart is the reconnect path there. createBot/pingFn are
 // parameters so tests can drive the own-quit vs fatal branches.
+// Follow target adoption at (re)start (idkcraft-p4s): the env order wins
+// (already the ticker's name, so this only runs when it is empty) — then
+// ONLY the name disk memory kept across the deploy, and only while that
+// player is online. Never the single online player: the owner may want
+// autonomous work, and that is their command, not the restart's decision.
+// Pure: roster reads only, so unit tests pin every branch.
+function startupFollow(bot, memName) {
+  try {
+    const players = (bot && bot.players) || {}
+    if (typeof memName === 'string' && memName) {
+      const real = resolvePlayer(bot, memName)
+      if (real && players[real]) return real
+    }
+  } catch (_) { /* roster best-effort */ }
+  return ''
+}
+
 function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
@@ -1265,11 +1344,18 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // home (e.g. an unfinished new site) wins over re-adopting the old
       // door near spawn. Adopt only when memory holds no home.
       if (tickCtx && ticker && typeof ticker.loadMemory === 'function') ticker.loadMemory()
+      // idkcraft-p4s: follow survives the deploy — adopt the remembered (or
+      // sole) target before the first decision, so work mode never starts.
+      if (tickCtx && ticker && !followName && typeof ticker.setFollow === 'function') {
+        const adopted = startupFollow(bot, tickCtx.followName)
+        if (adopted) ticker.setFollow(adopted)
+      }
       // Epic rw4.4: adopt a house an earlier run finished (door near
       // spawn) before the first decision, so a restart resumes as built.
       const found = (!tickCtx || !tickCtx.home) ? goal.adoptHome(bot) : null
       if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
-      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName) ticker.work()
+      const followedNow = ticker && typeof ticker.getFollowName === 'function' && ticker.getFollowName()
+      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
@@ -1292,7 +1378,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // decision line. Registered here in runOnce(), not in createTicker: the test
     // mockBot is a plain object, not an EventEmitter, so only the real
     // mineflayer bot ever reaches this code.
-    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]) })
+    bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
 
     const life = createLifecycle(ticker)
@@ -1719,4 +1805,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

@@ -243,6 +243,7 @@ function recoverFacts(bot, ctx, state, target) {
     stuckTicks: (ctx && ctx.stuckTicks) || 0,
     resetsStuck: (ctx && ctx.stuckResets) || 0,
     resetsPlaceError: (ctx && ctx.placeErrors) || 0,
+    placeError: !!(ctx && ctx.recovery && ctx.recovery.placeError),
     last: rec && rec.last ? `${rec.last.action}:${rec.last.outcome}` : 'none',
   }
 }
@@ -717,9 +718,13 @@ const RECOVER_MENU = {
   pillar_up: {
     // 4jr: a pillar to a level goal is pointless — laya took the first menu
     // item anyway, 29 times in 16 min. Climb prims need the goal above.
-    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked,
+    // p4s: placing is what just failed (3 done / 49 failed:place-error a
+    // day) — after a place-error in this episode pillar_up leaves the menu.
+    // 5vv: jumping to the apex in water is pointless — swim exits and
+    // sidestep own the escape, not the scaffold.
+    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
     run: pillarUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0,
+    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
   },
   dig_up: {
@@ -895,7 +900,7 @@ async function decide(bot, ctx, state, target) {
     return { action: rec.action, sprint: false, source: rec.source }
   }
   if (!rec) {
-    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null }
+    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, placeError: (ctx.placeErrors || 0) > 0 }
     metrics.routes.inc({ route: 'hard', reason: 'stuck' })
     // Drop the stale goal first: a live GoalFollow/GoalNear keeps driving
     // the executor (jump/forward overrides at 20 Hz) and fights every
@@ -912,6 +917,7 @@ async function decide(bot, ctx, state, target) {
     const outcome = rec.status
     const source = rec.source || 'fsm'
     rec.last = { action: prev, outcome }
+    if (outcome === 'failed:place-error') rec.placeError = true
     // The choice below must see the just-recorded outcome: facts was built
     // before it, so FSM escalation and the model-menu exclusion would both
     // read the previous last (4jr: the model repeated pillar_up live).
