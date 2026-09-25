@@ -851,3 +851,31 @@ describe('atl.7 rest explains itself', () => {
     assert.equal(ctx.restWhy, null)
   })
 })
+
+describe('xoj stepWhy mirrors the next-cell item gate', () => {
+  const day = { time: 'day', logs: 0, home: 'site', tablePlaced: false, inside: 'no' }
+  it('fresh site, table held, planks short: the batch is the reason, not the door', () => {
+    const bot = goalBot() // no blockAt: every cell reads missing, next is the table
+    const ctx = { home: siteFor(bot, pos(0, 64, 0)) }
+    const facts = { ...day, planks: 5, maxPlanks: 5, table: 1, door: 0 }
+    assert.equal(MENU.build.feasible(facts, bot, ctx), false)
+    assert.equal(stepWhy('build', facts, bot, ctx, ''), 'build: need 16 planks, have 5')
+  })
+  it('door cell next, door missing: the item is the reason', () => {
+    const probe = goalBot()
+    const home = siteFor(probe, pos(0, 64, 0))
+    const bot = goalBot()
+    bot.blockAt = (p) => {
+      const dx = Math.floor(p.x) - home.site.x
+      const dy = Math.floor(p.y) - home.site.y
+      const dz = Math.floor(p.z) - home.site.z
+      if (dx === 1 && dy === 0 && dz === 0) return { name: 'air' } // the door cell
+      if (dx === 4 && dy === 0 && dz === 1) return { name: 'crafting_table' }
+      return { name: 'oak_planks' }
+    }
+    const ctx = { home }
+    const facts = { ...day, planks: 45, maxPlanks: 45, table: 0, door: 0, tablePlaced: true }
+    assert.equal(MENU.build.feasible(facts, bot, ctx), false)
+    assert.equal(stepWhy('build', facts, bot, ctx, ''), 'build: need table/door item')
+  })
+})
