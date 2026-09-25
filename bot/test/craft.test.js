@@ -212,6 +212,10 @@ describe('craft step', () => {
     assert.equal(calls, 1) // the 2nd and 3rd calls wait on the in-flight guard
     release() // batch of 3: release once per iteration
     await flush()
+    assert.equal(ctx.craftInFlight, true) // held between iterations (round-2)
+    craft(bot, ctx, null, {}) // a re-entrant tick must not start a second op
+    await flush()
+    assert.equal(calls, 2) // only the loop's own next iteration
     release()
     await flush()
     release()

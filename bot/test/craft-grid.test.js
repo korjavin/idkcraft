@@ -294,4 +294,27 @@ describe('gxk 2x2 grid hang', () => {
     assert.equal(crafted, 1)
     bot.restoreError()
   })
+
+  it('an over-counted batch ends cleanly when the wood runs out', async () => {
+    // Ghost cursor log: counted in the batch size at selection (visible 13 +
+    // cursor 1 = 14), then wiped by a server correction — it never lands in
+    // items(). The loop must stop at exhaustion with the converted load
+    // reported, not fail the whole batch as missing ingredient (round-2).
+    const bot = fakeBot({ invLogs: 13 })
+    const ghost = logItem(1)
+    bot.inventory.selectedItem = ghost
+    bot.putSelectedItemRange = async (start, end, win) => {
+      win.selectedItem = null // correction: the server never held it
+    }
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.inventory.selectedItem, null)
+    assert.equal(countIn(bot.inventory, 'oak_log'), 0)
+    assert.equal(countIn(bot.inventory, 'oak_planks'), 52)
+    assert.equal(bot.calls.craft, 13)
+    assert.deepEqual(bot.lines, ['crafted 52 oak_planks (planks 52, logs 0)'])
+    bot.restoreError()
+  })
 })
