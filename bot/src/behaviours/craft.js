@@ -86,6 +86,25 @@ function isSlotTimeout(err) {
 // unchanged stays silent server-side exactly like the craft click did, so its
 // timeout is swallowed — the click itself still applied and the ingredient
 // moved. No-ops on slot-less mocks (unit tests without a window model).
+// A healthy click answers in a server round-trip; a silent one (result
+// unchanged) would eat the full 20 s mineflayer wait. Moving on after 2 s is
+// correct — the click was sent and applied at once, only the event is
+// missing — and bounds a 4-slot clear to ~8 s, inside equip's 30 s deadline.
+const CLEAR_CLICK_BUDGET_MS = 2000
+
+async function budgetedClick(bot, slot) {
+  let timer = null
+  const budget = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('clear-budget')), CLEAR_CLICK_BUDGET_MS)
+    if (timer && typeof timer.unref === 'function') timer.unref()
+  })
+  try {
+    await Promise.race([bot.clickWindow(slot, 0, 1), budget])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 async function clearGrid(bot) {
   const win = bot && bot.inventory
   if (!win || !Array.isArray(win.slots)) return
@@ -102,7 +121,7 @@ async function clearGrid(bot) {
     try { item = win.slots[slot] } catch (_) { item = null }
     if (!item) continue
     try {
-      await bot.clickWindow(slot, 0, 1) // shift-click: grid -> inventory
+      await budgetedClick(bot, slot) // shift-click: grid -> inventory
     } catch (_) { /* silent server (result unchanged): the move still applied */ }
   }
 }
@@ -112,6 +131,25 @@ async function clearGrid(bot) {
 // instead of churning the log count; on a repeated slot timeout close the
 // bare inventory window so the server resyncs the model. Table (3x3) crafts
 // pass through untouched — mineflayer closes the table window on error itself.
+// Same-name ingredients the pre-clear is about to return: grid slots 1..4
+// plus the cursor stack. Sizes the planks batch so a dirty grid converts
+// fully inside one step. Slot-less mocks read 0.
+function strandedCount(bot, name) {
+  let n = 0
+  try {
+    const win = bot && bot.inventory
+    if (win && Array.isArray(win.slots)) {
+      for (const s of GRID_2X2) {
+        const it = win.slots[s]
+        if (it && it.name === name) n += typeof it.count === 'number' ? it.count : 1
+      }
+      const cur = win.selectedItem
+      if (cur && cur.name === name) n += typeof cur.count === 'number' ? cur.count : 1
+    }
+  } catch (_) { /* unreadable window: no bonus */ }
+  return n
+}
+
 async function safeCraft(bot, recipe, count, table) {
   if (!table) await clearGrid(bot)
   try {
@@ -153,7 +191,7 @@ function craft(bot, ctx, target, state) {
   for (const [wood, n] of sortedWoods(logs)) {
     const name = `${wood}_planks`
     const found = recipes(bot, name, null)
-    if (found.length > 0) { op = { item: name, recipe: found[0], count: 1, table: null }; break } // gxk: one log per op, never count=n in one call
+    if (found.length > 0) { op = { item: name, recipe: found[0], count: n + strandedCount(bot, `${wood}_log`), table: null }; break } // batch = visible stack + stranded (run() still calls bot.craft with count=1)
   }
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
@@ -206,7 +244,13 @@ function craft(bot, ctx, target, state) {
   ctx.craftInFlight = true
   const run = async () => {
     try {
-      await safeCraft(bot, op.recipe, op.count, op.table)
+      // Batch at step level, one log per call: a single bot.craft(count=n)
+      // dies on the first silent click and strands the rest, while one op per
+      // log re-decides to gather at 13 logs. craftInFlight holds the step for
+      // the whole batch (goal.js), so mid-batch churn never re-decides.
+      for (let i = 0; i < op.count; i++) {
+        await safeCraft(bot, op.recipe, 1, op.table)
+      }
     } catch (err) {
       ctx.craftInFlight = false
       fail(ctx, op.item, err)

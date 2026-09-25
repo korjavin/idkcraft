@@ -168,26 +168,34 @@ async function flush() {
 }
 
 describe('gxk 2x2 grid hang', () => {
-  it('acceptance: stranded log is cleared, returned, and the next craft passes', async () => {
+  it('acceptance: stranded log is cleared, the whole batch converts in one step', async () => {
     // Grid slot 1 already holds a log; the server shows planks and stays
     // silent on further placements. Before the fix this craft times out and
     // strands one more log (13 -> 12); after the fix the grid is cleared up
-    // front, the log returns to items(), and the craft lands.
+    // front, the log returns to items(), and the whole NEED_LOGS batch
+    // converts inside one step — converting one log per op would re-arm
+    // gather at 13 logs and restart the switching (revmux round-1).
     const bot = fakeBot({ gridLogs: 1, invLogs: 13 })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(gridOf(bot.inventory), [])
-    assert.equal(countIn(bot.inventory, 'oak_log'), 13) // 14 returned, 1 crafted
-    assert.equal(countIn(bot.inventory, 'oak_planks'), 4)
-    craft(bot, ctx, null, {}) // the next craft passes too, no re-hang
-    await flush()
-    assert.equal(ctx.stepStatus, 'running')
-    assert.deepEqual(gridOf(bot.inventory), [])
-    assert.equal(countIn(bot.inventory, 'oak_log'), 12)
-    assert.equal(countIn(bot.inventory, 'oak_planks'), 8)
+    assert.equal(countIn(bot.inventory, 'oak_log'), 0) // 14 returned, 14 crafted
+    assert.equal(countIn(bot.inventory, 'oak_planks'), 56)
+    assert.equal(bot.calls.craft, 14) // one count=1 call per log ...
+    assert.deepEqual(bot.lines, ['crafted 56 oak_planks (planks 56, logs 0)']) // ... one chat
     bot.restoreError()
+    // The next craft on a fresh bot passes too, no re-hang.
+    const bot2 = fakeBot({ invLogs: 2 })
+    const ctx2 = freshCtx()
+    craft(bot2, ctx2, null, {})
+    await flush()
+    assert.equal(ctx2.stepStatus, 'running')
+    assert.deepEqual(gridOf(bot2.inventory), [])
+    assert.equal(countIn(bot2.inventory, 'oak_log'), 0)
+    assert.equal(countIn(bot2.inventory, 'oak_planks'), 8)
+    bot2.restoreError()
   })
 
   it('a failed craft still returns the stranded ingredient to items()', async () => {
@@ -242,6 +250,48 @@ describe('gxk 2x2 grid hang', () => {
     assert.equal(n, 1)
     assert.deepEqual(bot.calls.clicks, [])
     assert.equal(bot.calls.closes, 0)
+    bot.restoreError()
+  })
+
+  it('a cursor-held stack is returned to the inventory (pre- and catch-clear)', async () => {
+    // A timed-out craft leaves the picked-up stack on the cursor with its
+    // origin slot empty: both clearings must put it back, never toss it.
+    const bot = fakeBot({ invLogs: 13 })
+    const grab = (which) => {
+      const win = bot.inventory
+      const src = win.slots.findIndex((it, i) => i >= 9 && it && it.name === 'oak_log')
+      assert.ok(src >= 0, `${which}: no log stack to grab`)
+      win.selectedItem = win.slots[src]
+      win.slots[src] = null
+    }
+    bot.putSelectedItemRange = async (start, end, win) => {
+      assert.ok(win.selectedItem)
+      stash(win, win.selectedItem) // the freed origin slot takes it back
+      win.selectedItem = null
+    }
+    grab('pre') // cursor set before the op: the pre-clear returns it
+    bot.craft = async () => {
+      grab('catch') // and again mid-op: the catch-clear returns it too
+      throw new Error(TIMEOUT_MSG)
+    }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, null), /did not fire within timeout/)
+    assert.equal(bot.inventory.selectedItem, null)
+    assert.equal(countIn(bot.inventory, 'oak_log'), 13)
+    bot.restoreError()
+  })
+
+  it('a hanging clearing click does not stall recovery past its budget', async () => {
+    // A click the server never answers (worst case: the full 20 s mineflayer
+    // wait per slot) must not push safeCraft past equip's 30 s deadline:
+    // each clearing click gets ~2 s, then recovery moves on.
+    const bot = fakeBot({ gridLogs: 1, invLogs: 13 })
+    bot.clickWindow = () => new Promise(() => {}) // silent forever
+    let crafted = 0
+    bot.craft = async () => { crafted++ }
+    const t0 = Date.now()
+    await craft.safeCraft(bot, {}, 1, null)
+    assert.ok(Date.now() - t0 < 10000, 'recovery must not wait out the silent click')
+    assert.equal(crafted, 1)
     bot.restoreError()
   })
 })

@@ -56,7 +56,7 @@ async function flush() {
 }
 
 describe('craft step', () => {
-  it('(a) 3 logs -> planks recipe with count=1 (gxk: one log per op), chat reports items', async () => {
+  it('(a) 3 logs -> batched single-log planks calls, one chat with the total', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_log', count: 3 }],
       ids: IDS,
@@ -65,13 +65,15 @@ describe('craft step', () => {
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
     await flush()
-    assert.equal(bot.calls.craft.length, 1)
-    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
-    assert.equal(bot.calls.craft[0].count, 1)
-    assert.equal(bot.calls.craft[0].table, null)
+    assert.equal(bot.calls.craft.length, 3) // the batch loops count=1 calls
+    for (const c of bot.calls.craft) {
+      assert.deepEqual(c.recipe, recipeFor('oak_planks', 4))
+      assert.equal(c.count, 1)
+      assert.equal(c.table, null)
+    }
     assert.equal(ctx.stepStatus, 'running')
-    // 1 repetition x 4 planks: items, not repetitions (mock inventory is static)
-    assert.deepEqual(bot.lines, ['crafted 4 oak_planks (planks 0, logs 3)'])
+    // 3 repetitions x 4 planks: items, not repetitions (mock inventory is static)
+    assert.deepEqual(bot.lines, ['crafted 12 oak_planks (planks 0, logs 3)'])
     bot.restoreError()
   })
 
@@ -84,8 +86,8 @@ describe('craft step', () => {
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
     await flush()
-    assert.equal(bot.calls.craft.length, 1)
-    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
+    assert.equal(bot.calls.craft.length, 3) // batch of 3, all planks (never the table)
+    for (const c of bot.calls.craft) assert.deepEqual(c.recipe, recipeFor('oak_planks', 4))
     bot.restoreError()
   })
 
@@ -208,8 +210,13 @@ describe('craft step', () => {
     craft(bot, ctx, null, {})
     await flush() // let the 1st op start (the safeCraft pre-clear yields first)
     assert.equal(calls, 1) // the 2nd and 3rd calls wait on the in-flight guard
+    release() // batch of 3: release once per iteration
+    await flush()
     release()
     await flush()
+    release()
+    await flush()
+    assert.equal(calls, 3)
     assert.equal(ctx.craftInFlight, false)
     bot.restoreError()
   })
