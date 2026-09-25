@@ -62,6 +62,76 @@ function fail(ctx, item, err) {
   } catch (_) { /* logging best-effort */ }
 }
 
+// gxk: the 2x2 grid hangs bot.craft once an ingredient strands in it.
+// mineflayer waits for updateSlot:0 after every click on slots 0..4, but the
+// server only sends slot 0 when the result changes — a second log placed
+// while planks are already shown stays silent, the op times out after 20 s,
+// and the log strands in the grid, invisible to inventory.items() (slots
+// 9..44 only). Every later 2x2 craft times out the same way while logs churn
+// 14->13 per attempt, looping gather<->craft forever.
+const GRID_2X2 = [1, 2, 3, 4]
+
+// Consecutive updateSlot-timeout streak per bot: a repeated silence means the
+// model and the server disagree beyond a strandable grid, so the second one
+// in a row asks for a full resync. Any success resets the streak.
+const gridTimeouts = new WeakMap()
+
+function isSlotTimeout(err) {
+  const msg = err && err.message ? String(err.message) : String(err)
+  return msg.includes('did not fire within timeout')
+}
+
+// Return stranded 2x2 ingredients (and the cursor stack) to the inventory.
+// Best-effort per slot and silent-safe: a clearing click whose result is
+// unchanged stays silent server-side exactly like the craft click did, so its
+// timeout is swallowed — the click itself still applied and the ingredient
+// moved. No-ops on slot-less mocks (unit tests without a window model).
+async function clearGrid(bot) {
+  const win = bot && bot.inventory
+  if (!win || !Array.isArray(win.slots)) return
+  try {
+    if (win.selectedItem && typeof bot.putSelectedItemRange === 'function') {
+      const start = typeof win.inventoryStart === 'number' ? win.inventoryStart : 9
+      const end = typeof win.inventoryEnd === 'number' ? win.inventoryEnd : 45
+      await bot.putSelectedItemRange(start, end, win, null)
+    }
+  } catch (_) { /* cursor homeless: the craft below fails loudly instead */ }
+  if (typeof bot.clickWindow !== 'function') return
+  for (const slot of GRID_2X2) {
+    let item = null
+    try { item = win.slots[slot] } catch (_) { item = null }
+    if (!item) continue
+    try {
+      await bot.clickWindow(slot, 0, 1) // shift-click: grid -> inventory
+    } catch (_) { /* silent server (result unchanged): the move still applied */ }
+  }
+}
+
+// Shared 2x2-safe wrapper (craft.js and equip.js): clear the grid before the
+// op and again after any error, so a stranded ingredient returns to items()
+// instead of churning the log count; on a repeated slot timeout close the
+// bare inventory window so the server resyncs the model. Table (3x3) crafts
+// pass through untouched — mineflayer closes the table window on error itself.
+async function safeCraft(bot, recipe, count, table) {
+  if (!table) await clearGrid(bot)
+  try {
+    await bot.craft(recipe, count, table)
+  } catch (err) {
+    if (!table) {
+      await clearGrid(bot)
+      if (isSlotTimeout(err)) {
+        const n = (gridTimeouts.get(bot) || 0) + 1
+        gridTimeouts.set(bot, n)
+        if (n >= 2 && !bot.currentWindow && typeof bot.closeWindow === 'function') {
+          try { await bot.closeWindow(bot.inventory) } catch (_) { /* resync best-effort */ }
+        }
+      }
+    }
+    throw err
+  }
+  if (!table) gridTimeouts.set(bot, 0)
+}
+
 function craft(bot, ctx, target, state) {
   if (ctx.craftInFlight) return // exactly one op at a time (mutation: a craft every tick overlaps windows)
   const bp = bot.entity && bot.entity.position
@@ -83,7 +153,7 @@ function craft(bot, ctx, target, state) {
   for (const [wood, n] of sortedWoods(logs)) {
     const name = `${wood}_planks`
     const found = recipes(bot, name, null)
-    if (found.length > 0) { op = { item: name, recipe: found[0], count: n, table: null }; break }
+    if (found.length > 0) { op = { item: name, recipe: found[0], count: 1, table: null }; break } // gxk: one log per op, never count=n in one call
   }
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
@@ -136,7 +206,7 @@ function craft(bot, ctx, target, state) {
   ctx.craftInFlight = true
   const run = async () => {
     try {
-      await bot.craft(op.recipe, op.count, op.table)
+      await safeCraft(bot, op.recipe, op.count, op.table)
     } catch (err) {
       ctx.craftInFlight = false
       fail(ctx, op.item, err)
@@ -158,3 +228,4 @@ module.exports.recipes = recipes
 module.exports.tally = tally
 module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
+module.exports.safeCraft = safeCraft

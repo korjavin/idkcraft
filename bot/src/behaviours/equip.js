@@ -301,7 +301,7 @@ function craftOne(bot, ctx, op) {
   }
   const run = async () => {
     try {
-      await bot.craft(op.recipe, op.count, op.table)
+      await craftMod.safeCraft(bot, op.recipe, op.count, op.table)
     } catch (err) {
       finish(() => fail(ctx, op.item, err))
       return
