@@ -2,7 +2,7 @@
 
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
@@ -13,6 +13,7 @@ const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
 const fightMod = require('./behaviours/fight')
+const retreatMod = require('./behaviours/retreat')
 const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
 function brainTimeoutMs(env) {
   const raw = parseInt((env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000', 10)
@@ -45,6 +46,8 @@ const BEHAVIOURS = {
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
+  retreat: retreatMod.retreat,
+  pillar: retreatMod.pillar,
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
@@ -540,6 +543,7 @@ function fleeReflex(bot, ctx) {
     ctx.recovery = null
     ctx.stuckTicks = 0
     ctx.recoverLatch = null
+    ctx.retreat = null // orders end a retreat episode like any other step
   }
 
   // Greeting checks (v92): whoever the body approaches — the follow
@@ -547,7 +551,7 @@ function fleeReflex(bot, ctx) {
   // the module latches the far -> near edge. Only fighting or fleeing
   // suppress it (near a still player the stub says roam/idle, not follow).
   function greetCheck(decision) {
-    if (decision.action === 'fight' || decision.action === 'flee') return
+    if (decision.action === 'fight' || decision.action === 'flee' || decision.action === 'retreat') return
     // No greeting mid-recovery (ef3): the body belongs to the menu, and a
     // crouch would fight the primitive (jump/place/sneak conflict).
     if (ctx.stuck || ctx.recovery) return
@@ -880,6 +884,9 @@ function fleeReflex(bot, ctx) {
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
         applyDecision(decision, target, state)
+        // Stuck recovery taking the tick ends a retreat episode like any
+        // other non-chain dispatch (same release as the goal path).
+        if (!ctx.paused) ctx.retreat = null
         return { decision, calledBrain }
       }
       const key = stateKey(state)
@@ -962,6 +969,25 @@ function fleeReflex(bot, ctx) {
             return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
           }
         }
+        // Retreat chain (1tj): a vetoed follow at low health with a hostile
+        // on the bot means the FSM idles and the bot dies standing (gat).
+        // The model picks a retreat primitive through a yes/no chain; a
+        // miss falls through to goal.decide, i.e. the old behaviour.
+        if (decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') {
+          const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
+          if (retreat) {
+            if (ctx.paused || !ctx.work) {
+              // 'stop' (or a mode change) landed during the chain await:
+              // same stale-decision guard as after the goal await below.
+              stopOnce()
+              return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+            }
+            const rd = { action: retreat.action, sprint: false, source: retreat.source }
+            ctx.step = retreat.action
+            applyDecision(rd, target, state)
+            return { decision: rd, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
@@ -970,9 +996,16 @@ function fleeReflex(bot, ctx) {
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
         applyDecision(decision, target, state)
+        // The chain owns ctx.retreat only across its own dispatches: any other
+        // step taking the tick ends the episode, so the next veto re-chains
+        // instead of holding a stale pick (live 1tj: an unfinished flee
+        // survived into rest, then held and pillar was never asked).
+        if (!ctx.paused && ctx.work) ctx.retreat = null
         return { decision, calledBrain }
       }
       applyDecision(decision, target, state)
+      // Non-chain dispatch releases retreat ownership (see goal path).
+      if (!ctx.paused) ctx.retreat = null
       return { decision, calledBrain }
     } catch (err) {
       console.error(`tick error: ${err && err.message ? err.message : err}`)

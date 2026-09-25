@@ -674,9 +674,14 @@ async function decide(bot, ctx) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  if (!prev || finished || ctx.goalText !== text) {
+  // A chain-owned step never rides the goal shortcuts: re-issuing it here
+  // would bypass feasibility and the model ask (the stale hold in another
+  // coat). Force a real re-decide instead; the menu never contains
+  // retreat/pillar, so ownership transfers to a goal step.
+  const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
+  if (!prev || finished || ctx.goalText !== text || chainOwns) {
     const askKey = `${text}\n${status || ''}`
-    if (prev && ctx.askedKey === askKey) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !chainOwns) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
