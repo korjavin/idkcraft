@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js test/equip.test.js test/build.test.js test/bedrock-names.test.js test/help.test.js test/swim.test.js test/uuid-sender.test.js test/bring.test.js test/brain-switch.test.js test/home.test.js test/bring-food.test.js test/share.test.js test/autonomous.test.js test/forage.test.js test/deliver.test.js test/explore.test.js test/resources.test.js test/greet.test.js test/recover.test.js test/follow-wedge.test.js test/bring-search.test.js test/corner.test.js test/memory.test.js test/snow.test.js"
+    "test": "node --test test/brain.test.js test/fight.test.js test/goal.test.js test/roam.test.js test/scout.test.js test/tick.test.js test/lead.test.js test/gather.test.js test/craft.test.js test/equip.test.js test/build.test.js test/bedrock-names.test.js test/help.test.js test/swim.test.js test/uuid-sender.test.js test/bring.test.js test/brain-switch.test.js test/home.test.js test/bring-food.test.js test/share.test.js test/autonomous.test.js test/forage.test.js test/deliver.test.js test/explore.test.js test/resources.test.js test/greet.test.js test/recover.test.js test/follow-wedge.test.js test/bring-search.test.js test/corner.test.js test/memory.test.js test/snow.test.js test/retreat.test.js"
   },
   "dependencies": {
     "mineflayer": "4.39.0",
