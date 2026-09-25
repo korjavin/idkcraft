@@ -100,18 +100,18 @@ const MENU = {
         return false
       }
       if (planks + other <= 0) return false
-      // No livelock: a missing door/table item for an unfinished cell means
-      // build cannot advance — yield so gather/craft (or a new site) run.
-      // Skipped cells are given up and do not gate.
+      // No livelock: a missing door/table item for the NEXT unfinished cell
+      // means build cannot advance — yield so gather/craft (or a new site)
+      // run. Only the next cell gates, never the whole remainder: the door
+      // is crafted at the placed table after build lays it, so a door gate
+      // on later cells deadlocks a fresh site (xoj). Skipped cells are
+      // given up and do not gate.
       try {
-        const skip2 = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
-        for (let i = 0; i < BLUEPRINT.length; i++) {
-          if (skip2.has(i) || BLUEPRINT[i].kind === 'planks') continue
-          if (!buildMod.cellDone(bot, home, BLUEPRINT[i])) {
-            if (BLUEPRINT[i].kind === 'table' && !(facts.table > 0)) return false
-            if (BLUEPRINT[i].kind === 'door' && !(facts.door > 0)) return false
-          }
-        }
+        const next = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
+        if (next < 0) return false
+        const kind = BLUEPRINT[next].kind
+        if (kind === 'table' && !(facts.table > 0)) return false
+        if (kind === 'door' && !(facts.door > 0)) return false
       } catch (_) {
         return false
       }
@@ -557,9 +557,20 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
     case 'build': {
       // Facts-level wording; the exact remainder gate lives in the rule.
-      // Item gates run first (the rule yields on a missing item first).
+      // Item gates run first (the rule yields on a missing item first),
+      // on the next cell only (xoj) — a missing door for a later cell is
+      // not the reason when the table or the planks are up.
       if (facts.home === 'built') return 'build: home built'
-      if (facts.table === 0 || facts.door === 0) return 'build: need table/door item'
+      let kind = null
+      try {
+        const home = ctx && ctx.home
+        if (home && home.site) {
+          const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
+          if (ni >= 0) kind = BLUEPRINT[ni].kind
+        }
+      } catch (_) { kind = null }
+      if ((kind === 'table' && facts.table === 0) || (kind === 'door' && facts.door === 0) ||
+        (kind == null && (facts.table === 0 || facts.door === 0))) return 'build: need table/door item'
       if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       return 'build: nothing left to build'
     }

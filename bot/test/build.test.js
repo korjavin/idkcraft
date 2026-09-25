@@ -9,6 +9,7 @@ const assert = require('node:assert/strict')
 const { createTicker, handleChat } = require('../src/index')
 const goal = require('../src/goal')
 const build = require('../src/behaviours/build')
+const craft = require('../src/behaviours/craft')
 const { BLUEPRINT, PLANK_COUNT } = build
 
 function pos(x, y, z) {
@@ -750,5 +751,97 @@ describe('cjq guardOwnWalls is blueprint-scoped, not session-global', () => {
     const n2 = ctx.home.site
     assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', n2.x + 1, n2.y, n2.z), true, 'new box guarded')
     assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 1, s.y, s.z), false, 'old box freed')
+  })
+})
+
+describe('xoj fresh-site menu deadlock: build starts at the table without the door', () => {
+  function xojBot(world, items) {
+    const bot = mockBot(world, { items })
+    bot.entity.position = pos(10, 64, 2) // next to the table cell at origin+(4,0,1)
+    return bot
+  }
+
+  it('prod facts on an empty site: build feasible (table first, door later)', () => {
+    // Prod 2026-09-25: logs=13 planks=45 table=1 door=0 home=site,
+    // tablePlaced=false — build never feasible, 0 of 37 goal steps.
+    const world = makeWorld()
+    const items = [
+      { name: 'oak_log', count: 13 },
+      { name: 'oak_planks', count: 45 },
+      { name: 'crafting_table', count: 1 },
+    ]
+    const bot = xojBot(world, items)
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)) }
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.home, 'site')
+    assert.equal(facts.tablePlaced, false)
+    assert.equal(goal.MENU.build.feasible(facts, bot, ctx), true)
+  })
+
+  it('door still gates when the door cell itself is next', () => {
+    // The no-livelock side survives: with the table standing and only the
+    // door cell open, a missing door yields so craft runs instead.
+    const world = makeWorld()
+    const bot = xojBot(world, [{ name: 'oak_planks', count: 45 }])
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)) }
+    paintHouse(world, ctx.home)
+    const s = ctx.home.site
+    world.set(s.x + 1, s.y, s.z, 'air') // only the door cell is open
+    ctx.home.table = pos(s.x + 4, s.y, s.z + 1)
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.door, 0)
+    assert.equal(goal.MENU.build.feasible(facts, bot, ctx), false)
+  })
+
+  it('chain: build lays the table -> craft makes the door -> build lays the door', async () => {
+    const world = makeWorld()
+    const items = [
+      { name: 'oak_planks', count: 45 },
+      { name: 'crafting_table', count: 1 },
+    ]
+    const bot = xojBot(world, items)
+    // Door recipe only (no logs on hand, so the door branch is first).
+    bot.registry = { itemsByName: { oak_door: { id: 19 } } }
+    bot.recipesFor = (id) => (id === 19 ? [{ result: { name: 'oak_door', count: 1 } }] : [])
+    const crafted = []
+    bot.craft = async (recipe, count, table) => {
+      crafted.push({ recipe, count, table: table && table.name })
+      items.push({ name: 'oak_door', count: 1 })
+    }
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    const s = ctx.home.site
+
+    // 1. build starts on the fresh site and lays the table.
+    const startFacts = goal.goalFacts(bot, ctx)
+    assert.equal(goal.MENU.build.feasible(startFacts, bot, ctx), true)
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // place flight
+    await settle()
+    assert.equal(world.get(s.x + 4, s.y, s.z + 1), 'crafting_table')
+    build(bot, ctx, null, null) // claims home.table, approaches the next cell
+    assert.ok(ctx.home.table, 'table claimed once it stands')
+
+    // 2. the placed table unlocks the door craft; the door lands in hand.
+    const placedFacts = goal.goalFacts(bot, ctx)
+    assert.equal(placedFacts.tablePlaced, true)
+    assert.equal(goal.MENU.craft.feasible(placedFacts, bot, ctx), true)
+    craft(bot, ctx, null, {})
+    await settle()
+    assert.equal(crafted.length, 1)
+    assert.equal(crafted[0].recipe.result.name, 'oak_door')
+    assert.equal(crafted[0].table, 'crafting_table')
+    assert.equal(ctx.craftInFlight, false)
+
+    // 3. with the door in hand build reaches the door cell and lays it.
+    paintHouse(world, ctx.home)
+    world.set(s.x + 1, s.y, s.z, 'air') // only the door cell is open
+    bot.entity.position = pos(s.x + 1, s.y, s.z + 1) // next to the doorway
+    const doorFacts = goal.goalFacts(bot, ctx)
+    assert.equal(doorFacts.door, 1)
+    assert.equal(goal.MENU.build.feasible(doorFacts, bot, ctx), true)
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // place flight
+    await settle()
+    assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door')
   })
 })
