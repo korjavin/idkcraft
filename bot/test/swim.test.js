@@ -127,14 +127,21 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
   })
 
   it('h04: no rise from the surface or under a ceiling', () => {
-    // Rise edges are lateral (x±1/z±1, y+1), so assert on those — a
-    // vertical-only check would pass with the head-liquid gate removed.
+    // Rise edges are lateral (x±1/z±1, y+1): from a surface node every
+    // climb must land on the bank, never on open water.
     const movements = wiredMovements()
     const surface = movements.getNeighbors(new Move(9, 62, 0, 0, 0))
     const climbs = surface.filter((m) => m.y === 63 && (Math.abs(m.x - 9) + Math.abs(m.z) === 1))
     assert.ok(climbs.length > 0 && climbs.every((m) => m.x === 10), 'surface climbs only onto the bank, never a water rise')
-    // Ceiling over the start column kills every rise (the room guard).
+    // Head-liquid gate: a surface node (head in air) beside a taller
+    // water column offers no rise — without the gate the wet neighbour
+    // would read as a launchpad.
     const base = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const withColumn = (x, y, z) => (x === 6 && y === 63 && z === 0) ? 'water' : base(x, y, z)
+    const movementsG = wiredMovements(withColumn)
+    const surfG = movementsG.getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!surfG.some((m) => m.x === 6 && m.y === 63 && m.z === 0), 'air head blocks the rise into a wet neighbour')
+    // Ceiling over the start column kills every rise (the room guard).
     const withLid = (x, y, z) => (x === 5 && y === 63 && z === 0) ? 'stone' : base(x, y, z)
     const movements2 = wiredMovements(withLid)
     const mid = movements2.getNeighbors(new Move(5, 61, 0, 0, 0))
