@@ -108,11 +108,50 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     assert.ok(!ns.some((m) => m.x === 10 && m.y === 64 && m.z === 0), 'no unexecutable 9,62 -> 10,64')
   })
 
-  it('a submerged node with liquid head keeps the +2 exit', () => {
+  it('h04: no +2 exit from any water node — the mount is unexecutable', () => {
+    // Live (idk-eqd, idk-202): Paper 26.1.2 rejects every
+    // rise-while-touching-the-wall with a same-pos teleport, 20/s, so a +2
+    // mount from water never executes — the edge would only plan a dive to
+    // the bottom and pin there (plus reintroduce the b50 spawn trap).
+    // Grounded + submerged bottom nodes get no +2 either; floating nodes
+    // still rise diagonally toward the surface instead.
     const deep = makeNameAt({ bankTop: 62, waterLo: 61, waterHi: 62, extras: false })
     const movements = wiredMovements(deep)
-    const ns = movements.getNeighbors(new Move(9, 61, 0, 0, 0))
-    assert.ok(ns.some((m) => m.x === 10 && m.y === 63 && m.z === 0), 'swim exit 9,61 -> 10,63')
+    const bottom = movements.getNeighbors(new Move(9, 61, 0, 0, 0))
+    assert.ok(!bottom.some((m) => m.x === 10 && m.y === 63 && m.z === 0), 'grounded+submerged 9,61 takes no +2')
+    const floaty = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const movements2 = wiredMovements(floaty)
+    const mid = movements2.getNeighbors(new Move(5, 61, 0, 0, 0))
+    assert.ok(!mid.some((m) => m.y === 63), 'floating 5,61 takes no +2')
+    assert.ok(mid.some((m) => m.y === 62 && Math.abs(m.x - 5) + Math.abs(m.z) === 1), 'floating 5,61 rises diagonally')
+  })
+
+  it('h04: no rise from the surface or under a ceiling', () => {
+    // Rise edges are lateral (x±1/z±1, y+1): from a surface node every
+    // climb must land on the bank, never on open water.
+    const movements = wiredMovements()
+    const surface = movements.getNeighbors(new Move(9, 62, 0, 0, 0))
+    const climbs = surface.filter((m) => m.y === 63 && (Math.abs(m.x - 9) + Math.abs(m.z) === 1))
+    assert.ok(climbs.length > 0 && climbs.every((m) => m.x === 10), 'surface climbs only onto the bank, never a water rise')
+    // Head-liquid gate: a surface node (head in air) beside a taller
+    // water column offers no rise — without the gate the wet neighbour
+    // would read as a launchpad.
+    const base = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const withColumn = (x, y, z) => (x === 6 && y === 63 && z === 0) ? 'water' : base(x, y, z)
+    const movementsG = wiredMovements(withColumn)
+    const surfG = movementsG.getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!surfG.some((m) => m.x === 6 && m.y === 63 && m.z === 0), 'air head blocks the rise into a wet neighbour')
+    // Ceiling over the start column kills every rise (the room guard).
+    const withLid = (x, y, z) => (x === 5 && y === 63 && z === 0) ? 'stone' : base(x, y, z)
+    const movements2 = wiredMovements(withLid)
+    const mid = movements2.getNeighbors(new Move(5, 61, 0, 0, 0))
+    assert.ok(!mid.some((m) => m.y === 62 && (Math.abs(m.x - 5) + Math.abs(m.z) === 1)), 'no rise under a ceiling')
+    // Ceiling over one target head blocks only that rise (the rh guard).
+    const withTargetLid = (x, y, z) => (x === 6 && y === 63 && z === 0) ? 'stone' : base(x, y, z)
+    const movements3 = wiredMovements(withTargetLid)
+    const mid3 = movements3.getNeighbors(new Move(5, 61, 0, 0, 0))
+    assert.ok(!mid3.some((m) => m.x === 6 && m.y === 62 && m.z === 0), 'no rise into a lidded head cell')
+    assert.ok(mid3.some((m) => m.x === 4 && m.y === 62 && m.z === 0), 'open head cells still rise')
   })
 
   it('wrapping twice adds no duplicate exits; land nodes are untouched', () => {
@@ -139,5 +178,51 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     const movements = wiredMovements()
     const ns = movements.getNeighbors(new Move(-2, 62, 0, 0, 0))
     assert.ok(!ns.some((m) => m.y >= 64), 'lava never climbs to bank level')
+  })
+
+  it('h04: the level lip diagonal into water survives nocorner', () => {
+    // wiredMovements applies addNoCornerCut after the swim exits: the
+    // (3,63)->(4,62) lip diagonal grazes the bank-top block and used to be
+    // filtered, leaving only the dive. A safe-water landing forgives it.
+    const movements = wiredMovements()
+    const ns = movements.getNeighbors(new Move(3, 63, 0, 0, 0))
+    assert.ok(ns.some((m) => m.x === 4 && m.y === 62), 'level water entry kept')
+  })
+
+  it('h04: a level water diagonal past a post stays dropped (4ac)', () => {
+    // The nocorner water exemption forgives below-feet grazes only: a
+    // stone post at feet level on a side cell must still drop the level
+    // diagonal, wet landing or not, or the 4ac wedge returns on water.
+    const base = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const withPost = (x, y, z) => (x === 6 && y === 62 && z === 0) ? 'stone' : base(x, y, z)
+    const movements = wiredMovements(withPost)
+    const ns = movements.getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.x === 6 && m.y === 62 && m.z === 1), 'post-side diagonal dropped')
+  })
+
+  it('h04: shallow crossings skim the surface, no dive', () => {
+    // With level lip entries available the planner never leaves the top:
+    // no dive (deep arrival pins at the face live) and no rise needed.
+    const shallow = makeNameAt({ bankTop: 62, waterLo: 61, waterHi: 62, extras: false })
+    const movements = wiredMovements(shallow)
+    const astar = new AStar(new Move(0, 63, 0, 0, 0), movements, new goals.GoalBlock(14, 63, 0), 10000, 9000)
+    const r = astar.compute()
+    assert.equal(r.status, 'success')
+    const wet = r.path.filter((m) => m.x >= 4 && m.x <= 9)
+    assert.ok(wet.length > 0)
+    assert.ok(wet.every((m) => m.y === 62), `surface skim: ${wet.map((m) => m.y).join(',')}`)
+  })
+
+  it('h04: the bank exit starts at the surface', () => {
+    // Live (idk-eqd): a mount started below the surface never executes —
+    // rising while pressing the face gets every packet rejected. Whatever
+    // the cruise depth, the exit step itself must launch from the top.
+    const movements = wiredMovements()
+    const astar = new AStar(new Move(0, 63, 0, 0, 0), movements, new goals.GoalBlock(14, 63, 0), 10000, 9000)
+    const r = astar.compute()
+    assert.equal(r.status, 'success')
+    const bi = r.path.findIndex((m) => m.x >= 10 && m.y === 63)
+    assert.ok(bi > 0, 'path reaches the far bank')
+    assert.equal(r.path[bi - 1].y, 62, `exit launches from the surface, not ${r.path[bi - 1].y}`)
   })
 })
