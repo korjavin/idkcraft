@@ -77,7 +77,7 @@ services:
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
     # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft:latest
+    image: ghcr.io/korjavin/idkcraft:3b51c18440297cae7bc8a6a3570130a1972d7a08
     container_name: ${BOT_CONTAINER_NAME:-idkcraft-bot}
     restart: unless-stopped
     depends_on:
@@ -114,7 +114,7 @@ services:
   laya:
     # Built by CI from ./laya and pushed to GHCR.
     # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft-laya:latest
+    image: ghcr.io/korjavin/idkcraft-laya:8e15d66727962bd2083ec360ea45884136414995
     container_name: ${LAYA_CONTAINER_NAME:-idkcraft-laya}
     restart: unless-stopped
     # 2g contract replaced by 3g (2026-09-21: prod OOM-killed the sidecar
