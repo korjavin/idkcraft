@@ -184,3 +184,49 @@ describe('rest gave-up hold lapses online (idkcraft-q0h round 2)', () => {
     assert.equal(recover.restGaveUpHolds(ctx, bot), true, 'hold resumes when alone')
   })
 })
+
+describe('rest gave-up hold calls once (idkcraft-q0h round 3)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('two online episodes in one pit produce exactly one /tp chat', async () => {
+    // Round-2 core-1: the online lapse was permanent — an AFK owner got a
+    // /tp line every episode. One episode may ask; then the point holds.
+    const bot = pitBot()
+    const site = { x: 20, y: 65, z: 0 }
+    const ctx = {
+      work: true, step: 'rest', stepStatus: 'running',
+      home: { site }, brain: null,
+      stuck: { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' },
+    }
+    const failedEp = () => {
+      ctx.recovery = {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: null, attempts: 1, fails: 2, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null, placeError: false,
+      }
+    }
+    // Two offline gave-ups escalate and mark the point.
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    ctx.stuck = { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
+    // Owner logs in: one lapse episode runs and asks once ...
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false, 'online lapses the hold')
+    ctx.stuck = { by: 'no-displacement', goal: { x: 20, y: 65, z: 0 }, key: 'ticker' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null) // MAX_FAILS -> call_player chosen
+    assert.equal(ctx.recovery.action, 'call_player')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    await recover.decide(bot, ctx, {}, null) // endEpisode -> gave-up, lapse consumed
+    assert.equal(ctx.recovery, null)
+    const calls = bot.chats.filter((m) => m.startsWith("I'm stuck at"))
+    assert.equal(calls.length, 1, `exactly one /tp chat, got: ${bot.chats.join(' | ')}`)
+    // ... then the point holds again even online: no second episode, no chat.
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true, 'hold resumes after one call')
+    assert.equal(bot.chats.filter((m) => m.startsWith("I'm stuck at")).length, 1)
+  })
+})

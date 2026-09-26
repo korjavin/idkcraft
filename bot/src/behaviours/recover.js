@@ -838,14 +838,17 @@ function restGaveUpHolds(ctx, bot) {
     if (!ctx || !ctx.work || ctx.step !== 'rest') return false
     const at = ctx.restGaveUpAt
     if (!at || typeof at.x !== 'number') return false
-    // A player online lapses the hold (round 2): episodes must stay
-    // reachable so MAX_FAILS asks for a teleport. The marker stays — if the
-    // roster empties again, the same trap holds without re-counting.
-    if (anyPlayerOnline(bot)) return false
+    // A player online lapses the hold once per mark (rounds 2-3): one episode
+    // must stay reachable so MAX_FAILS asks for a teleport — afterwards the
+    // point holds even online until relocation, instead of paging every
+    // episode. The marker stays across roster changes; relocation clears all.
+    if (anyPlayerOnline(bot) && !ctx.restGaveUpCalled) return false
     const bp = botPos(bot)
     if (!bp) return true // no position: hold, never spin blind
     if (Math.hypot(bp.x - at.x, bp.z - at.z) > REST_GIVE_UP_DIST) {
       ctx.restGaveUpAt = null
+      ctx.restGaveUpCalled = false
+      ctx.restGaveUps = 0
       return false
     }
     return true
@@ -947,9 +950,13 @@ function release(bot, ctx, how) {
       } catch (_) { ctx.restGaveUpAt = null }
       ctx.stepStatus = 'failed:cannot-reach-home'
     }
+    // One lapse per hold (round 3): an episode that reached the player
+    // consumes the online lapse — afterwards the point holds even online
+    // until relocation, instead of paging every episode.
+    if (rec.calledPlayer) ctx.restGaveUpCalled = true
   } else {
     ctx.restGaveUps = 0
-    if (how === 'done') ctx.restGaveUpAt = null
+    if (how === 'done') { ctx.restGaveUpAt = null; ctx.restGaveUpCalled = false }
   }
   try {
     if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
