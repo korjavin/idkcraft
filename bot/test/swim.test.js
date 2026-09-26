@@ -126,10 +126,25 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     assert.ok(mid.some((m) => m.y === 62 && Math.abs(m.x - 5) + Math.abs(m.z) === 1), 'floating 5,61 rises diagonally')
   })
 
-  it('h04: no rise at the surface or under a ceiling', () => {
+  it('h04: no rise from the surface or under a ceiling', () => {
+    // Rise edges are lateral (x±1/z±1, y+1), so assert on those — a
+    // vertical-only check would pass with the head-liquid gate removed.
     const movements = wiredMovements()
     const surface = movements.getNeighbors(new Move(9, 62, 0, 0, 0))
-    assert.ok(!surface.some((m) => m.x === 9 && m.y === 63 && m.z === 0), 'no rise from the surface')
+    const climbs = surface.filter((m) => m.y === 63 && (Math.abs(m.x - 9) + Math.abs(m.z) === 1))
+    assert.ok(climbs.length > 0 && climbs.every((m) => m.x === 10), 'surface climbs only onto the bank, never a water rise')
+    // Ceiling over the start column kills every rise (the room guard).
+    const base = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const withLid = (x, y, z) => (x === 5 && y === 63 && z === 0) ? 'stone' : base(x, y, z)
+    const movements2 = wiredMovements(withLid)
+    const mid = movements2.getNeighbors(new Move(5, 61, 0, 0, 0))
+    assert.ok(!mid.some((m) => m.y === 62 && (Math.abs(m.x - 5) + Math.abs(m.z) === 1)), 'no rise under a ceiling')
+    // Ceiling over one target head blocks only that rise (the rh guard).
+    const withTargetLid = (x, y, z) => (x === 6 && y === 63 && z === 0) ? 'stone' : base(x, y, z)
+    const movements3 = wiredMovements(withTargetLid)
+    const mid3 = movements3.getNeighbors(new Move(5, 61, 0, 0, 0))
+    assert.ok(!mid3.some((m) => m.x === 6 && m.y === 62 && m.z === 0), 'no rise into a lidded head cell')
+    assert.ok(mid3.some((m) => m.x === 4 && m.y === 62 && m.z === 0), 'open head cells still rise')
   })
 
   it('wrapping twice adds no duplicate exits; land nodes are untouched', () => {
@@ -165,6 +180,17 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     const movements = wiredMovements()
     const ns = movements.getNeighbors(new Move(3, 63, 0, 0, 0))
     assert.ok(ns.some((m) => m.x === 4 && m.y === 62), 'level water entry kept')
+  })
+
+  it('h04: a level water diagonal past a post stays dropped (4ac)', () => {
+    // The nocorner water exemption forgives below-feet grazes only: a
+    // stone post at feet level on a side cell must still drop the level
+    // diagonal, wet landing or not, or the 4ac wedge returns on water.
+    const base = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
+    const withPost = (x, y, z) => (x === 6 && y === 62 && z === 0) ? 'stone' : base(x, y, z)
+    const movements = wiredMovements(withPost)
+    const ns = movements.getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.x === 6 && m.y === 62 && m.z === 1), 'post-side diagonal dropped')
   })
 
   it('h04: shallow crossings skim the surface, no dive', () => {

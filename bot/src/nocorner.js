@@ -25,15 +25,19 @@ function cutsCorner(movements, node, m) {
   const dx = m.x - node.x
   const dz = m.z - node.z
   if (Math.abs(dx) !== 1 || Math.abs(dz) !== 1) return false
-  // h04: a diagonal descent into safe water forgives the brush — the body
-  // lands liquid, nothing wedges. Without this the only lip entries into
-  // water are dives (the level diagonals graze the bank-top block), the
-  // plan arrives deep at the far bank, and rising while pressing the face
-  // gets every move packet rejected. Lava stays vetoed (never safe).
+  // h04: a diagonal descent into safe water forgives the below-feet
+  // brush only — the body lands liquid, nothing wedges. Without this the
+  // only lip entries into water are dives (the level diagonals graze the
+  // bank-top block), the plan arrives deep at the far bank, and the pin is
+  // deeper and less visible. Body-level side cells (dy >= 0) stay checked:
+  // a post or bank corner at feet/head height still wedges the 0.6-wide
+  // body even with a wet landing (4ac). Lava stays vetoed (never safe).
+  // The clamp only affects descents: level/climb diagonals already start
+  // the loop at 0.
   const landing = movements.getBlock(node, dx, m.y - node.y, dz)
-  if (landing && landing.liquid && landing.safe) return false
+  const waterLanding = landing && landing.liquid && landing.safe
   const broken = new Set((m.toBreak || []).map((p) => `${p.x},${p.y},${p.z}`))
-  const lo = Math.min(0, m.y - node.y)
+  const lo = waterLanding ? 0 : Math.min(0, m.y - node.y)
   const hi = Math.max(0, m.y - node.y) + 1
   for (let dy = lo; dy <= hi; dy++) {
     for (const [ox, oz] of [[dx, 0], [0, dz]]) {
