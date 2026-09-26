@@ -108,15 +108,17 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     assert.ok(!ns.some((m) => m.x === 10 && m.y === 64 && m.z === 0), 'no unexecutable 9,62 -> 10,64')
   })
 
-  it('h04: +2 exit fires only standing on the bottom, head submerged', () => {
-    // Live (idk-eqd): a bottom jump impulse launches ~2 with swim
-    // continuation, but floating hold-swim caps under the surface — so +2
-    // needs ground below plus liquid above. Standing on the 1-deep bottom
-    // (head in air) gets +1 only.
+  it('h04: no +2 exit from any water node — the mount is unexecutable', () => {
+    // Live (idk-eqd, idk-202): Paper 26.1.2 rejects every
+    // rise-while-touching-the-wall with a same-pos teleport, 20/s, so a +2
+    // mount from water never executes — the edge would only plan a dive to
+    // the bottom and pin there (plus reintroduce the b50 spawn trap).
+    // Grounded + submerged bottom nodes get no +2 either; floating nodes
+    // still rise diagonally toward the surface instead.
     const deep = makeNameAt({ bankTop: 62, waterLo: 61, waterHi: 62, extras: false })
     const movements = wiredMovements(deep)
     const bottom = movements.getNeighbors(new Move(9, 61, 0, 0, 0))
-    assert.ok(bottom.some((m) => m.x === 10 && m.y === 63 && m.z === 0), 'grounded+submerged 9,61 -> 10,63')
+    assert.ok(!bottom.some((m) => m.x === 10 && m.y === 63 && m.z === 0), 'grounded+submerged 9,61 takes no +2')
     const floaty = makeNameAt({ bankTop: 62, waterLo: 60, waterHi: 62, extras: false })
     const movements2 = wiredMovements(floaty)
     const mid = movements2.getNeighbors(new Move(5, 61, 0, 0, 0))
