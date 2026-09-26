@@ -30,6 +30,9 @@ const SIDESTEP_TIMEOUT_TICKS = 8
 const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
 const HOP_BACK_TICKS = 8 // back-up run-up before the mount jump
 const HOP_MOUNT_TICKS = 14 // walk to the edge plus the leap
+const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
+const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample at most
+const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
 const HOP_JUMP_DIST = 1.0 // leap once the step anchor is this close (flush contact is exactly 0.8: half block plus half body)
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
@@ -189,6 +192,12 @@ function setJump(bot, on) {
 function setForward(bot, on) {
   try {
     if (typeof bot.setControlState === 'function') bot.setControlState('forward', !!on)
+  } catch (_) { /* control best-effort */ }
+}
+
+function setBack(bot, on) {
+  try {
+    if (typeof bot.setControlState === 'function') bot.setControlState('back', !!on)
   } catch (_) { /* control best-effort */ }
 }
 
@@ -521,6 +530,13 @@ function hopStepRun(bot, ctx) {
   if (!bp) return 'failed:no-pos'
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
+  setBack(bot, false) // the unwedge below re-asserts it every tick it holds
+  // Airborne-stall samples (ak4): hang time at vel.y=0 with no ground reads
+  // here; the drive section backs off once they pile up.
+  const hopVy = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.y === 'number'
+    ? bot.entity.velocity.y : null
+  if (!grounded && hopVy !== null && Math.abs(hopVy) < HOP_STALL_VY) st.stall = (st.stall || 0) + 1
+  else st.stall = 0
   if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
   // Settled waits inside the same mount budget: a body knocked or coasted
   // off the top (overshoot, fight borrow, knockback) must fail out instead
@@ -593,6 +609,19 @@ function hopStepRun(bot, ctx) {
   try {
     if (typeof bot.look === 'function') bot.look(Math.atan2(-dx, -dz), 0)
   } catch (_) { /* facing best-effort */ }
+  if ((st.stall || 0) >= HOP_STALL_TICKS) {
+    // Airborne stall (ak4): pressed to the face with vel.y=0 and no ground,
+    // the held jump never fires (the sprint-wedge hang from index.js). Back
+    // off — facing stays on the anchor, so back walks off the face — until a
+    // sample reads ground, then resume the run-up. Shares the mount budget;
+    // the leap unlatches so the resume jumps at the edge, not mid-approach.
+    st.jumping = false
+    setForward(bot, false)
+    setJump(bot, false)
+    setBack(bot, true)
+    if (++st.waited > HOP_MOUNT_TICKS) { setBack(bot, false); return 'failed:no-progress' }
+    return 'running'
+  }
   setForward(bot, true)
   if (!st.jumping && Math.hypot(dx, dz) < HOP_JUMP_DIST) st.jumping = true
   setJump(bot, st.jumping)
@@ -628,7 +657,9 @@ function sidestepRun(bot, ctx) {
   // walks 2 blocks sideways is genuinely free and the mode resumes pathing
   // — failing that would burn strikes and misroute to dig/call_player.
   const strict = !st.goal0 || (st.goal0.y - st.start.y) >= 2
-  const climbed = Math.floor(bp.y) > Math.floor(st.start.y)
+  // Apex guard (ak4): the 1 Hz tick samples the sidestep jump mid-air, so a
+  // floor rise only counts on the ground — same rule as dig_step/hop_step.
+  const climbed = (!bot.entity || !!bot.entity.onGround) && Math.floor(bp.y) > Math.floor(st.start.y)
   let gained = false
   if (strict && st.goal0 && (st.goal0.y - st.start.y) >= 2 && typeof st.goalDist0 === 'number') {
     gained = st.goalDist0 - Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) > 1
@@ -778,6 +809,25 @@ function goalClose(a, b) {
   if (typeof a.x !== 'number' || typeof b.x !== 'number') return false
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= 2
 }
+// Rest gave-up marker (q0h): while the rest step keeps failing at one
+// point, detectors hold their fire there — relocation re-arms them. Lazy: a
+// far sample clears the marker and reports no hold.
+const REST_GIVE_UP_DIST = 2
+function restGaveUpHolds(ctx, bot) {
+  try {
+    if (!ctx || !ctx.work || ctx.step !== 'rest') return false
+    const at = ctx.restGaveUpAt
+    if (!at || typeof at.x !== 'number') return false
+    const bp = botPos(bot)
+    if (!bp) return true // no position: hold, never spin blind
+    if (Math.hypot(bp.x - at.x, bp.z - at.z) > REST_GIVE_UP_DIST) {
+      ctx.restGaveUpAt = null
+      return false
+    }
+    return true
+  } catch (_) { return false }
+}
+
 function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
   const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
@@ -802,6 +852,29 @@ function blockNameOf(b) {
 // Chosen lines (fja) carry the facts text plus feet/head/next block names
 // (b50 wedge-line style), so a pit, water and a wall read apart in prod
 // logs. facts is null on terminal/continue lines: pos alone there.
+// Hop diagnostics (ak4): why the mount does or does not fire — ground
+// contact, vertical speed, the step column and the own column above the
+// head. Best-effort: unknown sides read '?'.
+function hopDetail(bot, ctx) {
+  let og = '?'
+  let vy = '?'
+  try {
+    og = !bot.entity ? '?' : bot.entity.onGround ? '1' : '0'
+    const v = bot.entity && bot.entity.velocity
+    vy = v && typeof v.y === 'number' ? v.y.toFixed(2) : '?'
+  } catch (_) { /* telemetry best-effort */ }
+  let dir = null
+  try { dir = ctx && ctx.recovery && ctx.recovery.st && ctx.recovery.st.dir } catch (_) { dir = null }
+  if (!dir) {
+    try { dir = findHopStepDir(bot, ctx && ctx.stuck && ctx.stuck.goal) } catch (_) { dir = null }
+  }
+  const nm = (dx, dy, dz) => blockNameOf(cellAt(bot, dx, dy, dz))
+  const step = dir ? nm(dir[0], 0, dir[1]) : '?'
+  const above = dir ? nm(dir[0], 1, dir[1]) : '?'
+  const head = dir ? nm(dir[0], 2, dir[1]) : '?'
+  return `hop=og:${og},vy:${vy},step:${step},above:${above},head:${head},col2:${nm(0, 2, 0)}`
+}
+
 function logRecover(bot, ctx, action, source, outcome, facts) {
   let extra = ''
   if (facts) {
@@ -815,6 +888,7 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
     extra = ` facts=${recoverText(facts)} feet=${blockNameOf(cellAt(bot, 0, 0, 0))} ` +
       `head=${blockNameOf(cellAt(bot, 0, 1, 0))} next=${next}`
   }
+  if (action === 'hop_step') extra += ` ${hopDetail(bot, ctx)}`
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
@@ -824,6 +898,23 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
 function release(bot, ctx, how) {
   const rec = ctx.recovery || {}
   const by = (ctx.stuck && ctx.stuck.by) || 'unknown'
+  // Rest escalation (q0h): consecutive gave-ups in the rest step fail it, so
+  // the goal arbiter reconsiders instead of spinning episodes in one pit. A
+  // done episode is progress and clears the count; other steps never feed it.
+  if (how === 'gave-up' && ctx.work && ctx.step === 'rest') {
+    ctx.restGaveUps = (ctx.restGaveUps || 0) + 1
+    if (ctx.restGaveUps >= REST_GAVE_UPS) {
+      ctx.restGaveUps = 0
+      try {
+        const bp = botPos(bot)
+        ctx.restGaveUpAt = bp ? { x: bp.x, y: bp.y, z: bp.z } : null
+      } catch (_) { ctx.restGaveUpAt = null }
+      ctx.stepStatus = 'failed:cannot-reach-home'
+    }
+  } else {
+    ctx.restGaveUps = 0
+    if (how === 'done') ctx.restGaveUpAt = null
+  }
   try {
     if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
       bot.pathfinder.setGoal(null)
@@ -923,6 +1014,9 @@ async function decide(bot, ctx, state, target) {
     // read the previous last (4jr: the model repeated pillar_up live).
     facts.last = `${prev}:${outcome}`
     metrics.recover.inc({ action: prev, source, outcome: outcome === 'done' ? 'done' : outcome })
+    // Failed primitives leave a log line, not just a metric (ak4): done
+    // already logs through release(), failures never did.
+    if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
     if (outcome === 'done') {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {
         return release(bot, ctx, rec.endEpisode ? 'gave-up' : 'done')
@@ -1009,6 +1103,7 @@ module.exports = {
   RECOVER_CRITERIA,
   MAX_FAILS,
   REPEATS,
+  REST_GAVE_UPS,
   WAIT_TICKS,
   STUCK_TICKS_ENTRY,
   PLACE_ERROR_ENTRY,
@@ -1017,6 +1112,7 @@ module.exports = {
   recoverFsm,
   chooseRecovery,
   setStuck,
+  restGaveUpHolds,
   decide,
   release,
   run,

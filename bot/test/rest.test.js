@@ -56,3 +56,114 @@ describe('rest near player (idkcraft-p4s)', () => {
     assert.ok(Math.hypot(g.x - 100, g.z - 100) <= 8, 'goal near site')
   })
 })
+
+function key(x, y, z) { return `${x},${y},${z}` }
+
+// 1x1 shaft: solid floor at y=60, solid walls on all 4 sides from 61 up,
+// air inside. Bot starts on the floor, the site above and away.
+function pitBot() {
+  const solids = new Set()
+  for (let x = -3; x <= 3; x++) {
+    for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+  }
+  for (let y = 61; y <= 66; y++) {
+    solids.add(key(1, y, 0)); solids.add(key(-1, y, 0))
+    solids.add(key(0, y, 1)); solids.add(key(0, y, -1))
+  }
+  const calls = { setGoal: 0, goals: [] }
+  const bot = {
+    calls,
+    username: 'IdkBot', players: {}, entities: {},
+    entity: { position: pos(0.5, 61, 0.5), onGround: true },
+    inventory: { items: () => [{ name: 'dirt', count: 10 }] },
+    _moving: false,
+    pathfinder: {
+      goal: null,
+      setGoal: (g) => { calls.setGoal++; calls.goals.push(g); bot.pathfinder.goal = g },
+      isMoving: () => bot._moving,
+    },
+    blockAt(p) {
+      const k = key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+      const solidCell = solids.has(k)
+      return { name: solidCell ? 'dirt' : 'air', position: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }, boundingBox: solidCell ? 'block' : 'empty' }
+    },
+    chats: [],
+    chat(m) { this.chats.push(String(m)) },
+    setControlState(c, v) { (this.controls = this.controls || {})[c] = !!v },
+  }
+  return bot
+}
+
+describe('rest pit climbs to the site (idkcraft-q0h)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('roam-back wedge carries the site goal, the menu pillars up', async () => {
+    // Prod 2026-09-24: 82 min in a pit 4 below the site, recover facts
+    // goal=level dist=none — roam-back returned before any detector and the
+    // goal-less backstop chose sidestep/wait. Deleting the roam-back detector
+    // fails this test (no stuck fact raised).
+    const bot = pitBot()
+    bot._moving = true // wedged executor claims motion, the body stands still
+    const site = { x: 20, y: 65, z: 0 }
+    const ctx = {
+      work: true, step: 'rest', stepStatus: 'running',
+      lastGoalKey: 'roam-back:undefined', stuckResets: 2,
+      roamLastPos: pos(0.5, 61, 0.5), home: { site }, brain: null,
+    }
+    rest(bot, ctx, null, {})
+    assert.ok(ctx.stuck, 'roam-back raises the wedge')
+    assert.equal(ctx.stuck.by, 'roam')
+    assert.deepEqual(ctx.stuck.goal, site)
+    const facts = recover.recoverFacts(bot, ctx, {}, null)
+    assert.equal(facts.goalDy, 4)
+    assert.match(recover.recoverText(facts), /goal=high/)
+    const decision = await recover.decide(bot, ctx, {}, null)
+    assert.equal(decision.action, 'pillar_up')
+  })
+
+  it('two gave-ups in rest fail the step and hold new episodes at the point', async () => {
+    // Same pit, unclimbable day: episodes must escalate to a failed step,
+    // not spin at the same point. Deleting the escalation fails this test
+    // (the step stays running and the gate never holds).
+    const bot = pitBot()
+    const site = { x: 20, y: 65, z: 0 }
+    const ctx = {
+      work: true, step: 'rest', stepStatus: 'running',
+      home: { site }, brain: null,
+      stuck: { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' },
+    }
+    const failedEp = () => {
+      ctx.recovery = {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: null, attempts: 1, fails: 2, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null, placeError: false,
+      }
+    }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null) // first gave-up: counted, step runs on
+    assert.equal(ctx.recovery, null)
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.restGaveUps, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    ctx.stuck = { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null) // second gave-up: step fails, point marked
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
+    assert.ok(ctx.restGaveUpAt, 'gave-up point marked')
+    // No new episode at the same point: the shared gate holds ...
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true)
+    // ... so a wedged roam-back stays silent instead of raising again.
+    bot._moving = true
+    ctx.lastGoalKey = 'roam-back:undefined'
+    ctx.stuckResets = 2
+    ctx.roamLastPos = pos(0.5, 61, 0.5)
+    const goalsBefore = bot.calls.setGoal
+    rest(bot, ctx, null, {})
+    assert.equal(ctx.stuck, null)
+    assert.equal(bot.calls.setGoal, goalsBefore)
+    // Relocation re-arms the detectors.
+    bot.entity.position = pos(6.5, 61, 0.5)
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false)
+    assert.equal(ctx.restGaveUpAt, null)
+  })
+})

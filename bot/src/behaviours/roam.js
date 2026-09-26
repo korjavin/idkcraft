@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const recover = require('./recover')
 
 // Roam: stroll within a few blocks of a standing player. The brain only
 // picks roam when the player is close and still with no hostile near, so
@@ -11,6 +12,14 @@ const { goals } = require('mineflayer-pathfinder')
 // and the next tick picks another. One function, same shape as follow.js.
 const ROAM_RADIUS = 6
 const HAND_BACK_DIST = 6
+
+function formatPos(p) {
+  if (!p) return 'unknown'
+  const fx = typeof p.x === 'number' ? (Number.isInteger(p.x) ? p.x : p.x.toFixed(1)) : '0'
+  const fy = typeof p.y === 'number' ? (Number.isInteger(p.y) ? p.y : p.y.toFixed(1)) : '0'
+  const fz = typeof p.z === 'number' ? (Number.isInteger(p.z) ? p.z : p.z.toFixed(1)) : '0'
+  return `${fx},${fy},${fz}`
+}
 
 function roam(bot, ctx, target, state) {
   if (!target || !target.position) return
@@ -29,6 +38,23 @@ function roam(bot, ctx, target, state) {
     // a stroll comes to rest just past 6 blocks — motion changes the key and
     // the brain re-evaluates on the next tick. Same guard as follow.js.
     const backKey = `roam-back:${target.username || target.id}`
+    // Wedge detector (q0h): the long walk back (rest pulls to the site this
+    // way) raises with the walk target as the goal — without it only the
+    // goal-less ticker backstop fires and the menu climbs blind. Same
+    // moving + stuck-resets + no-displacement rule as follow.js; the stroll
+    // branch below keeps its p4s no-recover contract.
+    if (typeof bp.distanceTo === 'function' && ctx.roamLastPos) {
+      if (bp.distanceTo(ctx.roamLastPos) > 0.5) ctx.stuckResets = 0
+    }
+    if (typeof bp.clone === 'function') ctx.roamLastPos = bp.clone()
+    let movingBack = false
+    try { movingBack = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
+    if (movingBack && (ctx.stuckResets || 0) >= 2 && !recover.restGaveUpHolds(ctx, bot)) {
+      const gp = { x: pp.x, y: pp.y, z: pp.z }
+      if (recover.setStuck(ctx, 'roam', gp, backKey)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${distToPlayer.toFixed(1)} goal=${formatPos(gp)}`)
+      ctx.stuckResets = 0
+      return
+    }
     if (backKey !== ctx.lastGoalKey || !bot.pathfinder.isMoving()) {
       bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
       ctx.roamGoal = null // walking back to the player: no point target
@@ -46,7 +72,7 @@ function roam(bot, ctx, target, state) {
   // executor (isMoving with piling stuck resets and no displacement) just
   // takes another point below — p4s: handing the body to recover here turned
   // every 3.5 s pathfinder stop into 10-20 s of sidestep/dig/call menus that
-  // walk back into the same trap. No stuck fact from roam, ever.
+  // walk back into the same trap. No stuck fact from the stroll, ever.
   if (bot.pathfinder.isMoving() && (ctx.stuckResets || 0) < 2) return
   ctx.stuckResets = 0
   const angle = Math.random() * Math.PI * 2
