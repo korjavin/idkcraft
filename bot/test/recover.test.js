@@ -1322,3 +1322,37 @@ describe('hop_step airborne stall backs off (idkcraft-ak4)', () => {
     assert.equal(ctx.recovery.status, 'done')
   })
 })
+
+describe('backstop sidestep stays strict on level goals (idkcraft-q0h round 2)', () => {
+  it('floor shuffle under a level backstop goal fails, never done', () => {
+    // Round-1 body-1: the backstop now carries the live walk goal, but a
+    // level goal must not switch sidestep to the displacement rule — the fja
+    // pit loop otherwise returns and the rest counter never fills.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 5, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'sidestep', status: 'running', st: null },
+    }
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (!g || typeof g.x !== 'number') return
+      const bp = bot.entity.position
+      const dx = g.x - bp.x
+      const dz = g.z - bp.z
+      const d = Math.hypot(dx, dz)
+      if (d < 0.05) return
+      const s = Math.min(0.4, d) / d
+      bot.entity.position = pos(bp.x + dx * s, 61, bp.z + dz * s)
+    }
+    for (let t = 0; t < 12 && ctx.recovery.status === 'running'; t++) {
+      recover.run(bot, ctx)
+      stepBody()
+    }
+    assert.equal(ctx.recovery.status, 'failed:no-progress')
+  })
+})

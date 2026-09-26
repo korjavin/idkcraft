@@ -167,3 +167,20 @@ describe('rest pit climbs to the site (idkcraft-q0h)', () => {
     assert.equal(ctx.restGaveUpAt, null)
   })
 })
+
+describe('rest gave-up hold lapses online (idkcraft-q0h round 2)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('a player online lapses the hold, the marker survives for later', () => {
+    // Round-1 core-1/body-2: muting every detector at the gave-up point also
+    // muted call_player when the owner logged in. Roster presence re-arms.
+    const bot = pitBot()
+    const ctx = { work: true, step: 'rest', restGaveUpAt: { x: 0.5, y: 61, z: 0.5 } }
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true)
+    bot.players = { Steve: { username: 'Steve' } }
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false, 'online lapses the hold')
+    assert.ok(ctx.restGaveUpAt, 'marker kept for the next offline stretch')
+    bot.players = {}
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true, 'hold resumes when alone')
+  })
+})

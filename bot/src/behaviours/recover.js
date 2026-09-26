@@ -32,6 +32,7 @@ const HOP_BACK_TICKS = 8 // back-up run-up before the mount jump
 const HOP_MOUNT_TICKS = 14 // walk to the edge plus the leap
 const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
 const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample at most
+const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held while stalled
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
 const HOP_JUMP_DIST = 1.0 // leap once the step anchor is this close (flush contact is exactly 0.8: half block plus half body)
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
@@ -618,7 +619,11 @@ function hopStepRun(bot, ctx) {
     st.jumping = false
     setForward(bot, false)
     setJump(bot, false)
+    // Timed hold (round 2): primitives run at 1 Hz, so a raw hold walks ~4
+    // blind blocks. 250 ms backs ~1 block off the face; a still-stalled next
+    // tick holds again. A stale timer only ever releases — safe across ticks.
     setBack(bot, true)
+    try { setTimeout(() => setBack(bot, false), HOP_UNWEDGE_MS) } catch (_) { /* timer best-effort */ }
     if (++st.waited > HOP_MOUNT_TICKS) { setBack(bot, false); return 'failed:no-progress' }
     return 'running'
   }
@@ -656,7 +661,12 @@ function sidestepRun(bot, ctx) {
   // situation). A level goal keeps the old displacement done: a wedge that
   // walks 2 blocks sideways is genuinely free and the mode resumes pathing
   // — failing that would burn strikes and misroute to dig/call_player.
-  const strict = !st.goal0 || (st.goal0.y - st.start.y) >= 2
+  // Backstop episodes stay strict (q0h round 2): the ticker backstop now
+  // carries the live walk goal, but a 0.5-block shuffle toward it still
+  // proves nothing — without this the fja pit loop returns for every
+  // level-goal backstop and the rest counter never reaches its mark.
+  const backstop = ctx.stuck && ctx.stuck.by === 'no-displacement'
+  const strict = backstop || !st.goal0 || (st.goal0.y - st.start.y) >= 2
   // Apex guard (ak4): the 1 Hz tick samples the sidestep jump mid-air, so a
   // floor rise only counts on the ground — same rule as dig_step/hop_step.
   const climbed = (!bot.entity || !!bot.entity.onGround) && Math.floor(bp.y) > Math.floor(st.start.y)
@@ -812,12 +822,26 @@ function goalClose(a, b) {
 // Rest gave-up marker (q0h): while the rest step keeps failing at one
 // point, detectors hold their fire there — relocation re-arms them. Lazy: a
 // far sample clears the marker and reports no hold.
+function anyPlayerOnline(bot) {
+  try {
+    const players = (bot && bot.players) || {}
+    for (const key of Object.keys(players)) {
+      if (key !== bot.username) return true
+    }
+  } catch (_) { /* roster best-effort */ }
+  return false
+}
+
 const REST_GIVE_UP_DIST = 2
 function restGaveUpHolds(ctx, bot) {
   try {
     if (!ctx || !ctx.work || ctx.step !== 'rest') return false
     const at = ctx.restGaveUpAt
     if (!at || typeof at.x !== 'number') return false
+    // A player online lapses the hold (round 2): episodes must stay
+    // reachable so MAX_FAILS asks for a teleport. The marker stays — if the
+    // roster empties again, the same trap holds without re-counting.
+    if (anyPlayerOnline(bot)) return false
     const bp = botPos(bot)
     if (!bp) return true // no position: hold, never spin blind
     if (Math.hypot(bp.x - at.x, bp.z - at.z) > REST_GIVE_UP_DIST) {
@@ -826,6 +850,18 @@ function restGaveUpHolds(ctx, bot) {
     }
     return true
   } catch (_) { return false }
+}
+
+const ROAM_LATCH_CLEAR = 4 // mirrors HOME_LATCH_CLEAR (index.js); lives here because roam cannot require index (cycle)
+// A roam latch anchored at another wedge point is stale once the body
+// relocated: clear it so the roam-back detector fires again (round 2).
+function clearStaleRoamLatch(ctx, bot) {
+  try {
+    const L = ctx && ctx.recoverLatch
+    if (!L || L.by !== 'roam' || !L.at || typeof L.at.x !== 'number') return
+    const bp = botPos(bot)
+    if (bp && Math.hypot(bp.x - L.at.x, bp.z - L.at.z) > ROAM_LATCH_CLEAR) ctx.recoverLatch = null
+  } catch (_) { /* latch best-effort */ }
 }
 
 function setStuck(ctx, by, goal, key) {
@@ -952,10 +988,11 @@ function release(bot, ctx, how) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
-    if (by === 'home') {
-      // Homing goals never move, so goal-closeness cannot tell one wedge
+    if (by === 'home' || by === 'roam') {
+      // Static goals never move, so goal-closeness cannot tell one wedge
       // from the next: anchor the release point instead. walkHomeTick
-      // re-arms only once the body relocated past HOME_LATCH_CLEAR.
+      // (home) and the roam-back branch (roam) re-arm only once the body
+      // relocated past the latch radius.
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
@@ -1113,6 +1150,7 @@ module.exports = {
   chooseRecovery,
   setStuck,
   restGaveUpHolds,
+  clearStaleRoamLatch,
   decide,
   release,
   run,

@@ -879,3 +879,15 @@ describe('xoj stepWhy mirrors the next-cell item gate', () => {
     assert.equal(stepWhy('build', facts, bot, ctx, ''), 'build: need table/door item')
   })
 })
+
+describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
+  it('empty menu re-picks rest: the hold paces episodes, not the menu', async () => {
+    // Round-1 core-1: after rest fails as the only option, the arbiter
+    // re-picks rest — the gave-up hold (not the menu) paces episodes there.
+    const bot = goalBot({ items: [] })
+    const facts = goalFacts(bot, {})
+    const boom = { source: 'laya', ask: async () => { throw new Error('asked with no options') } }
+    const r = await chooseStep(boom, facts, [])
+    assert.deepEqual(r, { step: 'rest', source: 'only-option', fsm: 'rest', model: null })
+  })
+})

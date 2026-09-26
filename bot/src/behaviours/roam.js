@@ -49,6 +49,7 @@ function roam(bot, ctx, target, state) {
     if (typeof bp.clone === 'function') ctx.roamLastPos = bp.clone()
     let movingBack = false
     try { movingBack = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
+    recover.clearStaleRoamLatch(ctx, bot)
     if (movingBack && (ctx.stuckResets || 0) >= 2 && !recover.restGaveUpHolds(ctx, bot)) {
       const gp = { x: pp.x, y: pp.y, z: pp.z }
       if (recover.setStuck(ctx, 'roam', gp, backKey)) console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${distToPlayer.toFixed(1)} goal=${formatPos(gp)}`)
