@@ -123,8 +123,10 @@ function scanSides(bot) {
 }
 
 // A hand-dug staircase cycle (9sh): the side cell at feet level stays as
-// the step to mount, the side cell above it is air or digs by hand, and the
-// head has room to jump. Returns the side [dx, dz] or null.
+// the step to mount, the side cell above it is air or digs by hand, the
+// mount head above that is air or digs by hand (adv: the 1.8 body stands
+// the mount with its head in (dx,2,dz)), and the head has room to jump.
+// Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
   for (const [dx, dz] of SIDES) {
@@ -132,6 +134,8 @@ function findDigStepDir(bot) {
     if (!solid(step)) continue
     const above = cellAt(bot, dx, 1, dz)
     if (above && solid(above) && !handDiggable(bot, above)) continue
+    const cap = cellAt(bot, dx, 2, dz)
+    if (cap && solid(cap) && !handDiggable(bot, cap)) continue
     return [dx, dz]
   }
   return null
@@ -462,9 +466,10 @@ function digUpRun(bot, ctx) {
 }
 
 // Dig a step by hand and mount it (9sh): no scaffold, no pickaxe, dirt
-// pit. One cycle digs the wall above the side step, then jumps onto the
-// step top — done on floor rise, repeatable to the mouth. st.dir re-scans
-// when its step collapses mid-cycle.
+// pit. One cycle digs the wall above the side step plus the mount head
+// above that (adv), then jumps onto the step top — done on floor rise,
+// repeatable to the mouth. st.dir re-scans when its step collapses
+// mid-cycle.
 function digStepRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { dir: null, phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: null })
@@ -494,6 +499,25 @@ function digStepRun(bot, ctx) {
     st.digInFlight = true
     void (async () => {
       try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    })()
+    return 'running'
+  }
+  // Mount head (adv): the body stands the mount with its head in
+  // (dx,2,dz) — dig a hand-diggable solid there like above instead of
+  // relying on the executor's canDig to clear it mid-mount.
+  const cap = cellAt(bot, st.dir[0], 2, st.dir[1])
+  if (cap && solid(cap)) {
+    if (!handDiggable(bot, cap)) { st.dir = null; return 'running' }
+    if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
+    if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
+    if (st.digInFlight) {
+      if (++st.waited > DIG_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:dig-timeout' }
+      return 'running'
+    }
+    if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+    st.digInFlight = true
+    void (async () => {
+      try { await bot.dig(cap) } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
