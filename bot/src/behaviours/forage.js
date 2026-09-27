@@ -446,7 +446,10 @@ function forage(bot, ctx, target, state) {
       f.via = v || null
       f.leg = v ? 'via' : 'direct'
     }
-    if (f.leg === 'via' && f.via && dist(bp, f.via) <= WALK_RANGE) {
+    // Arrival reads xz-only from the waypoint cell centre (revmux 01):
+    // the XZ goal stops on a near cell whose 3D distance misses.
+    const viaArrived = (v) => Math.hypot(bp.x - (v.x + 0.5), bp.z - (v.z + 0.5)) <= WALK_RANGE + 0.5
+    if (f.leg === 'via' && f.via && viaArrived(f.via)) {
       f.leg = 'direct'
       f.stalls = 0
       try { ctx.lastGoalKey = '' } catch (_) { /* re-issue below */ }
@@ -455,7 +458,10 @@ function forage(bot, ctx, target, state) {
     const aim = onVia ? f.via : p
     const key = `forage:${Math.round(aim.x)},${Math.round(aim.y)},${Math.round(aim.z)}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalNear(aim.x, aim.y, aim.z, WALK_RANGE), false)
+      const goal = onVia
+        ? new goals.GoalNearXZ(aim.x, aim.z, WALK_RANGE)
+        : new goals.GoalNear(aim.x, aim.y, aim.z, WALK_RANGE)
+      bot.pathfinder.setGoal(goal, false)
       ctx.lastGoalKey = key
       // Consume the previous goal's verdict: only a noPath/timeout that
       // arrives AFTER this issue strikes (same attribution follow.js uses

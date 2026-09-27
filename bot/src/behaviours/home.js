@@ -375,9 +375,13 @@ function gohome(bot, ctx, target, state) {
     }
     const diverting = !st.viaDone && !!st.via
     const aim = diverting ? st.via : out
-    const arrived = walkTo(bot, ctx, st, diverting ? 'gohome-via' : 'gohome-walk',
-      new goals.GoalNear(aim.x, aim.y, aim.z, 1),
-      nearOut(aim, 1))
+    // The waypoint names x/z only (revmux 01): its y is the bot's feet at
+    // plan time, meaningless 20 blocks away on a slope. nearOut already
+    // reads arrival xz-only from the cell centre.
+    const goal = diverting
+      ? new goals.GoalNearXZ(aim.x, aim.z, 1)
+      : new goals.GoalNear(aim.x, aim.y, aim.z, 1)
+    const arrived = walkTo(bot, ctx, st, diverting ? 'gohome-via' : 'gohome-walk', goal, nearOut(aim, 1))
     if (st.phase === 'failed') {
       if (st.via && !st.viaDone) {
         st.phase = 'walk'

@@ -731,8 +731,8 @@ describe('rw4.12 forage detour', () => {
     forage(bot, ctx) // plan + walk issue
     assert.equal(bot.calls.setGoal, 1)
     const g = bot.pathfinder.goal
-    assert.equal(g.constructor.name, 'GoalNear')
-    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 20, y: 64, z: 8 })
+    assert.equal(g.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g.x, z: g.z }, { x: 20, z: 8 })
   })
 
   it('reaching the waypoint re-issues direct to the cell', () => {
@@ -775,6 +775,25 @@ describe('rw4.12 forage detour', () => {
     for (let i = 0; i < 12 && !(ctx.forageSkip && ctx.forageSkip.has('40,64,0')); i++) forage(bot, ctx) // direct leg stalls too
     assert.equal(ctx.forage.streak, 1, 'the cell strikes honestly')
     assert.ok(ctx.forageSkip.has('40,64,0'))
+  })
+
+  it('diagonal arrival fires from the pathfinder near cell', () => {
+    // Fractional raw waypoint (15.2,21.4): the XZ goal aims at (15,21)
+    // and arrival reads xz-only from its centre. The bot stops two
+    // cells past — inside range, outside the old 3D check.
+    const bot = mockBot()
+    const ctx = memCtx([{ x: 40, y: 64, z: 30, name: 'oak_log' }, { x: 0, y: 64, z: 60, name: 'oak_log' }])
+    danger.mark(ctx, { x: 20, y: 60, z: 15 }) // mid-segment on the diagonal
+    bot.entity.position = pos(0, 64, 0)
+    forage(bot, ctx) // issues the via goal
+    const g0 = bot.pathfinder.goal
+    assert.equal(g0.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g0.x, z: g0.z }, { x: 15, z: 21 })
+    bot.entity.position = pos(13.2, 64, 21.5) // end cell (13,21), far edge
+    forage(bot, ctx) // arrived: flips + re-issues direct
+    const g1 = bot.pathfinder.goal
+    assert.equal(g1.constructor.name, 'GoalNear')
+    assert.deepEqual({ x: g1.x, y: g1.y, z: g1.z }, { x: 40, y: 64, z: 30 })
   })
 
   it('stationary on the via leg never settles to dig a far cell', () => {

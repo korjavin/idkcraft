@@ -73,6 +73,14 @@ describe('detour.via', () => {
     assert.equal(detour.via(ctx, { x: 0, y: 64, z: 0 }, { x: 40, y: 64, z: 0 }, T0), null)
   })
 
+  it('diagonal walks get whole-cell waypoints (GoalNear floors)', () => {
+    // Mark on the segment: both raw candidates are fractional.
+    const ctx = marked([[20, 60, 15]])
+    const v = detour.via(ctx, { x: 0, y: 64, z: 0 }, { x: 40, y: 64, z: 30 }, T0)
+    assert.deepEqual(v, { x: 15, y: 64, z: 21 })
+    assert.ok(Number.isInteger(v.x) && Number.isInteger(v.z))
+  })
+
   it('never throws on junk: null in, null out', () => {
     assert.equal(detour.via(null, null, null), null)
     assert.equal(detour.via({}, {}, {}), null)

@@ -6,7 +6,8 @@
 // null for go-direct (no marks, feet/target inside a mark, the segment
 // misses every disc, both sides marked). The waypoint hangs AVOID_RADIUS
 // + MARGIN off the mark centre, perpendicular to the leg, on the shorter
-// side. Never throws.
+// side, floored to whole cells: GoalNear aims at the floored cell, so
+// arrival must measure from it too (revmux 01). Never throws.
 
 const danger = require('./danger')
 
@@ -47,8 +48,8 @@ function via(ctx, from, to, now) {
     const nz = dx / len
     const y = num(from.y) ? from.y : 64
     const cands = [
-      { x: hit.x + nx * off, y, z: hit.z + nz * off },
-      { x: hit.x - nx * off, y, z: hit.z - nz * off },
+      { x: Math.floor(hit.x + nx * off), y, z: Math.floor(hit.z + nz * off) },
+      { x: Math.floor(hit.x - nx * off), y, z: Math.floor(hit.z - nz * off) },
     ]
     const free = cands.filter((c) => !close(c))
     if (free.length === 0) return null

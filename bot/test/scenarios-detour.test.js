@@ -86,8 +86,8 @@ describe('rw4.12: gohome walks around the marked pit', () => {
       const r1 = await ticker.tick()
       assert.equal(r1.decision.action, 'gohome')
       const g1 = bot.pathfinder.goal
-      assert.equal(g1.constructor.name, 'GoalNear')
-      assert.deepEqual({ x: g1.x, y: g1.y, z: g1.z }, VIA)
+      assert.equal(g1.constructor.name, 'GoalNearXZ')
+      assert.deepEqual({ x: g1.x, z: g1.z }, { x: VIA.x, z: VIA.z })
       bot.entity.position = { ...VIA } // walked around the pit
       await ticker.tick() // arrived: flips direct
       const r3 = await ticker.tick() // re-issues to the door
