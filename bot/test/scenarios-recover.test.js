@@ -434,10 +434,10 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
     const brain = { async decide() { return { action: 'follow', sprint: false, source: 'stub' } } } // FSM-only
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.stuck = { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }
-    // Harness collision (revmux core-1): the feet cell is dug by the
-    // primitive, never walked through; a solid dirt head cell is dug the
-    // way the prod executor digs it (mount GoalNear + canDig) instead of
-    // being mounted into. Anything else solid refuses the move.
+    // Harness collision (adv): honest feet+head — any solid refuses the
+    // move. No executor-dig emulation: dig_step owns the mount head itself
+    // (digs (dx,2,dz) by hand before the mount), so the climb must pass on
+    // primitive digging alone.
     const stepBody = () => {
       const g = bot.pathfinder.goal
       if (g && typeof g.x === 'number') {
@@ -453,34 +453,64 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
           const head = bot.blockAt({ x: nx, y: bp.y + 1, z: nz })
           let ok = true
           if (feet && feet.boundingBox !== 'empty') ok = false
-          else if (head && head.boundingBox !== 'empty') {
-            if (head.name !== 'dirt' || !head.position) ok = false
-            else solids.delete(key(head.position.x, head.position.y, head.position.z))
-          }
+          else if (head && head.boundingBox !== 'empty') ok = false
           // A refused step never cancels the jump below: prod jumps in
           // place against the step, then moves over once risen.
           if (ok) bot.entity.position = pos(nx, bp.y, nz)
         }
       }
-      // Honest jump: at most one block above the cycle start floor — each
-      // new height needs a freshly dug step, not a free elevator.
+      // Honest jump + gravity (adv): a held jump impulses +1.0 from the
+      // ground only (a real leap, enough to clear the step's feet cell);
+      // airborne ticks fall, and solid ground below snaps the feet and
+      // grounds. Without the mount head dug, the XZ drift refuses at the
+      // face and the body bunny-hops in place until the mount budget dies.
       const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
       const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
-      if (bot.getControlState('jump') && bot.entity.position.y < capY) bot.entity.position.y += 0.5
+      const jumping = bot.getControlState('jump')
+      if (jumping && bot.entity.onGround && bot.entity.position.y < capY) bot.entity.position.y += 1.0
+      const below = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+      if (below && below.boundingBox !== 'empty') {
+        bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+        bot.entity.onGround = true
+      } else if (!jumping || !bot.entity.onGround) {
+        bot.entity.position.y -= 0.5
+        bot.entity.onGround = false
+        const land = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+        if (land && land.boundingBox !== 'empty') {
+          bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+          bot.entity.onGround = true
+        }
+      } else {
+        bot.entity.onGround = false
+      }
     }
     const flush = async () => { for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r)) }
     const cap = capture()
     const actions = []
     try {
       let t = 0
+      let firstMountHead = 'unseen'
+      let prevPhase = null
       for (; t < 200 && (bot._tickerCtx.stuck || bot._tickerCtx.recovery); t++) {
         const r = await ticker.tick()
         actions.push(r.decision && r.decision.action)
+        const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
+        const phase = st && st.phase
+        if (prevPhase === 'dig' && phase === 'step' && firstMountHead === 'unseen' && st && st.dir) {
+          // The mount head must already be air when the first mount starts:
+          // dig_step owns it upfront (adv), never discovers it mid-arc via
+          // an apex sample or the executor's canDig.
+          const bp = bot.entity.position
+          const head = bot.blockAt({ x: Math.floor(bp.x) + st.dir[0], y: Math.floor(bp.y) + 2, z: Math.floor(bp.z) + st.dir[1] })
+          firstMountHead = head && head.boundingBox !== 'empty' ? head.name : 'air'
+        }
+        if (phase) prevPhase = phase
         stepBody()
         await flush()
       }
       assert.ok(t < 200, 'episode ends')
       assert.equal(actions[0], 'dig_step', `first choice, got ${actions.join(',')}`)
+      assert.equal(firstMountHead, 'air', `mount head dug before the first mount, got ${firstMountHead}`)
       assert.ok(Math.floor(bot.entity.position.y) >= 65, `climbed out, y=${bot.entity.position.y}`)
       assert.equal(bot._tickerCtx.stuck, null, 'episode over')
       assert.equal(bot._tickerCtx.recovery, null, 'episode over')

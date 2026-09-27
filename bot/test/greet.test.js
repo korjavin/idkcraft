@@ -325,3 +325,117 @@ describe('greet wiring (idkcraft-v92)', () => {
     assert.equal(log.filter((v) => v === true).length, 1)
   })
 })
+
+describe('greet uncovered paths (idkcraft-g9k)', () => {
+  it('default now/sleep run a real 250 ms gesture with no deps', async () => {
+    const g = createGreeter()
+    const log = []
+    const bot = { setControlState: (k, v) => { if (k === 'sneak') log.push(v) } }
+    assert.equal(g.greetOnArrival(bot, 'Dee', 7, true), false) // arms
+    assert.equal(g.greetOnArrival(bot, 'Dee', 3.4, true), true)
+    await new Promise((resolve) => setTimeout(resolve, 1400))
+    assert.deepEqual(log, [true, false, true, false])
+  })
+
+  it('a rejecting sleep is swallowed by the arrival catch', async () => {
+    const g = createGreeter({ sleep: () => Promise.reject(new Error('no-timer')), sneakMs: 1 })
+    const bot = { setControlState: () => {} }
+    g.greetOnArrival(bot, 'Rex', 7, true)
+    assert.equal(g.greetOnArrival(bot, 'Rex', 3, true), true)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.ok(true, 'rejection did not escape')
+  })
+
+  it('a throwing sneak control is best-effort, gesture still completes', async () => {
+    const g = createGreeter()
+    let calls = 0
+    const bot = {
+      setControlState: (k, v) => {
+        if (k !== 'sneak') return
+        calls++
+        if (v === true) throw new Error('stuck key')
+      },
+    }
+    g.greetOnArrival(bot, 'Finn', 7, true)
+    assert.equal(g.greetOnArrival(bot, 'Finn', 3, true), true)
+    await new Promise((resolve) => setTimeout(resolve, 1400))
+    assert.equal(calls, 4, 'setSneak still attempted every edge')
+  })
+})
+
+// NOTE: no setSneak guard test: deleting `bot && typeof ...` throws into
+// setSneak's own try (equivalent mutant). The throwing-sneak test pins the catch.
+describe('greet guards (idkcraft-g9k)', () => {
+  it('a null bot declines an armed arrival', () => {
+    const g = createGreeter({ sleep: () => Promise.resolve() })
+    const bot = { setControlState: () => {} }
+    g.greetOnArrival(bot, 'Zed', 7, true) // arm with a real body
+    assert.equal(g.greetOnArrival(null, 'Zed', 3, true), false)
+  })
+
+  it('an empty name declines its own armed arrival', () => {
+    const g = createGreeter({ sleep: () => Promise.resolve() })
+    const bot = { setControlState: () => {} }
+    g.greetOnArrival(bot, '', 7, true) // arm the empty key
+    assert.equal(g.greetOnArrival(bot, '', 3, true), false)
+  })
+
+  it('a non-number dist declines an armed arrival', () => {
+    const g = createGreeter({ sleep: () => Promise.resolve() })
+    const bot = { setControlState: () => {} }
+    g.greetOnArrival(bot, 'Zed', 7, true)
+    assert.equal(g.greetOnArrival(bot, 'Zed', 'near', true), false)
+  })
+})
+
+describe('greet stale promise (idkcraft-g9k)', () => {
+  it('a gesture cancelled mid-hold resolves false and leaves running clear', async () => {
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    let sleeps = 0
+    const g = createGreeter({ sleep: () => { sleeps++; return sleeps === 1 ? gate : Promise.resolve() } })
+    const bot = { setControlState: () => {} }
+    const p = g.crouchTwice(bot)
+    await new Promise((resolve) => setTimeout(resolve, 20)) // first hold entered
+    g.cancel(bot)
+    release()
+    assert.equal(await p, false, 'stale generation bails after sleep')
+    assert.equal(sleeps, 1, 'no second sleep: the after-sleep check bailed first')
+    assert.equal(await p.then(() => g.crouchTwice(bot)), true, 'running clear: a fresh gesture completes')
+  })
+})
+
+describe('greet re-entry (idkcraft-g9k)', () => {
+  it('a second gesture while one runs is refused', async () => {
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const g = createGreeter({ sleep: () => gate })
+    const bot = { setControlState: () => {} }
+    const p = g.crouchTwice(bot)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(await g.crouchTwice(bot), false, 're-entry refused while running')
+    release()
+    assert.equal(await p, true, 'first gesture completes')
+  })
+})
+
+describe('greet gap cancel (idkcraft-g9k)', () => {
+  it('a cancel in the gap between holds stops the second hold', async () => {
+    const gates = []
+    const g = createGreeter({ sleep: () => new Promise((resolve) => gates.push(resolve)) })
+    const log = []
+    const bot = { setControlState: (k, v) => { if (k === 'sneak') log.push(v) } }
+    const p = g.crouchTwice(bot)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    gates.shift()() // first hold ends -> down() -> gap sleep starts
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    g.cancel(bot) // lands in the gap
+    gates.shift()() // gap sleep ends -> iteration-2 generation check
+    const outcome = await Promise.race([
+      p,
+      new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 500)),
+    ])
+    assert.equal(outcome, false, 'stale generation bails before the second hold (no hang)')
+    assert.deepEqual(log, [true, false, false], 'one hold plus releases, never a second hold')
+  })
+})
