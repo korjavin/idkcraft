@@ -1035,10 +1035,13 @@ function release(bot, ctx, how) {
     // nobody is online — a resourceless pit is inescapable alone (prod
     // 2026-09-27 ground 3 dusks in one hole), so page the owner once per
     // mark; chat persists in the server log for the next session. Online
-    // paging stays with the call_player menu item.
+    // paging stays with the call_player menu item, and the rest step stays
+    // with its own q0h escalation (gave-up hold + online lapse), which
+    // already owns repeats there.
     try {
       const bp = botPos(bot)
-      if (bp && !anyPlayerOnline(bot) && danger.near(ctx, bp) && !repeatPaged(ctx, bp)) {
+      const restOwned = !!(ctx && ctx.work && ctx.step === 'rest')
+      if (bp && !restOwned && !anyPlayerOnline(bot) && danger.near(ctx, bp) && !repeatPaged(ctx, bp)) {
         bot.chat(`I'm stuck at ${Math.floor(bp.x)} ${Math.floor(bp.y)} ${Math.floor(bp.z)} again with nobody online, /tp ${bot.username} <your-name>`)
         ctx.repeatGaveUpPage = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
         console.log(`repeat gave-up at ${fmtPos(bp)}, owner paged`)

@@ -763,6 +763,17 @@ describe('repeat gave-up pages the owner (rw4.9)', () => {
     }
     assert.deepEqual(bot.chats, [])
   })
+  it('rest repeats stay silent (q0h owns rest paging)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = { work: true, step: 'rest', stepStatus: 'running' }
+    for (const [by, key] of [['roam', 'roam:back'], ['roam', 'roam:back2']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+      ctx.stepStatus = 'running' // escalation may fail rest; keep looping
+    }
+    assert.deepEqual(bot.chats, [])
+  })
   it('relocated repeat pages again', () => {
     const bot = pageBot([10, 64, 0])
     const ctx = {}
