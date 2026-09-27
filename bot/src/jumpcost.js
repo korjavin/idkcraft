@@ -7,14 +7,18 @@
 // climb is a stuck lottery (path=success, body stands, reset=stuck after
 // 3.5 s). The lib offers no jump-up cost knob (only dig/place/liquid/entity
 // costs), so the penalty is applied here in the same getNeighbors wrap shape
-// as addNoCornerCut. The planner then routes around +1 faces when a flat
-// alternative exists, and still climbs when the jump is the only way (the
-// reactive hop_step recovers that wedge). Penalty scale: a flat step costs
-// 1, so +8 means the planner walks up to ~8 extra blocks to avoid one climb
-// — cheaper than 3.5 s stuck plus recovery. Pure-vertical edges (ladder /
-// 1x1-tower getMoveUp) and parkour gap jumps carry no face arc and are left
-// alone.
-const JUMP_UP_COST = 8
+// as addNoCornerCut. The planner then prefers flat alternatives within ~4
+// blocks of extra walk, and still climbs when the jump is the only way (the
+// reactive hop_step recovers that wedge). The value is the smallest that
+// reroutes a 2-block-distant gap under the full wrapper stack (the corner-cut
+// guard forbids the diagonal shortcut, so +2 still climbs): measured H=10
+// staircase +4 = 1891 nodes vs 56 raw (~90 ms cached worst case, sliced
+// across 40 ms ticks), against +8 = 7832 nodes. Pure-vertical edges (ladder
+// / 1x1-tower getMoveUp) carry no face arc
+// and are left alone. Parkour-up (gap leap onto a +1 ledge) IS a face arc —
+// across a gap, with less room — so it takes the penalty too; flat/drop
+// parkour never rises and needs no exemption.
+const JUMP_UP_COST = 4
 function addJumpUpCost(movements) {
   // setMovements also accepts plain movement-like objects (unit mocks carry
   // only flags): wrap only a real Movements with getNeighbors.
@@ -27,7 +31,6 @@ function addJumpUpCost(movements) {
       if (!m || typeof m.y !== 'number' || typeof m.cost !== 'number') continue
       if (m.y - node.y !== 1) continue
       if (m.x === node.x && m.z === node.z) continue // ladder/tower: no face arc
-      if (m.parkour) continue // gap jump: arc meets air, not a face
       m.cost += JUMP_UP_COST
     }
     return ns

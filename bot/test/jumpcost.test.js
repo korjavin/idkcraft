@@ -84,9 +84,36 @@ function climbs(path, start) {
   return n
 }
 
-function plan(movements, sx, sy, sz, gx, gy, gz) {
-  const astar = new AStar(new Move(sx, sy, sz, 0, 0), movements, new goals.GoalBlock(gx, gy, gz), 10000, 9000)
+function plan(movements, sx, sy, sz, gx, gy, gz, near = 0) {
+  const goal = near > 0 ? new goals.GoalNear(gx, gy, gz, near)
+    : new goals.GoalBlock(gx, gy, gz)
+  const astar = new AStar(new Move(sx, sy, sz, 0, 0), movements, goal, 30000, 90000)
   return astar.compute()
+}
+
+// Staircase hill: top surface rises +1 per x for x in [0, H).
+function stairNameAt(H) {
+  return function nameAt(x, y, z) {
+    const top = 63 + Math.max(0, Math.min(H, x + 1))
+    if (y < top) return 'stone'
+    if (y === top) return 'grass_block'
+    return 'air'
+  }
+}
+
+// Pit at (1,63,0) with a +1 step past it (x=2, open sides): raw A* leaps the
+// pit onto the ledge (parkour-up); the patched planner walks around.
+function pitNameAt(x, y, z) {
+  if (x === 1 && z === 0 && y === 63) return 'air'
+  if (x === 2 && y === 64 && z >= -1 && z <= 1) return 'stone'
+  if (y < 63) return 'stone'
+  if (y === 63) return 'grass_block'
+  return 'air'
+}
+
+function parkourUps(path, start) {
+  const full = [start, ...path]
+  return full.filter((p, i) => i > 0 && p.parkour && p.y - full[i - 1].y === 1)
 }
 
 describe('jump-up cost penalty (idkcraft-8yy)', () => {
@@ -119,6 +146,33 @@ describe('jump-up cost penalty (idkcraft-8yy)', () => {
     const fixed = plan(wiredMovements(nameFn), 0, 64, 0, 3, 64, 0)
     assert.equal(fixed.status, 'success')
     assert.equal(climbs(fixed.path, { x: 0, y: 64, z: 0 }), 0, `patched planner avoids the climb, got: ${fixed.path.map((p) => `${p.x},${p.y},${p.z}`).join(' ')}`)
+  })
+
+  it('parkour-up takes the penalty and the planner walks around the pit', () => {
+    const rawNs = rawMovements(pitNameAt).getNeighbors(new Move(0, 64, 0, 0, 0))
+    const rawLeap = rawNs.find((m) => m.parkour && m.x === 2 && m.y === 65 && m.z === 0)
+    assert.ok(rawLeap, 'setup offers the pit leap')
+    const fixedNs = wiredMovements(pitNameAt).getNeighbors(new Move(0, 64, 0, 0, 0))
+    const fixedLeap = fixedNs.find((m) => m.parkour && m.x === 2 && m.y === 65 && m.z === 0)
+    assert.equal(fixedLeap.cost, rawLeap.cost + JUMP_UP_COST)
+    const start = { x: 0, y: 64, z: 0 }
+    const raw = plan(rawMovements(pitNameAt), 0, 64, 0, 4, 64, 0)
+    assert.equal(raw.status, 'success')
+    assert.ok(parkourUps(raw.path, start).length >= 1, 'unpatched planner leaps the pit')
+    const fixed = plan(wiredMovements(pitNameAt), 0, 64, 0, 4, 64, 0)
+    assert.equal(fixed.status, 'success')
+    assert.equal(parkourUps(fixed.path, start).length, 0,
+      `patched planner avoids the pit leap, got: ${fixed.path.map((p) => `${p.x},${p.y},${p.z}${p.parkour ? 'P' : ''}`).join(' ')}`)
+  })
+
+  it('forced staircase climb stays within a node budget (no A* flood)', () => {
+    const nameFn = stairNameAt(10)
+    const raw = plan(rawMovements(nameFn), 0, 64, 0, 25, 74, 0, 2)
+    assert.equal(raw.status, 'success')
+    const fixed = plan(wiredMovements(nameFn), 0, 64, 0, 25, 74, 0, 2)
+    assert.equal(fixed.status, 'success')
+    assert.ok(fixed.visitedNodes < 40 * raw.visitedNodes,
+      `patched visited ${fixed.visitedNodes} vs raw ${raw.visitedNodes}`)
   })
 
   it('forced climb still plans (penalty never forbids)', () => {
