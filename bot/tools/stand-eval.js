@@ -5,29 +5,19 @@
 // instructions and criteria) against laya or JEV, scoring FSM-agreement and
 // model-call counts with and without the hg8 menu shaping.
 // Usage: node stand-eval.js [laya|jev] [--shape|--no-shape] [reps]
-// Env: EVAL_URL (default http://127.0.0.1:8000/v1/systemone),
+// Env: EVAL_URL (default http://localhost:8000/v1/systemone),
 //   EVAL_KEY (JEV bearer; only needed for jev — never commit keys).
 // JEV budget: one rep unshaped only (~50 calls); shaping needs no JEV calls
 // on the pair fixtures (only-option answers without asking).
 const fs = require('node:fs')
 const path = require('node:path')
 const { stubBrain, jevBrain, isHard, JEV_ENDPOINT } = require('../src/brain')
-const { STEP_CRITERIA, ASK_INSTRUCTIONS } = require('../src/goal')
+const { STEP_CRITERIA, ASK_INSTRUCTIONS, shapeGoalMenu } = require('../src/goal')
 
-const EVAL_URL = process.env.EVAL_URL || 'http://127.0.0.1:8000/v1/systemone'
+const EVAL_URL = process.env.EVAL_URL || 'http://localhost:8000/v1/systemone'
 
 function load(name) {
   return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'test', 'fixtures', name), 'utf8'))
-}
-
-// hg8 shaping, mirrored from goal.js chooseStep (keep in sync): a non-jev
-// brain is never asked a direct [work, rest] pair — rest cannot win a pair
-// it always poisons, and goalFsm never returns rest from a multi-menu, so
-// the work step is the answer by construction. Chains (>2) and JEV keep
-// the full menu.
-function shapedMenu(menu, model) {
-  if (model !== 'jev' && menu.length === 2 && menu.includes('rest')) return menu.filter((n) => n !== 'rest')
-  return menu
 }
 
 async function main() {
@@ -77,7 +67,7 @@ async function main() {
 
   console.log('--- goal (direct pairs; shaped [X,rest] answers without asking) ---')
   for (const row of goal) {
-    const names = shape ? shapedMenu(row.menu, model) : row.menu
+    const names = shape ? shapeGoalMenu(row.menu, model) : row.menu
     const want = names.length === 1 ? names[0] : row.fsm
     for (let r = 0; r < reps; r++) {
       let got

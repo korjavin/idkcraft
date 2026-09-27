@@ -468,11 +468,23 @@ const STEP_CRITERIA = {
   rest: 'nothing else fits: rest near home',
 }
 
+// hg8 shaping: a non-jev brain is never asked a direct [work, rest] pair.
+// Laya answers rest over 7 of 9 work steps unconditionally (prod 761/761
+// wrong in 7d; immune to rest rewording), while goalFsm never returns rest
+// from a multi-menu (rest is last and the day-skips are infeasible then) —
+// so the work step is the answer by construction. Chains (>2, rest last
+// and first-yes-wins) and JEV keep the full menu. Exported for the eval
+// stand so the rule has one source of truth.
+function shapeGoalMenu(names, model) {
+  if (model !== 'jev' && names.length === 2 && names.includes('rest')) return names.filter((n) => n !== 'rest')
+  return names
+}
+
 // Model step choice with the FSM as fallback and disagreement reference,
 // exactly like hybridBrain: { step, source, fsm, model }. source is
 // only-option (single feasible step, or a shaped [work, rest] pair answered
-// without asking — hg8 below — model not asked), goal-fsm (no ask method:
-// stub brain or unit tests), <brain source> (model answered) or
+// without asking — shapeGoalMenu above — model not asked), goal-fsm (no ask
+// method: stub brain or unit tests), <brain source> (model answered) or
 // fsm-fallback (model consulted and failed). model is the consulted brain
 // source or null when nothing was asked.
 async function chooseStep(brain, facts, feasible) {
@@ -482,15 +494,7 @@ async function chooseStep(brain, facts, feasible) {
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
-  // hg8 shaping: a non-jev brain is never asked a direct [work, rest] pair.
-  // Laya answers rest over 7 of 9 work steps unconditionally (prod 761/761
-  // wrong in 7d; immune to rest rewording), while goalFsm never returns rest
-  // from a multi-menu (rest is last and the day-skips are infeasible then) —
-  // so the work step is the answer by construction. Chains (>2, rest last
-  // and first-yes-wins) and JEV keep the full menu.
-  const askNames = (model !== 'jev' && names.length === 2 && names.includes('rest'))
-    ? names.filter((n) => n !== 'rest')
-    : names
+  const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
   const criteria = {}
   for (const n of askNames) criteria[n] = STEP_CRITERIA[n]
@@ -758,4 +762,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
