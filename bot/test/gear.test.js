@@ -557,11 +557,12 @@ describe('gear round-2: collision, async legs, latch', () => {
   it('async furnace done continues the gear step silently', async () => {
     const goal = require('../src/goal')
     const bot = mockBot({ items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }] })
-    const ctx = { home: home(), step: 'gear', stepStatus: 'done', brain: {}, furnace: { settled: true, result: 'done' } }
+    const ctx = { home: home(), step: 'gear', stepStatus: 'done', brain: {}, furnace: { settled: true, result: 'done' }, stepFail: { gear: { status: 'failed:smelt-stalled' } } }
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'gear')
     assert.equal(ctx.stepStatus, 'running')
     assert.equal(ctx.furnace.result, null)
+    assert.ok(!(ctx.stepFail && ctx.stepFail.gear), 'stale hold retired, not lingered')
   })
   it('async furnace no-fuel yields with an announce', async () => {
     const goal = require('../src/goal')
@@ -570,6 +571,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     const r = await goal.decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
     assert.ok(bot.lines.some((l) => l.includes('coal above the reserve')))
+    assert.ok(!(ctx.stepFail && ctx.stepFail.gear), 'yield records no hold')
     assert.equal(r.action, 'explore', 'gear latched out, fetchers run')
   })
   it('async furnace stall fails under a gear name and holds', async () => {
@@ -579,6 +581,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'explore')
     assert.ok(ctx.stepFail && ctx.stepFail.gear, 'hold recorded')
+    assert.equal(ctx.stepFail.gear.status, 'failed:gear-furnace-smelt-stalled')
   })
   it('async-settling leg fake: clobber between ticks is consumed', async () => {
     const goal = require('../src/goal')
@@ -741,5 +744,64 @@ describe('gear round-2: handover state and op span', () => {
     gear(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(bot.lines, [])
+  })
+})
+
+describe('gear round-3: the unhanded claim survives a rejoin', () => {
+  const memory = require('../src/memory')
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  // Save-then-restore across a fresh ctx, same world, same pack (the pack
+  // lives server-side, so it survives the rejoin; the haul claim must too).
+  function roundTrip(ctx, items) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gear-haul-'))
+    const file = path.join(dir, 'mem.json')
+    const spawn = { x: 100, y: 64, z: -200 }
+    const bot = mockBot({ items })
+    bot.spawnPoint = { ...spawn }
+    assert.equal(memory.save(bot, ctx, file), true)
+    const bot2 = mockBot({ items: items.map((i) => ({ ...i })) })
+    bot2.spawnPoint = { ...spawn }
+    const ctx2 = {}
+    assert.ok(memory.restore(bot2, ctx2, file))
+    return { bot2, ctx2 }
+  }
+  it('rejoin after a death reforges: the stale haul claim survives on disk', () => {
+    const { bot2, ctx2 } = roundTrip(
+      { home: home(), gear: { made: { iron_sword: true } }, gearFinished: {}, gearGiven: {}, haul: { iron_sword: 1 } },
+      [{ name: 'iron_pickaxe', count: 1 }]
+    )
+    assert.equal(ctx2.haul && ctx2.haul.iron_sword, 1, 'stale haul restored')
+    const next = gear.deriveNext(bot2, ctx2)
+    assert.ok(next && next.name === 'iron_sword', 'death-loss reforges, not forgiven')
+  })
+  it('rejoin after a toss keeps the handover: the ladder stays advanced', () => {
+    const { bot2, ctx2 } = roundTrip(
+      { home: home(), gear: { made: { iron_sword: true } }, gearFinished: {}, gearGiven: {}, haul: { iron_sword: 0 } },
+      [{ name: 'iron_pickaxe', count: 1 }]
+    )
+    assert.ok(!(ctx2.haul && ctx2.haul.iron_sword), 'zero haul not persisted')
+    const next = gear.deriveNext(bot2, ctx2)
+    assert.ok(next && next.name === 'iron_pickaxe', 'tossed sword stays handed, ladder advanced')
+  })
+  it('rejoin mid-handover keeps the finished claim: bank, not reforge', () => {
+    const { bot2, ctx2 } = roundTrip(
+      { home: home(), gear: { made: { iron_sword: true } }, gearFinished: { iron_sword: 1 }, gearGiven: {}, haul: { iron_sword: 1 } },
+      [{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_sword', count: 1 }]
+    )
+    assert.equal(gear.handoverWaiting(bot2, ctx2), true, 'finished claim rides the disk')
+    gear.reconcile(ctx2, bot2)
+    assert.deepEqual(ctx2.gearGiven || {}, {}, 'in-flight, not handed')
+    const next = gear.deriveNext(bot2, ctx2)
+    assert.ok(next && next.name === 'iron_sword', 'still the open want')
+  })
+  it('forage loot haul stays session-scoped: only ledger names persist', () => {
+    const { ctx2 } = roundTrip(
+      { home: home(), gear: { made: { iron_sword: true } }, gearFinished: {}, gearGiven: {}, haul: { iron_sword: 1, raw_iron: 9 } },
+      [{ name: 'iron_pickaxe', count: 1 }]
+    )
+    assert.equal(ctx2.haul && ctx2.haul.iron_sword, 1)
+    assert.ok(!(ctx2.haul && ctx2.haul.raw_iron), 'deliver-owned haul untouched')
   })
 })

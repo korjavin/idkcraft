@@ -857,19 +857,13 @@ async function decide(bot, ctx) {
   if (ctx && facts.time === 'day') ctx.inShelter = false
   const text = goalText(facts)
   const prev = (ctx && ctx.step) || null
-  const status = (ctx && ctx.stepStatus) || null
-  const finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
-  if (finished && prev && typeof status === 'string' && status.startsWith('failed:')) {
-    try {
-      if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
-      const bp = bot && bot.entity && bot.entity.position
-      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
-    } catch (_) { /* guard best-effort */ }
-  } else if (finished && prev && status === 'done' && ctx.stepFail && typeof ctx.stepFail === 'object') {
-    // A success retires its own hold: tomorrow's identical failure re-arms
-    // from scratch instead of inheriting a stale record (round-1 major).
-    try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
-  }
+  let status = (ctx && ctx.stepStatus) || null
+  let finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
+  // Async gear/furnace translation BEFORE the hold bookkeeping (revmux
+  // 02-review): the hold must record the translated status - and no hold at
+  // all for a yield - or the rename is dead and its test passes without
+  // this branch. The locals rewrite from the translation, so no-fuel takes
+  // the done branch (which deletes the hold) and stalls record gear-named.
   if (finished && prev === 'gear') {
     let result = null
     try {
@@ -881,25 +875,45 @@ async function decide(bot, ctx) {
         ctx.furnace.result = null
       } catch (_) { /* consume best-effort */ }
       if (result === 'done') {
+        // The furnace leg finished between ticks: keep working the rung
+        // without a re-decide (a facts-changed re-pick here could strand
+        // the rung on an earlier step). The bookkeeping below never runs
+        // for this path, so retire any stale hold explicitly instead of
+        // letting it linger into a later failure.
         ctx.stepStatus = 'running'
+        try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.gear } catch (_) { /* retire best-effort */ }
         return { action: 'gear', sprint: false, source: 'goal-fsm' }
-      }
-      const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
-      if (reason === 'no-cobble' || reason === 'no-fuel') {
-        const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-        const line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
-        try {
-          if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
-          if (ctx.gear.saidNeed !== key) {
-            ctx.gear.saidNeed = key
-            bot.chat(line)
-          }
-        } catch (_) { /* announce best-effort */ }
-        ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
       } else {
-        ctx.stepStatus = `failed:gear-furnace-${reason}`
+        const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
+        if (reason === 'no-cobble' || reason === 'no-fuel') {
+          const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
+          const line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          try {
+            if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
+            if (ctx.gear.saidNeed !== key) {
+              ctx.gear.saidNeed = key
+              bot.chat(line)
+            }
+          } catch (_) { /* announce best-effort */ }
+          ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
+          status = 'done'
+        } else {
+          ctx.stepStatus = `failed:gear-furnace-${reason}`
+          status = ctx.stepStatus
+        }
       }
     }
+  }
+  if (finished && prev && typeof status === 'string' && status.startsWith('failed:')) {
+    try {
+      if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
+      const bp = bot && bot.entity && bot.entity.position
+      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
+    } catch (_) { /* guard best-effort */ }
+  } else if (finished && prev && status === 'done' && ctx.stepFail && typeof ctx.stepFail === 'object') {
+    // A success retires its own hold: tomorrow's identical failure re-arms
+    // from scratch instead of inheriting a stale record (round-1 major).
+    try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
   }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt

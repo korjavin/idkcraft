@@ -155,6 +155,20 @@ function snapshot(bot, ctx, now) {
   let gear
   try {
     const gm = gearMaps({ given: ctx.gearGiven, finished: ctx.gearFinished, made: ctx.gear && ctx.gear.made })
+    // The unhanded claim rides with the ledger (revmux 02-review): tossed()
+    // reads an empty haul as proof of handover, so a rejoin without the
+    // haul flips a death-lost piece to handed. Only ledger names persist -
+    // forage loot haul stays session-scoped (deliver's domain, untouched).
+    try {
+      if (ctx.haul && typeof ctx.haul === 'object') {
+        const haul = {}
+        for (const n of new Set([...Object.keys(gm.made), ...Object.keys(gm.finished)])) {
+          const c = ctx.haul[n]
+          if (typeof c === 'number' && Number.isFinite(c) && c > 0) haul[n] = Math.floor(c)
+        }
+        gm.haul = haul
+      }
+    } catch (_) { /* haul best-effort */ }
     if (gearCount(gm) > 0) gear = gm
   } catch (_) { /* gear best-effort */ }
   return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear }
@@ -162,9 +176,11 @@ function snapshot(bot, ctx, now) {
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
 // file must not inject shapes): { given: {name: n}, finished: {name: n},
-// made: {name: true} }. Additive: old docs simply lack the key.
+// made: {name: true}, haul: {name: n} }. Additive: old docs simply lack
+// the key (and lack haul: a pre-fix file still forgives a death-loss, the
+// crash-window class, exactly once).
 function gearMaps(src) {
-  const out = { given: {}, finished: {}, made: {} }
+  const out = { given: {}, finished: {}, made: {}, haul: {} }
   try {
     const pick = (v, num) => {
       const o = {}
@@ -182,13 +198,14 @@ function gearMaps(src) {
     out.given = pick(o.given, true)
     out.finished = pick(o.finished, true)
     out.made = pick(o.made, false)
+    out.haul = pick(o.haul, true)
   } catch (_) { /* gear best-effort */ }
   return out
 }
 
 function gearCount(gm) {
   try {
-    return Object.keys(gm.given).length + Object.keys(gm.finished).length + Object.keys(gm.made).length
+    return Object.keys(gm.given).length + Object.keys(gm.finished).length + Object.keys(gm.made).length + Object.keys(gm.haul || {}).length
   } catch (_) {
     return 0
   }
@@ -267,6 +284,10 @@ function restore(bot, ctx, file, now) {
         ctx.gearFinished = gm.finished
         if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
         ctx.gear.made = gm.made
+        for (const [n, c] of Object.entries(gm.haul)) {
+          if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
+          ctx.haul[n] = c
+        }
         out.gear = gearCount(gm)
       }
     }
