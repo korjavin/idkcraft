@@ -129,10 +129,15 @@ const MENU = {
       if (facts.time !== 'day') return false
       const home = ctx && ctx.home
       if (!home || !home.site) return false
+      // Built only (revmux 01 majors): on an unbuilt site light outranks
+      // gather, spends house planks on sticks, and skips the roof spot
+      // (no roof = no ref) for the whole session.
+      if (facts.home !== 'built') return false
       if (!(facts.unlit > 0)) return false
       if ((facts.torches || 0) > 0) return true
       if ((facts.coal || 0) <= require('./behaviours/light').COAL_RESERVE) return false
-      return (facts.sticks || 0) > 0 || (facts.planks || 0) >= 2 || (facts.logs || 0) >= 1
+      // maxPlanks, not planks: stick recipes cannot mix woods (01 minor).
+      return (facts.sticks || 0) > 0 || (facts.maxPlanks || 0) >= 2 || (facts.logs || 0) >= 1
     },
     chat: () => 'on my own: lighting the yard',
     verb: 'lighting torches',
@@ -495,7 +500,7 @@ const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
-  light: 'unlit is few or many and time is day: place torches around the house',
+  light: 'unlit is few or many and time is day and home is built: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
@@ -630,6 +635,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'day') return 'light: daytime job'
       const home = ctx && ctx.home
       if (!home || !home.site) return 'light: no home site'
+      if (facts.home !== 'built') return 'light: home not built'
       if (!(facts.unlit > 0)) return 'light: yard lit'
       // Torches on hand with a dark yard is feasible (null above), so only
       // the fuel branches remain.

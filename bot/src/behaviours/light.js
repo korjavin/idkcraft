@@ -200,11 +200,25 @@ function craftTick(bot, ctx) {
   })
 }
 
-function skipSpot(ctx, idx, p, why) {
+// Exactly-once completion line per lighting run (module scope: the
+// place flight, the done branch and the skip path below can all observe
+// the closed ring).
+function completionLine(ctx) {
+  if (!ctx || ctx.lightLineDone) return
+  ctx.lightLineDone = true
+  console.log(`torches placed ${ctx.lightPlaced || 0}`)
+}
+
+function skipSpot(bot, home, ctx, idx, p, why) {
   if (!Array.isArray(ctx.lightSkip)) ctx.lightSkip = []
   if (!ctx.lightSkip.includes(idx)) ctx.lightSkip.push(idx)
   ctx.lightFails = 0
   console.log(`light skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
+  // A run whose last open spot closes by skipping must still log: the
+  // unlit flip re-decides away before any done tick (revmux 01 minor).
+  try {
+    if (nextSpotIdx(bot, home, ctx.lightSkip) === -1) completionLine(ctx)
+  } catch (_) { /* logging best-effort */ }
 }
 
 // One torch placement, build.js place shape: (re)approach the spot, then
@@ -227,11 +241,22 @@ function placeTick(bot, ctx, home, idx) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
-  // Stale goal after a preemption carried the body away: re-approach
-  // instead of burning refusals from out of reach (build.js twin).
+  // Stale goal after a preemption carried the body away: re-approach.
+  // Counted (unlike the build.js twin): an unreachable spot (noPath,
+  // partial path, walled-in stage) would otherwise alternate setGoal
+  // and reset for the whole day with no give-up (revmux 01 minor).
   try {
     const bp = bot.entity && bot.entity.position
     if (bp && typeof bp.x === 'number' && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > PLACE_REACH) {
+      if (ctx.lightFailIdx !== idx) {
+        ctx.lightFailIdx = idx
+        ctx.lightFails = 0
+      }
+      ctx.lightFails = (ctx.lightFails || 0) + 1
+      if (ctx.lightFails >= REFUSALS_TO_SKIP) {
+        skipSpot(bot, home, ctx, idx, p, 'unreachable')
+        return
+      }
       ctx.lightGoalIdx = -1
       return
     }
@@ -249,7 +274,7 @@ function placeTick(bot, ctx, home, idx) {
   const ref = buildMod.findRef(bot, p)
   if (!ref) {
     ctx.lightFails = (ctx.lightFails || 0) + 1
-    if (ctx.lightFails >= REFUSALS_TO_SKIP) skipSpot(ctx, idx, p, 'no-ref')
+    if (ctx.lightFails >= REFUSALS_TO_SKIP) skipSpot(bot, home, ctx, idx, p, 'no-ref')
     else ctx.lightGoalIdx = -1
     return
   }
@@ -260,19 +285,12 @@ function placeTick(bot, ctx, home, idx) {
   // so the completion line fires here, on the landing that closes the
   // ring. Log-only: never write stepStatus from a flight the menu may
   // have already handed to another step.
-  const completionLine = () => {
-    // Exactly once per lighting run: the flight and the done branch below
-    // can both observe the closed ring (live assay printed it twice).
-    if (ctx.lightLineDone) return
-    ctx.lightLineDone = true
-    console.log(`torches placed ${ctx.lightPlaced || 0}`)
-  }
   const landed = () => {
     ctx.lightFails = 0
     ctx.lightPlaced = (ctx.lightPlaced || 0) + 1
     metrics.light.inc({ op: 'placed' })
     try {
-      if (nextSpotIdx(bot, home, ctx.lightSkip) === -1) completionLine()
+      if (nextSpotIdx(bot, home, ctx.lightSkip) === -1) completionLine(ctx)
     } catch (_) { /* logging best-effort */ }
   }
   ;(async () => {
@@ -295,7 +313,7 @@ function placeTick(bot, ctx, home, idx) {
           ctx.lightFails = fails() + 1
         }
       }
-      if (fails() >= REFUSALS_TO_SKIP) skipSpot(ctx, idx, p, occupier || 'refused')
+      if (fails() >= REFUSALS_TO_SKIP) skipSpot(bot, home, ctx, idx, p, occupier || 'refused')
     } finally {
       ctx.placeInFlight = false
     }
@@ -313,12 +331,25 @@ function light(bot, ctx) {
   // (build.js cww lesson) — and the build guard may never have been
   // installed when the house was adopted, not built. Idempotent.
   buildMod.guardOwnWalls(bot, ctx)
+  // Skip state is site-relative (revmux 01 major/minor): a 'build here'
+  // or adopt that moves the home must not inherit the old site's skips.
+  // Keyed like buildGuardKey so no index.js hunk is needed.
+  const siteKey = `${home.site.x},${home.site.y},${home.site.z}`
+  if (ctx.lightSkipKey !== siteKey) {
+    ctx.lightSkipKey = siteKey
+    ctx.lightSkip = []
+    ctx.lightFails = 0
+    ctx.lightFailIdx = -1
+    ctx.lightGoalIdx = -1
+    ctx.lightPlaced = 0
+    ctx.lightLineDone = false
+  }
   if (!Array.isArray(ctx.lightSkip)) ctx.lightSkip = []
   const idx = nextSpotIdx(bot, home, ctx.lightSkip)
   if (idx === -1) {
     ctx.stepStatus = 'done'
     try {
-      if (!ctx.lightLineDone) { ctx.lightLineDone = true; console.log(`torches placed ${ctx.lightPlaced || 0}`) }
+      completionLine(ctx)
     } catch (_) { /* logging best-effort */ }
     return
   }

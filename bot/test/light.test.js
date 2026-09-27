@@ -147,7 +147,7 @@ describe('light torch economy (rw4.13)', () => {
 
 describe('MENU.light feasibility (rw4.13)', () => {
   const F = (o) => ({
-    time: 'day', logs: 0, planks: 0, sticks: 0, coal: 0, torches: 0, unlit: 8, ...o,
+    time: 'day', logs: 0, planks: 0, maxPlanks: 0, sticks: 0, coal: 0, torches: 0, home: 'built', unlit: 8, ...o,
   })
   const ctx = { home: home() }
   const feasible = goal.MENU.light.feasible
@@ -155,11 +155,14 @@ describe('MENU.light feasibility (rw4.13)', () => {
     assert.equal(feasible(F({ time: 'night', torches: 8 }), null, ctx), false, 'night never lights')
     assert.equal(feasible(F({ time: 'dusk', torches: 8 }), null, ctx), false, 'dusk belongs to gohome')
     assert.equal(feasible(F({ torches: 8 }), null, {}), false, 'no home site')
+    assert.equal(feasible(F({ torches: 8, home: 'site' }), null, ctx), false, 'unbuilt site builds first')
+    assert.equal(feasible(F({ torches: 8, home: 'none' }), null, ctx), false, 'no home at all')
     assert.equal(feasible(F({ torches: 8, unlit: 0 }), null, ctx), false, 'lit yard rests')
     assert.equal(feasible(F({ torches: 8 }), null, ctx), true, 'torches on hand')
     assert.equal(feasible(F({ coal: 4, sticks: 4 }), null, ctx), false, 'reserve fuel is not spendable')
     assert.equal(feasible(F({ coal: 5, sticks: 1 }), null, ctx), true, 'fuel + sticks')
-    assert.equal(feasible(F({ coal: 5, planks: 2 }), null, ctx), true, 'fuel + planks for sticks')
+    assert.equal(feasible(F({ coal: 5, planks: 2, maxPlanks: 2 }), null, ctx), true, 'fuel + planks for sticks')
+    assert.equal(feasible(F({ coal: 5, planks: 2, maxPlanks: 1 }), null, ctx), false, 'split woods make no sticks')
     assert.equal(feasible(F({ coal: 5, logs: 1 }), null, ctx), true, 'fuel + log for sticks')
     assert.equal(feasible(F({ coal: 5, planks: 1 }), null, ctx), false, 'one plank makes no sticks')
     assert.equal(feasible(F({ coal: 5 }), null, ctx), false, 'no stick material')
@@ -169,6 +172,7 @@ describe('MENU.light feasibility (rw4.13)', () => {
     const text = 't'
     assert.equal(why('light', F({ time: 'night' }), null, ctx, text), 'light: daytime job')
     assert.equal(why('light', F({}), null, {}, text), 'light: no home site')
+    assert.equal(why('light', F({ home: 'site' }), null, ctx, text), 'light: home not built')
     assert.equal(why('light', F({ unlit: 0 }), null, ctx, text), 'light: yard lit')
     assert.equal(why('light', F({ coal: 2 }), null, ctx, text), 'light: saving coal')
     assert.equal(why('light', F({ coal: 9 }), null, ctx, text), 'light: no sticks or wood')
@@ -177,6 +181,7 @@ describe('MENU.light feasibility (rw4.13)', () => {
   it('criteria names the bucket words', () => {
     assert.ok(goal.STEP_CRITERIA.light.includes('unlit is few or many'), goal.STEP_CRITERIA.light)
     assert.ok(goal.STEP_CRITERIA.light.includes('time is day'), goal.STEP_CRITERIA.light)
+    assert.ok(goal.STEP_CRITERIA.light.includes('home is built'), goal.STEP_CRITERIA.light)
   })
 })
 
@@ -205,7 +210,7 @@ describe('light behaviour ticks (rw4.13)', () => {
     const h = home()
     paintSpots(world, h)
     const bot = mockBot(world, { items: [] })
-    const ctx = { home: h, lightPlaced: 8 }
+    const ctx = { home: h, lightPlaced: 8, lightSkipKey: '0,64,0' }
     const logs = []
     const orig = console.log
     console.log = (l) => { logs.push(String(l)) }
@@ -303,6 +308,40 @@ describe('light behaviour ticks (rw4.13)', () => {
     }
     assert.ok(!logs.some((l) => l.startsWith('torches placed')), `silent, got: ${logs.join(' | ')}`)
   })
+  it('a run closed by skipping still logs torches placed exactly once', async () => {
+    // The unlit flip re-decides away before any done tick (revmux 01
+    // minor) — the line must fire in the skip path.
+    const world = makeWorld()
+    const h = home()
+    for (const s of LIGHT_SPOTS.slice(0, 8)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], failPlace: true })
+    const ctx = { home: h }
+    const logs = []
+    const orig = console.log
+    console.log = (l) => { logs.push(String(l)) }
+    try {
+      // Set/strike alternate (no-ref resets the goal each strike).
+      for (let i = 0; i < 6; i++) { light(bot, ctx); await flush() }
+      light(bot, ctx) // done branch observes the same closed ring
+    } finally {
+      console.log = orig
+    }
+    assert.deepEqual(ctx.lightSkip, [8])
+    assert.equal(logs.filter((l) => l === 'torches placed 0').length, 1, `one line, got: ${logs.join(' | ')}`)
+  })
+  it('a home move clears the old site skips', () => {
+    // Skip indices are site-relative (revmux 01 major): inheriting them
+    // would leave the new door-front dark forever.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }] })
+    const ctx = { home: h, lightSkipKey: '9,9,9', lightSkip: [0], lightPlaced: 3, lightLineDone: true }
+    light(bot, ctx)
+    assert.deepEqual(ctx.lightSkip, [], 'fresh site starts unskipped')
+    assert.equal(ctx.lightPlaced, 0)
+    assert.equal(ctx.lightLineDone, false)
+    assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 0)
+  })
   it('refusals skip the spot after 3, the ring completes without it', async () => {
     const world = makeWorld()
     const h = home()
@@ -313,15 +352,22 @@ describe('light behaviour ticks (rw4.13)', () => {
     assert.deepEqual(ctx.lightSkip, [0])
     assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 1)
   })
-  it('stale goal after preemption: re-approach instead of refusing', () => {
+  it('stale goal after preemption: re-approach twice, skip as unreachable on the 3rd strike', () => {
     const world = makeWorld()
     const h = home()
     const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(100, 65, 100) })
-    const ctx = { home: h, lightGoalIdx: 0 } // carried away mid-step
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' } // carried away mid-step
     light(bot, ctx)
     assert.equal(ctx.lightGoalIdx, -1, 'forced fresh approach')
-    assert.equal(ctx.lightFails || 0, 0, 'no refusal burned')
+    assert.equal(ctx.lightFails, 1, 'first strike counted')
     assert.equal(bot.calls.places.length, 0)
+    light(bot, ctx) // re-approach set...
+    light(bot, ctx) // ...still out of reach: strike 2
+    assert.equal(ctx.lightFails, 2)
+    light(bot, ctx)
+    light(bot, ctx) // strike 3: give up instead of looping all day
+    assert.deepEqual(ctx.lightSkip, [0])
+    assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 1)
   })
   it('no torches: one craft op per tick, flag settled, metric counted', async () => {
     const world = makeWorld()
