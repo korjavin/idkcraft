@@ -68,7 +68,7 @@ describe('forage deadlock (atl.10)', () => {
     const ctx = memCtx([]) // empty memory, no animals -> no-known on tick 1
     forage(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-known')
-    assert.match(logs.join('\n'), /forage failed:no-known/)
+    assert.match(logs.join('\n'), /forage failed:no-known strikes=0 drops=none mem=\S+ haul=/)
   })
 
   it('expires the final gate after 3 instant fails; next pick runs honestly', () => {
@@ -86,6 +86,7 @@ describe('forage deadlock (atl.10)', () => {
     forage(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-known')
     assert.equal(bot.calls.setGoal, 0, 'gated #1: no attempt despite pickaxe')
+    assert.match(logs.join('\n'), /forage gated failed:no-known n=1\/3/)
     ctx.stepStatus = 'running'
     forage(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-known')

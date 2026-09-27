@@ -232,7 +232,8 @@ function finish(bot, ctx, f, ok, reason) {
     ctx.stepStatus = `failed:${reason || 'no-known'}`
     try {
       const drops = Object.keys(f.drops || {}).join(',') || 'none'
-      console.log(`forage failed:${reason || 'no-known'} strikes=${f.streak || 0} drops=${drops}`)
+      const w = (ctx.forageFinal && ctx.forageFinal.world) || {}
+      console.log(`forage failed:${reason || 'no-known'} strikes=${f.streak || 0} drops=${drops} mem=${w.mem} haul=${w.haul}`)
     } catch (_) { /* log best-effort */ }
   }
 }
@@ -308,6 +309,8 @@ function forage(bot, ctx, target, state) {
           ctx.forageFinal = null
           ctx.forageGated = 0
           console.log(`forage gate expired after ${n} gated fails, next pick retries honestly`)
+        } else {
+          try { console.log(`forage gated ${FF.status} n=${n}/${GATED_MAX}`) } catch (_) { /* log best-effort */ }
         }
         ctx.stepStatus = FF.status
         return
