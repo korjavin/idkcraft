@@ -2,7 +2,7 @@
 
 // Retreat chain (idkcraft-1tj): alone at low health with a hostile on the
 // bot, the vetoed follow must offer retreat/pillar/gohome, never idle.
-const { describe, it } = require('node:test')
+const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar } = require('../src/behaviours/retreat')
@@ -533,5 +533,116 @@ describe('retreat flee edges (idkcraft-h13)', () => {
     const ctx = freshCtx()
     retreat(bot, ctx)
     assert.equal(ctx.stepStatus, 'running')
+  })
+})
+
+describe('taking-fire retreat (0ay)', () => {
+  // Alone + hurt + unreachable-close hostile: the FSM idles and the bot
+  // dies standing (prod 11:50) — the same chain runs instead. No dirt and
+  // no home here, so retreat is the only option and no model is asked.
+  let origLog
+  let logs
+  beforeEach(() => {
+    origLog = console.log
+    logs = []
+    console.log = (line) => { logs.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function idleRemote() {
+    return {
+      name: 'laya',
+      source: 'laya',
+      async decide() { return { action: 'idle', sprint: false, source: 'laya' } },
+      async ask() { throw new Error('chain must not ask: retreat is the only option') },
+    }
+  }
+  function fireBot(health) {
+    // Mob at ~4.5 blocks: beyond the latch melee override (a written-off
+    // mob in swing reach reports reachable) but inside the retreat menu
+    // (<=6) and the under-fire gate (<=8) — the prod 11:50 shape.
+    const bot = fieldBot({ entities: { 1: zombie(1, 5, 64, 0) }, health })
+    bot.players = {}
+    return bot
+  }
+
+  it('hurt + unreachable-close + nobody: retreats, never stands', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick() // hp 20: arms lastTickHp, goal arbiter acts
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1 // fight wrote the mob off: unreachable
+    bot.health = 19 // hurt lands between ticks
+    const r = await ticker.tick()
+    assert.equal(typeof ctx.lastHurtAt, 'number', 'hp drop stamps taking-fire')
+    assert.equal(r.decision.action, 'retreat')
+    assert.equal(r.decision.source, 'only-option')
+    assert.ok(logs.some((l) => l.includes('taking-fire:')), `engage logged, got: ${logs.join(' | ')}`)
+    ticker.destroy()
+  })
+
+  it('no hurt + unreachable: no retreat (quiet shadows are not fled)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    const r = await ticker.tick() // hp flat: no stamp
+    assert.equal(ctx.lastHurtAt, undefined)
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log without hurt')
+    ticker.destroy()
+  })
+
+  it('hurt + reachable: the fight path owns the tick, not the chain', async () => {
+    const bot = fireBot(20)
+    const remote = idleRemote()
+    remote.decide = async () => ({ action: 'fight', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 19 // hurt, but the mob was never written off: reachable
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(fightRan, 1)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('hurt + unreachable + visible player: no retreat (alone-only, like the veto leg)', async () => {
+    const bot = fireBot(20)
+    bot.players = { P: { username: 'P', entity: { position: pos(10, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log with a player visible')
+    ticker.destroy()
+  })
+
+  it('stale hurt + unreachable: no retreat (fire must be fresh)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    ctx.lastHurtAt = Date.now() - 60000 // an old wound, no fresh drop
+    const r = await ticker.tick() // hp flat 20: no re-stamp
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log on stale hurt')
+    ticker.destroy()
   })
 })
