@@ -10,10 +10,13 @@
 //
 // Wiring (index.js, work block): after a vetoed brain decision
 // (source fsm-noplayer, reason low-health-hostile), chooseRetreat replaces
-// goal.decide for that tick. A hit dispatches a registered BEHAVIOURS
-// action (retreat / pillar / gohome); a miss falls through to goal.decide,
-// i.e. the old behaviour. Nothing here touches the goal menu, its text, or
-// the normal (players online) flow: noplayer is implied by the veto.
+// goal.decide for that tick. 0ay also routes taking-fire ticks (any hp,
+// unreachable hostile, fresh hurt) here; those key a separate askedKey
+// bucket and ask under a taking-fire premise. A hit dispatches a
+// registered BEHAVIOURS action (retreat / pillar / gohome); a miss falls
+// through to goal.decide, i.e. the old behaviour. Nothing here touches the
+// goal menu, its text, or the normal (players online) flow: noplayer is
+// implied by the veto, and the under-fire leg gates it explicitly.
 
 const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget } = require('../perception')
@@ -23,6 +26,10 @@ const recover = require('./recover')
 // the model answers each question, the code never skips one for it.
 const RETREAT_ORDER = ['retreat', 'pillar', 'gohome']
 const RETREAT_INSTRUCTIONS = 'The bot is losing a fight alone. Answer yes (take it) or no (skip it)'
+// 0ay premise for healthy callers (taking fire from an unreachable
+// hostile): the low-hp wording above is validated for 1tj and stays
+// byte-identical on that path — this variant only serves the new leg.
+const RETREAT_INSTRUCTIONS_UNDER_FIRE = 'The bot takes fire from an unreachable hostile alone. Answer yes (take it) or no (skip it)'
 const RETREAT_CRITERIA = {
   retreat: 'run: a hostile is close and a side is open — run away from the hostile',
   pillar: 'climb: scaffold blocks on hand and headroom free — pillar 2-3 blocks up, out of reach',
@@ -149,8 +156,17 @@ async function chooseRetreat(brain, bot, ctx, state) {
   const hd = hostileDist(state)
   const hp = state && typeof state.bot_health === 'number' ? Math.round(state.bot_health) : '?'
   const n = state && typeof state.nearby_hostiles === 'number' ? state.nearby_hostiles : '?'
-  const text = `low health (${hp}/20), nearest hostile ${hd === null ? '?' : hd} blocks away, ${n} hostiles near, alone`
-  const hpB = hp === '?' ? '?' : hp < 3 ? '0-2' : '3-5'
+  // Branch and bucket on RAW health: isHard gates the veto leg on raw
+  // bot_health < 6, but hp above is Math.round'ed for display — at 5.5-5.99
+  // the rounded value reads 6 and would take the healthy premise/bucket on
+  // a genuine low-hp ask (revmux 0ay round 2).
+  const rawHp = state && typeof state.bot_health === 'number' ? state.bot_health : NaN
+  const lowHp = Number.isNaN(rawHp) || rawHp < 6
+  const text = `${lowHp ? 'low health' : 'taking fire'} (${hp}/20), nearest hostile ${hd === null ? '?' : hd} blocks away, ${n} hostiles near, alone`
+  // 0ay: a healthy decline keys its own bucket — without it a high-hp
+  // 'no' would stamp '3-5' and permanently silence a later low-hp ask.
+  const hpB = Number.isNaN(rawHp) ? '?' : rawHp < 3 ? '0-2' : rawHp < 6 ? '3-5' : '6-20'
+  const instructions = lowHp ? RETREAT_INSTRUCTIONS : RETREAT_INSTRUCTIONS_UNDER_FIRE
   const hdB = hd === null ? '?' : hd <= 2 ? 'adj' : hd <= FLEE_RANGE ? 'near' : 'far'
   const key = `${hpB}:${hdB}:${askNames.join('+')}`
   if (ctx && ctx.retreatAskedKey === key) return null // declined already, situation unchanged
@@ -159,7 +175,7 @@ async function chooseRetreat(brain, bot, ctx, state) {
     const criteria = { [opt]: RETREAT_CRITERIA[opt], no: RETREAT_CRITERIA.no }
     let label = null
     try {
-      label = await brain.ask({ state: text, instructions: RETREAT_INSTRUCTIONS, criteria, situation: text })
+      label = await brain.ask({ state: text, instructions, criteria, situation: text })
       heard = true
     } catch (_) { label = null }
     if (label === opt) return pick(bot, ctx, opt, model, model)

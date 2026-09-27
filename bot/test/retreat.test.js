@@ -2,7 +2,7 @@
 
 // Retreat chain (idkcraft-1tj): alone at low health with a hostile on the
 // bot, the vetoed follow must offer retreat/pillar/gohome, never idle.
-const { describe, it } = require('node:test')
+const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar } = require('../src/behaviours/retreat')
@@ -152,6 +152,36 @@ describe('retreat chain', () => {
     // Same-bucket drift (hp 3->5, hd 1.5->1.9): still no re-ask.
     assert.equal(await chooseRetreat(brain, bot, ctx, { ...STATE, bot_health: 5, hostile_distance: 1.9 }), null)
     assert.equal(brain.calls.length, 2)
+  })
+  it('0ay: a healthy decline keys its own bucket, never silencing the low-hp leg', async () => {
+    // Revmux 0ay round 1 (major): the under-fire leg calls the chain at
+    // any hp — without a separate bucket a high-hp 'no' would stamp '3-5'
+    // and permanently block a later real low-hp ask.
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const brain = askBrain(['no', 'no', 'pillar', 'pillar'])
+    const ctx = freshCtx()
+    const high = { bot_health: 19, hostile_distance: 1.5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, high), null)
+    assert.equal(brain.calls.length, 2)
+    assert.ok(ctx.retreatAskedKey.startsWith('6-20:'), `own bucket: ${ctx.retreatAskedKey}`)
+    const low = { bot_health: 4, hostile_distance: 1.5, nearby_hostiles: 3 }
+    const r = await chooseRetreat(brain, bot, ctx, low)
+    assert.equal(r && r.action, 'pillar', 'low-hp re-asks despite the healthy decline')
+    assert.equal(brain.calls.length, 4)
+  })
+  it('0ay round 2: the 5.5-5.99 band buckets low (raw hp, like isHard)', async () => {
+    // Math.round would read 6 here and take the healthy premise/bucket on
+    // a genuine veto-leg ask; the branch must match isHard's raw < 6.
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const brain = askBrain(['no', 'no'])
+    const ctx = freshCtx()
+    const band = { bot_health: 5.7, hostile_distance: 1.5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, band), null)
+    assert.ok(ctx.retreatAskedKey.startsWith('3-5:'), `low bucket: ${ctx.retreatAskedKey}`)
+    const over = { bot_health: 6.0, hostile_distance: 1.5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, over), null)
+    assert.ok(ctx.retreatAskedKey.startsWith('6-20:'), `healthy bucket: ${ctx.retreatAskedKey}`)
+    assert.equal(brain.calls.length, 4, 'band and over re-ask (different buckets)')
   })
   it('invalid label continues the chain with a disagree note', async () => {
     const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
@@ -533,5 +563,221 @@ describe('retreat flee edges (idkcraft-h13)', () => {
     const ctx = freshCtx()
     retreat(bot, ctx)
     assert.equal(ctx.stepStatus, 'running')
+  })
+})
+
+describe('taking-fire retreat (0ay)', () => {
+  // Alone + hurt + unreachable-close hostile: the FSM idles and the bot
+  // dies standing (prod 11:50) — the same chain runs instead. No dirt and
+  // no home here, so retreat is the only option and no model is asked.
+  let origLog
+  let logs
+  beforeEach(() => {
+    origLog = console.log
+    logs = []
+    console.log = (line) => { logs.push(String(line)) }
+  })
+  afterEach(() => { console.log = origLog })
+
+  function idleRemote() {
+    return {
+      name: 'laya',
+      source: 'laya',
+      async decide() { return { action: 'idle', sprint: false, source: 'laya' } },
+      async ask() { throw new Error('chain must not ask: retreat is the only option') },
+    }
+  }
+  function fireBot(health) {
+    // Mob at ~4.5 blocks: beyond the latch melee override (a written-off
+    // mob in swing reach reports reachable) but inside the retreat menu
+    // (<=6) and the under-fire gate (<=8) — the prod 11:50 shape.
+    const bot = fieldBot({ entities: { 1: zombie(1, 5, 64, 0) }, health })
+    bot.players = {}
+    return bot
+  }
+
+  it('hurt + unreachable-close + nobody: retreats, never stands', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick() // hp 20: arms lastTickHp, goal arbiter acts
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1 // fight wrote the mob off: unreachable
+    bot.health = 19 // hurt lands between ticks
+    const r = await ticker.tick()
+    assert.equal(typeof ctx.lastHurtAt, 'number', 'hp drop stamps taking-fire')
+    assert.equal(r.decision.action, 'retreat')
+    assert.equal(r.decision.source, 'only-option')
+    assert.ok(logs.some((l) => l.includes('taking-fire:')), `engage logged, got: ${logs.join(' | ')}`)
+    ticker.destroy()
+  })
+
+  it('no hurt + unreachable: no retreat (quiet shadows are not fled)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    const r = await ticker.tick() // hp flat: no stamp
+    assert.equal(ctx.lastHurtAt, undefined)
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log without hurt')
+    ticker.destroy()
+  })
+
+  it('hurt + reachable: the fight path owns the tick, not the chain', async () => {
+    const bot = fireBot(20)
+    const remote = idleRemote()
+    remote.decide = async () => ({ action: 'fight', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 19 // hurt, but the mob was never written off: reachable
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(fightRan, 1)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('hurt + unreachable + visible player: no retreat (alone-only, like the veto leg)', async () => {
+    const bot = fireBot(20)
+    bot.players = { P: { username: 'P', entity: { position: pos(10, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log with a player visible')
+    ticker.destroy()
+  })
+
+  it('stale hurt + unreachable: no retreat (fire must be fresh)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    ctx.lastHurtAt = Date.now() - 60000 // an old wound, no fresh drop
+    const r = await ticker.tick() // hp flat 20: no re-stamp
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no engage log on stale hurt')
+    ticker.destroy()
+  })
+
+  it('low hp + model fight + unreachable + hurt: the divert still retreats (fatal phase)', async () => {
+    // Revmux 0ay round 1 (major): without the work-gate divert a fight
+    // answer skips the whole work block and the give-up branch shadows
+    // nobody — standing under fire exactly when hp is lowest.
+    const bot = fireBot(5)
+    const remote = idleRemote()
+    remote.decide = async () => ({ action: 'fight', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      await ticker.tick() // hp 5, no stamp yet: fight dispatches (today)
+      assert.equal(fightRan, 1)
+      const ctx = bot._tickerCtx
+      ctx.fightGivenUpId = 1
+      bot.health = 4 // hurt lands: stamp arms the divert
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'retreat')
+      assert.equal(fightRan, 1, 'diverted tick never reaches fight')
+      assert.ok(logs.some((l) => l.includes('taking-fire:')), 'diverted pick logged')
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('6-8m band: empty menu falls through to goal, claims no retreat', async () => {
+    // Revmux 0ay round 1 (minor): the gate admits to 8m but retreat needs
+    // hd<=6 — with no scaffold/home the chain nulls and the log must not
+    // fire (it sits strictly after a dispatched pick).
+    const bot = fieldBot({ entities: { 1: zombie(1, 6.5, 64, 0) }, health: 20 })
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx0 = bot._tickerCtx
+    ctx0.fightGivenUpId = 1 // latched before tick 1: unreachable from the start
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.fightGivenUpId, 1, 'latch holds at 6.5m (candidate within 8)')
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `fell through: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log on a nulled chain')
+    ticker.destroy()
+  })
+
+  it('sheltered + hurt + unreachable: no retreat (pacing a 3x3 is not fleeing)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    ctx.inShelter = true
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log while sheltered')
+    ticker.destroy()
+  })
+
+  it('hurt + reachable + idle at low hp: no retreat (reachability gates)', async () => {
+    // Hard route (hp<6 + hostile fact) with an idle model: decision idle
+    // reaches the work block, so only the reachable===false conjunct stands
+    // between this tick and a retreat — deleting it fails this test.
+    const bot = fireBot(5)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 4 // drop stamps, but the mob was never written off
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
+    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log for reachable fire')
+    ticker.destroy()
+  })
+
+  it('continued fire across ticks logs the engage once (latch resets on stale hurt only)', async () => {
+    const bot = fireBot(20)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.fightGivenUpId = 1
+    bot.health = 19
+    const r2 = await ticker.tick()
+    assert.equal(r2.decision.action, 'retreat')
+    bot.health = 18 // still taking fire: the hold re-issues without re-asking
+    const r3 = await ticker.tick()
+    assert.equal(r3.decision.action, 'retreat')
+    assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 1, 'one engage log per fire episode')
+    // Round 2: quiet ticks let the hurt go stale (latch resets), and the
+    // next fire episode logs again — every episode stays visible in prod.
+    ctx.lastHurtAt = Date.now() - 60000
+    bot.food = 19 // bust the decision cache without re-stamping hurt
+    const r4 = await ticker.tick() // hp flat 18: no re-stamp, goal releases the episode
+    assert.ok(r4.decision.action !== 'retreat', 'stale hurt releases to goal')
+    bot.health = 17 // fresh hurt opens episode two
+    const r5 = await ticker.tick()
+    assert.equal(r5.decision.action, 'retreat')
+    assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 2, 'second episode re-logs')
+    ticker.destroy()
   })
 })
