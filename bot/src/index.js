@@ -979,7 +979,19 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
-      if (ctx.work && decision.action !== 'fight') {
+      // 0ay: taking fire from an unreachable hostile (arrows across a gap
+      // drain a bot the FSM idles — prod 11:50: 20 to 6.8 in 18 s standing
+      // still). Alone, close (<=8, the perception fight radius), hurt
+      // within HURT_FRESH_MS: fight ticks divert into the work block so
+      // the retreat leg below runs instead of the give-up shadow-stand.
+      // Orders still own their ticks (no starve, no no-dig leak — same
+      // gate as the atl.12 shelter hold); shelter never diverts.
+      const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
+      const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
+        state.hostile_reachable === false &&
+        typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
+      if (!hurtFresh) ctx.underFireLogged = false
+      if (ctx.work && (decision.action !== 'fight' || underFire)) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
@@ -1003,18 +1015,11 @@ function fleeReflex(bot, ctx) {
         }
         // Retreat chain (1tj): a vetoed follow at low health with a hostile
         // on the bot means the FSM idles and the bot dies standing (gat).
-        // 0ay extends it to taking fire from an unreachable hostile: arrows
-        // across a gap drain a bot the FSM idles (prod 11:50: 20 to 6.8 in
-        // 18 s standing still). Same chain — run/pillar breaks the line of
-        // fire; a miss falls through to goal.decide, i.e. the old behaviour.
-        const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
-        const underFire = !ctx.inShelter && !target && state.hostile_reachable === false &&
-          typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
-        if (underFire && !ctx.underFireLogged) {
-          console.log('taking-fire: unreachable hostile and fresh hurt, retreating')
-          ctx.underFireLogged = true
-        }
-        if (!hurtFresh) ctx.underFireLogged = false
+        // 0ay extends it to taking fire from an unreachable hostile (the
+        // underFire divert above): same chain — run/pillar breaks the line
+        // of fire; a miss falls through to goal.decide, i.e. the old
+        // behaviour. The engage log fires only on a dispatched pick, so an
+        // empty menu or a declined chain never claims a retreat.
         if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire) {
           const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
           if (retreat) {
@@ -1023,6 +1028,10 @@ function fleeReflex(bot, ctx) {
               // same stale-decision guard as after the goal await below.
               stopOnce()
               return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+            }
+            if (underFire && !ctx.underFireLogged) {
+              console.log('taking-fire: unreachable hostile and fresh hurt, retreating')
+              ctx.underFireLogged = true
             }
             const rd = { action: retreat.action, sprint: false, source: retreat.source }
             ctx.step = retreat.action
