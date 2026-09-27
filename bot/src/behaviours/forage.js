@@ -25,6 +25,7 @@ const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
 const detour = require('../detour')
+const { say, clearGoal, botPos } = require('./util')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -44,13 +45,6 @@ function valueRank(name) {
   return 99
 }
 
-function botPos(bot) {
-  try {
-    const p = bot && bot.entity && bot.entity.position
-    if (p && typeof p.x === 'number') return p
-  } catch (_) { /* no position */ }
-  return null
-}
 
 function dist(a, b) {
   try {
@@ -120,9 +114,6 @@ function planForage(bot, ctx) {
   return null
 }
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
 
 // Memory fingerprint: count alone pins at the 256 cap (oldest-out
@@ -172,16 +163,6 @@ function snapInventory(bot) {
   return snap
 }
 
-// Drop a live pathfinder goal without stop() (same latch lesson as
-// explore/gather clearGoal).
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 function blockAt(bot, x, y, z) {
   try {

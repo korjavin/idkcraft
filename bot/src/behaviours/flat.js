@@ -27,6 +27,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const danger = require('../danger')
+const { say, clearGoal } = require('./util')
 
 const FLAT_DEFAULT_RADIUS = 48
 const FLAT_MIN_RADIUS = 4
@@ -164,20 +165,7 @@ function isAirCell(b, nullAsAir) {
   return b.boundingBox === 'empty' && !isLiquidName(b.name)
 }
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
-// Drop a live pathfinder goal like stopOnce, but without stop(): its latch
-// would swallow the next setGoal issued on the same tick (gather pattern).
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 function keyOf(x, y, z) {
   return `${x},${y},${z}`

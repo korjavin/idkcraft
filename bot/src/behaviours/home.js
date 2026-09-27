@@ -4,6 +4,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { goalFacts } = require('../goal')
 const detour = require('../detour')
+const { botPos } = require('./util')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -98,10 +99,6 @@ function insidePos(home) {
   return new Vec3(home.site.x + 1, home.site.y, home.site.z + 1)
 }
 
-function botPos(bot) {
-  const p = bot && bot.entity && bot.entity.position
-  return p && typeof p.x === 'number' ? p : null
-}
 
 function isInside(bot, home) {
   try {

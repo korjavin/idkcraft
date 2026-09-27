@@ -20,6 +20,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
+const { botPos } = require('./util')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -67,13 +68,6 @@ function shapeRecoverMenu(names, facts) {
 
 // --- world scan helpers (all best-effort: nulls read as free/safe) ---
 
-function botPos(bot) {
-  try {
-    const p = bot && bot.entity && bot.entity.position
-    if (p && typeof p.x === 'number') return p
-  } catch (_) { /* no position */ }
-  return null
-}
 
 function fmtPos(p) {
   if (!p) return 'unknown'
