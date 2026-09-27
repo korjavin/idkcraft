@@ -266,6 +266,7 @@ describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => 
   it('explore rescan does not revive a struck point: <=3 forage picks, then explore', async () => {
     const bot = deepBot()
     const ctx = deepCtx()
+    ctx.gear = { saidNeed: 'want-logs' } // ipn.3: need announced, strike routing isolated
     let foragePicks = 0
     let last = null
     for (let c = 0; c < 10; c++) {

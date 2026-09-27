@@ -1,7 +1,7 @@
 'use strict'
 
-// Disk memory (idkcraft-hlk): homes, resource finds, explored chunks and
-// danger spots survive bot restart/redeploy. One JSON file on a named
+// Disk memory (idkcraft-hlk): homes, resource finds, explored chunks,
+// danger spots, and the gear ledger survive bot restart/redeploy. One JSON file on a named
 // volume (/app/memory/<BOT_USERNAME>.json), atomic write (tmp + rename),
 // throttled periodic save plus save on setHome and on disconnect. Load runs
 // before spawn adoption; a missing, corrupt or other-world file means empty
@@ -149,7 +149,66 @@ function snapshot(bot, ctx, now) {
       spots = spots.slice(-danger.MAX_SPOTS)
     }
   } catch (_) { /* danger best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow }
+  // Gear ledger (ipn.3 round-2): without it every rejoin reforges the
+  // owner's pieces (and orphaned in-flight goods lose their finished
+  // record). Omitted when empty, like follow.
+  let gear
+  try {
+    const gm = gearMaps({ given: ctx.gearGiven, finished: ctx.gearFinished, made: ctx.gear && ctx.gear.made })
+    // The unhanded claim rides with the ledger (revmux 02-review): tossed()
+    // reads an empty haul as proof of handover, so a rejoin without the
+    // haul flips a death-lost piece to handed. Only ledger names persist -
+    // forage loot haul stays session-scoped (deliver's domain, untouched).
+    try {
+      if (ctx.haul && typeof ctx.haul === 'object') {
+        const haul = {}
+        for (const n of new Set([...Object.keys(gm.made), ...Object.keys(gm.finished)])) {
+          const c = ctx.haul[n]
+          if (typeof c === 'number' && Number.isFinite(c) && c > 0) haul[n] = Math.floor(c)
+        }
+        gm.haul = haul
+      }
+    } catch (_) { /* haul best-effort */ }
+    if (gearCount(gm) > 0) gear = gm
+  } catch (_) { /* gear best-effort */ }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear }
+}
+
+// Gear ledger maps, sanitized both ways (own write, but a hand-edited
+// file must not inject shapes): { given: {name: n}, finished: {name: n},
+// made: {name: true}, haul: {name: n} }. Additive: old docs simply lack
+// the key (and lack haul: a pre-fix file still forgives a death-loss, the
+// crash-window class, exactly once).
+function gearMaps(src) {
+  const out = { given: {}, finished: {}, made: {}, haul: {} }
+  try {
+    const pick = (v, num) => {
+      const o = {}
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        for (const [k, n] of Object.entries(v)) {
+          if (typeof k !== 'string' || k.length === 0 || k.length > 64) continue
+          if (num) {
+            if (typeof n === 'number' && Number.isFinite(n) && n >= 0) o[k] = Math.floor(n)
+          } else if (n === true) o[k] = true
+        }
+      }
+      return o
+    }
+    const o = src || {}
+    out.given = pick(o.given, true)
+    out.finished = pick(o.finished, true)
+    out.made = pick(o.made, false)
+    out.haul = pick(o.haul, true)
+  } catch (_) { /* gear best-effort */ }
+  return out
+}
+
+function gearCount(gm) {
+  try {
+    return Object.keys(gm.given).length + Object.keys(gm.finished).length + Object.keys(gm.made).length + Object.keys(gm.haul || {}).length
+  } catch (_) {
+    return 0
+  }
 }
 
 function readDoc(file) {
@@ -170,7 +229,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -213,10 +272,28 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0 }
     if (typeof doc.follow === 'string' && doc.follow) {
       ctx.followName = doc.follow
       out.follow = 1
+    }
+    if (doc.gear && typeof doc.gear === 'object') {
+      const gm = gearMaps(doc.gear)
+      if (gearCount(gm) > 0) {
+        ctx.gearGiven = gm.given
+        ctx.gearFinished = gm.finished
+        if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
+        ctx.gear.made = gm.made
+        // Restore enforces the same ledger-names filter as save (revmux
+        // 03-review): a hand-written doc must not inject a haul claim for a
+        // name the ledger never made (e.g. forage loot deliver would toss).
+        for (const [n, c] of Object.entries(gm.haul)) {
+          if (!(c > 0) || (!gm.made[n] && !(n in gm.finished))) continue
+          if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
+          ctx.haul[n] = c
+        }
+        out.gear = gearCount(gm)
+      }
     }
     if (Array.isArray(doc.homes) && doc.homes.length) {
       const h = homeOf(doc.homes[doc.homes.length - 1])
