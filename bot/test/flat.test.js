@@ -567,18 +567,18 @@ describe('flat behaviour', () => {
     return { bot, ctx }
   }
 
-  it('fills a 1-deep hole, leaves a bump alone, reports done', async () => {
+  it('fills a 1-deep hole, then shaves the bump (v2), reports done', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air') // the hole
-    world.set(2, 64, 0, 'dirt') // a bump: out of scope v1
+    world.set(2, 64, 0, 'dirt') // a bump: shaved since v2 (w52.1)
     const { bot, ctx } = started(world)
-    await drive(bot, ctx, 10)
+    await drive(bot, ctx, 20)
     assert.equal(ctx.flat, null, 'episode ends')
     assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt')
-    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'dirt', 'bump untouched')
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'air', 'bump shaved')
     assert.equal(bot.calls.places.length, 1)
-    assert.ok(bot.chats.some((c) => c.includes('flattening 9x9 around P, level 63: 1 holes')), bot.chats.join('\n'))
-    assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole'), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('flattening 9x9 around P, level 63: 1 holes, 1 bumps')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole, shaved 1 bump'), bot.chats.join('\n'))
   })
 
   it('skips water holes and reports them', async () => {
