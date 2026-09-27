@@ -524,3 +524,216 @@ describe('equip step', () => {
     assert.equal(BEHAVIOURS.equip, equip)
   })
 })
+
+describe('equip failure edges (idkcraft-pun)', () => {
+  it('planks without a stick recipe fail no-stick-recipe', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { stick: null },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-pickaxe')
+    assert.ok(bot.errs[0].includes('no-stick-recipe'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('logs without a planks recipe fail no-planks-recipe', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 2 }],
+      ids: IDS,
+      recipes: { oak_planks: null },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-pickaxe')
+    assert.ok(bot.errs[0].includes('no-planks-recipe'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('sticks plus logs without a planks recipe fail converting the rock', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stick', count: 2 }, { name: 'oak_log', count: 2 }],
+      ids: IDS,
+      recipes: { oak_planks: null },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-pickaxe')
+    assert.ok(bot.errs[0].includes('no-planks-recipe'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('sticks alone fail no-materials', async () => {
+    const bot = mockBot({ items: [{ name: 'stick', count: 2 }], ids: IDS, recipes: {} })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-pickaxe')
+    assert.ok(bot.errs[0].includes('no-materials'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('table lands but the tool recipe is gone: no-recipe fails loudly', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: null },
+      blockAtImpl: () => TABLE,
+    })
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs[0].includes('no-recipe'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('missing bot.craft fails instead of throwing', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { stick: recipeFor('stick', 4) },
+    })
+    delete bot.craft
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-stick')
+    assert.ok(bot.errs[0].includes('bot.craft missing'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('throwing craft fails with the window error', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { stick: recipeFor('stick', 4) },
+      craftImpl: async () => { throw new Error('window busy') },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-stick')
+    assert.ok(bot.errs[0].includes('window busy'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('hanging craft fails craft-timeout on the deadline', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const bot = mockBot({
+        items: [{ name: 'oak_planks', count: 4 }],
+        ids: IDS,
+        recipes: { stick: recipeFor('stick', 4) },
+        craftImpl: () => new Promise(() => {}), // hung window
+      })
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {})
+      mock.timers.tick(30001)
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:equip-stick')
+      assert.ok(bot.errs[0].includes('craft-timeout'), `errs: ${bot.errs}`)
+      bot.restoreError()
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('landed craft clears strikes, frozen guard held', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { stick: recipeFor('stick', 4) },
+    })
+    bot.craft = landingCraft(bot)
+    const ctx = freshCtx()
+    ctx.equip = { made: Object.freeze({ stick: 2 }) }
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(bot.lines.some((l) => l === 'equipped stick'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.errs, [])
+    bot.restoreError()
+  })
+
+  it('flaky inventory degrades the table hunt to no-table', async () => {
+    // items() dies mid-tick (after toolOp tallied): tableFor reads [] and
+    // fails loudly instead of crashing the tick.
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+    })
+    let calls = 0
+    bot.inventory.items = () => {
+      calls++
+      if (calls >= 6) throw new Error('window flicker')
+      return bot._items
+    }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('nameless find hit is named through blockAt', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 5 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 64, z: 0 }],
+      blockAtImpl: (p) => ({ name: 'dirt', position: p }),
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('far dirt walks into reach first', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 5 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 20, y: 64, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.lastGoalKey, 'equip-dig:20,64,0')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('dig error fails the blocks loudly', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 5 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 64, z: 0, name: 'dirt' }],
+      digImpl: async () => { throw new Error('ghost block') },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs[0].includes('ghost block'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+})

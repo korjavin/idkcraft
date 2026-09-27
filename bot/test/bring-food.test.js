@@ -194,3 +194,143 @@ describe("'bring me food' (idkcraft-n7k)", () => {
     }
   })
 })
+describe("'bring me food' edges (idkcraft-pun)", () => {
+  it('logs the fence fact when the prey stands by fences', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    bot.blockAt = (p) => (p && p.x === 10 && p.y === 63 ? { name: 'oak_fence' } : null)
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+      bring(bot, bot._tickerCtx, null, {})
+      await flush()
+    } finally {
+      console.log = orig
+    }
+    assert.ok(logs.some((l) => l === 'hunt animal near fences: cow at 10 64 0'), `logs: ${logs}`)
+    assert.equal(bot._tickerCtx.bring.phase, 'walk')
+  })
+
+  it('stalled pickup refuses instead of waiting at the drop', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    const ctx = bot._tickerCtx
+    bring(bot, ctx, null, {})
+    await flush()
+    bot.entity.position = pos(11, 64, 0) // into swing range
+    for (let i = 0; i < 3; i++) {
+      bring(bot, ctx, null, {})
+      await flush()
+    }
+    assert.equal(ctx.bring.phase, 'kill')
+    bot.entities[11].isValid = false
+    bot._items.push({ name: 'beef', count: 1 })
+    bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'pickup')
+    bot.entity.position = pos(0, 64, 0) // dragged far from the drop
+    for (let i = 0; i < 12; i++) {
+      bring(bot, ctx, null, {})
+      await flush()
+    }
+    assert.ok(bot.lines.some((l) => l === 'could not pick up beef'), `lines: ${bot.lines}`)
+    assert.equal(ctx.bring, null)
+  })
+
+  it('return without toss refuses, haul-less and honest', async () => {
+    const bot = mockBot({ items: [{ name: 'bread', count: 3 }], playerPos: pos(30, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food')
+    delete bot.toss
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(bot.lines.some((l) => l === 'could not toss bread'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+
+  it('return with the drop missing from the registry refuses', async () => {
+    const bot = mockBot({ items: [{ name: 'bread', count: 3 }], playerPos: pos(30, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food')
+    delete bot.registry.itemsByName.bread
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(bot.lines.some((l) => l === 'could not toss bread'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+})
+
+describe("'bring me food' branch edges (idkcraft-pun)", () => {
+  it('unreadable inventory hunts instead of crashing', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    bot.inventory.items = () => { throw new Error('window flicker') }
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    bring(bot, bot._tickerCtx, null, {})
+    await flush()
+    assert.equal(bot._tickerCtx.bring.phase, 'walk')
+  })
+
+  it('kill without lookAt still collects the drop', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    bot._moving = true
+    delete bot.lookAt
+    delete bot.attack
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    await drive(bot, bot._tickerCtx, (b, o) => {
+      const ent = b.entities[o.animal.id]
+      if (ent) ent.isValid = false
+      if (!b._items.some((i) => i.name === 'beef')) b._items.push({ name: 'beef', count: 1 })
+    })
+    assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
+  })
+
+  it('vanished walk target re-finds, then refuses with no anchor', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 30)] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    const ctx = bot._tickerCtx
+    bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'walk')
+    delete bot.entities[11]
+    bring(bot, ctx, null, {})
+    await flush()
+    bring(bot, ctx, null, {})
+    await flush()
+    assert.ok(bot.lines.some((l) => l === 'no animals within 48 blocks'), `lines: ${bot.lines}`)
+    assert.equal(ctx.bring, null)
+  })
+
+  it('kill out of range walks back in', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    const ctx = bot._tickerCtx
+    bring(bot, ctx, null, {})
+    await flush()
+    bot.entity.position = pos(11, 64, 0)
+    bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'kill')
+    bot.entity.position = pos(0, 64, 0) // knocked far, cow alive
+    bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'walk')
+  })
+
+  it('second tick mid-toss does not re-toss', async () => {
+    const bot = mockBot({ items: [{ name: 'bread', count: 3 }], playerPos: pos(2, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food')
+    const ctx = bot._tickerCtx
+    bring(bot, ctx, null, {})
+    bring(bot, ctx, null, {}) // toss in flight: latched
+    await flush()
+    assert.ok(bot.lines.some((l) => l === 'here are 3 bread'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.bread, null, 3]])
+  })
+
+  it('throwing blockAt skips the fence fact silently', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
+    bot.blockAt = () => { throw new Error('unloaded') }
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    bring(bot, bot._tickerCtx, null, {})
+    await flush()
+    assert.equal(bot._tickerCtx.bring.phase, 'walk')
+  })
+})
