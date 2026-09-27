@@ -96,6 +96,8 @@ not derived by counting. On these the remote model is consulted and wins:
 | `crowd` | `nearby_hostiles >= 3` with a fight target (`hostile_distance` is a number or `hostile_near_player`) the pursuit has not written off (`hostile_reachable !== false`) | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it. A bare count (creepers, 8–16-block mobs) routes easy — the model can only phantom-fight it | model |
 | `hostile-vs-far-player` | reachable hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless). Unreachable routes easy (give-up latch respected; a player threat still fights via the FSM) | model |
 
+Futile-ask skip (idkcraft-uig): on `low-health-hostile` with nobody online `jevBrain.decide` answers the FSM's pick without the round-trip on non-jev remotes — laya answers follow ~98.5%+ there and the noplayer veto converts every follow to the FSM's answer anyway (prod VL 7d: 2991 follow vs <=45 fight on hostile-fact + hp<6 states), so no disagree line is emitted. The route still counts as hard; the route line carries the FSM answer with `source=fsm-noplayer` and no `veto=` word (a real veto always has one).
+
 ### What the model is asked
 
 Every named hard case is a fight-vs-follow judgement, so the wire question
