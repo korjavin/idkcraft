@@ -122,11 +122,20 @@ function scanSides(bot) {
   return { walls, free }
 }
 
+// Lava in or around the mount head: digging the cap would open a flow
+// onto the mount, and standing under lava is death either way. Mirrors the
+// executor's dontCreateFlow refusal (liquid above or beside the break).
+function capLavaAt(bot, dx, dz) {
+  return isLava(cellAt(bot, dx, 2, dz)) || isLava(cellAt(bot, dx, 3, dz)) ||
+    isLava(cellAt(bot, dx + 1, 2, dz)) || isLava(cellAt(bot, dx - 1, 2, dz)) ||
+    isLava(cellAt(bot, dx, 2, dz + 1)) || isLava(cellAt(bot, dx, 2, dz - 1))
+}
+
 // A hand-dug staircase cycle (9sh): the side cell at feet level stays as
 // the step to mount, the side cell above it is air or digs by hand, the
 // mount head above that is air or digs by hand (adv: the 1.8 body stands
-// the mount with its head in (dx,2,dz)), and the head has room to jump.
-// Returns the side [dx, dz] or null.
+// the mount with its head in (dx,2,dz)), no lava in or around the head,
+// and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
   for (const [dx, dz] of SIDES) {
@@ -136,6 +145,7 @@ function findDigStepDir(bot) {
     if (above && solid(above) && !handDiggable(bot, above)) continue
     const cap = cellAt(bot, dx, 2, dz)
     if (cap && solid(cap) && !handDiggable(bot, cap)) continue
+    if (capLavaAt(bot, dx, dz)) continue
     return [dx, dz]
   }
   return null
@@ -486,6 +496,10 @@ function digStepRun(bot, ctx) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
   }
+  // Lava in or around the mount head re-scans before any digging: opening
+  // the cells under lava would pour a flow onto the mount. The find skips
+  // these sides, so this terminates.
+  if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
     if (!handDiggable(bot, above)) { st.dir = null; return 'running' }

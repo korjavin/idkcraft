@@ -1927,6 +1927,73 @@ describe('dig_step owns the mount head (idkcraft-adv)', () => {
     const r = await recover.decide(bot, ctx, null, null)
     assert.notEqual(r.action, 'dig_step', `capped step unmountable, got ${r.action}`)
   })
+  it('lava in the mount head re-scans to a clean side', () => {
+    const bot = worldBot(pitWorld(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 63, 0)) {
+        return { ...b, name: 'lava' }
+      }
+      return b
+    }
+    const ctx = digCtx({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(ctx.recovery.st.dir, null, 'lava head drops the side before digging')
+    recover.run(bot, ctx)
+    assert.deepEqual(ctx.recovery.st.dir, [-1, 0], 're-scan skips the lava side')
+  })
+  it('failed:lava when lava crowds the cap dig', () => {
+    const solids = pitWorld()
+    solids.delete(key(1, 62, 0)) // above pre-dug: cap branch next
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(0, 61, 1)) {
+        return { ...b, name: 'lava' }
+      }
+      return b
+    }
+    const ctx = digCtx({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:lava')
+  })
+  it('failed:dig-error when the cap dig throws', async () => {
+    const solids = pitWorld()
+    solids.delete(key(1, 62, 0))
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.dig = async () => { throw new Error('gone') }
+    const ctx = digCtx({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-error')
+  })
+  it('failed:dig-timeout when the cap ack never arrives', () => {
+    const solids = pitWorld()
+    solids.delete(key(1, 62, 0))
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = digCtx({ dir: [1, 0], phase: 'dig', waited: 1000, digInFlight: true, digError: false, startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-timeout')
+  })
+  it('failed:no-dig when bot.dig is missing', () => {
+    const solids = pitWorld()
+    solids.delete(key(1, 62, 0))
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    delete bot.dig
+    const ctx = digCtx({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-dig')
+  })
 })
 
 describe('recover run-body edges (idkcraft-rcv)', () => {
