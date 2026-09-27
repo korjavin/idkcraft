@@ -1008,3 +1008,32 @@ describe('stockpile menu (idkcraft-atl.14)', () => {
     assert.match(STEP_CRITERIA.stockpile, /home chest/)
   })
 })
+
+describe('f3s step chat throttle', () => {
+  const { chatStep } = require('../src/goal')
+  function chatBot() {
+    const chats = []
+    return { chats, chat: (m) => { chats.push(String(m)) } }
+  }
+  it('first chat passes, rapid repeats suppressed, distinct lines pass', () => {
+    const bot = chatBot()
+    const ctx = {}
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), true)
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false) // same line <10s
+    assert.equal(chatStep(bot, ctx, 'next: exploring (goal-fsm)'), true) // distinct: news
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false) // flip back <10s
+    assert.deepEqual(bot.chats, ['next: foraging (goal-fsm)', 'next: exploring (goal-fsm)'])
+  })
+  it('stale stamps chat again', () => {
+    const bot = chatBot()
+    const ctx = { stepChat: { line: 'next: foraging (goal-fsm)', at: Date.now() - 11000 } }
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), true)
+    assert.equal(bot.chats.length, 1)
+  })
+  it('survives frozen ctx and missing chat', () => {
+    const bot = chatBot()
+    assert.equal(chatStep(bot, Object.freeze({})), true) // stamp throws, chat sends
+    assert.equal(chatStep({}, {}), true) // no bot.chat: still true, no throw
+    assert.equal(chatStep(null, null, 'x'), true)
+  })
+})
