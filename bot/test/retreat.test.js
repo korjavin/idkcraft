@@ -169,6 +169,20 @@ describe('retreat chain', () => {
     assert.equal(r && r.action, 'pillar', 'low-hp re-asks despite the healthy decline')
     assert.equal(brain.calls.length, 4)
   })
+  it('0ay round 2: the 5.5-5.99 band buckets low (raw hp, like isHard)', async () => {
+    // Math.round would read 6 here and take the healthy premise/bucket on
+    // a genuine veto-leg ask; the branch must match isHard's raw < 6.
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const brain = askBrain(['no', 'no'])
+    const ctx = freshCtx()
+    const band = { bot_health: 5.7, hostile_distance: 1.5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, band), null)
+    assert.ok(ctx.retreatAskedKey.startsWith('3-5:'), `low bucket: ${ctx.retreatAskedKey}`)
+    const over = { bot_health: 6.0, hostile_distance: 1.5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, over), null)
+    assert.ok(ctx.retreatAskedKey.startsWith('6-20:'), `healthy bucket: ${ctx.retreatAskedKey}`)
+    assert.equal(brain.calls.length, 4, 'band and over re-ask (different buckets)')
+  })
   it('invalid label continues the chain with a disagree note', async () => {
     const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
     const errs = []
@@ -754,6 +768,16 @@ describe('taking-fire retreat (0ay)', () => {
     const r3 = await ticker.tick()
     assert.equal(r3.decision.action, 'retreat')
     assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 1, 'one engage log per fire episode')
+    // Round 2: quiet ticks let the hurt go stale (latch resets), and the
+    // next fire episode logs again — every episode stays visible in prod.
+    ctx.lastHurtAt = Date.now() - 60000
+    bot.food = 19 // bust the decision cache without re-stamping hurt
+    const r4 = await ticker.tick() // hp flat 18: no re-stamp, goal releases the episode
+    assert.ok(r4.decision.action !== 'retreat', 'stale hurt releases to goal')
+    bot.health = 17 // fresh hurt opens episode two
+    const r5 = await ticker.tick()
+    assert.equal(r5.decision.action, 'retreat')
+    assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 2, 'second episode re-logs')
     ticker.destroy()
   })
 })

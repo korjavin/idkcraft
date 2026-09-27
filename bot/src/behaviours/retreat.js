@@ -156,11 +156,16 @@ async function chooseRetreat(brain, bot, ctx, state) {
   const hd = hostileDist(state)
   const hp = state && typeof state.bot_health === 'number' ? Math.round(state.bot_health) : '?'
   const n = state && typeof state.nearby_hostiles === 'number' ? state.nearby_hostiles : '?'
-  const lowHp = hp === '?' || hp < 6
+  // Branch and bucket on RAW health: isHard gates the veto leg on raw
+  // bot_health < 6, but hp above is Math.round'ed for display — at 5.5-5.99
+  // the rounded value reads 6 and would take the healthy premise/bucket on
+  // a genuine low-hp ask (revmux 0ay round 2).
+  const rawHp = state && typeof state.bot_health === 'number' ? state.bot_health : NaN
+  const lowHp = Number.isNaN(rawHp) || rawHp < 6
   const text = `${lowHp ? 'low health' : 'taking fire'} (${hp}/20), nearest hostile ${hd === null ? '?' : hd} blocks away, ${n} hostiles near, alone`
   // 0ay: a healthy decline keys its own bucket — without it a high-hp
   // 'no' would stamp '3-5' and permanently silence a later low-hp ask.
-  const hpB = hp === '?' ? '?' : hp < 3 ? '0-2' : hp < 6 ? '3-5' : '6-20'
+  const hpB = Number.isNaN(rawHp) ? '?' : rawHp < 3 ? '0-2' : rawHp < 6 ? '3-5' : '6-20'
   const instructions = lowHp ? RETREAT_INSTRUCTIONS : RETREAT_INSTRUCTIONS_UNDER_FIRE
   const hdB = hd === null ? '?' : hd <= 2 ? 'adj' : hd <= FLEE_RANGE ? 'near' : 'far'
   const key = `${hpB}:${hdB}:${askNames.join('+')}`
