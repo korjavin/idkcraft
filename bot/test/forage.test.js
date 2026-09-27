@@ -18,7 +18,7 @@ function pos(x, y, z) {
 
 function mockBot() {
   const inv = []
-  const calls = { setGoal: 0, goals: [], digs: 0 }
+  const calls = { setGoal: 0, goals: [], digs: 0, attacks: [] }
   const chats = []
   const bot = {
     calls, chats, inv,
@@ -42,6 +42,8 @@ function mockBot() {
     },
     canDigBlock: () => true,
     dig: async (block) => { calls.digs++ },
+    lookAt: () => {},
+    attack: (e) => { calls.attacks.push(e && e.id) },
     chat: (m) => { chats.push(String(m)) },
   }
   return bot
@@ -338,9 +340,12 @@ describe('forage successful hunt (idkcraft-9go)', () => {
     const bot = mockBot()
     const ctx = memCtx([])
     let nextId = 7
+    const spawned = []
     const spawnCow = (x) => {
       const id = nextId++
-      bot.entities = { [id]: { id, name: 'cow', position: pos(x, 64, 0), isValid: true } }
+      spawned.push(id)
+      const position = Object.assign(pos(x, 64, 0), { offset: (dx, dy, dz) => pos(x + dx, 64 + dy, dz) })
+      bot.entities = { [id]: { id, name: 'cow', height: 1.4, position, isValid: true } }
       return id
     }
     spawnCow(10)
@@ -353,8 +358,8 @@ describe('forage successful hunt (idkcraft-9go)', () => {
       const ent = bot.entities[f.target.id]
       if ((f.phase === 'walk' || f.phase === 'find') && ent) {
         bot.entity.position = pos(ent.position.x - 1, 64, 0) // pathfinder walks into swing range
-      } else if (f.phase === 'kill' && ent && f.lastPos) {
-        delete bot.entities[ent.id] // the kill lands after a real swing tick
+      } else if (f.phase === 'kill' && ent && bot.calls.attacks.includes(ent.id)) {
+        delete bot.entities[ent.id] // the kill lands only after the bot swung at it
         bot.inv.push({ name: 'beef', count: 1 })
       } else if (f.phase === 'pickup' && f.dropPos) {
         bot.entity.position = pos(f.dropPos.x, 64, f.dropPos.z)
@@ -363,6 +368,7 @@ describe('forage successful hunt (idkcraft-9go)', () => {
     }
     assert.equal(ctx.stepStatus, 'done', `hunt finished after ${n} ticks, status=${ctx.stepStatus}`)
     assert.deepEqual(ctx.haul, { beef: 8 })
+    assert.deepEqual(bot.calls.attacks.slice(0, 8), spawned, 'every cow died to a recorded swing')
     assert.ok(bot.chats.some((m) => m.startsWith('foraging: hunting cow')), `announced, got: ${bot.chats.join(' | ')}`)
     assert.ok(bot.calls.goals.includes('GoalNear'))
   })
@@ -639,12 +645,14 @@ describe('forage food pickup walk (idkcraft-9go)', () => {
     // pickup leg walks back, stalled ticks counted, displacement forgiven.
     const bot = mockBot()
     const ctx = memCtx([])
-    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    const attackPos = Object.assign(pos(10, 64, 0), { offset: (dx, dy, dz) => pos(10 + dx, 64 + dy, dz) })
+    bot.entities = { 7: { id: 7, name: 'cow', height: 1.4, position: attackPos, isValid: true } }
     forage(bot, ctx, null, {}) // plan the cow
     bot.entity.position = pos(9, 64, 0)
     forage(bot, ctx, null, {}) // into swing range -> kill
     assert.equal(ctx.forage.phase, 'kill')
-    forage(bot, ctx, null, {}) // swing tick sets lastPos
+    forage(bot, ctx, null, {}) // swing tick sets lastPos and attacks
+    assert.ok(bot.calls.attacks.includes(7), 'the bot swung before the kill')
     delete bot.entities[7]
     bot.inv.push({ name: 'beef', count: 1 })
     bot.entity.position = pos(0, 64, 0) // dragged away from the drop
@@ -685,11 +693,13 @@ describe('forage pickup stall-out (idkcraft-9go)', () => {
     // onto another animal instead of waiting at the drop forever.
     const bot = mockBot()
     const ctx = memCtx([])
-    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    const attackPos = Object.assign(pos(10, 64, 0), { offset: (dx, dy, dz) => pos(10 + dx, 64 + dy, dz) })
+    bot.entities = { 7: { id: 7, name: 'cow', height: 1.4, position: attackPos, isValid: true } }
     forage(bot, ctx, null, {}) // plan the cow
     bot.entity.position = pos(9, 64, 0)
     forage(bot, ctx, null, {}) // into swing range -> kill
-    forage(bot, ctx, null, {}) // swing tick sets lastPos
+    forage(bot, ctx, null, {}) // swing tick sets lastPos and attacks
+    assert.ok(bot.calls.attacks.includes(7), 'the bot swung before the kill')
     delete bot.entities[7]
     bot.inv.push({ name: 'beef', count: 1 })
     bot.entity.position = pos(0, 64, 0) // dragged away from the drop
