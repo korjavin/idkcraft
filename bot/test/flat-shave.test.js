@@ -10,7 +10,7 @@ const { createTicker } = require('../src/index')
 const flat = require('../src/behaviours/flat')
 const {
   detectBumps, isDiggable, DIG_ALLOWLIST, isStructureMarker, structureNear,
-  threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear,
+  threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear, buildSweep,
 } = flat
 
 function pos(x, y, z) {
@@ -645,5 +645,123 @@ describe('shave round-1 fixes', () => {
     }
     assert.equal(ctx.flat, null)
     assert.ok(bot.chats.some((c) => c.includes('1 left (stalled)')), bot.chats.join('\n'))
+  })
+})
+
+describe('sweep leftover scaffold (idkcraft-7wt)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  async function drive(bot, ctx, n) {
+    for (let i = 0; i < n && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      } else if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+  }
+
+  function started(world, botOpts = {}) {
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], ...botOpts })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    return { bot, ctx }
+  }
+
+  function sweepF(world, stepped, bumpCols) {
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.stepped = new Set(stepped)
+    f.bumpCols = new Set(bumpCols)
+    f.bumps = []
+    f.sweepTotal = 0
+    return { bot, f }
+  }
+
+  it('queues stepped dirt above the level', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // mid-episode nub, never scanned
+    const { bot, f } = sweepF(world, ['3,0'], [])
+    assert.equal(buildSweep(bot, f), true)
+    assert.equal(f.bumps.length, 1)
+    assert.equal(f.bumps[0].x, 3)
+    assert.equal(f.bumps[0].topY, 64)
+    assert.equal(f.bumps[0].sweep, true)
+    assert.equal(f.sweepTotal, 1)
+  })
+
+  it('skips original-bump columns (shaved, kept or refused already)', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // kept-bump remnant: never re-queued
+    const { bot, f } = sweepF(world, ['3,0'], ['3,0'])
+    assert.equal(buildSweep(bot, f), false)
+    assert.equal(f.bumps.length, 0)
+  })
+
+  it('skips non-scaffold mats and at-level dirt', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'stone') // player build, not ours
+    world.set(4, 63, 0, 'dirt') // at the level, not above it
+    const { bot, f } = sweepF(world, ['3,0', '4,0'], [])
+    assert.equal(buildSweep(bot, f), false)
+    assert.equal(f.bumps.length, 0)
+  })
+
+  it('skips stepped columns outside the square', () => {
+    const world = makeWorld({})
+    world.set(9, 64, 0, 'dirt')
+    const { bot, f } = sweepF(world, ['9,0'], [])
+    assert.equal(buildSweep(bot, f), false)
+    assert.equal(f.bumps.length, 0)
+  })
+
+  it('sweeps a mid-run nub end to end and reports it', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air') // one hole: the bot steps (3,0) working it
+    const { bot, ctx } = started(world)
+    flat(bot, ctx, null, null); await settle() // scan
+    assert.equal(ctx.flat.phase, 'fill')
+    world.set(3, 64, 0, 'dirt') // nub appears mid-episode, never scanned
+    for (let i = 0; i < 40 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      } else if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      }
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'nub swept')
+    assert.ok(bot.chats.some((c) => c.includes('swept 1 leftover')), bot.chats.join('\n'))
+  })
+
+  it('skips an unreachable tall remnant honestly instead of hanging', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    flat(bot, ctx, null, null); await settle() // scan
+    for (let y = 64; y <= 71; y++) world.set(3, y, 0, 'dirt') // 8-high tower
+    for (let i = 0; i < 60 && ctx.flat; i++) {
+      const f = ctx.flat
+      // Body pinned at the level: the tower top stays out of dig reach.
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      }
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends, no loop')
+    assert.ok(bot.chats.some((c) => c.includes('unreachable')), bot.chats.join('\n'))
   })
 })
