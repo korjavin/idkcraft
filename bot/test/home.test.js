@@ -420,3 +420,43 @@ describe('rw4.8 door failures fail loud', () => {
     assert.ok(!bot.chats.some((m) => m === 'morning; back to work'))
   })
 })
+
+describe('rw4.10 shelter run (walk sprints, night ticks stamped)', () => {
+  const lastSprint = (bot) => bot.calls.controls.filter(([n]) => n === 'sprint').pop()
+  it('night walk sprints and stamps a fresh shelterRun', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000 })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.deepEqual(lastSprint(bot), ['sprint', true])
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+  it('day walk sprints but leaves no stamp', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 6000 })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.deepEqual(lastSprint(bot), ['sprint', true])
+    assert.equal(ctx.shelterRun, undefined)
+  })
+  it('arrival clears sprint and stops refreshing the stamp', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000 })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx)
+    const stamp = ctx.shelterRun
+    assert.equal(typeof stamp, 'number')
+    bot.entity.position = { ...OUTSIDE }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'open')
+    assert.deepEqual(lastSprint(bot), ['sprint', false])
+    assert.equal(ctx.shelterRun, stamp)
+  })
+  it('failed walk clears sprint', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000, moving: false })
+    const ctx = { home: ctxHome(), step: 'gohome', stepStatus: 'running' }
+    for (let i = 0; i < 31; i++) home.gohome(bot, ctx) // 3 x 10 stall ticks
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
+    assert.deepEqual(lastSprint(bot), ['sprint', false])
+  })
+})

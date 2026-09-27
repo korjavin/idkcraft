@@ -241,6 +241,18 @@ function setWalkDig(bot, allow) {
     if (mov && typeof mov.canDig === 'boolean') mov.canDig = allow
   } catch (_) { /* approach best-effort */ }
 }
+
+function setSprint(bot, on) {
+  try {
+    if (bot && typeof bot.setControlState === 'function') bot.setControlState('sprint', !!on)
+  } catch (_) { /* sprint best-effort */ }
+}
+
+// Shelter-run contract (rw4.10, dispatch half in atl.12): gohome stamps
+// ctx.shelterRun with Date.now() on every night walk tick. Dispatch treats
+// the run as live while the stamp is fresher than this — a step switch
+// away simply lets it go stale, so no ticker clearing is needed.
+const SHELTER_RUN_FRESH_MS = 2500
 function freshGo() {
   return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
 }
@@ -251,6 +263,7 @@ function gohome(bot, ctx, target, state) {
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     setWalkDig(bot, true) // walk never owned the drill past this return
+    setSprint(bot, false)
     return
   }
   if (!ctx.gohome || ctx.gohome.phase === 'done' || ctx.gohome.phase === 'failed') {
@@ -271,9 +284,19 @@ function gohome(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'gohome-walk',
       new goals.GoalNear(out.x, out.y, out.z, 1),
       nearOut(out, 1))
-    if (st.phase === 'failed') { setWalkDig(bot, true);    return } // walkTo failed the step
-    if (arrived) st.phase = 'open'
-    else {    return }
+    if (st.phase === 'failed') { setWalkDig(bot, true); setSprint(bot, false); return } // walkTo failed the step
+    if (arrived) { setSprint(bot, false); st.phase = 'open' }
+    else {
+      // rw4.10: the walk home is a run, day and night — 48 blocks take 11 s
+      // sprinted, while fight churn on the way killed prod 7 times in 3.5
+      // min. A step switch away mid-walk leaves sprint on until some leg
+      // or hold re-asserts controls — speed only, hunger covered by eat.
+      setSprint(bot, true)
+      try {
+        if (goalFacts(bot, ctx).time === 'night') ctx.shelterRun = Date.now()
+      } catch (_) { /* unknown time: no stamp (fail closed) */ }
+      return
+    }
   }
   if (st.phase === 'open') {
     setWalkDig(bot, true)
@@ -405,4 +428,4 @@ function stay(bot, ctx, target, state) {
 
 }
 
-module.exports = { gohome, stay }
+module.exports = { gohome, stay, SHELTER_RUN_FRESH_MS }
