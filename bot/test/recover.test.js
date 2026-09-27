@@ -191,6 +191,9 @@ describe('recover invalid label (acceptance 2)', () => {
     assert.equal(decision.source, 'stub-fallback')
     assert.ok(errLines.some((l) => l.includes('brain disagree') && l.includes('reason=stuck') && l.includes('model=pillar_up') && l.includes('fsm=dig_up')),
       `disagree logged, got: ${errLines.join(' | ')}`)
+    const line = errLines.find((l) => l.includes('brain disagree'))
+    assert.ok(line.includes('menu=') && line.includes('dig_up'), `asked menu logged, got: ${line}`)
+    assert.ok(line.indexOf('menu=') < line.indexOf('facts='), `menu precedes facts, got: ${line}`)
     const text = await metricText()
     assert.match(text, /idkcraft_bot_recover_total\{action="dig_up",source="stub-fallback",outcome="chosen"\} [1-9]/)
     assert.match(text, /idkcraft_bot_escalation_total\{from="testmodel",to="fsm",reason="invalid"\} [1-9]/)

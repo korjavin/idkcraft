@@ -356,7 +356,9 @@ async function chooseRecovery(brain, facts, feasible) {
     // reference: disagree first, then fall back (acceptance: invalid answers
     // disagree in the log).
     if (label !== fsm) {
-      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck facts=${text}`)
+      // menu= is the asked menu (post-4jr exclusion), like goal's disagree
+      // line — the y34 stand replays prod stuck menus from these lines.
+      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck menu=${askNames.join(',')} facts=${text}`)
     }
     if (!askNames.includes(label)) return fail('invalid')
     return { action: label, source: model, fsm, model }
