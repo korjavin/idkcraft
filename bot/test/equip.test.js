@@ -30,7 +30,10 @@ function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, blockAt
     blockAt: blockAtImpl || (() => null),
     findBlocks: findBlocksImpl || (() => []),
     dig: digImpl || (async (block) => { calls.dig.push(block) }),
-    equip: async (item, dest) => { calls.equipped.push({ item: item && item.name, dest }) },
+    equip: async (item, dest) => {
+      if (!item) throw new Error('Invalid item object in equip') // live mineflayer rejects non-objects
+      calls.equipped.push({ item: item.name, dest })
+    },
     placeBlock: placeBlockImpl || (async (ref, face) => { calls.placeBlock.push({ ref, face }) }),
     pathfinder: {
       setGoal: (goal) => { calls.setGoal++; calls.goals.push(goal) },
@@ -765,6 +768,7 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     await flush()
     assert.ok(calls >= 5, `held search hit the garbage, calls=${calls}`)
     assert.equal(bot.calls.dig.length, 1, 'no held pickaxe found, still digs')
+    assert.deepEqual(bot.calls.equipped, [], 'garbled inventory holds nothing')
     assert.equal(ctx.stepStatus, 'running')
     bot.restoreError()
   })
@@ -893,7 +897,11 @@ describe('equip helper residuals (idkcraft-17a)', () => {
       ],
       ids: IDS,
       recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
-      blockAtImpl: () => null,
+      // Solid ground: without the placeBlock guard the scan would find a
+      // cell and die calling the missing driver (revmux round-1).
+      blockAtImpl: (p) => (p.y === 63
+        ? { name: 'dirt', position: { x: p.x, y: p.y, z: p.z } }
+        : { name: 'air' }),
     })
     delete bot.placeBlock
     const ctx = freshCtx()
@@ -1129,8 +1137,8 @@ describe('equip dig residuals (idkcraft-17a)', () => {
       ids: IDS,
       recipes: {},
       findBlocksImpl: () => [
-        { x: 0.5, y: 63, z: 0, name: 'stone' },
-        { x: 1, y: 63, z: 0, name: 'dirt' },
+        { x: 1, y: 63, z: 0, name: 'stone' },
+        { x: 1, y: 63, z: 1, name: 'dirt' },
       ],
     })
     const ctx = freshCtx()
@@ -1578,24 +1586,6 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     bot.restoreError()
   })
 
-  it('Q-sort2 soft dirt wins over nearer stone', async () => {
-    const bot = mockBot({
-      items: KIT,
-      ids: IDS,
-      recipes: {},
-      findBlocksImpl: () => [
-        { x: 1, y: 63, z: 0, name: 'stone' },
-        { x: 1, y: 63, z: 1, name: 'dirt' },
-      ],
-    })
-    const ctx = freshCtx()
-    equip(bot, ctx, null, {})
-    await flush()
-    await flush()
-    assert.equal(bot.calls.dig.length, 1)
-    assert.equal(bot.calls.dig[0].z, 1, `dug: ${JSON.stringify(bot.calls.dig)}`)
-    bot.restoreError()
-  })
 
 })
 
@@ -1873,9 +1863,9 @@ describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
 // - `st.digs == null` vs `=== undefined`: null inits to 0 either way
 //   (`null >= 64` is false, `null++` lands on 1).
 // - `if (!op)`: toolOp never returns null (stale comment aside).
-// - `if (held)` for the dig hold: without a pickaxe stone never becomes a
-//   candidate, so the false arm needs mid-tick inventory flake (pinned by the
-//   flaky-held test); the mock hold driver tolerates undefined.
+// - (round-1: the `if (held)` guard is NOT equivalent — live mineflayer
+//   throws on equip(undefined). The mock hold driver mirrors that, and the
+//   flaky-held test kills the dropped-guard mutant.)
 // - `else if (st.made)` vs bare `else`: the guarded delete no-ops on
 //   undefined either way.
 // - timeout `t &&`: setTimeout always returns an object.
