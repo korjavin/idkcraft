@@ -20,6 +20,7 @@ function brainTimeoutMs(env) {
   return Number.isFinite(raw) ? raw : 1000
 }
 const bringMod = require('./behaviours/bring')
+const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const goal = require('./goal')
 const memory = require('./memory')
@@ -37,6 +38,7 @@ const BEHAVIOURS = {
   lead: require('./behaviours/lead'),
   gather: require('./behaviours/gather'),
   bring: bringMod,
+  flat: flatMod,
   craft: require('./behaviours/craft'),
   equip: require('./behaviours/equip'),
   rest: require('./behaviours/rest'),
@@ -366,6 +368,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     clearStuck()
     resetNightStep()
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+    ctx.flat = null
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
@@ -745,14 +748,14 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring) {
+      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked)) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
       // An active bring-me owns the body like work-alone: the bot fetches up
       // to 48 blocks out, past entity-tracking range, so the idle branch must
       // not park it and the homing walk must not steal it mid-order.
-      const workAlone = (ctx.work || ctx.bring) && !target && (rosterOnline || ctx.autonomous) && !homing
+      const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked)) && !target && (rosterOnline || ctx.autonomous) && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -956,6 +959,19 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'bring' }, calledBrain }
       }
+      // Flat is an explicit player order like lead/bring: it owns the body
+      // above work, except fight which still preempts. Placed after
+      // lead/bring so a short errand preempts the long job tick-by-tick and
+      // the job resumes when the errand ends (only a mode change clears it).
+      // A parked episode (stop) never dispatches: any order that unparks the
+      // body (bring/share/lead) must not resurrect it — only `flat` resumes.
+      if (ctx.flat && !ctx.flat.parked && decision.action !== 'fight') {
+        const handler = BEHAVIOURS.flat
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        const flatDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=flat sprint=${decision.sprint} dist=${flatDist} ${pathSuffix()}`)
+        return { decision: { ...decision, action: 'flat' }, calledBrain }
+      }
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
@@ -1072,6 +1088,7 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+      ctx.flat = null
       ctx.inShelter = false
       const real = resolvePlayer(bot, name)
       followName = real
@@ -1101,6 +1118,11 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+      // ctx.flat survives stop as a parked episode: the next `flat` resumes
+      // it instead of re-scanning (w52 resumable job). The parked flag (not
+      // just paused) gates the dispatch, so an unrelated order that unparks
+      // the body cannot resurrect the job on its own (core-1).
+      if (ctx.flat) ctx.flat.parked = true
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -1222,9 +1244,44 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       return startBlockOrder(bot, ctx, { name, want, by }, res)
     },
+    setFlat: ({ radius, by, explicit }) => {
+      clearPendingSearch(ctx)
+      clearStuck()
+      resetNightStep()
+      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+      // Center: the player who gave the command, or the bot itself when the
+      // speaker is out of tracking range (same honest fallback as build here).
+      const speaker = by && bot.players && bot.players[by] && bot.players[by].entity
+      const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
+      const cx = anchor ? Math.floor(anchor.x) : 0
+      const cz = anchor ? Math.floor(anchor.z) : 0
+      const yTop = Math.floor(anchor ? anchor.y : 64) + flatMod.SCAN_UP
+      const key = `${cx},${cz},${radius}`
+      const parked = ctx.flat && ctx.flat.parked
+      // A parked episode resumes from anywhere inside its own square, and a
+      // bare `flat` (no radius argument) reuses the parked radius: the owner
+      // should not have to stand on the exact order block (core-5).
+      const insideParked = parked &&
+        Math.abs(cx - ctx.flat.cx) <= ctx.flat.r && Math.abs(cz - ctx.flat.cz) <= ctx.flat.r
+      if ((parked && insideParked && (!explicit || radius === ctx.flat.r)) ||
+          (ctx.flat && !parked && ctx.flat.key === key)) {
+        ctx.flat.by = by || ctx.flat.by
+        ctx.flat.parked = false
+        ctx.paused = false
+        return `resuming flat, ${ctx.flat.holes.length} holes left`
+      }
+      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
+      ctx.paused = false
+      const size = 2 * radius + 1
+      return `scanning ${size}x${size} for holes…`
+    },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
-      const mode = ctx.bring ? 'bringing' : (ctx.work ? 'working' : (ctx.paused ? 'parked' : (ctx.lead ? 'leading' : 'following')))
+      const flatParked = ctx.flat && ctx.flat.parked
+      const mode = ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.lead ? 'leading' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : 'following'))))
       // atl.7: a resting bot names the reason decide() stored, if any.
       const why = ctx.step === 'rest' && ctx.restWhy ? ` resting because ${ctx.restWhy}` : ''
       bot.chat(`${mode} step=${ctx.step || 'none'}${why} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
@@ -1695,6 +1752,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
+    } else if (msg === 'flat' || msg.startsWith('flat ') || msg === 'make flat' || msg.startsWith('make flat ') || msg === 'flatten' || msg.startsWith('flatten ')) {
+      const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+))?$/)
+      const r = m ? flatMod.parseRadius(m[1]) : null
+      if (r == null) bot.chat('try: flat 16')
+      else if (ticker && typeof ticker.setFlat === 'function') bot.chat(ticker.setFlat({ radius: r, by: playerName, explicit: m[1] != null }))
     } else if (msg === 'share') {
       if (ticker && typeof ticker.setShare === 'function') {
         const r = ticker.setShare({ by: playerName })
