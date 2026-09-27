@@ -1129,9 +1129,11 @@ describe('work mode (epic rw4)', () => {
       try {
         for (let t = 0; t < 3; t++) {
           ctx.shelterRun = Date.now() + 30000 // future-dated: flap timing cannot flake freshness
+          bot.health = 20 - t // round 2: bust the decision cache (stateKey covers health) so the idle tick really runs
           const r = await ticker.tick()
           assert.equal(r.decision.action, 'gohome', `tick ${t} walks`)
         }
+        assert.equal(i, 3, 'all three scripted decisions ran (idle was not cached away)')
         assert.equal(fightRan, 0)
         assert.equal(lines.filter((l) => l.includes('shelter-run: holding')).length, 1, 'one edge log per walk')
       } finally {
