@@ -2273,7 +2273,14 @@ describe('nobody-online leave', () => {
         pingFn: async () => { pings++; return { players: { online: 1, sample: [{ name: 'Steve' }] } } },
       }).then(() => { resolved3 = true }, () => { resolved3 = true })
       bot3.emit('spawn')
-      await new Promise((r) => setTimeout(r, 150))
+      // Wait for repeated re-arms, not a fixed sleep: under scheduling
+      // skew (cold first run + competing suites) fewer than 3 grace pings
+      // fit a fixed 150 ms window (idkcraft-m1y). The cap only trips if
+      // re-arming itself stops, never on a slow box.
+      const deadline = Date.now() + 5000
+      while (pings < 3 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10))
+      }
       assert.equal(bot3.quitCalls, 0) // stood down: still on the "server"
       assert.ok(pings >= 3, `re-armed every grace period (pings=${pings})`)
       assert.equal(resolved3, false)
