@@ -2287,3 +2287,43 @@ describe('recover dig in-flight wait (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.st.waited, 1)
   })
 })
+
+describe('quiet repeat stuck-chats (rw4.9.1)', () => {
+  const stuckCtx = () => ({ stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 } }, brain: { source: 'stub' } })
+  const stuckLines = (bot) => bot.chats.filter((m) => m.startsWith('stuck, trying'))
+
+  it('first episode in a fresh pit narrates the choice', async () => {
+    const bot = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    const d = await recover.decide(bot, stuckCtx(), {}, null)
+    assert.equal(stuckLines(bot).length, 1, bot.chats.join(' | '))
+    assert.match(stuckLines(bot)[0], /stuck, trying .+ \(fsm\)/)
+    assert.notEqual(d.action, 'call_player')
+  })
+
+  it('repeat at a live mark stays silent but chooses the same escape', async () => {
+    const bot1 = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    const d1 = await recover.decide(bot1, stuckCtx(), {}, null)
+    const bot2 = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    const ctx2 = stuckCtx()
+    danger.mark(ctx2, { x: 0.5, y: 61, z: 0.5 }) // gave-up laid this
+    const d2 = await recover.decide(bot2, ctx2, {}, null)
+    assert.deepEqual(stuckLines(bot2), [], 'no narration under a live mark')
+    assert.equal(d2.action, d1.action, 'episodes run as before, only the chat gates')
+  })
+
+  it('stale mark narrates again: a new pit after TTL', async () => {
+    const bot = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    const ctx = stuckCtx()
+    danger.mark(ctx, { x: 0.5, y: 61, z: 0.5 }, Date.now() - danger.TTL_MS - 1000)
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(stuckLines(bot).length, 1, bot.chats.join(' | '))
+  })
+
+  it('distant mark narrates: only the pit underfoot gates', async () => {
+    const bot = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    const ctx = stuckCtx()
+    danger.mark(ctx, { x: 100, y: 64, z: 100 })
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(stuckLines(bot).length, 1, bot.chats.join(' | '))
+  })
+})
