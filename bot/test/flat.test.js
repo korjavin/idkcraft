@@ -12,7 +12,7 @@ const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const flat = require('../src/behaviours/flat')
 const {
   probeColumn, spiralColumns, chooseLevel, detectHoles,
-  isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode, progressChat,
+  isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode, progressChat, buildSweep,
   restockPoint, guardFlatSurface,
   FLAT_DEFAULT_RADIUS, FLAT_MIN_RADIUS, FLAT_MAX_RADIUS,
 } = flat
@@ -189,12 +189,22 @@ describe('flat plan: probeColumn', () => {
     assert.deepEqual(probeColumn(gridAt(world), 0, 0, 74, 4), { status: 'ok', topY: 61, walkable: true })
   })
 
-  it('reports a water surface as liquid', () => {
+  it('dives past water to the solid bottom, recording the surface', () => {
+    // 7wt: the level decides post-scan whether below-level water caps.
     const world = makeWorld({ surface: 63 })
     world.set(0, 63, 0, 'air')
     world.set(0, 62, 0, 'water')
     const r = probeColumn(gridAt(world), 0, 0, 74, 4)
-    assert.equal(r.status, 'liquid')
+    assert.deepEqual(r, { status: 'ok', topY: 61, walkable: false, liquidTop: 62 })
+  })
+
+  it('reports bottomless water as liquid', () => {
+    const world = makeWorld({ surface: 63 })
+    world.set(0, 63, 0, 'air')
+    for (let y = 50; y <= 62; y++) world.set(0, y, 0, 'water')
+    world.set(0, 49, 0, 'dirt') // below yBottom: invisible, stays bottomless
+    const r = probeColumn(gridAt(world), 0, 0, 74, 50)
+    assert.deepEqual(r, { status: 'liquid', topY: 62 })
   })
 
   it('reports an unloaded column', () => {
@@ -707,7 +717,9 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole, shaved 1 bump'), bot.chats.join('\n'))
   })
 
-  it('skips water holes and reports them', async () => {
+  it('caps a ditch with below-level water, water stays', async () => {
+    // 7wt: liquid strictly below the level is an ordinary hole; the cap
+    // lands over the water without draining it.
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
     world.set(1, 62, 0, 'water')
@@ -715,7 +727,34 @@ describe('flat behaviour', () => {
     const { bot, ctx } = started(world)
     await drive(bot, ctx, 10)
     assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt', 'capped at level')
     assert.equal(world.blockAt({ x: 1, y: 62, z: 0 }).name, 'water', 'water untouched')
+    assert.ok(!bot.chats.some((c) => c.includes('water skipped')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole'), bot.chats.join('\n'))
+  })
+
+  it('caps over below-level lava the same way', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(1, 62, 0, 'lava')
+    world.set(1, 61, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt', 'capped at level')
+    assert.equal(world.blockAt({ x: 1, y: 62, z: 0 }).name, 'lava', 'lava covered, not drained')
+    assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole'), bot.chats.join('\n'))
+  })
+
+  it('still skips a water surface at the level', async () => {
+    // Boundary pin: liquid AT the level is a pond, never capped.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'water')
+    world.set(1, 62, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'water', 'surface untouched')
     assert.equal(bot.calls.places.length, 0)
     assert.ok(bot.chats.some((c) => c.includes('1 water skipped')), bot.chats.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 0 holes'), bot.chats.join('\n'))

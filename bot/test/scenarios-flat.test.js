@@ -54,7 +54,7 @@ function trenchField() {
   world.set(2, 63, 2, 'air') // deep pit: dug to 60
   world.set(2, 62, 2, 'air')
   world.set(2, 61, 2, 'air')
-  world.set(-2, 63, -2, 'air') // water hole: skipped + reported
+  world.set(-2, 63, -2, 'air') // water hole: capped, water stays (7wt)
   world.set(-2, 62, -2, 'water')
   world.set(3, 64, -3, 'dirt') // a bump: out of scope v1
   return world
@@ -154,14 +154,17 @@ describe('w52: trench field -> flat', () => {
         assert.equal(world.blockAt({ x: 0, y: 63, z }).name, 'dirt', `trench cap 0,${z}`)
       }
       assert.equal(world.blockAt({ x: 2, y: 63, z: 2 }).name, 'dirt', 'pit capped at the surface')
-      // Untouched: the water and the unloaded corner. The bump is shaved (v2).
+      // The water ditch caps at the surface, the water stays below it.
+      // Untouched: the unloaded corner. The bump is shaved (v2).
+      assert.equal(world.blockAt({ x: -2, y: 63, z: -2 }).name, 'dirt', 'ditch capped')
       assert.equal(world.blockAt({ x: -2, y: 62, z: -2 }).name, 'water')
       assert.equal(world.blockAt({ x: 3, y: 64, z: -3 }).name, 'air', 'bump shaved to the level')
       assert.equal(world.blockAt({ x: -4, y: 63, z: 4 }), null)
       const chat = bot.chats.join('\n')
-      assert.ok(chat.includes('flattening 9x9 around P, level 63: 14 holes, 1 bumps, 4 unloaded, 1 water skipped'), chat)
-      assert.ok(chat.includes('flat done: filled 14 holes, shaved 1 bump'), chat)
-      assert.ok(!chat.includes('flat 0/14'), 'no 0/N progress right after the start line')
+      assert.ok(chat.includes('flattening 9x9 around P, level 63: 15 holes, 1 bumps, 4 unloaded'), chat)
+      assert.ok(!chat.includes('water skipped'), chat)
+      assert.ok(chat.includes('flat done: filled 15 holes, shaved 1 bump'), chat)
+      assert.ok(!chat.includes('flat 0/'), 'no 0/N progress right after the start line')
     } finally {
       cap.release()
       ticker.destroy()
@@ -202,9 +205,11 @@ describe('w52: trench field -> flat', () => {
       assert.equal(world.blockAt({ x: 1, y: 64, z: -3 }).name, 'diamond_ore', 'ore kept')
       assert.equal(world.blockAt({ x: -1, y: 64, z: 2 }).name, 'dirt', 'door neighbour kept')
       assert.equal(world.blockAt({ x: -1, y: 64, z: 3 }).name, 'oak_door', 'door untouched')
+      assert.equal(world.blockAt({ x: -2, y: 63, z: -2 }).name, 'dirt', 'ditch capped')
+      assert.equal(world.blockAt({ x: -2, y: 62, z: -2 }).name, 'water', 'water stays')
       const chat = bot.chats.join('\n')
-      assert.ok(chat.includes('14 holes, 6 bumps'), chat)
-      assert.ok(chat.includes('flat done: filled 14 holes, shaved 3 bumps, skipped 3: 3 kept'), chat)
+      assert.ok(chat.includes('15 holes, 6 bumps'), chat)
+      assert.ok(chat.includes('flat done: filled 15 holes, shaved 3 bumps, skipped 3: 3 kept'), chat)
     } finally {
       cap.release()
       ticker.destroy()

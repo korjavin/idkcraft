@@ -16,6 +16,12 @@
 // `flat` from anywhere inside the running square resumes the episode with
 // its progress instead of re-scanning (9k4: a stepped-aside retype wiped
 // the run); only a new area or an explicit new radius starts over.
+// Flooded ditches cap (7wt): liquid strictly below the level is an
+// ordinary hole (the cap lands over the water); a surface at/above the
+// level is a pond and stays skipped. After the shave, one sweep pass
+// digs leftover above-level dirt/cobble in stepped columns (recover
+// pillar stairs placed mid-episode) through the same safety gates;
+// original-bump columns are never re-queued, so kept/refused bumps stay.
 //
 // v2 (w52.1) shaves bumps above the level after filling the holes, top-down
 // per column. Digging is allowlisted to natural terrain (ores, containers,
@@ -215,9 +221,13 @@ function blockNameAt(bot, p) {
 // feed synthetic grids. Returns one of:
 //   { status: 'unloaded' }                    chunk not loaded, skip + report
 //   { status: 'bump' }                        solid past the climb cap: inside a hill
-//   { status: 'liquid', topY }                water/lava surface: skip + report
+//   { status: 'liquid', topY }                bottomless water/lava: skip + report
 //   { status: 'deep' }                        no ground down to yBottom
 //   { status: 'ok', topY, walkable }          ground found
+//   { status: 'ok', topY, walkable, liquidTop }
+//     flooded ditch (7wt): solid bottom under a liquid surface. The level
+//     decides post-scan: surface at/above the level is a pond (skip),
+//     strictly below it is an ordinary hole (cap over the water).
 function probeColumn(blockAt, x, z, yTop, yBottom) {
   const at = (y) => {
     try {
@@ -235,15 +245,21 @@ function probeColumn(blockAt, x, z, yTop, yBottom) {
     if (top == null) break
   }
   if (top != null && isSolidCell(top)) return { status: 'bump' }
+  let liquidTop = null
   for (let d = y; d >= yBottom; d--) {
     const b = d === y ? top : at(d)
     if (b == null) continue // mid-scan null: defensive air
-    if (isLiquidName(b.name)) return { status: 'liquid', topY: d }
+    if (isLiquidName(b.name)) {
+      if (liquidTop == null) liquidTop = d // surface: keep diving for the bottom
+      continue
+    }
     if (isSolidCell(b)) {
       const walkable = isAirCell(at(d + 1), true) && isAirCell(at(d + 2), true)
+      if (liquidTop != null) return { status: 'ok', topY: d, walkable, liquidTop }
       return { status: 'ok', topY: d, walkable }
     }
   }
+  if (liquidTop != null) return { status: 'liquid', topY: liquidTop }
   return { status: 'deep' }
 }
 
@@ -513,6 +529,12 @@ function startEpisode(cx, cz, r, yTop, by) {
     scan: { queue: spiralColumns(cx, cz, r), i: 0 },
     tops: [],
     cands: [],
+    liquidCols: [],
+    stepped: new Set(),
+    bumpCols: null,
+    swept: false,
+    sweptN: 0,
+    sweepTotal: 0,
     counts: { unloaded: 0, liquid: 0, bump: 0, covered: 0 },
     level: null,
     holes: [],
@@ -555,8 +577,9 @@ function rotate(f) {
 }
 
 function shiftBumpDone(f) {
-  f.bumps.shift()
-  f.shaved++
+  const h = f.bumps.shift()
+  if (h && h.sweep) f.sweptN = (f.sweptN || 0) + 1
+  else f.shaved++
   f.lastProgressTick = f.ticks
 }
 
@@ -576,6 +599,7 @@ function finish(bot, ctx, f, why) {
   const skipped = Object.values(f.skip).reduce((a, b) => a + b, 0)
   let line = `flat done: filled ${f.filled} hole${f.filled === 1 ? '' : 's'}`
   if (f.totalBumps > 0) line += `, shaved ${f.shaved} bump${f.shaved === 1 ? '' : 's'}`
+  if (f.sweptN > 0) line += `, swept ${f.sweptN} leftover${f.sweptN === 1 ? '' : 's'}`
   if (left > 0) line += `, ${left} left (${leftWhy})`
   if (skipped > 0) {
     const parts = Object.entries(f.skip).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
@@ -598,6 +622,12 @@ function scanRecord(f, c, r) {
   } else if (r.status === 'deep') {
     f.cands.push({ x: c.x, z: c.z, deep: true })
   } else if (r.status === 'ok') {
+    if (r.liquidTop != null) {
+      // Flooded ditch: no tops vote (a drowned bottom must not drag the
+      // level down); the partition after chooseLevel caps or skips it.
+      f.liquidCols.push({ x: c.x, z: c.z, topY: r.topY, liquidTop: r.liquidTop })
+      return
+    }
     if (!r.walkable) {
       f.counts.covered++
       return
@@ -630,8 +660,16 @@ function scanTick(bot, ctx, f) {
     return
   }
   f.level = level
+  for (const c of f.liquidCols) {
+    // Surface at/above the level is a pond (filling it would destroy the
+    // water); strictly below it the ditch caps like an ordinary hole.
+    if (c.liquidTop >= level) f.counts.liquid++
+    else f.cands.push({ x: c.x, z: c.z, topY: c.topY })
+  }
+  f.liquidCols = []
   f.holes = detectHoles(f.cands, level, f.cx, f.cz)
   f.bumps = detectBumps(f.cands, level, f.cx, f.cz)
+  f.bumpCols = new Set(f.bumps.map((b) => `${b.x},${b.z}`))
   f.cands = []
   f.tops = []
   f.total = f.holes.length
@@ -909,12 +947,13 @@ function progressChat(bot, f) {
   }
   f.lastChat = now
   f.progressChats = (f.progressChats || 0) + 1
-  if (f.phase === 'shave') say(bot, `flat shave ${f.shaved}/${f.totalBumps} (level ${f.level})`)
+  if (f.phase === 'shave') say(bot, `flat shave ${f.shaved + (f.sweptN || 0)}/${f.totalBumps + (f.sweepTotal || 0)} (level ${f.level})`)
   else say(bot, `flat ${f.filled}/${f.total} (level ${f.level})`)
 }
 
 function fillTick(bot, ctx, f, bp) {
   f.ticks++
+  recordStepped(f, bp)
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
     if (f.bumps.length > 0) {
@@ -927,6 +966,7 @@ function fillTick(bot, ctx, f, bp) {
     return
   }
   if (f.holes.length === 0) {
+    if (f.bumps.length === 0) maybeSweep(bot, f)
     if (f.bumps.length === 0) {
       finish(bot, ctx, f, null)
       return
@@ -1087,14 +1127,73 @@ function fillTick(bot, ctx, f, bp) {
 // Bump shaving (w52.1): the head column digs top-down from h.y to the
 // level. Every target re-verifies: still there, still natural, no structure
 // within one block, nobody under it. Drops are walked into the inventory.
+// Above-level footprints for the end-of-job sweep: every column the body
+// occupies over the level can hold scaffold the bot placed mid-episode.
+function recordStepped(f, bp) {
+  try {
+    if (!f || !f.stepped || f.level == null || !bp) return
+    if (Math.floor(bp.y) > f.level) f.stepped.add(`${Math.floor(bp.x)},${Math.floor(bp.z)}`)
+  } catch (_) { /* footprints best-effort */ }
+}
+
+// Scaffold the bot itself placed mid-episode (recover pillar stairs while
+// stuck travelling, post-#158): dirt/cobble above the level in a stepped
+// column that the scan never queued. NOTE: mineflayer-pathfinder 2.4.5 has
+// no scaffold code, so the pathfinder is never the source; flat's own
+// caps/supports land at/below the level. Runs ONCE at shave end over a
+// frozen set, through the same shave safety gates (structure, liquid,
+// under-feet; the allowlist is extended to SWEEP_MATS for sweep bumps),
+// so it always terminates; tall remnants skip
+// honestly as unreachable. Returns true when bumps were queued.
+const SWEEP_MATS = new Set(['dirt', 'cobblestone'])
+function buildSweep(bot, f) {
+  if (!f || !f.stepped || f.stepped.size === 0 || f.level == null) return false
+  const before = f.bumps.length
+  const blockAt = (x, y, z) => {
+    try {
+      return bot.blockAt(new Vec3(x, y, z))
+    } catch (_) {
+      return null
+    }
+  }
+  for (const key of f.stepped) {
+    const parts = String(key).split(',')
+    const sx = Number(parts[0])
+    const sz = Number(parts[1])
+    if (!Number.isFinite(sx) || !Number.isFinite(sz)) continue
+    if (Math.abs(sx - f.cx) > f.r || Math.abs(sz - f.cz) > f.r) continue
+    if (f.bumpCols && f.bumpCols.has(key)) continue
+    const r = probeColumn(blockAt, sx, sz, f.level + 1 + SCAN_UP_EXTEND, f.level + 1)
+    if (!r || r.status !== 'ok' || typeof r.topY !== 'number' || r.topY <= f.level) continue
+    const name = blockNameAt(bot, new Vec3(sx, r.topY, sz))
+    if (!SWEEP_MATS.has(name)) continue
+    f.bumps.push({ x: sx, z: sz, topY: r.topY, y: r.topY, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null, sweep: true })
+  }
+  const n = f.bumps.length - before
+  if (n > 0) f.sweepTotal = (f.sweepTotal || 0) + n
+  return n > 0
+}
+
+// End-of-job sweep, shared by the fill and shave exits: fill-only jobs
+// never enter shaveTick, so both clean ends offer the sweep before
+// finishing. Stalled/backstop finishes skip it (a wedged bot starts no
+// new work). Runs once: the second exit finds f.swept set.
+function maybeSweep(bot, f) {
+  if (!f || f.swept) return false
+  f.swept = true
+  return buildSweep(bot, f)
+}
+
 function shaveTick(bot, ctx, f, bp) {
   f.ticks++
+  recordStepped(f, bp)
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
     finish(bot, ctx, f, 'stalled')
     return
   }
   if (f.bumps.length === 0) {
+    if (maybeSweep(bot, f)) return
     finish(bot, ctx, f, null)
     return
   }
@@ -1174,7 +1273,10 @@ function shaveTick(bot, ctx, f, bp) {
     return
   }
   const name = blockNameAt(bot, new Vec3(h.x, y, h.z))
-  if (!isDiggable(name)) {
+  // Sweep bumps carry our own pillar dirt/cobble: let SWEEP_MATS past the
+  // allowlist (cobblestone is not diggable for ordinary bumps). All other
+  // gates below (structure, liquid, under-feet) still apply.
+  if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name))) {
     shiftBumpSkip(f, 'kept') // ore, wood, built: keep valuables, keep houses
     return
   }
@@ -1334,6 +1436,7 @@ module.exports.isStructureMarker = isStructureMarker
 module.exports.structureNear = structureNear
 module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
+module.exports.buildSweep = buildSweep
 module.exports.resumeLine = resumeLine
 module.exports.DIG_ATTEMPTS = DIG_ATTEMPTS
 module.exports.PICKUP_STALLS = PICKUP_STALLS
