@@ -186,7 +186,14 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
   // level goal. ak4: pressed to the face with vel.y=0 and no ground, the
   // held jump never fires — the hop backs off until a sample reads ground.
   function stepBot() {
-    const bot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0)]), [])
+    // Full floor under the run-up plus the stone step: gravity and
+    // groundedness resolve everywhere the body walks, like prod ground.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0))
+    const bot = worldBot(solids, [])
     const raw = bot.blockAt.bind(bot)
     bot.blockAt = (p) => {
       const b = raw(p)
@@ -236,11 +243,21 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
     bot.entity.onGround = true
     const ticker = createTicker({ bot, brain: fsmBrain(), tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.stuck = { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:Steve' }
+    // Harness physics: face collision at low feet, capped jump rise,
+    // gravity, groundedness from the cell below. Without these the mount
+    // reads done on an airborne sample (revmux core-1): prod samples the
+    // leap mid-air, so done must wait for grounded feet over the step.
     const stepBody = () => {
       const bp = bot.entity.position
+      const blocked = (nx, nz) => {
+        const cell = bot.blockAt({ x: nx, y: bp.y, z: nz })
+        return !!cell && cell.boundingBox !== 'empty'
+      }
       if (bot.getControlState('forward')) {
         const yaw = bot._yaw || 0
-        bot.entity.position = pos(bp.x - Math.sin(yaw) * 0.4, bp.y, bp.z - Math.cos(yaw) * 0.4)
+        const nx = bp.x - Math.sin(yaw) * 0.4
+        const nz = bp.z - Math.cos(yaw) * 0.4
+        if (!blocked(nx, nz)) bot.entity.position = pos(nx, bp.y, nz)
       } else {
         const g = bot.pathfinder.goal
         if (g && typeof g.x === 'number') {
@@ -255,20 +272,41 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
       }
       const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
       const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
-      if (bot.getControlState('jump') && bot.entity.position.y < capY) bot.entity.position.y += 0.5
+      const jumping = bot.getControlState('jump')
+      if (jumping && bot.entity.position.y < capY) bot.entity.position.y += 0.5
+      const below = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+      if (below && below.boundingBox !== 'empty') {
+        bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+        bot.entity.onGround = true
+      } else if (!jumping) {
+        bot.entity.position.y -= 0.5
+        bot.entity.onGround = false
+        const land = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+        if (land && land.boundingBox !== 'empty') {
+          bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+          bot.entity.onGround = true
+        }
+      } else {
+        bot.entity.onGround = false
+      }
     }
     const cap = capture()
     const actions = []
     try {
       let t = 0
+      let sawSettled = false
       for (; t < 60 && (bot._tickerCtx.stuck || bot._tickerCtx.recovery); t++) {
         const r = await ticker.tick()
         actions.push(r.decision && r.decision.action)
+        const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
+        if (st && st.settled) sawSettled = true
         stepBody()
       }
       assert.ok(t < 60, 'episode ends')
       assert.equal(actions[0], 'hop_step', `first choice, got ${actions.join(',')}`)
+      assert.ok(sawSettled, 'leap settles over the top before done')
       assert.ok(Math.floor(bot.entity.position.y) >= 62, `mounted, y=${bot.entity.position.y}`)
+      assert.equal(bot.entity.onGround, true, 'done on grounded feet, not an apex sample')
       assert.equal(bot._tickerCtx.stuck, null, 'episode over')
       assert.equal(bot._tickerCtx.recovery, null, 'episode over')
       assert.ok(cap.lines.some((l) => /recover action=hop_step .* outcome=done/.test(l)), cap.lines.join('\n'))
