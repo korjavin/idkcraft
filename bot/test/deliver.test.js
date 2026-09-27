@@ -522,16 +522,28 @@ describe('deliver branch edges (idkcraft-haj)', () => {
 })
 
 describe('deliver branches (idkcraft-g9k)', () => {
-  it('unfloored position reads as not arrived, toss still lands', async () => {
+  it('unfloored position still arrives via the floor fallback, toss lands', async () => {
+    // NOTE: the `!node` disjunct (:125) is untestable — node is null only
+    // when bp is null, and then d0 is null too, so `arrived` is never read.
+    // This pins the Math.floor fallback arm instead (floor -> ceil mutant
+    // moves the node out of GoalFollow range and the toss never fires).
     const bot = mockBot()
-    bot.entity.position = Object.assign(pos(0, 64, 0), { floored: () => null })
-    bot.inv.push({ name: 'coal', count: 2 })
-    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
-    const ctx = ctxWithHaul({ coal: 2 })
-    deliver(bot, ctx, null, {})
-    await tick()
-    await tick()
+    const px = 7.9
+    bot.entity.position = {
+      x: px, y: 64, z: 0,
+      distanceTo: (q) => Math.hypot(px - q.x, 64 - q.y, 0 - q.z),
+      clone() { return bot.entity.position },
+    }
+    bot.inv.push({ name: 'coal', count: 5 })
+    bot.players = { P: { username: 'P', entity: { position: pos(4.0, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 5 })
+    for (let i = 0; i < 25; i++) {
+      deliver(bot, ctx, null, {})
+      await tick()
+      if (ctx.stepStatus && ctx.stepStatus !== 'running') break
+    }
     assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.join(' ').includes('brought 5 coal'))
   })
 
   it('throwing home store falls back to spawn, then nowhere', () => {
@@ -552,17 +564,9 @@ describe('deliver branches (idkcraft-g9k)', () => {
     assert.deepEqual(ctx.haul, { coal: 2 })
   })
 
-  it('greeter without the entry still delivers', async () => {
-    const bot = mockBot()
-    bot.inv.push({ name: 'coal', count: 2 })
-    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
-    const ctx = ctxWithHaul({ coal: 2 })
-    ctx.greeter = {}
-    deliver(bot, ctx, null, {})
-    await tick()
-    await tick()
-    assert.equal(ctx.stepStatus, 'done')
-  })
+  // NOTE: no missing-greetOnArrival test: without the entry the call
+  // throws into the greeting catch (:221), same outcome as the guard skip
+  // (equivalent mutant). 'throwing greeter still delivers' pins the catch.
 
   it('throwing mover greets as moving', async () => {
     const bot = mockBot()
@@ -614,21 +618,28 @@ describe('deliver branches (idkcraft-g9k)', () => {
     // file) and the latch holds re-entry, so no prod path triggers it.
   })
 
-  it('haul deleted mid-toss still finishes', async () => {
+  it('a throwing toss for one kind still delivers the rest', async () => {
+    // NOTE: the :242 haul inner-try is an equivalent mutant — dropping it
+    // lands in the :243 per-kind catch, which continues the loop the same
+    // way. This pins the :243 catch instead: without it the throw rejects
+    // the toss task and the step never completes.
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 2 })
+    bot.inv.push({ name: 'oak_log', count: 1 })
     bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
-    let release
-    const gate = new Promise((r) => { release = r })
     const origToss = bot.toss.bind(bot)
-    bot.toss = async (...a) => { await gate; return origToss(...a) }
-    const ctx = ctxWithHaul({ coal: 2 })
-    deliver(bot, ctx, null, {}) // toss starts, pending on the gate
-    delete ctx.haul
-    release()
+    bot.toss = async (id, ...rest) => {
+      if (id === 1) throw new Error('tray stuck') // coal (id 1) fails
+      return origToss(id, ...rest)
+    }
+    const ctx = ctxWithHaul({ coal: 2, oak_log: 1 })
+    deliver(bot, ctx, null, {})
+    await tick()
     await tick()
     await tick()
     assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.join(' ').includes('brought 1 oak_log'))
+    assert.deepEqual(ctx.haul, { coal: 2, oak_log: 0 })
   })
 })
 
@@ -653,10 +664,10 @@ describe('deliver live-stock branches (idkcraft-g9k)', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
-  it('null roster fails no-player like an empty one', () => {
+  it('a roster that throws mid-scan fails no-player', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 2 })
-    bot.players = null
+    bot.players = new Proxy({}, { ownKeys() { throw new Error('roster corrupt') } })
     const ctx = ctxWithHaul({ coal: 2 })
     deliver(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-player')

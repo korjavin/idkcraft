@@ -803,15 +803,18 @@ describe('forage planning branches (idkcraft-g9k)', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
-  it('missing or corrupt memory prints none in the final', () => {
+  it('non-Map memory with values still prints none in the final', () => {
+    // Pins the `instanceof Map` guard: a duck-typed items with a working
+    // values() would hash without it. (A wholly missing resources throws
+    // into the same catch either way — equivalent mutant, untestable.)
     const bot = mockBot()
-    const ctx = { lastGoalKey: '', stepStatus: 'running' }
+    const ctx = {
+      lastGoalKey: '', stepStatus: 'running',
+      resources: { items: { values: () => [{ x: 1, y: 60, z: 0, name: 'iron_ore' }] } },
+    }
     forage(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-known')
     assert.equal(ctx.forageFinal.world.mem, 'none')
-    const ctx2 = { lastGoalKey: '', stepStatus: 'running', resources: { items: {} } }
-    forage(bot, ctx2, null, {})
-    assert.equal(ctx2.forageFinal.world.mem, 'none')
   })
 
   it('corrupt haul snapshots -1', () => {
@@ -849,7 +852,7 @@ describe('forage planning branches (idkcraft-g9k)', () => {
   it('non-array inventory snapshots empty and plans on', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'stone_pickaxe', count: 1 })
-    bot.inventory.items = () => 'x'
+    bot.inventory.items = () => ({ *[Symbol.iterator]() { yield { name: 'oak_log', count: 5 } } })
     const ctx = memCtx([{ x: 5, y: 64, z: 0, name: 'oak_log' }])
     forage(bot, ctx, null, {})
     assert.equal(ctx.forage.target.name, 'oak_log')
@@ -868,24 +871,9 @@ describe('forage finish branches (idkcraft-g9k)', () => {
     return { bot, ctx }
   }
 
-  it('goal clear tolerates a missing pathfinder', () => {
-    const { bot, ctx } = nullTargetCtx()
-    bot.pathfinder = null
-    ctx.lastGoalKey = 'forage:1,2,3'
-    forage(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-known')
-    assert.equal(ctx.lastGoalKey, '')
-  })
-
-  it('goal clear tolerates a pathfinder without setGoal', () => {
-    const { bot, ctx } = nullTargetCtx()
-    bot.pathfinder = { goal: { x: 1 } }
-    ctx.lastGoalKey = 'forage:1,2,3'
-    forage(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-known')
-    assert.equal(ctx.lastGoalKey, '')
-  })
-
+  // NOTE: no tests for a missing pathfinder / missing setGoal here: deleting
+  // those guard arms throws into clearGoal's own catch with lastGoalKey reset
+  // outside it, so no assertion can distinguish them (equivalent mutants).
   it('goal clear swallows a throwing setGoal', () => {
     const { bot, ctx } = nullTargetCtx()
     bot.pathfinder = { goal: { x: 1 }, setGoal: () => { throw new Error('no driver') } }
@@ -998,14 +986,18 @@ describe('forage finish branches (idkcraft-g9k)', () => {
       { x: 40, y: 60, z: 0, name: 'iron_ore' },
       { x: 30, y: 60, z: 0, name: 'coal_ore' },
     ])
-    bot.blocks['30,60,0'] = 'coal_ore'
-    forage(bot, ctx, null, {})
+    forage(bot, ctx, null, {}) // plan iron, announce once
     assert.equal(bot.chats.length, 1)
-    ctx.lastPathStatus = 'noPath'
-    forage(bot, ctx, null, {})
+    const f = ctx.forage
+    f.phase = 'pickup' // dug but empty-handed: back to plan, not to walk
+    f.target = { kind: 'ore', name: 'iron_ore', pos: { x: 40, y: 60, z: 0 }, drop: 'raw_iron', want: 3 }
+    ctx.lastGoalKey = 'forage-pickup:40,60,0'
+    forage(bot, ctx, null, {}) // short pickup -> phase plan
+    assert.equal(ctx.forage.phase, 'plan')
+    forage(bot, ctx, null, {}) // plan-branch replan: coal, still one line
     assert.equal(ctx.stepStatus, 'running')
     assert.equal(ctx.forage.target.name, 'coal_ore')
-    assert.equal(bot.chats.length, 1, 'replan does not re-announce')
+    assert.equal(bot.chats.length, 1, 'the announced latch holds across the plan re-entry')
   })
 })
 
@@ -1019,9 +1011,13 @@ describe('forage food branches (idkcraft-g9k)', () => {
   }
 
   it('null distance never triggers the kill', () => {
-    const { bot, ctx } = huntCtx()
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(40, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the far cow: find/walk, out of swing range
+    assert.ok(ctx.forage.phase === 'find' || ctx.forage.phase === 'walk')
     bot.entity.position.distanceTo = () => null
-    forage(bot, ctx, null, {}) // adjacent cow, unreadable range: keep walking
+    forage(bot, ctx, null, {}) // unreadable range: keep walking, never kill
     assert.ok(ctx.forage.phase === 'find' || ctx.forage.phase === 'walk')
     assert.notEqual(ctx.forage.phase, 'kill')
   })
@@ -1040,9 +1036,9 @@ describe('forage food branches (idkcraft-g9k)', () => {
     const ctx = memCtx([])
     bot.entities = { 7: { id: 7, name: 'cow', position: pos(40, 64, 0), isValid: true } }
     forage(bot, ctx, null, {}) // plan + issue the hunt goal
-    bot.entities = {}
+    bot.entities[7].position = pos(100, 64, 0) // past find radius, still known by id
     ctx.lastPathStatus = 'noPath'
-    forage(bot, ctx, null, {})
+    forage(bot, ctx, null, {}) // noPath block -> replan finds nothing -> no-known
     assert.equal(ctx.stepStatus, 'failed:no-known')
   })
 
@@ -1119,9 +1115,9 @@ describe('forage ore branches (idkcraft-g9k)', () => {
     return { bot, ctx }
   }
 
-  it('nameless block reads as a ghost and replans', () => {
+  it('renamed block reads as a ghost and replans', () => {
     const { bot, ctx } = oreCtx()
-    bot.blockAt = () => ({}) // loaded but unnamed: ghost
+    bot.blockAt = () => ({ name: 'stone' }) // loaded but different: ghost
     forage(bot, ctx, null, {}) // plan iron, issue walk
     forage(bot, ctx, null, {}) // ghost -> forget + replan
     assert.equal(ctx.stepStatus, 'running')
@@ -1134,9 +1130,12 @@ describe('forage ore branches (idkcraft-g9k)', () => {
     bot.inv.push({ name: 'stone_pickaxe', count: 1 })
     const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
     forage(bot, ctx, null, {}) // plan iron, issue walk
-    ctx.resources.items = {} // corrupt: forget throws, bestMemoryCell reads null
-    forage(bot, ctx, null, {}) // ghost (stone): forget throws, caught, replan fails
-    assert.equal(ctx.stepStatus, 'failed:no-known')
+    const items = new Map(ctx.resources.items)
+    items.delete = () => { throw new Error('no delete') }
+    ctx.resources.items = items // readable memory, throwing forget
+    forage(bot, ctx, null, {}) // ghost (stone): forget throws, caught, replan re-picks iron
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.target.name, 'iron_ore')
   })
 
   it('missing canDigBlock settles to dig', () => {
