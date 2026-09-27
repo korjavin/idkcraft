@@ -220,3 +220,265 @@ describe('reviewer atl.2 r2: unreachable player fails, haul kept', () => {
     assert.ok(!ctx.stepStatus || !ctx.stepStatus.startsWith('failed:'), 'chase keeps running')
   })
 })
+
+describe('deliver toss failure (idkcraft-haj)', () => {
+  it('failed:toss when bot.toss is missing, haul kept', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    delete bot.toss
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'failed:toss')
+    assert.deepEqual(ctx.haul, { coal: 2 }, 'haul kept for the retry')
+    assert.ok(bot.chats.some((m) => m === 'could not toss coal'), JSON.stringify(bot.chats))
+  })
+
+  it('failed:toss when the registry lacks the item', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'diamond', count: 1 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ diamond: 1 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'failed:toss')
+    assert.deepEqual(ctx.haul, { diamond: 1 })
+    assert.ok(bot.chats.some((m) => m === 'could not toss diamond'), JSON.stringify(bot.chats))
+  })
+
+  it('failed:toss when the toss throws, haul kept', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    bot.toss = async () => { throw new Error('window busy') }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'failed:toss')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+    assert.deepEqual(bot.calls.tossed, [])
+  })
+
+  it('partial toss still banks what landed', async () => {
+    // One kind throws mid-toss: the rest lands, done names what arrived,
+    // the failed kind stays in the haul for the next deliver.
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.inv.push({ name: 'oak_log', count: 1 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (id, slot, n) => {
+      if (id === 2) throw new Error('stuck')
+      return origToss(id, slot, n)
+    }
+    const ctx = ctxWithHaul({ coal: 2, oak_log: 1 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.some((m) => m === 'brought 2 coal'), JSON.stringify(bot.chats))
+    assert.deepEqual(ctx.haul, { coal: 0, oak_log: 1 })
+  })
+})
+
+describe('deliver unseen wait placement (idkcraft-haj)', () => {
+  function captureGoals(bot) {
+    const issued = []
+    const rawSet = bot.pathfinder.setGoal.bind(bot.pathfinder)
+    bot.pathfinder.setGoal = (g) => { issued.push(g); rawSet(g) }
+    return issued
+  }
+
+  it('unseen player: waits at the home site with its level', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    const issued = captureGoals(bot)
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.home = { site: { x: 100, y: 65, z: 200 } }
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.lastGoalKey, 'deliver-wait:100,200')
+    assert.equal(issued.length, 1)
+    assert.equal(issued[0].constructor.name, 'GoalNear')
+    assert.deepEqual([issued[0].x, issued[0].y, issued[0].z], [100, 65, 200])
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+  it('unseen player: site without y waits at the bot level', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    const issued = captureGoals(bot)
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.home = { site: { x: 100, z: 200 } }
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.lastGoalKey, 'deliver-wait:100,200')
+    assert.equal(issued[0].y, 64, 'falls back to the bot level')
+  })
+
+  it('unseen player: nowhere to wait says the line and holds', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    bot.spawnPoint = null
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    deliver(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 0, 'no wait goal without home or spawn')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+    assert.ok(bot.chats.some((m) => m.includes("I can't see you")), JSON.stringify(bot.chats))
+  })
+})
+
+describe('deliver robustness edges (idkcraft-haj)', () => {
+  it('no position returns without crashing', () => {
+    const bot = mockBot()
+    bot.entity = null
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('plain-object position still resolves the player', () => {
+    const bot = mockBot()
+    bot.entity.position = { x: 0, y: 64, z: 0 } // no distanceTo: hypot fallback
+    bot.players = { P: { username: 'P', entity: { position: pos(5, 64, 0) } } }
+    const ps = deliver.playerStatus(bot)
+    assert.equal(ps.level, 'near')
+    assert.equal(ps.name, 'P')
+  })
+
+  it('throwing floored() still tosses in range', async () => {
+    // followSatisfied never throws: a broken floored() reads as not
+    // arrived, and true toss range still tosses.
+    const bot = mockBot()
+    bot.entity.position = Object.assign(pos(0, 64, 0), { floored() { throw new Error('no voxel') } })
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.some((m) => m === 'brought 2 coal'), JSON.stringify(bot.chats))
+  })
+
+  it('haulTotal survives a corrupt haul store', () => {
+    const bot = mockBot()
+    const ctx = {}
+    Object.defineProperty(ctx, 'haul', { get() { throw new Error('corrupt') } })
+    assert.equal(deliver.haulTotal(bot, ctx), 0)
+  })
+})
+
+describe('deliver branch edges (idkcraft-haj)', () => {
+  it('throwing distanceTo falls back to hypot', () => {
+    const bot = mockBot()
+    bot.entity.position = {
+      x: 0, y: 64, z: 0,
+      distanceTo: () => { throw new Error('no voxel') },
+    }
+    bot.players = { P: { username: 'P', entity: { position: pos(5, 64, 0) } } }
+    const ps = deliver.playerStatus(bot)
+    assert.equal(ps.level, 'near')
+    assert.equal(ps.name, 'P')
+  })
+
+  it('addHaul ignores nulls and non-positive gains', () => {
+    const ctx = {}
+    deliver.addHaul(null, { coal: 1 })
+    deliver.addHaul(ctx, null)
+    deliver.addHaul(ctx, { coal: 0, dirt: -2 })
+    assert.deepEqual(ctx.haul, {})
+    deliver.addHaul(ctx, { coal: 2 })
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+  it('zero-count haul prunes to empty', () => {
+    const bot = mockBot()
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 0 })
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:empty')
+  })
+
+  it('null roster entries are skipped', () => {
+    const bot = mockBot()
+    bot.players = { Ghost: null, P: { username: 'P', entity: { position: pos(5, 64, 0) } } }
+    assert.equal(deliver.playerStatus(bot).name, 'P')
+  })
+
+  it('malformed site falls back to spawn', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.home = { site: { z: 200 } } // no x: not a site
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.lastGoalKey, 'deliver-wait:0,0')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('spawn point without coords waits nowhere', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    bot.spawnPoint = {}
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+  it('visible deliver works without a greeter', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = { lastGoalKey: '', stepStatus: 'running', haul: { coal: 2 } }
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('second tick while tossing does not double-toss', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    deliver(bot, ctx, null, {}) // toss in flight: latched
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.calls.tossed, ['2 coal'])
+  })
+
+  it('failed:toss when the registry entry lacks an id', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    bot.registry.itemsByName.coal = {}
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'failed:toss')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+
+  it('no position resolves nobody even when listed', () => {
+    const bot = mockBot()
+    bot.entity = null
+    bot.players = { P: { username: 'P', entity: { position: pos(5, 64, 0) } } }
+    assert.equal(deliver.playerStatus(bot).level, 'none')
+  })
+})
