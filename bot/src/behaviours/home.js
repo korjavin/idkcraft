@@ -353,10 +353,12 @@ function stay(bot, ctx, target, state) {
     st.phase = 'hold'
     // rw4.8: the shelter is only a shelter with a shut door — an opened
     // door gets re-closed; a missing one logs once per episode (st is
-    // fresh per stay) and keeps holding — failing would spin, stay
+    // fresh per stay) and keeps holding unsheltered so fight is not
+    // suppressed through the open doorway. Failing would spin: stay
     // re-picks every tick at night (SELF_ADVANCING).
     const door = doorBlock(bot, home)
     if (!door) {
+      ctx.inShelter = false
       if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
     } else if (doorOpen(door)) {
       tryToggle(bot, st, door)

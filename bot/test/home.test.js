@@ -401,7 +401,7 @@ describe('rw4.8 door failures fail loud', () => {
       for (let i = 0; i < 5; i++) home.stay(bot, ctx)
       assert.equal(ctx.stay.phase, 'hold')
       assert.equal(ctx.stepStatus, 'running')
-      assert.equal(ctx.inShelter, true)
+      assert.equal(ctx.inShelter, false, 'no door: fight must not be suppressed')
       assert.deepEqual(lines, ['door missing at stay-hold'])
     } finally {
       console.log = realLog
