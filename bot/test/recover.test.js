@@ -701,6 +701,65 @@ describe('recover choice sources', () => {
   })
 })
 
+describe('recover menu shaping (y34)', () => {
+  const facts = {
+    goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, water: false,
+    headBlocked: false, walls: 4, freeSides: [], lavaNear: false,
+    playerOnline: false, playerDist: null, playerName: null, stuckTicks: 12,
+    resetsStuck: 0, resetsPlaceError: 0, last: 'none', by: 'follow',
+  }
+  it('shapeRecoverMenu drops dig_step only when hop_step shares a multi-menu', () => {
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'hop_step', 'wait']), ['hop_step', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait']), ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step']), ['dig_step'])
+    assert.deepEqual(recover.shapeRecoverMenu(['hop_step', 'wait']), ['hop_step', 'wait'])
+  })
+  it('hop menu: the model is asked without dig_step', async () => {
+    // Prod (603 stuck disagreements, 549 model=dig_step): laya digs where a
+    // hop would do. Removing the shaping re-offers dig (asked includes it).
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'hop_step' } }
+    const r = await recover.chooseRecovery(brain, facts, ['dig_step', 'hop_step', 'wait'])
+    assert.deepEqual(asked, ['hop_step', 'wait'])
+    assert.deepEqual(r, { action: 'hop_step', source: 'laya', fsm: 'hop_step', model: 'laya' })
+  })
+  it('dig-loving model on a hop menu: invalid dig falls back to FSM hop', async () => {
+    // The exact prod case: laya answers dig_step against FSM hop_step. dig
+    // is not on the asked menu, so it disagrees (menu= shaped) and the FSM
+    // hop runs instead of the dig.
+    const brain = { source: 'laya', ask: async () => 'dig_step' }
+    const errLines = []
+    const origErr = console.error
+    console.error = (l) => { errLines.push(String(l)) }
+    let r
+    try {
+      r = await recover.chooseRecovery(brain, facts, ['dig_step', 'hop_step', 'wait'])
+    } finally {
+      console.error = origErr
+    }
+    assert.deepEqual(r, { action: 'hop_step', source: 'stub-fallback', fsm: 'hop_step', model: 'laya' })
+    const line = errLines.find((l) => l.includes('brain disagree'))
+    const menu = line && /menu=([\w,]+)/.exec(line)
+    assert.ok(menu && menu[1] === 'hop_step,wait', `shaped menu logged, got: ${line}`)
+  })
+  it('failed hop still escalates to digging: shaping is a no-op without hop', async () => {
+    // 4jr exclusion removes the failed hop first; shaping must not hide the
+    // dig it escalates to. Reversing the order (shape first) breaks this.
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'dig_step' } }
+    const failed = { ...facts, last: 'hop_step:failed:no-apex' }
+    const r = await recover.chooseRecovery(brain, failed, ['dig_step', 'hop_step', 'wait'])
+    assert.deepEqual(asked, ['dig_step', 'wait'])
+    assert.equal(r.action, 'dig_step')
+    assert.equal(r.source, 'laya')
+  })
+  it('shaping shrinking the menu to one: only-option hop, brain never asked', async () => {
+    const boom = { source: 'x', ask: async () => { throw new Error('must not ask') } }
+    const r = await recover.chooseRecovery(boom, facts, ['dig_step', 'hop_step'])
+    assert.deepEqual(r, { action: 'hop_step', source: 'only-option', fsm: 'hop_step', model: null })
+  })
+})
+
 describe('gave-up marks danger (mnx)', () => {
   it('release gave-up marks the spot; release done leaves no mark', () => {
     // Acceptance: the gave-up point itself is what later steps avoid.
