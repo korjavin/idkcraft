@@ -330,7 +330,7 @@ describe('jevBrain', () => {
       const decision = await jevBrain('test-key', canned).decide({ distance_to_player: 1, player_moving: false })
       assert.deepEqual(decision, { action: 'idle', sprint: false, source: 'jev' })
       assert.equal(logs.length, 1)
-      assert.match(logs[0], /^brain disagree source=jev model=idle stub=roam state=.*distance_to_player=1\.0/)
+      assert.match(logs[0], /^brain disagree source=jev reason=unknown model=idle stub=roam state=.*distance_to_player=1\.0/)
     } finally {
       console.error = origError
     }
@@ -363,7 +363,27 @@ describe('jevBrain', () => {
       const decision = await jevBrain('test-key', canned).decide(hostileState)
       assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'jev' })
       assert.equal(logs.length, 1)
-      assert.match(logs[0], /^brain disagree source=jev model=follow stub=fight state=.*hostile_distance=4\.0 hostile_near_player=false/)
+      assert.match(logs[0], /^brain disagree source=jev reason=unknown model=follow stub=fight state=.*hostile_distance=4\.0 hostile_near_player=false/)
+    } finally {
+      console.error = origError
+    }
+  })
+
+  it('82i: disagree line carries the hard-case reason hybridBrain passed', async () => {
+    // Eval tooling joins disagreements to hard cases; the reason used to need
+    // recomputing via isHard (and pre-fix H4 lines no longer recompute).
+    const origError = console.error
+    const logs = []
+    console.error = (msg) => logs.push(msg)
+    try {
+      const canned = async () => ({
+        ok: true,
+        json: async () => ({ answers: { action: { type: 'choice', choice: 'follow' } } })
+      })
+      const hostileState = { distance_to_player: 12, bot_health: 20, bot_food: 20, nearby_hostiles: 1, hostile_distance: 4, hostile_near_player: false }
+      await jevBrain('test-key', canned).decide(hostileState, 'crowd')
+      assert.equal(logs.length, 1)
+      assert.ok(logs[0].includes('reason=crowd'), logs[0])
     } finally {
       console.error = origError
     }
@@ -442,7 +462,8 @@ describe('configurable brain endpoint (laya sidecar)', () => {
     try {
       const brain = makeBrain({ BRAIN_URL: LAYA, BRAIN_TIMEOUT_MS: '50' })
       const t0 = Date.now()
-      const decision = await brain.decide({ nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false, bot_health: 20 })
+      // 82i: hostile fact joined — a bare count is a phantom crowd (easy) now.
+      const decision = await brain.decide({ nearby_hostiles: 3, hostile_distance: 2, distance_to_player: 5.6, player_moving: false, bot_health: 20 })
       assert.ok(Date.now() - t0 < 1000, 'aborted near the 50 ms deadline')
       assert.equal(decision.source, 'stub-fallback')
     } finally {
@@ -480,7 +501,25 @@ describe('isHard', () => {
     assert.equal(isHard({ hostile_distance: 9.5, hostile_near_player: true, bot_health: 4.9, distance_to_player: 9.9 }), 'low-health-hostile')
   })
   it('crowd for the prod H2 state', () => {
-    assert.equal(isHard({ nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false }), 'crowd')
+    assert.equal(isHard({ nearby_hostiles: 3, hostile_distance: 2, distance_to_player: 5.6, player_moving: false }), 'crowd')
+  })
+  it('82i: phantom crowd (count without a fight target) is easy', () => {
+    // 5759/5783 prod crowd disagreements: nearby>=3 counts creepers and
+    // 8-16-block mobs while hostile_distance is none — the model can only
+    // phantom-fight, so the FSM follow/idle/roam answers unasked.
+    assert.equal(isHard({ nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false }), null)
+    assert.equal(isHard({ nearby_hostiles: 5, distance_to_player: 1.9, player_moving: false, bot_health: 20 }), null)
+  })
+  it('82i: unreachable crowd respects the give-up latch (easy)', () => {
+    // 24 prod cases: laya re-fought a written-off mob via the crowd leak.
+    assert.equal(isHard({ nearby_hostiles: 3, hostile_distance: 4, hostile_reachable: false, bot_health: 20 }), null)
+  })
+  it('82i: unreachable hostile-vs-far-player is easy (same H4 rule)', () => {
+    // Preventive: no prod cases in 7d, but the v3 question ignores
+    // reachability, so an unreachable ask could only re-fight give-up.
+    // A player threat still fights — via the FSM caution branch.
+    assert.equal(isHard({ hostile_distance: 4, hostile_reachable: false, distance_to_player: 12, bot_health: 20 }), null)
+    assert.equal(stubBrain.decide({ hostile_distance: 4, hostile_reachable: false, hostile_near_player: true, distance_to_player: 12, bot_health: 20 }).action, 'fight')
   })
   it('hostile-vs-far-player for the prod H3 state', () => {
     assert.equal(isHard({ hostile_distance: 0.7, distance_to_player: 26.8, bot_health: 15.8 }), 'hostile-vs-far-player')
@@ -586,7 +625,9 @@ describe('hybridBrain', () => {
   })
 
   it('fallback: fetch rejects -> FSM answer, source stub-fallback, route line carries it', async () => {
-    const state = { nearby_hostiles: 3, distance_to_player: 5.6, player_moving: false, bot_health: 20 }
+    // 82i: a hostile fact joined the state — a bare count is a phantom crowd
+    // (easy) now, and the fallback path needs a real hard route to run.
+    const state = { nearby_hostiles: 3, hostile_distance: 2, distance_to_player: 5.6, player_moving: false, bot_health: 20 }
     const expected = stubBrain.decide(state)
     const failing = async () => { throw new Error('boom') }
     const brain = hybridBrain(jevBrain('', failing, 1000, LAYA))
