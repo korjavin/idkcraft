@@ -1422,6 +1422,20 @@ describe('hop_step standstill leap on Paper (idkcraft-wqt)', () => {
     assert.ok(bot.getControlState('forward'), 'walks back in')
     assert.ok(!bot.getControlState('jump'), 'no leap from the long stance')
   })
+  it('hop entry drops a stale executor goal from a prior primitive', () => {
+    // dig_step/sidestep return failed with their GoalNear still live, and
+    // decide() only clears at episode entry: without the entry drop the lib
+    // fights the direct drive at 20 Hz. Deleting the setGoal(null) fails
+    // this test (goal stays live).
+    const bot = hopBot()
+    bot.entity.onGround = true
+    bot.pathfinder.setGoal({ x: 9, y: 61, z: 9, isEnd: () => false, isValid: () => true, heuristic: () => 0 })
+    const ctx = hopCtx(null)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(bot.pathfinder.goal, null, 'stale goal dropped at entry')
+    assert.ok(bot.getControlState('forward'), 'direct drive owns the body')
+  })
   it('head veto re-arms on the back-off', () => {
     const solids = new Set()
     for (let x = -3; x <= 3; x++) {

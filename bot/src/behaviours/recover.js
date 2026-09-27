@@ -555,6 +555,12 @@ function hopStepRun(bot, ctx) {
     const q = step && step.position
     if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
     st.stepPos = { x: q.x, y: q.y, z: q.z }
+    // Drop any live executor goal: a failed dig_step/sidestep leaves its
+    // GoalNear behind and decide() only clears at episode entry, so without
+    // this the lib fights the direct drive at 20 Hz (revmux 01 major).
+    try {
+      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+    } catch (_) { /* goal best-effort */ }
   }
   let step = null
   try {
