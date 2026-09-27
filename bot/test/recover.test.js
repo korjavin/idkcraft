@@ -771,6 +771,9 @@ describe('recover side shaping (duc)', () => {
   it('shapeRecoverMenu drops dig_step for sidestep only below a high goal', () => {
     assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], facts), ['sidestep', 'wait'])
     assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: -3 }), ['sidestep', 'wait'])
+    // Boundary pin (revmux 01 minor x2): <1/<3/<=2 mutants must die here.
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: 1 }), ['sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: 2 }), ['dig_step', 'sidestep', 'wait'])
     assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], high), ['dig_step', 'sidestep', 'wait'])
     assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait']), ['dig_step', 'sidestep', 'wait'])
     assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'wait'], facts), ['dig_step', 'wait'])
