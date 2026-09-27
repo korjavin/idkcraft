@@ -713,3 +713,78 @@ describe('forage pickup stall-out (idkcraft-9go)', () => {
     assert.equal(ctx.forage.foodStreak, 1)
   })
 })
+
+describe('rw4.12 forage detour', () => {
+  const danger = require('../src/danger')
+  const CELL = { x: 40, y: 64, z: 0, name: 'oak_log' } // logs: no pickaxe needed
+  const PIT = { x: 20, y: 60, z: 0 }
+  function detourCtx() {
+    // CELL2 outlives CELL's strike so replans survive for assertions.
+    const ctx = memCtx([{ ...CELL }, { x: 0, y: 64, z: 50, name: 'oak_log' }])
+    danger.mark(ctx, PIT)
+    return ctx
+  }
+
+  it('a pit on the leg diverts the first goal perpendicular', () => {
+    const bot = mockBot()
+    const ctx = detourCtx()
+    forage(bot, ctx) // plan + walk issue
+    assert.equal(bot.calls.setGoal, 1)
+    const g = bot.pathfinder.goal
+    assert.equal(g.constructor.name, 'GoalNear')
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 20, y: 64, z: 8 })
+  })
+
+  it('reaching the waypoint re-issues direct to the cell', () => {
+    const bot = mockBot()
+    const ctx = detourCtx()
+    forage(bot, ctx) // issues the via goal
+    bot.entity.position = pos(20, 64, 8) // walked around
+    forage(bot, ctx) // arrived: flips + re-issues direct
+    assert.equal(bot.calls.setGoal, 2)
+    const g = bot.pathfinder.goal
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 40, y: 64, z: 0 })
+  })
+
+  it('noPath on the detour leg falls back direct without a strike', () => {
+    const bot = mockBot()
+    const ctx = detourCtx()
+    forage(bot, ctx) // issues the via goal
+    ctx.lastPathStatus = 'noPath'
+    forage(bot, ctx) // detour dead: flip direct, no strike
+    assert.equal(ctx.forage.streak, 0)
+    assert.ok(!ctx.forageSkip || ctx.forageSkip.size === 0, 'the cell is not struck')
+    forage(bot, ctx) // re-issues direct
+    const g = bot.pathfinder.goal
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 40, y: 64, z: 0 })
+    ctx.lastPathStatus = 'noPath'
+    forage(bot, ctx) // direct dead too: the cell strikes honestly
+    assert.equal(ctx.forage.streak, 1)
+    assert.deepEqual(ctx.forage.target.pos, { x: 0, y: 64, z: 50 }, 'replan moves past the struck cell')
+  })
+
+  it('a stalled detour leg falls back direct, the cell strikes after', () => {
+    const bot = mockBot()
+    bot._moving = true // walking but frozen: stall counting runs
+    bot.blocks['40,64,0'] = 'oak_log' // loaded-correct: no ghost rule
+    const ctx = detourCtx()
+    for (let i = 0; i < 12; i++) forage(bot, ctx) // via leg stalls out
+    const g = bot.pathfinder.goal
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 40, y: 64, z: 0 }, 'falls back direct')
+    assert.equal(ctx.forage.streak, 0, 'no strike for the detour')
+    for (let i = 0; i < 12 && !(ctx.forageSkip && ctx.forageSkip.has('40,64,0')); i++) forage(bot, ctx) // direct leg stalls too
+    assert.equal(ctx.forage.streak, 1, 'the cell strikes honestly')
+    assert.ok(ctx.forageSkip.has('40,64,0'))
+  })
+
+  it('stationary on the via leg never settles to dig a far cell', () => {
+    const bot = mockBot() // frozen mid-leg, executor idle
+    bot.blocks['40,64,0'] = 'oak_log' // target reads diggable from afar
+    const ctx = detourCtx()
+    for (let i = 0; i < 12; i++) forage(bot, ctx)
+    assert.equal(ctx.forage.phase, 'walk', 'no thin-air dig')
+    assert.equal(bot.calls.digs, 0)
+    const g = bot.pathfinder.goal
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, { x: 40, y: 64, z: 0 }, 'stalls fall back direct')
+  })
+})
