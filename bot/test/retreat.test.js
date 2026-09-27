@@ -398,3 +398,140 @@ describe('veto path acceptance (1tj)', () => {
     assert.equal(r.decision.source, 'laya')
   })
 })
+
+describe('retreat empty menu (idkcraft-h13)', () => {
+  it('no feasible option: null, stale pick cleared', async () => {
+    // Boxed with no scaffold, hostile far, no home: feasibleRetreat is []
+    // and the chain must say null (caller falls through to goal.decide),
+    // clearing any stale pick instead of holding a dead escape.
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    assert.deepEqual(feasibleRetreat(bot, freshCtx(), { ...STATE, hostile_distance: 10 }), [])
+    const ctx = freshCtx()
+    ctx.retreat = { action: 'retreat', source: 'laya', model: 'laya' }
+    const r = await chooseRetreat(null, bot, ctx, { ...STATE, hostile_distance: 10 })
+    assert.equal(r, null)
+    assert.equal(ctx.retreat, null)
+    assert.equal(await chooseRetreat(null, bot, ctx, { ...STATE, hostile_distance: 10 }), null)
+  })
+})
+
+describe('retreat chain edges (idkcraft-h13)', () => {
+  function askBrain(answers) {
+    const calls = []
+    return {
+      calls,
+      source: 'laya',
+      async ask({ criteria }) {
+        calls.push(Object.keys(criteria))
+        return answers[Math.min(calls.length - 1, answers.length - 1)]
+      },
+    }
+  }
+  const armed = () => fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+
+  it('brain without source or name answers as model', async () => {
+    const r = await chooseRetreat({ async ask() { return 'retreat' } }, armed(), freshCtx(), STATE)
+    assert.deepEqual(r, { action: 'retreat', source: 'model', model: 'model' })
+  })
+
+  it('brain with name only answers under its name', async () => {
+    const brain = { name: 'jev', async ask() { return 'retreat' } }
+    const r = await chooseRetreat(brain, armed(), freshCtx(), STATE)
+    assert.deepEqual(r, { action: 'retreat', source: 'jev', model: 'jev' })
+  })
+
+  it('failed single option is still the only option', async () => {
+    // Exclusion needs an alternative: with one feasible option the failed
+    // label stays askable and the chain asks nothing.
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } }) // retreat only
+    const brain = askBrain([])
+    const ctx = freshCtx()
+    ctx.retreatFailed = 'retreat'
+    const r = await chooseRetreat(brain, bot, ctx, STATE)
+    assert.deepEqual(r, { action: 'retreat', source: 'only-option', model: null })
+    assert.equal(brain.calls.length, 0)
+  })
+
+  it('null brain picks the first feasible, source fsm', async () => {
+    const r = await chooseRetreat(null, armed(), freshCtx(), STATE)
+    assert.deepEqual(r, { action: 'retreat', source: 'fsm', model: null })
+  })
+
+  it('sourceless ongoing pick holds as retreat', async () => {
+    const brain = askBrain([])
+    const ctx = freshCtx()
+    ctx.retreat = { action: 'retreat' }
+    ctx.stepStatus = 'running'
+    const r = await chooseRetreat(brain, armed(), ctx, STATE)
+    assert.deepEqual(r, { action: 'retreat', source: 'retreat', model: null })
+    assert.equal(brain.calls.length, 0)
+  })
+
+  it('cross-bucket situation re-asks, unknown buckets stamp', async () => {
+    const bot = armed()
+    const brain = askBrain(['no'])
+    const ctx = freshCtx()
+    assert.equal(await chooseRetreat(brain, bot, ctx, STATE), null)
+    assert.equal(brain.calls.length, 2)
+    // hp 3->1 and hd 1.5->5 cross buckets: a new situation, re-asked.
+    const drift = { bot_health: 1, hostile_distance: 5, nearby_hostiles: 3 }
+    assert.equal(await chooseRetreat(brain, bot, ctx, drift), null)
+    assert.equal(brain.calls.length, 4, 'new bucket re-asks')
+    // Unknown health and distance stamp under '?' buckets and hold.
+    const home = { site: { x: 10, y: 64, z: 0 }, built: true }
+    const ctx2 = freshCtx(home)
+    const brain2 = askBrain(['no'])
+    assert.equal(await chooseRetreat(brain2, bot, ctx2, {}), null)
+    assert.equal(brain2.calls.length, 2, 'pillar? no; gohome? no')
+    assert.equal(await chooseRetreat(brain2, bot, ctx2, {}), null)
+    assert.equal(brain2.calls.length, 2, 'unknown-bucket stamp holds')
+  })
+
+  it('null ctx with empty menu returns null', async () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    const r = await chooseRetreat(null, bot, null, { ...STATE, hostile_distance: 10 })
+    assert.equal(r, null)
+  })
+})
+
+describe('retreat flee edges (idkcraft-h13)', () => {
+  it('stacked hostile still flees along +x', () => {
+    // dx === 0 && dz === 0 (mob inside the body): the run picks +x
+    // instead of dividing by zero.
+    const bot = fieldBot({ entities: { 1: zombie(1, 0.5, 64, 0.5) } })
+    const ctx = freshCtx()
+    retreat(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.setGoal, 1)
+    assert.ok(bot.calls.goals[0].x > 0.5, `away along +x, got x=${bot.calls.goals[0].x}`)
+    assert.ok(Number.isFinite(bot.calls.goals[0].x), 'no NaN from 0/0')
+  })
+
+  it('moving on the live away goal does not re-issue', () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    bot.pathfinder.isMoving = () => true
+    const ctx = freshCtx()
+    ctx.lastGoalKey = 'retreat:1'
+    retreat(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.setGoal, 0, 'live goal keeps running')
+  })
+
+  it('throwing isMoving re-issues the away goal', () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    bot.pathfinder.isMoving = () => { throw new Error('no driver') }
+    const ctx = freshCtx()
+    ctx.lastGoalKey = 'retreat:1'
+    retreat(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.setGoal, 1, 'stationary default re-issues')
+  })
+
+  it('throwing setGoal still runs', () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    bot.pathfinder.setGoal = () => { throw new Error('no driver') }
+    const ctx = freshCtx()
+    retreat(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+})
