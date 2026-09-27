@@ -12,9 +12,6 @@ const MAX_ITEMS = 256
 const SCAN_RADIUS = 48 // same reach as gather's FIND_RADIUS
 const SCAN_COUNT = 64
 
-function keyOf(p) {
-  return `${p.x},${p.y},${p.z}`
-}
 
 function store(ctx) {
   if (!ctx) return null
@@ -32,7 +29,7 @@ function noteSpots(ctx, spots, now) {
   let added = 0
   for (const s of spots) {
     if (!s || typeof s.x !== 'number' || typeof s.name !== 'string') continue
-    const k = keyOf(s)
+    const k = scout.keyOf(s)
     if (mem.items.has(k)) mem.items.delete(k)
     else added++
     mem.items.set(k, { x: s.x, y: s.y, z: s.z, name: s.name, at: t })

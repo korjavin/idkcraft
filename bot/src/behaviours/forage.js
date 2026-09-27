@@ -24,7 +24,6 @@ const { Vec3 } = require('vec3')
 const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
-const { countItems } = require('../perception')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -124,13 +123,6 @@ function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
 }
 
-function countDrop(bot, drop) {
-  try {
-    return countItems(bot, (n) => n === drop)
-  } catch (_) {
-    return 0
-  }
-}
 
 // Memory fingerprint: count alone pins at the 256 cap (oldest-out
 // eviction keeps it there while explore swaps cells underneath), so a
@@ -204,7 +196,7 @@ function finish(bot, ctx, f, ok, reason) {
   const gains = {}
   try {
     for (const d of Object.keys(f.drops || {})) {
-      const g = countDrop(bot, d) - ((f.startInv && f.startInv[d]) || 0)
+      const g = bring.countDrop(bot, d) - ((f.startInv && f.startInv[d]) || 0)
       if (g > 0) gains[d] = g
     }
   } catch (_) { /* no gains */ }
@@ -426,7 +418,7 @@ function forage(bot, ctx, target, state) {
         }
         return
       }
-      const have = Math.max(0, countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
+      const have = Math.max(0, bring.countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
       if (have >= t.want) {
         finish(bot, ctx, f, true)
       } else {
@@ -545,7 +537,7 @@ function forage(bot, ctx, target, state) {
       return
     }
     try { resources.forget(ctx, p.x, p.y, p.z) } catch (_) { /* dug: drop the cell */ }
-    const have = Math.max(0, countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
+    const have = Math.max(0, bring.countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
     if (have >= t.want) {
       finish(bot, ctx, f, true)
     } else {
