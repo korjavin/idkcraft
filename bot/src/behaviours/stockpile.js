@@ -214,6 +214,21 @@ function fail(ctx, reason) {
   ctx.stepStatus = `failed:${reason}`
 }
 
+// Far patience: consecutive far+standing ticks on one goal key before the
+// 'far' verdict. A single far reading is often a recovering pathfinder,
+// never a verdict (live assay); movement or a fresh goal resets. Wedge
+// recovery bounds the truly stuck case (it tears the goal, ticks accrue).
+const FAR_STALL_TICKS = 5
+function farStalled(ctx, key) {
+  const f = (ctx.stockpileFar && ctx.stockpileFar.key === key) ? ctx.stockpileFar : { key, n: 0 }
+  f.n++
+  ctx.stockpileFar = f
+  return f.n >= FAR_STALL_TICKS
+}
+function farReset(ctx) {
+  ctx.stockpileFar = null
+}
+
 // Claim the chest coords only once the chest block is really there (same
 // placed-station contract as the table: a ghost claim would walk bring to
 // an empty cell).
@@ -344,6 +359,7 @@ function stockpile(bot, ctx, target, state) {
       try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
       if (moving) return
       if (!nearPos(bot, { x: site.x + 2, y: site.y, z: site.z + 2 }, REPROBE_RADIUS)) {
+        if (!farStalled(ctx, key)) return
         fail(ctx, 'far') // issued, standing, still far: no path home
         return
       }
@@ -381,6 +397,7 @@ function stockpile(bot, ctx, target, state) {
     try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
     if (moving) return
     if (!nearPos(bot, c, INTERACT_REACH)) {
+      if (!farStalled(ctx, key)) return
       fail(ctx, 'far') // issued, standing, still far: no path
       return
     }
@@ -413,6 +430,8 @@ function stockpile(bot, ctx, target, state) {
   if (!nearPos(bot, c, INTERACT_REACH)) {
     // No path reads as !moving too: fail instead of eating the 20 s
     // windowOpen timeout on an out-of-range open (revmux 01-review).
+    // Five consecutive far ticks: one is often a recovering pathfinder.
+    if (!farStalled(ctx, key)) return
     fail(ctx, 'far')
     return
   }
@@ -521,6 +540,7 @@ function placeChest(bot, ctx, spot, bp) {
       let moving = false
       try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
       if (moving) return
+      if (!farStalled(ctx, key)) return
       fail(ctx, 'far') // issued, standing, still far: no path to the table
       return
     }
@@ -551,6 +571,7 @@ function placeChest(bot, ctx, spot, bp) {
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   if (!nearPos(bot, p, PLACE_REACH)) {
+    if (!farStalled(ctx, gkey)) return
     fail(ctx, 'far') // issued, standing, still far: no path to the spot
     return
   }

@@ -410,7 +410,9 @@ describe('stockpile behaviour', () => {
     })
     const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
     stockpile(bot, ctx) // goal issued; the body stays at spawn (no path)
-    stockpile(bot, ctx)
+    stockpile(bot, ctx) // one far tick never fails: recovering pathfinder
+    assert.equal(ctx.stepStatus, 'running')
+    for (let i = 0; i < 4; i++) stockpile(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:far')
     assert.equal(bot.calls.opens, 0)
     assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
@@ -421,6 +423,8 @@ describe('stockpile behaviour', () => {
     const ctx = homeCtx()
     stockpile(bot, ctx)
     stockpile(bot, ctx) // standing at spawn, spot 5 blocks out
+    assert.equal(ctx.stepStatus, 'running')
+    for (let i = 0; i < 4; i++) stockpile(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:far')
   })
 
@@ -450,7 +454,7 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx)
     assert.ok(ctx.lastGoalKey.startsWith('stockpile-site:'), ctx.lastGoalKey)
     assert.equal(ctx.stepStatus, 'running')
-    stockpile(bot, ctx) // standing, still far: no path home
+    for (let i = 0; i < 5; i++) stockpile(bot, ctx) // standing, still far: no path home
     assert.equal(ctx.stepStatus, 'failed:far')
   })
 

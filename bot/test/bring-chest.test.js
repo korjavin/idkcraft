@@ -254,6 +254,8 @@ describe('bring chestfetch phase', () => {
     chestHome(ctx)
     await bring(bot, ctx, null, {})
     await bring(bot, ctx, null, {}) // standing at spawn, chest 5 blocks out
+    assert.equal(ctx.bring.phase, 'chestfetch') // one far tick never falls back
+    for (let i = 0; i < 4; i++) await bring(bot, ctx, null, {})
     assert.equal(ctx.bring.phase, 'find')
     assert.equal(ctx.bring.chestTried, true)
     assert.equal(bot.calls.opens, 0)

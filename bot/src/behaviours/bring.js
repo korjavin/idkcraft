@@ -31,6 +31,8 @@ const WANT_LOGS = 4
 const WANT_FOOD = 3
 const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable target
+const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
+  // far reading is often a recovering pathfinder, not an unreachable chest)
 const MOVE_TOLERANCE = 0.5
 const RETURN_RANGE = 2
 
@@ -558,6 +560,7 @@ function chestFetch(bot, ctx, o, bp) {
       bot.pathfinder.setGoal(new goals.GoalNear(c.x, c.y, c.z, 2), false)
     } catch (_) { /* retry next tick */ }
     ctx.lastGoalKey = key
+    o.chestStalls = 0
     if (!o.announced) {
       o.announced = true
       say(bot, food && !o.drop ? 'checking the home chest for food' : `checking the home chest for ${o.drop || o.name}`)
@@ -566,18 +569,24 @@ function chestFetch(bot, ctx, o, bp) {
   }
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
-  if (moving) return
-  // No path reads as !moving too: fall back to find instead of eating the
-  // 20 s windowOpen timeout on an out-of-range open (revmux 01-review).
+  if (moving) { o.chestStalls = 0; return }
+  // No path reads as !moving too: after CHEST_STALL_TICKS far+standing
+  // ticks fall back to find instead of eating the 20 s windowOpen timeout
+  // on an out-of-range open. One far tick never falls back: the pathfinder
+  // often recovers on the next tick (live assay: place_error, then walk).
   let near = false
   try {
     near = bp && typeof bp.x === 'number' && Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= 4
   } catch (_) { near = false }
   if (!near) {
-    o.chestTried = true
-    o.phase = 'find'
+    o.chestStalls = (o.chestStalls || 0) + 1
+    if (o.chestStalls >= CHEST_STALL_TICKS) {
+      o.chestTried = true
+      o.phase = 'find'
+    }
     return
   }
+  o.chestStalls = 0
   if (o.chestInFlight) return // exactly one window op at a time (dig rule)
   o.chestInFlight = true
   void (async () => {
