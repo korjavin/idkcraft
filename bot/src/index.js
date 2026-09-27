@@ -1123,6 +1123,7 @@ function fleeReflex(bot, ctx) {
     },
     getLead: () => ctx.lead,
     cancelGreet: () => { try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ } },
+    noteDeath: () => { try { ctx.deaths = (ctx.deaths || 0) + 1 } catch (_) { /* counter best-effort */ } },
     getFollowName: () => followName,
     getBrainEngine: () => brainEngine,
     setBrain: (b, label) => { doSetBrain(b, label) },
@@ -1788,7 +1789,7 @@ function handlePlayerLeft(bot, ticker, player) {
 function createLifecycle(ticker) {
   let died = false
   return {
-    onDeath(bot, t = ticker) { died = true; metrics.events.inc({ event: 'death' }); handleDeath(bot, t) },
+    onDeath(bot, t = ticker) { died = true; metrics.events.inc({ event: 'death' }); try { if (t && typeof t.noteDeath === 'function') t.noteDeath() } catch (_) { /* counter best-effort */ } handleDeath(bot, t) },
     onRespawn(bot, t = ticker) {
       if (!died) return
       died = false

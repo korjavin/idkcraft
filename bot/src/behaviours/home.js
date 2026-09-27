@@ -25,6 +25,48 @@ const MAX_REISSUES = 3
 // A lagged block update can hide a toggle we just did; re-trying at once
 // would flip the door back. One attempt per window is plenty.
 const TOGGLE_COOLDOWN_MS = 2000
+// Within this many blocks of the site the dawn report says 'at home'.
+const HOME_NEAR_BLOCKS = 10
+
+// Night tally (rw4.14): deaths + banked haul for the one dawn line. The
+// tally snapshots the cumulative counters at the first night step after a
+// reported night; a death mid-night starts a second gohome/stay but the
+// tally keeps accumulating (reported=false), so the report covers the whole
+// night, not just the last episode. Chat-only: no decision reads it.
+function ensureNight(ctx) {
+  try {
+    if (!ctx.night || ctx.night.reported) {
+      ctx.night = { deaths: ctx.deaths || 0, haul: { ...(ctx.haul || {}) }, reported: false }
+    }
+  } catch (_) { /* tally best-effort */ }
+}
+
+function nightLine(bot, ctx, home) {
+  let deaths = 0
+  const banked = []
+  try {
+    const snap = (ctx && ctx.night) || {}
+    deaths = Math.max(0, (ctx.deaths || 0) - (snap.deaths || 0))
+    const haul = ctx.haul || {}
+    const before = snap.haul || {}
+    for (const d of Object.keys(haul)) {
+      const g = (haul[d] || 0) - (before[d] || 0)
+      if (g > 0) banked.push(`${g} ${d}`)
+    }
+  } catch (_) { /* report best-effort */ }
+  const dText = deaths === 0 ? 'no deaths' : `${deaths} death${deaths === 1 ? '' : 's'}`
+  const bText = banked.length ? `banked ${banked.join(', ')}` : 'banked nothing'
+  let pText = 'at home'
+  try {
+    const bp = botPos(bot)
+    const st = home && home.site
+    if (bp && st) {
+      const d = Math.hypot(bp.x - st.x, bp.z - st.z)
+      if (d > HOME_NEAR_BLOCKS) pText = `${Math.round(d)} blocks from home`
+    }
+  } catch (_) { /* position best-effort */ }
+  return `night: survived, ${dText}, ${bText}, ${pText}; back to work`
+}
 
 function doorPos(home) {
   return new Vec3(home.site.x + 1, home.site.y, home.site.z)
@@ -298,6 +340,7 @@ function gohome(bot, ctx, target, state) {
     ctx.gohome.phase = isInside(bot, home) ? 'close' : 'walk'
     ctx.stepStatus = 'running'
     ctx.lastGoalKey = '' // fresh walk must replan, not latch-skip (live 8kc)
+    ensureNight(ctx) // the night begins when the bot heads home
   }
   const st = ctx.gohome
   const out = outsidePos(home)
@@ -380,6 +423,7 @@ function stay(bot, ctx, target, state) {
     ctx.stay = freshGo()
     ctx.stay.phase = 'hold'
     ctx.stepStatus = 'running' // same sticky restore as gohome above
+    ensureNight(ctx) // already-inside dusk starts the tally here
   }
   const st = ctx.stay
   // A stale stay (death, follow->work, lead order) must not hold the bot
@@ -443,7 +487,8 @@ function stay(bot, ctx, target, state) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
       ctx.inShelter = false
-      try { bot.chat('morning; back to work') } catch (_) { /* chat best-effort */ }
+      try { if (ctx.night) ctx.night.reported = true } catch (_) { /* tally best-effort */ }
+      try { bot.chat(nightLine(bot, ctx, home)) } catch (_) { /* chat best-effort */ }
       return
     }
     tryToggle(bot, st, door)

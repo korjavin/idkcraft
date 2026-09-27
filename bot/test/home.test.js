@@ -296,7 +296,7 @@ describe('rw4.5 stay', () => {
     home.stay(bot, ctx) // door closed: done
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.inShelter, false)
-    assert.ok(bot.chats.some((m) => m === 'morning; back to work'))
+    assert.ok(bot.chats.some((m) => m === 'night: survived, no deaths, banked nothing, at home; back to work'), bot.chats.join(' | '))
     } finally {
       Date.now = realNow
     }
@@ -417,7 +417,7 @@ describe('rw4.8 door failures fail loud', () => {
     home.stay(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:no-door')
     assert.equal(ctx.stay.phase, 'failed')
-    assert.ok(!bot.chats.some((m) => m === 'morning; back to work'))
+    assert.ok(!bot.chats.some((m) => m.startsWith('night: ')), 'failed close reports nothing')
   })
 })
 
@@ -499,5 +499,93 @@ describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
     home.gohome(bot, ctx) // arrived -> open leg, no walk
     assert.equal(ctx.gohome.phase, 'open')
     assert.equal(ctx.shelterRun, stamp)
+  })
+})
+
+describe('rw4.14 dawn report (night tally)', () => {
+  const { createLifecycle } = require('../src/index')
+
+  function stayDone(at, setupCtx, atNight) {
+    // Drive stay to the close-done chat: hold at dusk, exit at day.
+    const bot = mockBot({ at, timeOfDay: 12500, doorOpen: false })
+    const ctx = { home: ctxHome(), step: 'stay', stepStatus: 'running' }
+    if (setupCtx) setupCtx(ctx, bot)
+    home.stay(bot, ctx) // dusk: hold starts the tally
+    if (atNight) atNight(ctx, bot) // the night happens before dawn
+    bot.time.timeOfDay = 1000 // dawn
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      home.stay(bot, ctx) // open: toggle the closed door
+      home.stay(bot, ctx) // door open while inside: exit starts sneaking
+      bot.entity.position = { ...OUTSIDE } // stepped out
+      home.stay(bot, ctx) // exit arrives -> close, no toggle yet
+      now += 5000
+      home.stay(bot, ctx) // close it
+      home.stay(bot, ctx) // shut -> done + report
+    } finally {
+      Date.now = realNow
+    }
+    return { bot, ctx }
+  }
+
+  it('counts deaths and banked haul since dusk', () => {
+    const { bot, ctx } = stayDone({ x: 12, y: 64, z: 22 }, (ctx) => {
+      ctx.deaths = 5
+      ctx.haul = { coal: 20 }
+    }, (ctx) => {
+      // Night happens: 2 deaths, 14 coal banked.
+      ctx.deaths = 7
+      ctx.haul = { coal: 34 }
+    })
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.some((m) => m === 'night: survived, 2 deaths, banked 14 coal, at home; back to work'),
+      bot.chats.join(' | '))
+  })
+
+  it('one death reads singular, empty haul reads nothing', () => {
+    const bot2 = mockBot({ at: { x: 12, y: 64, z: 22 }, timeOfDay: 1000, doorOpen: false })
+    const ctx2 = { home: ctxHome(), step: 'stay', stepStatus: 'running', deaths: 1, night: { deaths: 0, haul: {}, reported: false }, stay: { phase: 'close', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 } }
+    home.stay(bot2, ctx2)
+    assert.ok(bot2.chats.some((m) => m === 'night: survived, 1 death, banked nothing, at home; back to work'),
+      bot2.chats.join(' | '))
+  })
+
+  it('far from the site reads blocks-out, not at home', () => {
+    const bot = mockBot({ at: { x: 60, y: 64, z: 20 }, timeOfDay: 1000, doorOpen: false })
+    const ctx = {
+      home: ctxHome(), step: 'stay', stepStatus: 'running', deaths: 0,
+      night: { deaths: 0, haul: {}, reported: false },
+      stay: { phase: 'close', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+    }
+    home.stay(bot, ctx)
+    assert.ok(bot.chats.some((m) => m === 'night: survived, no deaths, banked nothing, 50 blocks from home; back to work'),
+      bot.chats.join(' | '))
+  })
+
+  it('a second night step keeps the tally until the report', () => {
+    const bot = mockBot({ at: { x: 12, y: 64, z: 22 }, timeOfDay: 12500, doorOpen: false })
+    const ctx = { home: ctxHome(), step: 'stay', stepStatus: 'running', deaths: 3, haul: { coal: 1 } }
+    home.stay(bot, ctx) // first stay: snapshots 3/coal:1
+    ctx.deaths = 4 // a death, then the step restarts (gohome again after respawn)
+    ctx.stay = null
+    ctx.stepStatus = 'running'
+    home.stay(bot, ctx) // second stay: tally NOT reset (unreported)
+    assert.equal(ctx.night.deaths, 3, 'snapshot kept across episodes')
+    assert.deepEqual(ctx.night.haul, { coal: 1 })
+    ctx.night.reported = true // dawn reported...
+    ctx.stay = null
+    home.stay(bot, ctx) // ...next night starts fresh
+    assert.equal(ctx.night.deaths, 4, 'fresh snapshot after the report')
+    assert.equal(ctx.night.reported, false)
+  })
+
+  it('onDeath counts into ctx.deaths via noteDeath', () => {
+    let noted = 0
+    const life = createLifecycle({ noteDeath: () => { noted++ } })
+    const bot = mockBot({ at: { x: 12, y: 64, z: 22 } })
+    life.onDeath(bot, { noteDeath: () => { noted++ } })
+    assert.equal(noted, 1)
   })
 })
