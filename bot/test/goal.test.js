@@ -365,7 +365,7 @@ describe('decide decision point', () => {
     assert.deepEqual(r, { action: 'gather', sprint: false, source: 'goal-fsm' })
     assert.equal(ctx.step, 'gather')
     assert.equal(ctx.stepStatus, 'running')
-    assert.deepEqual(goalLines(), [`goal step=gather prev=none source=goal-fsm fsm=gather why=start facts=${goalText(goalFacts(bot, ctx))}`])
+    assert.deepEqual(goalLines(), [`goal step=gather prev=none source=goal-fsm fsm=gather why=start menu=gather,rest facts=${goalText(goalFacts(bot, ctx))}`])
     assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
   })
 
@@ -573,28 +573,64 @@ describe('decide decision point', () => {
     // ...while a rest answer against a gather fsm is the disagreement case:
     // STEP_ORDER ranks craft above gather, so no menu can pair a craft answer
     // with a gather fsm — the machinery is proven on rest-vs-gather instead.
+    // hg8: laya is no longer asked a [work, rest] pair (shaped to only-option
+    // without asking), so the disagreement machinery is proven on a jev brain.
     const errLines = []
     const origErr = console.error
     console.error = (l) => { errLines.push(String(l)) }
     try {
       const r2 = await chooseStep(laya, { ...facts, logs: 0, planks: 0, maxPlanks: 0 }, ['gather', 'rest'])
-      const layaRest = { source: 'laya', ask: async () => 'rest' }
-      const r3 = await chooseStep(layaRest, { ...facts, logs: 0, planks: 0, maxPlanks: 0 }, ['gather', 'rest'])
-      assert.equal(r2.step, 'gather') // control: fsm path agrees silently
+      const jevRest = { source: 'jev', ask: async () => 'rest' }
+      const r3 = await chooseStep(jevRest, { ...facts, logs: 0, planks: 0, maxPlanks: 0 }, ['gather', 'rest'])
+      assert.deepEqual(r2, { step: 'gather', source: 'only-option', fsm: 'gather', model: null }) // shaped: not asked
       assert.equal(r3.step, 'rest')
-      assert.equal(r3.source, 'laya')
-      assert.ok(errLines.some((l) => l.includes('goal disagree') && l.includes('model=rest') && l.includes('fsm=gather')),
+      assert.equal(r3.source, 'jev')
+      assert.ok(errLines.some((l) => l.includes('goal disagree') && l.includes('model=rest') && l.includes('fsm=gather') && l.includes('menu=gather,rest')),
         `disagreement logged, got: ${errLines.join(' | ')}`)
     } finally {
       console.error = origErr
     }
   })
 
+  it('chooseStep hg8 shaping: laya pair [work, rest] answers work unasked; jev and chains still ask', async () => {
+    // The rest-poison fix: prod laya answered rest on 761/761 pair choices.
+    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no', health: 20, food: 20 }
+    const boom = { source: 'laya', ask: async () => { throw new Error('shaped pair must not ask') } }
+    const r = await chooseStep(boom, facts, ['forage', 'rest'])
+    assert.deepEqual(r, { step: 'forage', source: 'only-option', fsm: 'forage', model: null })
+    // A lone rest still rests (the true nothing-fits case).
+    const r2 = await chooseStep(boom, facts, ['rest'])
+    assert.deepEqual(r2, { step: 'rest', source: 'only-option', fsm: 'rest', model: null })
+    // Chains (>2) keep the full menu for laya: rest last, first-yes-wins.
+    let askedMenu = null
+    const chain = { source: 'laya', ask: async ({ criteria }) => { askedMenu = Object.keys(criteria); return 'forage' } }
+    const r3 = await chooseStep(chain, facts, ['forage', 'explore', 'rest'])
+    assert.equal(r3.step, 'forage')
+    assert.equal(r3.source, 'laya')
+    assert.deepEqual(askedMenu, ['forage', 'explore', 'rest'])
+    // JEV is exempt from shaping: pairs are asked in full.
+    let jevAsked = null
+    const jev = { source: 'jev', ask: async ({ criteria }) => { jevAsked = Object.keys(criteria); return 'rest' } }
+    const errLines = []
+    const origErr = console.error
+    console.error = (l) => { errLines.push(String(l)) }
+    try {
+      const r4 = await chooseStep(jev, facts, ['forage', 'rest'])
+      assert.equal(r4.step, 'rest')
+      assert.equal(r4.source, 'jev')
+      assert.deepEqual(jevAsked, ['forage', 'rest'])
+    } finally {
+      console.error = origErr
+    }
+  })
+
   it('chooseStep timeout falls back to fsm with escalation counted', async () => {
-    // (c) timeout: the FSM step runs, source is fsm-fallback.
+    // (c) timeout: the FSM step runs, source is fsm-fallback. hg8: a laya
+    // [work, rest] pair is shaped (never asked), so the fallback path is
+    // proven on a 3-menu, where laya is still consulted.
     const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 0, home: 'none', tablePlaced: false, inside: 'no', health: 20, food: 20 }
     const slow = { source: 'laya', ask: async () => { const e = new Error('slow'); e.name = 'TimeoutError'; throw e } }
-    const r = await chooseStep(slow, facts, ['gather', 'rest'])
+    const r = await chooseStep(slow, facts, ['gather', 'explore', 'rest'])
     assert.deepEqual(r, { step: 'gather', source: 'fsm-fallback', fsm: 'gather', model: 'laya' })
     const metrics = require('../src/metrics')
     const text = await metrics.client.register.metrics()
@@ -603,9 +639,11 @@ describe('decide decision point', () => {
 
   it('decide asks once per decision point, not per tick', async () => {
     // (e) same goalText + running step: ask is not called again. Deleting the
-    // change gate (ask every tick) fails this test.
+    // change gate (ask every tick) fails this test. hg8: the menu here is a
+    // [gather, rest] pair, which laya answers unasked — the jev brain keeps
+    // the ask alive so the gate is still what is proven.
     const bot = goalBot()
-    const brain = { source: 'laya', calls: 0, ask: async function () { this.calls++; return 'gather' } }
+    const brain = { source: 'jev', calls: 0, ask: async function () { this.calls++; return 'gather' } }
     const ctx = { brain }
     await decide(bot, ctx)
     assert.equal(brain.calls, 1)
@@ -615,15 +653,17 @@ describe('decide decision point', () => {
   })
 
   it('goal metrics count the model choice', async () => {
-    // (f) goal_steps_total, goal_step gauge, goal_choice_duration.
+    // (f) goal_steps_total, goal_step gauge, goal_choice_duration. hg8: the
+    // menu here is a [gather, rest] pair, which laya answers unasked — the
+    // jev brain keeps a real model choice so the metrics still count one.
     const bot = goalBot()
-    const brain = { source: 'laya', ask: async () => 'gather' }
+    const brain = { source: 'jev', ask: async () => 'gather' }
     await decide(bot, { brain })
     const metrics = require('../src/metrics')
     const text = await metrics.client.register.metrics()
-    assert.match(text, /idkcraft_bot_goal_steps_total\{step="gather",source="laya"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_goal_steps_total\{step="gather",source="jev"\} [1-9]/)
     assert.match(text, /idkcraft_bot_goal_step\{step="gather"\} 1/)
-    assert.match(text, /idkcraft_bot_goal_choice_duration_seconds_count\{source="laya"\} [1-9]/)
+    assert.match(text, /idkcraft_bot_goal_choice_duration_seconds_count\{source="jev"\} [1-9]/)
   })
 
   it('full load hands gather to craft', async () => {
@@ -641,9 +681,10 @@ describe('decide failed-step dedup (revmux 01 major)', () => {
     // atl.4: the failed step leaves the menu, so the repeat re-decides to
     // rest without asking (only-option); further ticks reuse the choice.
     // Deleting the (text, status) gate (ask every tick) still fails this
-    // test: a fresh multi-option point would ask on every tick.
+    // test: a fresh multi-option point would ask on every tick. hg8: jev
+    // brain — the first menu is a [gather, rest] pair laya answers unasked.
     const bot = goalBot()
-    const brain = { source: 'laya', calls: 0, ask: async function () { this.calls++; return 'gather' } }
+    const brain = { source: 'jev', calls: 0, ask: async function () { this.calls++; return 'gather' } }
     const ctx = { brain }
     await decide(bot, ctx)
     assert.equal(brain.calls, 1)
@@ -826,14 +867,16 @@ describe('atl.7 rest explains itself', () => {
     assert.ok(ctx.restWhy && ctx.restWhy.includes('gather: load full'))
   })
   it('model-chosen rest skips the feasible steps', async () => {
+    // hg8: the menu here is an [explore, rest] pair, which a laya-like brain
+    // answers unasked — the jev brain keeps rest askable for the ready test.
     const bot = goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }] })
-    const brain = { source: 'test', ask: async () => 'rest' }
+    const brain = { source: 'jev', ask: async () => 'rest' }
     const ctx = { step: '', stepStatus: null, goalText: null, home: { site: { x: 6, y: 64, z: 0 }, built: true }, brain }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
     assert.ok(ctx.restWhy.includes('gather: home built'), `why: ${ctx.restWhy}`)
     assert.ok(ctx.restWhy.includes('explore: ready'), `declined ready step marked: ${ctx.restWhy}`)
-    assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(test)')), `chats: ${bot.chats}`)
+    assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(jev)')), `chats: ${bot.chats}`)
   })
   it('held steps report the hold, not the facts', async () => {
     const bot = ladenBot()
