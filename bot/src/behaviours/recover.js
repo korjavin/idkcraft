@@ -211,8 +211,58 @@ function lavaNearAt(bot) {
   return false
 }
 
+// Pillar fuel: dirt and cobblestone. One predicate for the count and the
+// finder, so a positive count always yields an item to equip below.
+function isScaffoldName(n) {
+  return n === 'dirt' || n === 'cobblestone'
+}
+
 function scaffoldCount(bot) {
-  return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  return countItems(bot, isScaffoldName)
+}
+
+function findScaffoldItem(bot) {
+  let items = []
+  try {
+    items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+  } catch (_) { return null }
+  if (!Array.isArray(items)) return null
+  return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
+}
+
+// Issue window: rising, plus the first ~2 game ticks past the peak
+// (vy > -0.1, feet still >= +1.18). A pure vy > 0 guard shrinks the window
+// to ~150 ms, which 1 Hz sampling of the ~600 ms jump cycle can miss for a
+// whole episode (revmux 01 core-1: failed:no-apex); the ~250 ms window
+// always catches a 200 ms-spaced phase, and the server still applies the
+// placement while the feet are above the cell. Falling faster means the
+// feet are back in the cell at apply time (self-intersection refusal), so
+// those samples wait for the next apex. A missing velocity (mocks) reads
+// as inside the window.
+function apexWindow(bot) {
+  try {
+    const v = bot && bot.entity && bot.entity.velocity
+    if (!v || typeof v.y !== 'number') return true
+    return v.y > -0.1
+  } catch (_) { return true }
+}
+
+// Dig with the right tool: pillar_up leaves scaffold in hand, and digging
+// stone bare-handed takes ~7.5 s instead of ~1 s (revmux 01 body-1). Same
+// bestHarvestTool pattern as forage.js; a missing tool reads as "dig with
+// whatever is in hand".
+function digTool(bot, cell) {
+  try {
+    if (bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function') return bot.pathfinder.bestHarvestTool(cell) || null
+  } catch (_) { /* tool best-effort */ }
+  return null
+}
+
+// One log-safe token from a place error: the prod line carries err= so the
+// next session review sees WHY the server refused, not just that it did.
+function shortErr(e) {
+  const m = e && typeof e.message === 'string' ? e.message : String(e)
+  return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
 }
 
 function hasPickaxe(bot) {
@@ -428,7 +478,7 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + PILLAR_APEX) {
+    if (bp.y >= st.startFloor + PILLAR_APEX && apexWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
     } else {
@@ -468,12 +518,19 @@ function pillarUpRun(bot, ctx) {
     if (solid(c)) { ref = c; face = new Vec3(r.f[0], r.f[1], r.f[2]); break }
   }
   if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-reference'
+  // Equip first: mineflayer throws 'must be holding an item to place' on
+  // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
+  // pillar_ups, 0 placed). The count gate above already vetoed an empty
+  // stock; this covers an inventory that changed mid-jump.
+  const item = findScaffoldItem(bot)
+  if (!item) { setJump(bot, false); return 'failed:no-scaffold' }
   st.placeInFlight = true
   void (async () => {
     try {
+      if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
       await bot.placeBlock(ref, face)
       st.placed = true
-    } catch (_) { st.placeError = true } finally { st.placeInFlight = false }
+    } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
   return 'running'
 }
@@ -498,7 +555,11 @@ function digUpRun(bot, ctx) {
   const cell = solid(head1) ? head1 : head2
   st.digInFlight = true
   void (async () => {
-    try { await bot.dig(cell) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    try {
+      const tool = digTool(bot, cell)
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      await bot.dig(cell)
+    } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
   return 'running'
 }
@@ -805,7 +866,11 @@ function digThroughRun(bot, ctx) {
   const cell = solid(feet) ? feet : head
   st.digInFlight = true
   void (async () => {
-    try { await bot.dig(cell) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    try {
+      const tool = digTool(bot, cell)
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      await bot.dig(cell)
+    } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
   return 'running'
 }
@@ -1022,6 +1087,12 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
       `head=${blockNameOf(cellAt(bot, 0, 1, 0))} next=${next}`
   }
   if (action === 'hop_step') extra += ` ${hopDetail(bot, ctx)}`
+  if (outcome === 'failed:place-error') {
+    try {
+      const pe = ctx && ctx.recovery && ctx.recovery.st && ctx.recovery.st.placeErr
+      if (pe) extra += ` err=${pe}`
+    } catch (_) { /* err best-effort */ }
+  }
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
