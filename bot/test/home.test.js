@@ -421,42 +421,66 @@ describe('rw4.8 door failures fail loud', () => {
   })
 })
 
-describe('rw4.10 shelter run (walk sprints, night ticks stamped)', () => {
-  const lastSprint = (bot) => bot.calls.controls.filter(([n]) => n === 'sprint').pop()
-  it('night walk sprints and stamps a fresh shelterRun', () => {
-    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000 })
-    const ctx = { home: ctxHome() }
+describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
+  const FAR = { x: 20, y: 64, z: 10 } // ~13 from the door: past sprint distance
+  const flatNodes = [{ x: 18, y: 64, z: 12 }, { x: 16, y: 64, z: 14 }]
+  function walkCtx(extra) {
+    return Object.assign({
+      home: ctxHome(),
+      movements: { allowSprinting: false, allowParkour: true },
+      lastPathNodes: flatNodes,
+    }, extra)
+  }
+  it('night walk far+flat sprints and stamps a fresh shelterRun', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
     home.gohome(bot, ctx)
     assert.equal(ctx.gohome.phase, 'walk')
-    assert.deepEqual(lastSprint(bot), ['sprint', true])
+    assert.equal(ctx.movements.allowSprinting, true)
+    assert.equal(ctx.movements.allowParkour, false)
     assert.equal(typeof ctx.shelterRun, 'number')
     assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
   })
-  it('day walk sprints but leaves no stamp', () => {
-    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 6000 })
-    const ctx = { home: ctxHome() }
+  it('near door: walks, still stamps at night (gait-independent)', () => {
+    const bot = mockBot({ at: { x: 14, y: 64, z: 17 }, timeOfDay: 15000 })
+    const ctx = walkCtx()
     home.gohome(bot, ctx)
     assert.equal(ctx.gohome.phase, 'walk')
-    assert.deepEqual(lastSprint(bot), ['sprint', true])
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('+1 node in the window kills sprint but keeps the stamp', () => {
+    // 3nt.24: sprint-jump would wedge on the step face.
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx({ lastPathNodes: [{ x: 18, y: 64, z: 12 }, { x: 17, y: 65, z: 13 }] })
+    home.gohome(bot, ctx)
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(ctx.movements.allowParkour, true)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('no plan nodes: no sprint (fail closed), stamp kept', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx({ lastPathNodes: null })
+    home.gohome(bot, ctx)
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('day walk sprints but leaves no stamp', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 6000 })
+    const ctx = walkCtx()
+    home.gohome(bot, ctx)
+    assert.equal(ctx.movements.allowSprinting, true)
     assert.equal(ctx.shelterRun, undefined)
   })
-  it('arrival clears sprint and stops refreshing the stamp', () => {
-    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000 })
-    const ctx = { home: ctxHome() }
+  it('off-walk ticks do not refresh the stamp', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
     home.gohome(bot, ctx)
     const stamp = ctx.shelterRun
     assert.equal(typeof stamp, 'number')
     bot.entity.position = { ...OUTSIDE }
-    home.gohome(bot, ctx)
+    home.gohome(bot, ctx) // arrived -> open leg, no walk
     assert.equal(ctx.gohome.phase, 'open')
-    assert.deepEqual(lastSprint(bot), ['sprint', false])
     assert.equal(ctx.shelterRun, stamp)
-  })
-  it('failed walk clears sprint', () => {
-    const bot = mockBot({ at: { x: 16, y: 64, z: 14 }, timeOfDay: 15000, moving: false })
-    const ctx = { home: ctxHome(), step: 'gohome', stepStatus: 'running' }
-    for (let i = 0; i < 31; i++) home.gohome(bot, ctx) // 3 x 10 stall ticks
-    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
-    assert.deepEqual(lastSprint(bot), ['sprint', false])
   })
 })

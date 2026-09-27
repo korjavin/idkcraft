@@ -242,9 +242,30 @@ function setWalkDig(bot, allow) {
   } catch (_) { /* approach best-effort */ }
 }
 
-function setSprint(bot, on) {
+// Flat-run sprint (rw4.10): same gate as follow.js flat-pursuit sprint
+// (5vv) — far from the door and every plan node within one sprint tick
+// level, or the sprint-jump wedges on a +1 step (3nt.24). A raw
+// setControlState would die in 50 ms (the 20 Hz executor rewrites sprint
+// from allowSprinting), so this drives the flag the executor reads.
+// runTick restores both flags on ticks gohome does not own.
+const SHELTER_SPRINT_DIST = 8
+const SHELTER_SPRINT_LOOKAHEAD = 6
+function setShelterSprint(bot, ctx, out) {
   try {
-    if (bot && typeof bot.setControlState === 'function') bot.setControlState('sprint', !!on)
+    const mov = ctx && ctx.movements
+    if (!mov || typeof mov.allowSprinting !== 'boolean') return
+    const bp = botPos(bot)
+    const d = bp ? Math.hypot(bp.x - (out.x + 0.5), bp.y - out.y, bp.z - (out.z + 0.5)) : null
+    const nodes = ctx.lastPathNodes
+    const flat = !!(bp && Array.isArray(nodes) && nodes.length > 0 && nodes.every((n) => {
+      if (!n || typeof n.y !== 'number') return false
+      if (typeof n.x === 'number' && typeof n.z === 'number' &&
+        Math.hypot(n.x - bp.x, n.z - bp.z) > SHELTER_SPRINT_LOOKAHEAD) return true
+      return Math.floor(n.y) === Math.floor(bp.y)
+    }))
+    const sprint = d !== null && d > SHELTER_SPRINT_DIST && flat
+    mov.allowSprinting = sprint
+    if (typeof mov.allowParkour === 'boolean') mov.allowParkour = !sprint
   } catch (_) { /* sprint best-effort */ }
 }
 
@@ -263,7 +284,6 @@ function gohome(bot, ctx, target, state) {
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     setWalkDig(bot, true) // walk never owned the drill past this return
-    setSprint(bot, false)
     return
   }
   if (!ctx.gohome || ctx.gohome.phase === 'done' || ctx.gohome.phase === 'failed') {
@@ -284,14 +304,14 @@ function gohome(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'gohome-walk',
       new goals.GoalNear(out.x, out.y, out.z, 1),
       nearOut(out, 1))
-    if (st.phase === 'failed') { setWalkDig(bot, true); setSprint(bot, false); return } // walkTo failed the step
-    if (arrived) { setSprint(bot, false); st.phase = 'open' }
+    if (st.phase === 'failed') { setWalkDig(bot, true); return } // walkTo failed the step
+    if (arrived) st.phase = 'open'
     else {
-      // rw4.10: the walk home is a run, day and night — 48 blocks take 11 s
-      // sprinted, while fight churn on the way killed prod 7 times in 3.5
-      // min. A step switch away mid-walk leaves sprint on until some leg
-      // or hold re-asserts controls — speed only, hunger covered by eat.
-      setSprint(bot, true)
+      // rw4.10: the walk home runs far flat legs (48 blocks take ~11 s
+      // sprinted; fight churn on the way killed prod 7 times in 3.5 min),
+      // and every night walk tick stamps the shelter run for dispatch
+      // (atl.12) — gait-independent: rough legs walk but still count.
+      setShelterSprint(bot, ctx, out)
       try {
         if (goalFacts(bot, ctx).time === 'night') ctx.shelterRun = Date.now()
       } catch (_) { /* unknown time: no stamp (fail closed) */ }
