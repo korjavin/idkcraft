@@ -523,3 +523,487 @@ describe('stockpile behaviour', () => {
     assert.equal(ctx.stepStatus, 'failed:craft')
   })
 })
+
+describe('stockpile helper residuals (idkcraft-cq7)', () => {
+  function adoptedBot(over = {}) {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'oak_log', count: 20 }], ...over })
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = 'stockpile:5,64,1'
+    return { bot, ctx }
+  }
+
+
+  it('H-edibles a missing index set falls back to the built-in foods', () => {
+    const index = require('../src/index')
+    const keep = index.EDIBLE_FOODS
+    index.EDIBLE_FOODS = null
+    try {
+      // baked_potato is index-only: without the set it banks, none kept.
+      const plan = stockpile.depositPlan({ inventory: { items: () => [{ name: 'baked_potato', count: 12 }] } })
+      assert.deepEqual(plan, [{ name: 'baked_potato', count: 12 }])
+    } finally {
+      index.EDIBLE_FOODS = keep
+    }
+    const plan = stockpile.depositPlan({ inventory: { items: () => [{ name: 'baked_potato', count: 12 }] } })
+    assert.deepEqual(plan, [{ name: 'baked_potato', count: 2 }])
+  })
+
+  it('H-invthrow a dying inventory reads empty, the step finishes', () => {
+    const { bot, ctx } = adoptedBot()
+    bot.inventory.items = () => { throw new Error('window flicker') }
+    assert.doesNotThrow(() => stockpile(bot, ctx))
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(stockpile.depositPlan(bot), [])
+  })
+
+  it('H-invshape a non-array inventory reads empty instead of crashing', () => {
+    const bot = mockBot()
+    bot.inventory.items = () => ({})
+    assert.deepEqual(stockpile.depositPlan(bot), [])
+    assert.equal(stockpile.surplusCount(bot), 0)
+  })
+
+  it('H-nullslots null and nameless slots never reach the keeps', () => {
+    const plan = stockpile.depositPlan({ inventory: { items: () => [null, { count: 1 }, { name: 'dirt', count: 40 }] } })
+    assert.deepEqual(plan, [{ name: 'dirt', count: 8 }])
+  })
+
+  it('H-nocount a count-less stack banks a single item', () => {
+    const plan = stockpile.depositPlan({ inventory: { items: () => [{ name: 'oak_log' }] } })
+    assert.deepEqual(plan, [{ name: 'oak_log', count: 1 }])
+  })
+
+  it('H-scanthrow a throwing scan degrades the spot hunt to unknown', () => {
+    const bot = mockBot()
+    bot.blockAt = () => { throw new Error('chunk dark') }
+    assert.equal(stockpile.chestSpotFor(bot, homeCtx()), 'unknown')
+  })
+
+  it('H-badsite a non-numeric site scans nothing, returns null', () => {
+    let calls = 0
+    const bot = mockBot()
+    bot.blockAt = (p) => {
+      calls++
+      if (typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') throw new Error('NaN read')
+      return { name: 'air' }
+    }
+    assert.equal(stockpile.chestSpotFor(bot, homeCtx({ home: { site: { x: 'a' } } })), null)
+    assert.equal(calls, 0, 'no junk reads on a bad site')
+  })
+
+  it('H-darkbelow air cells over an unreadable floor read unknown', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => (p.y === 64 ? { name: 'air' } : null)
+    assert.equal(stockpile.chestSpotFor(bot, homeCtx()), 'unknown')
+  })
+
+  it('H-stalestamp an expired no-spot stamp places again', () => {
+    const bot = mockBot({ inv: [{ name: 'chest', count: 1 }] })
+    const ctx = homeCtx({ ctx: { chestNoSpotAt: Date.now() - 2 * 60 * 60 * 1000 } })
+    assert.equal(stockpile.chestTodo(bot, ctx, 0), 'place')
+  })
+
+  it('H-farkey a fresh goal key restarts the far patience', () => {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'oak_log', count: 20 }] })
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = 'stockpile:5,64,1'
+    ctx.stockpileFar = { key: 'stockpile-table:1,2,3', n: 4 }
+    stockpile(bot, ctx) // far on a new key: patience restarts, no fail
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.stockpileFar, { key: 'stockpile:5,64,1', n: 1 })
+  })
+
+  it('H-zerotake a zero-count chest stack issues no withdraw', async () => {
+    const bot = mockBot({ inv: [], chest: [] })
+    bot.blockAt = world({ '5,64,1': 'chest' }).blockAt
+    const asked = []
+    bot.openChest = async () => ({
+      containerItems: () => [{ name: 'dirt', type: 1, metadata: null, count: 0 }],
+      withdraw: async (type, meta, count) => { asked.push(count) },
+      close: () => {},
+    })
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    const res = await stockpile.withdrawFromChest(bot, ctx, 'dirt', 5)
+    assert.equal(res.got, 0)
+    assert.deepEqual(asked, [], 'no zero-count window click')
+  })
+
+  it('H-notake a count-less chest stack withdraws a single item', async () => {
+    const bot = mockBot({ inv: [], chest: [{ name: 'dirt' }] })
+    bot.blockAt = world({ '5,64,1': 'chest' }).blockAt
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    const res = await stockpile.withdrawFromChest(bot, ctx, 'dirt', 5)
+    assert.equal(res.got, 1)
+  })
+
+  it('H-wdnullbot a null bot withdraws nothing instead of throwing', async () => {
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    assert.deepEqual(await stockpile.withdrawFromChest(null, ctx, 'dirt', 5), { got: 0 })
+    assert.deepEqual(await stockpile.withdrawFromChest(undefined, ctx, 'dirt', 5), { got: 0 })
+  })
+
+  it('H-wenullbot a null bot withdraws no edible instead of throwing', async () => {
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    assert.deepEqual(await stockpile.withdrawEdible(null, ctx, 5), { got: 0, name: null })
+  })
+
+  it('H-weirdstacks a non-array chest listing reports empty with status', async () => {
+    const bot = mockBot({ inv: [], chest: [] })
+    bot.blockAt = world({ '5,64,1': 'chest' }).blockAt
+    bot.openChest = async () => ({ containerItems: () => 'weird', close: () => {} })
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    const res = await stockpile.withdrawEdible(bot, ctx, 5)
+    assert.deepEqual(res, { got: 0, name: null, status: 'ok' })
+  })
+})
+
+describe('stockpile guard residuals (idkcraft-cq7 batch B1)', () => {
+  function adoptedNear(over = {}) {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'oak_log', count: 20 }], ...over })
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = 'stockpile:5,64,1'
+    return { bot, ctx }
+  }
+
+  it('B-ctx a missing ctx returns silently', () => {
+    const bot = mockBot()
+    assert.doesNotThrow(() => stockpile(bot, null))
+    assert.doesNotThrow(() => stockpile(bot, undefined))
+  })
+
+  it('B-inflight a flying op blocks a second one', () => {
+    const { bot, ctx } = adoptedNear()
+    ctx.stockpileInFlight = true
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.goals.length, 0)
+    assert.equal(bot.calls.opens, 0)
+  })
+
+  it('B-bp a missing body returns silently', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    delete bot.entity
+    const ctx = homeCtx()
+    assert.doesNotThrow(() => stockpile(bot, ctx))
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.goals.length, 0)
+  })
+
+  it('B-say a throwing chat still banks the deposit', async () => {
+    const { bot, ctx } = adoptedNear()
+    bot.chat = () => { throw new Error('chat dead') }
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'done', `errs: ${ctx.stepStatus}`)
+    assert.deepEqual(bot.calls.deposits, ['20 oak_log'])
+  })
+
+  it('B-close a throwing close still banks the deposit', async () => {
+    const { bot, ctx } = adoptedNear()
+    const open = bot.openChest
+    bot.openChest = async (block) => {
+      const w = await open(block)
+      w.close = () => { throw new Error('close stuck') }
+      return w
+    }
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.chestErrorAt, null)
+    assert.deepEqual(bot.calls.deposits, ['20 oak_log'])
+  })
+
+  it('B-noopen a missing chest driver unadopts instead of failing', async () => {
+    const { bot, ctx } = adoptedNear()
+    delete bot.openChest
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.home.chest, null)
+  })
+
+
+  it('B-unregbank an unregistered surplus parks full instead of banking air', async () => {
+    const { bot, ctx } = adoptedNear({ inv: [{ name: 'mystery_ore', count: 20 }] })
+    bot.registry = { itemsByName: {} }
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.chestFull, true)
+    assert.ok(bot.chats.join(' ').includes('full'), `chats: ${bot.chats}`)
+    assert.deepEqual(bot.calls.deposits, [])
+  })
+})
+
+describe('stockpile place residuals (idkcraft-cq7 batch B2)', () => {
+  function placeBot(over = {}) {
+    const bot = mockBot({ inv: [{ name: 'chest', count: 1 }], ...over })
+    bot.entity.position = pos(5, 64, 1)
+    return { bot, ctx: homeCtx() }
+  }
+
+  it('B-notable no table anywhere fails no-chest instead of throwing', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => [{}] // craftable: without the guard the null tablePos would crash the tick
+    const ctx = homeCtx()
+    assert.doesNotThrow(() => stockpile(bot, ctx))
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+  })
+
+  it('B-claimedtable a menu-claimed table crafts past a missing home table', () => {
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => [{}]
+    const ctx = homeCtx({ ctx: { claimedTable: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx) // far from the table: a walk is issued, no fail
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.lastGoalKey, 'stockpile-table:4,64,1')
+  })
+
+  it('B-wrongtable a non-table block at the claim fails no-chest', () => {
+    const bot = mockBot({ cells: { '4,64,1': 'dirt' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => [{}] // craftable: without the name check the walk would issue
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    assert.doesNotThrow(() => stockpile(bot, ctx))
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+  })
+
+  it('B-norecipe a table without ingredients fails no-chest', () => {
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => []
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+  })
+
+
+
+
+
+
+  it('B-itemgone a chest lost during the flora dig fails no-chest', async () => {
+    const { bot, ctx } = placeBot({ cells: { '5,64,1': 'short_grass' } })
+    const dig = bot.dig
+    bot.dig = async (cell) => {
+      await dig(cell)
+      const ix = bot.inv.findIndex((i) => i.name === 'chest')
+      if (ix >= 0) bot.inv.splice(ix, 1) // pack changes across the dig await
+    }
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+
+  it('B-weirdinv a flaked inventory after the flora dig fails no-chest', async () => {
+    const { bot, ctx } = placeBot({ cells: { '5,64,1': 'short_grass' } })
+    const items = bot.inventory.items
+    let dug = false
+    const dig = bot.dig
+    bot.dig = async (cell) => { await dig(cell); dug = true }
+    bot.inventory.items = () => (dug ? 'weird' : items())
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+
+  it('B-noequipfn a missing hold driver still places', async () => {
+    const { bot, ctx } = placeBot()
+    delete bot.equip
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('B-noland a placement that leaves no chest fails place', async () => {
+    const { bot, ctx } = placeBot()
+    bot.placeBlock = async () => {} // server eats it: reread finds air
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:place')
+    assert.equal(ctx.home.chest, null)
+    assert.ok(!bot.chats.join(' ').includes('placed'), `chats: ${bot.chats}`)
+  })
+
+  it('B-holdthrow a throwing hold fails place', async () => {
+    const { bot, ctx } = placeBot()
+    bot.equip = async () => { throw new Error('hand stuck') }
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:place')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+
+  it('B-placethrow a refused placement fails place', async () => {
+    const { bot, ctx } = placeBot()
+    bot.placeBlock = async () => { throw new Error('placement refused') }
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:place')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+})
+
+describe('stockpile walk residuals (idkcraft-cq7 batch W)', () => {
+  const SITE_KEY = 'stockpile-site:0,64,0'
+  const CHEST_KEY = 'stockpile:5,64,1'
+
+  it('W-sitemove a moving body keeps walking to the dark site', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.blockAt = () => null // home chunk dark
+    bot.entity.position = pos(100, 64, 100)
+    bot.pathfinder.isMoving = () => true
+    const ctx = homeCtx()
+    ctx.lastGoalKey = SITE_KEY
+    ctx.stockpileFar = { key: SITE_KEY, n: 4 }
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.stockpileFar.n, 4, 'moving accrues no far tick')
+  })
+
+  it('W-siteretry an arrived-but-dark scan retries instead of failing', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.blockAt = () => null
+    const ctx = homeCtx()
+    ctx.lastGoalKey = SITE_KEY
+    ctx.stockpileFar = { key: SITE_KEY, n: 4 }
+    stockpile(bot, ctx) // near the site (spawn), standing, still dark
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.goals.length, 0)
+  })
+
+  it('W-adoptmove a moving body keeps walking to the dark chest', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.blockAt = () => null
+    bot.entity.position = pos(100, 64, 100)
+    bot.pathfinder.isMoving = () => true
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = CHEST_KEY
+    ctx.stockpileFar = { key: CHEST_KEY, n: 4 }
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 }, 'unknown never unadopts')
+  })
+
+  it('W-adoptretry an arrived-but-dark chest retries instead of failing', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.blockAt = () => null
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = CHEST_KEY
+    ctx.stockpileFar = { key: CHEST_KEY, n: 4 }
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+  })
+
+  it('W-adoptfar five far ticks on a dark chest fail far', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 20 }] })
+    bot.blockAt = () => null
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = CHEST_KEY
+    ctx.stockpileFar = { key: CHEST_KEY, n: 4 }
+    stockpile(bot, ctx) // standing at spawn: far from the dark chest
+    assert.equal(ctx.stepStatus, 'failed:far')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 }, 'far keeps the claim')
+  })
+
+  it('W-walkmove a moving body opens nothing on the way in', () => {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.entity.position = pos(5, 64, 1)
+    bot.pathfinder.isMoving = () => true
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    ctx.lastGoalKey = CHEST_KEY
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.opens, 0)
+  })
+
+  it('W-tablemove a moving body keeps walking to the table', () => {
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => [{}]
+    bot.pathfinder.isMoving = () => true
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    ctx.lastGoalKey = 'stockpile-table:4,64,1'
+    ctx.stockpileFar = { key: 'stockpile-table:4,64,1', n: 4 }
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.stockpileFar.n, 4)
+  })
+
+  it('W-tablefar five far ticks on the table walk fail far', () => {
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv: [{ name: 'oak_log', count: 20 }] })
+    bot.recipesFor = () => [{}]
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    ctx.lastGoalKey = 'stockpile-table:4,64,1'
+    ctx.stockpileFar = { key: 'stockpile-table:4,64,1', n: 4 }
+    stockpile(bot, ctx) // standing at spawn: far from the table
+    assert.equal(ctx.stepStatus, 'failed:far')
+  })
+
+  it('W-placemove a moving body places nothing on the way in', () => {
+    const bot = mockBot({ inv: [{ name: 'chest', count: 1 }] })
+    bot.entity.position = pos(5, 64, 1)
+    bot.pathfinder.isMoving = () => true
+    const ctx = homeCtx()
+    ctx.lastGoalKey = 'stockpile-place:5,64,1'
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(!ctx.stockpileInFlight, 'no window op while walking')
+  })
+})
+
+// NOTE (idkcraft-cq7 mutant review): the following source mutants survive the
+// suite and are equivalent or unreachable, not coverage gaps — verified by
+// probing, not by inspection alone:
+// - nearPos catch: unreachable — the head bp read and the nearPos re-read
+//   run in one synchronous tick, so a deterministic read cannot throw in one
+//   and not the other; the `!bp`/non-number guards cover the honest shapes.
+// - isKeep non-string guard: unreachable via depositPlan (nameless slots
+//   filter first) and isKeep is unexported; dropping depositPlan's own
+//   typeof arm is equivalent because isKeep would keep them anyway.
+// - `n <= 0` skip: equivalent over realistic counts — a zero count no-ops
+//   through the keep math and still fails `n > 0` (only negative counts,
+//   which no inventory holds, would diverge).
+// - blockNameAt `b &&`: equivalent — a null block throws inside the same
+//   try and the catch returns null either way.
+// - chestTodo `!=` vs `!==`: equivalent — an undefined stamp NaNs the
+//   time math to false, the same as skipping.
+// - withdraw `want <= 0` break: equivalent — without it the take math
+//   yields 0 and the take guard continues, issuing no window call.
+// - withdrawEdible `!first` early return: equivalent — without it the
+//   undefined dereference lands in withChest's catch and reports the same
+//   { got: 0, name: null }.
+// - withdraw `res &&`: equivalent — withChest always resolves an object.
+// - `before > 0`: equivalent — before is the same plan sum, so it is 0
+//   only when the plan is empty, which returns done earlier.
+// - deposit outer catch: unreachable — every inner op is individually
+//   guarded (per-item deposit, say, withChest), leaving no realistic throw.
+// - place no-ground arms: unreachable — the below re-read runs before the
+//   first await, in one synchronous tick with the scan, so a deterministic
+//   world cannot show ground at scan time and air at re-read. (The item
+//   re-read IS reachable — it runs after the flora-dig await — and is
+//   pinned by B-itemgone/B-weirdinv; round-1 minor.)
+// - mid-open unknown: unreachable via the step (same-tick reread); via
+//   withdraw unknown and gone both report { got: 0 }, so the distinction is
+//   untestable. (The gone branch itself IS pinned — B-noopen drives it with
+//   a missing chest driver and kills the dropped-branch mutant.)
