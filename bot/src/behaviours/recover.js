@@ -44,6 +44,22 @@ const NEAR_PLAYER = 8
 
 const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
+// Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
+// the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
+// works, never ask about digging: hop is feasible only for a level goal
+// (|goalDy| <= 1), where dig_step is never the FSM answer, so the menu loses
+// no climber. A failed hop still escalates to digging: the 4jr exclusion
+// below removes hop from the ask menu first, and shaping is a no-op without
+// it. Stand (/tmp/y34-stand, 45 real menus x2 reps vs laya): agreement
+// 26.7% -> 77.8%, dig picks 37 -> 14, hop picks 1 -> 24. Exported so the
+// rule has one source of truth, like shapeGoalMenu.
+function shapeRecoverMenu(names) {
+  if (names.length > 1 && names.includes('hop_step') && names.includes('dig_step')) {
+    return names.filter((n) => n !== 'dig_step')
+  }
+  return names
+}
+
 // --- world scan helpers (all best-effort: nulls read as free/safe) ---
 
 function botPos(bot) {
@@ -354,7 +370,11 @@ async function chooseRecovery(brain, facts, feasible) {
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
   const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
-  const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  // y34 shaping after the 4jr exclusion: a failed hop is already out, so
+  // shaping never hides the dig it escalates to. Before the only-option
+  // check: a menu shrunk to one answer costs no brain call (round-2 rule).
+  const askNames = shapeRecoverMenu(unshaped)
   if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
@@ -370,7 +390,9 @@ async function chooseRecovery(brain, facts, feasible) {
     // reference: disagree first, then fall back (acceptance: invalid answers
     // disagree in the log).
     if (label !== fsm) {
-      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck facts=${text}`)
+      // menu= is the asked menu (post-4jr exclusion + y34 shaping), like
+      // goal's disagree line — the y34 stand replays prod stuck menus.
+      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck menu=${askNames.join(',')} facts=${text}`)
     }
     if (!askNames.includes(label)) return fail('invalid')
     return { action: label, source: model, fsm, model }
@@ -1260,6 +1282,7 @@ module.exports = {
   recoverFacts,
   recoverText,
   recoverFsm,
+  shapeRecoverMenu,
   chooseRecovery,
   setStuck,
   restGaveUpHolds,
