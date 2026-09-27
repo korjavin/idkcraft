@@ -38,6 +38,24 @@ const EXACT_KEEP = new Set([
 ])
 const FOOD_KEEP = 10
 const SCAFFOLD_KEEP = 32
+// A full chest parks the step, but only for this long: the owner empties
+// the chest by hand (no ctx write), so the park must expire and re-probe
+// instead of holding until a bring fetch or a restart (revmux 01-review).
+const CHEST_FULL_RETRY_MS = 10 * 60 * 1000
+// Container/place interaction reach: isMoving()==false is not arrival (no
+// path reads the same), so window ops double-check the body is close
+// instead of eating mineflayer's 20 s windowOpen timeout (revmux 01-review).
+const INTERACT_REACH = 4
+
+function nearPos(bot, p, reach) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) <= reach
+  } catch (_) {
+    return false
+  }
+}
 
 function edibles() {
   try {
@@ -138,21 +156,30 @@ function adopted(ctx, spot) {
   ctx.home.chest = { x: spot.x, y: spot.y, z: spot.z }
 }
 
-// Open the adopted chest, run fn(window), always close. Null window when
-// the chest is gone or unreachable — the caller unadopts and re-places.
+// Open the adopted chest, run fn(window), always close.
+// { status: 'ok', value } | { status: 'gone' } | { status: 'unknown' }.
+// Unknown (blockAt null: unloaded chunk) is NOT gone — the caller walks
+// closer and retries instead of dropping the adoption (revmux 01-review).
 async function withChest(bot, ctx, fn) {
   const c = ctx && ctx.home && ctx.home.chest
-  if (!c || typeof bot.openChest !== 'function') return null
+  if (!c || typeof bot.openChest !== 'function') return { status: 'gone' }
   let block = null
+  let unknown = false
   try {
     block = bot.blockAt(new Vec3(c.x, c.y, c.z))
-  } catch (_) { block = null }
-  if (!block || block.name !== 'chest') return null
-  const window = await bot.openChest(block)
+    if (!block) unknown = true
+  } catch (_) { unknown = true }
+  if (!block) return { status: unknown ? 'unknown' : 'gone' }
+  if (block.name !== 'chest') return { status: 'gone' }
   try {
-    return await fn(window)
-  } finally {
-    try { window.close() } catch (_) { /* close best-effort */ }
+    const window = await bot.openChest(block)
+    try {
+      return { status: 'ok', value: await fn(window) }
+    } finally {
+      try { window.close() } catch (_) { /* close best-effort */ }
+    }
+  } catch (_) {
+    return { status: 'unknown' } // open raced a chunk unload: retry, keep the claim
   }
 }
 
@@ -160,7 +187,7 @@ async function withChest(bot, ctx, fn) {
 // chest is gone, empty of name, or the inventory is full.
 async function withdrawFromChest(bot, ctx, name, count) {
   try {
-    const got = await withChest(bot, ctx, async (window) => {
+    const res = await withChest(bot, ctx, async (window) => {
       const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
       let want = count
       let got = 0
@@ -177,7 +204,7 @@ async function withdrawFromChest(bot, ctx, name, count) {
       }
       return got
     })
-    return { got: got == null ? 0 : got }
+    return { got: res && res.status === 'ok' ? res.value : 0 }
   } catch (_) {
     return { got: 0 }
   }
@@ -190,7 +217,7 @@ async function withdrawEdible(bot, ctx, count) {
   try {
     const res = await withChest(bot, ctx, async (window) => {
       const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
-      if (!Array.isArray(stacks)) return { got: 0, name: null }
+      if (!Array.isArray(stacks)) return { got: 0, name: null, status: 'ok' }
       const first = stacks.find((s) => s && typeof s.name === 'string' && edible.has(s.name))
       if (!first) return { got: 0, name: null }
       let want = count
@@ -206,7 +233,7 @@ async function withdrawEdible(bot, ctx, count) {
       }
       return { got, name: first.name }
     })
-    return res == null ? { got: 0, name: null } : res
+    return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
     return { got: 0, name: null }
   }
@@ -246,6 +273,26 @@ function stockpile(bot, ctx, target, state) {
   try {
     at = blockNameAt(bot, c.x, c.y, c.z)
   } catch (_) { at = null }
+  if (at === null) {
+    // Chunk unknown (bot far from home): walk in so it loads. Never
+    // unadopt on unknown — that deletes a good claim from 200 blocks out.
+    const key = `stockpile:${c.x},${c.y},${c.z}`
+    if (key !== ctx.lastGoalKey) {
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(c.x, c.y, c.z, 2), false)
+      } catch (_) { /* retry next tick */ }
+      ctx.lastGoalKey = key
+      return
+    }
+    let moving = false
+    try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+    if (moving) return
+    if (!nearPos(bot, c, INTERACT_REACH)) {
+      fail(ctx, 'far') // issued, standing, still far: no path
+      return
+    }
+    return // arrived but the chunk is still dark: retry next tick
+  }
   if (at !== 'chest') {
     home.chest = null // mined or never there: re-place, same step
     ctx.stepStatus = 'running'
@@ -270,6 +317,12 @@ function stockpile(bot, ctx, target, state) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
+  if (!nearPos(bot, c, INTERACT_REACH)) {
+    // No path reads as !moving too: fail instead of eating the 20 s
+    // windowOpen timeout on an out-of-range open (revmux 01-review).
+    fail(ctx, 'far')
+    return
+  }
 
   ctx.stockpileInFlight = true
   void (async () => {
@@ -291,8 +344,14 @@ function stockpile(bot, ctx, target, state) {
         return true
       })
       ctx.stockpileInFlight = false
-      if (res == null) {
+      if (!res || res.status === 'gone') {
         home.chest = null // vanished mid-step: re-place, same step
+        ctx.stepStatus = 'running'
+        ctx.lastGoalKey = null
+        return
+      }
+      if (res.status === 'unknown') {
+        // Chunk unloaded mid-open: walk back in, keep the claim.
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = null
         return
@@ -303,9 +362,10 @@ function stockpile(bot, ctx, target, state) {
       }
       if (before > 0 && banked === 0) {
         // Nothing moved with surplus on hand: the chest is full. Done, not
-        // failed — failing would hold and spam; the flag parks the step
-        // until a bring fetch makes room (chestFull cleared there).
+        // failed — failing would hold and spam; the stamped flag parks the
+        // step until the retry window expires or a bring fetch re-arms it.
         ctx.chestFull = true
+        ctx.chestFullAt = Date.now()
         say(bot, 'the home chest is full')
       }
       ctx.stepStatus = 'done'
@@ -334,16 +394,43 @@ function placeChest(bot, ctx, spot, bp) {
         if (b && b.name === 'crafting_table') tableBlock = b
       } catch (_) { tableBlock = null }
     }
-    const found = craftMod ? craftMod.recipes(bot, 'chest', tableBlock) : []
-    if (found.length === 0 || !tableBlock) {
+    if (!tableBlock) {
       fail(ctx, 'no-chest')
+      return
+    }
+    const found = craftMod ? craftMod.recipes(bot, 'chest', tableBlock) : []
+    if (found.length === 0) { // no ingredients for the recipe
+      fail(ctx, 'no-chest')
+      return
+    }
+    // The table craft opens a window: walk into reach first (craft.js door
+    // rule). Crafting from across the map eats the 20 s windowOpen timeout
+    // and — with the error swallowed — livelocks the step (revmux 01-review).
+    const reach = (craftMod && craftMod.TABLE_REACH) || INTERACT_REACH
+    if (!nearPos(bot, tablePos, reach)) {
+      const key = `stockpile-table:${tablePos.x},${tablePos.y},${tablePos.z}`
+      if (key !== ctx.lastGoalKey) {
+        try {
+          bot.pathfinder.setGoal(new goals.GoalNear(tablePos.x, tablePos.y, tablePos.z, 2), false)
+        } catch (_) { /* retry next tick */ }
+        ctx.lastGoalKey = key
+        return
+      }
+      let moving = false
+      try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+      if (moving) return
+      fail(ctx, 'far') // issued, standing, still far: no path to the table
       return
     }
     ctx.stockpileInFlight = true
     void (async () => {
       try {
         await craftMod.safeCraft(bot, found[0], 1, tableBlock)
-      } catch (_) { /* menu re-checks readiness next decide */ }
+      } catch (_) {
+        ctx.stockpileInFlight = false
+        fail(ctx, 'craft') // loud: failHolds parks until the situation moves
+        return
+      }
       ctx.stockpileInFlight = false
     })()
     return
@@ -361,6 +448,10 @@ function placeChest(bot, ctx, spot, bp) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
+  if (!nearPos(bot, p, INTERACT_REACH)) {
+    fail(ctx, 'far') // issued, standing, still far: no path to the spot
+    return
+  }
 
   ctx.stockpileInFlight = true
   void (async () => {
@@ -405,3 +496,5 @@ module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
+module.exports.CHEST_FULL_RETRY_MS = CHEST_FULL_RETRY_MS
+module.exports.INTERACT_REACH = INTERACT_REACH

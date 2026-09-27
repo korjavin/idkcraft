@@ -567,6 +567,17 @@ function chestFetch(bot, ctx, o, bp) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
+  // No path reads as !moving too: fall back to find instead of eating the
+  // 20 s windowOpen timeout on an out-of-range open (revmux 01-review).
+  let near = false
+  try {
+    near = bp && typeof bp.x === 'number' && Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= 4
+  } catch (_) { near = false }
+  if (!near) {
+    o.chestTried = true
+    o.phase = 'find'
+    return
+  }
   if (o.chestInFlight) return // exactly one window op at a time (dig rule)
   o.chestInFlight = true
   void (async () => {

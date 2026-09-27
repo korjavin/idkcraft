@@ -153,6 +153,7 @@ describe('bring chestfetch phase', () => {
     await bring(bot, ctx, null, {}) // walk to the chest
     assert.equal(bot.calls.goals[0], 'GoalNear')
     assert.deepEqual(bot.lines, ['checking the home chest for coal'])
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {}) // arrived: fetch
     await flush()
     assert.equal(ctx.bring.phase, 'return')
@@ -170,6 +171,7 @@ describe('bring chestfetch phase', () => {
     const ctx = { bring: { kind: 'block', name: 'coal_ore', drop: 'coal', want: 4, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
     chestHome(ctx)
     await bring(bot, ctx, null, {})
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.bring.phase, 'find')
@@ -182,6 +184,7 @@ describe('bring chestfetch phase', () => {
     const ctx = { bring: { kind: 'block', name: 'coal_ore', drop: 'coal', want: 4, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
     chestHome(ctx)
     await bring(bot, ctx, null, {})
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.bring.phase, 'find')
@@ -201,6 +204,7 @@ describe('bring chestfetch phase', () => {
     const ctx = { bring: { kind: 'block', name: 'coal_ore', drop: 'coal', want: 4, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
     chestHome(ctx)
     await bring(bot, ctx, null, {})
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {})
     await bring(bot, ctx, null, {}) // still in flight: no second open
     await flush()
@@ -217,6 +221,7 @@ describe('bring chestfetch phase', () => {
     chestHome(ctx)
     await bring(bot, ctx, null, {})
     assert.deepEqual(bot.lines, ['checking the home chest for food'])
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.bring.drop, 'bread')
@@ -229,6 +234,7 @@ describe('bring chestfetch phase', () => {
     const ctx = { bring: { kind: 'food', name: 'food', drop: null, want: 5, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
     chestHome(ctx)
     await bring(bot, ctx, null, {})
+    bot.entity.position = pos(5, 64, 1) // arrived
     await bring(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.bring.phase, 'find')
@@ -240,6 +246,30 @@ describe('bring chestfetch phase', () => {
     chestHome(ctx)
     await bring(bot, ctx, null, {})
     assert.equal(ctx.bring.phase, 'chestfetch')
+  })
+
+  it('an unreachable chest falls back without opening', async () => {
+    const bot = mockBot({ names: { '5,64,1': 'chest' }, items: [], chest: [{ name: 'coal', count: 5 }] })
+    const ctx = { bring: { kind: 'block', name: 'coal_ore', drop: 'coal', want: 4, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
+    chestHome(ctx)
+    await bring(bot, ctx, null, {})
+    await bring(bot, ctx, null, {}) // standing at spawn, chest 5 blocks out
+    assert.equal(ctx.bring.phase, 'find')
+    assert.equal(ctx.bring.chestTried, true)
+    assert.equal(bot.calls.opens, 0)
+  })
+
+  it('an unknown chunk falls back and keeps the adoption', async () => {
+    const bot = mockBot({ names: { '5,64,1': 'chest' }, items: [], chest: [{ name: 'coal', count: 5 }] })
+    bot.blockAt = () => null
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = { bring: { kind: 'block', name: 'coal_ore', drop: 'coal', want: 4, by: 'P', phase: 'chestfetch', have: 0, announced: true } }
+    chestHome(ctx)
+    await bring(bot, ctx, null, {})
+    await bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'find')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
   })
 
   it('end to end: chestfetch to toss at the player', async () => {
@@ -259,7 +289,7 @@ describe('bring chestfetch phase', () => {
       await flush()
       const o = ctx.bring
       if (!o) break
-      if (o.phase === 'chestfetch') bot._moving = false // chest next door
+      if (o.phase === 'chestfetch') { bot._moving = false; bot.entity.position = pos(5, 64, 1) }
       if (o.phase === 'return') bot.entity.position = pos(6, 64, 1) // at the player
     }
     assert.equal(ctx.bring, null)

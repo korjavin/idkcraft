@@ -247,7 +247,9 @@ describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => 
     return bot
   }
   function deepCtx() {
-    const ctx = { lastGoalKey: '', home: { built: true }, brain: null, step: null, stepStatus: null }
+    // Chest adopted: the decide loop isolates forage/explore strike routing,
+    // not the atl.14 no-chest stockpile branch (an empty pack has no surplus).
+    const ctx = { lastGoalKey: '', home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: null, step: null, stepStatus: null }
     resources.noteSpots(ctx, [CELL], 1000)
     return ctx
   }

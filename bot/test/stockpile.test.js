@@ -256,6 +256,7 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx) // approach
     assert.ok(ctx.lastGoalKey.startsWith('stockpile-place:'))
     assert.deepEqual(bot.calls.goals, ['GoalPlaceBlock'])
+    bot.entity.position = pos(5, 64, 1) // arrived
     stockpile(bot, ctx) // arrived: place
     await flush()
     assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
@@ -282,6 +283,7 @@ describe('stockpile behaviour', () => {
     const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
     stockpile(bot, ctx) // approach
     assert.ok(ctx.lastGoalKey.startsWith('stockpile:5,64,1'))
+    bot.entity.position = pos(5, 64, 1) // arrived
     stockpile(bot, ctx) // arrived: deposit
     await flush()
     assert.equal(ctx.stepStatus, 'done')
@@ -301,10 +303,12 @@ describe('stockpile behaviour', () => {
     })
     const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
     stockpile(bot, ctx)
+    bot.entity.position = pos(5, 64, 1) // arrived
     stockpile(bot, ctx)
     await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.chestFull, true)
+    assert.equal(typeof ctx.chestFullAt, 'number')
     assert.ok(bot.chats.includes('the home chest is full'))
     assert.deepEqual(bot.inv, [{ name: 'oak_log', count: 6 }])
   })
@@ -315,5 +319,68 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx)
     assert.equal(ctx.home.chest, null)
     assert.ok(ctx.lastGoalKey.startsWith('stockpile-place:'), ctx.lastGoalKey)
+  })
+
+  it('an unknown chunk walks closer and keeps the adoption', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 6 }] })
+    bot.blockAt = () => null // nothing loaded: far from home
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.ok(ctx.lastGoalKey.startsWith('stockpile:5,64,1'))
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('an unreachable chest fails far without opening', () => {
+    const bot = mockBot({
+      cells: { '5,64,1': 'chest' },
+      inv: [{ name: 'oak_log', count: 6 }],
+    })
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    stockpile(bot, ctx) // goal issued; the body stays at spawn (no path)
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:far')
+    assert.equal(bot.calls.opens, 0)
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+  })
+
+  it('an unreachable spot fails far without placing', () => {
+    const bot = mockBot({ inv: [{ name: 'chest', count: 1 }] })
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    stockpile(bot, ctx) // standing at spawn, spot 5 blocks out
+    assert.equal(ctx.stepStatus, 'failed:far')
+  })
+
+  it('crafts the chest at the table: walks in, then crafts', async () => {
+    const bot = mockBot({
+      cells: { '4,64,1': 'crafting_table' },
+      inv: [{ name: 'oak_planks', count: 8 }],
+    })
+    bot.recipesFor = () => [{}]
+    bot.craft = async () => { bot.inv.push({ name: 'chest', count: 1 }) }
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx) // far from the table: walk, do not craft
+    assert.ok(ctx.lastGoalKey.startsWith('stockpile-table:'), ctx.lastGoalKey)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.inv.some((i) => i.name === 'chest'), false)
+    bot.entity.position = pos(4, 64, 1) // at the table
+    stockpile(bot, ctx)
+    await flush()
+    assert.equal(bot.inv.some((i) => i.name === 'chest'), true)
+  })
+
+  it('a failed craft fails the step loudly', async () => {
+    const bot = mockBot({
+      cells: { '4,64,1': 'crafting_table' },
+      inv: [{ name: 'oak_planks', count: 8 }],
+    })
+    bot.recipesFor = () => [{}]
+    bot.craft = async () => { throw new Error('windowOpen timeout') }
+    bot.entity.position = pos(4, 64, 1)
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft')
   })
 })

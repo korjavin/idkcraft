@@ -154,11 +154,15 @@ const MENU = {
   },
   stockpile: {
     // Bank the surplus in the home chest while the owner is away (atl.14):
-    // place and adopt the chest first, then deposit. Never while a haul
-    // waits for a player (deliver owns that), never before the house
-    // stands, and parked while the chest is full (a bring fetch re-arms).
-    feasible: (facts) => facts.home === 'built' && facts.haul !== 'waiting' &&
-      !facts.chestParked && (facts.chest === 'no' ? facts.chestReady : facts.surplus === 'yes'),
+    // adopt or place the chest first, then deposit. The haul gate is the
+    // exact complement of deliver's: a waiting haul with a player online
+    // belongs to deliver, with nobody online it belongs here (revmux
+    // 01-review — gating on haul alone never banks the night's loot).
+    // chest=no is always feasible: a standing chest re-adopts on sight
+    // without planks in hand, and a missing one fails no-chest and holds.
+    feasible: (facts) => facts.home === 'built' && !facts.chestParked &&
+      !(facts.haul === 'waiting' && facts.player !== 'none') &&
+      (facts.chest === 'no' || facts.surplus === 'yes'),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
   },
@@ -373,18 +377,22 @@ function goalFacts(bot, ctx) {
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.
   const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
-  // Home chest (atl.14): adopted coords, readiness to place one (a chest
-  // item or 8 same-wood planks for the recipe), live surplus, and the full
-  // flag the step parks itself with. Kept out of goalText: the step ends
-  // via done/failed, so no bucket flip needs to re-fire the decision.
-  const chestItem = countItems(bot, (n) => n === 'chest')
+  // Home chest (atl.14): adopted coords, live surplus, and the full park.
+  // The park expires after CHEST_FULL_RETRY_MS so a hand-emptied chest
+  // re-arms without a bring fetch or a restart (revmux 01-review); an
+  // unstamped flag (unit-test ctx) parks like before.
   let chest = 'no'
   try { if (ctx && ctx.home && ctx.home.chest) chest = 'yes' } catch (_) { /* unadopted */ }
-  const chestReady = chestItem > 0 || maxPlanks >= 8
   let surplus = 'no'
   try { if (stockpileMod.surplusCount(bot) > 0) surplus = 'yes' } catch (_) { /* no surplus */ }
   let chestParked = false
-  try { chestParked = !!(ctx && ctx.chestFull) } catch (_) { /* not parked */ }
+  try {
+    if (ctx && ctx.chestFull) {
+      const at = ctx.chestFullAt
+      const retry = (stockpileMod && stockpileMod.CHEST_FULL_RETRY_MS) || 600000
+      chestParked = at == null || Date.now() - at < retry
+    }
+  } catch (_) { /* not parked */ }
   let known = 'none'
   try {
     if (forageMod.planForage(bot, ctx)) known = 'near'
@@ -408,7 +416,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player, chest, chestReady, surplus, chestParked }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player, chest, surplus, chestParked }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -439,7 +447,8 @@ function goalText(facts) {
   const inside = facts.time === 'day' ? 'no' : facts.inside
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} health=${health} food=${food} ` +
-    `known=${facts.known} haul=${facts.haul} player=${facts.player}`
+    `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
+    `chest=${facts.chest} surplus=${facts.surplus}`
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -492,7 +501,7 @@ const STEP_CRITERIA = {
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
-  stockpile: 'home is built and the pack holds surplus or no chest: bank it at the home chest',
+  stockpile: 'chest is no or surplus is yes: place the home chest and bank the surplus',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
@@ -628,9 +637,8 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'deliver: nobody to deliver to'
     case 'stockpile':
       if (facts.home !== 'built') return 'stockpile: house not built yet'
-      if (facts.haul === 'waiting') return 'stockpile: haul waits for its player'
+      if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
       if (facts.chestParked) return 'stockpile: chest full'
-      if (facts.chest === 'no' && !facts.chestReady) return 'stockpile: need a chest or 8 planks'
       return 'stockpile: nothing to bank'
     case 'forage':
       if (facts.known !== 'near') return 'forage: nothing known nearby'
