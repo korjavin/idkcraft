@@ -1529,19 +1529,27 @@ describe('hop_step standstill leap on Paper (idkcraft-wqt)', () => {
     assert.ok(bot.getControlState('forward'), 'walks back in')
     assert.ok(!bot.getControlState('jump'), 'no leap from the long stance')
   })
-  it('hop entry drops a stale executor goal from a prior primitive', () => {
-    // dig_step/sidestep return failed with their GoalNear still live, and
-    // decide() only clears at episode entry: without the entry drop the lib
-    // fights the direct drive at 20 Hz. Deleting the setGoal(null) fails
-    // this test (goal stays live).
+  it('decide transition drops a stale executor goal (idkcraft-7gt)', async () => {
+    // dig_step/sidestep return failed with their GoalNear still live; the
+    // next primitive's direct drive would fight the lib at 20 Hz. decide()
+    // is the one choke point between primitives, so the stale goal dies on
+    // the transition. Deleting the setGoal(null) fails this test.
     const bot = hopBot()
     bot.entity.onGround = true
     bot.pathfinder.setGoal({ x: 9, y: 61, z: 9, isEnd: () => false, isValid: () => true, heuristic: () => 0 })
-    const ctx = hopCtx(null)
-    recover.run(bot, ctx)
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+      recovery: {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: { start: { x: 0.5, y: 61, z: 0.5 } }, attempts: 1, fails: 0, repeats: 0,
+        last: null, calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(bot.pathfinder.goal, null, 'stale goal dropped on transition')
+    assert.equal(r.action, 'hop_step', `FSM re-picks past the failure, got ${r.action}`)
     assert.equal(ctx.recovery.status, 'running')
-    assert.equal(bot.pathfinder.goal, null, 'stale goal dropped at entry')
-    assert.ok(bot.getControlState('forward'), 'direct drive owns the body')
   })
   it('head veto re-arms on the back-off', () => {
     const solids = new Set()
