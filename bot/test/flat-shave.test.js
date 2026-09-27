@@ -473,22 +473,54 @@ describe('shave round-1 fixes', () => {
     const bot = mockBot(world, { items: [] })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
     flat(bot, ctx, null, null); await settle() // scan
-    let parked = false
-    for (let i = 0; i < 200 && ctx.flat; i++) {
+    const keys = []
+    let lastKey = ''
+    let onTicks = 0
+    for (let i = 0; i < 300 && ctx.flat; i++) {
       const f = ctx.flat
       if (f.phase === 'shave' && f.bumps.length > 0) {
         const h = f.bumps[0]
-        // Simulate the pickup walk ending on the column, then stepping off.
-        if (h.pickup && !parked) { bot.entity.position = pos(h.x, h.y + 1, h.z); parked = true }
-        else { bot.entity.position = pos(h.x + 2, h.y, h.z); if (!h.pickup) parked = false }
+        // The pickup walk ends with feet inside the dug cell; the sidestep
+        // then takes 3 ticks per level. The body stays put while threatened
+        // so the self-threat branch really runs (round-2 core-2).
+        const key = h.pickup ? `p${h.x},${h.y}` : `s${h.x},${h.y}`
+        if (h.pickup || key !== lastKey || onTicks < 3) {
+          if (key !== lastKey) { lastKey = key; onTicks = 0 } else onTicks++
+          bot.entity.position = pos(h.x, h.y, h.z)
+        } else {
+          bot.entity.position = pos(h.x + 2, h.y, h.z)
+        }
       }
       flat(bot, ctx, null, null); await settle()
+      keys.push(ctx.lastGoalKey)
     }
     assert.equal(ctx.flat, null, 'tall column completes, not skipped occupied')
     for (let y = 64; y <= 71; y++) {
       assert.equal(world.blockAt({ x: 1, y, z: 0 }).name, 'air', `level ${y} dug`)
     }
+    const sideKeys = keys.filter((k) => k && k.startsWith('flat-shave-side:'))
+    assert.ok(sideKeys.length > 0, 'sidesteps really issued')
+    for (const k of sideKeys) {
+      assert.match(k, /^flat-shave-side:-?\d+,-?\d+,-?\d+$/, `stable key without counter: ${k}`)
+    }
     assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('skips the pickup walk for drops out of jump reach', async () => {
+    const world = makeWorld({})
+    world.set(1, 66, 0, 'dirt')
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // shave: issue
+    bot.entity.position = pos(3, 64, 0) // feet 2 below the dig
+    flat(bot, ctx, null, null); await settle() // arrived: dig flight
+    assert.ok(ctx.flat.bumps[0].pickup, 'pickup queued')
+    flat(bot, ctx, null, null); await settle() // pickup skipped, no walk goal
+    assert.equal(ctx.flat.bumps[0].pickup, null)
+    assert.ok(bot.calls.goals.every((g) => g.constructor.name !== 'GoalNear' || true))
+    const pickupGoals = bot.calls.goals.filter((g) => g && g.constructor && g.constructor.name === 'GoalNear' && g.x === 1 && g.z === 0)
+    assert.equal(pickupGoals.length, 1, 'only the approach goal, no pickup tower walk')
   })
 
   it('equips the harvest tool before the shave dig', async () => {

@@ -1080,6 +1080,15 @@ function shaveTick(bot, ctx, f, bp) {
   }
   const h = f.bumps[0]
   if (h.pickup) {
+    // A drop 2+ above the feet needs a tower to reach — more scaffold than
+    // the drop is worth. Skip the walk: the drop rides the column down as
+    // the dig descends and gets vacuumed at the bottom (core-3).
+    if (h.pickup.y - Math.floor(bp.y) >= 2) {
+      h.pickup = null
+      h.stalls = 0
+      f.lastProgressTick = f.ticks
+      return
+    }
     const key = `flat-shave-pickup:${h.pickup.x},${h.pickup.y},${h.pickup.z}`
     if (key !== ctx.lastGoalKey) {
       try {
@@ -1184,10 +1193,12 @@ function shaveTick(bot, ctx, f, bp) {
   const key = `flat-shave:${h.x},${y},${h.z}`
   if (key !== ctx.lastGoalKey) {
     try {
-      // Range 4: a bump up to ~4 above the feet is dug from the ground, so
-      // the pathfinder only climbs (never towers with scaffold) for taller
-      // isolated columns (core-5). The REACH_DIG check below stays the gate.
-      bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 4), false)
+      // Range 2 (NOT wider): GoalNear stops on floored nodes, and a range-4
+      // stop can land past REACH_DIG, re-issuing the same already-satisfied
+      // goal until the column burns its defers (round-2 majors). Range 2
+      // stops ~2.9 worst case, always inside 4.5. Towering on tall isolated
+      // columns is the accepted minor residual instead (core-5/core-3).
+      bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 2), false)
     } catch (_) { /* retry next tick */ return }
     const prevKey = ctx.lastGoalKey
     ctx.lastGoalKey = key
