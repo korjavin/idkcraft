@@ -30,6 +30,7 @@ const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
 const WALK_RANGE = 2
 const UNREACHABLE_STRIKES = 3 // struck cells before failed:unreachable, like gather
+const GATED_MAX = 3 // instant fails through the final gate before a forced honest retry (atl.10)
 
 // Memory value rank: lower is better. Unknown ores rank with coal-tier;
 // anything not ore/log ranks below logs (never picked: only ore/log/food
@@ -223,11 +224,17 @@ function finish(bot, ctx, f, ok, reason) {
   try {
     ctx.forageFinal = banked > 0 ? null : { status: `failed:${reason || 'no-known'}`, world: snapWorld(bot, ctx) }
   } catch (_) { /* final best-effort */ }
+  try { ctx.forageGated = 0 } catch (_) { /* counter best-effort */ }
   if (banked > 0) {
     ctx.stepStatus = 'done'
     console.log(`forage done: banked ${Object.keys(gains).map((d) => `${gains[d]} ${d}`).join(', ')}${ok ? '' : ` (${reason})`}`)
   } else {
     ctx.stepStatus = `failed:${reason || 'no-known'}`
+    try {
+      const drops = Object.keys(f.drops || {}).join(',') || 'none'
+      const w = (ctx.forageFinal && ctx.forageFinal.world) || {}
+      console.log(`forage failed:${reason || 'no-known'} strikes=${f.streak || 0} drops=${drops} mem=${w.mem} haul=${w.haul}`)
+    } catch (_) { /* log best-effort */ }
   }
 }
 
@@ -288,10 +295,29 @@ function forage(bot, ctx, target, state) {
     if (FF && typeof FF.status === 'string' && FF.status.startsWith('failed:')) {
       const w = snapWorld(bot, ctx)
       if (FF.world && w.mem === FF.world.mem && w.haul === FF.world.haul) {
+        // Deadlock breaker (atl.10): mem/haul never churn while forage is
+        // blocked and explore/deliver never run, so the gate would hold
+        // forever (prod 36h: 103 picks / 265 ticks). After GATED_MAX instant
+        // fails drop the final so the NEXT pick runs honestly with the skips
+        // intact (struck cells stay skipped per the atl.2 contract — the
+        // honest retry tries the remaining cells, or fails no-known with a
+        // logged reason if none remain). This pick still reports the recorded
+        // failure; the honest attempt happens on the following pick.
+        const n = (ctx.forageGated || 0) + 1
+        ctx.forageGated = n
+        if (n >= GATED_MAX) {
+          ctx.forageFinal = null
+          ctx.forageGated = 0
+          console.log(`forage gate expired after ${n} gated fails, next pick retries honestly`)
+        } else {
+          try { console.log(`forage gated ${FF.status} n=${n}/${GATED_MAX}`) } catch (_) { /* log best-effort */ }
+        }
         ctx.stepStatus = FF.status
         return
+      } else {
+        ctx.forageFinal = null
+        ctx.forageGated = 0
       }
-      ctx.forageFinal = null
     }
   } catch (_) { /* gate best-effort */ }
   if (!ctx.forage) {
