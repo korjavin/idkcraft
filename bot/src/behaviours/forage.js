@@ -310,7 +310,9 @@ function forage(bot, ctx, target, state) {
     if (!f.announced) {
       f.announced = true
       const t0 = f.target
-      say(bot, t0.kind === 'food' ? `foraging: hunting ${t0.name}` : `foraging: ${t0.name} nearby`)
+      const line = t0.kind === 'food' ? `foraging: hunting ${t0.name}` : `foraging: ${t0.name} nearby`
+      // f3s: same per-line throttle as step chats (deferred require: goal.js loads forage)
+      require('../goal').chatStep(bot, ctx, line)
     }
   }
 

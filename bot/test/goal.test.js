@@ -1026,9 +1026,15 @@ describe('f3s step chat throttle', () => {
   })
   it('stale stamps chat again', () => {
     const bot = chatBot()
-    const ctx = { stepChat: { line: 'next: foraging (goal-fsm)', at: Date.now() - 11000 } }
+    const ctx = { stepChat: { 'next: foraging (goal-fsm)': Date.now() - 11000 } }
     assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), true)
     assert.equal(bot.chats.length, 1)
+  })
+  it('fresh stamps stay silent', () => {
+    const bot = chatBot()
+    const ctx = { stepChat: { 'next: foraging (goal-fsm)': Date.now() - 5000 } }
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false)
+    assert.equal(bot.chats.length, 0)
   })
   it('survives frozen ctx and missing chat', () => {
     const bot = chatBot()
