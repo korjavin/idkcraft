@@ -225,9 +225,6 @@ function farStalled(ctx, key) {
   ctx.stockpileFar = f
   return f.n >= FAR_STALL_TICKS
 }
-function farReset(ctx) {
-  ctx.stockpileFar = null
-}
 
 // Claim the chest coords only once the chest block is really there (same
 // placed-station contract as the table: a ghost claim would walk bring to
