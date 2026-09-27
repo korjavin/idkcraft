@@ -17,6 +17,7 @@ const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
 const forageMod = require('./behaviours/forage')
 const deliverMod = require('./behaviours/deliver')
+const stockpileMod = require('./behaviours/stockpile')
 const BLUEPRINT = buildMod.BLUEPRINT
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
@@ -151,6 +152,16 @@ const MENU = {
     chat: () => 'on my own: delivering the haul',
     verb: 'delivering',
   },
+  stockpile: {
+    // Bank the surplus in the home chest while the owner is away (atl.14):
+    // place and adopt the chest first, then deposit. Never while a haul
+    // waits for a player (deliver owns that), never before the house
+    // stands, and parked while the chest is full (a bring fetch re-arms).
+    feasible: (facts) => facts.home === 'built' && facts.haul !== 'waiting' &&
+      !facts.chestParked && (facts.chest === 'no' ? facts.chestReady : facts.surplus === 'yes'),
+    chat: () => 'on my own: stockpiling at the home chest',
+    verb: 'stockpiling',
+  },
   forage: {
     // Known valuable find nearby (planForage: value rank, pickaxe gate).
     // Nothing known -> explore finds more.
@@ -199,7 +210,7 @@ function equipWant(facts) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'stockpile', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -362,6 +373,18 @@ function goalFacts(bot, ctx) {
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.
   const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
+  // Home chest (atl.14): adopted coords, readiness to place one (a chest
+  // item or 8 same-wood planks for the recipe), live surplus, and the full
+  // flag the step parks itself with. Kept out of goalText: the step ends
+  // via done/failed, so no bucket flip needs to re-fire the decision.
+  const chestItem = countItems(bot, (n) => n === 'chest')
+  let chest = 'no'
+  try { if (ctx && ctx.home && ctx.home.chest) chest = 'yes' } catch (_) { /* unadopted */ }
+  const chestReady = chestItem > 0 || maxPlanks >= 8
+  let surplus = 'no'
+  try { if (stockpileMod.surplusCount(bot) > 0) surplus = 'yes' } catch (_) { /* no surplus */ }
+  let chestParked = false
+  try { chestParked = !!(ctx && ctx.chestFull) } catch (_) { /* not parked */ }
   let known = 'none'
   try {
     if (forageMod.planForage(bot, ctx)) known = 'near'
@@ -385,7 +408,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player, chest, chestReady, surplus, chestParked }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -469,6 +492,7 @@ const STEP_CRITERIA = {
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
+  stockpile: 'home is built and the pack holds surplus or no chest: bank it at the home chest',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
@@ -602,6 +626,12 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'deliver':
       if (facts.haul !== 'waiting') return 'deliver: nothing waiting'
       return 'deliver: nobody to deliver to'
+    case 'stockpile':
+      if (facts.home !== 'built') return 'stockpile: house not built yet'
+      if (facts.haul === 'waiting') return 'stockpile: haul waits for its player'
+      if (facts.chestParked) return 'stockpile: chest full'
+      if (facts.chest === 'no' && !facts.chestReady) return 'stockpile: need a chest or 8 planks'
+      return 'stockpile: nothing to bank'
     case 'forage':
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
@@ -695,12 +725,12 @@ async function decide(bot, ctx) {
   // step before gohome shuts the door, chats and shelters — and stepping out
   // flips it back before stay says good morning. The phase machine fails
   // itself on real trouble (no-home, cannot-reach), which re-arms choice.
-  // In-flight craft windows (craft/equip) must not be preempted mid-click:
+  // In-flight craft windows (craft/equip/stockpile) must not be preempted mid-click:
   // re-deciding on changed facts while the async op runs corrupts the window
   // cursor (live 26.1 lesson: a table placement flips the facts before the
   // sword craft lands). The flags reset on completion, so this holds for a
   // few ticks at most.
-  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight)) {
+  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   if (!finished && (prev === 'gohome' || prev === 'stay')) {

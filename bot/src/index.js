@@ -48,6 +48,7 @@ const BEHAVIOURS = {
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
+  stockpile: require('./behaviours/stockpile'),
   retreat: retreatMod.retreat,
   pillar: retreatMod.pillar,
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
@@ -1264,7 +1265,7 @@ function fleeReflex(bot, ctx) {
         clearStuck()
         ctx.bring = {
           kind: 'food', name: 'food', want: n, by, drop: null, have: 0,
-          phase: 'find', announced: false, animal: null,
+          phase: bringMod.openPhase(ctx), announced: false, animal: null,
         }
         ctx.paused = false
         return 'looking for animals'
@@ -1285,7 +1286,7 @@ function fleeReflex(bot, ctx) {
           ctx.resumeWork = false
           clearStuck()
           ctx.bring = {
-            kind: 'block', name, want, by, phase: 'find',
+            kind: 'block', name, want, by, phase: bringMod.openPhase(ctx),
             have: 0, announced: false, searchSkipFar: true,
           }
           ctx.paused = false
@@ -1641,7 +1642,7 @@ function advancePendingSearch(bot, ticker, ctx) {
         return
       }
       ctx.bring = {
-        kind: 'block', name: p.name, want: p.want, by: p.by, phase: 'find',
+        kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
         have: 0, announced: false, searchSkipFar: true,
       }
       ctx.paused = false

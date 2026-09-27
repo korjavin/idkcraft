@@ -36,13 +36,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(NEED_PLANKS, 48)
   })
 
-  it('menu has all ten steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay'])
+  it('menu has all eleven steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay', 'stockpile'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'stockpile', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -932,5 +932,46 @@ describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
     const boom = { source: 'laya', ask: async () => { throw new Error('asked with no options') } }
     const r = await chooseStep(boom, facts, [])
     assert.deepEqual(r, { step: 'rest', source: 'only-option', fsm: 'rest', model: null })
+  })
+})
+
+describe('stockpile menu (idkcraft-atl.14)', () => {
+  const built = { time: 'day', home: 'built', haul: 'none', chest: 'no', chestReady: true, surplus: 'no', chestParked: false }
+  it('sits in STEP_ORDER right after deliver', () => {
+    assert.equal(STEP_ORDER.indexOf('stockpile'), STEP_ORDER.indexOf('deliver') + 1)
+  })
+  it('feasible to place the chest, then only with surplus', () => {
+    assert.equal(MENU.stockpile.feasible({ ...built }), true)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes', surplus: 'yes' }), true)
+  })
+  it('yields to a waiting haul, the unbuilt house, a full chest and missing planks', () => {
+    assert.equal(MENU.stockpile.feasible({ ...built, haul: 'waiting' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, home: 'site' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes', surplus: 'yes', chestParked: true }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chestReady: false }), false)
+  })
+  it('stepWhy mirrors the rule branch for branch', () => {
+    const bot = goalBot()
+    assert.equal(stepWhy('stockpile', { ...built, home: 'site' }, bot, {}, ''), 'stockpile: house not built yet')
+    assert.equal(stepWhy('stockpile', { ...built, haul: 'waiting' }, bot, {}, ''), 'stockpile: haul waits for its player')
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes', surplus: 'yes', chestParked: true }, bot, {}, ''), 'stockpile: chest full')
+    assert.equal(stepWhy('stockpile', { ...built, chestReady: false }, bot, {}, ''), 'stockpile: need a chest or 8 planks')
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes' }, bot, {}, ''), 'stockpile: nothing to bank')
+  })
+  it('goalFacts reads chest, readiness and surplus', () => {
+    const bot = goalBot({ items: [{ name: 'oak_log', count: 20 }, { name: 'oak_planks', count: 3 }] })
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    const f = goalFacts(bot, ctx)
+    assert.equal(f.chest, 'no')
+    assert.equal(f.chestReady, false)
+    assert.equal(f.surplus, 'yes')
+    ctx.home.chest = { x: 5, y: 64, z: 1 }
+    assert.equal(goalFacts(bot, ctx).chest, 'yes')
+    ctx.chestFull = true
+    assert.equal(goalFacts(bot, ctx).chestParked, true)
+  })
+  it('criteria names the step', () => {
+    assert.match(STEP_CRITERIA.stockpile, /home chest/)
   })
 })
