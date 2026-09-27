@@ -1141,8 +1141,9 @@ function recordStepped(f, bp) {
 // column that the scan never queued. NOTE: mineflayer-pathfinder 2.4.5 has
 // no scaffold code, so the pathfinder is never the source; flat's own
 // caps/supports land at/below the level. Runs ONCE at shave end over a
-// frozen set, through the same shave safety gates (allowlist, structure,
-// liquid, under-feet), so it always terminates; tall remnants skip
+// frozen set, through the same shave safety gates (structure, liquid,
+// under-feet; the allowlist is extended to SWEEP_MATS for sweep bumps),
+// so it always terminates; tall remnants skip
 // honestly as unreachable. Returns true when bumps were queued.
 const SWEEP_MATS = new Set(['dirt', 'cobblestone'])
 function buildSweep(bot, f) {
@@ -1272,7 +1273,10 @@ function shaveTick(bot, ctx, f, bp) {
     return
   }
   const name = blockNameAt(bot, new Vec3(h.x, y, h.z))
-  if (!isDiggable(name)) {
+  // Sweep bumps carry our own pillar dirt/cobble: let SWEEP_MATS past the
+  // allowlist (cobblestone is not diggable for ordinary bumps). All other
+  // gates below (structure, liquid, under-feet) still apply.
+  if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name))) {
     shiftBumpSkip(f, 'kept') // ore, wood, built: keep valuables, keep houses
     return
   }

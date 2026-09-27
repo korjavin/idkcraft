@@ -764,4 +764,20 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.equal(ctx.flat, null, 'episode ends, no loop')
     assert.ok(bot.chats.some((c) => c.includes('unreachable')), bot.chats.join('\n'))
   })
+
+  it('sweeps a cobble leftover after a real shave phase (shave exit)', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt') // one original bump: shave phase runs
+    const { bot, ctx } = started(world)
+    flat(bot, ctx, null, null); await settle() // scan
+    assert.equal(ctx.flat.phase, 'shave')
+    // Recover pillars cobble mid-episode on a stepped column (never scanned).
+    world.set(3, 64, 0, 'cobblestone')
+    ctx.flat.stepped.add('3,0')
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'air', 'bump shaved')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'cobble swept')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump') && c.includes('swept 1 leftover')), bot.chats.join('\n'))
+  })
 })
