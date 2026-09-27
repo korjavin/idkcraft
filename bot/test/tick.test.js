@@ -762,6 +762,73 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(a3) work + door streams late: adopt retries and claims it (im4)', async () => {
+    // The old adopt-once missed forever when door chunks trailed the
+    // spawn block (2/5 live-assay bots). Retry while streaming.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const cells = new Map([['0,64,0', 'grass_block']])
+    bot.blockAt = (pt) => {
+      const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
+      return n ? { name: n } : null
+    }
+    bot.findBlocks = (opts) => {
+      const out = []
+      const test = typeof opts.matching === 'function' ? opts.matching : () => false
+      for (const [k, name] of cells) {
+        if (!test({ name })) continue
+        const [x, y, z] = k.split(',').map(Number)
+        out.push({ x, y, z })
+        if (out.length >= (opts.count || 1)) break
+      }
+      return out
+    }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    try {
+      const r1 = await ticker.tick()
+      assert.equal(r1.decision.action, 'idle', 'tick 1 waits on the door')
+      assert.ok(lines.some((l) => l.includes('waiting for home chunks')), 'waiting evidence')
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'idle', 'tick 2 still waits')
+      assert.equal(ctx.home, undefined, 'nothing adopted yet')
+      cells.set('9,64,8', 'oak_door') // the door streams in
+      const r3 = await ticker.tick()
+      assert.ok(ctx.home, 'adopted on the retry')
+      assert.deepEqual([ctx.home.site.x, ctx.home.site.y, ctx.home.site.z], [8, 64, 8])
+      assert.equal(ctx.adoptDone, true)
+      assert.ok(bot.chats.some((m) => m === 'my home is at 8 64 8'), 'adopt announces')
+      assert.notEqual(r3.decision.source, 'local-idle', 'work proceeds after adopt')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(a4) work + no door ever: grace exhausts, build proceeds (im4)', async () => {
+    // Bounded wait: a fresh world must not idle forever (5 grace ticks).
+    const bot = workBot()
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] // geared: build runs once adopt gives up
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.blockAt = () => ({ name: 'grass_block' }) // ready, but nothing streams
+    bot.findBlocks = () => []
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    try {
+      for (let i = 0; i < 5; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', `grace tick ${i + 1} waits`)
+      }
+      assert.equal(ctx.adoptDone, undefined, 'not done during grace')
+      const r6 = await ticker.tick()
+      assert.equal(ctx.adoptDone, true, 'grace exhausted')
+      assert.equal(r6.decision.action, 'build', 'build proceeds on the 6th tick')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(b) work + hostile at 5 blocks: fight preempts as before', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }

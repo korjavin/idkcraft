@@ -111,6 +111,10 @@ const TARGET_GONE_TICKS = 10
 // death+respawn at spawn, or walked out of entity range. Same 10-tick scale
 // as the lead give-up. Spawn pre-arm uses blocks, not ticks (below).
 const UNSEEN_HOME_TICKS = 10
+// Adopt retries (idkcraft-im4): ready-but-doorless ticks before giving up
+// to build. Door chunks trail the spawn block by seconds on a real
+// server; 5 ticks cover the stream with a bounded fresh-world delay.
+const ADOPT_GRACE = 5
 const FAR_FROM_SPAWN = 64
 // GoalNear range of the homing walk, and arrival radius for resuming work.
 const RETURN_HOME_RANGE = 2
@@ -1037,21 +1041,38 @@ function fleeReflex(bot, ctx) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
-          // adopt once before build defaults a fresh site. Readiness needs
+          // adopt before build defaults a fresh site. Readiness needs
           // positive evidence once a spawn is known; without a spawn yet
           // (or without a blockAt hook, i.e. unit mocks) adoption no-ops,
           // so work proceeds and the one shot waits for the spawn below.
+          // im4: a VISIBLE spawn block does not mean the door chunks (12
+          // blocks off) have streamed — the old adopt-once missed forever
+          // (2/5 live-assay bots). Retry while the miss may be streaming,
+          // then give up to build. Retry needs a world that can stream
+          // (all three hooks); hook-less mocks keep the old immediate
+          // path, so unit timing is untouched.
+          const canStream = !!(bot.blockAt && bot.spawnPoint && bot.findBlocks)
           let ready = true
           try { if (bot.blockAt && bot.spawnPoint) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
-          if (ready || (ctx.adoptTries = (ctx.adoptTries || 0) + 1) > 60) {
-            if (!ctx.adoptDone && bot.spawnPoint) ctx.adoptDone = true
-            try {
-              const foundEarly = goal.adoptHome(bot)
-              // Same resets as setHome below (no ticker handle in this scope).
-              if (foundEarly) { ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ } }
-            } catch (_) { /* no adoptable house; build defaults below */ }
-          } else {
+          if (!ready && (ctx.adoptTries = (ctx.adoptTries || 0) + 1) <= 60) {
             if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+          let foundEarly = null
+          try {
+            foundEarly = goal.adoptHome(bot)
+          } catch (_) { foundEarly = null }
+          if (foundEarly) {
+            ctx.adoptDone = true
+            // Same resets as setHome below (no ticker handle in this scope).
+            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1
+            try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+          } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
+            // Give up to build: a mock that never streams, patience out
+            // without readiness, or grace exhausted.
+            ctx.adoptDone = true
+          } else {
+            if (ctx.adoptReadyMisses <= 1) console.log('waiting for home chunks before work')
             return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
           }
         }
