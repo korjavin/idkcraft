@@ -1315,26 +1315,26 @@ function fleeReflex(bot, ctx) {
       const cx = anchor ? Math.floor(anchor.x) : 0
       const cz = anchor ? Math.floor(anchor.z) : 0
       const yTop = Math.floor(anchor ? anchor.y : 64) + flatMod.SCAN_UP
-      const key = `${cx},${cz},${radius}`
-      const parked = ctx.flat && ctx.flat.parked
-      // A parked episode resumes from anywhere inside its own square, and a
-      // bare `flat` (no radius argument) reuses the parked radius: the owner
-      // should not have to stand on the exact order block (core-5).
-      const insideParked = parked &&
-        Math.abs(cx - ctx.flat.cx) <= ctx.flat.r && Math.abs(cz - ctx.flat.cz) <= ctx.flat.r
-      if ((parked && insideParked && (!explicit || radius === ctx.flat.r)) ||
-          (ctx.flat && !parked && ctx.flat.key === key)) {
-        ctx.flat.by = by || ctx.flat.by
-        ctx.flat.parked = false
+      const f = ctx.flat
+      // Any re-flat from inside the running square resumes with its
+      // progress (9k4: a stepped-aside retype used to wipe the run); only
+      // a new area or an explicit new radius starts over. Bare `flat`
+      // (no radius argument) always means "this job".
+      const inside = f &&
+        Math.abs(cx - f.cx) <= f.r && Math.abs(cz - f.cz) <= f.r
+      if (f && inside && (!explicit || radius === f.r)) {
+        f.by = by || f.by
+        f.parked = false
         ctx.paused = false
-        return flatMod.resumeLine(ctx.flat)
+        return flatMod.resumeLine(f)
       }
       ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.paused = false
       const size = 2 * radius + 1
-      return `scanning ${size}x${size} for holes…`
+      const hint = explicit ? '' : ' (flat 48 for a big field)'
+      return `scanning ${size}x${size} for holes…${hint}`
     },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)

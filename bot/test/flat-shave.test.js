@@ -221,6 +221,11 @@ describe('shave report: resumeLine', () => {
     assert.equal(resumeLine({ holes: [1], bumps: [1, 2, 3], totalBumps: 3 }), 'resuming flat, 1 holes + 3 bumps left')
     assert.equal(resumeLine({ holes: [], bumps: [1], totalBumps: 1 }), 'resuming flat, 0 holes + 1 bumps left')
   })
+
+  it('scan phase says still scanning, not 0 left', () => {
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    assert.match(resumeLine(f), /still scanning 9x9/)
+  })
 })
 
 describe('shave behaviour', () => {
@@ -393,6 +398,21 @@ describe('shave behaviour', () => {
     }
     assert.equal(ctx2.flat, null)
     assert.ok(bot2.chats.some((c) => c.includes('skipped 1: 1 refused')), bot2.chats.join('\n'))
+  })
+
+  it('logs refused digs with coordinates to the console', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt')
+    const bot = mockBot(world, { items: [], failDig: true })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 30 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.ok(cap.lines.some((l) => l.includes('flat refused-dig 1,64,0') && l.includes('err=interrupted')),
+      cap.lines.join('\n'))
   })
 
   it('walks the drop into range, gives up the walk when wedged', async () => {
