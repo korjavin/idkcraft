@@ -693,14 +693,16 @@ describe('hybridBrain', () => {
   })
 
   it('uig: short-circuit is H1-only — crowd noplayer still asks laya', async () => {
+    // Revmux 01 (minor x2): a mock remote never runs the jevBrain skip,
+    // so only a real client pins the reason gate — widen it and this fails.
     const state = { nearby_hostiles: 3, hostile_distance: 2, bot_health: 20 }
+    assert.equal(isHard(state), 'crowd')
     let calls = 0
-    const remote = {
-      name: 'laya',
-      source: 'laya',
-      async decide() { calls++; return { action: 'fight', sprint: false, source: 'laya' } }
+    const spy = async () => {
+      calls++
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'fight' } } }) }
     }
-    const brain = hybridBrain(remote)
+    const brain = hybridBrain(jevBrain('k', spy, 1000, LAYA))
     const { r, logs } = await capture(() => brain.decide(state))
     assert.equal(calls, 1)
     assert.equal(r.action, 'fight')
