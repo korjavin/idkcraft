@@ -947,6 +947,125 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  describe('atl.12 night shelter-run holds fight preemption', () => {
+    // rw4.10 split: gohome stamps ctx.shelterRun on every night walk tick;
+    // dispatch (this half) walks instead of fighting while it is fresh.
+    // The export lands with rw4.10 — until then pin the contract value.
+    const homeMod = require('../src/behaviours/home')
+    const hadFresh = Object.prototype.hasOwnProperty.call(homeMod, 'SHELTER_RUN_FRESH_MS')
+    const origFresh = homeMod.SHELTER_RUN_FRESH_MS
+    beforeEach(() => { homeMod.SHELTER_RUN_FRESH_MS = 2500 })
+    afterEach(() => {
+      if (hadFresh) homeMod.SHELTER_RUN_FRESH_MS = origFresh
+      else delete homeMod.SHELTER_RUN_FRESH_MS
+    })
+
+    function nightWalkBot() {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve' } } // rostered but unseen: brain called, target null
+      bot.time = { timeOfDay: 15000 } // night
+      return bot
+    }
+    function nightWalkCtx(bot) {
+      const ctx = bot._tickerCtx
+      ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+      ctx.step = 'gohome'
+      ctx.stepStatus = 'running'
+      ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
+      return ctx
+    }
+    function fightBrain() {
+      return mockBrain({ action: 'fight', sprint: false, source: 'stub' })
+    }
+
+    it('fresh stamp + brain fight + nobody visible: walks home, fight never runs', async () => {
+      const bot = nightWalkBot()
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() // the walk stamps its ticks (rw4.10 half)
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'gohome')
+        assert.equal(fightRan, 0, 'fight must not run during a live shelter-run')
+        assert.ok(lines.some((l) => l.includes('shelter-run: holding fight preemption')), `edge logged, got: ${lines.join(' | ')}`)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('stale stamp resumes fight (a stalled walk does not disarm the bot)', async () => {
+      const bot = nightWalkBot()
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() - 10000
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1)
+        assert.ok(!lines.some((l) => l.includes('shelter-run:')), 'no edge log without a hold')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('visible player keeps player protection fighting (shelter hold is alone-only)', async () => {
+      const bot = nightWalkBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now()
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('holds across ticks while the walk re-stamps; logs the edge once', async () => {
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 2), 2: zombie(2, -2), 3: zombie(3, 0) } // 3 adjacent hostiles, brain still says fight
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        for (let i = 0; i < 5; i++) {
+          ctx.shelterRun = Date.now() // the live walk re-stamps every tick
+          const r = await ticker.tick()
+          assert.equal(r.decision.action, 'gohome', `tick ${i} walks`)
+        }
+        assert.equal(fightRan, 0, 'fight never runs across a held walk')
+        assert.equal(lines.filter((l) => l.includes('shelter-run: holding')).length, 1, 'edge logged once per walk')
+        ctx.shelterRun = Date.now() - 10000 // walk stalls: stamp goes stale
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight', 'fail-safe: stale stamp resumes fight')
+        assert.equal(fightRan, 1)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+  })
+
   it('(d) follow me in chat resets work: next tick follows', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
