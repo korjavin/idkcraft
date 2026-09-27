@@ -283,6 +283,31 @@ describe('deliver toss failure (idkcraft-haj)', () => {
     assert.ok(bot.chats.some((m) => m === 'brought 2 coal'), JSON.stringify(bot.chats))
     assert.deepEqual(ctx.haul, { coal: 0, oak_log: 1 })
   })
+
+  it('kind vanishing mid-toss-loop is skipped, rest banks', async () => {
+    // Later kinds are counted after earlier kinds' awaits: eat reflex or
+    // death mid-toss zeroes the count, the kind is skipped, the rest lands.
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.inv.push({ name: 'oak_log', count: 1 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (id, slot, n) => {
+      const r = await origToss(id, slot, n)
+      if (id === 1) {
+        const i = bot.inv.findIndex((x) => x.name === 'oak_log')
+        if (i >= 0) bot.inv.splice(i, 1) // eaten while the coal toss landed
+      }
+      return r
+    }
+    const ctx = ctxWithHaul({ coal: 2, oak_log: 1 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.some((m) => m === 'brought 2 coal'), JSON.stringify(bot.chats))
+    assert.deepEqual(ctx.haul, { coal: 0, oak_log: 1 })
+  })
 })
 
 describe('deliver unseen wait placement (idkcraft-haj)', () => {
@@ -449,14 +474,27 @@ describe('deliver branch edges (idkcraft-haj)', () => {
   })
 
   it('second tick while tossing does not double-toss', async () => {
+    // The toss stays pending across the second tick (prod: window clicks
+    // take ticks), so the second call must hit the tossInFlight latch —
+    // with a synchronous mock toss it would take failed:empty instead and
+    // the latch would go untested.
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 2 })
     bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    let release
+    const gate = new Promise((r) => { release = r })
+    let tossCalls = 0
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (id, slot, n) => { tossCalls++; await gate; return origToss(id, slot, n) }
     const ctx = ctxWithHaul({ coal: 2 })
-    deliver(bot, ctx, null, {})
-    deliver(bot, ctx, null, {}) // toss in flight: latched
+    deliver(bot, ctx, null, {}) // starts the toss, pending on the gate
+    deliver(bot, ctx, null, {}) // latched: must not start a second toss
+    assert.equal(tossCalls, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    release()
     await tick()
     await tick()
+    assert.equal(tossCalls, 1)
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(bot.calls.tossed, ['2 coal'])
   })
