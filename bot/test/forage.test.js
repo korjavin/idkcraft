@@ -779,8 +779,9 @@ describe('rw4.12 forage detour', () => {
 
   it('diagonal arrival fires from the pathfinder near cell', () => {
     // Fractional raw waypoint (15.2,21.4): the XZ goal aims at (15,21)
-    // and arrival reads xz-only from its centre. The bot stops two
-    // cells past — inside range, outside the old 3D check.
+    // and arrival reads xz-only from its centre. The bot is up a slope
+    // (y=67): the old 3D check misses on height, the unfloored
+    // waypoint misses on x/z.
     const bot = mockBot()
     const ctx = memCtx([{ x: 40, y: 64, z: 30, name: 'oak_log' }, { x: 0, y: 64, z: 60, name: 'oak_log' }])
     danger.mark(ctx, { x: 20, y: 60, z: 15 }) // mid-segment on the diagonal
@@ -789,7 +790,7 @@ describe('rw4.12 forage detour', () => {
     const g0 = bot.pathfinder.goal
     assert.equal(g0.constructor.name, 'GoalNearXZ')
     assert.deepEqual({ x: g0.x, z: g0.z }, { x: 15, z: 21 })
-    bot.entity.position = pos(13.2, 64, 21.5) // end cell (13,21), far edge
+    bot.entity.position = pos(13.2, 67, 21.5) // end cell (13,21), up a slope
     forage(bot, ctx) // arrived: flips + re-issues direct
     const g1 = bot.pathfinder.goal
     assert.equal(g1.constructor.name, 'GoalNear')
