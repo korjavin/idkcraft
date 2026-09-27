@@ -557,3 +557,290 @@ describe('light goal wiring (rw4.13)', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 })
+
+describe('light craft residuals (idkcraft-qxa batch H)', () => {
+  const recipeFor = (name) => ({ result: { name, count: 1 } })
+
+  function craftBot(over = {}) {
+    const world = makeWorld()
+    const ids = { torch: 1, stick: 2, oak_planks: 3 }
+    return {
+      world,
+      bot: mockBot(world, {
+        items: [{ name: 'coal', count: 5 }, { name: 'stick', count: 2 }],
+        ids,
+        recipes: { torch: recipeFor('torch'), stick: recipeFor('stick'), oak_planks: recipeFor('oak_planks') },
+        ...over,
+      }),
+      ctx: { home: home() },
+    }
+  }
+
+  it('H-nostickrecipe planks without a stick recipe fail no-stick-recipe', () => {
+    const { bot } = craftBot({
+      items: [{ name: 'coal', count: 5 }, { name: 'oak_planks', count: 4 }],
+      recipes: { torch: recipeFor('torch'), oak_planks: recipeFor('oak_planks') },
+    })
+    // recipesFor throws for unlisted names: list stick as missing instead.
+    bot.recipesFor = (id) => {
+      const name = Object.keys({ torch: 1, stick: 2, oak_planks: 3 }).find((n) => ({ torch: 1, stick: 2, oak_planks: 3 })[n] === id)
+      if (name === 'stick') return []
+      if (name === 'torch') return [recipeFor('torch')]
+      throw new Error(`unexpected recipesFor(${name})`)
+    }
+    assert.deepEqual(torchOp(bot), { fail: 'failed:no-stick-recipe' })
+  })
+
+  it('H-noplanksrecipe logs without a planks recipe fail no-planks-recipe', () => {
+    const { bot } = craftBot({
+      items: [{ name: 'coal', count: 5 }, { name: 'oak_log', count: 2 }],
+      recipes: { torch: recipeFor('torch') },
+    })
+    bot.recipesFor = (id) => {
+      const name = Object.keys({ torch: 1, stick: 2, oak_planks: 3 }).find((n) => ({ torch: 1, stick: 2, oak_planks: 3 })[n] === id)
+      if (name === 'oak_planks') return []
+      if (name === 'torch') return [recipeFor('torch')]
+      throw new Error(`unexpected recipesFor(${name})`)
+    }
+    assert.deepEqual(torchOp(bot), { fail: 'failed:no-planks-recipe' })
+  })
+
+  it('H-nocraft a missing craft driver fails no-craft', async () => {
+    const { bot, ctx } = craftBot()
+    delete bot.craft
+    light(bot, ctx)
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:no-craft')
+    assert.ok(!ctx.lightCraftInFlight)
+  })
+
+  it('H-craftthrow a throwing craft fails craft-torch, flag cleared', async () => {
+    const { bot, ctx } = craftBot({ craftImpl: async () => { throw new Error('window busy') } })
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft-torch')
+    assert.equal(ctx.lightCraftInFlight, false)
+  })
+
+  it('H-crafttimeout a hanging craft fails craft-timeout on the deadline', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const { bot, ctx } = craftBot({ craftImpl: () => new Promise(() => {}) })
+      light(bot, ctx)
+      mock.timers.tick(30001)
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:craft-timeout')
+      assert.equal(ctx.lightCraftInFlight, false)
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('H-settled a craft failing after the deadline settles exactly once', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      let release = null
+      const { bot, ctx } = craftBot({ craftImpl: () => new Promise((_, reject) => { release = reject }) })
+      light(bot, ctx)
+      mock.timers.tick(30001)
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:craft-timeout')
+      release(new Error('late window error'))
+      await flush()
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:craft-timeout', 'late error must not overwrite the verdict')
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('H-stillupdate an XZ stride re-anchors instead of accruing still', () => {
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(0, 65, 0) })
+    bot.pathfinder.isMoving = () => true
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0', lightStillTicks: 9, lightStillAnchor: { idx: 0, x: 0, z: 0 } }
+    bot.entity.position = pos(5, 65, 5) // strides 7+ blocks XZ: progress
+    light(bot, ctx)
+    assert.equal(ctx.lightStillTicks, 0)
+    assert.deepEqual(ctx.lightStillAnchor, { idx: 0, x: 5, z: 5 })
+  })
+})
+
+describe('light place residuals (idkcraft-qxa batch P)', () => {
+  function torchBot(over = {}) {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], ...over })
+    return { world, bot, ctx: { home: home(), lightSkipKey: '0,64,0' } }
+  }
+
+  it('P-anchoridx a stale anchor for another spot re-anchors as progress', () => {
+    const { bot, ctx } = torchBot({ at: pos(0, 65, 0) })
+    bot.pathfinder.isMoving = () => true
+    ctx.lightGoalIdx = 0
+    ctx.lightStillAnchor = { idx: 5, x: 0, z: 0 }
+    ctx.lightStillTicks = 9
+    light(bot, ctx)
+    assert.deepEqual(ctx.lightStillAnchor, { idx: 0, x: 0, z: 0 })
+    assert.equal(ctx.lightStillTicks, 0)
+  })
+
+  it('P-stillfailidx stillness on a new spot restarts the far budget', () => {
+    const { bot, ctx } = torchBot({ at: pos(0, 65, 0) })
+    bot.pathfinder.isMoving = () => true
+    ctx.lightGoalIdx = 0
+    ctx.lightFailIdx = 5
+    ctx.lightFarTicks = 2
+    ctx.lightStillAnchor = { idx: 0, x: 0, z: 0 }
+    ctx.lightStillTicks = 3
+    light(bot, ctx) // same cell: still accrues, far budget restarts
+    assert.equal(ctx.lightFailIdx, 0)
+    assert.equal(ctx.lightFarTicks, 0)
+    assert.equal(ctx.lightStillTicks, 4)
+  })
+
+  it('P-placefailidx a carry-over fail count resets on a new spot', async () => {
+    const { bot, ctx } = torchBot({ at: pos(1, 64, -2), failPlace: true })
+    ctx.lightGoalIdx = 0
+    ctx.lightFailIdx = 5
+    ctx.lightFails = 2
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.lightFails, 1, 'fresh spot starts its own refusal count')
+    assert.deepEqual(ctx.lightSkip || [], [], 'one refusal never skips')
+  })
+
+  it('P-noref a spot with no solid neighbour skips after 3 refusals', () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    world.set(1, 63, -2, 'air') // door-front spot floats: findRef finds nothing
+    light(bot, ctx) // goal issued
+    light(bot, ctx) // refusal 1, goal torn
+    assert.equal(ctx.lightGoalIdx, -1)
+    light(bot, ctx)
+    light(bot, ctx) // refusal 2
+    light(bot, ctx)
+    light(bot, ctx) // refusal 3: skipped
+    assert.deepEqual(ctx.lightSkip, [0])
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('P-occupier a torch landed mid-flight forgives the refusal', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    ctx.lightGoalIdx = 0
+    ctx.lightFailIdx = 0
+    ctx.lightFails = 2
+    let placed = false
+    const place = bot.placeBlock
+    bot.placeBlock = async (ref, face) => {
+      placed = true
+      throw new Error('refused') // our attempt refused...
+    }
+    const blockAt = bot.blockAt
+    bot.blockAt = (p) => (placed && p.x === 1 && p.z === -2 && p.y === 64
+      ? { name: 'torch', position: pos(1, 64, -2) } // ...but a torch stands now
+      : blockAt(p))
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.lightFails, 0)
+    assert.deepEqual(ctx.lightSkip || [], [], 'a standing torch never skips')
+  })
+
+  it('P-retry refuse-on-flora digs and replaces in one flight', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    ctx.lightGoalIdx = 0
+    ctx.lightFailIdx = 0
+    let attempts = 0
+    bot.placeBlock = async (ref, face) => {
+      attempts++
+      if (attempts === 1) throw new Error('refused') // flora in the cell
+      const rp = (ref && ref.position) || ref
+      world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+    }
+    const blockAt = bot.blockAt
+    bot.blockAt = (p) => (attempts >= 1 && p.x === 1 && p.z === -2 && p.y === 64
+      ? { name: 'short_grass', position: pos(1, 64, -2) }
+      : blockAt(p))
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.deepEqual(bot.calls.digs, ['short_grass'])
+    assert.equal(attempts, 2)
+    assert.equal(ctx.lightFails, 0)
+    assert.equal(ctx.lightPlaced, 1)
+  })
+
+  it('P-retryfail a refused retry counts a second refusal', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    ctx.lightGoalIdx = 0
+    ctx.lightFailIdx = 0
+    bot.placeBlock = async () => { throw new Error('refused') }
+    const blockAt = bot.blockAt
+    bot.blockAt = (p) => (p.x === 1 && p.z === -2 && p.y === 64
+      ? { name: 'short_grass', position: pos(1, 64, -2) }
+      : blockAt(p))
+    bot.dig = async () => { throw new Error('dig refused') }
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.lightFails, 2)
+    assert.deepEqual(ctx.lightSkip || [], [])
+  })
+
+  it('P-placeflying a place flight blocks a second op like the craft flag', async () => {
+    const { bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    ctx.lightGoalIdx = 0
+    light(bot, ctx) // async place starts, not yet landed
+    light(bot, ctx) // re-entrant tick while it flies
+    await flush()
+    await flush()
+    assert.equal(bot.calls.places.length, 1, 'one attempt for two ticks')
+    assert.equal(ctx.lightPlaced, 1)
+  })
+
+  it('P-linelatch a latched line re-arms while work remains', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    paintSpots(world, home(), 'torch')
+    world.set(1, 64, -2, 'air') // only the door-front spot is dark
+    ctx.lightLineDone = true // a previous close latched it
+    ctx.lightGoalIdx = 0
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      light(bot, ctx)
+      await flush()
+      await flush()
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(lines.some((l) => l.startsWith('torches placed')), `lines: ${lines}`)
+  })
+})
+
+// NOTE (idkcraft-qxa mutant review): the following source mutants survive the
+// suite and are equivalent or unreachable, not coverage gaps — verified by
+// probing, not by inspection alone:
+// - countUnlit/nextSpotIdx try/catch: spotLit cannot throw (blockNameAt
+//   guards, spotAbs is pure), so the catches are defensive.
+// - findItem catch and the no-torches fail: countItems>0 and a findItem hit
+//   read the same inventory in one tick, so findItem is null only when the
+//   head already routed to craft; divergent reads would need a lying mock.
+// - lagged double-place guard: same-tick reread after nextSpotIdx, so a
+//   deterministic world cannot flip between the two reads.
+// - skipSpot dedup (`includes`) and the lightSkip Array guards (head,
+//   skipSpot): a skipped spot leaves the rotation and the site reset clears
+//   the list, so a duplicate push is unreachable; the three guards absorb
+//   each other and all callers pass arrays (direct undefined-skipped calls
+//   are also probed-surviving).
+// - doorway skip arm: no LIGHT_SPOTS entry matches (dx 1, dz 0/-1), so the
+//   arm is dead defense for a plan shape that never occurs.
+// - 'failed:no-op': torchOp never returns null, so the fallback is
+//   unreachable (verified: renaming the string breaks nothing).
+// - still-progress `!bp` and both still/reach catches: dropping the null
+//   check throws into the same try that reports progress/attempt-anyway;
+//   no honest read throws, so the catches are defensive.
