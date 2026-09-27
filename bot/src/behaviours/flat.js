@@ -325,9 +325,11 @@ function findRef(bot, p) {
 // dig steps out of the square it is leveling — a GoalPlaceBlock approach
 // across an uncapped trench would otherwise notch the surface behind the
 // scan. Same exclusionAreasBreak seam as build.guardOwnWalls, but the
-// predicate self-invalidates when the episode is gone, replaced or parked,
-// so a cancel path ('follow me', 'go work', 'stop') can never leak a live
-// guard into other behaviours.
+// predicate only bites while a flat goal is pursued: lead/bring preempt the
+// job tick-by-tick with their own goals, and their searches must still dig
+// (round-2 majors). Goal ownership (not the tick) is the switch, so a
+// multi-tick flat search stays guarded to its end, while a cancel path
+// ('follow me', 'go work', 'stop') or a replaced episode no-ops at once.
 function guardFlatSurface(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -350,6 +352,8 @@ function guardFlatSurface(bot, ctx) {
       try {
         const cur = ctx.flat
         if (!cur || cur.key !== key || cur.parked || cur.level == null) return 0
+        const k = ctx.lastGoalKey || ''
+        if (!/^flat[:-]/.test(k)) return 0
         const q = block && block.position
         if (!q || typeof q.x !== 'number' || typeof q.y !== 'number' || typeof q.z !== 'number') return 0
         if (q.y > cur.level) return 0

@@ -457,6 +457,8 @@ describe('flat ticker wiring', () => {
       const t2 = await r.ticker.tick()
       assert.notEqual(t2.decision.action, 'flat', 'parked job stays parked')
       assert.equal(r.ctx.flat.parked, true)
+      r.ticker.status()
+      assert.ok(r.bot.chats.at(-1).startsWith('parked (flat paused)'), r.bot.chats.at(-1))
     } finally { BEHAVIOURS.bring = origBring; r.done() }
   })
 
@@ -728,6 +730,43 @@ describe('flat behaviour', () => {
     assert.ok(pt && (Math.abs(pt.x) > 4 || Math.abs(pt.z) > 4), `search origin outside the square: ${pt && `${pt.x},${pt.z}`}`)
   })
 
+  it('skips a hole whose support cell unloaded as floating', async () => {
+    let dark = false
+    const world = makeWorld({ unloaded: (x, z) => dark && Math.abs(x - 1) <= 1 && Math.abs(z) <= 1 })
+    world.set(1, 63, 0, 'air')
+    world.set(1, 62, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan while loaded
+    assert.equal(ctx.flat.holes.length, 1)
+    dark = true // the chunk drops out from under the job
+    for (let i = 0; i < 30 && ctx.flat; i++) {
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 floating')), bot.chats.join('\n'))
+  })
+
+  it('skips a hole whose support cell is occupied', async () => {
+    // Center 2-deep with an unloaded ring (no side refs), player feet in
+    // the support cell but clear of the cap.
+    const world = makeWorld({ unloaded: (x, z) => Math.abs(x) <= 1 && Math.abs(z) <= 1 && !(x === 0 && z === 0) })
+    world.set(0, 63, 0, 'air')
+    world.set(0, 62, 0, 'air')
+    const players = { Q: { username: 'Q', entity: { position: pos(0, 61.5, 0) } } }
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], players })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 30 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) bot.entity.position = pos(2, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 0, y: 63, z: 0 }).name, 'air')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
+  })
+
   it('restockPoint exits past the nearest edge', () => {
     const f = startEpisode(0, 0, 4, 74, 'P')
     const at = (p) => [p.x, p.y, p.z]
@@ -744,7 +783,7 @@ describe('flat behaviour', () => {
     bot.pathfinder.movements = mov
     const f = startEpisode(0, 0, 4, 74, 'P')
     f.level = 63
-    const ctx = { lastGoalKey: '', flat: f }
+    const ctx = { lastGoalKey: 'flat:0,63,0', flat: f }
     guardFlatSurface(bot, ctx)
     assert.equal(mov.exclusionAreasBreak.length, 1)
     const fn = mov.exclusionAreasBreak[0]
@@ -753,6 +792,11 @@ describe('flat behaviour', () => {
     assert.equal(veto(0, 63, 0), 100, 'at level inside')
     assert.equal(veto(0, 64, 0), 0, 'above level: pass through')
     assert.equal(veto(20, 62, 0), 0, 'outside the square')
+    ctx.lastGoalKey = 'lead:1,2,3' // an errand owns the body: its search digs
+    assert.equal(veto(0, 62, 0), 0, 'non-flat goal: guard off')
+    ctx.lastGoalKey = 'flat-dig:9,9,9'
+    assert.equal(veto(0, 62, 0), 100, 'restock walk: guard on')
+    ctx.lastGoalKey = 'flat:0,63,0'
     f.parked = true
     assert.equal(veto(0, 62, 0), 0, 'parked: no live guard')
     f.parked = false

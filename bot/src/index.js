@@ -1280,7 +1280,8 @@ function fleeReflex(bot, ctx) {
     },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
-      const mode = ctx.bring ? 'bringing' : (ctx.flat && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.paused ? (ctx.flat ? 'parked (flat paused)' : 'parked') : (ctx.lead ? 'leading' : 'following'))))
+      const flatParked = ctx.flat && ctx.flat.parked
+      const mode = ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : (ctx.lead ? 'leading' : 'following'))))
       // atl.7: a resting bot names the reason decide() stored, if any.
       const why = ctx.step === 'rest' && ctx.restWhy ? ` resting because ${ctx.restWhy}` : ''
       bot.chat(`${mode} step=${ctx.step || 'none'}${why} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
