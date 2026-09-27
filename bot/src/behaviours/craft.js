@@ -150,7 +150,26 @@ function strandedCount(bot, name) {
   return n
 }
 
+// xg9: consecutive window ops must stay a server tick apart. Fired
+// back-to-back (0-8 ms), clicks desync mineflayer's inventory model from
+// Paper: a later click waits on updateSlot:0 the server never sends that
+// way, the op eats the 20 s timeout, and items strand server-side while
+// the model marches on (assayed: unpaced 64-log batch broke at op27 with
+// a phantom button + vanishing logs; paced 60 ms went 64/64 exact). A
+// vanilla client can never click sub-tick either. Applies to table crafts
+// too — the gear epic will batch those. Cost: ~60 ms per op.
+const WINDOW_OP_GAP_MS = 60
+const lastWindowOp = new WeakMap()
+
+async function paceWindowOp(bot) {
+  let prev = 0
+  try { prev = lastWindowOp.get(bot) || 0 } catch (_) { prev = 0 }
+  const wait = WINDOW_OP_GAP_MS - (Date.now() - prev)
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
+}
+
 async function safeCraft(bot, recipe, count, table) {
+  await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   try {
     await bot.craft(recipe, count, table)
@@ -166,6 +185,8 @@ async function safeCraft(bot, recipe, count, table) {
       }
     }
     throw err
+  } finally {
+    try { lastWindowOp.set(bot, Date.now()) } catch (_) { /* pacing best-effort */ }
   }
   if (!table) gridTimeouts.set(bot, 0)
 }
@@ -281,3 +302,4 @@ module.exports.tally = tally
 module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
+module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS
