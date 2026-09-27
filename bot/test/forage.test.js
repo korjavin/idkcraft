@@ -329,3 +329,377 @@ describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => 
     assert.equal(p.name, 'coal_ore')
   })
 })
+
+describe('forage successful hunt (idkcraft-9go)', () => {
+  it('hunts a batch of 8 beef and banks the haul', async () => {
+    // The food path end to end: find -> walk -> kill -> pickup per animal,
+    // re-find onto the next cow, done when the batch fills. Previously only
+    // stall-outs of the hunt were tested; kill/pickup never ran.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    let nextId = 7
+    const spawnCow = (x) => {
+      const id = nextId++
+      bot.entities = { [id]: { id, name: 'cow', position: pos(x, 64, 0), isValid: true } }
+      return id
+    }
+    spawnCow(10)
+    let n = 0
+    for (; n < 300 && !ctx.stepStatus.startsWith('done') && !ctx.stepStatus.startsWith('failed:'); n++) {
+      forage(bot, ctx, null, {})
+      await tick()
+      const f = ctx.forage
+      if (!f || !f.target || f.target.kind !== 'food') continue
+      const ent = bot.entities[f.target.id]
+      if ((f.phase === 'walk' || f.phase === 'find') && ent) {
+        bot.entity.position = pos(ent.position.x - 1, 64, 0) // pathfinder walks into swing range
+      } else if (f.phase === 'kill' && ent && f.lastPos) {
+        delete bot.entities[ent.id] // the kill lands after a real swing tick
+        bot.inv.push({ name: 'beef', count: 1 })
+      } else if (f.phase === 'pickup' && f.dropPos) {
+        bot.entity.position = pos(f.dropPos.x, 64, f.dropPos.z)
+      }
+      if (f.phase === 'find' && !bot.entities[f.target.id]) spawnCow(10 + n)
+    }
+    assert.equal(ctx.stepStatus, 'done', `hunt finished after ${n} ticks, status=${ctx.stepStatus}`)
+    assert.deepEqual(ctx.haul, { beef: 8 })
+    assert.ok(bot.chats.some((m) => m.startsWith('foraging: hunting cow')), `announced, got: ${bot.chats.join(' | ')}`)
+    assert.ok(bot.calls.goals.includes('GoalNear'))
+  })
+
+  it('replans onto a new species when the prey vanishes', () => {
+    // Cow despawns, a pig is near: the re-find filters by the old drop, so
+    // the hunt replans onto the pig instead of chasing a ghost.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the cow
+    assert.equal(ctx.forage.target.name, 'cow')
+    bot.entities = { 9: { id: 9, name: 'pig', position: pos(12, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // re-find: cow gone, pig drops porkchop, not beef
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.target.name, 'pig')
+    assert.equal(ctx.forage.target.drop, 'porkchop')
+    assert.equal(ctx.forage.phase, 'find')
+  })
+
+  it('vanished prey with empty memory fails no-known', () => {
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the cow
+    bot.entities = {}
+    forage(bot, ctx, null, {}) // re-find: nothing, replan finds nothing
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+    assert.deepEqual(ctx.haul, {})
+  })
+
+  it('noPath on the hunt strikes toward unreachable', () => {
+    // Like the ore walk, a noPath verdict on the live hunt goal strikes at
+    // once; three strikes fail the step with the haul kept empty.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(40, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan + issue the hunt goal
+    for (const want of [1, 2]) {
+      ctx.lastPathStatus = 'noPath'
+      forage(bot, ctx, null, {})
+      assert.equal(ctx.stepStatus, 'running')
+      assert.equal(ctx.forage.foodStreak, want)
+    }
+    ctx.lastPathStatus = 'noPath'
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.deepEqual(ctx.haul, {})
+  })
+
+  it('walking displacement resets the hunt stall count', () => {
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(40, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan + issue the hunt goal
+    for (let i = 0; i < 12; i++) {
+      bot.entity.position = pos(i + 1, 64, 0) // chasing: real displacement
+      forage(bot, ctx, null, {})
+    }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.stalls || 0, 0)
+  })
+})
+
+describe('forage walk and dig edges (idkcraft-9go)', () => {
+  function oreTarget(x, y, z, name, drop) {
+    return { kind: 'log', name, pos: { x, y, z }, drop, want: 8 }
+  }
+
+  it('third noPath strike fails unreachable at once', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    ctx.forage = {
+      phase: 'walk', target: oreTarget(40, 60, 0, 'iron_ore', 'raw_iron'),
+      stalls: 0, streak: 2, lastBotPos: { x: 0, y: 64, z: 0 },
+      startInv: {}, drops: {}, announced: true,
+    }
+    ctx.lastGoalKey = 'forage:40,60,0'
+    ctx.lastPathStatus = 'noPath'
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.deepEqual(ctx.haul, {})
+  })
+
+  it('noPath strike replans to the next point', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([
+      { x: 40, y: 60, z: 0, name: 'iron_ore' },
+      { x: 30, y: 60, z: 0, name: 'coal_ore' },
+    ])
+    bot.blocks['30,60,0'] = 'coal_ore'
+    forage(bot, ctx, null, {}) // plan iron, issue the walk
+    assert.equal(ctx.forage.target.name, 'iron_ore')
+    ctx.lastPathStatus = 'noPath'
+    forage(bot, ctx, null, {}) // strike iron, replan onto coal
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.target.name, 'coal_ore')
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('40,60,0'))
+    assert.equal(resources.count(ctx), 2, 'memory intact, cell skipped not forgotten')
+  })
+
+  it('walking displacement resets the ore stall count', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    bot.blocks['40,60,0'] = 'iron_ore'
+    bot._moving = true
+    forage(bot, ctx, null, {}) // issue the walk goal
+    for (let i = 0; i < 12; i++) {
+      bot.entity.position = pos(i + 1, 64, 0)
+      forage(bot, ctx, null, {})
+    }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.stalls || 0, 0)
+  })
+
+  it('third displacement strike fails unreachable', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    bot.blocks['40,60,0'] = 'iron_ore'
+    bot._moving = true // executor claims motion, body stands still
+    ctx.forage = {
+      phase: 'walk', target: oreTarget(40, 60, 0, 'iron_ore', 'raw_iron'),
+      stalls: 9, streak: 2, lastBotPos: { x: 0, y: 64, z: 0 },
+      startInv: {}, drops: {}, announced: true,
+    }
+    ctx.lastGoalKey = 'forage:40,60,0'
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+  })
+
+  it('dig without bot.dig forgets the cell and replans', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([
+      { x: 40, y: 60, z: 0, name: 'iron_ore' },
+      { x: 30, y: 60, z: 0, name: 'coal_ore' },
+    ])
+    delete bot.dig
+    ctx.forage = {
+      phase: 'dig', target: oreTarget(40, 60, 0, 'iron_ore', 'raw_iron'),
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: {}, announced: true,
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(resources.count(ctx), 1)
+    assert.equal(ctx.forage.target.name, 'coal_ore')
+  })
+
+  it('vanished dig block forgets the cell and replans', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([
+      { x: 40, y: 60, z: 0, name: 'iron_ore' },
+      { x: 30, y: 60, z: 0, name: 'coal_ore' },
+    ])
+    bot.blocks['30,60,0'] = 'coal_ore' // iron dug out by someone else
+    ctx.forage = {
+      phase: 'dig', target: oreTarget(40, 60, 0, 'iron_ore', 'raw_iron'),
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: {}, announced: true,
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(resources.count(ctx), 1)
+    assert.equal(ctx.forage.target.name, 'coal_ore')
+  })
+
+  it('null target fails no-known without crashing on inventory', () => {
+    const bot = mockBot()
+    bot.inventory.items = () => { throw new Error('no inventory') }
+    const ctx = memCtx([])
+    ctx.forage = {
+      phase: 'walk', target: null,
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: { raw_iron: true }, announced: true,
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+  })
+
+  it('unknown phase replans', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    ctx.forage = {
+      phase: 'bogus', target: oreTarget(40, 60, 0, 'iron_ore', 'raw_iron'),
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: {}, announced: true,
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.phase, 'walk')
+    assert.equal(ctx.forage.target.name, 'iron_ore')
+  })
+
+  it('unloaded block read error keeps the walk', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    bot._moving = true
+    forage(bot, ctx, null, {}) // issue the walk goal
+    bot.blockAt = () => { throw new Error('chunk not loaded') }
+    for (let i = 0; i < 3; i++) forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.stalls, 3)
+  })
+})
+
+describe('forage planning edges (idkcraft-9go)', () => {
+  it('stone memory never plans (value rank 99)', () => {
+    const bot = mockBot()
+    const ctx = memCtx([{ x: 1, y: 64, z: 0, name: 'stone' }])
+    assert.equal(forage.planForage(bot, ctx), null)
+  })
+
+  it('non-string memory name never plans', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([])
+    ctx.resources.items.set('1,64,0', { x: 1, y: 64, z: 0, name: 12345 })
+    assert.equal(forage.planForage(bot, ctx), null)
+  })
+
+  it('no position returns without crashing', () => {
+    const bot = mockBot()
+    bot.entity = null
+    const ctx = memCtx([])
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('plain-object position uses the hypot fallback', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    bot.entity.position = { x: 0, y: 64, z: 0 } // no distanceTo
+    const ctx = memCtx([{ x: 5, y: 60, z: 0, name: 'iron_ore' }])
+    const p = forage.planForage(bot, ctx)
+    assert.equal(p.name, 'iron_ore')
+  })
+
+  it('throwing skip set still fails out instead of hanging', () => {
+    // skipSet/strikeCell never throw: even a corrupt ctx.forageSkip ends in
+    // failed:unreachable via the strike counter, never a wedged step.
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name: 'iron_ore' }])
+    bot.blocks['40,60,0'] = 'iron_ore'
+    bot._moving = true
+    Object.defineProperty(ctx, 'forageSkip', { get() { throw new Error('corrupt') } })
+    for (let i = 0; i < 60 && !ctx.stepStatus.startsWith('failed:'); i++) forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+  })
+
+  it('corrupt memory print releases the final', () => {
+    // memPrint never throws: a corrupt items map prints 'none', which
+    // differs from the recorded final and releases the step for a retry.
+    class EvilMap extends Map { values() { throw new Error('corrupt') } }
+    const bot = mockBot()
+    const ctx = {
+      lastGoalKey: '', stepStatus: 'running',
+      forageFinal: { status: 'failed:unreachable', world: { mem: 'x', haul: 0 } },
+      resources: { items: new EvilMap() },
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+    assert.equal(ctx.forageFinal.world.mem, 'none')
+  })
+})
+
+describe('forage food pickup walk (idkcraft-9go)', () => {
+  it('far pickup counts stalls, displacement resets, arrival picks up', () => {
+    // Kill lands, the bot is pulled away before reaching the drop: the
+    // pickup leg walks back, stalled ticks counted, displacement forgiven.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the cow
+    bot.entity.position = pos(9, 64, 0)
+    forage(bot, ctx, null, {}) // into swing range -> kill
+    assert.equal(ctx.forage.phase, 'kill')
+    forage(bot, ctx, null, {}) // swing tick sets lastPos
+    delete bot.entities[7]
+    bot.inv.push({ name: 'beef', count: 1 })
+    bot.entity.position = pos(0, 64, 0) // dragged away from the drop
+    forage(bot, ctx, null, {}) // kill -> pickup
+    assert.equal(ctx.forage.phase, 'pickup')
+    forage(bot, ctx, null, {}) // issue the walk back
+    forage(bot, ctx, null, {})
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.forage.stalls, 2, 'two still ticks far from the drop')
+    bot.entity.position = pos(1, 64, 0)
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.forage.stalls, 0, 'displacement resets the stall count')
+    bot.entity.position = pos(10, 64, 0)
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.forage.phase, 'find', 'one beef banked, hunting the next')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('unknown food phase replans', () => {
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    ctx.forage = {
+      phase: 'bogus',
+      target: { kind: 'food', name: 'cow', id: 7, pos: null, drop: 'beef', want: 8 },
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: {}, announced: true,
+    }
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.phase, 'find')
+    assert.equal(ctx.forage.target.name, 'cow')
+  })
+})
+
+describe('forage pickup stall-out (idkcraft-9go)', () => {
+  it('ten still ticks far from the drop replan onto live prey', () => {
+    // The pickup leg stalls (fence, water): ten still ticks replan the hunt
+    // onto another animal instead of waiting at the drop forever.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the cow
+    bot.entity.position = pos(9, 64, 0)
+    forage(bot, ctx, null, {}) // into swing range -> kill
+    forage(bot, ctx, null, {}) // swing tick sets lastPos
+    delete bot.entities[7]
+    bot.inv.push({ name: 'beef', count: 1 })
+    bot.entity.position = pos(0, 64, 0) // dragged away from the drop
+    bot.entities = { 9: { id: 9, name: 'cow', position: pos(2, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // kill -> pickup
+    forage(bot, ctx, null, {}) // issue the walk back
+    for (let i = 0; i < 10; i++) forage(bot, ctx, null, {}) // stand still, far away
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.forage.phase, 'find', 'stalled pickup replans the hunt')
+    assert.equal(ctx.forage.target.id, 9)
+    assert.equal(ctx.forage.foodStreak, 1)
+  })
+})
