@@ -413,19 +413,26 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
       for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
       solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
     }
-    // Natural notch: without one irregularity a uniform 4-pit is
-    // hand-inescapable by physics (no headroom above any second step).
+    // Notch at the wall top: the second cycle picks its step standing on
+    // the first mount, and findDigStepDir vetoes without two air above the
+    // feet — (0,64,1) is that headroom cell. Load-bearing (verified:
+    // filling the notch fails the climb, the episode degrades to /tp).
     solids.delete(key(0, 64, 1))
     return solids
   }
 
   it('high goal dirt pit: dig_step first, climbs out, never pages', async () => {
-    const bot = worldBot(dirtPit(), [])
+    const solids = dirtPit()
+    const bot = worldBot(solids, [])
     bot.entity.position = pos(0.5, 61, 0.5)
     bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: pos(50, 64, 0) } } }
     const brain = { async decide() { return { action: 'follow', sprint: false, source: 'stub' } } } // FSM-only
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.stuck = { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }
+    // Harness collision (revmux core-1): the feet cell is dug by the
+    // primitive, never walked through; a solid dirt head cell is dug the
+    // way the prod executor digs it (mount GoalNear + canDig) instead of
+    // being mounted into. Anything else solid refuses the move.
     const stepBody = () => {
       const g = bot.pathfinder.goal
       if (g && typeof g.x === 'number') {
@@ -435,7 +442,19 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
         const d = Math.hypot(dx, dz)
         if (d >= 0.05) {
           const s = Math.min(0.4, d) / d
-          bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+          const nx = bp.x + dx * s
+          const nz = bp.z + dz * s
+          const feet = bot.blockAt({ x: nx, y: bp.y, z: nz })
+          const head = bot.blockAt({ x: nx, y: bp.y + 1, z: nz })
+          let ok = true
+          if (feet && feet.boundingBox !== 'empty') ok = false
+          else if (head && head.boundingBox !== 'empty') {
+            if (head.name !== 'dirt' || !head.position) ok = false
+            else solids.delete(key(head.position.x, head.position.y, head.position.z))
+          }
+          // A refused step never cancels the jump below: prod jumps in
+          // place against the step, then moves over once risen.
+          if (ok) bot.entity.position = pos(nx, bp.y, nz)
         }
       }
       // Honest jump: at most one block above the cycle start floor — each
