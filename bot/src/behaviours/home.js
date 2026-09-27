@@ -3,6 +3,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { goalFacts } = require('../goal')
+const detour = require('../detour')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -364,11 +365,43 @@ function gohome(bot, ctx, target, state) {
   const inn = insidePos(home)
   if (st.phase === 'walk') {
     setWalkDig(bot, false)
-    const arrived = walkTo(bot, ctx, st, 'gohome-walk',
-      new goals.GoalNear(out.x, out.y, out.z, 1),
-      nearOut(out, 1))
-    if (st.phase === 'failed') { setWalkDig(bot, true); return } // walkTo failed the step
-    if (arrived) st.phase = 'open'
+    // rw4.12: a live mark on the leg diverts via a waypoint first; a dead
+    // detour leg falls back to direct once (never noPath instead of home).
+    if (st.via === undefined) {
+      let v = null
+      try { v = detour.via(ctx, botPos(bot), out) } catch (_) { v = null }
+      st.via = v
+      st.viaDone = !v
+    }
+    const diverting = !st.viaDone && !!st.via
+    const aim = diverting ? st.via : out
+    // The waypoint names x/z only (revmux 01): its y is the bot's feet at
+    // plan time, meaningless 20 blocks away on a slope. nearOut already
+    // reads arrival xz-only from the cell centre.
+    const goal = diverting
+      ? new goals.GoalNearXZ(aim.x, aim.z, 1)
+      : new goals.GoalNear(aim.x, aim.y, aim.z, 1)
+    const arrived = walkTo(bot, ctx, st, diverting ? 'gohome-via' : 'gohome-walk', goal, nearOut(aim, 1))
+    if (st.phase === 'failed') {
+      if (st.via && !st.viaDone) {
+        st.phase = 'walk'
+        st.stalls = 0
+        st.fails = 0
+        st.lastPos = null
+        st.viaDone = true
+        ctx.stepStatus = 'running'
+        ctx.lastGoalKey = ''
+        return
+      }
+      setWalkDig(bot, true); return
+    } // walkTo failed the step
+    if (arrived) {
+      if (st.via && !st.viaDone) {
+        st.viaDone = true
+        st.fails = 0 // the direct leg starts with a clean record
+        ctx.lastGoalKey = ''
+      } else st.phase = 'open'
+    }
     else {
       // rw4.10: the walk home runs far flat legs (48 blocks take ~11 s
       // sprinted; fight churn on the way killed prod 7 times in 3.5 min),

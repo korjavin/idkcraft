@@ -24,6 +24,7 @@ const { Vec3 } = require('vec3')
 const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
+const detour = require('../detour')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -265,6 +266,8 @@ function replanFoodStall(bot, ctx, f, bp) {
 
 function replan(bot, ctx, f, bp) {
   f.target = planForage(bot, ctx)
+  f.leg = null // fresh target re-decides the detour
+  f.via = null
   f.phase = null
   f.stalls = 0
   f.lastBotPos = bp ? { x: bp.x, y: bp.y, z: bp.z } : null
@@ -313,7 +316,7 @@ function forage(bot, ctx, target, state) {
     }
   } catch (_) { /* gate best-effort */ }
   if (!ctx.forage) {
-    ctx.forage = { phase: 'plan', target: null, stalls: 0, streak: 0, lastBotPos: null, startInv: null, drops: {}, announced: false }
+    ctx.forage = { phase: 'plan', target: null, leg: null, via: null, stalls: 0, streak: 0, lastBotPos: null, startInv: null, drops: {}, announced: false }
   }
   const f = ctx.forage
   const bp = botPos(bot)
@@ -432,11 +435,33 @@ function forage(bot, ctx, target, state) {
   }
 
   // --- ore/log: walk (bring-style: issue returns, settle digs) ---
+  // rw4.12: the first issue goes via the detour waypoint when the straight
+  // leg crosses a live mark; arrival (or a dead detour leg) drops to the
+  // direct goal. Food legs stay direct: the target moves every tick.
   if (f.phase === 'walk') {
     const p = t.pos
-    const key = `forage:${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`
+    if (!f.leg) {
+      let v = null
+      try { v = detour.via(ctx, bp, p) } catch (_) { v = null }
+      f.via = v || null
+      f.leg = v ? 'via' : 'direct'
+    }
+    // Arrival reads xz-only from the waypoint cell centre (revmux 01):
+    // the XZ goal stops on a near cell whose 3D distance misses.
+    const viaArrived = (v) => Math.hypot(bp.x - (v.x + 0.5), bp.z - (v.z + 0.5)) <= WALK_RANGE + 0.5
+    if (f.leg === 'via' && f.via && viaArrived(f.via)) {
+      f.leg = 'direct'
+      f.stalls = 0
+      try { ctx.lastGoalKey = '' } catch (_) { /* re-issue below */ }
+    }
+    const onVia = f.leg === 'via' && !!f.via
+    const aim = onVia ? f.via : p
+    const key = `forage:${Math.round(aim.x)},${Math.round(aim.y)},${Math.round(aim.z)}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, WALK_RANGE), false)
+      const goal = onVia
+        ? new goals.GoalNearXZ(aim.x, aim.z, WALK_RANGE)
+        : new goals.GoalNear(aim.x, aim.y, aim.z, WALK_RANGE)
+      bot.pathfinder.setGoal(goal, false)
       ctx.lastGoalKey = key
       // Consume the previous goal's verdict: only a noPath/timeout that
       // arrives AFTER this issue strikes (same attribution follow.js uses
@@ -453,6 +478,15 @@ function forage(bot, ctx, target, state) {
     // Striking on timeout drops a progressing walk (round-1 minor); the
     // displacement stall counter below stays the backstop.
     if (verdict === 'noPath') {
+      if (onVia) {
+        // Dead detour, live cell: fall back direct without a strike (the
+        // direct leg strikes honestly if it dies too).
+        f.leg = 'direct'
+        f.stalls = 0
+        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+        try { ctx.lastPathStatus = 'none'; ctx.lastGoalKey = '' } catch (_) { /* re-issue below */ }
+        return
+      }
       // One failure on this point is one strike: the cell is skipped (not
       // forgotten) and the next point is tried, or the step fails.
       strikeCell(ctx, f, p)
@@ -475,7 +509,9 @@ function forage(bot, ctx, target, state) {
     // Unloaded (blockAt null) is not gone: a deep point keeps its walk
     // while chunks stream in, with stall counting below as the backstop
     // (gather's unloaded-far rule).
-    if (!bot.pathfinder.isMoving()) {
+    if (!onVia && !bot.pathfinder.isMoving()) {
+      // Direct leg only: at the waypoint the target cell reads diggable
+      // while the bot stands a pit away — settling would dig thin air.
       // Stationary but out of digging reach is not a settle: fall through
       // to stall counting below (a loaded-but-far point froze here forever,
       // the live deep-ore trap). Diggable settles to dig.
@@ -490,6 +526,15 @@ function forage(bot, ctx, target, state) {
       f.stalls = 0
       f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++f.stalls >= WALK_STALL_TICKS) {
+      if (onVia) {
+        // Stalled detour: the waypoint may be the unreachable one, not
+        // the cell — fall back direct without a strike.
+        f.leg = 'direct'
+        f.stalls = 0
+        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+        try { ctx.lastGoalKey = '' } catch (_) { /* re-issue below */ }
+        return
+      }
       strikeCell(ctx, f, p)
       if ((f.streak || 0) >= UNREACHABLE_STRIKES) {
         finish(bot, ctx, f, false, 'unreachable')
