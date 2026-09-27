@@ -363,6 +363,8 @@ describe('greet uncovered paths (idkcraft-g9k)', () => {
   })
 })
 
+// NOTE: no setSneak guard test: deleting `bot && typeof ...` throws into
+// setSneak's own try (equivalent mutant). The throwing-sneak test pins the catch.
 describe('greet guards (idkcraft-g9k)', () => {
   it('a null bot declines an armed arrival', () => {
     const g = createGreeter({ sleep: () => Promise.resolve() })

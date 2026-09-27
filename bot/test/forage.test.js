@@ -1115,6 +1115,8 @@ describe('forage ore branches (idkcraft-g9k)', () => {
     return { bot, ctx }
   }
 
+  // NOTE: no nameless-block test: `!block.name` (:476) is redundant while the
+  // target has a name (undefined !== name already ghosts) — equivalent mutant.
   it('renamed block reads as a ghost and replans', () => {
     const { bot, ctx } = oreCtx()
     bot.blockAt = () => ({ name: 'stone' }) // loaded but different: ghost

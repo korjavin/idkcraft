@@ -664,6 +664,8 @@ describe('deliver live-stock branches (idkcraft-g9k)', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
+  // NOTE: no null-roster test: `|| {}` (:97) is an equivalent mutant —
+  // Object.keys(null) throws into the same catch with the same 'none'.
   it('a roster that throws mid-scan fails no-player', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'coal', count: 2 })
