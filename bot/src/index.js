@@ -1322,7 +1322,7 @@ function fleeReflex(bot, ctx) {
         ctx.flat.by = by || ctx.flat.by
         ctx.flat.parked = false
         ctx.paused = false
-        return `resuming flat, ${ctx.flat.holes.length} holes left`
+        return flatMod.resumeLine(ctx.flat)
       }
       ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
       ctx.unseenTicks = 0
