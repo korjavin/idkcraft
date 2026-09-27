@@ -29,13 +29,17 @@ const COAL_RESERVE = 4 // fuel floor: smelting's share, never torched
 const PLACE_RANGE = 4
 const PLACE_REACH = 5
 const REFUSALS_TO_SKIP = 3
+const STILL_TICKS = 10 // no-progress watchdog: moving but stationary this long re-paths
+const STILL_RADIUS = 1 // anchor radius: leaving it (XZ) reads as progress
 const CRAFT_TIMEOUT_MS = 30000
 
 // Spot plan: offsets from home.site (ground level unless dy). Door-front
-// first (the mob door), then a ring around the 4x4 shell, then the roof:
-// the flat dark roof is a mob factory above the bed (live assay night2:
-// hostiles at XZ 0.6-3.0 from center). dy 3 is the air above the dy-2
-// roof surface — placeable from the ground next to the house (reach 4.3).
+// first (the mob door), then a ring around the 4x4 shell, then the roof,
+// then the interior: the dark 2x2 under the roof spawns mobs inside the
+// house (live assay night2, filed as idkcraft-nhb). dy 3 is the air above
+// the dy-2 roof surface — placeable from the ground next to the house
+// (reach 4.3). The interior needs no entry: it stages from the door-front
+// ground in place reach (3.2), so no home.js door phases are touched.
 // (5,1) is deliberately NOT on the plan:
 // plan: atl.14 adopts the stockpile chest at table+1 east, and the skip
 // rule below guards it (and the table, and the doorway) anyway. The dark
@@ -52,6 +56,9 @@ const LIGHT_SPOTS = [
   // forever), so the approach walks to plain ground in place reach
   // (3.7) and the place flow runs from there.
   { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } },
+  // Interior: the torch goes through the doorway from the staged ground
+  // (no entry, no door phases). The door cell itself is never taken.
+  { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } },
 ]
 
 function spotAbs(home, spot) {
@@ -214,6 +221,8 @@ function skipSpot(bot, home, ctx, idx, p, why) {
   if (!ctx.lightSkip.includes(idx)) ctx.lightSkip.push(idx)
   ctx.lightFails = 0
   ctx.lightFarTicks = 0
+  ctx.lightStillTicks = 0
+  ctx.lightStillAnchor = null
   console.log(`light skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
   // A run whose last open spot closes by skipping must still log: the
   // unlit flip re-decides away before any done tick (revmux 01 minor).
@@ -232,7 +241,48 @@ function placeTick(bot, ctx, home, idx) {
   // Any walking breaks the far-idle streak (round-2 minor) — read before
   // the set branch, so a walk already running when the goal (re)sets
   // counts as progress too. Only N CONSECUTIVE far-idle ticks give up.
-  if (moving) ctx.lightFarTicks = 0
+  // A walk that makes no progress (nhb live assay: corner squeeze loops
+  // stuck/success forever) re-paths after STILL_TICKS on the far budget.
+  if (moving) {
+    // Progress is measured from an XZ anchor, not tick to tick: jump
+    // arcs (y bobbing) and node oscillation must not read as progress,
+    // and y is excluded for the same reason (revmux 01 minors).
+    let progressed = false
+    try {
+      const bp = bot.entity && bot.entity.position
+      const a = ctx.lightStillAnchor
+      if (!bp || typeof bp.x !== 'number') progressed = true // unverifiable: not still
+      else if (!a || a.idx !== idx) {
+        ctx.lightStillAnchor = { idx, x: bp.x, z: bp.z }
+        ctx.lightStillTicks = 0
+        progressed = true
+      } else if (Math.hypot(bp.x - a.x, bp.z - a.z) > STILL_RADIUS) {
+        ctx.lightStillAnchor = { idx, x: bp.x, z: bp.z }
+        ctx.lightStillTicks = 0
+        progressed = true
+      }
+    } catch (_) { progressed = true }
+    if (!progressed) {
+      if (ctx.lightFailIdx !== idx) {
+        ctx.lightFailIdx = idx
+        ctx.lightFarTicks = 0
+      }
+      ctx.lightStillTicks = (ctx.lightStillTicks || 0) + 1
+      if (ctx.lightStillTicks >= STILL_TICKS) {
+        ctx.lightStillTicks = 0
+        ctx.lightFarTicks = (ctx.lightFarTicks || 0) + 1
+        if (ctx.lightFarTicks >= REFUSALS_TO_SKIP) {
+          skipSpot(bot, home, ctx, idx, p, 'stalled')
+          return
+        }
+        ctx.lightGoalIdx = -1
+        return
+      }
+    } else {
+      ctx.lightStillTicks = 0
+      ctx.lightFarTicks = 0
+    }
+  }
   if (ctx.lightGoalIdx !== idx) {
     ctx.lightGoalIdx = idx
     try {
@@ -262,6 +312,8 @@ function placeTick(bot, ctx, home, idx) {
         ctx.lightFarTicks = 0
       }
       ctx.lightFarTicks = (ctx.lightFarTicks || 0) + 1
+      ctx.lightStillTicks = 0
+      ctx.lightStillAnchor = null
       if (ctx.lightFarTicks >= REFUSALS_TO_SKIP) {
         skipSpot(bot, home, ctx, idx, p, 'unreachable')
         return
@@ -297,6 +349,8 @@ function placeTick(bot, ctx, home, idx) {
   const landed = () => {
     ctx.lightFails = 0
     ctx.lightFarTicks = 0
+    ctx.lightStillTicks = 0
+    ctx.lightStillAnchor = null
     ctx.lightPlaced = (ctx.lightPlaced || 0) + 1
     metrics.light.inc({ op: 'placed' })
     try {
@@ -350,6 +404,8 @@ function light(bot, ctx) {
     ctx.lightSkip = []
     ctx.lightFails = 0
     ctx.lightFarTicks = 0
+    ctx.lightStillTicks = 0
+    ctx.lightStillAnchor = null
     ctx.lightFailIdx = -1
     ctx.lightGoalIdx = -1
     ctx.lightPlaced = 0

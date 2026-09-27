@@ -87,10 +87,11 @@ function paintSpots(world, h, name) {
 }
 
 describe('light spot plan (rw4.13)', () => {
-  it('door-front first, ring around the shell, chest cell free, roof last', () => {
-    assert.equal(LIGHT_SPOTS.length, 9)
+  it('door-front first, ring around the shell, chest cell free, roof then interior', () => {
+    assert.equal(LIGHT_SPOTS.length, 10)
     assert.deepEqual(LIGHT_SPOTS[0], { dx: 1, dz: -2 }) // the mob door first
     assert.deepEqual(LIGHT_SPOTS[8], { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } }) // the air above the dark flat roof
+    assert.deepEqual(LIGHT_SPOTS[9], { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } }) // the dark interior, staged from the doorway
     // atl.14 adopts the stockpile chest at table+1 east (table is (4,1)):
     // the plan must never take that cell.
     assert.ok(!LIGHT_SPOTS.some((s) => s.dx === 5 && s.dz === 1), 'chest cell not on the plan')
@@ -101,12 +102,12 @@ describe('light spot plan (rw4.13)', () => {
     const world = makeWorld()
     const h = home()
     const bot = mockBot(world)
-    assert.equal(countUnlit(bot, h, []), 9)
+    assert.equal(countUnlit(bot, h, []), 10)
     world.set(1, 64, -2, 'torch')
     world.set(-2, 64, -2, 'wall_torch')
     world.set(4, 64, -2, 'redstone_torch') // too dim to hold the ring
     world.set(1, 67, 1, 'wall_torch') // the roof spot burns too
-    assert.equal(countUnlit(bot, h, []), 6)
+    assert.equal(countUnlit(bot, h, []), 7)
     assert.equal(nextSpotIdx(bot, h, []), 2)
   })
   it('table/chest cells and skips read as done', () => {
@@ -114,10 +115,10 @@ describe('light spot plan (rw4.13)', () => {
     const bot = mockBot(world)
     // Table and chest adopted exactly on two planned spots.
     const h = { site: pos(0, 64, 0), built: true, table: pos(1, 64, -2), chest: pos(-2, 64, -2) }
-    assert.equal(countUnlit(bot, h, []), 7)
+    assert.equal(countUnlit(bot, h, []), 8)
     assert.equal(nextSpotIdx(bot, h, []), 2)
-    assert.equal(countUnlit(bot, h, [2, 3, 4, 5, 6, 7, 8]), 0)
-    assert.equal(nextSpotIdx(bot, home(), [0, 1, 2, 3, 4, 5, 6, 7, 8]), -1)
+    assert.equal(countUnlit(bot, h, [2, 3, 4, 5, 6, 7, 8, 9]), 0)
+    assert.equal(nextSpotIdx(bot, home(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), -1)
   })
 })
 
@@ -261,6 +262,22 @@ describe('light behaviour ticks (rw4.13)', () => {
     await flush()
     assert.equal(logs.filter((l) => l === 'torches placed 1').length, 1, `exactly once, got: ${logs.join(' | ')}`)
   })
+  it('interior spot: staged from the door-front ground, torch inside', async () => {
+    // nhb: no entry, no door phases — the place lands through the doorway.
+    const world = makeWorld()
+    const h = home()
+    for (const s of LIGHT_SPOTS.slice(0, 9)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 1 }] })
+    const ctx = { home: h }
+    assert.equal(nextSpotIdx(bot, h, []), 9)
+    light(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1)
+    const g = bot.calls.goals[0]
+    assert.deepEqual([g.x, g.y, g.z], [1, 64, -1], 'door-front staging')
+    light(bot, ctx)
+    await flush()
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 2 }).name, 'torch')
+  })
   it('roof spot: staged via ground, never a high GoalPlaceBlock', () => {
     // Live assay: aiming GoalPlaceBlock 3 above the feet dug the bot into
     // a hole. The roof approach must be a plain ground walk.
@@ -313,7 +330,7 @@ describe('light behaviour ticks (rw4.13)', () => {
     // minor) — the line must fire in the skip path.
     const world = makeWorld()
     const h = home()
-    for (const s of LIGHT_SPOTS.slice(0, 8)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
+    for (const s of LIGHT_SPOTS.slice(0, 9)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
     const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], failPlace: true })
     const ctx = { home: h }
     const logs = []
@@ -322,7 +339,7 @@ describe('light behaviour ticks (rw4.13)', () => {
     try {
       // Set/strike alternate (no-ref resets the goal each strike).
       for (let i = 0; i < 6; i++) { light(bot, ctx); await flush() }
-      assert.deepEqual(ctx.lightSkip, [8])
+      assert.deepEqual(ctx.lightSkip, [9])
       // Mutant-grade (revmux 02 minor): the line must already be here
       // from the skip path, before any done-branch tick could print it.
       assert.equal(logs.filter((l) => l === 'torches placed 0').length, 1, `skip path logs, got: ${logs.join(' | ')}`)
@@ -373,6 +390,70 @@ describe('light behaviour ticks (rw4.13)', () => {
     assert.deepEqual(ctx.lightSkip, [0])
     assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 1)
   })
+  it('stalled walk: 10 motionless ticks re-path on the far budget, 3rd skips', () => {
+    // nhb live assay: a corner squeeze loops pathfinder stuck/success
+    // forever with moving=true — the behaviour must notice and give up.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(7.7, 64, 8.2) })
+    bot.pathfinder.isMoving = () => true // frozen mid-walk
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    // 11: first tick records the baseline, then 10 motionless.
+    for (let i = 0; i < 11; i++) light(bot, ctx)
+    assert.equal(ctx.lightFarTicks, 1, 'first stall burns one far strike')
+    assert.equal(ctx.lightGoalIdx, -1, 're-pathed')
+    for (let i = 0; i < 22; i++) light(bot, ctx)
+    assert.deepEqual(ctx.lightSkip, [0], '3rd stall gives up')
+  })
+  it('jump in place reads as still: y bobbing is not progress', () => {
+    // Revmux 01 minor: the pathfinder holding jump bobs y while x/z are
+    // frozen — tick-to-tick 3D comparison would wipe the budget forever.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(7.7, 64, 8.2) })
+    bot.pathfinder.isMoving = () => true
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    for (let i = 0; i < 11; i++) {
+      bot.entity.position = pos(7.7, 64 + (i % 2 === 0 ? 0.4 : -0.1), 8.2)
+      light(bot, ctx)
+    }
+    assert.equal(ctx.lightFarTicks, 1, 'bobbing still strikes')
+  })
+  it('a far-idle strike resets the stall state; XZ progress forgives', () => {
+    // Revmux 01 minor: far budget is one consecutive no-progress budget —
+    // a far strike clears the still counter + anchor so the old stall can
+    // never combine with new evidence, and genuine XZ movement forgives.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(7.7, 64, 8.2) })
+    let walking = true
+    bot.pathfinder.isMoving = () => walking
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    for (let i = 0; i < 10; i++) light(bot, ctx) // anchor + 9 still
+    assert.equal(ctx.lightStillTicks, 9)
+    walking = false
+    bot.entity.position = pos(100, 65, 100) // preemption carried the body off
+    light(bot, ctx)
+    assert.equal(ctx.lightFarTicks, 1, 'far strike counted')
+    assert.equal(ctx.lightStillTicks, 0, 'still counter cleared')
+    assert.equal(ctx.lightStillAnchor, null, 'anchor cleared')
+    walking = true
+    light(bot, ctx) // moving again: re-anchors, budget forgiven
+    assert.equal(ctx.lightFarTicks, 0, 'progress forgives the streak')
+    assert.equal(ctx.lightStillTicks, 0, 'no inherited stall')
+  })
+  it('walking with progress resets the stall counter', () => {
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(0, 65, 0) })
+    bot.pathfinder.isMoving = () => true
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0', lightStillTicks: 9 }
+    bot.entity.position = pos(5, 65, 5) // strides on
+    light(bot, ctx)
+    assert.equal(ctx.lightStillTicks, 0)
+    assert.equal(ctx.lightFarTicks, 0)
+    assert.deepEqual(ctx.lightSkip || [], [])
+  })
   it('preemption resume: one far tick then walking back never burns the spot', () => {
     // Round-2 minor: the far streak must break on walking, or fight
     // preemptions pile strikes onto a reachable spot across the day.
@@ -387,6 +468,8 @@ describe('light behaviour ticks (rw4.13)', () => {
       light(bot, ctx) // resume: far and idle, streak 1...
       assert.equal(ctx.lightFarTicks, 1)
       walking = true
+      // A real walk strides; a static pos would read as stalled.
+      bot.entity.position = pos(100 - (i + 1) * 5, 65, 100)
       light(bot, ctx) // ...then the walk back breaks the streak (and re-sets)
       assert.equal(ctx.lightFarTicks, 0)
     }
@@ -445,7 +528,7 @@ describe('light goal wiring (rw4.13)', () => {
     const facts = goal.goalFacts(bot, { home: h })
     assert.equal(facts.coal, 5)
     assert.equal(facts.torches, 4)
-    assert.equal(facts.unlit, 9)
+    assert.equal(facts.unlit, 10)
     paintSpots(world, h)
     assert.equal(goal.goalFacts(bot, { home: h }).unlit, 0)
   })
