@@ -20,7 +20,8 @@ const { COAL_RESERVE } = require('./light')
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
 const ORE_PER_FUEL = 8 // one coal smelts eight ore
-const STALL_TICKS = 120 // output-idle smelt ticks with input+fuel before failed:smelt-stalled
+const STALL_TICKS = 120 // output-idle ticks with input+fuel before failed:smelt-stalled
+const FUEL_GRACE_TICKS = 15 // output-idle ticks before failed:no-fuel (one cook + slop)
 
 function botPos(bot) {
   try {
@@ -47,7 +48,7 @@ function fail(ctx, reason) {
 }
 
 function freshRun() {
-  return { phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, win: null, settled: false, result: null }
+  return { phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, tookOnce: false, win: null, settled: false, result: null }
 }
 
 // Verified crafting table (craft pattern): the claim plus a live block
@@ -229,30 +230,33 @@ function doSmelt(bot, ctx, f, spot) {
       const outNow = slotCount(win.outputItem())
       const inN = slotCount(win.inputItem())
       const fuelN = slotCount(win.fuelItem())
-      // Live burn level: progress sticks at its last fraction once the
-      // property packets arrive, so progress != null is true even cold.
-      // fuel drops to 0 on burnout (core-2).
-      const burning = typeof win.fuel === 'number' && win.fuel > 0
+      // Burn state comes from output growth, not properties (see below).
       let took = false
       if (outNow > 0) {
         const got = await win.takeOutput()
         f.smelted = (f.smelted || 0) + (got && typeof got.count === 'number' ? got.count : outNow)
         f.idleTicks = 0
+        f.tookOnce = true
         took = true
-      } else if (inN > 0 && (fuelN > 0 || burning)) {
+      } else if (inN > 0) {
+        // Slots only: property packets (progress/fuel) never arrive on
+        // this Paper, so burn state comes from output growth alone.
         f.idleTicks = (f.idleTicks || 0) + 1
-        if (f.idleTicks >= STALL_TICKS) { finishSmelt(bot, ctx, f, 'smelt-stalled'); return }
+        if (f.idleTicks >= STALL_TICKS && fuelN > 0) { finishSmelt(bot, ctx, f, 'smelt-stalled'); return }
       } else {
         f.idleTicks = 0
       }
       const invOre = invCount(bot, 'raw_iron')
       const invCoal = invCount(bot, 'coal')
       const invChar = invCount(bot, 'charcoal')
-      // Top up input (room in the slot) and fuel (reserve-capped). The
-      // burn in flight counts as a piece (core-5): without it every
-      // ignition parks one extra coal that never burns this run.
+      // Top up input (room in the slot) and fuel (reserve-capped). A
+      // recent take means a burn is likely in flight (core-5): the piece
+      // left the slot but still cooks, so it counts or every ignition
+      // parks one extra coal. Past the grace the discount lapses and a
+      // cold furnace reloads.
       const oreLoad = Math.min(invOre, 64 - inN)
-      const fuelLoad = Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - (burning ? 1 : 0))
+      const inFlight = f.tookOnce && (f.idleTicks || 0) < FUEL_GRACE_TICKS ? 1 : 0
+      const fuelLoad = Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
       if (oreLoad > 0) {
         const id = craftMod.itemId(bot, 'raw_iron')
         if (id == null) throw new Error('no-ore-id')
@@ -294,12 +298,16 @@ function doSmelt(bot, ctx, f, spot) {
           await win.putFuel(id, null, Math.min(invChar, fuelLoad))
         }
       }
-      // Settle: no ore anywhere = done; ore stranded with nothing
-      // burnable and nothing taken = hungry.
+      // Settle: no ore anywhere = done; ore stranded past the grace
+      // with an empty slot and nothing loadable = hungry. The grace
+      // covers the burn in flight (a lit furnace with a drained slot
+      // still cooks for one item time).
       const oreLeft = inN + invOre
-      const canBurn = fuelN > 0 || burning || fuelLoad > 0
       if (oreLeft === 0 && (outNow === 0 || took)) { finishSmelt(bot, ctx, f, 'done'); return }
-      if (outNow === 0 && oreLeft > 0 && !canBurn) { finishSmelt(bot, ctx, f, 'no-fuel'); return }
+      if (outNow === 0 && oreLeft > 0 && fuelN === 0 && fuelLoad === 0 && (f.idleTicks || 0) >= FUEL_GRACE_TICKS) {
+        finishSmelt(bot, ctx, f, 'no-fuel')
+        return
+      }
       f.winErrs = 0
     } catch (err) {
       await shut(bot, f)

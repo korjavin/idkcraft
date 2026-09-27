@@ -237,15 +237,33 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     assert.equal(fuels[0][2], 1)
   })
 
-  it('ore without spendable fuel fails no-fuel and loads no fuel', async () => {
+  it('ore without spendable fuel fails no-fuel after the grace', async () => {
+    // Slots-only hunger: a drained slot with ore standing could still be
+    // a burn in flight, so the verdict waits out one cook time.
     const { bot, log } = smeltBot({
       inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
       slots: [null, null, null],
     })
     const ctx = smeltCtx()
     await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined, 'grace covers the burn in flight')
+    for (let i = 0; i < 15; i++) await tick(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:no-fuel')
     assert.ok(!log.some(([op]) => op === 'putFuel'), JSON.stringify(log))
+  })
+
+  it('output flow resets the hunger clock', async () => {
+    // A take mid-grace proves the burn: idle restarts instead of failing.
+    const { bot, win } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
+      slots: [{ name: 'raw_iron', count: 8 }, null, null],
+    })
+    const ctx = smeltCtx()
+    for (let i = 0; i < 5; i++) await tick(bot, ctx)
+    win.slots[2] = { name: 'iron_ingot', count: 1 } // the flight lands
+    await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.equal(ctx.furnace.idleTicks, 0)
   })
 
   it('takes full output, logs smelted N iron, done when ore stands nowhere', async () => {
@@ -263,12 +281,10 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     }
   })
 
-  it('burning input waits without taking', async () => {
+  it('loaded input waits without taking', async () => {
     const { bot, log } = smeltBot({
       inv: [],
       slots: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }, null],
-      progress: 0.5,
-      fuel: 0.5,
     })
     const ctx = smeltCtx()
     await tick(bot, ctx)
@@ -386,31 +402,34 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     assert.equal(fuels[0][2], 8)
   })
 
-  it('stale progress with dead fuel fails no-fuel, never stalls', async () => {
-    // Core-2: progress sticks at its last fraction on a live window;
-    // only the fuel level tells cold from burning.
+  it('a cold drained slot fails hungry, never stalled', async () => {
+    // Stall needs fuel standing in the slot doing nothing; an empty
+    // slot with unspendable hands is hunger whatever the idle count.
     const { bot } = smeltBot({
       inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
       slots: [{ name: 'raw_iron', count: 8 }, null, null],
-      progress: 0.5,
-      fuel: 0,
     })
     const ctx = smeltCtx()
-    await tick(bot, ctx)
+    for (let i = 0; i < 130; i++) {
+      await tick(bot, ctx)
+      if (ctx.stepStatus) break
+    }
     assert.equal(ctx.stepStatus, 'failed:no-fuel')
   })
 
-  it('the burn in flight counts as a loaded piece', async () => {
-    // Core-5: fuel ignites out of the slot, so fuelN reads 0 while a
-    // piece burns — loading another would park coal past done.
-    const { bot, log } = smeltBot({
+  it('a recent take discounts one fuel piece until the grace lapses', async () => {
+    // Core-5 slots-only: output flowed, so a burn is likely in flight
+    // and its piece counts; past the grace a cold furnace reloads.
+    const { bot, log, win } = smeltBot({
       inv: [{ name: 'coal', count: 6 }],
-      slots: [{ name: 'raw_iron', count: 8 }, null, null],
-      progress: 0.3,
-      fuel: 0.9,
+      slots: [{ name: 'raw_iron', count: 8 }, null, { name: 'iron_ingot', count: 2 }],
     })
-    await tick(bot, smeltCtx())
+    const ctx = smeltCtx()
+    await tick(bot, ctx) // take proves the burn
     assert.ok(!log.some(([op]) => op === 'putFuel'), `no parked extra: ${JSON.stringify(log)}`)
+    for (let i = 0; i < 15; i++) await tick(bot, ctx) // grace lapses, still cold
+    assert.ok(log.some(([op]) => op === 'putFuel'), `cold furnace reloads: ${JSON.stringify(log)}`)
+    assert.equal(ctx.stepStatus, undefined)
   })
 
   it('unreachable table fails after 20 walk ticks', async () => {
