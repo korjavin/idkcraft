@@ -940,9 +940,11 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     const first = []
     const stepBody = () => {
       const bp = bot.entity.position
+      const yaw = bot._yaw || 0
       if (bot.getControlState('forward')) {
-        const yaw = bot._yaw || 0
         bot.entity.position = pos(bp.x - Math.sin(yaw) * 0.4, bp.y, bp.z - Math.cos(yaw) * 0.4)
+      } else if (bot.getControlState('back')) {
+        bot.entity.position = pos(bp.x + Math.sin(yaw) * 0.4, bp.y, bp.z + Math.cos(yaw) * 0.4)
       } else {
         const g = bot.pathfinder.goal
         if (g && typeof g.x === 'number') {
@@ -1019,7 +1021,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1028,23 +1030,29 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
   })
 
-  it('hop latches at the physical flush distance (0.8), walks farther out', () => {
-    // Round-1 major: flush contact is exactly half-block plus half-body, so
-    // a strict < 0.8 latch never fires and the primitive always times out.
+  it('hop pressed at entry backs to leap stance instead of leaping (wqt)', async () => {
+    // Paper zeroes a leap from contact (rise 0.00, ~20 rejects/s), so the
+    // first pressed tick backs off on a 100 ms timer and arms the standstill
+    // leap — it must never hold jump into the face. Deleting the pressed
+    // branch fails this test (jump held, back never asserted).
     const bot = stepBot()
     bot.entity.position = pos(0.7, 61, 0.5)
     const ctx = {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
     }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
-    assert.ok(bot.getControlState('jump'), 'leap latches at exactly 0.8')
+    assert.ok(!bot.getControlState('jump'), 'no leap into the face')
+    assert.ok(bot.getControlState('back'), 'short back-off held')
+    assert.equal(ctx.recovery.st.armed, true, 'standstill leap armed')
+    await new Promise((r) => setTimeout(r, 150))
+    assert.ok(!bot.getControlState('back'), 'timer releases back')
   })
 
   it('hop leaves no control pressed after the mount', () => {
@@ -1057,7 +1065,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1108,7 +1116,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true, settled: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1139,7 +1147,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true, settled: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: true, armed: false, stall: 0, settled: true },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1155,14 +1163,14 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.ok(!bot.getControlState('jump'), 'jump released on the way out')
   })
 
-  it('hop walks to the edge first, leaps inside jump range', () => {
+  it('hop walks in, backs when pressed, leaps from leap stance', () => {
     const bot = stepBot()
     bot.entity.position = pos(-1.5, 61, 0.5)
     const ctx = {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1170,11 +1178,18 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
     assert.ok(bot.getControlState('forward'), 'walking to the edge')
-    assert.ok(!bot.getControlState('jump'), 'no early leap from 3m out')
-    bot.entity.position = pos(0.9, 61, 0.5)
+    assert.ok(!bot.getControlState('jump'), 'no run-up leap from 3m out')
+    bot.entity.position = pos(0.9, 61, 0.5) // pressed (dc 0.6)
     recover.run(bot, ctx)
-    assert.ok(bot.getControlState('jump'), 'leap latches at the edge')
-    assert.ok(ctx.recovery.st.jumping, 'latch sticks')
+    assert.ok(bot.getControlState('back'), 'backs instead of leaping pressed')
+    assert.ok(!bot.getControlState('jump'), 'jump stays off')
+    assert.equal(ctx.recovery.st.armed, true, 'standstill leap armed')
+    bot.entity.position = pos(0.4, 61, 0.5) // backed to stance (dc 1.1)
+    recover.run(bot, ctx)
+    assert.ok(bot.getControlState('forward'), 'leap drives forward')
+    assert.ok(bot.getControlState('jump'), 'standstill leap fires')
+    assert.equal(ctx.recovery.st.armed, false, 'leap consumes the arm')
+    assert.equal(ctx.recovery.st.leapt, true)
   })
 })
 
@@ -1320,6 +1335,113 @@ describe('hop_step airborne stall backs off (idkcraft-ak4)', () => {
     bot.entity.onGround = true
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
+  })
+})
+
+describe('hop_step standstill leap on Paper (idkcraft-wqt)', () => {
+  // Paper 26.1.2 zeroes a leap from wall contact (rise 0.00, ~20 silent
+  // server teleports/s); a run-up leap cannot be timed on 1 Hz ticks. Hop
+  // backs 100 ms to leap stance (gap 0.25-0.5) and leaps from the
+  // standstill instead. Deleting the pressed branch fails the first two
+  // tests (jump held into the face); deleting the past-step done fails the
+  // overflow test (running instead of done).
+  function hopCtx(st) {
+    return {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running', st,
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+  }
+  function hopBot() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0)) // the +1 step east of the body
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    return bot
+  }
+  it('landed-short leap re-backs and re-arms the veto', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(0.9, 61, 0.5) // pressed after a short landing
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 2, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('back'), 're-backs to leap stance')
+    assert.ok(!bot.getControlState('jump'), 'no re-leap from contact')
+    assert.equal(ctx.recovery.st.armed, true, 'next tick leaps')
+    assert.equal(ctx.recovery.st.leapt, false, 'veto re-armed')
+  })
+  it('in-flight arc coasts with thrust held, never backs mid-air', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(1.0, 61.5, 0.5) // rising past the face
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 2, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('forward'), 'carry continues')
+    assert.ok(bot.getControlState('jump'), 'thrust held through the arc')
+    assert.ok(!bot.getControlState('back'), 'no mid-air back-off')
+  })
+  it('grounded past the step is done (overflowed arc escapes)', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(2.6, 61, 0.5) // landed beyond the narrow top
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.ok(!bot.getControlState('forward'), 'forward released')
+    assert.ok(!bot.getControlState('jump'), 'jump released')
+  })
+  it('airborne past the step is not done', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(2.6, 61.5, 0.5) // sailing over, not landed
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: -0.1, z: 0 }
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'apex guard covers the overflow done')
+  })
+  it('walk-in holds no jump after a long back-off (ak4 resume)', () => {
+    // The 250 ms airborne unwedge leaves too long a runway for a
+    // standstill leap, so the resume walks back in and re-presses first.
+    const bot = hopBot()
+    bot.entity.position = pos(0.0, 61, 0.5) // dc 1.5, unwedged stance
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 4, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('forward'), 'walks back in')
+    assert.ok(!bot.getControlState('jump'), 'no leap from the long stance')
+  })
+  it('head veto re-arms on the back-off', () => {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0))
+    solids.add(key(0, 62, 0)) // head blocked over the body
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.9, 61, 0.5)
+    bot.entity.onGround = true
+    const st = { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 1, startFloor: 61, leapt: false, armed: true, stall: 0, settled: false }
+    const ctx = hopCtx(st)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:head-blocked', 'fresh leap checks headroom')
+    st.leapt = true // same sample mid-leap: the veto stays out of the arc
+    ctx.recovery.status = 'running'
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'mid-leap veto disarmed')
   })
 })
 
@@ -1622,7 +1744,7 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
 
   it('hop anchor collapse re-scans instead of mounting air', () => {
     // The step block is gone (dug by another tick, ghost): hop_step drops
-    // the stale anchor and re-scans from the back phase.
+    // the stale anchor and leap state, then re-scans.
     const bot = worldBot(pitWorld(), [])
     bot.entity.position = pos(0.5, 61, 0.5)
     const ctx = {
@@ -1630,9 +1752,8 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
       recovery: {
         action: 'hop_step', status: 'running',
         st: {
-          dir: [1, 0], stepPos: { x: 5, y: 61, z: 0 }, phase: 'hop',
-          waited: 0, startFloor: 61, backStart: { x: 0.5, y: 61, z: 0.5 },
-          jumping: false, settled: false,
+          dir: [1, 0], stepPos: { x: 5, y: 61, z: 0 },
+          waited: 0, startFloor: 61, leapt: true, armed: true, stall: 0, settled: false,
         },
       },
     }
@@ -1640,7 +1761,8 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.status, 'running')
     assert.equal(ctx.recovery.st.dir, null)
     assert.equal(ctx.recovery.st.stepPos, null)
-    assert.equal(ctx.recovery.st.phase, 'back')
+    assert.equal(ctx.recovery.st.leapt, false)
+    assert.equal(ctx.recovery.st.armed, false)
   })
 
   it('run() catches a throwing primitive as failed:error', () => {
