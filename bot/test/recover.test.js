@@ -716,6 +716,71 @@ describe('gave-up marks danger (mnx)', () => {
   })
 })
 
+describe('repeat gave-up pages the owner (rw4.9)', () => {
+  function pageBot(at, players) {
+    return {
+      username: 'IdkBot', players: players || {},
+      entity: { position: pos(at[0], at[1], at[2]) },
+      pathfinder: { goal: null },
+      chats: [], chat(m) { this.chats.push(String(m)) },
+    }
+  }
+  it('first gave-up marks silently; second at the live mark pages once', () => {
+    // Prod 2026-09-27: cross-step episodes re-ground the same pit for an
+    // hour with nobody online to hear call_player. Different by/key per
+    // episode mirrors the cross-step loop (the latch only holds one).
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    recover.setStuck(ctx, 'explore', { x: 40, y: 64, z: 0 }, 'explore:40,0')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.deepEqual(bot.chats, [])
+    assert.equal(danger.count(ctx), 1)
+    recover.setStuck(ctx, 'roam', { x: -30, y: 64, z: 5 }, 'roam:back')
+    ctx.recovery = { action: 'dig_step', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(bot.chats.length, 1)
+    assert.match(bot.chats[0], /I'm stuck at 10 64 0 again with nobody online/)
+  })
+  it('third gave-up at the same mark stays silent (latched)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    const detectors = [['explore', 'explore:40,0'], ['roam', 'roam:back'], ['gather', 'gather']]
+    for (const [by, key] of detectors) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+  })
+  it('no page with a player online (call_player owns it)', () => {
+    const bot = pageBot([10, 64, 0], { Steve: {} })
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.deepEqual(bot.chats, [])
+  })
+  it('relocated repeat pages again', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+    bot.entity.position = pos(14, 64, 0) // 4 out: inside mark radius 6, past page latch 2
+    recover.setStuck(ctx, 'gather', { x: 40, y: 64, z: 0 }, 'gather')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(bot.chats.length, 2)
+    assert.match(bot.chats[1], /I'm stuck at 14 64 0 again/)
+  })
+})
+
 describe('setStuck transition', () => {
   it('latch blocks the same situation, a moved goal re-raises', () => {
     // M4: after an episode the same detector must stay quiet until the

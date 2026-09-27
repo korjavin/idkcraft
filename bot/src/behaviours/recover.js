@@ -946,6 +946,15 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
+// One page per mark: the same spot (xz) within the mark TTL stays silent;
+// relocation past it (or an expired mark) re-arms.
+function repeatPaged(ctx, bp) {
+  const pg = ctx && ctx.repeatGaveUpPage
+  if (!pg || typeof pg.x !== 'number' || typeof pg.z !== 'number') return false
+  if (typeof pg.at !== 'number' || Date.now() - pg.at > danger.TTL_MS) return false
+  return Math.hypot(bp.x - pg.x, bp.z - pg.z) <= REST_GIVE_UP_DIST
+}
+
 // Episode end: drop the pathfinder goal (a stale goal re-wedges the next
 // tick — idkcraft-yvi), resume the owning mode, clear the fact. done =
 // an escape worked; gave-up = budget spent, target stays dropped.
@@ -1022,6 +1031,19 @@ function release(bot, ctx, how) {
     }
   }
   if (how === 'gave-up') {
+    // Repeat page (rw4.9): gave up where a live mark already sits and
+    // nobody is online — a resourceless pit is inescapable alone (prod
+    // 2026-09-27 ground 3 dusks in one hole), so page the owner once per
+    // mark; chat persists in the server log for the next session. Online
+    // paging stays with the call_player menu item.
+    try {
+      const bp = botPos(bot)
+      if (bp && !anyPlayerOnline(bot) && danger.near(ctx, bp) && !repeatPaged(ctx, bp)) {
+        bot.chat(`I'm stuck at ${Math.floor(bp.x)} ${Math.floor(bp.y)} ${Math.floor(bp.z)} again with nobody online, /tp ${bot.username} <your-name>`)
+        ctx.repeatGaveUpPage = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
+        console.log(`repeat gave-up at ${fmtPos(bp)}, owner paged`)
+      }
+    } catch (_) { /* paging best-effort */ }
     // Pit memory (mnx): the release point stays dangerous, so explore and
     // gather do not lead back into it. call_player ends here too
     // (endEpisode -> gave-up), same mark.
