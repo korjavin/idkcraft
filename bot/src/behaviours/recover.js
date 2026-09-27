@@ -211,8 +211,43 @@ function lavaNearAt(bot) {
   return false
 }
 
+// Pillar fuel: dirt and cobblestone. One predicate for the count and the
+// finder, so a positive count always yields an item to equip below.
+function isScaffoldName(n) {
+  return n === 'dirt' || n === 'cobblestone'
+}
+
 function scaffoldCount(bot) {
-  return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  return countItems(bot, isScaffoldName)
+}
+
+function findScaffoldItem(bot) {
+  let items = []
+  try {
+    items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+  } catch (_) { return null }
+  if (!Array.isArray(items)) return null
+  return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
+}
+
+// 1 Hz ticks sample the ~0.6 s jump at a random phase: issuing while
+// already falling lets the server apply the placement after the feet are
+// back inside the target cell, which the server refuses as
+// self-intersection. Issue only while rising; a missing velocity (mocks)
+// reads as rising.
+function rising(bot) {
+  try {
+    const v = bot && bot.entity && bot.entity.velocity
+    if (!v || typeof v.y !== 'number') return true
+    return v.y > 0
+  } catch (_) { return true }
+}
+
+// One log-safe token from a place error: the prod line carries err= so the
+// next session review sees WHY the server refused, not just that it did.
+function shortErr(e) {
+  const m = e && typeof e.message === 'string' ? e.message : String(e)
+  return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
 }
 
 function hasPickaxe(bot) {
@@ -428,7 +463,7 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + PILLAR_APEX) {
+    if (bp.y >= st.startFloor + PILLAR_APEX && rising(bot)) {
       st.phase = 'place'
       setJump(bot, false)
     } else {
@@ -468,12 +503,19 @@ function pillarUpRun(bot, ctx) {
     if (solid(c)) { ref = c; face = new Vec3(r.f[0], r.f[1], r.f[2]); break }
   }
   if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-reference'
+  // Equip first: mineflayer throws 'must be holding an item to place' on
+  // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
+  // pillar_ups, 0 placed). The count gate above already vetoed an empty
+  // stock; this covers an inventory that changed mid-jump.
+  const item = findScaffoldItem(bot)
+  if (!item) { setJump(bot, false); return 'failed:no-scaffold' }
   st.placeInFlight = true
   void (async () => {
     try {
+      if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
       await bot.placeBlock(ref, face)
       st.placed = true
-    } catch (_) { st.placeError = true } finally { st.placeInFlight = false }
+    } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
   return 'running'
 }
@@ -1022,6 +1064,12 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
       `head=${blockNameOf(cellAt(bot, 0, 1, 0))} next=${next}`
   }
   if (action === 'hop_step') extra += ` ${hopDetail(bot, ctx)}`
+  if (outcome === 'failed:place-error') {
+    try {
+      const pe = ctx && ctx.recovery && ctx.recovery.st && ctx.recovery.st.placeErr
+      if (pe) extra += ` err=${pe}`
+    } catch (_) { /* err best-effort */ }
+  }
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
