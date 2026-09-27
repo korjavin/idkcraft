@@ -373,6 +373,8 @@ function build(bot, ctx, target, state) {
 }
 
 module.exports = build
+module.exports.findRef = findRef
+module.exports.isReplaceable = isReplaceable
 module.exports.guardOwnWalls = guardOwnWalls
 module.exports.BLUEPRINT = BLUEPRINT
 module.exports.PLANK_COUNT = PLANK_COUNT

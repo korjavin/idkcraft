@@ -121,6 +121,22 @@ const MENU = {
     chat: () => 'on my own: building the house',
     verb: 'building the house',
   },
+  light: {
+    // Day shift only: walking the yard at night is the danger being fixed.
+    // Fuel floor mirrors the behaviour's reserve (deferred require: the
+    // equip precedent — goal.js loads inside the behaviour chain).
+    feasible: (facts, bot, ctx) => {
+      if (facts.time !== 'day') return false
+      const home = ctx && ctx.home
+      if (!home || !home.site) return false
+      if (!(facts.unlit > 0)) return false
+      if ((facts.torches || 0) > 0) return true
+      if ((facts.coal || 0) <= require('./behaviours/light').COAL_RESERVE) return false
+      return (facts.sticks || 0) > 0 || (facts.planks || 0) >= 2 || (facts.logs || 0) >= 1
+    },
+    chat: () => 'on my own: lighting the yard',
+    verb: 'lighting torches',
+  },
   gather: {
     // Only while material is still missing: plank-equivalent on hand vs the
     // house budget (table 4 + door 6 + NEED_PLANKS planks), and never once
@@ -199,7 +215,7 @@ function equipWant(facts) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -332,6 +348,8 @@ function goalFacts(bot, ctx) {
   const pickaxe = countItems(bot, (n) => n.endsWith('_pickaxe'))
   const cobble = countItems(bot, (n) => n === 'cobblestone')
   const sticks = countItems(bot, (n) => n === 'stick')
+  const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
+  const torches = countItems(bot, (n) => n === 'torch')
   const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
@@ -349,6 +367,13 @@ function goalFacts(bot, ctx) {
     }
   } catch (_) { /* inventory not ready: 0 */ }
   const home = !ctx || !ctx.home ? 'none' : ctx.home.built ? 'built' : 'site'
+  // Unlit torch spots around the house (rw4.13 light step): scanned like
+  // the build remainder, so the step ends when the ring burns.
+  let unlit = 0
+  try {
+    const hh = ctx && ctx.home
+    if (hh && hh.site) unlit = require('./behaviours/light').countUnlit(bot, hh, ctx.lightSkip)
+  } catch (_) { /* unscannable reads as lit: light yields, nothing churns */ }
   // ctx.home.interior contract (set by bead .4): { min: {x,y,z}, max: {x,y,z} }.
   let inside = 'no'
   try {
@@ -385,7 +410,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -395,6 +420,9 @@ function logBucket(n) {
 }
 function plankBucket(n) {
   return n <= 0 ? 'none' : n < NEED_PLANKS ? 'few' : 'enough'
+}
+function unlitBucket(n) {
+  return !(n > 0) ? 'none' : n < 5 ? 'few' : 'many'
 }
 // Canonical facts text: ALSO the model state (iwb lesson: the model matches
 // whole-criterion similarity, so numbers go out, bucket words go in). The
@@ -414,8 +442,9 @@ function goalText(facts) {
   // true facts.inside; only the decision text (and the model state, whose day
   // menu never offers stay/gohome) goes steady.
   const inside = facts.time === 'day' ? 'no' : facts.inside
+  const unlit = unlitBucket(facts.unlit)
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
-    `table=${table} door=${door} home=${facts.home} inside=${inside} health=${health} food=${food} ` +
+    `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player}`
 }
 
@@ -466,6 +495,7 @@ const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
   craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
+  light: 'unlit is few or many and time is day: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
@@ -596,6 +626,18 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       return 'build: nothing left to build'
     }
+    case 'light': {
+      if (facts.time !== 'day') return 'light: daytime job'
+      const home = ctx && ctx.home
+      if (!home || !home.site) return 'light: no home site'
+      if (!(facts.unlit > 0)) return 'light: yard lit'
+      // Torches on hand with a dark yard is feasible (null above), so only
+      // the fuel branches remain.
+      let reserve = 4
+      try { reserve = require('./behaviours/light').COAL_RESERVE } catch (_) { /* mirror default */ }
+      if ((facts.coal || 0) <= reserve) return 'light: saving coal'
+      return 'light: no sticks or wood'
+    }
     case 'gather':
       if (facts.home === 'built') return 'gather: home built'
       return 'gather: load full'
@@ -700,7 +742,7 @@ async function decide(bot, ctx) {
   // cursor (live 26.1 lesson: a table placement flips the facts before the
   // sword craft lands). The flags reset on completion, so this holds for a
   // few ticks at most.
-  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight)) {
+  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.lightCraftInFlight)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   if (!finished && (prev === 'gohome' || prev === 'stay')) {

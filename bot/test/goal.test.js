@@ -36,13 +36,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(NEED_PLANKS, 48)
   })
 
-  it('menu has all ten steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'rest', 'stay'])
+  it('menu has all eleven steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'light', 'rest', 'stay'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'gather', 'deliver', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -92,8 +92,9 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no health=ok food=ok known=none haul=none player=none')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes health=low food=hungry known=near haul=waiting player=near')
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near')
+    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }).includes('unlit=few'), true)
   })
 })
 
