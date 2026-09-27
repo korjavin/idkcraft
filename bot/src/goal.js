@@ -158,11 +158,12 @@ const MENU = {
     // exact complement of deliver's: a waiting haul with a player online
     // belongs to deliver, with nobody online it belongs here (revmux
     // 01-review — gating on haul alone never banks the night's loot).
-    // chest=no is always feasible: a standing chest re-adopts on sight
-    // without planks in hand, and a missing one fails no-chest and holds.
+    // The chest=no branch runs only when actionable (a standing chest to
+    // adopt, or the pack to place one): an unready bot must not preempt a
+    // forage leg just to fail at once (revmux 02-review).
     feasible: (facts) => facts.home === 'built' && !facts.chestParked &&
       !(facts.haul === 'waiting' && facts.player !== 'none') &&
-      (facts.chest === 'no' || facts.surplus === 'yes'),
+      (facts.chest === 'no' ? facts.chestTodo !== 'none' : facts.surplus === 'yes'),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
   },
@@ -377,20 +378,38 @@ function goalFacts(bot, ctx) {
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.
   const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
-  // Home chest (atl.14): adopted coords, live surplus, and the full park.
-  // The park expires after CHEST_FULL_RETRY_MS so a hand-emptied chest
-  // re-arms without a bring fetch or a restart (revmux 01-review); an
-  // unstamped flag (unit-test ctx) parks like before.
+  // Home chest (atl.14): adopted coords, the no-chest todo, batched live
+  // surplus, and the full park. Surplus flips only past SURPLUS_BATCH:
+  // banking preempts forage, so one dug block must not re-fire the
+  // decision mid-vein (revmux 02-review; craft batch-gate precedent).
   let chest = 'no'
   try { if (ctx && ctx.home && ctx.home.chest) chest = 'yes' } catch (_) { /* unadopted */ }
+  let chestTodo = 'none'
+  try { chestTodo = stockpileMod.chestTodo(bot, ctx, maxPlanks) } catch (_) { /* undecidable */ }
   let surplus = 'no'
-  try { if (stockpileMod.surplusCount(bot) > 0) surplus = 'yes' } catch (_) { /* no surplus */ }
+  try {
+    const batch = (stockpileMod && stockpileMod.SURPLUS_BATCH) || 16
+    if (stockpileMod.surplusCount(bot) >= batch) surplus = 'yes'
+  } catch (_) { /* no surplus */ }
+  // The full park expires after CHEST_FULL_RETRY_MS so a hand-emptied
+  // chest re-arms without a bring fetch or a restart (01-review); an
+  // unstamped flag (unit-test ctx) parks like before. An expired park
+  // re-arms only near home: no cross-map trip for a probably-still-full
+  // chest (02-review) — gohome brings the body back nightly anyway.
   let chestParked = false
   try {
     if (ctx && ctx.chestFull) {
       const at = ctx.chestFullAt
       const retry = (stockpileMod && stockpileMod.CHEST_FULL_RETRY_MS) || 600000
-      chestParked = at == null || Date.now() - at < retry
+      if (at == null || Date.now() - at < retry) {
+        chestParked = true
+      } else {
+        const bp = bot && bot.entity && bot.entity.position
+        const c = ctx.home && ctx.home.chest
+        const r = (stockpileMod && stockpileMod.REPROBE_RADIUS) || 32
+        chestParked = !(bp && c && typeof bp.x === 'number' &&
+          Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= r)
+      }
     }
   } catch (_) { /* not parked */ }
   let known = 'none'
@@ -416,7 +435,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player, chest, surplus, chestParked }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, scaffold, home, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -639,6 +658,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.home !== 'built') return 'stockpile: house not built yet'
       if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
       if (facts.chestParked) return 'stockpile: chest full'
+      if (facts.chest === 'no') return 'stockpile: no chest to adopt, nothing to place it with'
       return 'stockpile: nothing to bank'
     case 'forage':
       if (facts.known !== 'near') return 'forage: nothing known nearby'

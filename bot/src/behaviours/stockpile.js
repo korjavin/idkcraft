@@ -38,6 +38,13 @@ const EXACT_KEEP = new Set([
 ])
 const FOOD_KEEP = 10
 const SCAFFOLD_KEEP = 32
+// Surplus batch gate (craft NEED_LOGS precedent): banking preempts forage,
+// so a single dug block must not flip it — the leg would shrink to one
+// block per round trip home. The menu sees surplus only past a full batch.
+const SURPLUS_BATCH = 16
+// Park re-probe radius: an expired full park re-arms only near home, so a
+// probably-still-full chest never costs a cross-map trip (revmux 02-review).
+const REPROBE_RADIUS = 32
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -46,12 +53,18 @@ const CHEST_FULL_RETRY_MS = 10 * 60 * 1000
 // path reads the same), so window ops double-check the body is close
 // instead of eating mineflayer's 20 s windowOpen timeout (revmux 01-review).
 const INTERACT_REACH = 4
+// Place reach: GoalPlaceBlock(range 4) ends on head-to-face-centre <= 4,
+// so the gate must accept every valid end node (02-review geometry).
+const PLACE_REACH = 4.5
 
 function nearPos(bot, p, reach) {
+  // Measured to the block CENTRE: GoalPlaceBlock ends on head-to-face
+  // distance, and feet-to-corner over-measures by ~1 on +x/+z approaches,
+  // failing 'far' on a valid end node (revmux 02-review).
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return false
-    return Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) <= reach
+    return Math.hypot(bp.x - (p.x + 0.5), bp.y - (p.y + 0.5), bp.z - (p.z + 0.5)) <= reach
   } catch (_) {
     return false
   }
@@ -124,21 +137,43 @@ function blockNameAt(bot, x, y, z) {
 }
 
 // First candidate that can hold the chest: air (or a chest to adopt) at
-// the cell, solid ground below. { x, y, z, adopt } or null.
+// the cell, solid ground below. { x, y, z, adopt }, 'unknown' when no
+// candidate is decidable (chunks dark: walk in, don't fail), else null.
 function chestSpotFor(bot, ctx) {
   const site = ctx && ctx.home && ctx.home.site
   if (!site || typeof site.x !== 'number') return null
+  let sawUnknown = false
   for (const s of CHEST_SPOTS) {
     const x = site.x + s.dx
     const y = site.y + s.dy
     const z = site.z + s.dz
     const at = blockNameAt(bot, x, y, z)
-    if (at !== 'air' && at !== 'chest' && at !== null) continue
+    if (at === null) { sawUnknown = true; continue }
+    if (at !== 'air' && at !== 'chest') continue
     const below = blockNameAt(bot, x, y - 1, z)
-    if (below === null || below === 'air') continue
+    if (below === null) { sawUnknown = true; continue }
+    if (below === 'air') continue
     return { x, y, z, adopt: at === 'chest' }
   }
-  return null
+  return sawUnknown ? 'unknown' : null
+}
+
+// What the no-chest branch can do: 'adopt' a standing chest on sight,
+// 'place' one when the pack holds a chest item or 8 same-wood planks,
+// 'none' otherwise. The menu gates on this so an unready bot never
+// preempts a forage leg to fail at once (revmux 02-review).
+function chestTodo(bot, ctx, maxPlanks) {
+  try {
+    const site = ctx && ctx.home && ctx.home.site
+    if (site && typeof site.x === 'number') {
+      for (const s of CHEST_SPOTS) {
+        if (blockNameAt(bot, site.x + s.dx, site.y + s.dy, site.z + s.dz) === 'chest') return 'adopt'
+      }
+    }
+    if (countItems(bot, (n) => n === 'chest') > 0) return 'place'
+    if ((maxPlanks || 0) >= 8) return 'place'
+  } catch (_) { /* undecidable: none */ }
+  return 'none'
 }
 
 function say(bot, line) {
@@ -157,9 +192,11 @@ function adopted(ctx, spot) {
 }
 
 // Open the adopted chest, run fn(window), always close.
-// { status: 'ok', value } | { status: 'gone' } | { status: 'unknown' }.
+// { status: 'ok', value } | 'gone' | 'unknown' | 'error'.
 // Unknown (blockAt null: unloaded chunk) is NOT gone — the caller walks
-// closer and retries instead of dropping the adoption (revmux 01-review).
+// closer and retries instead of dropping the adoption. An open throw on a
+// LOADED chest (blocked lid, cat, lag) is an error, never unknown: the
+// caller fails loud so failHolds parks the step (revmux 02-review).
 async function withChest(bot, ctx, fn) {
   const c = ctx && ctx.home && ctx.home.chest
   if (!c || typeof bot.openChest !== 'function') return { status: 'gone' }
@@ -179,7 +216,7 @@ async function withChest(bot, ctx, fn) {
       try { window.close() } catch (_) { /* close best-effort */ }
     }
   } catch (_) {
-    return { status: 'unknown' } // open raced a chunk unload: retry, keep the claim
+    return { status: 'error' }
   }
 }
 
@@ -257,6 +294,27 @@ function stockpile(bot, ctx, target, state) {
     try {
       spot = chestSpotFor(bot, ctx)
     } catch (_) { spot = null }
+    if (spot === 'unknown') {
+      // Home chunk dark (returning from a far leg): walk in so the scan
+      // can decide. Failing here would preempt every leg to fail at once.
+      const site = home.site
+      const key = `stockpile-site:${site.x},${site.y},${site.z}`
+      if (key !== ctx.lastGoalKey) {
+        try {
+          bot.pathfinder.setGoal(new goals.GoalNear(site.x + 2, site.y, site.z + 2, 3), false)
+        } catch (_) { /* retry next tick */ }
+        ctx.lastGoalKey = key
+        return
+      }
+      let moving = false
+      try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+      if (moving) return
+      if (!nearPos(bot, { x: site.x + 2, y: site.y, z: site.z + 2 }, REPROBE_RADIUS)) {
+        fail(ctx, 'far') // issued, standing, still far: no path home
+        return
+      }
+      return // arrived but the scan is still dark: retry next tick
+    }
     if (spot && spot.adopt) {
       adopted(ctx, spot)
     } else if (spot) {
@@ -356,6 +414,10 @@ function stockpile(bot, ctx, target, state) {
         ctx.lastGoalKey = null
         return
       }
+      if (res.status === 'error') {
+        fail(ctx, 'deposit') // lid blocked or open timed out: hold, retry later
+        return
+      }
       if (banked > 0) {
         ctx.chestFull = false
         say(bot, `stockpiled ${names.join(', ')}`)
@@ -448,7 +510,7 @@ function placeChest(bot, ctx, spot, bp) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
-  if (!nearPos(bot, p, INTERACT_REACH)) {
+  if (!nearPos(bot, p, PLACE_REACH)) {
     fail(ctx, 'far') // issued, standing, still far: no path to the spot
     return
   }
@@ -498,3 +560,7 @@ module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
 module.exports.CHEST_FULL_RETRY_MS = CHEST_FULL_RETRY_MS
 module.exports.INTERACT_REACH = INTERACT_REACH
+module.exports.PLACE_REACH = PLACE_REACH
+module.exports.SURPLUS_BATCH = SURPLUS_BATCH
+module.exports.REPROBE_RADIUS = REPROBE_RADIUS
+module.exports.chestTodo = chestTodo

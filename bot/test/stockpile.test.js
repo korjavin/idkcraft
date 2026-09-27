@@ -26,7 +26,7 @@ function world(over = {}) {
   }
 }
 
-function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false } = {}) {
+function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false, failOpen = false } = {}) {
   const w = world(cells)
   const chats = []
   const calls = { goals: [], opens: 0, deposits: [], withdraws: [], closes: 0 }
@@ -63,6 +63,7 @@ function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false } = {})
     },
     openChest: async () => {
       calls.opens++
+      if (failOpen) throw new Error('chest blocked')
       return {
         containerItems: () => chest.map((s) => ({ name: s.name, type: idOf(s.name), metadata: null, count: s.count })),
         deposit: async (type, _meta, count) => {
@@ -178,6 +179,32 @@ describe('stockpile chestSpotFor', () => {
     const air = mockBot({ cells })
     assert.equal(stockpile.chestSpotFor(air, homeCtx()), null)
   })
+
+  it('returns unknown when no candidate is decidable', () => {
+    const bot = mockBot()
+    bot.blockAt = () => null
+    assert.equal(stockpile.chestSpotFor(bot, homeCtx()), 'unknown')
+  })
+})
+
+describe('stockpile chestTodo', () => {
+  it('adopts a standing chest without anything in hand', () => {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [] })
+    assert.equal(stockpile.chestTodo(bot, homeCtx(), 0), 'adopt')
+  })
+  it('places with a chest item or 8 same-wood planks', () => {
+    const item = mockBot({ inv: [{ name: 'chest', count: 1 }] })
+    assert.equal(stockpile.chestTodo(item, homeCtx(), 0), 'place')
+    const planks = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
+    assert.equal(stockpile.chestTodo(planks, homeCtx(), 8), 'place')
+  })
+  it('reports none when unready and nothing stands', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_planks', count: 7 }] })
+    assert.equal(stockpile.chestTodo(bot, homeCtx(), 7), 'none')
+    const dark = mockBot({ inv: [] })
+    dark.blockAt = () => null
+    assert.equal(stockpile.chestTodo(dark, homeCtx(), 0), 'none')
+  })
 })
 
 describe('stockpile withdraw helpers', () => {
@@ -222,6 +249,15 @@ describe('stockpile withdraw helpers', () => {
   it('withdrawEdible reports null with no food', async () => {
     const { bot, ctx } = chestBot([{ name: 'oak_log', count: 9 }])
     assert.deepEqual(await stockpile.withdrawEdible(bot, ctx, 5), { got: 0, name: null })
+  })
+
+  it('a blocked open withdraws nothing and keeps the adoption', async () => {
+    const bot = mockBot({ inv: [], chest: [{ name: 'coal', count: 5 }], failOpen: true })
+    bot.blockAt = world({ '5,64,1': 'chest' }).blockAt
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    const res = await stockpile.withdrawFromChest(bot, ctx, 'coal', 5)
+    assert.equal(res.got, 0)
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
   })
 })
 
@@ -368,6 +404,46 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx)
     await flush()
     assert.equal(bot.inv.some((i) => i.name === 'chest'), true)
+  })
+
+  it('a dark home scan walks to the site instead of failing', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
+    bot.blockAt = () => null
+    bot.entity.position = pos(200, 64, 200)
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    assert.ok(ctx.lastGoalKey.startsWith('stockpile-site:'), ctx.lastGoalKey)
+    assert.equal(ctx.stepStatus, 'running')
+    stockpile(bot, ctx) // standing, still far: no path home
+    assert.equal(ctx.stepStatus, 'failed:far')
+  })
+
+  it('a blocked chest fails the deposit loudly', async () => {
+    const bot = mockBot({
+      cells: { '5,64,1': 'chest' },
+      inv: [{ name: 'oak_log', count: 20 }],
+      chest: [],
+      failOpen: true,
+    })
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:deposit')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+  })
+
+  it('places from a valid GoalPlaceBlock end node (+x/+z side)', async () => {
+    const bot = mockBot({ inv: [{ name: 'chest', count: 1 }, { name: 'bread', count: 2 }] })
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    // End node at spot+(3,0,2): head-to-face is in range, feet-to-corner
+    // (4.3) is not — the centre-based gate must still accept it.
+    bot.entity.position = pos(8.5, 64, 3.5)
+    stockpile(bot, ctx)
+    await flush()
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
   })
 
   it('a failed craft fails the step loudly', async () => {
