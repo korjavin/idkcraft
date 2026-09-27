@@ -102,6 +102,9 @@ function setGoal(bot, ctx, key, goal) {
   try {
     bot.pathfinder.setGoal(goal, false)
     ctx.lastGoalKey = key
+    // The new plan has no nodes yet: drop the previous behaviour's so the
+    // sprint gate fails closed until path_update (follow.js 5vv mirror).
+    ctx.lastPathNodes = null
   } catch (_) { /* retry next tick */ }
 }
 
