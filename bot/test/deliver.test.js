@@ -520,3 +520,157 @@ describe('deliver branch edges (idkcraft-haj)', () => {
     assert.equal(deliver.playerStatus(bot).level, 'none')
   })
 })
+
+describe('deliver branches (idkcraft-g9k)', () => {
+  it('unfloored position reads as not arrived, toss still lands', async () => {
+    const bot = mockBot()
+    bot.entity.position = Object.assign(pos(0, 64, 0), { floored: () => null })
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('throwing home store falls back to spawn, then nowhere', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: null } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    Object.defineProperty(ctx, 'home', { get() { throw new Error('corrupt') } })
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.lastGoalKey, 'deliver-wait:0,0', 'spawn survives a corrupt home')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.spawnPoint = null
+    ctx.lastGoalKey = ''
+    const calls = bot.calls.setGoal
+    deliver(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, calls, 'nowhere to wait: no goal')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+  it('greeter without the entry still delivers', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.greeter = {}
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('throwing mover greets as moving', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    bot.pathfinder.isMoving = () => { throw new Error('no driver') }
+    const seen = []
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.greeter = { greetOnArrival: (b, name, d, standing) => { seen.push([name, d, standing]) } }
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(seen, [['P', 2, false]], 'unreadable motion assumes moving')
+  })
+
+  it('displacement resets the no-path budget', () => {
+    // NO_PATH_TICKS still ticks fail the chase; walking keeps it alive.
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(30, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    for (let i = 0; i < 6; i++) {
+      bot.entity.position = pos(i + 1, 64, 0)
+      deliver(bot, ctx, null, {})
+    }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.deliver.noPathTicks, 0)
+  })
+
+  it('replaced deliver is not nulled by the late toss', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    let release
+    const gate = new Promise((r) => { release = r })
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (...a) => { await gate; return origToss(...a) }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {}) // toss starts, pending on the gate
+    const f = ctx.deliver
+    ctx.deliver = { phase: 'wait' } // step superseded before the toss lands
+    release()
+    await tick()
+    await tick()
+    assert.equal(f.tossInFlight, true, 'latch clears only on the live step')
+    // Note: completion still nulls ctx.deliver unconditionally — only
+    // deliver() itself ever replaces the state (all writes are in this
+    // file) and the latch holds re-entry, so no prod path triggers it.
+  })
+
+  it('haul deleted mid-toss still finishes', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    let release
+    const gate = new Promise((r) => { release = r })
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (...a) => { await gate; return origToss(...a) }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {}) // toss starts, pending on the gate
+    delete ctx.haul
+    release()
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+  })
+})
+
+describe('deliver live-stock branches (idkcraft-g9k)', () => {
+  it('haul without stock fails empty', () => {
+    const bot = mockBot()
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 }) // nothing in hand
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:empty')
+  })
+
+  it('throwing greeter still delivers', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    ctx.greeter = { greetOnArrival: () => { throw new Error('no gesture') } }
+    deliver(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('null roster fails no-player like an empty one', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = null
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-player')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+
+  it('positionless entity waits as unseen', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 2 })
+    bot.players = { P: { username: 'P', entity: {} } }
+    const ctx = ctxWithHaul({ coal: 2 })
+    deliver(bot, ctx, null, {})
+    assert.equal(ctx.lastGoalKey, 'deliver-wait:0,0')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(ctx.haul, { coal: 2 })
+  })
+})
