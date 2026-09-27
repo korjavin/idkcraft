@@ -29,13 +29,17 @@ const COAL_RESERVE = 4 // fuel floor: smelting's share, never torched
 const PLACE_RANGE = 4
 const PLACE_REACH = 5
 const REFUSALS_TO_SKIP = 3
+const STILL_TICKS = 10 // no-progress watchdog: moving but stationary this long re-paths
+const STILL_TOLERANCE = 0.1
 const CRAFT_TIMEOUT_MS = 30000
 
 // Spot plan: offsets from home.site (ground level unless dy). Door-front
-// first (the mob door), then a ring around the 4x4 shell, then the roof:
-// the flat dark roof is a mob factory above the bed (live assay night2:
-// hostiles at XZ 0.6-3.0 from center). dy 3 is the air above the dy-2
-// roof surface — placeable from the ground next to the house (reach 4.3).
+// first (the mob door), then a ring around the 4x4 shell, then the roof,
+// then the interior: the dark 2x2 under the roof spawns mobs inside the
+// house (live assay night2, filed as idkcraft-nhb). dy 3 is the air above
+// the dy-2 roof surface — placeable from the ground next to the house
+// (reach 4.3). The interior needs no entry: it stages from the door-front
+// ground in place reach (3.2), so no home.js door phases are touched.
 // (5,1) is deliberately NOT on the plan:
 // plan: atl.14 adopts the stockpile chest at table+1 east, and the skip
 // rule below guards it (and the table, and the doorway) anyway. The dark
@@ -52,6 +56,9 @@ const LIGHT_SPOTS = [
   // forever), so the approach walks to plain ground in place reach
   // (3.7) and the place flow runs from there.
   { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } },
+  // Interior: the torch goes through the doorway from the staged ground
+  // (no entry, no door phases). The door cell itself is never taken.
+  { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } },
 ]
 
 function spotAbs(home, spot) {
@@ -232,7 +239,38 @@ function placeTick(bot, ctx, home, idx) {
   // Any walking breaks the far-idle streak (round-2 minor) — read before
   // the set branch, so a walk already running when the goal (re)sets
   // counts as progress too. Only N CONSECUTIVE far-idle ticks give up.
-  if (moving) ctx.lightFarTicks = 0
+  // A walk that makes no progress (nhb live assay: corner squeeze loops
+  // stuck/success forever) re-paths after STILL_TICKS on the far budget.
+  if (moving) {
+    let still = false
+    try {
+      const bp = bot.entity && bot.entity.position
+      const lp = ctx.lightLastPos
+      if (bp && typeof bp.x === 'number' && lp && typeof lp.x === 'number' &&
+        Math.hypot(bp.x - lp.x, bp.y - lp.y, bp.z - lp.z) < STILL_TOLERANCE) still = true
+      if (bp && typeof bp.x === 'number') ctx.lightLastPos = { x: bp.x, y: bp.y, z: bp.z }
+    } catch (_) { /* unverifiable: not still */ }
+    if (still) {
+      if (ctx.lightFailIdx !== idx) {
+        ctx.lightFailIdx = idx
+        ctx.lightFarTicks = 0
+      }
+      ctx.lightStillTicks = (ctx.lightStillTicks || 0) + 1
+      if (ctx.lightStillTicks >= STILL_TICKS) {
+        ctx.lightStillTicks = 0
+        ctx.lightFarTicks = (ctx.lightFarTicks || 0) + 1
+        if (ctx.lightFarTicks >= REFUSALS_TO_SKIP) {
+          skipSpot(bot, home, ctx, idx, p, 'stalled')
+          return
+        }
+        ctx.lightGoalIdx = -1
+        return
+      }
+    } else {
+      ctx.lightStillTicks = 0
+      ctx.lightFarTicks = 0
+    }
+  }
   if (ctx.lightGoalIdx !== idx) {
     ctx.lightGoalIdx = idx
     try {
