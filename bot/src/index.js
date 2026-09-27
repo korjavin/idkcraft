@@ -476,6 +476,23 @@ function fleeReflex(bot, ctx) {
   // Stillness fact for the stuck menu: consecutive ticks with no
   // horizontal displacement while the executor claims to move. Progress
   // clears a stale detector fact (but never a running episode).
+  // Backstop goal (q0h): the stuck menu needs the walk target — read the live
+  // pathfinder goal best-effort (the entity position, then the x/y/z snapshot).
+  function backstopGoal() {
+    try {
+      const g = bot.pathfinder && bot.pathfinder.goal
+      if (!g) return null
+      const ep = g.entity && g.entity.position
+      if (ep && typeof ep.x === 'number' && typeof ep.y === 'number' && typeof ep.z === 'number') {
+        return { x: ep.x, y: ep.y, z: ep.z }
+      }
+      if (typeof g.x === 'number' && typeof g.y === 'number' && typeof g.z === 'number') {
+        return { x: g.x, y: g.y, z: g.z }
+      }
+    } catch (_) { /* goal-less backstop */ }
+    return null
+  }
+
   function noteDisplacement() {
     if (ctx.paused) return
     let bp = null
@@ -492,6 +509,9 @@ function fleeReflex(bot, ctx) {
       }
     } else if (!moving) ctx.stuckTicks = 0
     if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    // A clean relocation (a /tp out) ends the rest gave-up hold even when no
+    // detector fires to consult the gate (core-1 follow-up).
+    if (ctx.restGaveUpAt) recover.clearRelocatedRestMark(ctx, bot)
   }
 
   // A hostile inside swing reach preempts recovery: the body fights first,
@@ -869,8 +889,8 @@ function fleeReflex(bot, ctx) {
         // step's own signal (follow/gather count it toward their stalls), and
         // handing the body to recover on it turned rest/roam traps into long
         // sidestep/dig/call episodes. Only the no-displacement backstop stays.
-        if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY) {
-          ctx.stuck = { by: 'no-displacement', goal: null, key: 'ticker' }
+        if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY && !recover.restGaveUpHolds(ctx, bot)) {
+          ctx.stuck = { by: 'no-displacement', goal: backstopGoal(), key: 'ticker' }
         }
       }
       let decision = null

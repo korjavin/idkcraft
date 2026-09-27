@@ -1247,3 +1247,112 @@ describe('pillar_up after place-error (idkcraft-p4s)', () => {
     assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts({ placeError: true })), false)
   })
 })
+
+describe('sidestep apex is not done (idkcraft-ak4)', () => {
+  it('airborne floor rise stays running, grounded rise reports done', () => {
+    // Prod 2026-09-24: 13/13 sidestep dones read at y=62.1-62.2 from a y=61
+    // start — the 1 Hz tick sampling the sidestep jump apex. Deleting the
+    // onGround guard fails this test (the apex reads done).
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 10, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: { action: 'sidestep', status: 'running', st: null },
+    }
+    recover.run(bot, ctx) // issues the sidestep goal + one-tick jump
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(0.5, 62.2, 0.5) // jump apex sample
+    bot.entity.onGround = false
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'apex sample is not an escape')
+    bot.entity.onGround = true // same rise, feet on the ground
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+})
+
+describe('hop_step airborne stall backs off (idkcraft-ak4)', () => {
+  it('hangs at the face, backs until ground, then mounts', () => {
+    // Prod 2026-09-24: hop_step 16 chosen, 0 done — pressed to the step face
+    // with vel.y=0 and onGround=false the held jump never fires. Deleting the
+    // unwedge fails this test (back is never held).
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0)) // the +1 step east of the body
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.onGround = false // hanging at the face from the first sample
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: { action: 'hop_step', status: 'running', st: null },
+    }
+    let sawBack = false
+    for (let t = 0; t < 12 && !sawBack; t++) {
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'running')
+      if (bot.controls.back) sawBack = true
+    }
+    assert.ok(sawBack, 'stall backs off the face')
+    // Feet touch after the back-off: the body resumes the run-up, leaps at
+    // the edge and lands on the step top.
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(bot.controls.back || false, false, 'back released on the ground')
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(1.2, 61.5, 0.5) // rising past the edge
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(1.4, 62.2, 0.5) // over the top
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(1.4, 62, 0.5) // landed on the step
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+})
+
+describe('backstop sidestep stays strict on level goals (idkcraft-q0h round 2)', () => {
+  it('floor shuffle under a level backstop goal fails, never done', () => {
+    // Round-1 body-1: the backstop now carries the live walk goal, but a
+    // level goal must not switch sidestep to the displacement rule — the fja
+    // pit loop otherwise returns and the rest counter never fills.
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 5, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'sidestep', status: 'running', st: null },
+    }
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (!g || typeof g.x !== 'number') return
+      const bp = bot.entity.position
+      const dx = g.x - bp.x
+      const dz = g.z - bp.z
+      const d = Math.hypot(dx, dz)
+      if (d < 0.05) return
+      const s = Math.min(0.4, d) / d
+      bot.entity.position = pos(bp.x + dx * s, 61, bp.z + dz * s)
+    }
+    for (let t = 0; t < 12 && ctx.recovery.status === 'running'; t++) {
+      recover.run(bot, ctx)
+      stepBody()
+    }
+    assert.equal(ctx.recovery.status, 'failed:no-progress')
+  })
+})

@@ -267,3 +267,30 @@ describe('roam wedge without recover (idkcraft-p4s)', () => {
     assert.equal(bot.calls.setGoal, 2)
   })
 })
+
+describe('roam-back latch re-arms on relocation (idkcraft-q0h round 2)', () => {
+  it('relocation past the latch anchor raises again, same point stays latched', () => {
+    // Round-1 core-2: the roam latch on the static site never cleared, so the
+    // detector fired once per session. Release anchors the point; moving on
+    // clears it.
+    const bot = mockBot()
+    bot._moving = true
+    const site = { x: 20, y: 64, z: 0 }
+    bot.entity.position = pos(0, 64, 0)
+    const ctx = {
+      lastGoalKey: 'roam-back:undefined', stuckResets: 2, roamLastPos: pos(0, 64, 0),
+      recoverLatch: { by: 'roam', key: 'roam-back:undefined', goal: { x: 20, y: 64, z: 0 }, at: { x: 0, y: 64, z: 8 } },
+    }
+    roam(bot, ctx, { position: site }, {})
+    assert.ok(ctx.stuck, 're-armed detector raises after relocation')
+    assert.equal(ctx.stuck.by, 'roam')
+    assert.deepEqual(ctx.stuck.goal, site)
+    // Same wedge point: the latch still suppresses.
+    const ctx2 = {
+      lastGoalKey: 'roam-back:undefined', stuckResets: 2, roamLastPos: pos(0, 64, 0),
+      recoverLatch: { by: 'roam', key: 'roam-back:undefined', goal: { x: 20, y: 64, z: 0 }, at: { x: 0, y: 64, z: 1 } },
+    }
+    roam(bot, ctx2, { position: site }, {})
+    assert.equal(ctx2.stuck, undefined)
+  })
+})
