@@ -13,7 +13,7 @@ const DOOR = { x: 11, y: 64, z: 20 }
 const OUTSIDE = { x: 11, y: 64, z: 19 }
 const INSIDE = { x: 11, y: 64, z: 21 }
 
-function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false, door = true } = {}) {
+function mockBot({ at, timeOfDay = 12500, day = 5, doorOpen = false, moving = false, door = true } = {}) {
   const chats = []
   const calls = { goals: [], activates: 0, looks: [], controls: [], clears: 0 }
   const state = { doorOpen }
@@ -21,7 +21,7 @@ function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false, door
     chats,
     calls,
     entity: { position: { x: at.x, y: at.y, z: at.z } },
-    time: { timeOfDay },
+    time: { timeOfDay, day },
     pathfinder: {
       goal: null,
       movements: { canDig: true },
@@ -587,5 +587,86 @@ describe('rw4.14 dawn report (night tally)', () => {
     const bot = mockBot({ at: { x: 12, y: 64, z: 22 } })
     life.onDeath(bot, { noteDeath: () => { noted++ } })
     assert.equal(noted, 1)
+  })
+})
+
+describe('rw4.14 tally days (revmux round 1)', () => {
+  it('an unreported night never leaks into the next line', () => {
+    // Dusk day 5: tally opens. No report (gohome walks past dawn / follow
+    // order / failed close). Day 6 brings day deaths + day haul. Next dusk
+    // re-snapshots deaths; the report covers night 6 only.
+    const bot2 = mockBot({ at: { x: 12, y: 64, z: 22 }, timeOfDay: 12500, day: 5 })
+    const ctx2 = { home: ctxHome(), step: 'stay', stepStatus: 'running', deaths: 5, haul: { coal: 20 } }
+    home.stay(bot2, ctx2)
+    assert.equal(ctx2.night.deaths, 5)
+    assert.equal(ctx2.night.day, 5)
+    // Day 6 happens with no report: 1 day death, 40 day coal.
+    ctx2.deaths = 6
+    ctx2.haul = { coal: 60 }
+    bot2.time.day = 6
+    bot2.time.timeOfDay = 12500
+    ctx2.stay = null // next dusk, new episode
+    home.stay(bot2, ctx2)
+    assert.equal(ctx2.night.deaths, 6, 'fresh death snapshot, day death excluded')
+    assert.equal(ctx2.night.day, 6)
+    // Night 6 quiet; dawn report covers night 6 deaths only, haul since the
+    // last report (none yet: cold-start dusk snapshot).
+    bot2.time.timeOfDay = 1000
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      home.stay(bot2, ctx2)
+      home.stay(bot2, ctx2)
+      bot2.entity.position = { ...OUTSIDE }
+      home.stay(bot2, ctx2)
+      now += 5000
+      home.stay(bot2, ctx2)
+      home.stay(bot2, ctx2)
+    } finally {
+      Date.now = realNow
+    }
+    assert.ok(bot2.chats.some((m) => m === 'night: survived, no deaths, banked 40 coal, at home; back to work'),
+      bot2.chats.join(' | '))
+  })
+
+  it('haul spans dawn to dawn across a reported night', () => {
+    // Dawn 1 reports (haul snaps at 20). Day forage banks 40. Night quiet.
+    // Dawn 2 reports the day's haul, not 'banked nothing'.
+    const bot = mockBot({ at: { x: 12, y: 64, z: 22 }, timeOfDay: 12500, day: 5 })
+    const ctx = { home: ctxHome(), step: 'stay', stepStatus: 'running', deaths: 0, haul: { coal: 20 } }
+    home.stay(bot, ctx)
+    bot.time.timeOfDay = 1000
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    const closeOut = (b, c) => {
+      b.time.timeOfDay = 1000
+      home.stay(b, c)
+      home.stay(b, c)
+      b.entity.position = { ...OUTSIDE }
+      home.stay(b, c)
+      now += 5000
+      home.stay(b, c)
+      home.stay(b, c)
+    }
+    try {
+      closeOut(bot, ctx) // dawn 1: cold start, nothing new
+      assert.ok(bot.chats.some((m) => m === 'night: survived, no deaths, banked nothing, at home; back to work'),
+        bot.chats.join(' | '))
+      assert.deepEqual(ctx.night.haul, { coal: 20 }, 'haul snaps at the report')
+      ctx.haul = { coal: 60 } // day forage
+      bot.time.day = 6
+      bot.time.timeOfDay = 12500
+      ctx.stay = null
+      bot.entity.position = { x: 12, y: 64, z: 22 }
+      home.stay(bot, ctx) // dusk 2: deaths re-snap, haul kept from dawn 1
+      assert.deepEqual(ctx.night.haul, { coal: 20 }, 'dusk does not wipe the report snapshot')
+      closeOut(bot, ctx) // dawn 2: the day's haul lands
+      assert.ok(bot.chats.some((m) => m === 'night: survived, no deaths, banked 40 coal, at home; back to work'),
+        bot.chats.join(' | '))
+    } finally {
+      Date.now = realNow
+    }
   })
 })

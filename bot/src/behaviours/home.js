@@ -28,15 +28,32 @@ const TOGGLE_COOLDOWN_MS = 2000
 // Within this many blocks of the site the dawn report says 'at home'.
 const HOME_NEAR_BLOCKS = 10
 
-// Night tally (rw4.14): deaths + banked haul for the one dawn line. The
-// tally snapshots the cumulative counters at the first night step after a
-// reported night; a death mid-night starts a second gohome/stay but the
-// tally keeps accumulating (reported=false), so the report covers the whole
-// night, not just the last episode. Chat-only: no decision reads it.
-function ensureNight(ctx) {
+function dayOf(bot) {
   try {
-    if (!ctx.night || ctx.night.reported) {
-      ctx.night = { deaths: ctx.deaths || 0, haul: { ...(ctx.haul || {}) }, reported: false }
+    const d = bot && bot.time && bot.time.day
+    return typeof d === 'number' ? d : 0
+  } catch (_) { return 0 }
+}
+
+// Night tally (rw4.14): deaths + banked haul for the one dawn line. The
+// tally is day-stamped: each new MC day re-opens it, so an unreported
+// night never leaks day deaths into the next line; a death mid-night
+// starts a second gohome/stay but the same-day latch keeps the day's
+// first opening, so multi-episode nights still accumulate. Deaths snap
+// at dusk (night-only); haul snaps at the report, so it spans dawn to
+// dawn across a reported night (cold start: the first dusk). Chat-only:
+// no decision reads it.
+function ensureNight(bot, ctx) {
+  try {
+    const day = dayOf(bot)
+    const n = ctx.night
+    if (!n || n.reported === true || n.day !== day) {
+      ctx.night = {
+        deaths: ctx.deaths || 0,
+        haul: (n && n.haul) ? n.haul : { ...(ctx.haul || {}) },
+        reported: false,
+        day,
+      }
     }
   } catch (_) { /* tally best-effort */ }
 }
@@ -340,7 +357,7 @@ function gohome(bot, ctx, target, state) {
     ctx.gohome.phase = isInside(bot, home) ? 'close' : 'walk'
     ctx.stepStatus = 'running'
     ctx.lastGoalKey = '' // fresh walk must replan, not latch-skip (live 8kc)
-    ensureNight(ctx) // the night begins when the bot heads home
+    ensureNight(bot, ctx) // the night begins when the bot heads home
   }
   const st = ctx.gohome
   const out = outsidePos(home)
@@ -423,7 +440,7 @@ function stay(bot, ctx, target, state) {
     ctx.stay = freshGo()
     ctx.stay.phase = 'hold'
     ctx.stepStatus = 'running' // same sticky restore as gohome above
-    ensureNight(ctx) // already-inside dusk starts the tally here
+    ensureNight(bot, ctx) // already-inside dusk starts the tally here
   }
   const st = ctx.stay
   // A stale stay (death, follow->work, lead order) must not hold the bot
@@ -487,8 +504,18 @@ function stay(bot, ctx, target, state) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
       ctx.inShelter = false
-      try { if (ctx.night) ctx.night.reported = true } catch (_) { /* tally best-effort */ }
-      try { bot.chat(nightLine(bot, ctx, home)) } catch (_) { /* chat best-effort */ }
+      // Compose before snapshotting: the line reads the opening, then the
+      // report becomes the next opening (haul spans dawn to dawn).
+      let line = ''
+      try { line = nightLine(bot, ctx, home) } catch (_) { /* report best-effort */ }
+      try {
+        if (ctx.night) {
+          ctx.night.deaths = ctx.deaths || 0
+          ctx.night.haul = { ...(ctx.haul || {}) }
+          ctx.night.reported = true
+        }
+      } catch (_) { /* tally best-effort */ }
+      try { if (line) bot.chat(line) } catch (_) { /* chat best-effort */ }
       return
     }
     tryToggle(bot, st, door)

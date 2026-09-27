@@ -24,7 +24,7 @@ function nightBot() {
     health: 20,
     food: 20,
     entity: { position: { x: 12, y: 64, z: 22 }, onGround: true },
-    time: { timeOfDay: 12500 }, // dusk
+    time: { timeOfDay: 12500, day: 5 }, // dusk
     pathfinder: {
       goal: null,
       movements: { canDig: true },
