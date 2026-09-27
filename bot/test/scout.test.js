@@ -760,3 +760,80 @@ describe("chat command 'find me <block>'", () => {
     assert.deepEqual(calls, [['setFollow', ''], ['stop']])
   })
 })
+
+describe('scout ranking edges (idkcraft-l71)', () => {
+  it('unknown ore base ranks last in the report', () => {
+    // A remapped registry names an id outside ORE_NAMES: rankOf falls back
+    // to the list length, so known ores report first, no crash.
+    const d = pos(3, 10, 0)
+    const c = pos(30, 10, 0)
+    const bot = mockBot({
+      registry: { diamond_ore: 179, iron_ore: 15 },
+      spots: [d, c],
+      names: { '3,10,0': 'diamond_ore', '30,10,0': 'iron_ore' },
+    })
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => (p.x === 30 ? { name: 'copper_ore' } : raw(p))
+    makeScout(bot, { everyMs: 0 }).tick()
+    assert.deepEqual(bot.lines, ['diamond_ore x1 at 3 10 0', 'copper_ore x1 at 30 10 0'])
+  })
+
+  it('completion trims past 64 hits to the nearest, plain positions meter by hypot', () => {
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({
+      registry: { coal_ore: 10 },
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    bot.entity.position = { x: 0, y: 64, z: 0 } // plain: clonePos and dist fall back
+    const cursor = startFarSearch(bot, 'coal')
+    assert.ok(cursor && cursor !== 'unknown')
+    assert.deepEqual(cursor.origin, { x: 0, y: 64, z: 0 })
+    for (let x = 5; x < 75; x++) cursor.hits.set(`${x},64,0`, { x, y: 64, z: 0 })
+    cursor.at = cursor.queue.length
+    const r = stepFarSearch(bot, cursor)
+    assert.equal(r.done, true)
+    assert.equal(r.result.name, 'coal')
+    assert.deepEqual([r.result.position.x, r.result.position.z], [5, 0])
+    assert.equal(r.result.distance, 5)
+  })
+
+  it('walked-off bot rebuilds the cursor at the live origin', () => {
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({
+      registry: { coal_ore: 10 },
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      findImpl: () => [],
+    })
+    const cursor = startFarSearch(bot, 'coal')
+    assert.ok(cursor && cursor !== 'unknown')
+    bot.entity.position = { x: 200, y: 64, z: 0 } // walked past SEARCH_FIRST
+    const r = stepFarSearch(bot, cursor)
+    assert.deepEqual(cursor.origin, { x: 200, y: 64, z: 0 })
+    assert.equal(r.done, true)
+    assert.equal(r.result, null)
+  })
+
+  it('throwing findBlocks skips the ring instead of failing', () => {
+    const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
+    let n = 0
+    const bot = mockBot({
+      registry: { coal_ore: 10 },
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      findImpl: () => { n++; if (n === 1) throw new Error('chunk busy'); return [] },
+    })
+    const cursor = startFarSearch(bot, 'coal')
+    assert.ok(cursor && cursor !== 'unknown')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
+    assert.equal(r.done, true)
+    assert.equal(r.result, null)
+  })
+
+  it('throwing blockAt keeps the requested name', () => {
+    const bot = mockBot({ registry: { iron_ore: 15 }, findImpl: () => [pos(5, 64, 0)] })
+    bot.blockAt = () => { throw new Error('unloaded') }
+    const r = findNearest(bot, 'iron')
+    assert.equal(r.name, 'iron')
+    assert.equal(r.exposed, false)
+  })
+})
