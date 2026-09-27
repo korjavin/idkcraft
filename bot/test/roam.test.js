@@ -316,10 +316,10 @@ describe('roam branch residuals (idkcraft-1hy)', () => {
   it('a plain body without distanceTo/clone still walks back, tracking untouched', () => {
     const bot = mockBot()
     bot.entity.position = { x: 0, y: 64, z: 0 }
-    const ctx = { lastGoalKey: '', roamLastPos: pos(0, 64, 0) }
+    const ctx = { lastGoalKey: '', roamLastPos: pos(5, 64, 5) }
     roam(bot, ctx, playerEntity(20), {})
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
-    assert.deepEqual([ctx.roamLastPos.x, ctx.roamLastPos.y, ctx.roamLastPos.z], [0, 64, 0])
+    assert.deepEqual([ctx.roamLastPos.x, ctx.roamLastPos.y, ctx.roamLastPos.z], [5, 64, 5], 'no clone, no update')
   })
 
   it('exactly 6 blocks strolls, past 6 walks back', () => {
