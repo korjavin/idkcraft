@@ -796,6 +796,22 @@ describe('gear round-3: the unhanded claim survives a rejoin', () => {
     const next = gear.deriveNext(bot2, ctx2)
     assert.ok(next && next.name === 'iron_sword', 'still the open want')
   })
+  it('restore drops haul names outside the ledger (hand-written doc)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gear-haul-'))
+    const file = path.join(dir, 'mem.json')
+    const spawn = { x: 100, y: 64, z: -200 }
+    const bot = mockBot({ items: [] })
+    bot.spawnPoint = { ...spawn }
+    fs.writeFileSync(file, JSON.stringify({
+      v: 1, world: memory.worldKey(bot), savedAt: Date.now(),
+      homes: [], resources: [], visited: [], danger: [], follow: null,
+      gear: { given: {}, finished: {}, made: { iron_sword: true }, haul: { iron_sword: 1, raw_iron: 9 } },
+    }))
+    const ctx = {}
+    assert.ok(memory.restore(bot, ctx, file))
+    assert.equal(ctx.haul && ctx.haul.iron_sword, 1)
+    assert.ok(!(ctx.haul && ctx.haul.raw_iron), 'foreign haul name dropped')
+  })
   it('forage loot haul stays session-scoped: only ledger names persist', () => {
     const { ctx2 } = roundTrip(
       { home: home(), gear: { made: { iron_sword: true } }, gearFinished: {}, gearGiven: {}, haul: { iron_sword: 1, raw_iron: 9 } },

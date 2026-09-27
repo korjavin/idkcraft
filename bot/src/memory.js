@@ -284,7 +284,11 @@ function restore(bot, ctx, file, now) {
         ctx.gearFinished = gm.finished
         if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
         ctx.gear.made = gm.made
+        // Restore enforces the same ledger-names filter as save (revmux
+        // 03-review): a hand-written doc must not inject a haul claim for a
+        // name the ledger never made (e.g. forage loot deliver would toss).
         for (const [n, c] of Object.entries(gm.haul)) {
+          if (!(c > 0) || (!gm.made[n] && !(n in gm.finished))) continue
           if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
           ctx.haul[n] = c
         }
