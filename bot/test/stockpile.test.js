@@ -180,6 +180,21 @@ describe('stockpile chestSpotFor', () => {
     assert.equal(stockpile.chestSpotFor(air, homeCtx()), null)
   })
 
+  it('adopts a chest at a later spot over air at the first', () => {
+    const bot = mockBot({ cells: { '4,64,0': 'chest' } })
+    assert.deepEqual(stockpile.chestSpotFor(bot, homeCtx()), { x: 4, y: 64, z: 0, adopt: true })
+  })
+
+  it('treats flora as placeable (the server replaces it)', () => {
+    const bot = mockBot()
+    const w = world({})
+    bot.blockAt = (p) => {
+      if (p.x === 5 && p.y === 64 && p.z === 1) return { name: 'short_grass', boundingBox: 'empty', position: pos(5, 64, 1) }
+      return w.blockAt(p)
+    }
+    assert.deepEqual(stockpile.chestSpotFor(bot, homeCtx()), { x: 5, y: 64, z: 1, adopt: false })
+  })
+
   it('returns unknown when no candidate is decidable', () => {
     const bot = mockBot()
     bot.blockAt = () => null
@@ -198,6 +213,14 @@ describe('stockpile chestTodo', () => {
     const planks = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
     assert.equal(stockpile.chestTodo(planks, homeCtx(), 8), 'place')
   })
+  it('honors a fresh no-spot stamp even when ready', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
+    const fresh = homeCtx({ ctx: { chestNoSpotAt: Date.now() } })
+    assert.equal(stockpile.chestTodo(bot, fresh, 8), 'none')
+    const stale = homeCtx({ ctx: { chestNoSpotAt: Date.now() - 61 * 60 * 1000 } })
+    assert.equal(stockpile.chestTodo(bot, stale, 8), 'place')
+  })
+
   it('reports none when unready and nothing stands', () => {
     const bot = mockBot({ inv: [{ name: 'oak_planks', count: 7 }] })
     assert.equal(stockpile.chestTodo(bot, homeCtx(), 7), 'none')
@@ -276,14 +299,18 @@ describe('stockpile behaviour', () => {
     const ctx = homeCtx()
     stockpile(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:no-spot')
+    assert.equal(typeof ctx.chestNoSpotAt, 'number')
   })
 
   it('adopts the chest on sight and finishes with an empty surplus', () => {
     const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'bread', count: 3 }] })
-    const ctx = homeCtx()
+    const ctx = homeCtx({ ctx: { chestFull: true, chestFullAt: 1, chestErrorAt: 2, chestNoSpotAt: 3 } })
     stockpile(bot, ctx)
     assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
     assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.chestFull, false) // a claim proves the chest works: parks cleared
+    assert.equal(ctx.chestErrorAt, null)
+    assert.equal(ctx.chestNoSpotAt, null)
   })
 
   it('places a carried chest, then adopts it', async () => {
@@ -432,6 +459,7 @@ describe('stockpile behaviour', () => {
     await flush()
     assert.equal(ctx.stepStatus, 'failed:deposit')
     assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.equal(typeof ctx.chestErrorAt, 'number')
   })
 
   it('places from a valid GoalPlaceBlock end node (+x/+z side)', async () => {

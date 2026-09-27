@@ -45,6 +45,10 @@ const SURPLUS_BATCH = 16
 // Park re-probe radius: an expired full park re-arms only near home, so a
 // probably-still-full chest never costs a cross-map trip (revmux 02-review).
 const REPROBE_RADIUS = 32
+// No-spot retry window: all six spots decidably unusable (solid cells,
+// floats) stamps a park so far legs don't each cost a walk home to
+// rediscover it; a freed spot retries within the hour (revmux 03-review).
+const NO_SPOT_RETRY_MS = 60 * 60 * 1000
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -128,41 +132,64 @@ function surplusCount(bot) {
 }
 
 function blockNameAt(bot, x, y, z) {
+  const info = blockInfoAt(bot, x, y, z)
+  return info ? info.name : null
+}
+
+function blockInfoAt(bot, x, y, z) {
   try {
     const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(new Vec3(x, y, z)) : null
-    return (b && b.name) || null
+    if (!b || !b.name) return null
+    return { name: b.name, empty: b.boundingBox === 'empty' }
   } catch (_) {
     return null
   }
 }
 
-// First candidate that can hold the chest: air (or a chest to adopt) at
-// the cell, solid ground below. { x, y, z, adopt }, 'unknown' when no
-// candidate is decidable (chunks dark: walk in, don't fail), else null.
+// First candidate that can hold the chest: a standing chest to adopt, else
+// air (or flora the server replaces on place) with solid ground below.
+// Adopt scans FIRST across all spots: a chest at a later spot must win
+// over an air cell at an earlier one (revmux 03-review). Returns
+// { x, y, z, adopt }, 'unknown' when nothing is decidable (chunks dark:
+// walk in, don't fail), else null.
 function chestSpotFor(bot, ctx) {
   const site = ctx && ctx.home && ctx.home.site
   if (!site || typeof site.x !== 'number') return null
   let sawUnknown = false
-  for (const s of CHEST_SPOTS) {
+  const cell = (s) => {
     const x = site.x + s.dx
     const y = site.y + s.dy
     const z = site.z + s.dz
-    const at = blockNameAt(bot, x, y, z)
-    if (at === null) { sawUnknown = true; continue }
-    if (at !== 'air' && at !== 'chest') continue
-    const below = blockNameAt(bot, x, y - 1, z)
+    const at = blockInfoAt(bot, x, y, z)
+    if (!at) { sawUnknown = true; return null }
+    return { x, y, z, at }
+  }
+  for (const s of CHEST_SPOTS) {
+    const c = cell(s)
+    if (c && c.at.name === 'chest') return { x: c.x, y: c.y, z: c.z, adopt: true }
+  }
+  for (const s of CHEST_SPOTS) {
+    const c = cell(s)
+    if (!c) continue
+    if (c.at.name !== 'air' && !c.at.empty) continue
+    const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }
     if (below === 'air') continue
-    return { x, y, z, adopt: at === 'chest' }
+    return { x: c.x, y: c.y, z: c.z, adopt: false }
   }
   return sawUnknown ? 'unknown' : null
 }
 
 // What the no-chest branch can do: 'adopt' a standing chest on sight,
 // 'place' one when the pack holds a chest item or 8 same-wood planks,
-// 'none' otherwise. The menu gates on this so an unready bot never
-// preempts a forage leg to fail at once (revmux 02-review).
+// 'none' otherwise — including a fresh no-spot stamp (revmux 03-review).
+// The menu gates on this so an unready bot never preempts a forage leg
+// to fail at once.
 function chestTodo(bot, ctx, maxPlanks) {
+  try {
+    const stamped = ctx && ctx.chestNoSpotAt
+    if (stamped != null && Date.now() - stamped < NO_SPOT_RETRY_MS) return 'none'
+  } catch (_) { /* unstamped */ }
   try {
     const site = ctx && ctx.home && ctx.home.site
     if (site && typeof site.x === 'number') {
@@ -189,6 +216,10 @@ function fail(ctx, reason) {
 // an empty cell).
 function adopted(ctx, spot) {
   ctx.home.chest = { x: spot.x, y: spot.y, z: spot.z }
+  ctx.chestFull = false
+  ctx.chestFullAt = null
+  ctx.chestErrorAt = null
+  ctx.chestNoSpotAt = null
 }
 
 // Open the adopted chest, run fn(window), always close.
@@ -321,6 +352,7 @@ function stockpile(bot, ctx, target, state) {
       placeChest(bot, ctx, spot, bp)
       return
     } else {
+      ctx.chestNoSpotAt = Date.now()
       fail(ctx, 'no-spot')
       return
     }
@@ -415,11 +447,16 @@ function stockpile(bot, ctx, target, state) {
         return
       }
       if (res.status === 'error') {
-        fail(ctx, 'deposit') // lid blocked or open timed out: hold, retry later
+        // Lid blocked or open timed out: seal like a full chest (time +
+        // near-home re-probe) so far legs don't each cost a walk + 20 s.
+        ctx.chestErrorAt = Date.now()
+        fail(ctx, 'deposit')
         return
       }
       if (banked > 0) {
         ctx.chestFull = false
+        ctx.chestFullAt = null
+        ctx.chestErrorAt = null
         say(bot, `stockpiled ${names.join(', ')}`)
       }
       if (before > 0 && banked === 0) {
@@ -563,4 +600,5 @@ module.exports.INTERACT_REACH = INTERACT_REACH
 module.exports.PLACE_REACH = PLACE_REACH
 module.exports.SURPLUS_BATCH = SURPLUS_BATCH
 module.exports.REPROBE_RADIUS = REPROBE_RADIUS
+module.exports.NO_SPOT_RETRY_MS = NO_SPOT_RETRY_MS
 module.exports.chestTodo = chestTodo

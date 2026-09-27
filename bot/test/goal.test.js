@@ -988,15 +988,20 @@ describe('stockpile menu (idkcraft-atl.14)', () => {
     assert.equal(goalFacts(goalBot({ items: [{ name: 'oak_log', count: 15 }] }), ctx).surplus, 'no')
     ctx.home.chest = { x: 5, y: 64, z: 1 }
     assert.equal(goalFacts(bot, ctx).chest, 'yes')
-    ctx.chestFull = true // unstamped flag parks like before
+    ctx.chestFull = true
+    ctx.chestFullAt = Date.now() // fresh stamp parks
     assert.equal(goalFacts(bot, ctx).chestParked, true)
     ctx.chestFullAt = Date.now() - 11 * 60 * 1000 // stale stamp re-arms near home
     assert.equal(goalFacts(bot, ctx).chestParked, false)
-    ctx.chestFullAt = Date.now() // fresh stamp parks
-    assert.equal(goalFacts(bot, ctx).chestParked, true)
-    ctx.chestFullAt = Date.now() - 11 * 60 * 1000 // stale stamp still parks far away
     const far = goalBot({ items: [{ name: 'oak_log', count: 20 }], at: pos(200, 64, 200) })
-    assert.equal(goalFacts(far, ctx).chestParked, true)
+    assert.equal(goalFacts(far, ctx).chestParked, true) // stale stamp still parks far away
+    ctx.home.chest = null // a stale flag never parks an unadopted chest
+    assert.equal(goalFacts(bot, ctx).chestParked, false)
+    ctx.home.chest = { x: 5, y: 64, z: 1 }
+    ctx.chestFull = false
+    ctx.chestErrorAt = Date.now() // a blocked open seals like a full chest
+    assert.equal(goalFacts(bot, ctx).chestParked, true)
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes', chestParked: true }, bot, ctx, ''), 'stockpile: chest would not open')
   })
   it('criteria names the step', () => {
     assert.match(STEP_CRITERIA.stockpile, /home chest/)

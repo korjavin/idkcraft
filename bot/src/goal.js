@@ -391,23 +391,27 @@ function goalFacts(bot, ctx) {
     const batch = (stockpileMod && stockpileMod.SURPLUS_BATCH) || 16
     if (stockpileMod.surplusCount(bot) >= batch) surplus = 'yes'
   } catch (_) { /* no surplus */ }
-  // The full park expires after CHEST_FULL_RETRY_MS so a hand-emptied
-  // chest re-arms without a bring fetch or a restart (01-review); an
-  // unstamped flag (unit-test ctx) parks like before. An expired park
-  // re-arms only near home: no cross-map trip for a probably-still-full
-  // chest (02-review) — gohome brings the body back nightly anyway.
+  // The chest seal (full flag or blocked-open error, whichever is newer)
+  // parks the step for CHEST_FULL_RETRY_MS so a hand-emptied chest re-arms
+  // without a bring fetch or a restart (01-review). An expired seal
+  // re-arms only near home: no cross-map trip for a probably-still-sealed
+  // chest (02-review) — gohome brings the body back nightly anyway. The
+  // seal needs an adopted chest: an unadopted one must re-place, never
+  // park on a stale flag (03-review).
   let chestParked = false
   try {
-    if (ctx && ctx.chestFull) {
-      const at = ctx.chestFullAt
+    const c = ctx && ctx.home && ctx.home.chest
+    const fullAt = ctx && ctx.chestFull ? (ctx.chestFullAt == null ? 0 : ctx.chestFullAt) : null
+    const errAt = ctx ? ctx.chestErrorAt : null
+    const sealedAt = fullAt == null ? errAt : errAt == null ? fullAt : Math.max(fullAt, errAt)
+    if (c && sealedAt != null) {
       const retry = (stockpileMod && stockpileMod.CHEST_FULL_RETRY_MS) || 600000
-      if (at == null || Date.now() - at < retry) {
+      if (Date.now() - sealedAt < retry) {
         chestParked = true
       } else {
         const bp = bot && bot.entity && bot.entity.position
-        const c = ctx.home && ctx.home.chest
         const r = (stockpileMod && stockpileMod.REPROBE_RADIUS) || 32
-        chestParked = !(bp && c && typeof bp.x === 'number' &&
+        chestParked = !(bp && typeof bp.x === 'number' &&
           Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= r)
       }
     }
@@ -657,7 +661,13 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'stockpile':
       if (facts.home !== 'built') return 'stockpile: house not built yet'
       if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
-      if (facts.chestParked) return 'stockpile: chest full'
+      if (facts.chestParked) {
+        // A blocked lid seals like a full chest but must not read as one.
+        try {
+          if (ctx && (ctx.chestErrorAt || 0) > (ctx.chestFullAt || 0)) return 'stockpile: chest would not open'
+        } catch (_) { /* wording best-effort */ }
+        return 'stockpile: chest full'
+      }
       if (facts.chest === 'no') return 'stockpile: no chest to adopt, nothing to place it with'
       return 'stockpile: nothing to bank'
     case 'forage':
