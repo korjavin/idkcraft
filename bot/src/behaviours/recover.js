@@ -946,13 +946,15 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
-// One page per mark: the same spot (xz) within the mark TTL stays silent;
-// relocation past it (or an expired mark) re-arms.
+// One page per pit per mark TTL: the latch zone is the same avoid radius
+// that triggers paging, so gave-ups wandering one pit floor (revmux
+// 01-review: A-B-A ping-pong inside 6 blocks) page once, not per episode.
+// Relocation past the pit (or an expired mark) re-arms.
 function repeatPaged(ctx, bp) {
   const pg = ctx && ctx.repeatGaveUpPage
   if (!pg || typeof pg.x !== 'number' || typeof pg.z !== 'number') return false
   if (typeof pg.at !== 'number' || Date.now() - pg.at > danger.TTL_MS) return false
-  return Math.hypot(bp.x - pg.x, bp.z - pg.z) <= REST_GIVE_UP_DIST
+  return Math.hypot(bp.x - pg.x, bp.z - pg.z) <= danger.AVOID_RADIUS
 }
 
 // Episode end: drop the pathfinder goal (a stale goal re-wedges the next

@@ -763,6 +763,33 @@ describe('repeat gave-up pages the owner (rw4.9)', () => {
     }
     assert.deepEqual(bot.chats, [])
   })
+  it('ping-pong inside one pit pages once (revmux 01-review)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    const spots = [[10, 'explore', 'explore:40,0'], [13, 'roam', 'roam:back'], [10, 'gather', 'gather'], [13, 'follow', 'follow:Bob']]
+    for (const [x, by, key] of spots) {
+      bot.entity.position = pos(x, 64, 0)
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+  })
+  it('expired page latch re-arms', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+    ctx.repeatGaveUpPage.at = Date.now() - danger.TTL_MS - 1000
+    recover.setStuck(ctx, 'gather', { x: 40, y: 64, z: 0 }, 'gather')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(bot.chats.length, 2)
+  })
   it('rest repeats stay silent (q0h owns rest paging)', () => {
     const bot = pageBot([10, 64, 0])
     const ctx = { work: true, step: 'rest', stepStatus: 'running' }
@@ -783,12 +810,16 @@ describe('repeat gave-up pages the owner (rw4.9)', () => {
       recover.release(bot, ctx, 'gave-up')
     }
     assert.equal(bot.chats.length, 1)
-    bot.entity.position = pos(14, 64, 0) // 4 out: inside mark radius 6, past page latch 2
+    bot.entity.position = pos(20, 64, 0) // 10 out: past the pit, needs its own mark+page
     recover.setStuck(ctx, 'gather', { x: 40, y: 64, z: 0 }, 'gather')
     ctx.recovery = { action: 'sidestep', source: 'laya' }
-    recover.release(bot, ctx, 'gave-up')
+    recover.release(bot, ctx, 'gave-up') // first mark here: silent
+    assert.equal(bot.chats.length, 1)
+    recover.setStuck(ctx, 'follow', { x: 40, y: 64, z: 0 }, 'follow:Ann')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up') // repeat at the new pit: pages
     assert.equal(bot.chats.length, 2)
-    assert.match(bot.chats[1], /I'm stuck at 14 64 0 again/)
+    assert.match(bot.chats[1], /I'm stuck at 20 64 0 again/)
   })
 })
 
