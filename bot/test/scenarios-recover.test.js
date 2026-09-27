@@ -258,6 +258,11 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
         const nx = bp.x - Math.sin(yaw) * 0.4
         const nz = bp.z - Math.cos(yaw) * 0.4
         if (!blocked(nx, nz)) bot.entity.position = pos(nx, bp.y, nz)
+      } else if (bot.getControlState('back')) {
+        const yaw = bot._yaw || 0
+        const nx = bp.x + Math.sin(yaw) * 0.4
+        const nz = bp.z + Math.cos(yaw) * 0.4
+        if (!blocked(nx, nz)) bot.entity.position = pos(nx, bp.y, nz)
       } else {
         const g = bot.pathfinder.goal
         if (g && typeof g.x === 'number') {
