@@ -294,11 +294,12 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
     tie.restoreError()
   })
 
-  it('a throwing inventory reads as empty and finishes done', () => {
+  it('a throwing inventory reads as empty and finishes done', async () => {
     const bot = mockBot({ items: [{ name: 'oak_log', count: 3 }], ids: IDS, recipes: {} })
     bot.inventory.items = () => { throw new Error('no window') }
     const ctx = freshCtx()
     assert.doesNotThrow(() => craft(bot, ctx, null, {}))
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0)
     bot.restoreError()
@@ -337,7 +338,7 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
     bot.restoreError()
   })
 
-  it('fewer than 4 planks never starts a table', () => {
+  it('fewer than 4 planks never starts a table', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }],
       ids: IDS,
@@ -345,6 +346,7 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0)
     bot.restoreError()
@@ -451,7 +453,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     assert.equal(ctx.stepStatus, 'failed:craft-stripped_oak_planks')
   })
 
-  it('a null recipe list reads as no recipes', () => {
+  it('a null recipe list reads as no recipes', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_log', count: 3 }],
       ids: IDS,
@@ -460,12 +462,13 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     bot.recipesFor = () => null
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0)
     bot.restoreError()
   })
 
-  it('a non-numeric registry id reads as no recipe', () => {
+  it('a non-numeric registry id reads as no recipe', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_log', count: 3 }],
       ids: { oak_planks: 'eighteen' },
@@ -473,6 +476,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0)
     bot.restoreError()
@@ -505,7 +509,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     bot.restoreError()
   })
 
-  it('a placed table suppresses a second table build', () => {
+  it('a placed table suppresses a second table build', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 4 }],
       ids: IDS,
@@ -514,12 +518,13 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     bot.blockAt = () => ({ name: 'crafting_table' })
     const ctx = freshCtx({ table: pos(2, 64, 0) })
     craft(bot, ctx, null, {})
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0, 'no duplicate table')
     bot.restoreError()
   })
 
-  it('a table in hand suppresses a second table build', () => {
+  it('a table in hand suppresses a second table build', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 4 }, { name: 'crafting_table', count: 1 }],
       ids: IDS,
@@ -527,6 +532,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
+    await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.calls.craft.length, 0, 'no duplicate table')
     bot.restoreError()
