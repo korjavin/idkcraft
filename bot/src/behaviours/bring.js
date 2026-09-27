@@ -5,6 +5,7 @@ const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveF
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
+const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal } = require('./util')
 
@@ -31,6 +32,8 @@ const WANT_LOGS = 4
 const WANT_FOOD = 3
 const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable target
+const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
+  // far reading is often a recovering pathfinder, not an unreachable chest)
 const MOVE_TOLERANCE = 0.5
 const RETURN_RANGE = 2
 
@@ -505,6 +508,100 @@ function pickupFood(bot, ctx, o, bp, grounded) {
   }
 }
 
+// Fetch-first from the home chest (atl.14 phase 2): an order that opens
+// with no world hit checks the adopted chest before the far shells and
+// search legs. One attempt per order (o.chestTried); anything short falls
+// back to find and digs the rest. Orders that open with a world hit in
+// hand (startBlockOrder) dig directly — no chest detour, no regression.
+function openPhase(ctx) {
+  try {
+    if (ctx && ctx.home && ctx.home.chest) return 'chestfetch'
+  } catch (_) { /* no chest: find */ }
+  return 'find'
+}
+
+function chestFetch(bot, ctx, o, bp) {
+  const c = ctx && ctx.home && ctx.home.chest
+  if (!c) {
+    o.chestTried = true
+    o.phase = 'find'
+    return
+  }
+  const food = (o.kind || 'block') === 'food'
+  // Orders that open with no world hit carry no drop yet: derive it from
+  // the requested name (ores/logs: dropFor covers request and block names).
+  if (!food && !o.drop && o.name) {
+    try { o.drop = dropFor(o.name) } catch (_) { o.drop = null }
+  }
+  // Inventory first: no walk, no window when the pack already holds it.
+  if (o.drop) {
+    o.have = countDrop(bot, o.drop)
+    if (o.have >= o.want) {
+      o.phase = 'return'
+      o.saidWaiting = false
+      return
+    }
+  }
+  const key = `bring-chest:${c.x},${c.y},${c.z}`
+  if (key !== ctx.lastGoalKey) {
+    try {
+      bot.pathfinder.setGoal(new goals.GoalNear(c.x, c.y, c.z, 2), false)
+    } catch (_) { /* retry next tick */ }
+    ctx.lastGoalKey = key
+    o.chestStalls = 0
+    if (!o.announced) {
+      o.announced = true
+      say(bot, food && !o.drop ? 'checking the home chest for food' : `checking the home chest for ${o.drop || o.name}`)
+    }
+    return
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) { o.chestStalls = 0; return }
+  // No path reads as !moving too: after CHEST_STALL_TICKS far+standing
+  // ticks fall back to find instead of eating the 20 s windowOpen timeout
+  // on an out-of-range open. One far tick never falls back: the pathfinder
+  // often recovers on the next tick (live assay: place_error, then walk).
+  let near = false
+  try {
+    near = bp && typeof bp.x === 'number' && Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= 4
+  } catch (_) { near = false }
+  if (!near) {
+    o.chestStalls = (o.chestStalls || 0) + 1
+    if (o.chestStalls >= CHEST_STALL_TICKS) {
+      o.chestTried = true
+      o.phase = 'find'
+    }
+    return
+  }
+  o.chestStalls = 0
+  if (o.chestInFlight) return // exactly one window op at a time (dig rule)
+  o.chestInFlight = true
+  void (async () => {
+    try {
+      const need = Math.max(o.want - o.have, 0)
+      const res = food && !o.drop
+        ? await stockpileMod.withdrawEdible(bot, ctx, need)
+        : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need)
+      o.chestInFlight = false
+      o.chestTried = true
+      ctx.chestFull = false // a fetch may have made room: re-arm the step
+      if (food && !o.drop && res && res.name) o.drop = res.name
+      o.have = o.drop ? countDrop(bot, o.drop) : 0 // inventory count is the truth
+      if (o.have >= o.want) {
+        o.phase = 'return'
+        o.saidWaiting = false
+      } else {
+        o.phase = 'find' // short or empty: dig the rest
+      }
+    } catch (_) {
+      o.chestInFlight = false
+      o.chestTried = true
+      o.phase = 'find'
+    }
+  })()
+}
+
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
@@ -514,6 +611,8 @@ async function bring(bot, ctx, target, state) {
   const food = (o.kind || 'block') === 'food'
 
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
+
+  if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return }
 
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
@@ -528,6 +627,10 @@ async function bring(bot, ctx, target, state) {
       return
     }
     if (!res) {
+      if (!food && !o.chestTried && o.have < o.want && ctx && ctx.home && ctx.home.chest) {
+        o.phase = 'chestfetch'
+        return
+      }
       if (o.have > 0) {
         await enterSearch(bot, ctx, o, `only got ${o.have} ${o.drop}`)
         return
@@ -809,6 +912,7 @@ module.exports.chooseBringSearch = chooseBringSearch
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
+module.exports.openPhase = openPhase
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
