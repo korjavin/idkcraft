@@ -1256,7 +1256,15 @@ async function decide(bot, ctx, state, target) {
   metrics.recover.inc({ action: choice.action, source: choice.source, outcome: 'chosen' })
   logRecover(bot, ctx, choice.action, choice.source, 'chosen', facts)
   if (choice.action !== 'call_player' && (!rec.last || rec.last.action !== choice.action)) {
-    try { bot.chat(`stuck, trying ${RECOVER_MENU[choice.action].verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+    // rw4.9.1: repeats stay silent — a live mark underfoot means this pit
+    // already had its stuck chat. Same spot/TTL as the repeat-page gate,
+    // so the one page stands out instead of drowning. Episodes run as
+    // before; only the narration gates.
+    let marked = false
+    try { marked = danger.near(ctx, botPos(bot)) } catch (_) { marked = false }
+    if (!marked) {
+      try { bot.chat(`stuck, trying ${RECOVER_MENU[choice.action].verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+    }
   }
   return { action: choice.action, sprint: false, source: choice.source }
 }

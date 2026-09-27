@@ -294,3 +294,186 @@ describe('roam-back latch re-arms on relocation (idkcraft-q0h round 2)', () => {
     assert.equal(ctx2.stuck, undefined)
   })
 })
+
+describe('roam branch residuals (idkcraft-1hy)', () => {
+  it('does nothing without a body', () => {
+    const bot = mockBot()
+    bot.entity = null
+    const ctx = { lastGoalKey: '' }
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.lastGoalKey, '')
+  })
+
+  it('keys the walk-back by entity id when the player has no username', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    roam(bot, ctx, { id: 7, position: pos(20, 64, 0) }, {})
+    assert.equal(ctx.lastGoalKey, 'roam-back:7')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+  })
+
+  it('a plain body without distanceTo/clone still walks back, tracking untouched', () => {
+    const bot = mockBot()
+    bot.entity.position = { x: 0, y: 64, z: 0 }
+    const ctx = { lastGoalKey: '', roamLastPos: pos(5, 64, 5) }
+    roam(bot, ctx, playerEntity(20), {})
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+    assert.deepEqual([ctx.roamLastPos.x, ctx.roamLastPos.y, ctx.roamLastPos.z], [5, 64, 5], 'no clone, no update')
+  })
+
+  it('exactly 6 blocks strolls, past 6 walks back', () => {
+    const bot = mockBot()
+    const at6 = { lastGoalKey: '' }
+    roam(bot, at6, playerEntity(6), {})
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+    const past6 = { lastGoalKey: '' }
+    roam(bot, past6, { id: 7, username: 'S', position: pos(6.1, 64, 0) }, {})
+    assert.equal(bot.calls.goals[1].constructor.name, 'GoalFollow')
+  })
+
+  it('a throwing mover reads as stationary and the fresh walk-back still issues', () => {
+    const bot = mockBot()
+    bot.pathfinder.isMoving = () => { throw new Error('no driver') }
+    const ctx = { lastGoalKey: '', stuckResets: 2 }
+    roam(bot, ctx, playerEntity(20), {})
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+    assert.equal(ctx.stuck, undefined, 'stationary default never raises')
+  })
+
+  it('walk-back clears the point target, a stroll records it', () => {
+    const bot = mockBot()
+    const back = { lastGoalKey: '', roamGoal: { x: 1, y: 64, z: 1 } }
+    roam(bot, back, playerEntity(20), {})
+    assert.equal(back.roamGoal, null)
+    const stroll = { lastGoalKey: '' }
+    roam(bot, stroll, playerEntity(2), {})
+    assert.ok(stroll.roamGoal && typeof stroll.roamGoal.x === 'number')
+    assert.equal(stroll.roamGoal.y, 64)
+  })
+})
+
+describe('roam wedge arms (idkcraft-1hy)', () => {
+  function wedgeBot() {
+    const bot = mockBot()
+    bot._moving = true
+    return bot
+  }
+
+  it('a resting hold suppresses the wedge raise, the walk-back still issues', () => {
+    const bot = wedgeBot()
+    const ctx = {
+      lastGoalKey: '', stuckResets: 2, roamLastPos: pos(0, 64, 0),
+      work: {}, step: 'rest', restGaveUpAt: { x: 0, y: 64, z: 0 },
+    }
+    roam(bot, ctx, playerEntity(20), {})
+    assert.equal(ctx.stuck, undefined, 'rest hold suppresses the raise')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
+  })
+
+  it('a raise that setStuck refuses stays silent and resets the counter', () => {
+    const bot = wedgeBot()
+    const ctx = {
+      lastGoalKey: '', stuckResets: 2, roamLastPos: pos(0, 64, 0),
+      stuck: { by: 'fight', goal: null, key: 'fight' },
+    }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      roam(bot, ctx, playerEntity(20), {})
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(ctx.stuckResets, 0)
+    assert.equal(bot.calls.setGoal, 0, 'refused raise still returns before the walk-back')
+    assert.ok(!logs.some((m) => m.includes('stuck reason=wedge')), 'no wedge line without a stuck fact')
+  })
+
+  it('the wedge line prints fractional feet with one decimal', () => {
+    const bot = wedgeBot()
+    bot.entity.position = Object.assign(pos(7.36, 64, 0), {})
+    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7.36, 64, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      roam(bot, ctx, playerEntity(20), {})
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(ctx.stuck, 'wedge raised')
+    assert.ok(logs.some((m) => m.includes('pos=7.4,64,0')), `feet rounded: ${logs.join('|')}`)
+    assert.ok(logs.some((m) => m.includes('goal=20,64,0')), `goal ints: ${logs.join('|')}`)
+  })
+
+  it('non-numeric feet print as zeroes, fractional z rounds', () => {
+    const bot = wedgeBot()
+    bot.entity.position = {
+      x: '7', y: '64', z: 0.25,
+      distanceTo: () => 0,
+      clone: () => pos(7, 64, 0),
+    }
+    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      roam(bot, ctx, playerEntity(20), {})
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(ctx.stuck, 'wedge raised')
+    assert.ok(logs.some((m) => m.includes('pos=0,0,0.3')), `string feet zeroed: ${logs.join('|')}`)
+  })
+
+  it('a non-numeric z prints as zero', () => {
+    // The typeof guard exists so a non-number never reaches .toFixed (which
+    // would throw): without it this tick crashes instead of logging.
+    const bot = wedgeBot()
+    bot.entity.position = {
+      x: 7, y: 64, z: '0',
+      distanceTo: () => 0,
+      clone: () => pos(7, 64, 0),
+    }
+    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      roam(bot, ctx, playerEntity(20), {})
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(ctx.stuck, 'wedge raised')
+    assert.ok(logs.some((m) => m.includes('pos=7,64,0')), `z zeroed: ${logs.join('|')}`)
+  })
+
+  it('a plain body in stroll range still strolls without tracking', () => {
+    const bot = mockBot()
+    bot.entity.position = { x: 0, y: 64, z: 0 }
+    const ctx = { lastGoalKey: '', roamLastPos: pos(5, 64, 5) }
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+    assert.deepEqual([ctx.roamLastPos.x, ctx.roamLastPos.z], [5, 5], 'no clone, no update')
+  })
+})
+
+describe('roam wedge line y (idkcraft-1hy)', () => {
+  it('fractional height rounds to one decimal', () => {
+    const bot = mockBot()
+    bot._moving = true
+    bot.entity.position = Object.assign(pos(7, 64.55, 0), {})
+    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64.55, 0) }
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      roam(bot, ctx, { id: 7, username: 'S', position: pos(20, 64, 0) }, {})
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(ctx.stuck, 'wedge raised')
+    assert.ok(logs.some((m) => /pos=7,64\.5,0/.test(m)), `height rounded: ${logs.join('|')}`)
+  })
+})

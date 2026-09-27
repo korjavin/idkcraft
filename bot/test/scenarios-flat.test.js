@@ -85,7 +85,14 @@ function scenarioBot(world, items) {
       setMovements: () => {},
     },
     equip: async (item) => { bot.held = item.name },
-    dig: async () => { throw new Error('no digging in this scenario') },
+    digs: [],
+    dig: async (b) => {
+      bot.digs.push(b.name)
+      world.set(b.position.x, b.position.y, b.position.z, 'air')
+      const stack = items.find((i) => i.name === 'dirt')
+      if (stack) stack.count++
+      else items.push({ name: 'dirt', count: 1 })
+    },
     placeBlock: async (ref, face) => {
       const rp = ref.position
       world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
@@ -129,6 +136,9 @@ describe('w52: trench field -> flat', () => {
         if (f.phase === 'fill' && f.holes.length > 0) {
           const h = f.holes[0]
           bot.entity.position = pos(h.x + 2, 64, h.z)
+        } else if (f.phase === 'shave' && f.bumps.length > 0) {
+          const h = f.bumps[0]
+          bot.entity.position = pos(h.x + 2, h.y, h.z)
         }
         const r = await ticker.tick()
         await settle()
@@ -144,14 +154,57 @@ describe('w52: trench field -> flat', () => {
         assert.equal(world.blockAt({ x: 0, y: 63, z }).name, 'dirt', `trench cap 0,${z}`)
       }
       assert.equal(world.blockAt({ x: 2, y: 63, z: 2 }).name, 'dirt', 'pit capped at the surface')
-      // Untouched: the water, the bump, the unloaded corner.
+      // Untouched: the water and the unloaded corner. The bump is shaved (v2).
       assert.equal(world.blockAt({ x: -2, y: 62, z: -2 }).name, 'water')
-      assert.equal(world.blockAt({ x: 3, y: 64, z: -3 }).name, 'dirt')
+      assert.equal(world.blockAt({ x: 3, y: 64, z: -3 }).name, 'air', 'bump shaved to the level')
       assert.equal(world.blockAt({ x: -4, y: 63, z: 4 }), null)
       const chat = bot.chats.join('\n')
-      assert.ok(chat.includes('flattening 9x9 around P, level 63: 14 holes, 4 unloaded, 1 water skipped'), chat)
-      assert.ok(chat.includes('flat done: filled 14 holes'), chat)
+      assert.ok(chat.includes('flattening 9x9 around P, level 63: 14 holes, 1 bumps, 4 unloaded, 1 water skipped'), chat)
+      assert.ok(chat.includes('flat done: filled 14 holes, shaved 1 bump'), chat)
       assert.ok(!chat.includes('flat 0/14'), 'no 0/N progress right after the start line')
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  })
+
+  it('shaves dirt bumps after the holes, keeps ore and door neighbours', async () => {
+    const world = trenchField()
+    world.set(3, 64, 3, 'dirt') // shavable bump, 1 high
+    world.set(-3, 64, 1, 'dirt') // shavable bump, 2 high
+    world.set(-3, 65, 1, 'dirt')
+    world.set(1, 64, -3, 'diamond_ore') // ore bump: kept
+    world.set(-1, 64, 2, 'dirt') // door-adjacent bump: kept
+    world.set(-1, 64, 3, 'oak_door')
+    const items = [{ name: 'dirt', count: 64 }]
+    const bot = scenarioBot(world, items)
+    const brain = { async decide() { return { action: 'roam', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const cap = capture()
+    try {
+      handleChat(bot, ticker, 'P', 'flat 4')
+      for (let i = 0; i < 900 && bot._tickerCtx.flat; i++) {
+        const f = bot._tickerCtx.flat
+        if (f.phase === 'fill' && f.holes.length > 0) {
+          const h = f.holes[0]
+          bot.entity.position = pos(h.x + 2, 64, h.z)
+        } else if (f.phase === 'shave' && f.bumps.length > 0) {
+          const h = f.bumps[0]
+          bot.entity.position = pos(h.x + 2, h.y, h.z)
+        }
+        await ticker.tick()
+        await settle()
+      }
+      assert.equal(bot._tickerCtx.flat, null, 'episode ends')
+      assert.equal(world.blockAt({ x: 3, y: 64, z: 3 }).name, 'air', 'bump shaved')
+      assert.equal(world.blockAt({ x: -3, y: 64, z: 1 }).name, 'air', 'tall bump shaved')
+      assert.equal(world.blockAt({ x: -3, y: 65, z: 1 }).name, 'air')
+      assert.equal(world.blockAt({ x: 1, y: 64, z: -3 }).name, 'diamond_ore', 'ore kept')
+      assert.equal(world.blockAt({ x: -1, y: 64, z: 2 }).name, 'dirt', 'door neighbour kept')
+      assert.equal(world.blockAt({ x: -1, y: 64, z: 3 }).name, 'oak_door', 'door untouched')
+      const chat = bot.chats.join('\n')
+      assert.ok(chat.includes('14 holes, 6 bumps'), chat)
+      assert.ok(chat.includes('flat done: filled 14 holes, shaved 3 bumps, skipped 3: 3 kept'), chat)
     } finally {
       cap.release()
       ticker.destroy()
