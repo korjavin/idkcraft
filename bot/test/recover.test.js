@@ -1356,3 +1356,408 @@ describe('backstop sidestep stays strict on level goals (idkcraft-q0h round 2)',
     assert.equal(ctx.recovery.status, 'failed:no-progress')
   })
 })
+
+describe('recover dig_up run body (idkcraft-rcv)', () => {
+  const pick = () => [{ name: 'iron_pickaxe', count: 1 }]
+  const rec = (over) => ({
+    stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 }, key: 'follow:P' },
+    recovery: { action: 'dig_up', status: 'running', st: null, ...over },
+  })
+
+  it('done when the headroom is already air', () => {
+    const bot = worldBot(pitWorld(), pick())
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+
+  it('failed:no-pickaxe without a pickaxe', () => {
+    const bot = worldBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-pickaxe')
+  })
+
+  it('failed:lava vetoes the dig with lava next to the head', () => {
+    const bot = worldBot(pitWorld(), pick())
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      if (key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 61, 0)) {
+        return { name: 'lava', position: new Vec3(1, 61, 0), boundingBox: 'block' }
+      }
+      return raw(p)
+    }
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:lava')
+  })
+
+  it('digs the ceiling head-first, then done', async () => {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    solids.add(key(0, 63, 0))
+    const bot = worldBot(solids, pick())
+    const dug = []
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { dug.push(key(b.position.x, b.position.y, b.position.z)); return rawDig(b) }
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'head2 still solid')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.deepEqual(dug, [key(0, 62, 0), key(0, 63, 0)], 'head1 first, then head2')
+  })
+
+  it('digs head2 alone when head1 is already air', async () => {
+    const solids = pitWorld()
+    solids.add(key(0, 63, 0))
+    const bot = worldBot(solids, pick())
+    const dug = []
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { dug.push(key(b.position.x, b.position.y, b.position.z)); return rawDig(b) }
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.deepEqual(dug, [key(0, 63, 0)])
+  })
+
+  it('failed:dig-error when the dig throws', async () => {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    const bot = worldBot(solids, pick())
+    bot.dig = async () => { throw new Error('gone') }
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-error')
+  })
+
+  it('failed:dig-timeout when the ack never arrives', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    const bot = worldBot(solids, pick())
+    const ctx = rec({ st: { waited: 1000, digInFlight: true, digError: false } })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-timeout')
+  })
+
+  it('failed:no-dig when bot.dig is missing', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    const bot = worldBot(solids, pick())
+    delete bot.dig
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-dig')
+  })
+})
+
+describe('recover dig_through run body (idkcraft-rcv)', () => {
+  const pick = () => [{ name: 'iron_pickaxe', count: 1 }]
+  function flatWorld() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    return solids
+  }
+  const rec = (goal, over) => ({
+    stuck: { by: 'follow', goal, key: 'follow:P' },
+    recovery: { action: 'dig_through', status: 'running', st: null, ...over },
+  })
+
+  it('failed:no-pos without a position', () => {
+    const bot = worldBot(flatWorld(), pick())
+    bot.entity = null
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-pos')
+  })
+
+  it('failed:no-pickaxe without a pickaxe', () => {
+    const bot = worldBot(flatWorld(), [])
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-pickaxe')
+  })
+
+  it('failed:no-direction without a goal', () => {
+    const bot = worldBot(flatWorld(), pick())
+    const ctx = { stuck: { by: 'follow', key: 'follow:P' }, recovery: { action: 'dig_through', status: 'running', st: null } }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-direction')
+  })
+
+  it('failed:lava when the feet cell is lava', () => {
+    const bot = worldBot(flatWorld(), pick())
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      if (key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 61, 0)) {
+        return { name: 'lava', position: new Vec3(1, 61, 0), boundingBox: 'block' }
+      }
+      return raw(p)
+    }
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:lava')
+  })
+
+  it('failed:lava when only the head cell is lava', () => {
+    const bot = worldBot(flatWorld(), pick())
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      if (key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 62, 0)) {
+        return { name: 'lava', position: new Vec3(1, 62, 0), boundingBox: 'block' }
+      }
+      return raw(p)
+    }
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:lava')
+  })
+
+  it('done when the tunnel is already open', () => {
+    const bot = worldBot(flatWorld(), pick())
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+
+  it('digs feet-first, then head, then done', async () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    solids.add(key(1, 62, 0))
+    const bot = worldBot(solids, pick())
+    const dug = []
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { dug.push(key(b.position.x, b.position.y, b.position.z)); return rawDig(b) }
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'head still solid')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.deepEqual(dug, [key(1, 61, 0), key(1, 62, 0)], 'feet cell first, then head')
+  })
+
+  it('a z-dominant goal tunnels along z', async () => {
+    const solids = flatWorld()
+    solids.add(key(0, 61, 1))
+    const bot = worldBot(solids, pick())
+    const dug = []
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { dug.push(key(b.position.x, b.position.y, b.position.z)); return rawDig(b) }
+    const ctx = rec({ x: 0.5, y: 61, z: 5 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.deepEqual(dug, [key(0, 61, 1)])
+  })
+
+  it('failed:dig-error when the dig throws', async () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    const bot = worldBot(solids, pick())
+    bot.dig = async () => { throw new Error('gone') }
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-error')
+  })
+
+  it('failed:dig-timeout when the ack never arrives', () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    const bot = worldBot(solids, pick())
+    const ctx = rec({ x: 5, y: 61, z: 0 }, { st: { waited: 1000, digInFlight: true, digError: false } })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-timeout')
+  })
+
+  it('failed:no-dig when bot.dig is missing', () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    const bot = worldBot(solids, pick())
+    delete bot.dig
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-dig')
+  })
+})
+
+describe('recover run-body edges (idkcraft-rcv)', () => {
+  it('dig_step dig-timeout fails with jump released', () => {
+    // pitWorld walls are dirt (hand-diggable): the dig above the side step
+    // hangs, the budget spend fails the primitive instead of wedging the
+    // episode forever.
+    const bot = worldBot(pitWorld(), [])
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'dig_step', status: 'running',
+        st: { dir: [1, 0], phase: 'dig', waited: 1000, digInFlight: true, digError: false, startFloor: 61 },
+      },
+    }
+    bot.setControlState('jump', true) // held by an earlier phase: the timeout must release it
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:dig-timeout')
+    assert.equal(bot.getControlState('jump'), false)
+  })
+
+  it('hop anchor collapse re-scans instead of mounting air', () => {
+    // The step block is gone (dug by another tick, ghost): hop_step drops
+    // the stale anchor and re-scans from the back phase.
+    const bot = worldBot(pitWorld(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', status: 'running',
+        st: {
+          dir: [1, 0], stepPos: { x: 5, y: 61, z: 0 }, phase: 'hop',
+          waited: 0, startFloor: 61, backStart: { x: 0.5, y: 61, z: 0.5 },
+          jumping: false, settled: false,
+        },
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(ctx.recovery.st.dir, null)
+    assert.equal(ctx.recovery.st.stepPos, null)
+    assert.equal(ctx.recovery.st.phase, 'back')
+  })
+
+  it('run() catches a throwing primitive as failed:error', () => {
+    // A bug inside any run body must fail the primitive, never kill the tick.
+    const bot = worldBot(pitWorld(), [])
+    const ctx = { stuck: { by: 'follow', key: 'follow:P' }, recovery: { action: 'wait', status: 'running', st: null } }
+    const orig = recover.RECOVER_MENU.wait.run
+    recover.RECOVER_MENU.wait.run = () => { throw new Error('boom') }
+    try {
+      recover.run(bot, ctx)
+    } finally {
+      recover.RECOVER_MENU.wait.run = orig
+    }
+    assert.equal(ctx.recovery.status, 'failed:error')
+  })
+
+  it('release done clears the gather skip set, gave-up keeps the final', () => {
+    // An escape may have moved the body somewhere reachable: done re-arms
+    // the gather scan, while gave-up leaves the failed:* final standing.
+    const bot = worldBot(pitWorld(), [])
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 5, y: 61, z: 0 }, key: 'gather' },
+      recovery: { action: 'dig_through', status: 'done' },
+      gather: { skip: new Set([key(1, 61, 0)]), streak: 2 },
+    }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.gather.skip.size, 0)
+    assert.equal(ctx.gather.streak, 0)
+    const ctx2 = {
+      stuck: { by: 'gather', goal: { x: 5, y: 61, z: 0 }, key: 'gather' },
+      recovery: { action: 'dig_through', status: 'done' },
+      gather: { skip: new Set([key(1, 61, 0)]), streak: 2 },
+    }
+    recover.release(bot, ctx2, 'gave-up')
+    assert.equal(ctx2.gather.skip.size, 1, 'gave-up keeps the strikes')
+    assert.equal(ctx2.gather.streak, 2)
+  })
+
+  it('chooseRecovery generic error counts escalation reason=error', async () => {
+    const facts = {
+      goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, water: false,
+      headBlocked: false, walls: 0, freeSides: [[1, 0]], lavaNear: false,
+      playerOnline: true, playerDist: 5, playerName: 'Steve', stuckTicks: 12,
+      resetsStuck: 0, resetsPlaceError: 0, last: 'none', by: 'follow',
+    }
+    const brain = { source: 'laya', ask: async () => { throw new Error('boom') } }
+    const r = await recover.chooseRecovery(brain, facts, ['sidestep', 'wait', 'call_player'])
+    assert.deepEqual(r, { action: 'sidestep', source: 'stub-fallback', fsm: 'sidestep', model: 'laya' })
+    const text = await metricText()
+    assert.match(text, /idkcraft_bot_escalation_total\{from="laya",to="fsm",reason="error"\} [1-9]/)
+  })
+
+  it('chooseRecovery jev-missing error counts escalation reason=invalid', async () => {
+    const facts = {
+      goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, water: false,
+      headBlocked: false, walls: 0, freeSides: [[1, 0]], lavaNear: false,
+      playerOnline: true, playerDist: 5, playerName: 'Steve', stuckTicks: 12,
+      resetsStuck: 0, resetsPlaceError: 0, last: 'none', by: 'follow',
+    }
+    const brain = { source: 'jev', ask: async () => { throw new Error('jev missing api key') } }
+    const r = await recover.chooseRecovery(brain, facts, ['sidestep', 'wait', 'call_player'])
+    assert.deepEqual(r, { action: 'sidestep', source: 'stub-fallback', fsm: 'sidestep', model: 'jev' })
+    const text = await metricText()
+    assert.match(text, /idkcraft_bot_escalation_total\{from="jev",to="fsm",reason="invalid"\} [1-9]/)
+  })
+})
+
+describe('recover dig in-flight wait (idkcraft-rcv)', () => {
+  it('dig_up waits while the dig is in flight within budget', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    const bot = worldBot(solids, [{ name: 'iron_pickaxe', count: 1 }])
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 }, key: 'follow:P' },
+      recovery: { action: 'dig_up', status: 'running', st: { waited: 0, digInFlight: true, digError: false } },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
+  })
+
+  it('dig_through waits while the dig is in flight within budget', () => {
+    const solids = new Set([key(0, 60, 0), key(1, 61, 0)])
+    const bot = worldBot(solids, [{ name: 'iron_pickaxe', count: 1 }])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: { action: 'dig_through', status: 'running', st: { waited: 0, digInFlight: true, digError: false } },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
+  })
+
+  it('dig_step waits while the hand dig is in flight within budget', () => {
+    const bot = worldBot(pitWorld(), [])
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'dig_step', status: 'running',
+        st: { dir: [1, 0], phase: 'dig', waited: 0, digInFlight: true, digError: false, startFloor: 61 },
+      },
+    }
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
+  })
+})
