@@ -210,6 +210,20 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
       // ponytail: one call per tick, no batching/caching — upgrade path is
       // batching states if JEV cost ever matters ($0.042/M tokens; ~200
       // tokens/tick -> pennies/day).
+      // Futile-ask skip (idkcraft-uig): on low-health-hostile with nobody
+      // online laya answers follow ~98.5%+ (prod VL 7d: 2991 follow vs
+      // <=45 fight on hostile-fact + hp<6 states) and hybrid's noplayer
+      // veto converts every follow to the FSM's answer — the ask is
+      // decided before it is sent. Like the only-option skip in ask(),
+      // answer without the round-trip on non-jev remotes (JEV keeps its
+      // judgement). The <=1.5% jitter-fight tail at hp<6 with zero
+      // backup is safer as the FSM's follow/idle. No disagree line is
+      // emitted (nothing was asked); hybrid logs the FSM answer with
+      // source=fsm-noplayer and no veto= word.
+      if (reason === 'low-health-hostile' && noPlayerOnline(state) && source !== 'jev') {
+        const skip = stubBrain.decide(state)
+        return { action: skip.action, sprint: skip.sprint, source: 'fsm-noplayer' }
+      }
       try {
         const choice = await self.ask({
           state: `hard=${reason} ${stateToText(state)}`,
@@ -268,6 +282,13 @@ function isHard(state) {
   return null
 }
 
+// Nobody to walk to: distance_to_player is not a number (nobody
+// online, or the fact is unknown). Shared by the veto and the uig
+// short-circuit so the two can never disagree on who is missing.
+function noPlayerOnline(state) {
+  return !state || typeof state !== 'object' || typeof state.distance_to_player !== 'number'
+}
+
 function hybridBrain(remote) {
   return {
     name: 'hybrid',
@@ -286,7 +307,7 @@ function hybridBrain(remote) {
       // Feasibility (idkcraft-dxl): follow walks to the player, so with
       // nobody online the model's follow is vetoed to the FSM's answer
       // (which idles without distance_to_player). Source names the veto.
-      if (model.action === 'follow' && (!state || typeof state !== 'object' || typeof state.distance_to_player !== 'number')) {
+      if (model.action === 'follow' && noPlayerOnline(state)) {
         console.log(`brain route=hard reason=${reason} model=follow veto=noplayer fsm=${fsm.action} source=${model.source}`)
         return { action: fsm.action, sprint: fsm.sprint, source: 'fsm-noplayer' }
       }

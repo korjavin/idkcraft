@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText } = require('../src/brain')
+const { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, JEV_ENDPOINT } = require('../src/brain')
 
 describe('stubBrain', () => {
   it('roams when the player is close and still with no hostile (dist 1)', () => {
@@ -622,6 +622,92 @@ describe('hybridBrain', () => {
     const state = { hostile_distance: 9.5, hostile_near_player: true, bot_health: 4.9, distance_to_player: 9.9 }
     await brain.decide(state)
     assert.equal(gotReason, 'low-health-hostile')
+  })
+
+  it('uig: low-health + noplayer short-circuits laya (zero calls, FSM idle, no disagree)', async () => {
+    // c-lowhp-7 shape: hostile fact, hp<6, nobody online.
+    const state = { bot_health: 4.75, bot_food: 16, nearby_hostiles: 1, hostile_distance: 7.5, hostile_near_player: false, hostile_reachable: true }
+    assert.equal(isHard(state), 'low-health-hostile')
+    assert.equal(stubBrain.decide(state).action, 'idle')
+    let calls = 0
+    const spy = async () => {
+      calls++
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'fight' } } }) }
+    }
+    const brain = hybridBrain(jevBrain('k', spy, 1000, LAYA))
+    const { r, logs, errs } = await capture(() => brain.decide(state))
+    assert.equal(calls, 0)
+    assert.equal(r.action, 'idle')
+    assert.equal(r.source, 'fsm-noplayer')
+    assert.equal(errs.length, 0)
+    assert.equal(logs.length, 1)
+    assert.match(logs[0], /brain route=hard reason=low-health-hostile model=idle fsm=idle source=fsm-noplayer/)
+    assert.ok(!logs[0].includes('veto'), 'skipped ask is not a veto')
+  })
+
+  it('uig: veto still converts follow with nobody online on other hard cases', async () => {
+    const state = { nearby_hostiles: 3, hostile_distance: 2, bot_health: 20 }
+    assert.equal(isHard(state), 'crowd')
+    assert.equal(stubBrain.decide(state).action, 'fight')
+    const remote = {
+      name: 'laya',
+      source: 'laya',
+      async decide() { return { action: 'follow', sprint: false, source: 'laya' } }
+    }
+    const brain = hybridBrain(remote)
+    const { r, logs } = await capture(() => brain.decide(state))
+    assert.equal(r.action, 'fight')
+    assert.equal(r.source, 'fsm-noplayer')
+    assert.match(logs[0], /veto=noplayer/)
+  })
+
+  it('uig: jev remote is still asked at low health with nobody online', async () => {
+    const state = { bot_health: 4.75, hostile_distance: 7.5, hostile_reachable: true }
+    assert.equal(isHard(state), 'low-health-hostile')
+    let calls = 0
+    const spy = async () => {
+      calls++
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'fight' } } }) }
+    }
+    const brain = hybridBrain(jevBrain('k', spy, 1000, JEV_ENDPOINT))
+    const { r, errs } = await capture(() => brain.decide(state))
+    assert.equal(calls, 1)
+    assert.equal(r.action, 'fight')
+    assert.equal(r.source, 'jev')
+    assert.equal(errs.length, 1, 'a real jev ask still emits its disagree line')
+  })
+
+  it('uig: decide-only remotes (no ask) are still asked, never skipped', async () => {
+    // The skip saves a network round-trip; mocks have none, and the ticker
+    // tests expect their answer to flow through (retreat fatal phase).
+    const state = { bot_health: 4.75, hostile_distance: 7.5, hostile_reachable: true }
+    let calls = 0
+    const remote = {
+      name: 'mock',
+      async decide() { calls++; return { action: 'fight', sprint: false, source: 'mock' } }
+    }
+    const brain = hybridBrain(remote)
+    const { r } = await capture(() => brain.decide(state))
+    assert.equal(calls, 1)
+    assert.equal(r.action, 'fight')
+  })
+
+  it('uig: short-circuit is H1-only — crowd noplayer still asks laya', async () => {
+    // Revmux 01 (minor x2): a mock remote never runs the jevBrain skip,
+    // so only a real client pins the reason gate — widen it and this fails.
+    const state = { nearby_hostiles: 3, hostile_distance: 2, bot_health: 20 }
+    assert.equal(isHard(state), 'crowd')
+    let calls = 0
+    const spy = async () => {
+      calls++
+      return { ok: true, json: async () => ({ answers: { action: { type: 'choice', choice: 'fight' } } }) }
+    }
+    const brain = hybridBrain(jevBrain('k', spy, 1000, LAYA))
+    const { r, logs } = await capture(() => brain.decide(state))
+    assert.equal(calls, 1)
+    assert.equal(r.action, 'fight')
+    assert.equal(r.source, 'laya')
+    assert.match(logs[0], /reason=crowd model=fight/)
   })
 
   it('fallback: fetch rejects -> FSM answer, source stub-fallback, route line carries it', async () => {

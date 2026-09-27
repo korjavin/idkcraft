@@ -1,8 +1,9 @@
 'use strict'
 // Brain-quality eval stand (beads idkcraft-hg8, idkcraft-82i): replays the
 // prod-sampled fixtures (bot/test/fixtures/*-eval.json) through the REAL
-// prod path (isHard routing + jevBrain ask/decide with the shipped
-// instructions and criteria) against laya or JEV, scoring FSM-agreement and
+// prod path (hybridBrain: isHard routing + noplayer veto + uig
+// short-circuit, jevBrain ask/decide with the shipped instructions and
+// criteria) against laya or JEV, scoring FSM-agreement and
 // model-call counts with and without the hg8 menu shaping.
 // Usage: node stand-eval.js [laya|jev] [--shape|--no-shape] [reps]
 // Env: EVAL_URL (default http://localhost:8000/v1/systemone),
@@ -11,7 +12,7 @@
 // on the pair fixtures (only-option answers without asking).
 const fs = require('node:fs')
 const path = require('node:path')
-const { stubBrain, jevBrain, isHard, JEV_ENDPOINT } = require('../src/brain')
+const { stubBrain, jevBrain, hybridBrain, isHard, JEV_ENDPOINT } = require('../src/brain')
 const { STEP_CRITERIA, ASK_INSTRUCTIONS, shapeGoalMenu } = require('../src/goal')
 
 const EVAL_URL = process.env.EVAL_URL || 'http://localhost:8000/v1/systemone'
@@ -27,15 +28,21 @@ async function main() {
   const shape = shapeFlag === '--shape'
   if (!['--shape', '--no-shape'].includes(shapeFlag)) { console.error('flag: --shape|--no-shape'); process.exit(2) }
   let brain
+  // calls counts true network POSTs (the uig skip sends none) — a chain
+  // ask costs its yes/no round-trips, like in prod.
+  let remoteCalls = 0
+  const countingFetch = async (...a) => { remoteCalls++; return fetch(...a) }
   if (backend === 'laya') {
-    brain = jevBrain('stand', undefined, 60000, EVAL_URL)
+    brain = jevBrain('stand', countingFetch, 60000, EVAL_URL)
   } else if (backend === 'jev') {
     const key = process.env.EVAL_KEY
     if (!key) { console.error('EVAL_KEY required for jev'); process.exit(2) }
-    brain = jevBrain(key, undefined, 60000, JEV_ENDPOINT)
+    brain = jevBrain(key, countingFetch, 60000, JEV_ENDPOINT)
   } else { console.error('backend: laya|jev'); process.exit(2) }
   const model = brain.source || brain.name || 'model'
   console.log(`backend=${backend} shape=${shape} reps=${reps} model=${model}`)
+  // Faithful prod path: hybrid veto + jevBrain futile-ask skip included.
+  const hybrid = hybridBrain(brain)
 
   const combat = load('combat-eval.json')
   const goal = load('goal-eval.json')
@@ -46,22 +53,27 @@ async function main() {
     const want = stubBrain.decide(row.state).action
     const reason = isHard(row.state)
     for (let r = 0; r < reps; r++) {
-      let got, asked = false
+      let got, asked = false, skipped = false
       if (!reason) {
         got = want // easy: FSM answers, model not consulted
       } else {
-        asked = true
-        calls++
+        const before = remoteCalls
         try {
-          got = (await brain.decide(row.state, reason)).action
+          got = (await hybrid.decide(row.state)).action
         } catch (err) {
           got = `ERROR:${err && err.message ? err.message : err}`
+        }
+        if (remoteCalls > before) {
+          asked = true
+          calls += remoteCalls - before
+        } else {
+          skipped = true // uig short-circuit: veto pre-decided, no ask sent
         }
       }
       const ok = got === want
       if (ok) agree++
       total++
-      console.log(`${ok ? 'OK  ' : 'MISS'} ${row.id} route=${reason || 'easy'} want=${want} got=${got}${asked ? '' : ' (no ask)'}${row.prod_model ? ` prod=${row.prod_model}` : ''}`)
+      console.log(`${ok ? 'OK  ' : 'MISS'} ${row.id} route=${reason || 'easy'} want=${want} got=${got}${asked ? '' : skipped ? ' (short-circuit)' : ' (no ask)'}${row.prod_model ? ` prod=${row.prod_model}` : ''}`)
     }
   }
 
@@ -76,12 +88,12 @@ async function main() {
       } else {
         const criteria = {}
         for (const n of names) criteria[n] = STEP_CRITERIA[n]
-        calls++
         try {
           got = await brain.ask({ state: row.state_text, instructions: ASK_INSTRUCTIONS, criteria, situation: `${row.id}#${r}` })
         } catch (err) {
           got = `ERROR:${err && err.message ? err.message : err}`
         }
+        calls = remoteCalls // POST-level counting, shared with combat
       }
       const ok = got === want
       if (ok) agree++
