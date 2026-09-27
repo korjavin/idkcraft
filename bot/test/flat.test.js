@@ -459,6 +459,9 @@ describe('flat ticker wiring', () => {
       assert.equal(r.ctx.flat.parked, true)
       r.ticker.status()
       assert.ok(r.bot.chats.at(-1).startsWith('parked (flat paused)'), r.bot.chats.at(-1))
+      r.ticker.setLead({ name: 'coal', pos: { x: 1, y: 63, z: 0 }, by: 'P', lastProgressAt: Date.now() })
+      r.ticker.status()
+      assert.ok(r.bot.chats.at(-1).startsWith('leading'), r.bot.chats.at(-1))
     } finally { BEHAVIOURS.bring = origBring; r.done() }
   })
 
@@ -731,10 +734,15 @@ describe('flat behaviour', () => {
   })
 
   it('skips a hole whose support cell unloaded as floating', async () => {
+    // Only the hole column goes dark; (2,62,0) stays loaded dirt under a
+    // liquid (2,63,0), so a deleted below-unloaded branch would find a
+    // support reference and place — the place count pins the branch, and
+    // the liquid neighbour can never cap in from the side.
     let dark = false
-    const world = makeWorld({ unloaded: (x, z) => dark && Math.abs(x - 1) <= 1 && Math.abs(z) <= 1 })
+    const world = makeWorld({ unloaded: (x, z) => dark && Math.abs(x - 1) <= 1 && Math.abs(z) <= 1 && !(x === 2 && z === 0) })
     world.set(1, 63, 0, 'air')
     world.set(1, 62, 0, 'air')
+    world.set(2, 63, 0, 'water')
     const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
     flat(bot, ctx, null, null); await settle() // scan while loaded
@@ -745,6 +753,7 @@ describe('flat behaviour', () => {
       flat(bot, ctx, null, null); await settle()
     }
     assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 0, 'no support into an unloaded cell')
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 floating')), bot.chats.join('\n'))
   })
 
