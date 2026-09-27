@@ -845,3 +845,53 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
     assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door')
   })
 })
+
+describe('build counting and guard edges (idkcraft-l71)', () => {
+  it('countRemainingPlanks: none without a site, zero when laid, skips excluded', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, {})
+    assert.equal(build.countRemainingPlanks(bot, null, []), PLANK_COUNT)
+    assert.equal(build.countRemainingPlanks(bot, {}, []), PLANK_COUNT)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    assert.equal(build.countRemainingPlanks(bot, home, []), PLANK_COUNT, 'fresh site: every plank missing')
+    const s = home.site
+    const plankIdx = []
+    BLUEPRINT.forEach((c, i) => {
+      if (c.kind !== 'planks') return
+      plankIdx.push(i)
+      world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'oak_planks')
+    })
+    assert.equal(build.countRemainingPlanks(bot, home, []), 0)
+    // One plank missing but skipped: excluded from the count, not blocking.
+    const missing = BLUEPRINT[plankIdx[0]]
+    world.set(s.x + missing.dx, s.y + missing.dy, s.z + missing.dz, 'air')
+    assert.equal(build.countRemainingPlanks(bot, home, [plankIdx[0]]), 0)
+    assert.equal(build.countRemainingPlanks(bot, home, []), 1)
+  })
+
+  it('guard names blocks through the registry when type is missing', () => {
+    const REG = { oak_planks: { id: 5 }, crafting_table: { id: 998 } }
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.registry = { blocksByName: REG }
+    bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [] }
+    build(bot, ctx, null, null)
+    const s = home.site
+    const fn = bot.pathfinder.movements.exclusionAreasBreak[0]
+    assert.equal(fn({ name: 'oak_planks', position: { x: s.x + 1, y: s.y, z: s.z } }), 100, 'byName id guards typeless blocks')
+    assert.equal(fn({ name: 'stone', position: { x: s.x + 1, y: s.y, z: s.z } }), 0, 'unknown name diggable')
+    assert.equal(fn({ type: 5, name: 'oak_planks', position: { x: s.x + 1, y: s.y, z: s.z } }), 100, 'numeric type still guards')
+  })
+
+  it('throwing spawn point leaves home null instead of crashing', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, {})
+    Object.defineProperty(bot, 'spawnPoint', { get() { throw new Error('no spawn') } })
+    const ctx = {}
+    build(bot, ctx, null, null)
+    assert.equal(ctx.home, null)
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+})

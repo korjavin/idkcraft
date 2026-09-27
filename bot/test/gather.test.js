@@ -592,3 +592,65 @@ describe('stuck-detector blind spots (idkcraft-68p)', () => {
     assert.deepEqual(bot.lines, ['chopping oak_log 1/14', 'chopping oak_log 2/14'])
   })
 })
+
+describe('gather edges (idkcraft-l71)', () => {
+  it('plain positions meter by hypot on the first find', () => {
+    const bot = mockBot({
+      spots: [{ x: 12, y: 64, z: 0 }, { x: 3, y: 64, z: 0 }],
+      names: { '12,64,0': 'oak_log', '3,64,0': 'oak_log' },
+    })
+    bot.entity.position = { x: 0, y: 64, z: 0 } // no distanceTo: hypot fallback
+    const ctx = freshCtx()
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:3,64,0$/, 'hypot picks the nearer trunk')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('fresh drops clear stale skips and release the gather latch', () => {
+    // A recovered-then-chopped trunk proves the world changed: old skips
+    // go stale, the streak resets, the recover latch releases.
+    const bot = mockBot({ items: [{ name: 'oak_log', count: 5 }] })
+    const ctx = freshCtx()
+    ctx.gather = {
+      pos: { x: 12, y: 64, z: 0 }, name: 'oak_log', phase: 'walk',
+      skip: new Set(['9,9,9']), streak: 2, final: null, atLogs: -1,
+      seenLogs: 0, lastProgressAt: Date.now(),
+    }
+    ctx.recoverLatch = { by: 'gather' }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.skip.size, 0)
+    assert.equal(ctx.gather.streak, 0)
+    assert.equal(ctx.recoverLatch, null)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('missing dig skips the cell and re-finds', () => {
+    const bot = mockBot({})
+    delete bot.dig
+    const ctx = freshCtx()
+    ctx.gather = {
+      pos: { x: 1, y: 64, z: 0 }, name: 'oak_log', phase: 'dig', block: {},
+      skip: new Set(), streak: 0, final: null, atLogs: -1,
+      seenLogs: 0, lastProgressAt: Date.now(),
+    }
+    gather(bot, ctx, null, {})
+    assert.ok(ctx.gather.skip.has('1,64,0'))
+    assert.equal(ctx.gather.pos, null)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('pickup arrival moves to the next tree', () => {
+    const bot = mockBot({})
+    const ctx = freshCtx()
+    ctx.lastGoalKey = 'gather-pickup:1,64,0'
+    ctx.gather = {
+      pos: { x: 1, y: 64, z: 0 }, name: 'oak_log', phase: 'pickup',
+      skip: new Set(), streak: 0, final: null, atLogs: -1,
+      seenLogs: 0, lastProgressAt: Date.now(),
+    }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.pos, null)
+    assert.equal(ctx.gather.phase, 'walk')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+})
