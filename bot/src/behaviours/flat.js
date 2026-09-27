@@ -83,12 +83,17 @@ function isDirtName(name) {
 // Bump-shaving allowlist: natural terrain only. Everything valuable or built
 // (ores, logs, planks, containers, beds, doors, glass, dirt paths, farmland)
 // is excluded by construction — an unlisted block is kept, never dug.
+// Cobblestone/mossy/cobbled-deepslate/snow_block are deliberately absent:
+// they never generate as surface terrain, so above the level they are
+// player builds (round-1 core-1/body-1). Sandstone and packed ice stay
+// because deserts and icebergs grow them, with the structure gate covering
+// adjacent builds.
 const DIG_ALLOWLIST = new Set([
   'dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
   'mud', 'clay', 'gravel', 'sand', 'red_sand', 'sandstone', 'red_sandstone',
-  'stone', 'cobblestone', 'mossy_cobblestone', 'andesite', 'granite', 'diorite',
-  'tuff', 'deepslate', 'cobbled_deepslate', 'calcite', 'dripstone_block',
-  'snow', 'snow_block', 'ice', 'packed_ice',
+  'stone', 'andesite', 'granite', 'diorite',
+  'tuff', 'deepslate', 'calcite', 'dripstone_block',
+  'snow', 'ice', 'packed_ice',
   'netherrack', 'basalt', 'blackstone', 'soul_sand', 'soul_soil',
   'magma_block', 'end_stone',
 ])
@@ -114,6 +119,19 @@ const STRUCTURE_MARKERS = [
 function isStructureMarker(name) {
   if (typeof name !== 'string') return false
   return STRUCTURE_MARKERS.some((m) => name.includes(m))
+}
+
+// Face-neighbour liquid: digging next to a spring or lava pool would let it
+// flow over the leveled area, so the column is skipped instead (core-4).
+// Returns 'water', 'lava' or null.
+function liquidNear(bot, x, y, z) {
+  const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+  for (const [ox, oy, oz] of dirs) {
+    const name = blockNameAt(bot, new Vec3(x + ox, y + oy, z + oz))
+    if (name === 'lava') return 'lava'
+    if (name === 'water' || name === 'bubble_column') return 'water'
+  }
+  return null
 }
 
 // First marker name in the 26 neighbours, or null. The target itself is
@@ -380,10 +398,12 @@ function cellOccupied(bot, x, y, z) {
 function threatens(ent, x, y, z) {
   const p = ent && ent.position
   if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
-  const fx = Math.floor(p.x)
+  // The hitbox is 0.6 wide: a player on the edge of the target still stands
+  // on it even when their centre floors to the neighbour column (core-3).
+  const xs = new Set([Math.floor(p.x - 0.3), Math.floor(p.x + 0.3)])
+  const zs = new Set([Math.floor(p.z - 0.3), Math.floor(p.z + 0.3)])
+  if (!xs.has(x) || !zs.has(z)) return false
   const fy = Math.floor(p.y)
-  const fz = Math.floor(p.z)
-  if (fx !== x || fz !== z) return false
   return fy === y || fy + 1 === y || fy - 1 === y
 }
 
@@ -509,7 +529,8 @@ function startEpisode(cx, cz, r, yTop, by) {
     bumps: [],
     totalBumps: 0,
     shaved: 0,
-    skip: { water: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0 },
+    skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0 },
+    abortWhy: null,
     parked: false,
     issuedKey: null,
     ticks: 0,
@@ -557,10 +578,11 @@ function rotateBump(f) {
 
 function finish(bot, ctx, f, why) {
   const left = f.holes.length + f.bumps.length
+  const leftWhy = why || f.abortWhy || 'around you'
   const skipped = Object.values(f.skip).reduce((a, b) => a + b, 0)
   let line = `flat done: filled ${f.filled} hole${f.filled === 1 ? '' : 's'}`
   if (f.totalBumps > 0) line += `, shaved ${f.shaved} bump${f.shaved === 1 ? '' : 's'}`
-  if (left > 0) line += `, ${left} left (${why || 'around you'})`
+  if (left > 0) line += `, ${left} left (${leftWhy})`
   if (skipped > 0) {
     const parts = Object.entries(f.skip).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
     line += `, skipped ${skipped}: ${parts.join(', ')}`
@@ -633,6 +655,20 @@ function scanTick(bot, ctx, f) {
   else if (f.total === 0) f.phase = 'shave'
 }
 
+// Step aside from a cell the bot itself blocks: fixed direction per column
+// and a stable goal key, so a multi-tick sidestep never reverses mid-walk
+// (round-1 core-2/body-3). The caller counts attempts and skips when wedged.
+function sidestep(bot, ctx, h, bp, x, y, z, tag) {
+  const step = SIDESTEPS[Math.abs(h.x * 7 + h.z * 13) % SIDESTEPS.length]
+  const key = `${tag}:${x},${y},${z}`
+  if (key !== ctx.lastGoalKey) {
+    try {
+      bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
+    } catch (_) { return }
+    ctx.lastGoalKey = key
+  }
+}
+
 function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
   ctx.placeInFlight = true
   ;(async () => {
@@ -660,6 +696,11 @@ function digFlight(bot, ctx, f, h, block) {
   const at = { x: block.position.x, y: block.position.y, z: block.position.z }
   ;(async () => {
     try {
+      // Stone by hand takes ~7.5 s and drops nothing; the harvest tool
+      // (forage.js pattern) keeps the job fast and banks the drops.
+      let tool = null
+      try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
       await bot.dig(block)
       h.pickup = at // walk the drop into the inventory (gather pattern)
       f.lastProgressTick = f.ticks
@@ -725,6 +766,15 @@ function endDig(bot, ctx, f, resume) {
   if (resume) {
     f.phase = 'fill'
     f.lastProgressTick = f.ticks
+    return
+  }
+  // Shaving needs no fill blocks: fall through to the bumps instead of
+  // ending the episode, and keep the reason for the leftover holes (body-5).
+  if (f.bumps.length > 0) {
+    f.phase = 'shave'
+    f.abortWhy = 'no fill blocks'
+    f.lastProgressTick = f.ticks
+    say(bot, `no fill blocks, shaving ${f.bumps.length} bumps first`)
     return
   }
   finish(bot, ctx, f, 'no fill blocks')
@@ -847,6 +897,12 @@ function fillTick(bot, ctx, f, bp) {
   f.ticks++
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
+    if (f.bumps.length > 0) {
+      f.phase = 'shave'
+      f.abortWhy = 'stalled'
+      f.lastProgressTick = f.ticks
+      return
+    }
     finish(bot, ctx, f, 'stalled')
     return
   }
@@ -878,22 +934,14 @@ function fillTick(bot, ctx, f, bp) {
   const playerIn = cellOccupiedByPlayer(bot, cx, cy, cz)
   if (selfIn && !playerIn) {
     // Standing in our own cap cell (a 1-deep trench floor is a normal place
-    // goal parking spot): step aside so the cap can land. The offset rotates
-    // with the attempt count; a bot that cannot move skips the hole instead
-    // of orbiting it.
+    // goal parking spot): step aside so the cap can land; a bot that cannot
+    // move skips the hole instead of orbiting it.
     h.selfOcc = (h.selfOcc || 0) + 1
     if (h.selfOcc > SELF_OCC_LIMIT) {
       shiftSkip(f, 'occupied')
       return
     }
-    const step = SIDESTEPS[(h.selfOcc - 1) % SIDESTEPS.length]
-    const key = `flat-side:${cx},${cy},${cz}:${h.selfOcc}`
-    if (key !== ctx.lastGoalKey) {
-      try {
-        bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
-      } catch (_) { /* retry next tick */ return }
-      ctx.lastGoalKey = key
-    }
+    sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-side')
     return
   }
   if (playerIn) {
@@ -1035,7 +1083,7 @@ function shaveTick(bot, ctx, f, bp) {
     const key = `flat-shave-pickup:${h.pickup.x},${h.pickup.y},${h.pickup.z}`
     if (key !== ctx.lastGoalKey) {
       try {
-        bot.pathfinder.setGoal(new goals.GoalBlock(h.pickup.x, h.pickup.y, h.pickup.z), false)
+        bot.pathfinder.setGoal(new goals.GoalNear(h.pickup.x, h.pickup.y, h.pickup.z, 1), false)
       } catch (_) { /* retry next tick */ return }
       ctx.lastGoalKey = key
       h.stalls = 0
@@ -1076,6 +1124,7 @@ function shaveTick(bot, ctx, f, bp) {
     }
     break
   }
+  if (y < h.y) h.selfOcc = 0 // new level, fresh sidestep budget (core-2)
   h.y = y
   if (y <= f.level) {
     shiftBumpDone(f)
@@ -1083,6 +1132,15 @@ function shaveTick(bot, ctx, f, bp) {
   }
   const target = cellAt(bot, h.x, y, h.z)
   if (target === 'liquid') {
+    shiftBumpSkip(f, 'water')
+    return
+  }
+  const leak = liquidNear(bot, h.x, y, h.z)
+  if (leak === 'lava') {
+    shiftBumpSkip(f, 'lava')
+    return
+  }
+  if (leak === 'water') {
     shiftBumpSkip(f, 'water')
     return
   }
@@ -1103,21 +1161,15 @@ function shaveTick(bot, ctx, f, bp) {
   const selfThreat = threatenedSelf(bot, h.x, y, h.z)
   const playerThreat = threatenedByPlayer(bot, h.x, y, h.z)
   if (selfThreat && !playerThreat) {
-    // Standing on the dig target (normal after climbing the bump): step
-    // aside; a wedged bot skips the column instead of orbiting it.
+    // Standing on the dig target (normal after climbing the bump, or after
+    // a pickup parked on the column): step aside; a wedged bot skips the
+    // column instead of orbiting it.
     h.selfOcc = (h.selfOcc || 0) + 1
     if (h.selfOcc > SELF_OCC_LIMIT) {
       shiftBumpSkip(f, 'occupied')
       return
     }
-    const step = SIDESTEPS[(h.selfOcc - 1) % SIDESTEPS.length]
-    const key = `flat-shave-side:${h.x},${y},${h.z}:${h.selfOcc}`
-    if (key !== ctx.lastGoalKey) {
-      try {
-        bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
-      } catch (_) { /* retry next tick */ return }
-      ctx.lastGoalKey = key
-    }
+    sidestep(bot, ctx, h, bp, h.x, y, h.z, 'flat-shave-side')
     return
   }
   if (playerThreat) {
@@ -1132,7 +1184,10 @@ function shaveTick(bot, ctx, f, bp) {
   const key = `flat-shave:${h.x},${y},${h.z}`
   if (key !== ctx.lastGoalKey) {
     try {
-      bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 2), false)
+      // Range 4: a bump up to ~4 above the feet is dug from the ground, so
+      // the pathfinder only climbs (never towers with scaffold) for taller
+      // isolated columns (core-5). The REACH_DIG check below stays the gate.
+      bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 4), false)
     } catch (_) { /* retry next tick */ return }
     const prevKey = ctx.lastGoalKey
     ctx.lastGoalKey = key
@@ -1246,6 +1301,7 @@ module.exports.isDiggable = isDiggable
 module.exports.DIG_ALLOWLIST = [...DIG_ALLOWLIST]
 module.exports.isStructureMarker = isStructureMarker
 module.exports.structureNear = structureNear
+module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
 module.exports.resumeLine = resumeLine
 module.exports.DIG_ATTEMPTS = DIG_ATTEMPTS

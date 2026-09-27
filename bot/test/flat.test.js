@@ -555,6 +555,9 @@ describe('flat behaviour', () => {
       if (f.phase === 'fill' && f.holes.length > 0) {
         const h = f.holes[0]
         bot.entity.position = pos(h.x + 2, 64, h.z)
+      } else if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
       }
       flat(bot, ctx, null, null)
       await settle()

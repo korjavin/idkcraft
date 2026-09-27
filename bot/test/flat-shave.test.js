@@ -10,7 +10,7 @@ const { createTicker } = require('../src/index')
 const flat = require('../src/behaviours/flat')
 const {
   detectBumps, isDiggable, DIG_ALLOWLIST, isStructureMarker, structureNear,
-  threatenedSelf, threatenedByPlayer, resumeLine, startEpisode,
+  threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear,
 } = flat
 
 function pos(x, y, z) {
@@ -62,9 +62,9 @@ const DIRT_REGISTRY = {
   blocksByName: { dirt: { id: 1 }, grass_block: { id: 2 }, coarse_dirt: { id: 3 }, stone: { id: 4 } },
 }
 
-function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, failDig = false, moving = false, canDig = true, registry = null, dirtSpots = [] } = {}) {
+function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, failDig = false, moving = false, canDig = true, registry = null, dirtSpots = [], bestTool = null } = {}) {
   const chats = []
-  const calls = { goals: [], places: [], digs: [], pickups: [] }
+  const calls = { goals: [], places: [], digs: [], pickups: [], equips: [] }
   const bot = {
     username: 'IdkBot',
     chats,
@@ -87,12 +87,13 @@ function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, failDi
     _moving: !!moving,
     pathfinder: {
       goal: null,
+      bestHarvestTool: bestTool == null ? undefined : () => bestTool,
       isMoving: () => bot._moving,
       setGoal: (g) => { calls.goals.push(g); bot.pathfinder.goal = g },
       stop: () => {},
       setMovements: () => {},
     },
-    equip: async (item, dest) => { bot.held = item.name },
+    equip: async (item, dest) => { calls.equips.push(item && item.name); bot.held = item && item.name },
     dig: async (b) => {
       calls.digs.push(b.name)
       if (failDig) throw new Error('interrupted')
@@ -147,10 +148,10 @@ describe('shave plan: detectBumps', () => {
 
 describe('shave safety: dig allowlist', () => {
   it('digs natural terrain, keeps ores/wood/built/valuable', () => {
-    for (const n of ['dirt', 'grass_block', 'stone', 'cobblestone', 'gravel', 'sand', 'deepslate', 'tuff', 'snow', 'ice', 'netherrack', 'end_stone']) {
+    for (const n of ['dirt', 'grass_block', 'stone', 'gravel', 'sand', 'deepslate', 'tuff', 'snow', 'ice', 'netherrack', 'end_stone']) {
       assert.equal(isDiggable(n), true, n)
     }
-    for (const n of ['diamond_ore', 'iron_ore', 'coal_ore', 'ancient_debris', 'oak_log', 'oak_planks', 'oak_door', 'white_bed', 'chest', 'furnace', 'glass', 'glass_pane', 'dirt_path', 'farmland', 'bedrock', 'obsidian', 'torch', 'oak_leaves', 'water', 'air', null]) {
+    for (const n of ['diamond_ore', 'iron_ore', 'coal_ore', 'ancient_debris', 'oak_log', 'oak_planks', 'oak_door', 'white_bed', 'chest', 'furnace', 'glass', 'glass_pane', 'dirt_path', 'farmland', 'bedrock', 'obsidian', 'torch', 'oak_leaves', 'cobblestone', 'mossy_cobblestone', 'cobbled_deepslate', 'snow_block', 'water', 'air', null]) {
       assert.equal(isDiggable(n), false, String(n))
     }
   })
@@ -202,6 +203,15 @@ describe('shave safety: under-feet threat', () => {
     assert.equal(threatenedByPlayer(bot, 0, 63, 0), false)
     assert.equal(threatenedSelf({}, 0, 63, 0), false)
     assert.equal(threatenedByPlayer({}, 0, 63, 0), false)
+  })
+
+  it('catches a player straddling the target edge', () => {
+    // Centre floors to column 2 but the 0.6 hitbox stands on column 1 too.
+    const bot = { players: { P: { entity: { position: pos(2.1, 65, 0) } } } }
+    assert.equal(threatenedByPlayer(bot, 1, 64, 0), true)
+    assert.equal(threatenedByPlayer(bot, 2, 64, 0), true)
+    assert.equal(threatenedByPlayer(bot, 3, 64, 0), false)
+    assert.equal(threatenedByPlayer(bot, 0, 64, 0), false)
   })
 })
 
@@ -332,14 +342,16 @@ describe('shave behaviour', () => {
     const world = makeWorld({})
     world.set(1, 64, 0, 'dirt')
     world.set(2, 64, 0, 'dirt')
+    world.set(4, 64, 0, 'dirt')
     const { bot, ctx } = started(world)
-    flat(bot, ctx, null, null); await settle() // scan: 2 bumps
-    assert.equal(ctx.flat.bumps.length, 2)
+    flat(bot, ctx, null, null); await settle() // scan: 3 bumps
+    assert.equal(ctx.flat.bumps.length, 3)
     world.set(1, 64, 0, 'water') // flooded before the shave reaches it
     await drive(bot, ctx, 40)
     assert.equal(ctx.flat, null)
-    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'air', 'sane bump shaved')
-    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 water')), bot.chats.join('\n'))
+    assert.equal(world.blockAt({ x: 4, y: 64, z: 0 }).name, 'air', 'dry bump shaved')
+    // The flooded column and its water-banked neighbour are both skipped.
+    assert.ok(bot.chats.some((c) => c.includes('skipped 2: 2 water')), bot.chats.join('\n'))
   })
 
   it('skips an unloaded bump column as unreachable', async () => {
@@ -447,5 +459,140 @@ describe('shave safety: restock never digs under a player', () => {
     assert.equal(ctx.flat.phase, 'dig')
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [30, 0], 'dirt under the player skipped')
+  })
+})
+
+describe('shave round-1 fixes', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  it('shaves a tall column even when every pickup parks on top', async () => {
+    const world = makeWorld({})
+    for (let y = 64; y <= 71; y++) world.set(1, y, 0, 'dirt') // 8 high
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    let parked = false
+    for (let i = 0; i < 200 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        // Simulate the pickup walk ending on the column, then stepping off.
+        if (h.pickup && !parked) { bot.entity.position = pos(h.x, h.y + 1, h.z); parked = true }
+        else { bot.entity.position = pos(h.x + 2, h.y, h.z); if (!h.pickup) parked = false }
+      }
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'tall column completes, not skipped occupied')
+    for (let y = 64; y <= 71; y++) {
+      assert.equal(world.blockAt({ x: 1, y, z: 0 }).name, 'air', `level ${y} dug`)
+    }
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('equips the harvest tool before the shave dig', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'stone')
+    const pick = { name: 'iron_pickaxe', count: 1 }
+    const bot = mockBot(world, { items: [pick], bestTool: pick })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // shave: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived: dig flight
+    assert.deepEqual(bot.calls.equips, ['iron_pickaxe'], 'tool equipped before the dig')
+    assert.equal(bot.calls.digs.length, 1)
+  })
+
+  it('liquidNear reports face-neighbour water and lava', () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'water')
+    world.set(0, 64, 0, 'lava')
+    const bot = mockBot(world, {})
+    assert.equal(liquidNear(bot, 1, 64, 0), 'water')
+    assert.equal(liquidNear(bot, -1, 64, 0), 'lava')
+    assert.equal(liquidNear(bot, 10, 64, 10), null)
+  })
+
+  it('keeps a bump banked by water or lava', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt')
+    world.set(2, 64, 0, 'water')
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 20 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'dirt', 'bank not dug')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 water')), bot.chats.join('\n'))
+
+    const world2 = makeWorld({})
+    world2.set(1, 64, 0, 'dirt')
+    world2.set(1, 64, 1, 'lava')
+    const bot2 = mockBot(world2, { items: [] })
+    const ctx2 = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 20 && ctx2.flat; i++) {
+      const f = ctx2.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) bot2.entity.position = pos(3, 64, 0)
+      flat(bot2, ctx2, null, null); await settle()
+    }
+    assert.equal(ctx2.flat, null)
+    assert.ok(bot2.chats.some((c) => c.includes('skipped 1: 1 lava')), bot2.chats.join('\n'))
+  })
+
+  it('falls through to shaving when fill runs out of blocks', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air') // hole, no blocks, no dirt registry
+    world.set(2, 64, 0, 'dirt') // bump shaved anyway
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived, no item -> dig
+    assert.equal(ctx.flat.phase, 'dig')
+    flat(bot, ctx, null, null); await settle() // dig: no dirt -> shave, not finish
+    assert.equal(ctx.flat.phase, 'shave')
+    for (let i = 0; i < 40 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      }
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'air', 'bump shaved')
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'air', 'hole honestly left')
+    assert.ok(bot.chats.some((c) => c.includes('1 left (no fill blocks)')), bot.chats.join('\n'))
+  })
+
+  it('falls through to shaving when fill stalls', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(2, 64, 0, 'dirt')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    ctx.flat.ticks = 200
+    ctx.flat.lastProgressTick = 0
+    flat(bot, ctx, null, null); await settle() // backstop -> shave, not finish
+    assert.equal(ctx.flat.phase, 'shave')
+    for (let i = 0; i < 40 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      } else if (f.phase === 'fill' && f.holes.length > 0) {
+        bot.entity.position = pos(3, 64, 0)
+      }
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('1 left (stalled)')), bot.chats.join('\n'))
   })
 })
