@@ -36,13 +36,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(NEED_PLANKS, 48)
   })
 
-  it('menu has all eleven steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'light', 'rest', 'stay'])
+  it('menu has all twelve steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gohome', 'light', 'rest', 'stay', 'stockpile'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -92,9 +92,9 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near')
-    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none' }).includes('unlit=few'), true)
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes')
+    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no' }).includes('unlit=few'), true)
   })
 })
 
@@ -189,7 +189,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   const memCtx = (cells, items) => {
     const bot = goalBot({ items: items || [] })
-    const ctx = { home: { built: true } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } } }
     resources.noteSpots(ctx, cells, 1000)
     return { bot, ctx }
   }
@@ -214,7 +214,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   it('nothing known routes to explore once built', () => {
     const bot = goalBot()
-    const ctx = { home: { built: true } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } } }
     const facts = goalFacts(bot, ctx)
     assert.equal(facts.known, 'none')
     assert.equal(F('explore', facts), true)
@@ -253,6 +253,15 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     assert.equal(F('deliver', facts), false)
     assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'forage')
   })
+  it('a batched haul with nobody online banks in the chest (atl.14)', () => {
+    const { bot, ctx } = memCtx(
+      [{ x: 5, y: 60, z: 0, name: 'iron_ore' }],
+      [{ name: 'stone_pickaxe', count: 1 }, { name: 'raw_iron', count: 16 }])
+    ctx.haul = { raw_iron: 16 }
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.surplus, 'yes')
+    assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'stockpile')
+  })
   it('criteria name one fact each', () => {
     assert.ok(STEP_CRITERIA.forage.includes('known is near'))
     assert.ok(STEP_CRITERIA.deliver.includes('haul is waiting'))
@@ -260,7 +269,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   it('decide picks forage when a find is known', async () => {
     const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
-    const ctx = { home: { built: true }, brain: {} }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {} }
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     const r = await decide(bot, ctx)
     assert.deepEqual(r, { action: 'forage', sprint: false, source: 'goal-fsm' })
@@ -287,8 +296,9 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
   it('failed gather routes to explore once the house stands', async () => {
     // atl.2 menu: the atLogs final outlives the home transition, so the
     // FSM takes explore instead of re-picking gather or idling on rest.
+    // (9 held logs sit under the atl.14 surplus batch, so no banking.)
     const bot = logsBot(9)
-    const ctx = { home: { built: true }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'explore')
   })
@@ -341,7 +351,7 @@ describe('atl.4 exemptions: self-advancing failures never hold', () => {
     // Holding explore would deadlock the spiral after one river: the failed
     // point is visited and the next pick is a new target by construction.
     const bot = goalBot()
-    const ctx = { home: { built: true }, brain: {}, step: 'explore', stepStatus: 'failed:unreachable' }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, step: 'explore', stepStatus: 'failed:unreachable' }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'explore')
   })
@@ -824,6 +834,9 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
     const ctx2 = { home: { table: pos(2, 64, 0) }, step: 'craft', stepStatus: 'running', goalText: 'old', craftInFlight: true }
     const r2 = await decide(bot, ctx2)
     assert.deepEqual(r2, { action: 'craft', sprint: false, source: 'goal-fsm' })
+    const ctx3 = { home: { table: pos(2, 64, 0) }, step: 'stockpile', stepStatus: 'running', goalText: 'old', stockpileInFlight: true }
+    const r3 = await decide(bot, ctx3)
+    assert.deepEqual(r3, { action: 'stockpile', sprint: false, source: 'goal-fsm' })
   })
 })
 
@@ -933,5 +946,65 @@ describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
     const boom = { source: 'laya', ask: async () => { throw new Error('asked with no options') } }
     const r = await chooseStep(boom, facts, [])
     assert.deepEqual(r, { step: 'rest', source: 'only-option', fsm: 'rest', model: null })
+  })
+})
+
+describe('stockpile menu (idkcraft-atl.14)', () => {
+  const built = { time: 'day', home: 'built', haul: 'none', player: 'none', chest: 'no', chestTodo: 'place', surplus: 'no', chestParked: false }
+  it('sits in STEP_ORDER right after deliver', () => {
+    assert.equal(STEP_ORDER.indexOf('stockpile'), STEP_ORDER.indexOf('deliver') + 1)
+  })
+  it('feasible to place the chest, then only with surplus', () => {
+    assert.equal(MENU.stockpile.feasible({ ...built }), true)
+    assert.equal(MENU.stockpile.feasible({ ...built, chestTodo: 'adopt' }), true)
+    assert.equal(MENU.stockpile.feasible({ ...built, chestTodo: 'none' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes', surplus: 'yes' }), true)
+  })
+  it('banks the waiting haul with nobody online, yields it to deliver otherwise', () => {
+    assert.equal(MENU.stockpile.feasible({ ...built, haul: 'waiting', player: 'none' }), true)
+    assert.equal(MENU.stockpile.feasible({ ...built, haul: 'waiting', player: 'near' }), false)
+    assert.equal(MENU.deliver.feasible({ haul: 'waiting', player: 'none' }), false)
+    assert.equal(MENU.deliver.feasible({ haul: 'waiting', player: 'near' }), true)
+  })
+  it('yields to the unbuilt house and a fresh full park', () => {
+    assert.equal(MENU.stockpile.feasible({ ...built, home: 'site' }), false)
+    assert.equal(MENU.stockpile.feasible({ ...built, chest: 'yes', surplus: 'yes', chestParked: true }), false)
+  })
+  it('stepWhy mirrors the rule branch for branch', () => {
+    const bot = goalBot()
+    assert.equal(stepWhy('stockpile', { ...built, home: 'site' }, bot, {}, ''), 'stockpile: house not built yet')
+    assert.equal(stepWhy('stockpile', { ...built, haul: 'waiting', player: 'near' }, bot, {}, ''), 'stockpile: haul waits for its player')
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes', surplus: 'yes', chestParked: true }, bot, {}, ''), 'stockpile: chest full')
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes' }, bot, {}, ''), 'stockpile: nothing to bank')
+    assert.equal(stepWhy('stockpile', { ...built, chestTodo: 'none' }, bot, {}, ''), 'stockpile: no chest to adopt, nothing to place it with')
+  })
+  it('goalFacts reads chest, todo and batched surplus', () => {
+    const bot = goalBot({ items: [{ name: 'oak_log', count: 20 }, { name: 'oak_planks', count: 3 }], at: pos(5, 64, 1) })
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    const f = goalFacts(bot, ctx)
+    assert.equal(f.chest, 'no')
+    assert.equal(f.chestTodo, 'none') // no blockAt: no adopt; 3 planks: no place
+    assert.equal(f.surplus, 'yes') // 23 bankable past the 16 batch
+    assert.equal(goalFacts(goalBot({ items: [{ name: 'oak_log', count: 15 }] }), ctx).surplus, 'no')
+    ctx.home.chest = { x: 5, y: 64, z: 1 }
+    assert.equal(goalFacts(bot, ctx).chest, 'yes')
+    ctx.chestFull = true
+    ctx.chestFullAt = Date.now() // fresh stamp parks
+    assert.equal(goalFacts(bot, ctx).chestParked, true)
+    ctx.chestFullAt = Date.now() - 11 * 60 * 1000 // stale stamp re-arms near home
+    assert.equal(goalFacts(bot, ctx).chestParked, false)
+    const far = goalBot({ items: [{ name: 'oak_log', count: 20 }], at: pos(200, 64, 200) })
+    assert.equal(goalFacts(far, ctx).chestParked, true) // stale stamp still parks far away
+    ctx.home.chest = null // a stale flag never parks an unadopted chest
+    assert.equal(goalFacts(bot, ctx).chestParked, false)
+    ctx.home.chest = { x: 5, y: 64, z: 1 }
+    ctx.chestFull = false
+    ctx.chestErrorAt = Date.now() // a blocked open seals like a full chest
+    assert.equal(goalFacts(bot, ctx).chestParked, true)
+    assert.equal(stepWhy('stockpile', { ...built, chest: 'yes', chestParked: true }, bot, ctx, ''), 'stockpile: chest would not open')
+  })
+  it('criteria names the step', () => {
+    assert.match(STEP_CRITERIA.stockpile, /home chest/)
   })
 })

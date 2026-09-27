@@ -55,6 +55,25 @@ async function flush() {
   await new Promise((resolve) => setImmediate(resolve))
 }
 
+// xg9: paced batches take real time (60 ms/op); poll for N craft calls.
+async function untilCrafts(bot, n, timeoutMs = 8000) {
+  const t0 = Date.now()
+  while (bot.calls.craft.length < n) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`craft calls stuck at ${bot.calls.craft.length}, want ${n}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await flush()
+}
+
+async function untilCount(get, n, timeoutMs = 8000) {
+  const t0 = Date.now()
+  while (get() < n) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`count stuck at ${get()}, want ${n}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await flush()
+}
+
 describe('craft step', () => {
   it('(a) 3 logs -> batched single-log planks calls, one chat with the total', async () => {
     const bot = mockBot({
@@ -64,7 +83,7 @@ describe('craft step', () => {
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3) // the batch loops count=1 calls
     for (const c of bot.calls.craft) {
       assert.deepEqual(c.recipe, recipeFor('oak_planks', 4))
@@ -85,7 +104,7 @@ describe('craft step', () => {
     })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3) // batch of 3, all planks (never the table)
     for (const c of bot.calls.craft) assert.deepEqual(c.recipe, recipeFor('oak_planks', 4))
     bot.restoreError()
@@ -214,10 +233,10 @@ describe('craft step', () => {
     await flush()
     assert.equal(ctx.craftInFlight, true) // held between iterations (round-2)
     craft(bot, ctx, null, {}) // a re-entrant tick must not start a second op
-    await flush()
+    await untilCount(() => calls, 2)
     assert.equal(calls, 2) // only the loop's own next iteration
     release()
-    await flush()
+    await untilCount(() => calls, 3) // op 3 starts after the pace gap
     release()
     await flush()
     assert.equal(calls, 3)
@@ -279,7 +298,7 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
       recipes: { oak_planks: recipeFor('oak_planks'), birch_planks: recipeFor('birch_planks') },
     })
     craft(bot, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(bot, 5)
     assert.equal(bot.calls.craft.length, 5)
     assert.ok(bot.lines.join(' ').match(/crafted 5 birch_planks/))
     bot.restoreError()
@@ -289,7 +308,7 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
       recipes: { oak_planks: recipeFor('oak_planks'), birch_planks: recipeFor('birch_planks') },
     })
     craft(tie, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(tie, 3)
     assert.ok(tie.lines.join(' ').match(/crafted 3 birch_planks/), 'tie: birch before oak')
     tie.restoreError()
   })
@@ -392,7 +411,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
       recipes: { oak_planks: {} },
     })
     craft(bot, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3)
     assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
     bot.restoreError()
@@ -411,8 +430,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     process.on('unhandledRejection', onRej)
     try {
       craft(bot, ctx, null, {})
-      await flush()
-      await flush()
+      await untilCrafts(bot, 3)
     } finally {
       process.removeListener('unhandledRejection', onRej)
     }
@@ -489,7 +507,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
       recipes: { oak_planks: recipeFor('oak_planks') },
     })
     craft(bot, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3)
     assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
     bot.restoreError()
@@ -562,7 +580,7 @@ describe('craft op residuals (idkcraft-zaw)', () => {
     Object.defineProperty(slots, '1', { get() { throw new Error('slot gone') } })
     bot.inventory = { slots, items: () => bot._items, selectedItem: null }
     craft(bot, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3, 'no stranded bonus, no throw')
     assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
     bot.restoreError()
@@ -585,7 +603,7 @@ describe('craft stranded residuals (idkcraft-zaw)', () => {
     bot.inventory = { slots, items: () => bot._items, selectedItem: { name: 'oak_log' } }
     bot.clickWindow = async (slot) => { bot.inventory.slots[slot] = null }
     craft(bot, freshCtx(), null, {})
-    await flush()
+    await untilCrafts(bot, 3)
     assert.equal(bot.calls.craft.length, 3, '1 visible + grid 1 + cursor 1')
     assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
     bot.restoreError()
