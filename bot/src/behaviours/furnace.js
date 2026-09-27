@@ -36,6 +36,18 @@ function dist3(a, b) {
 
 function fail(ctx, reason) {
   ctx.stepStatus = `failed:${reason}`
+  // Slice-C contract: the outcome stays readable on ctx.furnace.result
+  // (gear wraps stepStatus, which furnace would otherwise end).
+  try {
+    if (ctx.furnace) {
+      ctx.furnace.result = `failed:${reason}`
+      ctx.furnace.settled = true
+    }
+  } catch (_) { /* flag best-effort */ }
+}
+
+function freshRun() {
+  return { phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, win: null, settled: false, result: null }
 }
 
 // Verified crafting table (craft pattern): the claim plus a live block
@@ -79,11 +91,15 @@ function fuelPieces(oreTotal, fuelTotal) {
   return Math.min(spendable, Math.ceil(oreTotal / ORE_PER_FUEL))
 }
 
-function walkTo(bot, ctx, key, p) {
+// Walk one leg with a give-up: an unreachable table/furnace fails the
+// step instead of idling here forever (equip walkWaits shape).
+function walkTo(bot, ctx, f, key, p, reason) {
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 3), false)
     ctx.lastGoalKey = key
   }
+  f.walkTicks = (f.walkTicks || 0) + 1
+  if (f.walkTicks > 20) fail(ctx, reason)
 }
 
 // Craft one furnace at the verified table (table block always passed:
@@ -95,9 +111,10 @@ function doCraft(bot, ctx, f) {
   const st = tableBlock(bot, ctx)
   if (!st) { fail(ctx, 'no-table'); return }
   if (dist3(bp, st.pos) > craftMod.TABLE_REACH) {
-    walkTo(bot, ctx, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos)
+    walkTo(bot, ctx, f, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-unreachable')
     return // walk into reach, craft on a later tick
   }
+  f.walkTicks = 0
   const found = craftMod.recipes(bot, 'furnace', st.block)
   if (!found || found.length === 0) { fail(ctx, 'no-furnace-recipe'); return }
   if (typeof bot.craft !== 'function') { fail(ctx, 'no-craft-api'); return }
@@ -183,11 +200,13 @@ async function shut(bot, f) {
 function finishSmelt(bot, ctx, f, status) {
   void shut(bot, f)
   ctx.furnaceInFlight = false
+  try { f.settled = true } catch (_) { /* flag best-effort */ }
   if (status === 'done') {
     if ((f.smelted || 0) > 0) {
       try { console.log(`smelted ${f.smelted} iron`) } catch (_) { /* log best-effort */ }
     }
     ctx.stepStatus = 'done'
+    try { f.result = 'done' } catch (_) { /* flag best-effort */ }
   } else {
     fail(ctx, status)
   }
@@ -210,7 +229,10 @@ function doSmelt(bot, ctx, f, spot) {
       const outNow = slotCount(win.outputItem())
       const inN = slotCount(win.inputItem())
       const fuelN = slotCount(win.fuelItem())
-      const burning = win.progress != null
+      // Live burn level: progress sticks at its last fraction once the
+      // property packets arrive, so progress != null is true even cold.
+      // fuel drops to 0 on burnout (core-2).
+      const burning = typeof win.fuel === 'number' && win.fuel > 0
       let took = false
       if (outNow > 0) {
         const got = await win.takeOutput()
@@ -226,27 +248,50 @@ function doSmelt(bot, ctx, f, spot) {
       const invOre = invCount(bot, 'raw_iron')
       const invCoal = invCount(bot, 'coal')
       const invChar = invCount(bot, 'charcoal')
-      // Top up input (room in the slot) and fuel (reserve-capped).
+      // Top up input (room in the slot) and fuel (reserve-capped). The
+      // burn in flight counts as a piece (core-5): without it every
+      // ignition parks one extra coal that never burns this run.
       const oreLoad = Math.min(invOre, 64 - inN)
-      const fuelLoad = Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN)
+      const fuelLoad = Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - (burning ? 1 : 0))
       if (oreLoad > 0) {
         const id = craftMod.itemId(bot, 'raw_iron')
         if (id == null) throw new Error('no-ore-id')
         await win.putInput(id, null, oreLoad)
       }
       if (fuelLoad > 0) {
-        let left = fuelLoad
-        const coalN = Math.min(invCoal, left)
-        if (coalN > 0) {
+        // One fuel kind per cycle (core-1): coal and charcoal share the
+        // single fuel slot, and transfer throws destination-full into a
+        // slot holding the other kind. A holding slot tops up its own
+        // kind only; an empty slot takes whichever single kind covers
+        // the need (coal first), and a short kind waits for burn-down.
+        const fuelSlot = typeof win.fuelItem === 'function' ? win.fuelItem() : null
+        const fuelName = fuelSlot && fuelSlot.name
+        if (!fuelName) {
+          if (invCoal >= fuelLoad) {
+            const id = craftMod.itemId(bot, 'coal')
+            if (id == null) throw new Error('no-coal-id')
+            await win.putFuel(id, null, fuelLoad)
+          } else if (invChar >= fuelLoad) {
+            const id = craftMod.itemId(bot, 'charcoal')
+            if (id == null) throw new Error('no-char-id')
+            await win.putFuel(id, null, fuelLoad)
+          } else if (invCoal > 0) {
+            const id = craftMod.itemId(bot, 'coal')
+            if (id == null) throw new Error('no-coal-id')
+            await win.putFuel(id, null, invCoal)
+          } else if (invChar > 0) {
+            const id = craftMod.itemId(bot, 'charcoal')
+            if (id == null) throw new Error('no-char-id')
+            await win.putFuel(id, null, Math.min(invChar, fuelLoad))
+          }
+        } else if (fuelName === 'coal' && invCoal > 0) {
           const id = craftMod.itemId(bot, 'coal')
           if (id == null) throw new Error('no-coal-id')
-          await win.putFuel(id, null, coalN)
-          left -= coalN
-        }
-        if (left > 0) {
+          await win.putFuel(id, null, Math.min(invCoal, fuelLoad))
+        } else if (fuelName === 'charcoal' && invChar > 0) {
           const id = craftMod.itemId(bot, 'charcoal')
           if (id == null) throw new Error('no-char-id')
-          await win.putFuel(id, null, Math.min(invChar, left))
+          await win.putFuel(id, null, Math.min(invChar, fuelLoad))
         }
       }
       // Settle: no ore anywhere = done; ore stranded with nothing
@@ -272,7 +317,9 @@ function furnace(bot, ctx, target, state) {
   if (ctx.stepStatus === 'done' || (ctx.stepStatus && String(ctx.stepStatus).startsWith('failed:'))) return // terminal: no second smelted line
   const bp = botPos(bot)
   if (!bp) return
-  if (!ctx.furnace) ctx.furnace = { phase: 'ensure', smelted: 0, idleTicks: 0 }
+  // A settled run never resumes spent: the next pick starts fresh
+  // counters (core-4: equip's resetRunCounters shape).
+  if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun()
   const f = ctx.furnace
   const spot = furnaceSpot(bot, ctx)
   if (!spot) {
@@ -283,14 +330,23 @@ function furnace(bot, ctx, target, state) {
   }
   if (dist3(bp, spot) > FURNACE_REACH) {
     f.phase = 'walk'
-    walkTo(bot, ctx, `furnace-walk:${spot.x},${spot.y},${spot.z}`, spot)
+    walkTo(bot, ctx, f, `furnace-walk:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
     return // walk into reach, smelt on a later tick
   }
+  f.walkTicks = 0
   f.phase = 'smelt'
   doSmelt(bot, ctx, f, spot)
 }
 
+// Slice-C readiness: the verified claim or null. Retracts ghosts (same
+// path furnace() walks, so the check cannot rot); null reads keep the
+// claim (unloaded chunk, never gone).
+function furnaceReady(bot, ctx) {
+  return furnaceSpot(bot, ctx)
+}
+
 module.exports = furnace
+module.exports.furnaceReady = furnaceReady
 module.exports.fuelPieces = fuelPieces
 module.exports.FURNACE_REACH = FURNACE_REACH
 module.exports.ORE_PER_FUEL = ORE_PER_FUEL

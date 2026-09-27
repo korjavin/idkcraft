@@ -12,7 +12,8 @@ const IDS = { furnace: 61, raw_iron: 100, coal: 101, charcoal: 102, cobblestone:
 function mockWindow(slots, log) {
   return {
     slots,
-    progress: null,
+    progress: 0, // live-like: property packets arrive as 0/0, never null
+    fuel: 0,
     inputItem() { return this.slots[0] || null },
     fuelItem() { return this.slots[1] || null },
     outputItem() { return this.slots[2] || null },
@@ -29,9 +30,11 @@ function mockWindow(slots, log) {
       this.slots[0] = { name: 'raw_iron', count: (cur ? cur.count : 0) + count }
     },
     async putFuel(type, meta, count) {
-      log.push(['putFuel', type, count])
-      const cur = this.slots[1]
       const name = type === IDS.charcoal ? 'charcoal' : 'coal'
+      const cur = this.slots[1]
+      // transfer fidelity: one fuel kind per slot, else destination-full.
+      if (cur && cur.name !== name) throw new Error('destination full')
+      log.push(['putFuel', type, count])
       this.slots[1] = { name, count: (cur ? cur.count : 0) + count }
     },
   }
@@ -200,10 +203,11 @@ describe('furnace place + claim', () => {
 
 describe('furnace smelt (load above reserve, take, settle)', () => {
   const SPOT = { '0,64,1': 'furnace' }
-  function smeltBot({ inv, slots, progress = null }) {
+  function smeltBot({ inv, slots, progress = 0, fuel = 0 }) {
     const log = []
     const win = mockWindow(slots, log)
     win.progress = progress
+    win.fuel = fuel
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv, blocks: { ...floorBlocks(), ...SPOT }, window: win })
     return { bot, log, win }
   }
@@ -264,6 +268,7 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
       inv: [],
       slots: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }, null],
       progress: 0.5,
+      fuel: 0.5,
     })
     const ctx = smeltCtx()
     await tick(bot, ctx)
@@ -353,6 +358,91 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     assert.equal(bot.calls.opens, opens, 'no second smelted line, no reopen')
   })
 
+  it('mixed fuel never collides: coal-held slot waits out charcoal', async () => {
+    // Core-1: the slot holds coal, hands hold charcoal — loading now
+    // would throw destination-full, so the cycle waits for burn-down.
+    const { bot, log, win } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'charcoal', count: 6 }],
+      slots: [null, { name: 'coal', count: 2 }, null],
+    })
+    const ctx = smeltCtx()
+    await tick(bot, ctx)
+    assert.ok(!log.some(([op]) => op === 'putFuel'), JSON.stringify(log))
+    assert.equal(ctx.stepStatus, undefined, 'still running, no throw')
+    await assert.rejects(win.putFuel(IDS.charcoal, null, 1), /destination full/, 'mock keeps transfer fidelity')
+  })
+
+  it('empty slot takes the single kind that covers the need', async () => {
+    // Core-1 main case: 64 ore wants 8 pieces; 2 coal cannot cover it
+    // alone, so charcoal goes in whole — never coal-then-charcoal.
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 64 }, { name: 'coal', count: 2 }, { name: 'charcoal', count: 10 }],
+      slots: [null, null, null],
+    })
+    await tick(bot, smeltCtx())
+    const fuels = log.filter(([op]) => op === 'putFuel')
+    assert.equal(fuels.length, 1)
+    assert.equal(fuels[0][1], 102, 'charcoal covers the need whole')
+    assert.equal(fuels[0][2], 8)
+  })
+
+  it('stale progress with dead fuel fails no-fuel, never stalls', async () => {
+    // Core-2: progress sticks at its last fraction on a live window;
+    // only the fuel level tells cold from burning.
+    const { bot } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
+      slots: [{ name: 'raw_iron', count: 8 }, null, null],
+      progress: 0.5,
+      fuel: 0,
+    })
+    const ctx = smeltCtx()
+    await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-fuel')
+  })
+
+  it('the burn in flight counts as a loaded piece', async () => {
+    // Core-5: fuel ignites out of the slot, so fuelN reads 0 while a
+    // piece burns — loading another would park coal past done.
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'coal', count: 6 }],
+      slots: [{ name: 'raw_iron', count: 8 }, null, null],
+      progress: 0.3,
+      fuel: 0.9,
+    })
+    await tick(bot, smeltCtx())
+    assert.ok(!log.some(([op]) => op === 'putFuel'), `no parked extra: ${JSON.stringify(log)}`)
+  })
+
+  it('unreachable table fails after 20 walk ticks', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv: [{ name: 'cobblestone', count: 8 }], blocks: { '10,64,10': 'crafting_table' } })
+    const ctx = { home: { table: { x: 10, y: 64, z: 10 } } }
+    for (let i = 0; i < 21; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:table-unreachable')
+  })
+
+  it('unreachable furnace fails after 20 walk ticks', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '50,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 50, y: 64, z: 0 } } }
+    for (let i = 0; i < 21; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+  })
+
+  it('a settled run never resumes spent', async () => {
+    // Core-4: stall-fail leaves idleTicks at cap and smelted counted;
+    // the next pick starts fresh counters, not an instant fail.
+    const { bot } = smeltBot({
+      inv: [],
+      slots: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }, null],
+    })
+    const ctx = smeltCtx()
+    for (let i = 0; i < 121; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:smelt-stalled')
+    ctx.stepStatus = 'running' // next pick
+    await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running', 'no instant fail on fresh counters')
+    assert.equal(ctx.furnace.idleTicks, 1)
+  })
+
   it('one smelt op per tick: concurrent ticks open once', async () => {
     const { bot } = smeltBot({
       inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 6 }],
@@ -363,5 +453,42 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     furnace(bot, ctx)
     await settle()
     assert.equal(bot.calls.opens, 1)
+  })
+})
+
+describe('furnace slice-C contract (result + readiness)', () => {
+  it('done stamps result, and the next run resets it', async () => {
+    const bot = mockBot({ inv: [], blocks: { '0,64,1': 'furnace' } })
+    const win = mockWindow([null, null, { name: 'iron_ingot', count: 2 }], [])
+    bot.openFurnace = async () => win
+    const ctx = { home: { furnace: { x: 0, y: 64, z: 1 } } }
+    await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.furnace.result, 'done')
+    ctx.stepStatus = 'running' // gear re-picks
+    bot.openFurnace = async () => { throw new Error('no reopen yet') }
+    await tick(bot, ctx)
+    assert.equal(ctx.furnace.result, null, 'fresh run, no stale outcome')
+  })
+
+  it('failures stamp failed:<reason> next to stepStatus', async () => {
+    const bot = mockBot({ inv: [{ name: 'cobblestone', count: 1 }] })
+    const ctx = { home: {} }
+    await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-cobble')
+    assert.equal(ctx.furnace.result, 'failed:no-cobble')
+  })
+
+  it('furnaceReady verifies, retracts ghosts, keeps unloaded', () => {
+    const standing = mockBot({ blocks: { '0,64,1': 'furnace' } })
+    assert.deepEqual(
+      furnace.furnaceReady(standing, { home: { furnace: { x: 0, y: 64, z: 1 } } }),
+      { x: 0, y: 64, z: 1 })
+    const ghostCtx = { home: { furnace: { x: 5, y: 64, z: 5 } } }
+    assert.equal(furnace.furnaceReady(mockBot({ blocks: { '5,64,5': 'air' } }), ghostCtx), null)
+    assert.equal(ghostCtx.home.furnace, undefined, 'ghost retracted')
+    const darkCtx = { home: { furnace: { x: 5, y: 64, z: 5 } } }
+    assert.deepEqual(furnace.furnaceReady(mockBot({}), darkCtx), { x: 5, y: 64, z: 5 })
+    assert.deepEqual(darkCtx.home.furnace, { x: 5, y: 64, z: 5 }, 'unloaded kept')
   })
 })
