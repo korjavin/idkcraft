@@ -44,6 +44,22 @@ const NEAR_PLAYER = 8
 
 const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
+// Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
+// the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
+// works, never ask about digging: hop is feasible only for a level goal
+// (|goalDy| <= 1), where dig_step is never the FSM answer, so the menu loses
+// no climber. A failed hop still escalates to digging: the 4jr exclusion
+// below removes hop from the ask menu first, and shaping is a no-op without
+// it. Stand (/tmp/y34-stand, 45 real menus x2 reps vs laya): agreement
+// 26.7% -> 77.8%, dig picks 37 -> 14, hop picks 1 -> 24. Exported so the
+// rule has one source of truth, like shapeGoalMenu.
+function shapeRecoverMenu(names) {
+  if (names.length > 1 && names.includes('hop_step') && names.includes('dig_step')) {
+    return names.filter((n) => n !== 'dig_step')
+  }
+  return names
+}
+
 // --- world scan helpers (all best-effort: nulls read as free/safe) ---
 
 function botPos(bot) {
@@ -122,9 +138,20 @@ function scanSides(bot) {
   return { walls, free }
 }
 
+// Lava in or around the mount head: digging the cap would open a flow
+// onto the mount, and standing under lava is death either way. Mirrors the
+// executor's dontCreateFlow refusal (liquid above or beside the break).
+function capLavaAt(bot, dx, dz) {
+  return isLava(cellAt(bot, dx, 2, dz)) || isLava(cellAt(bot, dx, 3, dz)) ||
+    isLava(cellAt(bot, dx + 1, 2, dz)) || isLava(cellAt(bot, dx - 1, 2, dz)) ||
+    isLava(cellAt(bot, dx, 2, dz + 1)) || isLava(cellAt(bot, dx, 2, dz - 1))
+}
+
 // A hand-dug staircase cycle (9sh): the side cell at feet level stays as
-// the step to mount, the side cell above it is air or digs by hand, and the
-// head has room to jump. Returns the side [dx, dz] or null.
+// the step to mount, the side cell above it is air or digs by hand, the
+// mount head above that is air or digs by hand (adv: the 1.8 body stands
+// the mount with its head in (dx,2,dz)), no lava in or around the head,
+// and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
   for (const [dx, dz] of SIDES) {
@@ -132,6 +159,9 @@ function findDigStepDir(bot) {
     if (!solid(step)) continue
     const above = cellAt(bot, dx, 1, dz)
     if (above && solid(above) && !handDiggable(bot, above)) continue
+    const cap = cellAt(bot, dx, 2, dz)
+    if (cap && solid(cap) && !handDiggable(bot, cap)) continue
+    if (capLavaAt(bot, dx, dz)) continue
     return [dx, dz]
   }
   return null
@@ -340,7 +370,11 @@ async function chooseRecovery(brain, facts, feasible) {
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
   const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
-  const askNames = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  // y34 shaping after the 4jr exclusion: a failed hop is already out, so
+  // shaping never hides the dig it escalates to. Before the only-option
+  // check: a menu shrunk to one answer costs no brain call (round-2 rule).
+  const askNames = shapeRecoverMenu(unshaped)
   if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
@@ -356,7 +390,9 @@ async function chooseRecovery(brain, facts, feasible) {
     // reference: disagree first, then fall back (acceptance: invalid answers
     // disagree in the log).
     if (label !== fsm) {
-      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck facts=${text}`)
+      // menu= is the asked menu (post-4jr exclusion + y34 shaping), like
+      // goal's disagree line — the y34 stand replays prod stuck menus.
+      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=stuck menu=${askNames.join(',')} facts=${text}`)
     }
     if (!askNames.includes(label)) return fail('invalid')
     return { action: label, source: model, fsm, model }
@@ -462,9 +498,10 @@ function digUpRun(bot, ctx) {
 }
 
 // Dig a step by hand and mount it (9sh): no scaffold, no pickaxe, dirt
-// pit. One cycle digs the wall above the side step, then jumps onto the
-// step top — done on floor rise, repeatable to the mouth. st.dir re-scans
-// when its step collapses mid-cycle.
+// pit. One cycle digs the wall above the side step plus the mount head
+// above that (adv), then jumps onto the step top — done on floor rise,
+// repeatable to the mouth. st.dir re-scans when its step collapses
+// mid-cycle.
 function digStepRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { dir: null, phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: null })
@@ -481,6 +518,10 @@ function digStepRun(bot, ctx) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
   }
+  // Lava in or around the mount head re-scans before any digging: opening
+  // the cells under lava would pour a flow onto the mount. The find skips
+  // these sides, so this terminates.
+  if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
     if (!handDiggable(bot, above)) { st.dir = null; return 'running' }
@@ -494,6 +535,25 @@ function digStepRun(bot, ctx) {
     st.digInFlight = true
     void (async () => {
       try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    })()
+    return 'running'
+  }
+  // Mount head (adv): the body stands the mount with its head in
+  // (dx,2,dz) — dig a hand-diggable solid there like above instead of
+  // relying on the executor's canDig to clear it mid-mount.
+  const cap = cellAt(bot, st.dir[0], 2, st.dir[1])
+  if (cap && solid(cap)) {
+    if (!handDiggable(bot, cap)) { st.dir = null; return 'running' }
+    if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
+    if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
+    if (st.digInFlight) {
+      if (++st.waited > DIG_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:dig-timeout' }
+      return 'running'
+    }
+    if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+    st.digInFlight = true
+    void (async () => {
+      try { await bot.dig(cap) } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
@@ -1222,6 +1282,7 @@ module.exports = {
   recoverFacts,
   recoverText,
   recoverFsm,
+  shapeRecoverMenu,
   chooseRecovery,
   setStuck,
   restGaveUpHolds,

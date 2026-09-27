@@ -14,6 +14,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const follow = require('./follow')
+const bring = require('./bring')
 const { countItems } = require('../perception')
 
 const DELIVER_RANGE = 3
@@ -30,10 +31,6 @@ function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
 }
 
-function atPos(bot) {
-  const bp = bot.entity && bot.entity.position
-  return bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
-}
 
 function botPos(bot) {
   try {
@@ -273,7 +270,7 @@ function deliver(bot, ctx, target, state) {
   if (!f.saidWaiting) {
     f.saidWaiting = true
     const what = Object.keys(live.items).map((n) => `${live.items[n]} ${n}`).join(', ')
-    say(bot, `I can't see you — I'm at ${atPos(bot)} with your ${what}; come closer`)
+    say(bot, `I can't see you — I'm at ${bring.atPos(bot)} with your ${what}; come closer`)
   }
 }
 

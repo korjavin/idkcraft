@@ -481,4 +481,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES }
+module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf }
