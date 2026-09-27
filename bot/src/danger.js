@@ -1,7 +1,7 @@
 'use strict'
 
 // Danger memory (idkcraft-mnx): gave-up/call_player spots that explore and
-// gather must not lead back into. Separate from the resource finds store:
+// gather must not lead back into, and gohome/forage route around (rw4.12). Separate from the resource finds store:
 // these are avoidances, never targets. Distance is xz-only (pits are
 // vertical; the bot's level never matches the mark exactly). Bounded + TTL,
 // never throws.
@@ -45,6 +45,23 @@ function near(ctx, p, radius, now) {
   return false
 }
 
+// Live marks as fresh {x, y, z} points for planning (rw4.12 detour).
+// Copies: callers cannot corrupt the memory. Never throws.
+function spots(ctx, now) {
+  try {
+    const mem = ctx && ctx.danger
+    if (!mem || !Array.isArray(mem.spots)) return []
+    const t = typeof now === 'number' ? now : Date.now()
+    const out = []
+    for (const s of mem.spots) {
+      if (!s || typeof s.x !== 'number' || typeof s.z !== 'number') continue
+      if (t - s.at > TTL_MS) continue
+      out.push({ x: s.x, y: typeof s.y === 'number' ? s.y : 0, z: s.z })
+    }
+    return out
+  } catch (_) { return [] }
+}
+
 function prune(ctx, now) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots)) return 0
@@ -63,4 +80,4 @@ function clear(ctx) {
   if (ctx && ctx.danger && Array.isArray(ctx.danger.spots)) ctx.danger.spots.length = 0
 }
 
-module.exports = { mark, near, prune, count, clear, MAX_SPOTS, TTL_MS, AVOID_RADIUS }
+module.exports = { mark, near, spots, prune, count, clear, MAX_SPOTS, TTL_MS, AVOID_RADIUS }
