@@ -167,6 +167,16 @@ async function flush() {
   for (let i = 0; i < 4; i++) await new Promise((resolve) => setImmediate(resolve))
 }
 
+// xg9: paced batches take real time (60 ms/op); wait for the batch chat.
+async function untilChat(bot, timeoutMs = 8000) {
+  const t0 = Date.now()
+  while (bot.lines.length === 0) {
+    if (Date.now() - t0 > timeoutMs) throw new Error('batch chat never arrived')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  await flush()
+}
+
 describe('gxk 2x2 grid hang', () => {
   it('acceptance: stranded log is cleared, the whole batch converts in one step', async () => {
     // Grid slot 1 already holds a log; the server shows planks and stays
@@ -178,7 +188,7 @@ describe('gxk 2x2 grid hang', () => {
     const bot = fakeBot({ gridLogs: 1, invLogs: 13 })
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
-    await flush()
+    await untilChat(bot)
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(gridOf(bot.inventory), [])
     assert.equal(countIn(bot.inventory, 'oak_log'), 0) // 14 returned, 14 crafted
@@ -190,7 +200,7 @@ describe('gxk 2x2 grid hang', () => {
     const bot2 = fakeBot({ invLogs: 2 })
     const ctx2 = freshCtx()
     craft(bot2, ctx2, null, {})
-    await flush()
+    await untilChat(bot2)
     assert.equal(ctx2.stepStatus, 'running')
     assert.deepEqual(gridOf(bot2.inventory), [])
     assert.equal(countIn(bot2.inventory, 'oak_log'), 0)
@@ -308,7 +318,7 @@ describe('gxk 2x2 grid hang', () => {
     }
     const ctx = freshCtx()
     craft(bot, ctx, null, {})
-    await flush()
+    await untilChat(bot)
     assert.equal(ctx.stepStatus, 'running')
     assert.equal(bot.inventory.selectedItem, null)
     assert.equal(countIn(bot.inventory, 'oak_log'), 0)
@@ -387,5 +397,35 @@ describe('craft grid residuals (idkcraft-zaw)', () => {
     await craft.safeCraft(bot, {}, 1, null)
     assert.deepEqual(ranges, [[9, 45]])
     bot.restoreError()
+  })
+})
+
+describe('xg9 window pacing', () => {
+  function paceBot() {
+    const win = fakeWindow()
+    return { inventory: win, craft: async () => {} }
+  }
+  it('spaces consecutive crafts a server tick apart', async () => {
+    // Assayed: unpaced back-to-back crafts desync mineflayer's model from
+    // Paper (~op27: phantom result, vanishing ingredients, then a 20 s
+    // updateSlot:0 timeout); paced 60 ms a 64-batch goes exact.
+    const bot = paceBot()
+    const t0 = Date.now()
+    await craft.safeCraft(bot, {}, 1, null)
+    await craft.safeCraft(bot, {}, 1, null)
+    assert.ok(Date.now() - t0 >= 50, `two ops took ${Date.now() - t0}ms, want >= 50`)
+  })
+  it('pacing is per bot, and failures still pace the retry', async () => {
+    const a = paceBot()
+    const b = paceBot()
+    let calls = 0
+    a.craft = async () => { calls++; if (calls === 1) throw new Error(TIMEOUT_MSG) }
+    await assert.rejects(a.safeCraft ? a.safeCraft : craft.safeCraft(a, {}, 1, null), /did not fire/)
+    const t0 = Date.now()
+    await craft.safeCraft(b, {}, 1, null) // other bot: no wait
+    assert.ok(Date.now() - t0 < 50, 'unrelated bot waited')
+    const t1 = Date.now()
+    await craft.safeCraft(a, {}, 1, null) // same bot after failure: paced
+    assert.ok(Date.now() - t1 >= 50, 'retry after failure was not paced')
   })
 })

@@ -12,7 +12,7 @@ const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const flat = require('../src/behaviours/flat')
 const {
   probeColumn, spiralColumns, chooseLevel, detectHoles,
-  isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode,
+  isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode, progressChat,
   restockPoint, guardFlatSurface,
   FLAT_DEFAULT_RADIUS, FLAT_MIN_RADIUS, FLAT_MAX_RADIUS,
 } = flat
@@ -304,7 +304,7 @@ describe('flat parseRadius', () => {
     assert.equal(parseRadius('2'), FLAT_MIN_RADIUS)
     assert.equal(parseRadius('abc'), null)
     assert.equal(parseRadius('16x'), null)
-    assert.equal(FLAT_DEFAULT_RADIUS, 48)
+    assert.equal(FLAT_DEFAULT_RADIUS, 8)
   })
 })
 
@@ -321,12 +321,12 @@ describe('flat chat command', () => {
   it('routes flat + aliases to setFlat with the parsed radius', () => {
     const seen = []
     const ticker = { setFlat: (arg) => { seen.push(arg); return 'ok' } }
-    for (const [msg, want] of [['flat', 48], ['make flat', 48], ['flatten', 48], ['flat 16', 16], ['flatten 10', 10], ['flat 200', 64], ['flat 2', 4]]) {
+    for (const [msg, want] of [['flat', 8], ['make flat', 8], ['flatten', 8], ['flat 16', 16], ['flatten 10', 10], ['flat 200', 64], ['flat 2', 4]]) {
       const bot = chatBot()
       handleChat(bot, ticker, 'P', msg)
       assert.deepEqual(bot.chats, ['ok'], msg)
     }
-    assert.deepEqual(seen.map((s) => s.radius), [48, 48, 48, 16, 10, 64, 4])
+    assert.deepEqual(seen.map((s) => s.radius), [8, 8, 8, 16, 10, 64, 4])
     assert.deepEqual(seen.map((s) => s.explicit), [false, false, false, true, true, true, true])
     assert.ok(seen.every((s) => s.by === 'P'))
   })
@@ -421,6 +421,79 @@ describe('flat ticker wiring', () => {
       assert.equal(r.ctx.flat.parked, false, 'resume unparks')
       assert.equal(r.ctx.flat, f, 'same key resumes the same episode')
       assert.equal(r.ctx.flat.holes.length, 2, 'queue preserved, no rescan')
+    } finally { r.done() }
+  })
+
+  it('a bare re-flat from inside the running square resumes with progress', async () => {
+    // Prod 2026-09-27: the owner retyped flat after stepping aside and the
+    // new center wiped the run. Any inside retype now resumes instead.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(2, 63, 0, 'air')
+    const r = rig({ world, players: { P: { username: 'P', entity: { position: pos(2, 64, 0) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      await r.ticker.tick() // scan completes, 2 holes queued
+      const f = r.ctx.flat
+      assert.equal(f.holes.length, 2)
+      r.bot.players.P.entity.position = pos(3, 64, 1) // stepped aside, still inside
+      const line = r.ticker.setFlat({ radius: parseRadius(undefined), by: 'P' })
+      assert.match(line, /resuming flat, 2 holes left/)
+      assert.equal(r.ctx.flat, f, 'same episode, no rescan')
+      assert.equal(r.ctx.flat.holes.length, 2, 'queue preserved')
+      assert.equal(r.ctx.flat.filled, 0)
+    } finally { r.done() }
+  })
+
+  it('a re-flat from outside the running square rescans', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world, players: { P: { username: 'P', entity: { position: pos(2, 64, 0) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      await r.ticker.tick()
+      const f = r.ctx.flat
+      r.bot.players.P.entity.position = pos(50, 64, 50) // walked to a new area
+      const line = r.ticker.setFlat({ radius: parseRadius(undefined), by: 'P' })
+      assert.match(line, /scanning/)
+      assert.notEqual(r.ctx.flat, f, 'new area, new episode')
+      assert.equal(r.ctx.flat.phase, 'scan')
+    } finally { r.done() }
+  })
+
+  it('an inside re-flat with a different explicit radius rescans', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world, players: { P: { username: 'P', entity: { position: pos(2, 64, 0) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      await r.ticker.tick()
+      const f = r.ctx.flat
+      const line = r.ticker.setFlat({ radius: 8, by: 'P', explicit: true })
+      assert.match(line, /scanning/)
+      assert.notEqual(r.ctx.flat, f, 'explicit new size, new episode')
+    } finally { r.done() }
+  })
+
+  it('a re-flat during the scan says still scanning', async () => {
+    const r = rig({ players: { P: { username: 'P', entity: { position: pos(2, 64, 0) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      assert.equal(r.ctx.flat.phase, 'scan')
+      const line = r.ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      assert.match(line, /still scanning 9x9/)
+    } finally { r.done() }
+  })
+
+  it('a bare flat hints at flat 48; an explicit radius does not', async () => {
+    const r = rig({ players: { P: { username: 'P', entity: { position: pos(2, 64, 0) } } } })
+    try {
+      const bare = r.ticker.setFlat({ radius: parseRadius(undefined), by: 'P' })
+      assert.match(bare, /scanning 17x17 for holes/)
+      assert.match(bare, /flat 48 for a big field/)
+      r.bot.players.P.entity.position = pos(60, 64, 60)
+      const sized = r.ticker.setFlat({ radius: 8, by: 'P', explicit: true })
+      assert.ok(!sized.includes('big field'), `no hint when sized: ${sized}`)
     } finally { r.done() }
   })
 
@@ -538,6 +611,56 @@ describe('flat ticker wiring', () => {
       r.ticker.status()
       assert.ok(r.bot.chats.at(-1).startsWith('parked (flat paused)'), r.bot.chats.at(-1))
     } finally { r.done() }
+  })
+})
+
+describe('flat progress chat', () => {
+  function progBot() {
+    return { chats: [], chat(m) { this.chats.push(String(m)) } }
+  }
+  function progFlat(over = {}) {
+    return Object.assign({
+      phase: 'fill', filled: 0, shaved: 0, total: 20, totalBumps: 0, level: 63,
+      skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0 },
+      lastChat: 0, progressChats: 0,
+    }, over)
+  }
+
+  it('first progress comes within 25 s of silence', () => {
+    const bot = progBot()
+    progressChat(bot, progFlat({ lastChat: Date.now() - 26000 }))
+    assert.deepEqual(bot.chats, ['flat 0/20 (level 63)'])
+  })
+
+  it('stays silent 10 s in with no resolutions', () => {
+    const bot = progBot()
+    progressChat(bot, progFlat({ lastChat: Date.now() - 10000 }))
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('first progress fires after 10 resolutions even when fresh', () => {
+    const bot = progBot()
+    progressChat(bot, progFlat({ lastChat: Date.now() - 10000, filled: 10 }))
+    assert.deepEqual(bot.chats, ['flat 10/20 (level 63)'])
+  })
+
+  it('later progress keeps the 120 s cadence', () => {
+    const bot = progBot()
+    progressChat(bot, progFlat({ lastChat: Date.now() - 60000, progressChats: 1, filled: 5 }))
+    assert.deepEqual(bot.chats, [])
+    progressChat(bot, progFlat({ lastChat: Date.now() - 121000, progressChats: 1, filled: 5 }))
+    assert.deepEqual(bot.chats, ['flat 5/20 (level 63)'])
+  })
+
+  it('second immediate call on the same episode stays silent', () => {
+    // Revmux 01 core-1: without the progressChats increment a resolved
+    // field would chat every tick; the second call must post nothing.
+    const bot = progBot()
+    const f = progFlat({ lastChat: Date.now() - 10000, filled: 10 })
+    progressChat(bot, f)
+    assert.equal(bot.chats.length, 1)
+    progressChat(bot, f)
+    assert.equal(bot.chats.length, 1, 'no chat spam after the first line')
   })
 })
 
@@ -857,6 +980,31 @@ describe('flat behaviour', () => {
     assert.equal(ctx.flat, null)
     assert.equal(bot.calls.places.length, 3)
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 refused')), bot.chats.join('\n'))
+  })
+
+  it('an 11-hole field chats exactly one progress line before done', async () => {
+    // Revmux 01 core-1 through the tick path: the count trigger fires
+    // once past 10 resolved cells, then the 120 s cadence holds.
+    const world = makeWorld({})
+    for (let x = -4; x <= 4; x++) world.set(x, 63, 0, 'air')
+    world.set(-4, 63, 1, 'air')
+    world.set(-3, 63, 1, 'air')
+    const { bot, ctx } = started(world)
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null)
+    const prog = bot.chats.filter((c) => /^flat \d+\/\d+ \(level/.test(c))
+    assert.equal(prog.length, 1, bot.chats.join('\n'))
+  })
+
+  it('logs refused placements with coordinates to the console', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], failPlace: true })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    await drive(bot, ctx, 20)
+    assert.equal(ctx.flat, null)
+    assert.ok(cap.lines.some((l) => l.includes('flat refused-place 1,63,0') && l.includes('err=refused')),
+      cap.lines.join('\n'))
   })
 
   it('gives up through the backstop instead of looping forever', async () => {

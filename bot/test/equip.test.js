@@ -62,6 +62,16 @@ async function flush() {
   for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve))
 }
 
+// xg9: paced crafts take real time (60 ms/op); poll for N craft calls.
+async function untilCrafts(bot, n, timeoutMs = 8000) {
+  const t0 = Date.now()
+  while (bot.calls.craft.length < n) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`craft calls stuck at ${bot.calls.craft.length}, want ${n}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await flush()
+}
+
 // Craft lands the item, like a live window update before the next tick.
 function landingCraft(bot) {
   return async (recipe, count, table) => {
@@ -117,10 +127,10 @@ describe('equip step', () => {
     bot.craft = landingCraft(bot)
     const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
     equip(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 1)
     assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('wooden_pickaxe'))
     equip(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 2)
     assert.equal(bot.calls.craft.length, 2)
     assert.deepEqual(bot.calls.craft[1].recipe, recipeFor('wooden_sword'))
     bot.restoreError()
@@ -308,7 +318,7 @@ describe('equip step', () => {
     const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
     for (let i = 0; i < 3; i++) {
       equip(bot, ctx, null, {})
-      await flush()
+      await untilCrafts(bot, i + 1)
     }
     assert.equal(bot.calls.craft.length, 3)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
@@ -496,10 +506,10 @@ describe('equip step', () => {
     }
     const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
     equip(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 1)
     assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_planks', 4))
     equip(bot, ctx, null, {})
-    await flush()
+    await untilCrafts(bot, 2)
     assert.equal(bot.calls.craft.length, 2)
     assert.deepEqual(bot.calls.craft[1].recipe, recipeFor('wooden_pickaxe'))
     assert.equal(ctx.stepStatus, 'running') // chained, never failed
