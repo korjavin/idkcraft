@@ -983,7 +983,7 @@ describe('work mode (epic rw4)', () => {
       const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
       ticker.work()
       const ctx = nightWalkCtx(bot)
-      ctx.shelterRun = Date.now() // the walk stamps its ticks (rw4.10 half)
+      ctx.shelterRun = Date.now() + 30000 // fresh (future-dated: suite stalls cannot flake the hold)
       const origFight = BEHAVIOURS.fight
       let fightRan = 0
       BEHAVIOURS.fight = () => { fightRan++ }
@@ -1049,7 +1049,7 @@ describe('work mode (epic rw4)', () => {
       BEHAVIOURS.fight = () => { fightRan++ }
       try {
         for (let i = 0; i < 5; i++) {
-          ctx.shelterRun = Date.now() // the live walk re-stamps every tick
+          ctx.shelterRun = Date.now() + 30000 // the live walk re-stamps every tick (future-dated)
           const r = await ticker.tick()
           assert.equal(r.decision.action, 'gohome', `tick ${i} walks`)
         }
@@ -1059,6 +1059,81 @@ describe('work mode (epic rw4)', () => {
         const r = await ticker.tick()
         assert.equal(r.decision.action, 'fight', 'fail-safe: stale stamp resumes fight')
         assert.equal(fightRan, 1)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('active lead order keeps fight ticks (orders beat the shelter hold)', async () => {
+      // Revmux atl.12 round 1 (major): without the order gate a fresh stamp
+      // diverted fight ticks into goal.decide under an unseen-player lead,
+      // starving the order and leaking the walk no-dig into lead pathing.
+      const bot = nightWalkBot()
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.lead = { name: 'Steve' } // explicit order, player unseen
+      ctx.shelterRun = Date.now()
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1)
+        assert.ok(!lines.some((l) => l.includes('shelter-run:')), 'no hold line when the order owns the tick')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('active bring order keeps fight ticks', async () => {
+      const bot = nightWalkBot()
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.bring = { name: 'coal', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+      ctx.shelterRun = Date.now()
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1)
+        assert.ok(!lines.some((l) => l.includes('shelter-run:')), 'no hold line when the order owns the tick')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('fight/idle flap mid-walk logs the edge once (latch resets on stale stamp only)', async () => {
+      // Revmux atl.12 round 1 (minor): resetting the latch on every
+      // non-hold tick re-logged whenever a mob hovered at the 8-block edge.
+      const bot = nightWalkBot()
+      const script = [
+        { action: 'fight', sprint: false, source: 'stub' },
+        { action: 'idle', sprint: false, source: 'stub' },
+        { action: 'fight', sprint: false, source: 'stub' },
+      ]
+      let i = 0
+      const ticker = createTicker({ bot, brain: { decide: async () => script[i++] }, tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        for (let t = 0; t < 3; t++) {
+          ctx.shelterRun = Date.now() + 30000 // future-dated: flap timing cannot flake freshness
+          const r = await ticker.tick()
+          assert.equal(r.decision.action, 'gohome', `tick ${t} walks`)
+        }
+        assert.equal(fightRan, 0)
+        assert.equal(lines.filter((l) => l.includes('shelter-run: holding')).length, 1, 'one edge log per walk')
       } finally {
         BEHAVIOURS.fight = origFight
         ticker.destroy()
