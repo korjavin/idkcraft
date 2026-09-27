@@ -405,6 +405,43 @@ describe('light behaviour ticks (rw4.13)', () => {
     for (let i = 0; i < 22; i++) light(bot, ctx)
     assert.deepEqual(ctx.lightSkip, [0], '3rd stall gives up')
   })
+  it('jump in place reads as still: y bobbing is not progress', () => {
+    // Revmux 01 minor: the pathfinder holding jump bobs y while x/z are
+    // frozen — tick-to-tick 3D comparison would wipe the budget forever.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(7.7, 64, 8.2) })
+    bot.pathfinder.isMoving = () => true
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    for (let i = 0; i < 11; i++) {
+      bot.entity.position = pos(7.7, 64 + (i % 2 === 0 ? 0.4 : -0.1), 8.2)
+      light(bot, ctx)
+    }
+    assert.equal(ctx.lightFarTicks, 1, 'bobbing still strikes')
+  })
+  it('a far-idle strike resets the stall state; XZ progress forgives', () => {
+    // Revmux 01 minor: far budget is one consecutive no-progress budget —
+    // a far strike clears the still counter + anchor so the old stall can
+    // never combine with new evidence, and genuine XZ movement forgives.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(7.7, 64, 8.2) })
+    let walking = true
+    bot.pathfinder.isMoving = () => walking
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    for (let i = 0; i < 10; i++) light(bot, ctx) // anchor + 9 still
+    assert.equal(ctx.lightStillTicks, 9)
+    walking = false
+    bot.entity.position = pos(100, 65, 100) // preemption carried the body off
+    light(bot, ctx)
+    assert.equal(ctx.lightFarTicks, 1, 'far strike counted')
+    assert.equal(ctx.lightStillTicks, 0, 'still counter cleared')
+    assert.equal(ctx.lightStillAnchor, null, 'anchor cleared')
+    walking = true
+    light(bot, ctx) // moving again: re-anchors, budget forgiven
+    assert.equal(ctx.lightFarTicks, 0, 'progress forgives the streak')
+    assert.equal(ctx.lightStillTicks, 0, 'no inherited stall')
+  })
   it('walking with progress resets the stall counter', () => {
     const world = makeWorld()
     const h = home()

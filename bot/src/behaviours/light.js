@@ -30,7 +30,7 @@ const PLACE_RANGE = 4
 const PLACE_REACH = 5
 const REFUSALS_TO_SKIP = 3
 const STILL_TICKS = 10 // no-progress watchdog: moving but stationary this long re-paths
-const STILL_TOLERANCE = 0.1
+const STILL_RADIUS = 1 // anchor radius: leaving it (XZ) reads as progress
 const CRAFT_TIMEOUT_MS = 30000
 
 // Spot plan: offsets from home.site (ground level unless dy). Door-front
@@ -221,6 +221,8 @@ function skipSpot(bot, home, ctx, idx, p, why) {
   if (!ctx.lightSkip.includes(idx)) ctx.lightSkip.push(idx)
   ctx.lightFails = 0
   ctx.lightFarTicks = 0
+  ctx.lightStillTicks = 0
+  ctx.lightStillAnchor = null
   console.log(`light skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
   // A run whose last open spot closes by skipping must still log: the
   // unlit flip re-decides away before any done tick (revmux 01 minor).
@@ -242,15 +244,25 @@ function placeTick(bot, ctx, home, idx) {
   // A walk that makes no progress (nhb live assay: corner squeeze loops
   // stuck/success forever) re-paths after STILL_TICKS on the far budget.
   if (moving) {
-    let still = false
+    // Progress is measured from an XZ anchor, not tick to tick: jump
+    // arcs (y bobbing) and node oscillation must not read as progress,
+    // and y is excluded for the same reason (revmux 01 minors).
+    let progressed = false
     try {
       const bp = bot.entity && bot.entity.position
-      const lp = ctx.lightLastPos
-      if (bp && typeof bp.x === 'number' && lp && typeof lp.x === 'number' &&
-        Math.hypot(bp.x - lp.x, bp.y - lp.y, bp.z - lp.z) < STILL_TOLERANCE) still = true
-      if (bp && typeof bp.x === 'number') ctx.lightLastPos = { x: bp.x, y: bp.y, z: bp.z }
-    } catch (_) { /* unverifiable: not still */ }
-    if (still) {
+      const a = ctx.lightStillAnchor
+      if (!bp || typeof bp.x !== 'number') progressed = true // unverifiable: not still
+      else if (!a || a.idx !== idx) {
+        ctx.lightStillAnchor = { idx, x: bp.x, z: bp.z }
+        ctx.lightStillTicks = 0
+        progressed = true
+      } else if (Math.hypot(bp.x - a.x, bp.z - a.z) > STILL_RADIUS) {
+        ctx.lightStillAnchor = { idx, x: bp.x, z: bp.z }
+        ctx.lightStillTicks = 0
+        progressed = true
+      }
+    } catch (_) { progressed = true }
+    if (!progressed) {
       if (ctx.lightFailIdx !== idx) {
         ctx.lightFailIdx = idx
         ctx.lightFarTicks = 0
@@ -300,6 +312,8 @@ function placeTick(bot, ctx, home, idx) {
         ctx.lightFarTicks = 0
       }
       ctx.lightFarTicks = (ctx.lightFarTicks || 0) + 1
+      ctx.lightStillTicks = 0
+      ctx.lightStillAnchor = null
       if (ctx.lightFarTicks >= REFUSALS_TO_SKIP) {
         skipSpot(bot, home, ctx, idx, p, 'unreachable')
         return
@@ -335,6 +349,8 @@ function placeTick(bot, ctx, home, idx) {
   const landed = () => {
     ctx.lightFails = 0
     ctx.lightFarTicks = 0
+    ctx.lightStillTicks = 0
+    ctx.lightStillAnchor = null
     ctx.lightPlaced = (ctx.lightPlaced || 0) + 1
     metrics.light.inc({ op: 'placed' })
     try {
@@ -388,6 +404,8 @@ function light(bot, ctx) {
     ctx.lightSkip = []
     ctx.lightFails = 0
     ctx.lightFarTicks = 0
+    ctx.lightStillTicks = 0
+    ctx.lightStillAnchor = null
     ctx.lightFailIdx = -1
     ctx.lightGoalIdx = -1
     ctx.lightPlaced = 0
