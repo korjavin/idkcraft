@@ -627,6 +627,25 @@ async function chooseStep(brain, facts, feasible) {
 // the switch does not know (atl.6) falls back to 'not feasible'. The
 // 'model choice' line below is unreachable-but-safe (STEP_ORDER always
 // holds other steps).
+// f3s: repeat step-change chats throttled (Paper kicks past ~10 rapid lines,
+// and a flip-flopping menu re-decides every tick: the assayed kick shape is
+// 2-3 steps alternating, so each line is rate-limited independently — comparing
+// only to the last line would still let A,B,A,B through). The same line chats
+// at most every 10 s; a line never chatted (or silent >10 s) always passes.
+// The console keeps every transition. First chat per ctx always passes. Same
+// timestamp style as explore's departure throttle.
+const STEP_CHAT_SAME_MS = 10000
+function chatStep(bot, ctx, line) {
+  const now = Date.now()
+  let seen = null
+  try { seen = ctx && ctx.stepChat } catch (_) { seen = null }
+  const prev = seen ? seen[line] : undefined
+  if (typeof prev === 'number' && now - prev < STEP_CHAT_SAME_MS) return false
+  try { if (ctx) { (ctx.stepChat = ctx.stepChat || {})[line] = now } } catch (_) { /* stamp best-effort */ }
+  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+  return true
+}
+
 function stepWhy(name, facts, bot, ctx, text) {
   try {
     if (failHolds(ctx, name, text, bot)) return `${name} holds after failure`
@@ -874,15 +893,15 @@ async function decide(bot, ctx) {
       const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
       console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
-        try { bot.chat(`resting: ${ctx.restWhy} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+        chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
       } else {
         const entry = MENU[choice.step]
         const verb = (entry && entry.verb) || choice.step
-        try { bot.chat(`next: ${verb} (${choice.source})`) } catch (_) { /* chat best-effort */ }
+        chatStep(bot, ctx, `next: ${verb} (${choice.source})`)
       }
     }
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }

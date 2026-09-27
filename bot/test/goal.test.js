@@ -380,6 +380,20 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
   })
 
+  it('step flip back within 10s chats once (f3s call-site pin)', async () => {
+    // A->B->A on one ctx: the repeat next: line must be throttled. Reverting
+    // the decide() call sites to plain bot.chat fails this test.
+    const bot = goalBot()
+    const ctx = {}
+    await decide(bot, ctx)
+    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+    ctx.step = 'explore'; ctx.stepStatus = 'done' // simulate a finished flip away
+    const r = await decide(bot, ctx) // same facts re-decide to gather
+    assert.equal(ctx.step, 'gather')
+    assert.equal(r.action, 'gather')
+    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+  })
+
   it('same facts with a running step: no change, no log, no chat', async () => {
     const bot = goalBot()
     const ctx = {}
@@ -1006,5 +1020,40 @@ describe('stockpile menu (idkcraft-atl.14)', () => {
   })
   it('criteria names the step', () => {
     assert.match(STEP_CRITERIA.stockpile, /home chest/)
+  })
+})
+
+describe('f3s step chat throttle', () => {
+  const { chatStep } = require('../src/goal')
+  function chatBot() {
+    const chats = []
+    return { chats, chat: (m) => { chats.push(String(m)) } }
+  }
+  it('first chat passes, rapid repeats suppressed, distinct lines pass', () => {
+    const bot = chatBot()
+    const ctx = {}
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), true)
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false) // same line <10s
+    assert.equal(chatStep(bot, ctx, 'next: exploring (goal-fsm)'), true) // distinct: news
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false) // flip back <10s
+    assert.deepEqual(bot.chats, ['next: foraging (goal-fsm)', 'next: exploring (goal-fsm)'])
+  })
+  it('stale stamps chat again', () => {
+    const bot = chatBot()
+    const ctx = { stepChat: { 'next: foraging (goal-fsm)': Date.now() - 11000 } }
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), true)
+    assert.equal(bot.chats.length, 1)
+  })
+  it('fresh stamps stay silent', () => {
+    const bot = chatBot()
+    const ctx = { stepChat: { 'next: foraging (goal-fsm)': Date.now() - 5000 } }
+    assert.equal(chatStep(bot, ctx, 'next: foraging (goal-fsm)'), false)
+    assert.equal(bot.chats.length, 0)
+  })
+  it('survives frozen ctx and missing chat', () => {
+    const bot = chatBot()
+    assert.equal(chatStep(bot, Object.freeze({})), true) // stamp throws, chat sends
+    assert.equal(chatStep({}, {}), true) // no bot.chat: still true, no throw
+    assert.equal(chatStep(null, null, 'x'), true)
   })
 })
