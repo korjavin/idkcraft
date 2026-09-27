@@ -106,15 +106,37 @@ function invItems(bot) {
 // Inventory -> deposit list in inventory order, keeps skipped. Food keeps
 // the first FOOD_KEEP edibles (the eat reflex feeds from the inventory),
 // dirt+cobble keep the first SCAFFOLD_KEEP (the pillar reserve share keeps).
-function depositPlan(bot) {
+// Finished-goods exception (ipn.3): forged owner tools bank up to the gear
+// ledger count (ctx.gearFinished); the rest of the kit stays. Without ctx
+// the behaviour is exactly the old one.
+function depositPlan(bot, ctx) {
   const list = invItems(bot)
   const edible = edibles()
   let keepFood = FOOD_KEEP
   let keepScaffold = SCAFFOLD_KEEP
+  let finished = null
+  try {
+    finished = (ctx && ctx.gearFinished) || null
+  } catch (_) { /* no allowance */ }
+  const totals = {}
+  if (finished) {
+    for (const j of list) {
+      if (!j || typeof j.name !== 'string') continue
+      totals[j.name] = (totals[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+  }
+  const allow = {}
   const plan = []
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
-    if (isKeep(i.name)) continue
+    if (isKeep(i.name)) {
+      if (!finished) continue
+      if (!(i.name in allow)) allow[i.name] = Math.max(0, Math.min(finished[i.name] || 0, totals[i.name] || 0))
+      const take = Math.min(allow[i.name], typeof i.count === 'number' ? i.count : 1)
+      allow[i.name] -= take
+      if (take > 0) plan.push({ name: i.name, count: take })
+      continue
+    }
     let n = typeof i.count === 'number' ? i.count : 1
     if (n <= 0) continue
     if (edible.has(i.name)) {
@@ -131,9 +153,9 @@ function depositPlan(bot) {
   return plan
 }
 
-function surplusCount(bot) {
+function surplusCount(bot, ctx) {
   let n = 0
-  for (const p of depositPlan(bot)) n += p.count
+  for (const p of depositPlan(bot, ctx)) n += p.count
   return n
 }
 
@@ -407,7 +429,7 @@ function stockpile(bot, ctx, target, state) {
     return
   }
 
-  const plan = depositPlan(bot)
+  const plan = depositPlan(bot, ctx)
   if (plan.length === 0) {
     ctx.stepStatus = 'done'
     return
@@ -436,17 +458,19 @@ function stockpile(bot, ctx, target, state) {
   ctx.stockpileInFlight = true
   void (async () => {
     try {
-      const before = surplusCount(bot)
+      const before = surplusCount(bot, ctx)
       const names = []
+      const bankedByName = {}
       let banked = 0
       const res = await withChest(bot, ctx, async (window) => {
-        for (const p of depositPlan(bot)) {
+        for (const p of depositPlan(bot, ctx)) {
           const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[p.name]
           const type = entry && typeof entry.id === 'number' ? entry.id : null
           if (type == null) continue
           try {
             await window.deposit(type, null, p.count)
             banked += p.count
+            bankedByName[p.name] = (bankedByName[p.name] || 0) + p.count
             names.push(`${p.count} ${p.name}`)
           } catch (_) { /* chest full or stack unmovable: stop at the rest */ }
         }
@@ -473,10 +497,30 @@ function stockpile(bot, ctx, target, state) {
         return
       }
       if (banked > 0) {
+        let handed = []
+        try {
+          const fin = ctx.gearFinished && typeof ctx.gearFinished === 'object' ? ctx.gearFinished : null
+          if (fin) {
+            if (!ctx.gearGiven || typeof ctx.gearGiven !== 'object') ctx.gearGiven = {}
+            for (const name of Object.keys(bankedByName)) {
+              if ((fin[name] || 0) <= 0) continue
+              const c = Math.min(fin[name], bankedByName[name])
+              fin[name] -= c
+              ctx.gearGiven[name] = (ctx.gearGiven[name] || 0) + c
+              handed.push(`${c} ${name}`)
+            }
+          }
+        } catch (_) { /* ledger best-effort */ }
         ctx.chestFull = false
         ctx.chestFullAt = null
         ctx.chestErrorAt = null
         say(bot, `stockpiled ${names.join(', ')}`)
+        if (handed.length > 0) {
+          say(bot, `handed ${handed.join(', ')} to the home chest`)
+          try {
+            console.log(`gear handed ${handed.join(', ')} to chest`)
+          } catch (_) { /* logging best-effort */ }
+        }
       }
       if (before > 0 && banked === 0) {
         // Nothing moved with surplus on hand: the chest is full. Done, not

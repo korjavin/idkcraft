@@ -184,9 +184,34 @@ const MENU = {
     // forage leg just to fail at once (revmux 02-review).
     feasible: (facts) => facts.home === 'built' && !facts.chestParked &&
       !(facts.haul === 'waiting' && facts.player !== 'none') &&
-      (facts.chest === 'no' ? facts.chestTodo !== 'none' : facts.surplus === 'yes'),
+      (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
+  },
+  gear: {
+    // The blacksmith (ipn.3): forge the ladder (iron, then diamond) and hand
+    // finished goods over. Built-home only: the table, furnace, and chest
+    // all live there, and rw4 owns the body until built anyway. The plan is
+    // the behaviour's (menuPlan, deferred require like light): ready works
+    // now, want/wait announce once through the said latch, done never fires.
+    feasible: (facts, bot, ctx) => {
+      if (facts.home !== 'built') return false
+      let plan = null
+      try {
+        plan = require('./behaviours/gear').menuPlan(facts, ctx)
+      } catch (_) {
+        return false
+      }
+      if (!plan || plan.state === 'done') return false
+      if (plan.state === 'ready') return true
+      let said = null
+      try {
+        said = ctx && ctx.gear && ctx.gear.saidNeed
+      } catch (_) { /* unlatched */ }
+      return plan.key !== said
+    },
+    chat: () => 'on my own: forging better gear',
+    verb: 'forging gear',
   },
   forage: {
     // Known valuable find nearby (planForage: value rank, pickaxe gate).
@@ -236,7 +261,7 @@ function equipWant(facts) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -372,6 +397,14 @@ function goalFacts(bot, ctx) {
   const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
   const torches = countItems(bot, (n) => n === 'torch')
   const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  const ironOre = countItems(bot, (n) => n === 'raw_iron')
+  const ingots = countItems(bot, (n) => n === 'iron_ingot')
+  const diamonds = countItems(bot, (n) => n === 'diamond')
+  const ironPick = countItems(bot, (n) => n === 'iron_pickaxe')
+  const ironSword = countItems(bot, (n) => n === 'iron_sword')
+  const diamondPick = countItems(bot, (n) => n === 'diamond_pickaxe')
+  const diamondSword = countItems(bot, (n) => n === 'diamond_sword')
+  const furnaceItem = countItems(bot, (n) => n === 'furnace')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
   try {
@@ -421,6 +454,17 @@ function goalFacts(bot, ctx) {
     const batch = (stockpileMod && stockpileMod.SURPLUS_BATCH) || 16
     if (stockpileMod.surplusCount(bot) >= batch) surplus = 'yes'
   } catch (_) { /* no surplus */ }
+  // Furnace claim (ipn.1 station, chest/table contract): set when the block
+  // stands. Handover (ipn.3): forged owner goods still on hand flip the
+  // stockpile step while the batch gate would never fire.
+  let furnace = 'no'
+  try {
+    if (ctx && ctx.home && ctx.home.furnace) furnace = 'yes'
+  } catch (_) { /* unclaimed */ }
+  let gearHandover = 'none'
+  try {
+    if (require('./behaviours/gear').handoverWaiting(bot, ctx)) gearHandover = 'waiting'
+  } catch (_) { /* none waiting */ }
   // The chest seal (full flag or blocked-open error, whichever is newer)
   // parks the step for CHEST_FULL_RETRY_MS so a hand-emptied chest re-arms
   // without a bring fetch or a restart (01-review). An expired seal
@@ -458,6 +502,13 @@ function goalFacts(bot, ctx) {
   try {
     player = deliverMod.playerStatus(bot).level
   } catch (_) { /* nobody online */ }
+  // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
+  // Unreadable reads done (light precedent): gear yields, nothing churns.
+  let gear = 'done'
+  try {
+    const gm = require('./behaviours/gear')
+    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
+  } catch (_) { /* unreadable ladder */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
   try {
@@ -469,7 +520,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, furnaceItem, furnace, gearHandover, gear }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -505,7 +556,7 @@ function goalText(facts) {
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
-    `chest=${facts.chest} surplus=${facts.surplus}`
+    `chest=${facts.chest} surplus=${facts.surplus} gear=${facts.gear}`
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -560,6 +611,7 @@ const STEP_CRITERIA = {
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
   stockpile: 'chest is no or surplus is yes: place the home chest and bank the surplus',
+  gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
@@ -718,6 +770,18 @@ function stepWhy(name, facts, bot, ctx, text) {
       }
       if (facts.chest === 'no') return 'stockpile: no chest to adopt, nothing to place it with'
       return 'stockpile: nothing to bank'
+    case 'gear': {
+      if (facts.home !== 'built') return 'gear: house not built yet'
+      let plan = null
+      try {
+        plan = require('./behaviours/gear').menuPlan(facts, ctx)
+      } catch (_) {
+        return 'gear: not feasible'
+      }
+      if (!plan || plan.state === 'done') return 'gear: ladder complete'
+      if (plan.state === 'ready') return 'gear: ready'
+      return `gear: ${plan.line || plan.key}`
+    }
     case 'forage':
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
@@ -816,7 +880,7 @@ async function decide(bot, ctx) {
   // cursor (live 26.1 lesson: a table placement flips the facts before the
   // sword craft lands). The flags reset on completion, so this holds for a
   // few ticks at most.
-  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight)) {
+  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   if (!finished && (prev === 'gohome' || prev === 'stay')) {
@@ -850,6 +914,7 @@ async function decide(bot, ctx) {
     // its first tick. Station claims (claimedTable) live outside ctx.equip
     // and survive. Same-name re-picks were already reset by done/failed.
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
+    if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
     ctx.stepStatus = 'running'
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })

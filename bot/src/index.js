@@ -50,6 +50,7 @@ const BEHAVIOURS = {
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
   stockpile: require('./behaviours/stockpile'),
+  gear: require('./behaviours/gear'),
   retreat: retreatMod.retreat,
   pillar: retreatMod.pillar,
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
