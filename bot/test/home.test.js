@@ -386,16 +386,26 @@ describe('rw4.8 door failures fail loud', () => {
     assert.equal(bot.calls.activates, 1)
   })
 
-  it('stay hold with no door fails loud and drops shelter', () => {
-    const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, door: false })
-    const ctx = {
-      home: ctxHome(), step: 'stay', stepStatus: 'running', inShelter: true,
-      stay: { phase: 'hold', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+  it('stay hold with no door logs once and keeps holding (no fail spin)', () => {
+    // Revmux 01-review: stay is self-advancing, so failing here would
+    // re-pick and log every tick all night (~400 lines). Hold + one line.
+    const realLog = console.log
+    const lines = []
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, door: false })
+      const ctx = {
+        home: ctxHome(), step: 'stay', stepStatus: 'running', inShelter: true,
+        stay: { phase: 'hold', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      }
+      for (let i = 0; i < 5; i++) home.stay(bot, ctx)
+      assert.equal(ctx.stay.phase, 'hold')
+      assert.equal(ctx.stepStatus, 'running')
+      assert.equal(ctx.inShelter, true)
+      assert.deepEqual(lines, ['door missing at stay-hold'])
+    } finally {
+      console.log = realLog
     }
-    home.stay(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:no-door')
-    assert.equal(ctx.stay.phase, 'failed')
-    assert.equal(ctx.inShelter, false)
   })
 
   it('morning close with no door fails instead of done', () => {

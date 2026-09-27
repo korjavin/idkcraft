@@ -76,7 +76,9 @@ function doorOpen(block) {
 
 // A close into a missing door is a failure, never a silent done (rw4.8):
 // prod stood a whole night 'sheltered' with arrows coming through. Failing
-// lets the arbiter send build to repair the door cell.
+// surfaces the fault to the arbiter (day picks can send build to repair
+// the door cell). stay-hold instead logs once and keeps holding: stay is
+// self-advancing, so failing there would re-pick and log every tick.
 function failNoDoor(ctx, st, where) {
   st.phase = 'failed'
   ctx.stepStatus = 'failed:no-door'
@@ -350,14 +352,15 @@ function stay(bot, ctx, target, state) {
   if (time !== 'day') {
     st.phase = 'hold'
     // rw4.8: the shelter is only a shelter with a shut door — an opened
-    // door gets re-closed, a missing one fails loud (see failNoDoor).
+    // door gets re-closed; a missing one logs once per episode (st is
+    // fresh per stay) and keeps holding — failing would spin, stay
+    // re-picks every tick at night (SELF_ADVANCING).
     const door = doorBlock(bot, home)
     if (!door) {
-      failNoDoor(ctx, st, 'stay-hold')
-      ctx.inShelter = false
-      return
+      if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
+    } else if (doorOpen(door)) {
+      tryToggle(bot, st, door)
     }
-    if (doorOpen(door)) tryToggle(bot, st, door)
     holdStill(bot, ctx)
     return
   }
