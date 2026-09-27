@@ -230,9 +230,9 @@ describe('ticker with a target', () => {
       const bot = mockBot()
       const brain = mockBrain()
       const ticker = createTicker({ bot, brain, tickMs: 111, idleTickMs: 222 })
-      await ticker.tick() // no target -> slow
+      await ticker.tick(true) // scheduled tick, no target -> slow
       bot.players = { Steve: { username: 'Steve', entity: playerEntity(5) } }
-      await ticker.tick() // target -> fast
+      await ticker.tick(true) // scheduled tick, target -> fast
       assert.deepEqual(delays, [222, 111])
     } finally {
       global.setTimeout = orig
@@ -788,7 +788,7 @@ describe('work mode (epic rw4)', () => {
       bot.players = { Steve: { username: 'Steve' } }
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222, followName: 'Nobody' })
       ticker.work()
-      const r = await ticker.tick()
+      const r = await ticker.tick(true) // scheduled tick
       assert.equal(r.decision.action, 'build') // without workAlone this would be idle
       assert.deepEqual(delays, [111]) // fast ticks while working, not idle cadence
       ticker.destroy()
@@ -1594,7 +1594,7 @@ describe('work mode (epic rw4)', () => {
         const brain = mockBrain()
         const ticker = createTicker({ bot, brain, tickMs: 111, idleTickMs: 222 })
         ticker.work()
-        const r = await ticker.tick()
+        const r = await ticker.tick(true) // scheduled tick
         assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
         assert.equal(brain.calls, 0)
         assert.ok(!lines.some((l) => l.includes('goal step=')), 'no goal decision while alone')
@@ -2104,11 +2104,11 @@ describe('nobody-online leave', () => {
     try {
       const bot = leaveBot()
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
-      await ticker.tick() // schedules the next tick
+      ticker.start() // arms the timer
       assert.deepEqual(delays, [10])
       ticker.destroy() // clears the pending tick, schedules nothing after
       assert.equal(cleared.length, 1)
-      await ticker.tick() // a tick still runs once asked, but re-arms nothing
+      await ticker.tick() // a manual tick still runs once asked, but arms nothing
       assert.deepEqual(delays, [10])
     } finally {
       global.setTimeout = origSet
@@ -2775,7 +2775,7 @@ describe('creeper flee reflex', () => {
       const bot = creeperBot()
       bot.entities = { 9: creeper(9, 4) } // no players: nobody online
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
-      await ticker.tick()
+      await ticker.tick(true) // scheduled tick
       assert.deepEqual(delays, [111]) // fast re-arm while fleeing, not 222
       assert.equal(bot.calls.setGoal, 1)
     } finally {
@@ -2792,7 +2792,7 @@ describe('creeper flee reflex', () => {
       bot.entities = { 9: creeper(9, 4) } // no players: parked with nobody online
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
       ticker.stop() // park
-      const r = await ticker.tick()
+      const r = await ticker.tick(true) // scheduled tick
       assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
       assert.deepEqual(delays, [111]) // fast re-arm while fleeing, not 222
       assert.equal(bot.calls.setGoal, 1)
@@ -2841,11 +2841,11 @@ describe('melee reflex cadence with nobody online', () => {
       zp.offset = (ox, oy, oz) => pos2(zp.x + ox, zp.y + oy, zp.z + oz)
       bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } }
       const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 111, idleTickMs: 222 })
-      await ticker.tick()
+      await ticker.tick(true) // scheduled tick
       assert.equal(bot.attackCalls, 1)
       assert.deepEqual(delays, [111]) // swinging: fast, not the 10 s idle poll
       delete bot.entities[1] // mob dies
-      await ticker.tick()
+      await ticker.tick(true) // scheduled tick
       assert.deepEqual(delays, [111, 222]) // nothing in reach: back to slow
     } finally {
       global.setTimeout = orig
@@ -3353,6 +3353,49 @@ describe('rest mark clears on relocation ticks (idkcraft-q0h core-1 follow-up)',
       assert.equal(ctx.restGaveUpCalled, false)
       assert.equal(ctx.restGaveUps, 0)
     } finally {
+      ticker.destroy()
+    }
+  })
+})
+
+describe('ticker manual vs scheduled ticks (idkcraft-8e9)', () => {
+  it('a manual tick arms no background timer', async () => {
+    // A re-armed timer fires shadow ticks into harness loops (8e9): they
+    // advance recovery without the harness stepBody and flake climbs.
+    // (brain.calls cannot pin this — background ticks reuse the cached
+    // decision — so spy the timer arming itself.)
+    const delays = []
+    const orig = global.setTimeout
+    global.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return orig(fn, ms, ...rest) }
+    try {
+      const bot = mockBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const brain = mockBrain()
+      const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+      await ticker.tick()
+      assert.equal(brain.calls, 1, 'manual tick still decides once')
+      assert.deepEqual(delays, [], 'manual tick arms nothing')
+      ticker.destroy()
+    } finally {
+      global.setTimeout = orig
+    }
+  })
+
+  it('start() keeps the timer loop ticking', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = mockBrain()
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => lines.push(String(m))
+    try {
+      ticker.start()
+      await new Promise((r) => setTimeout(r, 100))
+      const decisions = lines.filter((l) => l.startsWith('decision '))
+      assert.ok(decisions.length >= 2, `timer loop keeps ticking, got ${decisions.length} decision lines`)
+    } finally {
+      console.log = origLog
       ticker.destroy()
     }
   })

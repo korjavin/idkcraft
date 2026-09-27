@@ -618,13 +618,17 @@ function fleeReflex(bot, ctx) {
   function scheduleNext(fast) {
     if (destroyed) return
     if (timer) { clearTimeout(timer); timer = null }
-    timer = setTimeout(() => { timer = null; void tick() }, fast ? tickMs : idleTickMs)
+    timer = setTimeout(() => { timer = null; void tick(true) }, fast ? tickMs : idleTickMs)
     if (timer && typeof timer.unref === 'function') timer.unref()
   }
 
-  async function tick() {
+  // scheduled: true only for timer-driven ticks. A manual tick() (tests,
+  // harness loops) must not arm the background timer — under contention a
+  // shadow tick lands mid-loop and advances recovery without the harness
+  // stepBody, which flaked the 9sh/pillar climb acceptances (8e9).
+  async function tick(scheduled = false) {
     const endTimer = metrics.tickDuration.startTimer()
-    const r = await runTick()
+    const r = await runTick(scheduled)
     // Disk memory (idkcraft-hlk): one throttled write per window covers
     // every in-place store mutation (table claim, build done, arrival
     // scans, danger marks) with no per-store hooks. No world key (unit
@@ -637,7 +641,7 @@ function fleeReflex(bot, ctx) {
     return r
   }
 
-  async function runTick() {
+  async function runTick(scheduled = false) {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
     // 0ay: tick-over-tick hp drops stamp taking-fire (unreachable archers,
@@ -1100,7 +1104,7 @@ function fleeReflex(bot, ctx) {
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible || reflexFast || workTickFast)
+      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast)
     }
   }
 
