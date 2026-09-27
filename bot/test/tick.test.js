@@ -2108,7 +2108,7 @@ describe('nobody-online leave', () => {
       assert.deepEqual(delays, [10])
       ticker.destroy() // clears the pending tick, schedules nothing after
       assert.equal(cleared.length, 1)
-      await ticker.tick() // a manual tick still runs once asked, but arms nothing
+      await ticker.tick(true) // scheduled tick after destroy: runs, but the destroyed guard blocks re-arm
       assert.deepEqual(delays, [10])
     } finally {
       global.setTimeout = origSet
@@ -3052,7 +3052,8 @@ describe('eat reflex', () => {
     const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     assert.equal(bot.consumeCalls, 1)
-    ticker.destroy()
+    ticker.start() // arm the re-tick timer (manual ticks arm nothing)
+    ticker.destroy() // disarm it
     await new Promise((resolve) => setTimeout(resolve, 30)) // past the 10 ms re-tick
     assert.equal(bot.consumeCalls, 1)
   })
