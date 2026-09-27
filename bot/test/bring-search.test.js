@@ -439,3 +439,34 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
   })
 
 })
+
+describe('bring search edges (idkcraft-pun)', () => {
+  it('chooseBringSearch error and jev-missing fall back to the FSM', async () => {
+    const boom = { source: 'test', ask: async () => { throw new Error('boom') } }
+    const r1 = await chooseBringSearch(boom, 'search=food legs=1/4 last=empty', 3)
+    assert.equal(r1.action, 'search_more')
+    assert.equal(r1.source, 'fsm-fallback')
+    const jev = { source: 'jev', ask: async () => { throw new Error('jev missing api key') } }
+    const r2 = await chooseBringSearch(jev, 'search=food legs=1/4 last=empty', 3)
+    assert.equal(r2.action, 'search_more')
+    assert.equal(r2.source, 'fsm-fallback')
+  })
+
+  it('exploding explore fails the leg back to find', async () => {
+    // walkSearch never lets a broken executor wedge the order: the leg
+    // counts as failed and the order re-finds.
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    delete bot.pathfinder.setGoal
+    const ctx = {
+      lastGoalKey: '', stepStatus: 'running',
+      bring: {
+        kind: 'block', name: 'coal_ore', phase: 'searchwalk',
+        searchLegs: { legs: 0, startedAt: Date.now(), announced: true, last: 'empty' },
+      },
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'find')
+    assert.equal(ctx.bring.searchLegs.legs, 1)
+    assert.equal(ctx.bring.searchLegs.last, 'failed')
+  })
+})

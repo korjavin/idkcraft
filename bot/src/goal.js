@@ -407,8 +407,15 @@ function goalText(facts) {
   const door = facts.door > 0 ? 'yes' : 'no'
   const health = facts.health < 6 ? 'low' : 'ok'
   const food = facts.food < 6 ? 'hungry' : 'ok'
+  // Inside hides by day (atl.13): it gates only the night steps (stay/gohome
+  // feasibility), but the binary in/out flip on the 2x2x2 boundary re-fires
+  // the decision point all day (prod: 50% of re-decisions are facts-changed,
+  // forage<->rest every ~15-60s on inside alone). Feasibility still reads the
+  // true facts.inside; only the decision text (and the model state, whose day
+  // menu never offers stay/gohome) goes steady.
+  const inside = facts.time === 'day' ? 'no' : facts.inside
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
-    `table=${table} door=${door} home=${facts.home} inside=${facts.inside} health=${health} food=${food} ` +
+    `table=${table} door=${door} home=${facts.home} inside=${inside} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player}`
 }
 

@@ -555,12 +555,6 @@ function hopStepRun(bot, ctx) {
     const q = step && step.position
     if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
     st.stepPos = { x: q.x, y: q.y, z: q.z }
-    // Drop any live executor goal: a failed dig_step/sidestep leaves its
-    // GoalNear behind and decide() only clears at episode entry, so without
-    // this the lib fights the direct drive at 20 Hz (revmux 01 major).
-    try {
-      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
-    } catch (_) { /* goal best-effort */ }
   }
   let step = null
   try {
@@ -1124,6 +1118,17 @@ async function decide(bot, ctx, state, target) {
     // Failed primitives leave a log line, not just a metric (ak4): done
     // already logs through release(), failures never did.
     if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
+    // A finished goal-owner (dig_step/sidestep) leaves its GoalNear live,
+    // and the next primitive's direct drive would fight the lib at 20 Hz
+    // (7gt: revmux-01 found hop's instance) — decide() is the one choke
+    // point between primitives, so the stale goal dies here. Chains are
+    // safe: pillar/dig_up set no goals, dig_step re-sets its own on the
+    // step phase, and release() clears again anyway.
+    try {
+      if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
+        bot.pathfinder.setGoal(null)
+      }
+    } catch (_) { /* body best-effort */ }
     if (outcome === 'done') {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {
         return release(bot, ctx, rec.endEpisode ? 'gave-up' : 'done')
