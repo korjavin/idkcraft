@@ -518,7 +518,6 @@ describe('shave round-1 fixes', () => {
     assert.ok(ctx.flat.bumps[0].pickup, 'pickup queued')
     flat(bot, ctx, null, null); await settle() // pickup skipped, no walk goal
     assert.equal(ctx.flat.bumps[0].pickup, null)
-    assert.ok(bot.calls.goals.every((g) => g.constructor.name !== 'GoalNear' || true))
     const pickupGoals = bot.calls.goals.filter((g) => g && g.constructor && g.constructor.name === 'GoalNear' && g.x === 1 && g.z === 0)
     assert.equal(pickupGoals.length, 1, 'only the approach goal, no pickup tower walk')
   })
