@@ -322,12 +322,15 @@ describe('light behaviour ticks (rw4.13)', () => {
     try {
       // Set/strike alternate (no-ref resets the goal each strike).
       for (let i = 0; i < 6; i++) { light(bot, ctx); await flush() }
-      light(bot, ctx) // done branch observes the same closed ring
+      assert.deepEqual(ctx.lightSkip, [8])
+      // Mutant-grade (revmux 02 minor): the line must already be here
+      // from the skip path, before any done-branch tick could print it.
+      assert.equal(logs.filter((l) => l === 'torches placed 0').length, 1, `skip path logs, got: ${logs.join(' | ')}`)
+      light(bot, ctx) // done branch observes the same closed ring...
+      assert.equal(logs.filter((l) => l === 'torches placed 0').length, 1, '...and stays silent')
     } finally {
       console.log = orig
     }
-    assert.deepEqual(ctx.lightSkip, [8])
-    assert.equal(logs.filter((l) => l === 'torches placed 0').length, 1, `one line, got: ${logs.join(' | ')}`)
   })
   it('a home move clears the old site skips', () => {
     // Skip indices are site-relative (revmux 01 major): inheriting them
@@ -352,22 +355,43 @@ describe('light behaviour ticks (rw4.13)', () => {
     assert.deepEqual(ctx.lightSkip, [0])
     assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 1)
   })
-  it('stale goal after preemption: re-approach twice, skip as unreachable on the 3rd strike', () => {
+  it('unwalkable spot: 3 consecutive far-idle ticks skip it as unreachable', () => {
     const world = makeWorld()
     const h = home()
     const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(100, 65, 100) })
-    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' } // carried away mid-step
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' } // approach never arrives
     light(bot, ctx)
     assert.equal(ctx.lightGoalIdx, -1, 'forced fresh approach')
-    assert.equal(ctx.lightFails, 1, 'first strike counted')
+    assert.equal(ctx.lightFarTicks, 1, 'first streak tick counted')
+    assert.equal(ctx.lightFails || 0, 0, 'refusal counter untouched')
     assert.equal(bot.calls.places.length, 0)
     light(bot, ctx) // re-approach set...
-    light(bot, ctx) // ...still out of reach: strike 2
-    assert.equal(ctx.lightFails, 2)
+    light(bot, ctx) // ...still out of reach: streak 2
+    assert.equal(ctx.lightFarTicks, 2)
     light(bot, ctx)
-    light(bot, ctx) // strike 3: give up instead of looping all day
+    light(bot, ctx) // streak 3: give up instead of looping all day
     assert.deepEqual(ctx.lightSkip, [0])
     assert.equal(nextSpotIdx(bot, h, ctx.lightSkip), 1)
+  })
+  it('preemption resume: one far tick then walking back never burns the spot', () => {
+    // Round-2 minor: the far streak must break on walking, or fight
+    // preemptions pile strikes onto a reachable spot across the day.
+    const world = makeWorld()
+    const h = home()
+    const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], at: pos(100, 65, 100) })
+    let walking = false
+    bot.pathfinder.isMoving = () => walking
+    const ctx = { home: h, lightGoalIdx: 0, lightSkipKey: '0,64,0' }
+    for (let i = 0; i < 3; i++) {
+      walking = false
+      light(bot, ctx) // resume: far and idle, streak 1...
+      assert.equal(ctx.lightFarTicks, 1)
+      walking = true
+      light(bot, ctx) // ...then the walk back breaks the streak (and re-sets)
+      assert.equal(ctx.lightFarTicks, 0)
+    }
+    assert.deepEqual(ctx.lightSkip || [], [], 'reachable spot never skipped')
+    assert.equal(ctx.lightFails || 0, 0)
   })
   it('no torches: one craft op per tick, flag settled, metric counted', async () => {
     const world = makeWorld()

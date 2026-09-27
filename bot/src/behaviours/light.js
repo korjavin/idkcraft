@@ -213,6 +213,7 @@ function skipSpot(bot, home, ctx, idx, p, why) {
   if (!Array.isArray(ctx.lightSkip)) ctx.lightSkip = []
   if (!ctx.lightSkip.includes(idx)) ctx.lightSkip.push(idx)
   ctx.lightFails = 0
+  ctx.lightFarTicks = 0
   console.log(`light skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
   // A run whose last open spot closes by skipping must still log: the
   // unlit flip re-decides away before any done tick (revmux 01 minor).
@@ -226,6 +227,12 @@ function skipSpot(bot, home, ctx, idx, p, why) {
 function placeTick(bot, ctx, home, idx) {
   const spot = LIGHT_SPOTS[idx]
   const p = spotAbs(home, spot)
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  // Any walking breaks the far-idle streak (round-2 minor) — read before
+  // the set branch, so a walk already running when the goal (re)sets
+  // counts as progress too. Only N CONSECUTIVE far-idle ticks give up.
+  if (moving) ctx.lightFarTicks = 0
   if (ctx.lightGoalIdx !== idx) {
     ctx.lightGoalIdx = idx
     try {
@@ -238,22 +245,24 @@ function placeTick(bot, ctx, home, idx) {
     } catch (_) { /* retry next tick */ }
     return
   }
-  let moving = false
-  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   // Stale goal after a preemption carried the body away: re-approach.
-  // Counted (unlike the build.js twin): an unreachable spot (noPath,
-  // partial path, walled-in stage) would otherwise alternate setGoal
-  // and reset for the whole day with no give-up (revmux 01 minor).
+  // Counted on its own streak (unlike the build.js twin): an unreachable
+  // spot (noPath, partial path, walled-in stage) would otherwise alternate
+  // setGoal and reset for the whole day with no give-up (revmux 01
+  // minor). A dedicated counter, not lightFails: a preemption resume is
+  // one far-idle tick and the walk back resets the streak, so only
+  // genuinely unwalkable spots burn (revmux 02 minor). Residual: a path
+  // computation slower than 3 ticks on a flat yard reads as unwalkable.
   try {
     const bp = bot.entity && bot.entity.position
     if (bp && typeof bp.x === 'number' && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > PLACE_REACH) {
       if (ctx.lightFailIdx !== idx) {
         ctx.lightFailIdx = idx
-        ctx.lightFails = 0
+        ctx.lightFarTicks = 0
       }
-      ctx.lightFails = (ctx.lightFails || 0) + 1
-      if (ctx.lightFails >= REFUSALS_TO_SKIP) {
+      ctx.lightFarTicks = (ctx.lightFarTicks || 0) + 1
+      if (ctx.lightFarTicks >= REFUSALS_TO_SKIP) {
         skipSpot(bot, home, ctx, idx, p, 'unreachable')
         return
       }
@@ -287,6 +296,7 @@ function placeTick(bot, ctx, home, idx) {
   // have already handed to another step.
   const landed = () => {
     ctx.lightFails = 0
+    ctx.lightFarTicks = 0
     ctx.lightPlaced = (ctx.lightPlaced || 0) + 1
     metrics.light.inc({ op: 'placed' })
     try {
@@ -339,6 +349,7 @@ function light(bot, ctx) {
     ctx.lightSkipKey = siteKey
     ctx.lightSkip = []
     ctx.lightFails = 0
+    ctx.lightFarTicks = 0
     ctx.lightFailIdx = -1
     ctx.lightGoalIdx = -1
     ctx.lightPlaced = 0
