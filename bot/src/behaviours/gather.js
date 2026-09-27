@@ -8,6 +8,7 @@ const danger = require('../danger')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
+const { say, clearGoal } = require('./util')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
 // function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
@@ -55,20 +56,7 @@ function logIds(bot) {
   return ids
 }
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
-// Drop a dead goal like stopOnce, but without stop(): its latch would
-// swallow the next setGoal issued on the same tick.
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 // Commit a walk target: shared init for the sync-48 hit, a resource-memory
 // point and a far-search hit. far marks a fallback origin: if it reads back

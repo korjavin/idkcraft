@@ -6,6 +6,7 @@ const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
 const metrics = require('../metrics')
+const { say, clearGoal } = require('./util')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -141,9 +142,6 @@ function tierArticle(tier) {
   return tier === 'iron' ? 'an' : 'a'
 }
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
 function countDrop(bot, drop) {
   try {
@@ -153,16 +151,6 @@ function countDrop(bot, drop) {
   }
 }
 
-// Drop a dead order goal without stop(): its latch would swallow the next
-// setGoal issued on the same tick (same lesson as gather.js clearGoal).
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 function bringKind(ctx) {
   return (ctx.bring && ctx.bring.kind) || 'block'
