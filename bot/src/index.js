@@ -975,6 +975,27 @@ function fleeReflex(bot, ctx) {
       // Work mode (epic rw4) owns the body like an order: the goal arbiter
       // picks the step, except fight which still preempts (safety beats work).
       // Placed after lead so an explicit find-me order wins its ticks.
+      // atl.12 + rw4.10 split: a live night shelter-run holds fight
+      // preemption like shelter — stopping to fight every mob on the way
+      // home is how the bot dies outside (prod: 68% of deaths at night,
+      // 57% gohome-active). gohome stamps ctx.shelterRun on every night
+      // walk tick; while the stamp is fresh the work step below keeps
+      // walking (melee reflex defends) instead of engaging, and a stalled
+      // walk lets it go stale so fight resumes. Nobody-visible only
+      // (player protection still fights), no shelter/lead/bring override:
+      // an explicit order owns fight ticks exactly as before, so a fresh
+      // stamp can neither starve an order nor leak the walk's no-dig into
+      // order pathing. Dormant until rw4.10 lands (the export reads
+      // undefined and no stamp is ever fresh).
+      const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
+      const stampFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
+      if (!stampFresh) ctx.shelterRunLogged = false
+      const shelterRun = ctx.work && !ctx.lead && !ctx.bring && !ctx.inShelter &&
+        decision.action === 'fight' && !target && stampFresh
+      if (shelterRun && !ctx.shelterRunLogged) {
+        console.log('shelter-run: holding fight preemption, walking home')
+        ctx.shelterRunLogged = true
+      }
       if (ctx.inShelter && decision.action === 'fight') {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
@@ -983,7 +1004,7 @@ function fleeReflex(bot, ctx) {
         console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
-      if (ctx.work && decision.action !== 'fight') {
+      if (ctx.work && (decision.action !== 'fight' || shelterRun)) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
