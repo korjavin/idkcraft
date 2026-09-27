@@ -26,10 +26,10 @@ function world(over = {}) {
   }
 }
 
-function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false, failOpen = false } = {}) {
+function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false, failOpen = false, failDig = false } = {}) {
   const w = world(cells)
   const chats = []
-  const calls = { goals: [], opens: 0, deposits: [], withdraws: [], closes: 0 }
+  const calls = { goals: [], opens: 0, deposits: [], withdraws: [], closes: 0, digs: [] }
   const ids = {}
   let nextId = 1
   const idOf = (name) => {
@@ -51,6 +51,12 @@ function mockBot({ inv = [], cells = {}, chest = [], failDeposit = false, failOp
     inventory: { items: () => inv },
     blockAt: (p) => w.blockAt(p),
     equip: async () => {},
+    dig: async (cell) => {
+      if (failDig) throw new Error('dig refused')
+      calls.digs.push(cell && cell.name)
+      const q = cell && cell.position
+      if (q) delete w.cells[`${Math.floor(q.x)},${Math.floor(q.y)},${Math.floor(q.z)}`]
+    },
     placeBlock: async (ref, face) => {
       const p = ref && ref.position ? ref.position : { x: 5, y: 63, z: 1 }
       const f = face || { x: 0, y: 1, z: 0 }
@@ -185,14 +191,11 @@ describe('stockpile chestSpotFor', () => {
     assert.deepEqual(stockpile.chestSpotFor(bot, homeCtx()), { x: 4, y: 64, z: 0, adopt: true })
   })
 
-  it('treats flora as placeable (the server replaces it)', () => {
-    const bot = mockBot()
-    const w = world({})
-    bot.blockAt = (p) => {
-      if (p.x === 5 && p.y === 64 && p.z === 1) return { name: 'short_grass', boundingBox: 'empty', position: pos(5, 64, 1) }
-      return w.blockAt(p)
-    }
-    assert.deepEqual(stockpile.chestSpotFor(bot, homeCtx()), { x: 5, y: 64, z: 1, adopt: false })
+  it('treats clearable flora as placeable, skips torches', () => {
+    const grass = mockBot({ cells: { '5,64,1': 'short_grass' } })
+    assert.deepEqual(stockpile.chestSpotFor(grass, homeCtx()), { x: 5, y: 64, z: 1, adopt: false })
+    const torch = mockBot({ cells: { '5,64,1': 'torch' } })
+    assert.deepEqual(stockpile.chestSpotFor(torch, homeCtx()), { x: 4, y: 64, z: 0, adopt: false })
   })
 
   it('returns unknown when no candidate is decidable', () => {
@@ -213,6 +216,12 @@ describe('stockpile chestTodo', () => {
     const planks = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
     assert.equal(stockpile.chestTodo(planks, homeCtx(), 8), 'place')
   })
+  it('adopts despite a fresh no-spot stamp', () => {
+    const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [] })
+    const stamped = homeCtx({ ctx: { chestNoSpotAt: Date.now() } })
+    assert.equal(stockpile.chestTodo(bot, stamped, 0), 'adopt')
+  })
+
   it('honors a fresh no-spot stamp even when ready', () => {
     const bot = mockBot({ inv: [{ name: 'oak_planks', count: 8 }] })
     const fresh = homeCtx({ ctx: { chestNoSpotAt: Date.now() } })
@@ -460,6 +469,28 @@ describe('stockpile behaviour', () => {
     assert.equal(ctx.stepStatus, 'failed:deposit')
     assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
     assert.equal(typeof ctx.chestErrorAt, 'number')
+  })
+
+  it('digs clearable flora before placing', async () => {
+    const bot = mockBot({ cells: { '5,64,1': 'short_grass' }, inv: [{ name: 'chest', count: 1 }] })
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    bot.entity.position = pos(5, 64, 1)
+    stockpile(bot, ctx)
+    await flush()
+    assert.deepEqual(bot.calls.digs, ['short_grass'])
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+  })
+
+  it('a refused dig fails the step loudly', async () => {
+    const bot = mockBot({ cells: { '5,64,1': 'poppy' }, inv: [{ name: 'chest', count: 1 }], failDig: true })
+    bot.entity.position = pos(5, 64, 1)
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:dig')
+    assert.equal(ctx.home.chest, null)
   })
 
   it('places from a valid GoalPlaceBlock end node (+x/+z side)', async () => {

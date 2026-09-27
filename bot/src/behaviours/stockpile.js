@@ -49,6 +49,12 @@ const REPROBE_RADIUS = 32
 // floats) stamps a park so far legs don't each cost a walk home to
 // rediscover it; a freed spot retries within the hour (revmux 03-review).
 const NO_SPOT_RETRY_MS = 60 * 60 * 1000
+const CLEAR_FLORA = new Set([
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush',
+  'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
+  'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
+  'white_tulip', 'pink_tulip',
+])
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -132,22 +138,16 @@ function surplusCount(bot) {
 }
 
 function blockNameAt(bot, x, y, z) {
-  const info = blockInfoAt(bot, x, y, z)
-  return info ? info.name : null
-}
-
-function blockInfoAt(bot, x, y, z) {
   try {
     const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(new Vec3(x, y, z)) : null
-    if (!b || !b.name) return null
-    return { name: b.name, empty: b.boundingBox === 'empty' }
+    return (b && b.name) || null
   } catch (_) {
     return null
   }
 }
 
 // First candidate that can hold the chest: a standing chest to adopt, else
-// air (or flora the server replaces on place) with solid ground below.
+// air (or clearable flora, dug before the place) with solid ground below.
 // Adopt scans FIRST across all spots: a chest at a later spot must win
 // over an air cell at an earlier one (revmux 03-review). Returns
 // { x, y, z, adopt }, 'unknown' when nothing is decidable (chunks dark:
@@ -160,18 +160,18 @@ function chestSpotFor(bot, ctx) {
     const x = site.x + s.dx
     const y = site.y + s.dy
     const z = site.z + s.dz
-    const at = blockInfoAt(bot, x, y, z)
-    if (!at) { sawUnknown = true; return null }
+    const at = blockNameAt(bot, x, y, z)
+    if (at === null) { sawUnknown = true; return null }
     return { x, y, z, at }
   }
   for (const s of CHEST_SPOTS) {
     const c = cell(s)
-    if (c && c.at.name === 'chest') return { x: c.x, y: c.y, z: c.z, adopt: true }
+    if (c && c.at === 'chest') return { x: c.x, y: c.y, z: c.z, adopt: true }
   }
   for (const s of CHEST_SPOTS) {
     const c = cell(s)
     if (!c) continue
-    if (c.at.name !== 'air' && !c.at.empty) continue
+    if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
     const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }
     if (below === 'air') continue
@@ -182,14 +182,11 @@ function chestSpotFor(bot, ctx) {
 
 // What the no-chest branch can do: 'adopt' a standing chest on sight,
 // 'place' one when the pack holds a chest item or 8 same-wood planks,
-// 'none' otherwise — including a fresh no-spot stamp (revmux 03-review).
-// The menu gates on this so an unready bot never preempts a forage leg
-// to fail at once.
+// 'none' otherwise. The no-spot stamp gates placing only: a chest the
+// owner puts down by hand adopts immediately, never after the hour
+// (revmux 04-review). The menu gates on this so an unready bot never
+// preempts a forage leg to fail at once.
 function chestTodo(bot, ctx, maxPlanks) {
-  try {
-    const stamped = ctx && ctx.chestNoSpotAt
-    if (stamped != null && Date.now() - stamped < NO_SPOT_RETRY_MS) return 'none'
-  } catch (_) { /* unstamped */ }
   try {
     const site = ctx && ctx.home && ctx.home.site
     if (site && typeof site.x === 'number') {
@@ -197,6 +194,12 @@ function chestTodo(bot, ctx, maxPlanks) {
         if (blockNameAt(bot, site.x + s.dx, site.y + s.dy, site.z + s.dz) === 'chest') return 'adopt'
       }
     }
+  } catch (_) { /* no adopt */ }
+  try {
+    const stamped = ctx && ctx.chestNoSpotAt
+    if (stamped != null && Date.now() - stamped < NO_SPOT_RETRY_MS) return 'none'
+  } catch (_) { /* unstamped */ }
+  try {
     if (countItems(bot, (n) => n === 'chest') > 0) return 'place'
     if ((maxPlanks || 0) >= 8) return 'place'
   } catch (_) { /* undecidable: none */ }
@@ -559,6 +562,20 @@ function placeChest(bot, ctx, spot, bp) {
       if (!below || !below.name || below.name === 'air') {
         ctx.stockpileInFlight = false
         fail(ctx, 'no-ground')
+        return
+      }
+      // The scan admits clearable flora: break it first, the server
+      // refuses to place into a non-replaceable cell (revmux 04-review).
+      // Anything else non-air here fails below at the landed check.
+      try {
+        const cell = bot.blockAt(new Vec3(spot.x, spot.y, spot.z))
+        if (cell && cell.name && cell.name !== 'air' && cell.name !== 'chest' &&
+          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function') {
+          await bot.dig(cell)
+        }
+      } catch (_) {
+        ctx.stockpileInFlight = false
+        fail(ctx, 'dig')
         return
       }
       const items = bot.inventory.items()
