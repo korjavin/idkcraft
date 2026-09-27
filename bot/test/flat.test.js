@@ -651,6 +651,17 @@ describe('flat progress chat', () => {
     progressChat(bot, progFlat({ lastChat: Date.now() - 121000, progressChats: 1, filled: 5 }))
     assert.deepEqual(bot.chats, ['flat 5/20 (level 63)'])
   })
+
+  it('second immediate call on the same episode stays silent', () => {
+    // Revmux 01 core-1: without the progressChats increment a resolved
+    // field would chat every tick; the second call must post nothing.
+    const bot = progBot()
+    const f = progFlat({ lastChat: Date.now() - 10000, filled: 10 })
+    progressChat(bot, f)
+    assert.equal(bot.chats.length, 1)
+    progressChat(bot, f)
+    assert.equal(bot.chats.length, 1, 'no chat spam after the first line')
+  })
 })
 
 describe('flat behaviour', () => {
@@ -969,6 +980,20 @@ describe('flat behaviour', () => {
     assert.equal(ctx.flat, null)
     assert.equal(bot.calls.places.length, 3)
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 refused')), bot.chats.join('\n'))
+  })
+
+  it('an 11-hole field chats exactly one progress line before done', async () => {
+    // Revmux 01 core-1 through the tick path: the count trigger fires
+    // once past 10 resolved cells, then the 120 s cadence holds.
+    const world = makeWorld({})
+    for (let x = -4; x <= 4; x++) world.set(x, 63, 0, 'air')
+    world.set(-4, 63, 1, 'air')
+    world.set(-3, 63, 1, 'air')
+    const { bot, ctx } = started(world)
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null)
+    const prog = bot.chats.filter((c) => /^flat \d+\/\d+ \(level/.test(c))
+    assert.equal(prog.length, 1, bot.chats.join('\n'))
   })
 
   it('logs refused placements with coordinates to the console', async () => {
