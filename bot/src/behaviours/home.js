@@ -102,6 +102,9 @@ function setGoal(bot, ctx, key, goal) {
   try {
     bot.pathfinder.setGoal(goal, false)
     ctx.lastGoalKey = key
+    // The new plan has no nodes yet: drop the previous behaviour's so the
+    // sprint gate fails closed until path_update (follow.js 5vv mirror).
+    ctx.lastPathNodes = null
   } catch (_) { /* retry next tick */ }
 }
 
@@ -241,6 +244,39 @@ function setWalkDig(bot, allow) {
     if (mov && typeof mov.canDig === 'boolean') mov.canDig = allow
   } catch (_) { /* approach best-effort */ }
 }
+
+// Flat-run sprint (rw4.10): same gate as follow.js flat-pursuit sprint
+// (5vv) — far from the door and every plan node within one sprint tick
+// level, or the sprint-jump wedges on a +1 step (3nt.24). A raw
+// setControlState would die in 50 ms (the 20 Hz executor rewrites sprint
+// from allowSprinting), so this drives the flag the executor reads.
+// runTick restores both flags on ticks gohome does not own.
+const SHELTER_SPRINT_DIST = 8
+const SHELTER_SPRINT_LOOKAHEAD = 6
+function setShelterSprint(bot, ctx, out) {
+  try {
+    const mov = ctx && ctx.movements
+    if (!mov || typeof mov.allowSprinting !== 'boolean') return
+    const bp = botPos(bot)
+    const d = bp ? Math.hypot(bp.x - (out.x + 0.5), bp.y - out.y, bp.z - (out.z + 0.5)) : null
+    const nodes = ctx.lastPathNodes
+    const flat = !!(bp && Array.isArray(nodes) && nodes.length > 0 && nodes.every((n) => {
+      if (!n || typeof n.y !== 'number') return false
+      if (typeof n.x === 'number' && typeof n.z === 'number' &&
+        Math.hypot(n.x - bp.x, n.z - bp.z) > SHELTER_SPRINT_LOOKAHEAD) return true
+      return Math.floor(n.y) === Math.floor(bp.y)
+    }))
+    const sprint = d !== null && d > SHELTER_SPRINT_DIST && flat
+    mov.allowSprinting = sprint
+    if (typeof mov.allowParkour === 'boolean') mov.allowParkour = !sprint
+  } catch (_) { /* sprint best-effort */ }
+}
+
+// Shelter-run contract (rw4.10, dispatch half in atl.12): gohome stamps
+// ctx.shelterRun with Date.now() on every night walk tick. Dispatch treats
+// the run as live while the stamp is fresher than this — a step switch
+// away simply lets it go stale, so no ticker clearing is needed.
+const SHELTER_RUN_FRESH_MS = 2500
 function freshGo() {
   return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
 }
@@ -271,9 +307,19 @@ function gohome(bot, ctx, target, state) {
     const arrived = walkTo(bot, ctx, st, 'gohome-walk',
       new goals.GoalNear(out.x, out.y, out.z, 1),
       nearOut(out, 1))
-    if (st.phase === 'failed') { setWalkDig(bot, true);    return } // walkTo failed the step
+    if (st.phase === 'failed') { setWalkDig(bot, true); return } // walkTo failed the step
     if (arrived) st.phase = 'open'
-    else {    return }
+    else {
+      // rw4.10: the walk home runs far flat legs (48 blocks take ~11 s
+      // sprinted; fight churn on the way killed prod 7 times in 3.5 min),
+      // and every night walk tick stamps the shelter run for dispatch
+      // (atl.12) — gait-independent: rough legs walk but still count.
+      setShelterSprint(bot, ctx, out)
+      try {
+        if (goalFacts(bot, ctx).time === 'night') ctx.shelterRun = Date.now()
+      } catch (_) { /* unknown time: no stamp (fail closed) */ }
+      return
+    }
   }
   if (st.phase === 'open') {
     setWalkDig(bot, true)
@@ -405,4 +451,4 @@ function stay(bot, ctx, target, state) {
 
 }
 
-module.exports = { gohome, stay }
+module.exports = { gohome, stay, SHELTER_RUN_FRESH_MS }
