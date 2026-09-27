@@ -668,8 +668,10 @@ describe('equip failure edges (idkcraft-pun)', () => {
   })
 
   it('flaky inventory degrades the table hunt to no-table', async () => {
-    // items() dies mid-tick (after toolOp tallied): tableFor reads [] and
-    // fails loudly instead of crashing the tick.
+    // items() dies mid-tick: tableFor reads [] and fails loudly instead of
+    // crashing the tick. 6 = hasPickaxe + 4 toolOp reads, so the 6th call is
+    // tableFor's itemsOf; the calls assert below keeps this honest if a read
+    // is added or removed upstream.
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
       ids: IDS,
@@ -684,6 +686,7 @@ describe('equip failure edges (idkcraft-pun)', () => {
     const ctx = freshCtx()
     equip(bot, ctx, null, {})
     await flush()
+    assert.ok(calls >= 6, `items() throw reached tableFor, calls=${calls}`)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
     assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
     bot.restoreError()
