@@ -752,6 +752,7 @@ describe('light place residuals (idkcraft-qxa batch P)', () => {
 
   it('P-retry refuse-on-flora digs and replaces in one flight', async () => {
     const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    world.set(1, 64, -2, 'short_grass') // static cell: the scan, reread, dig and retry all agree
     ctx.lightGoalIdx = 0
     ctx.lightFailIdx = 0
     let attempts = 0
@@ -761,10 +762,6 @@ describe('light place residuals (idkcraft-qxa batch P)', () => {
       const rp = (ref && ref.position) || ref
       world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
     }
-    const blockAt = bot.blockAt
-    bot.blockAt = (p) => (attempts >= 1 && p.x === 1 && p.z === -2 && p.y === 64
-      ? { name: 'short_grass', position: pos(1, 64, -2) }
-      : blockAt(p))
     light(bot, ctx)
     await flush()
     await flush()
@@ -776,13 +773,10 @@ describe('light place residuals (idkcraft-qxa batch P)', () => {
 
   it('P-retryfail a refused retry counts a second refusal', async () => {
     const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
+    world.set(1, 64, -2, 'short_grass')
     ctx.lightGoalIdx = 0
     ctx.lightFailIdx = 0
     bot.placeBlock = async () => { throw new Error('refused') }
-    const blockAt = bot.blockAt
-    bot.blockAt = (p) => (p.x === 1 && p.z === -2 && p.y === 64
-      ? { name: 'short_grass', position: pos(1, 64, -2) }
-      : blockAt(p))
     bot.dig = async () => { throw new Error('dig refused') }
     light(bot, ctx)
     await flush()
