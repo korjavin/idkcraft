@@ -53,9 +53,14 @@ const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep'
 // it. Stand (/tmp/y34-stand, 45 real menus x2 reps vs laya): agreement
 // 26.7% -> 77.8%, dig picks 37 -> 14, hop picks 1 -> 24. Exported so the
 // rule has one source of truth, like shapeGoalMenu.
-function shapeRecoverMenu(names) {
-  if (names.length > 1 && names.includes('hop_step') && names.includes('dig_step')) {
-    return names.filter((n) => n !== 'dig_step')
+// duc: the same for sidestep, goal-gated — on a level/low goal a sidestep
+// beats digging a step upward (wrong direction), but on a high goal dig is
+// the FSM climber and stays. No escape on the menu ([dig,wait] pit): no
+// shaping, digging out beats standing still.
+function shapeRecoverMenu(names, facts) {
+  if (names.length > 1 && names.includes('dig_step')) {
+    if (names.includes('hop_step')) return names.filter((n) => n !== 'dig_step')
+    if (names.includes('sidestep') && facts && facts.goalDy < 2) return names.filter((n) => n !== 'dig_step')
   }
   return names
 }
@@ -371,10 +376,11 @@ async function chooseRecovery(brain, facts, feasible) {
   // answer must not cost a brain call on the tick path.
   const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
-  // y34 shaping after the 4jr exclusion: a failed hop is already out, so
-  // shaping never hides the dig it escalates to. Before the only-option
-  // check: a menu shrunk to one answer costs no brain call (round-2 rule).
-  const askNames = shapeRecoverMenu(unshaped)
+  // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
+  // already out, so shaping never hides the dig it escalates to. Before
+  // the only-option check: a menu shrunk to one answer costs no brain
+  // call (round-2 rule).
+  const askNames = shapeRecoverMenu(unshaped, facts)
   if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')

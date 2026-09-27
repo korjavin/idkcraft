@@ -760,6 +760,75 @@ describe('recover menu shaping (y34)', () => {
   })
 })
 
+describe('recover side shaping (duc)', () => {
+  const facts = {
+    goalDy: 0, goalDist: 10, scaffold: 0, pickaxe: false, water: false,
+    headBlocked: false, walls: 2, freeSides: [[1, 0]], lavaNear: false,
+    playerOnline: false, playerDist: null, playerName: null, stuckTicks: 12,
+    resetsStuck: 0, resetsPlaceError: 0, last: 'none', by: 'follow',
+  }
+  const high = { ...facts, goalDy: 5, goalDist: 12 }
+  it('shapeRecoverMenu drops dig_step for sidestep only below a high goal', () => {
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], facts), ['sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: -3 }), ['sidestep', 'wait'])
+    // Boundary pin (revmux 01 minor x2): <1/<3/<=2 mutants must die here.
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: 1 }), ['sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], { ...facts, goalDy: 2 }), ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait'], high), ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'sidestep', 'wait']), ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(recover.shapeRecoverMenu(['dig_step', 'wait'], facts), ['dig_step', 'wait'])
+  })
+  it('level side menu: the model is asked without dig_step', async () => {
+    // y34 residual (prod 221, stand 0/9): laya digs a step upward where a
+    // sidestep would do. Removing the goal gate re-offers dig.
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'sidestep' } }
+    const r = await recover.chooseRecovery(brain, facts, ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(asked, ['sidestep', 'wait'])
+    assert.deepEqual(r, { action: 'sidestep', source: 'laya', fsm: 'sidestep', model: 'laya' })
+  })
+  it('high side menu: dig_step stays, the FSM climber is askable', async () => {
+    // Dropping the goalDy<2 gate would hide the only climber here and the
+    // model would sidestep under a high goal.
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'dig_step' } }
+    const r = await recover.chooseRecovery(brain, high, ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(asked, ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(r, { action: 'dig_step', source: 'laya', fsm: 'dig_step', model: 'laya' })
+  })
+  it('failed sidestep still escalates to digging', async () => {
+    // 4jr exclusion removes the failed sidestep first; shaping must not
+    // hide the dig it escalates to.
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'dig_step' } }
+    const failed = { ...facts, last: 'sidestep:failed:no-gain' }
+    const r = await recover.chooseRecovery(brain, failed, ['dig_step', 'sidestep', 'wait'])
+    assert.deepEqual(asked, ['dig_step', 'wait'])
+    assert.equal(r.action, 'dig_step')
+    assert.equal(r.source, 'laya')
+  })
+  it('enclosed pit without escape: no shaping, digging out stays askable', async () => {
+    // [dig,wait] with a level goal: shaping to only-option wait would stand
+    // still forever in a diggable pit.
+    let asked = null
+    const brain = { source: 'laya', ask: async ({ criteria }) => { asked = Object.keys(criteria); return 'dig_step' } }
+    const errLines = []
+    const origErr = console.error
+    console.error = (l) => { errLines.push(String(l)) }
+    let r
+    try {
+      r = await recover.chooseRecovery(brain, facts, ['dig_step', 'wait'])
+    } finally {
+      console.error = origErr
+    }
+    assert.deepEqual(asked, ['dig_step', 'wait'])
+    assert.equal(r.action, 'dig_step')
+    const line = errLines.find((l) => l.includes('brain disagree'))
+    const menu = line && /menu=([\w,]+)/.exec(line)
+    assert.ok(menu && menu[1] === 'dig_step,wait', `unshaped menu logged, got: ${line}`)
+  })
+})
+
 describe('gave-up marks danger (mnx)', () => {
   it('release gave-up marks the spot; release done leaves no mark', () => {
     // Acceptance: the gave-up point itself is what later steps avoid.
