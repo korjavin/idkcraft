@@ -74,6 +74,15 @@ function doorOpen(block) {
   }
 }
 
+// A close into a missing door is a failure, never a silent done (rw4.8):
+// prod stood a whole night 'sheltered' with arrows coming through. Failing
+// lets the arbiter send build to repair the door cell.
+function failNoDoor(ctx, st, where) {
+  st.phase = 'failed'
+  ctx.stepStatus = 'failed:no-door'
+  console.log(`door missing at ${where}`)
+}
+
 // Fire-and-forget toggle, at most one per window; the phase only advances
 // on the OBSERVED state, never optimistically.
 function tryToggle(bot, st, block) {
@@ -285,7 +294,8 @@ function gohome(bot, ctx, target, state) {
   }
   if (st.phase === 'close') {
     const door = doorBlock(bot, home)
-    if (!door || !doorOpen(door)) {
+    if (!door) { failNoDoor(ctx, st, 'gohome-close'); return }
+    if (!doorOpen(door)) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
       ctx.inShelter = true
@@ -339,6 +349,15 @@ function stay(bot, ctx, target, state) {
   } catch (_) { /* hold on unknown time */ }
   if (time !== 'day') {
     st.phase = 'hold'
+    // rw4.8: the shelter is only a shelter with a shut door — an opened
+    // door gets re-closed, a missing one fails loud (see failNoDoor).
+    const door = doorBlock(bot, home)
+    if (!door) {
+      failNoDoor(ctx, st, 'stay-hold')
+      ctx.inShelter = false
+      return
+    }
+    if (doorOpen(door)) tryToggle(bot, st, door)
     holdStill(bot, ctx)
     return
   }
@@ -368,7 +387,8 @@ function stay(bot, ctx, target, state) {
   }
   if (st.phase === 'close') {
     const door = doorBlock(bot, home)
-    if (!door || !doorOpen(door)) {
+    if (!door) { failNoDoor(ctx, st, 'stay-close'); return }
+    if (!doorOpen(door)) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
       ctx.inShelter = false
