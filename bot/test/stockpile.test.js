@@ -786,6 +786,37 @@ describe('stockpile place residuals (idkcraft-cq7 batch B2)', () => {
 
 
 
+  it('B-itemgone a chest lost during the flora dig fails no-chest', async () => {
+    const { bot, ctx } = placeBot({ cells: { '5,64,1': 'short_grass' } })
+    const dig = bot.dig
+    bot.dig = async (cell) => {
+      await dig(cell)
+      const ix = bot.inv.findIndex((i) => i.name === 'chest')
+      if (ix >= 0) bot.inv.splice(ix, 1) // pack changes across the dig await
+    }
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+
+  it('B-weirdinv a flaked inventory after the flora dig fails no-chest', async () => {
+    const { bot, ctx } = placeBot({ cells: { '5,64,1': 'short_grass' } })
+    const items = bot.inventory.items
+    let dug = false
+    const dig = bot.dig
+    bot.dig = async (cell) => { await dig(cell); dug = true }
+    bot.inventory.items = () => (dug ? 'weird' : items())
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
+    assert.equal(ctx.stockpileInFlight, false)
+  })
+
   it('B-noequipfn a missing hold driver still places', async () => {
     const { bot, ctx } = placeBot()
     delete bot.equip
@@ -967,9 +998,11 @@ describe('stockpile walk residuals (idkcraft-cq7 batch W)', () => {
 //   only when the plan is empty, which returns done earlier.
 // - deposit outer catch: unreachable — every inner op is individually
 //   guarded (per-item deposit, say, withChest), leaving no realistic throw.
-// - place no-ground arms and the async item re-read: unreachable — the scan
-//   and the async prefix run in one synchronous tick, so a deterministic
-//   world cannot show ground/a chest at scan time and air/none at re-read.
+// - place no-ground arms: unreachable — the below re-read runs before the
+//   first await, in one synchronous tick with the scan, so a deterministic
+//   world cannot show ground at scan time and air at re-read. (The item
+//   re-read IS reachable — it runs after the flora-dig await — and is
+//   pinned by B-itemgone/B-weirdinv; round-1 minor.)
 // - mid-open unknown: unreachable via the step (same-tick reread); via
 //   withdraw unknown and gone both report { got: 0 }, so the distinction is
 //   untestable. (The gone branch itself IS pinned — B-noopen drives it with
