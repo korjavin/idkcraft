@@ -16,7 +16,7 @@ const { Movements, goals } = require('mineflayer-pathfinder')
 const AStar = require('mineflayer-pathfinder/lib/astar')
 const Move = require('mineflayer-pathfinder/lib/move')
 const { createTicker } = require('../src/index')
-const { addJumpUpCost, JUMP_UP_COST } = require('../src/jumpcost')
+const { addJumpUpCost, JUMP_UP_COST, WEDGE_COST } = require('../src/jumpcost')
 
 // Flat feet-64 ground; a +1 step wall across x=1 (block at y=64) for
 // z in [lo, hi). Gap course: short wall, open gap past the end. Forced
@@ -111,6 +111,16 @@ function pitNameAt(x, y, z) {
   return 'air'
 }
 
+// 1-wide shaft at x=2,z=0 (cells y=61..63 air, stone floor y=60), flat
+// feet-64 ground everywhere else. The shaft bottom (2,61,0) has all 4
+// feet-level sides solid: landing there wedges the body on Paper (o6n).
+function shaftNameAt(x, y, z) {
+  if (x === 2 && z === 0 && y >= 61 && y <= 63) return 'air'
+  if (y < 63) return 'stone'
+  if (y === 63) return 'grass_block'
+  return 'air'
+}
+
 function parkourUps(path, start) {
   const full = [start, ...path]
   return full.filter((p, i) => i > 0 && p.parkour && p.y - full[i - 1].y === 1)
@@ -173,6 +183,34 @@ describe('jump-up cost penalty (idkcraft-8yy)', () => {
     assert.equal(fixed.status, 'success')
     assert.ok(fixed.visitedNodes < 40 * raw.visitedNodes,
       `patched visited ${fixed.visitedNodes} vs raw ${raw.visitedNodes}`)
+  })
+
+  it('wedged landings take the penalty, open and unknown landings do not', () => {
+    const movements = wiredMovements(shaftNameAt)
+    // drop-down move landing at the shaft bottom (2,61,0): 4 solid sides
+    const from = new Move(1, 64, 0, 0, 0)
+    const down = movements.getNeighbors(from).find((m) => m.x === 2 && m.y === 61 && m.z === 0)
+    assert.ok(down, 'drop-down move into the shaft exists')
+    const rawDown = rawMovements(shaftNameAt).getNeighbors(from)
+      .find((m) => m.x === 2 && m.y === 61 && m.z === 0)
+    assert.equal(down.cost, rawDown.cost + WEDGE_COST)
+    // flat move onto open ground: no penalty
+    const flat = movements.getNeighbors(new Move(0, 64, 0, 0, 0))
+      .find((m) => m.x === 0 && m.y === 64 && m.z === 1)
+    assert.equal(flat.cost, 1)
+  })
+
+  it('forced shaft descent still plans (penalty never forbids)', () => {
+    const mk = (wired) => {
+      const m = wired ? wiredMovements(shaftNameAt) : rawMovements(shaftNameAt)
+      // walls unbreakable: the shaft is the only way down (corner.test.js shape)
+      m.blocksCantBreak.add(mcData.blocksByName.stone.id)
+      return m
+    }
+    const fixed = plan(mk(true), 0, 64, 0, 2, 61, 0)
+    assert.equal(fixed.status, 'success')
+    const last = fixed.path[fixed.path.length - 1]
+    assert.deepEqual([last.x, last.y, last.z], [2, 61, 0])
   })
 
   it('forced climb still plans (penalty never forbids)', () => {
