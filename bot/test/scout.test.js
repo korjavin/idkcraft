@@ -769,7 +769,7 @@ describe('scout ranking edges (idkcraft-l71)', () => {
     const c = pos(30, 10, 0)
     const bot = mockBot({
       registry: { diamond_ore: 179, iron_ore: 15 },
-      spots: [d, c],
+      spots: [c, d], // copper first: only the fallback rank moves it last
       names: { '3,10,0': 'diamond_ore', '30,10,0': 'iron_ore' },
     })
     const raw = bot.blockAt.bind(bot)
@@ -782,13 +782,14 @@ describe('scout ranking edges (idkcraft-l71)', () => {
     const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
     const bot = mockBot({
       registry: { coal_ore: 10 },
-      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone', '80,65,0': 'air' },
     })
     bot.entity.position = { x: 0, y: 64, z: 0 } // plain: clonePos and dist fall back
     const cursor = startFarSearch(bot, 'coal')
     assert.ok(cursor && cursor !== 'unknown')
     assert.deepEqual(cursor.origin, { x: 0, y: 64, z: 0 })
     for (let x = 5; x < 75; x++) cursor.hits.set(`${x},64,0`, { x, y: 64, z: 0 })
+    cursor.hits.set('80,64,0', { x: 80, y: 64, z: 0 }) // exposed, past the 64-nearest window
     cursor.at = cursor.queue.length
     const r = stepFarSearch(bot, cursor)
     assert.equal(r.done, true)
@@ -801,11 +802,15 @@ describe('scout ranking edges (idkcraft-l71)', () => {
     const { startFarSearch, stepFarSearch } = require('../src/behaviours/scout')
     const bot = mockBot({
       registry: { coal_ore: 10 },
-      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+      names: {
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+        '248,64,0': 'stone', '296,64,0': 'stone', '328,64,0': 'stone', '360,64,0': 'stone',
+      },
       findImpl: () => [],
     })
     const cursor = startFarSearch(bot, 'coal')
     assert.ok(cursor && cursor !== 'unknown')
+    // Same loaded edge at the new spot: only the walked-off distance rebuilds.
     bot.entity.position = { x: 200, y: 64, z: 0 } // walked past SEARCH_FIRST
     const r = stepFarSearch(bot, cursor)
     assert.deepEqual(cursor.origin, { x: 200, y: 64, z: 0 })
@@ -819,14 +824,15 @@ describe('scout ranking edges (idkcraft-l71)', () => {
     const bot = mockBot({
       registry: { coal_ore: 10 },
       names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
-      findImpl: () => { n++; if (n === 1) throw new Error('chunk busy'); return [] },
+      findImpl: () => { n++; if (n === 1) throw new Error('chunk busy'); return n === 2 ? [{ x: 60, y: 64, z: 0 }] : [] },
     })
     const cursor = startFarSearch(bot, 'coal')
     assert.ok(cursor && cursor !== 'unknown')
     let r = { done: false, result: null }
     for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor)
     assert.equal(r.done, true)
-    assert.equal(r.result, null)
+    assert.ok(r.result, 'later rings still run after the throw')
+    assert.deepEqual([r.result.position.x, r.result.position.z], [60, 0])
   })
 
   it('throwing blockAt keeps the requested name', () => {

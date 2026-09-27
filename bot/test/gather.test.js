@@ -596,13 +596,13 @@ describe('stuck-detector blind spots (idkcraft-68p)', () => {
 describe('gather edges (idkcraft-l71)', () => {
   it('plain positions meter by hypot on the first find', () => {
     const bot = mockBot({
-      spots: [{ x: 12, y: 64, z: 0 }],
-      names: { '12,64,0': 'oak_log' },
+      spots: [{ x: 12, y: 64, z: 0 }, { x: 3, y: 64, z: 0 }],
+      names: { '12,64,0': 'oak_log', '3,64,0': 'oak_log' },
     })
     bot.entity.position = { x: 0, y: 64, z: 0 } // no distanceTo: hypot fallback
     const ctx = freshCtx()
     gather(bot, ctx, null, {})
-    assert.match(ctx.lastGoalKey, /^gather:12,64,0$/)
+    assert.match(ctx.lastGoalKey, /^gather:3,64,0$/, 'hypot picks the nearer trunk')
     assert.equal(ctx.stepStatus, 'running')
   })
 

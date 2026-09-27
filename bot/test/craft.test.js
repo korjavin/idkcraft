@@ -252,6 +252,7 @@ describe('craft edges (idkcraft-l71)', () => {
     const bot = mockBot({ ids: { stick: 1 }, recipes: {} })
     bot.recipesFor = () => { throw new Error('registry busy') }
     assert.deepEqual(craft.recipes(bot, 'stick', null), [])
+    bot.restoreError()
   })
 
   it('missing bot.craft fails the op instead of throwing', async () => {
