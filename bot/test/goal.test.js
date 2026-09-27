@@ -380,6 +380,20 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
   })
 
+  it('step flip back within 10s chats once (f3s call-site pin)', async () => {
+    // A->B->A on one ctx: the repeat next: line must be throttled. Reverting
+    // the decide() call sites to plain bot.chat fails this test.
+    const bot = goalBot()
+    const ctx = {}
+    await decide(bot, ctx)
+    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+    ctx.step = 'explore'; ctx.stepStatus = 'done' // simulate a finished flip away
+    const r = await decide(bot, ctx) // same facts re-decide to gather
+    assert.equal(ctx.step, 'gather')
+    assert.equal(r.action, 'gather')
+    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+  })
+
   it('same facts with a running step: no change, no log, no chat', async () => {
     const bot = goalBot()
     const ctx = {}

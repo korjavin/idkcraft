@@ -391,6 +391,22 @@ describe('forage successful hunt (idkcraft-9go)', () => {
     assert.equal(ctx.forage.phase, 'find')
   })
 
+  it('second episode on one ctx stays silent within 10s (f3s call-site pin)', () => {
+    // finish() nulls ctx.forage between episodes; the fresh episode re-announces
+    // the same line, which the throttle must drop. Reverting the announce to
+    // plain say() fails this test.
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // episode 1 announces
+    assert.ok(bot.chats.some((m) => m.startsWith('foraging:')), `announced, got: ${bot.chats.join(' | ')}`)
+    const n = bot.chats.length
+    ctx.forage = null // finish() nulls it between episodes
+    forage(bot, ctx, null, {}) // episode 2 replans the same cow
+    assert.equal(ctx.forage.target.name, 'cow')
+    assert.equal(bot.chats.length, n)
+  })
+
   it('vanished prey with empty memory fails no-known', () => {
     const bot = mockBot()
     const ctx = memCtx([])
