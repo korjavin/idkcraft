@@ -36,7 +36,8 @@ function addJumpUpCost(movements) {
     for (const m of ns) {
       if (!m || typeof m.y !== 'number' || typeof m.cost !== 'number') continue
       if (m.y - node.y === 1 && (m.x !== node.x || m.z !== node.z)) m.cost += JUMP_UP_COST
-      if (landsWedged(movements, m)) m.cost += WEDGE_COST
+      const digs = !!(m.toBreak && m.toBreak.length)
+      if (!digs && landsWedged(movements, m)) m.cost += WEDGE_COST
     }
     return ns
   }
@@ -45,12 +46,18 @@ function addJumpUpCost(movements) {
 // A landing whose feet cell has all 4 horizontal neighbours solid: the body
 // starts wedged and Paper zeroes every move out (o6n). Unknown cells
 // (unloaded chunk: physical=false) fail open — unexplored is not a wedge.
+// A side counts only when it fills the cell (height check): carpets, slabs
+// and other thin physical blocks are step-overs, not walls; climbables are
+// passable. Dig moves (toBreak) skip the charge at the call site: their
+// enclosure is self-made (tunnel walls read solid though planned-dug) and
+// charging every dug descent would flood A* like the climb penalty did.
 function landsWedged(movements, m) {
   if (!movements || typeof movements.getBlock !== 'function') return false
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     let c = null
     try { c = movements.getBlock(m, dx, 0, dz) } catch (_) { return false }
-    if (!c || !c.physical) return false
+    if (!c || !c.physical || c.climbable) return false
+    if (typeof c.height !== 'number' || c.height < m.y + 1) return false
   }
   return true
 }

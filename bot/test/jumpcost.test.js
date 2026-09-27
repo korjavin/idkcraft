@@ -200,6 +200,49 @@ describe('jump-up cost penalty (idkcraft-8yy)', () => {
     assert.equal(flat.cost, 1)
   })
 
+  it('carpeted floors are not wedges (thin blocks fail open)', () => {
+    const carpetAt = (x, y, z) => {
+      if (y === 64 && Math.abs(x) <= 6 && Math.abs(z) <= 6) return 'moss_carpet'
+      if (y < 63) return 'stone'
+      if (y === 63) return 'grass_block'
+      return 'air'
+    }
+    const movements = wiredMovements(carpetAt)
+    const flat = movements.getNeighbors(new Move(0, 64, 0, 0, 0))
+      .find((m) => m.x === 1 && m.y === 64 && m.z === 0)
+    assert.ok(flat, 'flat step across carpet exists')
+    assert.equal(flat.cost, 1)
+  })
+
+  it('unknown side cells fail open (no penalty at chunk edge)', () => {
+    const base = worldBot(shaftNameAt)
+    const nullBot = { ...base, blockAt: (p) => (p.x === 3 && p.y === 61 && p.z === 0 ? null : base.blockAt(p)) }
+    const mk = (wired) => {
+      const m = new Movements(nullBot)
+      m.allowSprinting = false
+      if (wired) {
+        const ticker = createTicker({ bot: nullBot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+        ticker.setMovements(m)
+      }
+      return m
+    }
+    const from = new Move(1, 64, 0, 0, 0)
+    const fixed = mk(true).getNeighbors(from).find((m) => m.x === 2 && m.y === 61 && m.z === 0)
+    const raw = mk(false).getNeighbors(from).find((m) => m.x === 2 && m.y === 61 && m.z === 0)
+    assert.ok(fixed && raw, 'shaft drop exists on both stacks')
+    assert.equal(fixed.cost, raw.cost)
+  })
+
+  it('dug descents skip the wedge charge (no A* flood underground)', () => {
+    const dirtAt = (x, y, z) => (y <= 63 ? 'dirt' : 'air')
+    const raw = plan(rawMovements(dirtAt), 6, 64, 0, 6, 56, 0, 1)
+    assert.equal(raw.status, 'success')
+    const fixed = plan(wiredMovements(dirtAt), 6, 64, 0, 6, 56, 0, 1)
+    assert.equal(fixed.status, 'success')
+    assert.ok(fixed.visitedNodes < 3 * raw.visitedNodes,
+      `wired visited ${fixed.visitedNodes} vs raw ${raw.visitedNodes}`)
+  })
+
   it('forced shaft descent still plans (penalty never forbids)', () => {
     const mk = (wired) => {
       const m = wired ? wiredMovements(shaftNameAt) : rawMovements(shaftNameAt)
