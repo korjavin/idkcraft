@@ -93,8 +93,8 @@ not derived by counting. On these the remote model is consulted and wins:
 | --- | --- | --- | --- |
 | `low-health-hostile` | hostile fact (`hostile_distance` is a number or `hostile_near_player`) and `bot_health < 6` | Bot at 4.9 hp shadowing while the player was slain 5 times: fight (protect) vs follow (survive) is a real judgement | model |
 | `unreachable-hostile` | `hostile_reachable === false` (fight's give-up latch) | The rules already failed once on this mob; re-probe vs shadow the player is a guess | model |
-| `crowd` | `nearby_hostiles >= 3` | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it | model |
-| `hostile-vs-far-player` | hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless) | model |
+| `crowd` | `nearby_hostiles >= 3` with a fight target (`hostile_distance` is a number or `hostile_near_player`) the pursuit has not written off (`hostile_reachable !== false`) | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it. A bare count (creepers, 8–16-block mobs) routes easy — the model can only phantom-fight it | model |
+| `hostile-vs-far-player` | reachable hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless). Unreachable routes easy (give-up latch respected; a player threat still fights via the FSM) | model |
 
 ### What the model is asked
 
@@ -450,6 +450,84 @@ overnight stay Sep 26 01:25–01:35 (dusk to dawn inside, `step-done`).
   bot inside its closed house (Sep 27 08:25–08:28), then 7 more deaths
   walking home at night. JEV comparison still open: switching brains needs
   a player (`brain jev` in chat).
+
+### Changelog (2026-09-27, PRs #113–#136)
+
+Recover / physics on Paper 26.1.2 (#113, #114, #126, #128, #133):
+- Swim: the planner no longer proposes +2 water exits — Paper 26.1.2
+  rejects every wall-contact rise with a same-position teleport (assayed
+  live vs vanilla/1.21.4); +1 exits, the diagonal rise, and the nocorner
+  lip exemption stay (#113). A bank a full block up stays unswimmable;
+  see open beads.
+- `hop_step` mounts +1 again: it backs to a leap stance and jumps from a
+  standstill instead of leaping into the face (Paper zeroes wall-contact
+  leaps), holding thrust through the arc; assayed live on Paper vs
+  vanilla (#126). Watch `recover action=hop_step … outcome=done` where
+  it used to be `failed:no-progress`.
+- Sidestep apex no longer fakes done (rise needs `onGround`), hop backs
+  off airborne hangs instead of holding jump forever, and failed
+  primitives log (#114). Stale executor goals drop on primitive
+  transitions so chained drives stop fighting the lib at 20 Hz (#133).
+- Rest escalation (#114): roam-back wedge detection, a live-goal ticker
+  backstop, and 2 gave-ups failing the step (`failed:cannot-reach-home`)
+  with a hold at the point — no more 82-minute pit spins.
+- Repeat gave-up with nobody online pages the owner once per pit
+  (`I'm stuck at … again with nobody online, /tp …`); the chat persists
+  in the server log for the next session (#128). Rest repeats stay with
+  the q0h escalation above (no double page).
+
+Home / night (#122, #134):
+- Door failures fail loud: both closes report `failed:no-door` plus
+  `door missing at <where>` instead of sheltering silently; stay
+  re-closes an opened door and holds unsheltered (fighting back) with no
+  door, logging once (#122). By day the arbiter sends build to repair
+  the door cell.
+- Gohome walk runs far flat legs (sprint gated like follow: 8+ blocks,
+  level plan window, parkour off) and stamps `shelterRun` on night ticks
+  for dispatch (#134). The fight-hold half lands with atl.12 (open).
+
+Brain + LAYA menus (#123, #127, #130):
+- Goal pairs: LAYA is never asked a 2-menu containing rest (`[work,
+  rest]` answers work unasked — all 761 prod disagreements were
+  rest-vs-work); longer chains and JEV keep the full menu. `goal step=`
+  and `goal disagree` lines now carry `menu=<csv>` (#123). Expect goal
+  disagreement to fall and `only-option` picks to rise (Grafana: House
+  cycle row).
+- Hard cases gated on a real fight target + reachability
+  (crowd/hostile-vs-far-player): the 99.6% no-target crowd disagreements
+  now route easy, and `brain disagree` lines carry `reason=<hard-case>`
+  (#127).
+- Day decision text hides `inside` (the house-boundary flip re-asked the
+  model every ~15–60 s for nothing); night text stays truthful, and
+  feasibility always reads the true value (#130). Fewer
+  `why=facts-changed` re-decisions by day.
+
+Forage (#124):
+- The final gate expires after 3 instant fails (final dropped, skips
+  kept), so picks run honestly instead of failing 2.6 ticks/pick
+  forever; empty bankings log `forage failed:<reason> strikes=N` (#124).
+
+Tests / e2e (#115–#118, #120, #121, #125, #129, #132, #135, #136):
+- 1045 tests green (was 834 at #113): unit coverage for recover run bodies,
+  the forage food path, deliver toss/wait, retreat empty menu, danger
+  memory, and bring/equip/resources residuals; e2e batches replaying
+  closed follow/stuck/recover/work/order/fight bugs through real ticks;
+  tests run by glob so new files can no longer silently skip (#136).
+
+Docs (#119): house-cycle narrative, goal log rows, metrics, the panel
+note, and the Sep-27 acceptance (the section above).
+
+Still open and why:
+- h04 / y5o (P1, deferred to Nov 25): water exit onto a raised bank is a
+  Paper 26.x regression (proven against vanilla); y5o (water dig-assist)
+  is the code-side follow-up. Waiting on an upstream fix or a
+  server-version decision.
+- rw4.9 latch (P1): paging shipped (#128); a cross-step episode latch
+  was evaluated as net-negative (spins for self-advancing steps) —
+  verdict noted on the bead, needs owner direction.
+- rw4.10 dispatch half / atl.12 death loop (P1, in progress): the walk
+  side merged (#134); holding fight preemption on a fresh `shelterRun`
+  plus the night-combat work is still open.
 
 ## Online-mode note
 

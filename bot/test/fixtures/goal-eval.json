@@ -1,0 +1,322 @@
+[
+ {
+  "id": "g-craft-1",
+  "state_text": "time=day logs=enough planks=few table=yes door=no home=none inside=no health=ok food=ok",
+  "menu": [
+   "craft",
+   "rest"
+  ],
+  "fsm": "craft",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-craft-2",
+  "state_text": "time=day logs=enough planks=few table=yes door=no home=none inside=no health=ok food=ok",
+  "menu": [
+   "craft",
+   "rest"
+  ],
+  "fsm": "craft",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-gohome-1",
+  "state_text": "time=dusk logs=none planks=none table=no door=no home=built inside=no health=ok food=ok",
+  "menu": [
+   "gohome",
+   "rest"
+  ],
+  "fsm": "gohome",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-gohome-2",
+  "state_text": "time=night logs=none planks=none table=no door=no home=built inside=no health=ok food=ok",
+  "menu": [
+   "gohome",
+   "rest"
+  ],
+  "fsm": "gohome",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-gohome-3",
+  "state_text": "time=night logs=none planks=none table=no door=no home=built inside=no health=ok food=ok",
+  "menu": [
+   "gohome",
+   "rest"
+  ],
+  "fsm": "gohome",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-equip-1",
+  "state_text": "time=day logs=none planks=enough table=yes door=no home=site inside=no health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "equip",
+   "rest"
+  ],
+  "fsm": "equip",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-equip-2",
+  "state_text": "time=day logs=none planks=enough table=yes door=no home=site inside=yes health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "equip",
+   "rest"
+  ],
+  "fsm": "equip",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-equip-3",
+  "state_text": "time=day logs=none planks=enough table=yes door=no home=site inside=no health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "equip",
+   "rest"
+  ],
+  "fsm": "equip",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-equip-4",
+  "state_text": "time=day logs=none planks=enough table=yes door=no home=site inside=yes health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "equip",
+   "rest"
+  ],
+  "fsm": "equip",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-equip-5",
+  "state_text": "time=day logs=none planks=enough table=yes door=no home=site inside=no health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "equip",
+   "rest"
+  ],
+  "fsm": "equip",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-1",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-2",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=yes health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-3",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-4",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=yes health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-5",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-6",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=yes health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-7",
+  "state_text": "time=night logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-8",
+  "state_text": "time=day logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-9",
+  "state_text": "time=day logs=none planks=none table=no door=no home=site inside=yes health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-10",
+  "state_text": "time=day logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-11",
+  "state_text": "time=day logs=none planks=none table=no door=no home=site inside=yes health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-forage-12",
+  "state_text": "time=day logs=none planks=none table=no door=no home=site inside=no health=ok food=ok known=near haul=none player=none",
+  "menu": [
+   "forage",
+   "rest"
+  ],
+  "fsm": "forage",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-1",
+  "state_text": "time=day logs=few planks=few table=yes door=yes home=built inside=no health=ok food=ok known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-2",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=ok food=ok known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-3",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=ok food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-4",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=ok food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-5",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=ok food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-6",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=yes health=ok food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-7",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=ok food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-explore-8",
+  "state_text": "time=day logs=few planks=few table=no door=yes home=built inside=no health=low food=hungry known=near haul=waiting player=none",
+  "menu": [
+   "explore",
+   "rest"
+  ],
+  "fsm": "explore",
+  "prod_model": "rest"
+ },
+ {
+  "id": "g-synth-gather",
+  "state_text": "time=day logs=none planks=none table=no door=no home=none inside=no health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "gather",
+   "rest"
+  ],
+  "fsm": "gather",
+  "prod_model": "gather"
+ },
+ {
+  "id": "g-synth-stay",
+  "state_text": "time=night logs=none planks=enough table=yes door=yes home=built inside=yes health=ok food=ok known=none haul=none player=none",
+  "menu": [
+   "stay",
+   "rest"
+  ],
+  "fsm": "stay",
+  "prod_model": "stay"
+ }
+]

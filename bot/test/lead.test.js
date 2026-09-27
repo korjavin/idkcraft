@@ -487,3 +487,29 @@ describe('lead behaviour', () => {
     assert.deepEqual(bot.calls.chats, [])
   })
 })
+
+describe('lead distance edges (idkcraft-l71)', () => {
+  it('plain positions measure by hypot and wait when far', () => {
+    // No distanceTo anywhere (snapshotted positions): hypot still meters
+    // the gap, and a far player parks the order in waiting.
+    const bot = mockBot()
+    bot.entity.position = { x: 0, y: 64, z: 0 }
+    const target = { id: 7, username: 'Steve', position: { x: 100, y: 64, z: 0 } }
+    const ctx = { lastGoalKey: '', lead: orderAt(10, 64, 0) }
+    lead(bot, ctx, target, {})
+    assert.equal(ctx.lead.waiting, true)
+    assert.equal(ctx.lead.waitTicks, 1)
+    assert.ok(bot.calls.chats.some((l) => l.startsWith('waiting for you')), `chats: ${bot.calls.chats}`)
+  })
+
+  it('unresolvable distance keeps waiting without resuming', () => {
+    // No state distance, no target, no crash: dp null never satisfies the
+    // resume check, the order holds its wait budget.
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '', lead: { ...orderAt(10, 64, 0), waiting: true, waitTicks: 0 } }
+    lead(bot, ctx, null, {})
+    assert.equal(ctx.lead.waiting, true)
+    assert.equal(ctx.lead.waitTicks, 1)
+    assert.equal(ctx.lead.stuckTicks, 0)
+  })
+})

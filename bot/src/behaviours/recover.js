@@ -28,13 +28,13 @@ const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
 const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
-const HOP_BACK_TICKS = 8 // back-up run-up before the mount jump
-const HOP_MOUNT_TICKS = 14 // walk to the edge plus the leap
+const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles
 const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
 const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample at most
 const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held while stalled
+const HOP_RETRY_BACK_MS = 100 // short back-off to leap stance: gap 0.25-0.5 off the face (wqt assay)
+const HOP_PRESS_DIST = 1.0 // pressed: closer than this to the anchor a leap goes into the face (flush is 0.8)
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
-const HOP_JUMP_DIST = 1.0 // leap once the step anchor is this close (flush contact is exactly 0.8: half block plus half body)
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
@@ -515,30 +515,64 @@ function digStepRun(bot, ctx) {
   return 'running'
 }
 
-// Hop a plain +1 step (cjq): no digging, level goal only. The executor's
-// walk-jump from a standstill flush against the face rises and falls back,
-// and its per-tick re-simulation cuts forward mid-air — a player backs up
-// first and leaps at the edge, so this does too: phase 'back' walks ~1
-// block away from the step (executor GoalNear, no jump), phase 'hop' drives
-// the body directly (face the anchor, walk, leap inside HOP_JUMP_DIST — the
-// lib leaves controls alone with no goal, so no fight). Done on a grounded
-// floor rise, same apex-sampling guard as dig_step. Single shot, never
-// repeatable: one mount ends the episode and the mode resumes from the top.
+// Hop a plain +1 step (cjq): no digging, level goal only. Paper 26.1.2
+// silently rejects (server teleport, no log) any move whose arc meets a wall,
+// so a leap from contact never leaves the ground (wqt: rise 0.00, ~20
+// rejects/s; vanilla mounts the same leap). A 1 Hz tick cannot time a run-up
+// leap — the body walks 4+ blocks between ticks and is always already
+// pressed — so there is no run-up: pressed (under HOP_PRESS_DIST of the
+// anchor) backs to leap stance on a 100 ms timer (gap 0.25-0.5, measured)
+// and leaps from the standstill (measured 4/4 mounts, 0 rejects); open
+// floor walks in without jumping, in-flight arcs coast with thrust held.
+// A failed leap lands back pressed and re-backs (self-retry inside
+// HOP_MOUNT_TICKS). No executor goal the whole
+// primitive — direct drive only, so the lib never fights the leap. Done on
+// a grounded floor rise (same apex-sampling guard as dig_step) or grounded
+// past the step (an arc overflowing a narrow top still escapes). Single
+// shot, never repeatable: one mount ends the episode.
 function hopStepRun(bot, ctx) {
   const rec = ctx.recovery
-  const st = rec.st || (rec.st = { dir: null, stepPos: null, phase: 'back', waited: 0, startFloor: null, backStart: null, jumping: false, settled: false })
+  const st = rec.st || (rec.st = { dir: null, stepPos: null, waited: 0, startFloor: null, leapt: false, armed: false, stall: 0, settled: false })
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
-  setBack(bot, false) // the unwedge below re-asserts it every tick it holds
+  setBack(bot, false) // the back-offs below re-assert it every tick they hold
   // Airborne-stall samples (ak4): hang time at vel.y=0 with no ground reads
-  // here; the drive section backs off once they pile up.
+  // here; the stall section backs off once they pile up.
   const hopVy = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.y === 'number'
     ? bot.entity.velocity.y : null
   if (!grounded && hopVy !== null && Math.abs(hopVy) < HOP_STALL_VY) st.stall = (st.stall || 0) + 1
   else st.stall = 0
   if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  if (!st.dir) {
+    const gp = ctx.stuck && ctx.stuck.goal
+    st.dir = findHopStepDir(bot, gp)
+    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    // Absolute anchor: the relative cell goes stale the moment the body
+    // walks (floor(bp) shifts), so the mount target is fixed once here.
+    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
+    const q = step && step.position
+    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    st.stepPos = { x: q.x, y: q.y, z: q.z }
+  }
+  let step = null
+  try {
+    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+  } catch (_) { /* anchor read best-effort */ }
+
+  if (!solid(step)) {
+    st.dir = null; st.stepPos = null; st.leapt = false; st.armed = false; st.settled = false
+    setJump(bot, false); setForward(bot, false)
+    return 'running'
+  }
+  const sx = st.stepPos.x + 0.5
+  const sz = st.stepPos.z + 0.5
+  const dx = sx - bp.x
+  const dz = sz - bp.z
+  // Past the step on the ground: an arc overflowing a narrow top lands
+  // beyond it at the old floor — the wedge is behind, no re-mount needed.
+  if (grounded && (-dx * st.dir[0] - dz * st.dir[1]) > 1.0) { setJump(bot, false); setForward(bot, false); return 'done' }
   // Settled waits inside the same mount budget: a body knocked or coasted
   // off the top (overshoot, fight borrow, knockback) must fail out instead
   // of waiting for a grounded sample that never comes (no episode timeout).
@@ -557,56 +591,10 @@ function hopStepRun(bot, ctx) {
     setJump(bot, false); setForward(bot, false)
     return 'running'
   }
-  // Head veto only before the leap latches: a mount that lands under a
-  // 2-high ceiling is still an escape, and killing jump mid-air drops the
-  // body back off the step.
-  if (!st.jumping && headBlockedAt(bot)) { setJump(bot, false); setForward(bot, false); return 'failed:head-blocked' }
-  if (!st.dir) {
-    const gp = ctx.stuck && ctx.stuck.goal
-    st.dir = findHopStepDir(bot, gp)
-    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    // Absolute anchor: the relative cell goes stale the moment the body
-    // walks (floor(bp) shifts), so the mount target is fixed once here.
-    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
-    const q = step && step.position
-    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    st.stepPos = { x: q.x, y: q.y, z: q.z }
-    st.backStart = { x: bp.x, y: bp.y, z: bp.z }
-    try {
-      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-        bot.pathfinder.setGoal(new goals.GoalNear(bp.x - st.dir[0] * 1.5, bp.y, bp.z - st.dir[1] * 1.5, 1), false)
-      }
-    } catch (_) { /* goal best-effort */ }
-  }
-  if (st.phase === 'back') {
-    const moved = Math.hypot(bp.x - st.backStart.x, bp.z - st.backStart.z)
-    if (moved >= 0.5 || ++st.waited > HOP_BACK_TICKS) {
-      st.phase = 'hop'
-      st.waited = 0
-      // Direct drive from here: drop the back goal so the executor stops
-      // pulling (setGoal(null) never latches, unlike stop()).
-      try {
-        if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
-      } catch (_) { /* goal best-effort */ }
-    } else {
-      setJump(bot, false)
-      return 'running'
-    }
-  }
-  let step = null
-  try {
-    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
-  } catch (_) { /* anchor read best-effort */ }
-
-  if (!solid(step)) {
-    st.dir = null; st.stepPos = null; st.phase = 'back'; st.jumping = false; st.settled = false
-    setJump(bot, false); setForward(bot, false)
-    return 'running'
-  }
-  const sx = st.stepPos.x + 0.5
-  const sz = st.stepPos.z + 0.5
-  const dx = sx - bp.x
-  const dz = sz - bp.z
+  // Head veto, disarmed mid-leap: a mount that lands under a 2-high ceiling
+  // is still an escape, and killing jump mid-air drops the body back off
+  // the step. Re-arms on every back-off, so each fresh leap re-checks.
+  if (!st.leapt && headBlockedAt(bot)) { setJump(bot, false); setForward(bot, false); return 'failed:head-blocked' }
   try {
     if (typeof bot.look === 'function') bot.look(Math.atan2(-dx, -dz), 0)
   } catch (_) { /* facing best-effort */ }
@@ -614,9 +602,11 @@ function hopStepRun(bot, ctx) {
     // Airborne stall (ak4): pressed to the face with vel.y=0 and no ground,
     // the held jump never fires (the sprint-wedge hang from index.js). Back
     // off — facing stays on the anchor, so back walks off the face — until a
-    // sample reads ground, then resume the run-up. Shares the mount budget;
-    // the leap unlatches so the resume jumps at the edge, not mid-approach.
-    st.jumping = false
+    // sample reads ground, then the drive walks back in. Shares the mount
+    // budget; leap state resets so the resume re-backs instead of leaping
+    // from a 250 ms stance (too long a runway for a standstill leap).
+    st.leapt = false
+    st.armed = false
     setForward(bot, false)
     setJump(bot, false)
     // Timed hold (round 2): primitives run at 1 Hz, so a raw hold walks ~4
@@ -627,9 +617,32 @@ function hopStepRun(bot, ctx) {
     if (++st.waited > HOP_MOUNT_TICKS) { setBack(bot, false); return 'failed:no-progress' }
     return 'running'
   }
+  if (grounded && Math.hypot(dx, dz) < HOP_PRESS_DIST) {
+    // Pressed (wqt): Paper zeroes a leap from contact, so back to leap
+    // stance instead of leaping — 100 ms lands gap 0.25-0.5, and the next
+    // tick leaps from the standstill. A still-pressed next tick holds
+    // again. A stale timer only ever releases — safe across ticks.
+    st.leapt = false
+    st.armed = true
+    setForward(bot, false)
+    setJump(bot, false)
+    setBack(bot, true)
+    try { setTimeout(() => setBack(bot, false), HOP_RETRY_BACK_MS) } catch (_) { /* timer best-effort */ }
+    if (++st.waited > HOP_MOUNT_TICKS) { setBack(bot, false); return 'failed:no-progress' }
+    return 'running'
+  }
+  // Open floor: armed (just backed off) leaps from the standstill; anything
+  // else walks in without jumping — a run-up leap cannot be timed on 1 Hz
+  // ticks and only re-presses. Airborne samples coast with thrust held: an
+  // in-flight arc must complete, never back off mid-air.
   setForward(bot, true)
-  if (!st.jumping && Math.hypot(dx, dz) < HOP_JUMP_DIST) st.jumping = true
-  setJump(bot, st.jumping)
+  if (st.armed || !grounded) {
+    setJump(bot, true)
+    st.leapt = true
+    st.armed = false
+  } else {
+    setJump(bot, false)
+  }
   if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   return 'running'
 }
@@ -946,6 +959,17 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
 
+// One page per pit per mark TTL: the latch zone is the same avoid radius
+// that triggers paging, so gave-ups wandering one pit floor (revmux
+// 01-review: A-B-A ping-pong inside 6 blocks) page once, not per episode.
+// Relocation past the pit (or an expired mark) re-arms.
+function repeatPaged(ctx, bp) {
+  const pg = ctx && ctx.repeatGaveUpPage
+  if (!pg || typeof pg.x !== 'number' || typeof pg.z !== 'number') return false
+  if (typeof pg.at !== 'number' || Date.now() - pg.at > danger.TTL_MS) return false
+  return Math.hypot(bp.x - pg.x, bp.z - pg.z) <= danger.AVOID_RADIUS
+}
+
 // Episode end: drop the pathfinder goal (a stale goal re-wedges the next
 // tick — idkcraft-yvi), resume the owning mode, clear the fact. done =
 // an escape worked; gave-up = budget spent, target stays dropped.
@@ -1022,6 +1046,22 @@ function release(bot, ctx, how) {
     }
   }
   if (how === 'gave-up') {
+    // Repeat page (rw4.9): gave up where a live mark already sits and
+    // nobody is online — a resourceless pit is inescapable alone (prod
+    // 2026-09-27 ground 3 dusks in one hole), so page the owner once per
+    // mark; chat persists in the server log for the next session. Online
+    // paging stays with the call_player menu item, and the rest step stays
+    // with its own q0h escalation (gave-up hold + online lapse), which
+    // already owns repeats there.
+    try {
+      const bp = botPos(bot)
+      const restOwned = !!(ctx && ctx.work && ctx.step === 'rest')
+      if (bp && !restOwned && !anyPlayerOnline(bot) && danger.near(ctx, bp) && !repeatPaged(ctx, bp)) {
+        bot.chat(`I'm stuck at ${Math.floor(bp.x)} ${Math.floor(bp.y)} ${Math.floor(bp.z)} again with nobody online, /tp ${bot.username} <your-name>`)
+        ctx.repeatGaveUpPage = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
+        console.log(`repeat gave-up at ${fmtPos(bp)}, owner paged`)
+      }
+    } catch (_) { /* paging best-effort */ }
     // Pit memory (mnx): the release point stays dangerous, so explore and
     // gather do not lead back into it. call_player ends here too
     // (endEpisode -> gave-up), same mark.
@@ -1078,6 +1118,17 @@ async function decide(bot, ctx, state, target) {
     // Failed primitives leave a log line, not just a metric (ak4): done
     // already logs through release(), failures never did.
     if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
+    // A finished goal-owner (dig_step/sidestep) leaves its GoalNear live,
+    // and the next primitive's direct drive would fight the lib at 20 Hz
+    // (7gt: revmux-01 found hop's instance) — decide() is the one choke
+    // point between primitives, so the stale goal dies here. Chains are
+    // safe: pillar/dig_up set no goals, dig_step re-sets its own on the
+    // step phase, and release() clears again anyway.
+    try {
+      if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
+        bot.pathfinder.setGoal(null)
+      }
+    } catch (_) { /* body best-effort */ }
     if (outcome === 'done') {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {
         return release(bot, ctx, rec.endEpisode ? 'gave-up' : 'done')

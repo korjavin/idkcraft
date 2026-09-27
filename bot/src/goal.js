@@ -407,8 +407,15 @@ function goalText(facts) {
   const door = facts.door > 0 ? 'yes' : 'no'
   const health = facts.health < 6 ? 'low' : 'ok'
   const food = facts.food < 6 ? 'hungry' : 'ok'
+  // Inside hides by day (atl.13): it gates only the night steps (stay/gohome
+  // feasibility), but the binary in/out flip on the 2x2x2 boundary re-fires
+  // the decision point all day (prod: 50% of re-decisions are facts-changed,
+  // forage<->rest every ~15-60s on inside alone). Feasibility still reads the
+  // true facts.inside; only the decision text (and the model state, whose day
+  // menu never offers stay/gohome) goes steady.
+  const inside = facts.time === 'day' ? 'no' : facts.inside
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
-    `table=${table} door=${door} home=${facts.home} inside=${facts.inside} health=${health} food=${food} ` +
+    `table=${table} door=${door} home=${facts.home} inside=${inside} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player}`
 }
 
@@ -468,9 +475,22 @@ const STEP_CRITERIA = {
   rest: 'nothing else fits: rest near home',
 }
 
+// hg8 shaping: a non-jev brain is never asked a direct [work, rest] pair.
+// Laya answers rest over 7 of 9 work steps unconditionally (prod 761/761
+// wrong in 7d; immune to rest rewording), while goalFsm never returns rest
+// from a multi-menu (rest is last and the day-skips are infeasible then) —
+// so the work step is the answer by construction. Chains (>2, rest last
+// and first-yes-wins) and JEV keep the full menu. Exported for the eval
+// stand so the rule has one source of truth.
+function shapeGoalMenu(names, model) {
+  if (model !== 'jev' && names.length === 2 && names.includes('rest')) return names.filter((n) => n !== 'rest')
+  return names
+}
+
 // Model step choice with the FSM as fallback and disagreement reference,
 // exactly like hybridBrain: { step, source, fsm, model }. source is
-// only-option (single feasible step, model not asked), goal-fsm (no ask
+// only-option (single feasible step, or a shaped [work, rest] pair answered
+// without asking — shapeGoalMenu above — model not asked), goal-fsm (no ask
 // method: stub brain or unit tests), <brain source> (model answered) or
 // fsm-fallback (model consulted and failed). model is the consulted brain
 // source or null when nothing was asked.
@@ -481,18 +501,20 @@ async function chooseStep(brain, facts, feasible) {
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
+  const askNames = shapeGoalMenu(names, model)
+  if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
   const criteria = {}
-  for (const n of names) criteria[n] = STEP_CRITERIA[n]
+  for (const n of askNames) criteria[n] = STEP_CRITERIA[n]
   const fail = (reason) => {
     metrics.escalation.inc({ from: model, to: 'fsm', reason })
     return { step: fsm, source: 'fsm-fallback', fsm, model }
   }
   try {
     const label = await brain.ask({ state: text, instructions: ASK_INSTRUCTIONS, criteria, situation: text })
-    if (!names.includes(label)) return fail('invalid')
+    if (!askNames.includes(label)) return fail('invalid')
     if (label !== fsm) {
       metrics.goalDisagreements.inc({ model: label, fsm })
-      console.error(`goal disagree source=${model} model=${label} fsm=${fsm} facts=${text}`)
+      console.error(`goal disagree source=${model} model=${label} fsm=${fsm} menu=${names.join(',')} facts=${text}`)
     }
     return { step: label, source: model, fsm, model }
   } catch (err) {
@@ -733,7 +755,8 @@ async function decide(bot, ctx) {
     // lie, so only an actually-working bot chats. !== false keeps unit-test
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} facts=${text}`)
+      const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
+      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
         try { bot.chat(`resting: ${ctx.restWhy} (${choice.source})`) } catch (_) { /* chat best-effort */ }
       } else {
@@ -746,4 +769,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome }

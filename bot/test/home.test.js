@@ -13,7 +13,7 @@ const DOOR = { x: 11, y: 64, z: 20 }
 const OUTSIDE = { x: 11, y: 64, z: 19 }
 const INSIDE = { x: 11, y: 64, z: 21 }
 
-function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false } = {}) {
+function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false, door = true } = {}) {
   const chats = []
   const calls = { goals: [], activates: 0, looks: [], controls: [], clears: 0 }
   const state = { doorOpen }
@@ -34,7 +34,7 @@ function mockBot({ at, timeOfDay = 12500, doorOpen = false, moving = false } = {
       const fx = Math.floor(p.x)
       const fy = Math.floor(p.y)
       const fz = Math.floor(p.z)
-      if (fx === DOOR.x && (fy === DOOR.y || fy === DOOR.y + 1) && fz === DOOR.z) {
+      if (door && fx === DOOR.x && (fy === DOOR.y || fy === DOOR.y + 1) && fz === DOOR.z) {
         return { name: 'oak_door', position: { x: fx, y: fy, z: fz }, getProperties: () => ({ open: state.doorOpen }) }
       }
       return { name: 'air', boundingBox: 'empty', position: { x: fx, y: fy, z: fz } }
@@ -358,5 +358,146 @@ describe('rw4.5 stay', () => {
     assert.equal(ctx.inShelter, false)
     assert.equal(bot.calls.goals.length, 0)
     assert.equal(bot.calls.activates, 0)
+  })
+})
+
+describe('rw4.8 door failures fail loud', () => {
+  it('gohome close with no door fails instead of sheltering silently', () => {
+    // Prod 2026-09-27 stood a night 'sheltered' while arrows came through.
+    const bot = mockBot({ at: { ...INSIDE }, door: false })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx) // inside -> close -> no-door fail in one tick
+    assert.equal(ctx.stepStatus, 'failed:no-door')
+    assert.equal(ctx.gohome.phase, 'failed')
+    assert.notEqual(ctx.inShelter, true)
+    assert.ok(!bot.chats.some((m) => m === 'home for the night'))
+  })
+
+  it('stay hold re-closes an opened door and keeps holding', async () => {
+    const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, doorOpen: true })
+    const ctx = { home: ctxHome(), step: 'stay', stepStatus: 'running' }
+    home.stay(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 1)
+    assert.equal(ctx.stay.phase, 'hold')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.inShelter, true)
+    home.stay(bot, ctx) // shut now: no more toggles
+    assert.equal(bot.calls.activates, 1)
+  })
+
+  it('stay hold with no door logs once and keeps holding (no fail spin)', () => {
+    // Revmux 01-review: stay is self-advancing, so failing here would
+    // re-pick and log every tick all night (~400 lines). Hold + one line.
+    const realLog = console.log
+    const lines = []
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, door: false })
+      const ctx = {
+        home: ctxHome(), step: 'stay', stepStatus: 'running', inShelter: true,
+        stay: { phase: 'hold', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      }
+      for (let i = 0; i < 5; i++) home.stay(bot, ctx)
+      assert.equal(ctx.stay.phase, 'hold')
+      assert.equal(ctx.stepStatus, 'running')
+      assert.equal(ctx.inShelter, false, 'no door: fight must not be suppressed')
+      assert.deepEqual(lines, ['door missing at stay-hold'])
+    } finally {
+      console.log = realLog
+    }
+  })
+
+  it('morning close with no door fails instead of done', () => {
+    const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 1000, door: false })
+    const ctx = {
+      home: ctxHome(), step: 'stay', stepStatus: 'running',
+      stay: { phase: 'close', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+    }
+    home.stay(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-door')
+    assert.equal(ctx.stay.phase, 'failed')
+    assert.ok(!bot.chats.some((m) => m === 'morning; back to work'))
+  })
+})
+
+describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
+  const FAR = { x: 20, y: 64, z: 10 } // ~13 from the door: past sprint distance
+  const flatNodes = [{ x: 18, y: 64, z: 12 }, { x: 16, y: 64, z: 14 }]
+  function walkCtx(extra) {
+    return Object.assign({
+      home: ctxHome(),
+      movements: { allowSprinting: false, allowParkour: true },
+    }, extra)
+  }
+  // Real sequence: tick 1 issues the goal (nodes dropped), path_update lands
+  // the plan, tick 2 gates on it. Returns after tick 2.
+  function steadyWalk(bot, ctx, nodes) {
+    home.gohome(bot, ctx)
+    ctx.lastPathNodes = nodes === undefined ? flatNodes : nodes
+    home.gohome(bot, ctx)
+  }
+  it('night walk far+flat sprints and stamps a fresh shelterRun', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
+    steadyWalk(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(ctx.movements.allowSprinting, true)
+    assert.equal(ctx.movements.allowParkour, false)
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+  it('near door: walks, still stamps at night (gait-independent)', () => {
+    const bot = mockBot({ at: { x: 14, y: 64, z: 17 }, timeOfDay: 15000 })
+    const ctx = walkCtx()
+    steadyWalk(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('+1 node in the window kills sprint but keeps the stamp', () => {
+    // 3nt.24: sprint-jump would wedge on the step face.
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
+    steadyWalk(bot, ctx, [{ x: 18, y: 64, z: 12 }, { x: 17, y: 65, z: 13 }])
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(ctx.movements.allowParkour, true)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('no plan nodes: no sprint (fail closed), stamp kept', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
+    steadyWalk(bot, ctx, null)
+    assert.equal(ctx.movements.allowSprinting, false)
+    assert.equal(typeof ctx.shelterRun, 'number')
+  })
+  it('day walk sprints but leaves no stamp', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 6000 })
+    const ctx = walkCtx()
+    steadyWalk(bot, ctx)
+    assert.equal(ctx.movements.allowSprinting, true)
+    assert.equal(ctx.shelterRun, undefined)
+  })
+  it('goal-issue tick fails closed on stale nodes (revmux 02-review)', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx({ lastGoalKey: 'gather', lastPathNodes: flatNodes })
+    home.gohome(bot, ctx) // issues: stale nodes dropped, no sprint yet
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(ctx.lastPathNodes, null)
+    assert.equal(ctx.movements.allowSprinting, false)
+    ctx.lastPathNodes = flatNodes // path_update lands the fresh plan
+    home.gohome(bot, ctx)
+    assert.equal(ctx.movements.allowSprinting, true)
+  })
+  it('off-walk ticks do not refresh the stamp', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+    const ctx = walkCtx()
+    home.gohome(bot, ctx)
+    const stamp = ctx.shelterRun
+    assert.equal(typeof stamp, 'number')
+    bot.entity.position = { ...OUTSIDE }
+    home.gohome(bot, ctx) // arrived -> open leg, no walk
+    assert.equal(ctx.gohome.phase, 'open')
+    assert.equal(ctx.shelterRun, stamp)
   })
 })

@@ -716,6 +716,113 @@ describe('gave-up marks danger (mnx)', () => {
   })
 })
 
+describe('repeat gave-up pages the owner (rw4.9)', () => {
+  function pageBot(at, players) {
+    return {
+      username: 'IdkBot', players: players || {},
+      entity: { position: pos(at[0], at[1], at[2]) },
+      pathfinder: { goal: null },
+      chats: [], chat(m) { this.chats.push(String(m)) },
+    }
+  }
+  it('first gave-up marks silently; second at the live mark pages once', () => {
+    // Prod 2026-09-27: cross-step episodes re-ground the same pit for an
+    // hour with nobody online to hear call_player. Different by/key per
+    // episode mirrors the cross-step loop (the latch only holds one).
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    recover.setStuck(ctx, 'explore', { x: 40, y: 64, z: 0 }, 'explore:40,0')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.deepEqual(bot.chats, [])
+    assert.equal(danger.count(ctx), 1)
+    recover.setStuck(ctx, 'roam', { x: -30, y: 64, z: 5 }, 'roam:back')
+    ctx.recovery = { action: 'dig_step', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(bot.chats.length, 1)
+    assert.match(bot.chats[0], /I'm stuck at 10 64 0 again with nobody online/)
+  })
+  it('third gave-up at the same mark stays silent (latched)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    const detectors = [['explore', 'explore:40,0'], ['roam', 'roam:back'], ['gather', 'gather']]
+    for (const [by, key] of detectors) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+  })
+  it('no page with a player online (call_player owns it)', () => {
+    const bot = pageBot([10, 64, 0], { Steve: {} })
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.deepEqual(bot.chats, [])
+  })
+  it('ping-pong inside one pit pages once (revmux 01-review)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    const spots = [[10, 'explore', 'explore:40,0'], [13, 'roam', 'roam:back'], [10, 'gather', 'gather'], [13, 'follow', 'follow:Bob']]
+    for (const [x, by, key] of spots) {
+      bot.entity.position = pos(x, 64, 0)
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+  })
+  it('expired page latch re-arms', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+    ctx.repeatGaveUpPage.at = Date.now() - danger.TTL_MS - 1000
+    recover.setStuck(ctx, 'gather', { x: 40, y: 64, z: 0 }, 'gather')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(bot.chats.length, 2)
+  })
+  it('rest repeats stay silent (q0h owns rest paging)', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = { work: true, step: 'rest', stepStatus: 'running' }
+    for (const [by, key] of [['roam', 'roam:back'], ['roam', 'roam:back2']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+      ctx.stepStatus = 'running' // escalation may fail rest; keep looping
+    }
+    assert.deepEqual(bot.chats, [])
+  })
+  it('relocated repeat pages again', () => {
+    const bot = pageBot([10, 64, 0])
+    const ctx = {}
+    for (const [by, key] of [['explore', 'explore:40,0'], ['roam', 'roam:back']]) {
+      recover.setStuck(ctx, by, { x: 40, y: 64, z: 0 }, key)
+      ctx.recovery = { action: 'sidestep', source: 'laya' }
+      recover.release(bot, ctx, 'gave-up')
+    }
+    assert.equal(bot.chats.length, 1)
+    bot.entity.position = pos(20, 64, 0) // 10 out: past the pit, needs its own mark+page
+    recover.setStuck(ctx, 'gather', { x: 40, y: 64, z: 0 }, 'gather')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up') // first mark here: silent
+    assert.equal(bot.chats.length, 1)
+    recover.setStuck(ctx, 'follow', { x: 40, y: 64, z: 0 }, 'follow:Ann')
+    ctx.recovery = { action: 'sidestep', source: 'laya' }
+    recover.release(bot, ctx, 'gave-up') // repeat at the new pit: pages
+    assert.equal(bot.chats.length, 2)
+    assert.match(bot.chats[1], /I'm stuck at 20 64 0 again/)
+  })
+})
+
 describe('setStuck transition', () => {
   it('latch blocks the same situation, a moved goal re-raises', () => {
     // M4: after an episode the same detector must stay quiet until the
@@ -940,9 +1047,11 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     const first = []
     const stepBody = () => {
       const bp = bot.entity.position
+      const yaw = bot._yaw || 0
       if (bot.getControlState('forward')) {
-        const yaw = bot._yaw || 0
         bot.entity.position = pos(bp.x - Math.sin(yaw) * 0.4, bp.y, bp.z - Math.cos(yaw) * 0.4)
+      } else if (bot.getControlState('back')) {
+        bot.entity.position = pos(bp.x + Math.sin(yaw) * 0.4, bp.y, bp.z + Math.cos(yaw) * 0.4)
       } else {
         const g = bot.pathfinder.goal
         if (g && typeof g.x === 'number') {
@@ -1019,7 +1128,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1028,23 +1137,29 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.equal(ctx.recovery.status, 'running', 'airborne apex is not an escape')
   })
 
-  it('hop latches at the physical flush distance (0.8), walks farther out', () => {
-    // Round-1 major: flush contact is exactly half-block plus half-body, so
-    // a strict < 0.8 latch never fires and the primitive always times out.
+  it('hop pressed at entry backs to leap stance instead of leaping (wqt)', async () => {
+    // Paper zeroes a leap from contact (rise 0.00, ~20 rejects/s), so the
+    // first pressed tick backs off on a 100 ms timer and arms the standstill
+    // leap — it must never hold jump into the face. Deleting the pressed
+    // branch fails this test (jump held, back never asserted).
     const bot = stepBot()
     bot.entity.position = pos(0.7, 61, 0.5)
     const ctx = {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
     }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
-    assert.ok(bot.getControlState('jump'), 'leap latches at exactly 0.8')
+    assert.ok(!bot.getControlState('jump'), 'no leap into the face')
+    assert.ok(bot.getControlState('back'), 'short back-off held')
+    assert.equal(ctx.recovery.st.armed, true, 'standstill leap armed')
+    await new Promise((r) => setTimeout(r, 150))
+    assert.ok(!bot.getControlState('back'), 'timer releases back')
   })
 
   it('hop leaves no control pressed after the mount', () => {
@@ -1057,7 +1172,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1108,7 +1223,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 3, startFloor: 61, jumping: true, settled: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1139,7 +1254,7 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: true, settled: true },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: true, armed: false, stall: 0, settled: true },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1155,14 +1270,14 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     assert.ok(!bot.getControlState('jump'), 'jump released on the way out')
   })
 
-  it('hop walks to the edge first, leaps inside jump range', () => {
+  it('hop walks in, backs when pressed, leaps from leap stance', () => {
     const bot = stepBot()
     bot.entity.position = pos(-1.5, 61, 0.5)
     const ctx = {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: {
         action: 'hop_step', source: 'fsm', model: null, status: 'running',
-        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, phase: 'hop', waited: 0, startFloor: 61, jumping: false },
+        st: { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 0, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false },
         attempts: 1, fails: 0, repeats: 0, last: null,
         calledPlayer: false, endEpisode: false, lastDy: null,
       },
@@ -1170,11 +1285,18 @@ describe('recover hop_step mounts a +1 step on a level goal (cjq)', () => {
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
     assert.ok(bot.getControlState('forward'), 'walking to the edge')
-    assert.ok(!bot.getControlState('jump'), 'no early leap from 3m out')
-    bot.entity.position = pos(0.9, 61, 0.5)
+    assert.ok(!bot.getControlState('jump'), 'no run-up leap from 3m out')
+    bot.entity.position = pos(0.9, 61, 0.5) // pressed (dc 0.6)
     recover.run(bot, ctx)
-    assert.ok(bot.getControlState('jump'), 'leap latches at the edge')
-    assert.ok(ctx.recovery.st.jumping, 'latch sticks')
+    assert.ok(bot.getControlState('back'), 'backs instead of leaping pressed')
+    assert.ok(!bot.getControlState('jump'), 'jump stays off')
+    assert.equal(ctx.recovery.st.armed, true, 'standstill leap armed')
+    bot.entity.position = pos(0.4, 61, 0.5) // backed to stance (dc 1.1)
+    recover.run(bot, ctx)
+    assert.ok(bot.getControlState('forward'), 'leap drives forward')
+    assert.ok(bot.getControlState('jump'), 'standstill leap fires')
+    assert.equal(ctx.recovery.st.armed, false, 'leap consumes the arm')
+    assert.equal(ctx.recovery.st.leapt, true)
   })
 })
 
@@ -1320,6 +1442,135 @@ describe('hop_step airborne stall backs off (idkcraft-ak4)', () => {
     bot.entity.onGround = true
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
+  })
+})
+
+describe('hop_step standstill leap on Paper (idkcraft-wqt)', () => {
+  // Paper 26.1.2 zeroes a leap from wall contact (rise 0.00, ~20 silent
+  // server teleports/s); a run-up leap cannot be timed on 1 Hz ticks. Hop
+  // backs 100 ms to leap stance (gap 0.25-0.5) and leaps from the
+  // standstill instead. Deleting the pressed branch fails the first two
+  // tests (jump held into the face); deleting the past-step done fails the
+  // overflow test (running instead of done).
+  function hopCtx(st) {
+    return {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      recovery: {
+        action: 'hop_step', source: 'fsm', model: null, status: 'running', st,
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+  }
+  function hopBot() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0)) // the +1 step east of the body
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    return bot
+  }
+  it('landed-short leap re-backs and re-arms the veto', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(0.9, 61, 0.5) // pressed after a short landing
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 2, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('back'), 're-backs to leap stance')
+    assert.ok(!bot.getControlState('jump'), 'no re-leap from contact')
+    assert.equal(ctx.recovery.st.armed, true, 'next tick leaps')
+    assert.equal(ctx.recovery.st.leapt, false, 'veto re-armed')
+  })
+  it('in-flight arc coasts with thrust held, never backs mid-air', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(1.0, 61.5, 0.5) // rising past the face
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 2, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('forward'), 'carry continues')
+    assert.ok(bot.getControlState('jump'), 'thrust held through the arc')
+    assert.ok(!bot.getControlState('back'), 'no mid-air back-off')
+  })
+  it('grounded past the step is done (overflowed arc escapes)', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(2.6, 61, 0.5) // landed beyond the narrow top
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+    assert.ok(!bot.getControlState('forward'), 'forward released')
+    assert.ok(!bot.getControlState('jump'), 'jump released')
+  })
+  it('airborne past the step is not done', () => {
+    const bot = hopBot()
+    bot.entity.position = pos(2.6, 61.5, 0.5) // sailing over, not landed
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: -0.1, z: 0 }
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 3, startFloor: 61, leapt: true, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'apex guard covers the overflow done')
+  })
+  it('walk-in holds no jump after a long back-off (ak4 resume)', () => {
+    // The 250 ms airborne unwedge leaves too long a runway for a
+    // standstill leap, so the resume walks back in and re-presses first.
+    const bot = hopBot()
+    bot.entity.position = pos(0.0, 61, 0.5) // dc 1.5, unwedged stance
+    bot.entity.onGround = true
+    const ctx = hopCtx({ dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 4, startFloor: 61, leapt: false, armed: false, stall: 0, settled: false })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(bot.getControlState('forward'), 'walks back in')
+    assert.ok(!bot.getControlState('jump'), 'no leap from the long stance')
+  })
+  it('decide transition drops a stale executor goal (idkcraft-7gt)', async () => {
+    // dig_step/sidestep return failed with their GoalNear still live; the
+    // next primitive's direct drive would fight the lib at 20 Hz. decide()
+    // is the one choke point between primitives, so the stale goal dies on
+    // the transition. Deleting the setGoal(null) fails this test.
+    const bot = hopBot()
+    bot.entity.onGround = true
+    bot.pathfinder.setGoal({ x: 9, y: 61, z: 9, isEnd: () => false, isValid: () => true, heuristic: () => 0 })
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+      brain: null,
+      recovery: {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: { start: { x: 0.5, y: 61, z: 0.5 } }, attempts: 1, fails: 0, repeats: 0,
+        last: null, calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(bot.pathfinder.goal, null, 'stale goal dropped on transition')
+    assert.equal(r.action, 'hop_step', `FSM re-picks past the failure, got ${r.action}`)
+    assert.equal(ctx.recovery.status, 'running')
+  })
+  it('head veto re-arms on the back-off', () => {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    solids.add(key(1, 61, 0))
+    solids.add(key(0, 62, 0)) // head blocked over the body
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.9, 61, 0.5)
+    bot.entity.onGround = true
+    const st = { dir: [1, 0], stepPos: { x: 1, y: 61, z: 0 }, waited: 1, startFloor: 61, leapt: false, armed: true, stall: 0, settled: false }
+    const ctx = hopCtx(st)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:head-blocked', 'fresh leap checks headroom')
+    st.leapt = true // same sample mid-leap: the veto stays out of the arc
+    ctx.recovery.status = 'running'
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', true)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'mid-leap veto disarmed')
   })
 })
 
@@ -1622,7 +1873,7 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
 
   it('hop anchor collapse re-scans instead of mounting air', () => {
     // The step block is gone (dug by another tick, ghost): hop_step drops
-    // the stale anchor and re-scans from the back phase.
+    // the stale anchor and leap state, then re-scans.
     const bot = worldBot(pitWorld(), [])
     bot.entity.position = pos(0.5, 61, 0.5)
     const ctx = {
@@ -1630,9 +1881,8 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
       recovery: {
         action: 'hop_step', status: 'running',
         st: {
-          dir: [1, 0], stepPos: { x: 5, y: 61, z: 0 }, phase: 'hop',
-          waited: 0, startFloor: 61, backStart: { x: 0.5, y: 61, z: 0.5 },
-          jumping: false, settled: false,
+          dir: [1, 0], stepPos: { x: 5, y: 61, z: 0 },
+          waited: 0, startFloor: 61, leapt: true, armed: true, stall: 0, settled: false,
         },
       },
     }
@@ -1640,7 +1890,8 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.status, 'running')
     assert.equal(ctx.recovery.st.dir, null)
     assert.equal(ctx.recovery.st.stepPos, null)
-    assert.equal(ctx.recovery.st.phase, 'back')
+    assert.equal(ctx.recovery.st.leapt, false)
+    assert.equal(ctx.recovery.st.armed, false)
   })
 
   it('run() catches a throwing primitive as failed:error', () => {

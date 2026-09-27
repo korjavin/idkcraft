@@ -76,3 +76,49 @@ describe('resource memory', () => {
     assert.equal(resources.nearest(ctx, pos(0, 64, 0), ['oak_log']).name, 'oak_log')
   })
 })
+
+describe('resource memory edges (idkcraft-pun)', () => {
+  it('clear empties the store', () => {
+    const ctx = {}
+    resources.noteSpots(ctx, [{ x: 1, y: 2, z: 3, name: 'iron_ore' }], 1000)
+    assert.equal(resources.count(ctx), 1)
+    resources.clear(ctx)
+    assert.equal(resources.count(ctx), 0)
+    resources.clear(null)
+    resources.clear({})
+  })
+
+  it('scan survives a throwing resolver', () => {
+    const ctx = {}
+    const bot = {}
+    Object.defineProperty(bot, 'registry', { get() { throw new Error('no registry') } })
+    assert.deepEqual(resources.scan(bot, ctx, { now: 5000 }), { added: 0, total: 0 })
+  })
+
+  it('scan survives a throwing findBlocks', () => {
+    const bot = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { blocksByName: { iron_ore: { id: 1 } } },
+      findBlocks: () => { throw new Error('chunk busy') },
+      blockAt: () => null,
+    }
+    const ctx = {}
+    assert.deepEqual(resources.scan(bot, ctx, { now: 5000 }), { added: 0, total: 0 })
+  })
+
+  it('scan skips spots whose naming throws, keeps the rest', () => {
+    const bot = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { blocksByName: { iron_ore: { id: 1 }, oak_log: { id: 2 } } },
+      findBlocks: () => [pos(10, 60, 0), pos(20, 64, 5)],
+      blockAt: (p) => {
+        if (p.x === 10) throw new Error('unloaded')
+        return { name: 'oak_log' }
+      },
+    }
+    const ctx = {}
+    const r = resources.scan(bot, ctx, { now: 5000 })
+    assert.equal(r.added, 1)
+    assert.equal(resources.nearest(ctx, pos(0, 64, 0)).name, 'oak_log')
+  })
+})

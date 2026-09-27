@@ -447,3 +447,131 @@ describe('bring me order', () => {
     assert.match(cmd.usage, /bring me <block> \[count\]/)
   })
 })
+
+describe('bring tier re-check mid-order (idkcraft-pun)', () => {
+  // The find leg re-checks the pickaxe tier on every re-find, so a tool
+  // lost after the first drop refuses honestly instead of mining forever.
+  async function driveToHave(bot, ctx) {
+    for (let i = 0; i < 40 && ctx.bring && ctx.bring.have < 1; i++) {
+      bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      const gk = ctx.lastGoalKey
+      if (gk.startsWith('bring:') && o.pos) {
+        bot.entity.position = pos(o.pos.x + 1, o.pos.y, o.pos.z)
+        bot._moving = false
+      } else if (gk.startsWith('bring-pickup')) {
+        bot._moving = false
+      }
+    }
+  }
+
+  it('lost pickaxe refuses with a stone article', async () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'coal_ore', '6,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal')
+    const ctx = bot._tickerCtx
+    await driveToHave(bot, ctx)
+    assert.ok(ctx.bring && ctx.bring.have >= 1, 'first coal banked')
+    bot._items = []
+    await bring(bot, ctx, null, {})
+    await flush()
+    assert.ok(bot.lines.some((l) => l === 'need a stone pickaxe for coal_ore'), `lines: ${bot.lines}`)
+    assert.equal(ctx.bring, null)
+  })
+
+  it('lost pickaxe refuses with an iron article', async () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'gold_ore', '6,64,0': 'gold_ore' },
+      items: [{ name: 'iron_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me gold')
+    const ctx = bot._tickerCtx
+    await driveToHave(bot, ctx)
+    assert.ok(ctx.bring && ctx.bring.have >= 1, 'first gold banked')
+    bot._items = []
+    await bring(bot, ctx, null, {})
+    await flush()
+    assert.ok(bot.lines.some((l) => l === 'need an iron pickaxe for gold_ore'), `lines: ${bot.lines}`)
+    assert.equal(ctx.bring, null)
+  })
+})
+
+describe('bring creation gates (idkcraft-pun)', () => {
+  it('canBringName: bringable true, stone false, null name false', () => {
+    const bot = mockBot({})
+    assert.equal(bring.canBringName(bot, 'coal'), true)
+    assert.equal(bring.canBringName(bot, 'stone'), false)
+    assert.equal(bring.canBringName(bot, null), false)
+  })
+
+  it('canSearch: home or spawn anchors, neither refuses', () => {
+    const bot = mockBot({})
+    assert.equal(bring.canSearch(bot, { home: { site: { x: 0, z: 0 } } }), true)
+    bot.spawnPoint = pos(0, 64, 0)
+    assert.equal(bring.canSearch(bot, {}), true)
+    delete bot.spawnPoint
+    assert.equal(bring.canSearch(bot, {}), false)
+  })
+})
+
+describe('bring helper branches (idkcraft-pun)', () => {
+  it('findAnimal skips the invalid, the far and the filtered', () => {
+    const bot = mockBot({})
+    bot.entities = {
+      1: { id: 1, name: 'cow' }, // no position
+      2: { id: 2, name: 'cow', position: pos(5, 64, 0), isValid: false },
+      3: { id: 3, name: 'zombie', position: pos(5, 64, 0), isValid: true },
+      4: { id: 4, name: 'cow', position: pos(100, 64, 0), isValid: true }, // past 48
+      5: { id: 5, name: 'cow', position: pos(10, 64, 0), isValid: true },
+    }
+    assert.equal(bring.findAnimal(bot, null).id, 5)
+    assert.equal(bring.findAnimal(bot, 'porkchop'), null)
+  })
+
+  it('entityById skips invalid and positionless', () => {
+    const bot = mockBot({})
+    bot.entities = {
+      1: { id: 1, name: 'cow', position: pos(5, 64, 0), isValid: true },
+      2: { id: 2, name: 'cow', position: pos(5, 64, 0), isValid: false },
+      3: { id: 3, name: 'cow' },
+    }
+    assert.equal(bring.entityById(bot, 1).id, 1)
+    assert.equal(bring.entityById(bot, 2), null)
+    assert.equal(bring.entityById(bot, 3), null)
+    assert.equal(bring.entityById(bot, 99), null)
+  })
+
+  it('progressed: first sight, level change, stillness', () => {
+    assert.equal(bring.progressed(pos(0, 64, 0), null, true), true)
+    assert.equal(bring.progressed(pos(0, 65, 0), pos(0, 64, 0), true), true)
+    assert.equal(bring.progressed(pos(0, 64, 0), pos(0, 64, 0), true), false)
+    assert.equal(bring.progressed(pos(0, 65, 0), pos(0, 64, 0), false), false)
+  })
+
+  it('animal distance throw reads as no match', () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    bot.entity.position = {
+      x: 0, y: 64, z: 0,
+      distanceTo: () => { throw new Error('no voxel') },
+    }
+    bot.entities = { 5: { id: 5, name: 'cow', position: pos(10, 64, 0), isValid: true } }
+    assert.equal(bring.findAnimal(bot, null), null)
+  })
+
+  it('chooseBringSearch name-only brain answers under its name', async () => {
+    const brain = { name: 'probe', ask: async () => 'search_more' }
+    const r = await bring.chooseBringSearch(brain, 'search=food legs=1/4 last=empty', 3)
+    assert.equal(r.source, 'probe')
+    assert.equal(r.model, 'probe')
+  })
+})

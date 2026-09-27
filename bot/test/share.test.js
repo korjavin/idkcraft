@@ -193,3 +193,137 @@ describe('share order', () => {
     assert.ok(bot._tickerCtx.bring, 'order still waits')
   })
 })
+
+describe('share toss edges (idkcraft-pun)', () => {
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+  it('inventory emptied before arrival refuses nothing to share', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    assert.ok(bot._tickerCtx.bring, 'share order created')
+    bot._items = []
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush()
+    }
+    assert.ok(bot.lines.some((l) => l === 'nothing to share'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+
+  it('toss failing on every item refuses with the first kind', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    assert.ok(bot._tickerCtx.bring, 'share order created')
+    delete bot.toss
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush()
+    }
+    assert.ok(bot.lines.some((l) => l === 'could not toss dirt'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+    assert.deepEqual(bot.tossCalls, [])
+  })
+})
+
+describe('share toss branches (idkcraft-pun)', () => {
+  const flush2 = () => new Promise((resolve) => setImmediate(resolve))
+
+  it('throwing registry entry is skipped, rest shares', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    Object.defineProperty(bot.registry.itemsByName, 'dirt', { get() { throw new Error('registry flicker') } })
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush2()
+    }
+    assert.ok(bot.lines.some((l) => l === 'shared: 5 coal'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+
+  it('kind eaten mid-share-loop is skipped', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (id, meta, n) => {
+      const r = await origToss(id, meta, n)
+      bot._items = bot._items.filter((i) => i.name !== 'coal') // eaten mid-loop
+      return r
+    }
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush2()
+    }
+    assert.ok(bot.lines.some((l) => l === 'shared: 8 dirt'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+
+  it("one item's toss throwing shares the rest", async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    const origToss = bot.toss.bind(bot)
+    bot.toss = async (id, meta, n) => {
+      if (id === ITEM_IDS.coal) throw new Error('window busy')
+      return origToss(id, meta, n)
+    }
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush2()
+    }
+    assert.ok(bot.lines.some((l) => l === 'shared: 8 dirt'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+
+  it('unreadable inventory at toss time refuses nothing to share', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'dirt', count: 40 },
+        { name: 'coal', count: 5 },
+      ],
+      playerPos: pos(1, 64, 0),
+    })
+    bot.entity.position = pos(0, 64, 0)
+    handleChat(bot, tickerFor(bot), 'P', 'share')
+    bot.inventory.items = () => { throw new Error('window flicker') }
+    for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) {
+      bring(bot, bot._tickerCtx, null, {})
+      await flush2()
+    }
+    assert.ok(bot.lines.some((l) => l === 'nothing to share'), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring, null)
+  })
+})

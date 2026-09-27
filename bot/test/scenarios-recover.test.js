@@ -258,6 +258,11 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
         const nx = bp.x - Math.sin(yaw) * 0.4
         const nz = bp.z - Math.cos(yaw) * 0.4
         if (!blocked(nx, nz)) bot.entity.position = pos(nx, bp.y, nz)
+      } else if (bot.getControlState('back')) {
+        const yaw = bot._yaw || 0
+        const nx = bp.x + Math.sin(yaw) * 0.4
+        const nz = bp.z + Math.cos(yaw) * 0.4
+        if (!blocked(nx, nz)) bot.entity.position = pos(nx, bp.y, nz)
       } else {
         const g = bot.pathfinder.goal
         if (g && typeof g.x === 'number') {
@@ -311,6 +316,175 @@ describe('ak4/cjq: hop_step back-off and mount through ticks', () => {
       assert.equal(bot._tickerCtx.recovery, null, 'episode over')
       assert.ok(cap.lines.some((l) => /recover action=hop_step .* outcome=done/.test(l)), cap.lines.join('\n'))
       assert.ok(!actions.includes('call_player'), `mounted, never paged: ${actions.join(',')}`)
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  })
+})
+
+describe('4jr: level goal never offers climb, failed prims are not repeated', () => {
+  // Prod 2026-09-24: laya always took the first menu item (pillar_up) on
+  // level goals and repeated it after place-error fails — 29 pillar_ups in
+  // 16 min, ~20 s standing per attempt. Fixed twice: climb prims leave the
+  // feasible menu on level goals, and the just-failed prim leaves the ask
+  // menu (a stubborn repeat reads invalid and falls back to the FSM).
+  const kit = [{ name: 'dirt', count: 5 }, { name: 'iron_pickaxe', count: 1 }]
+
+  // Floor + one dirt wall with a stone cap: walls=1, but no dig_step (the
+  // cap never digs by hand) — the 4jr menu case exactly.
+  function levelBot() {
+    const bot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)]), kit)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === key(1, 62, 0)) {
+        return { ...b, name: 'stone' }
+      }
+      return b
+    }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: pos(5, 61, 0) } } }
+    return bot
+  }
+
+  it('level goal: first-label model gets sidestep, menu lacks climb', async () => {
+    const bot = levelBot()
+    const seen = []
+    const brain = {
+      async decide() { return { action: 'follow', sprint: false, source: 'stub' } },
+      async ask(q) { seen.push(Object.keys(q.criteria)); return seen[0][0] },
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stuck = { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:Steve' }
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(seen.length, 1, 'asked once')
+      assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+      assert.ok(!seen[0].includes('dig_up'), `menu: ${seen[0]}`)
+      assert.equal(r.decision.action, 'sidestep')
+      assert.equal(bot._tickerCtx.recovery.status, 'running')
+      assert.ok(bot.pathfinder.goal, 'sidestep issued its goal')
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'sidestep', 'episode runs on')
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  })
+
+  it('stubborn pillar_up repeat after place-error is overruled to dig_up', async () => {
+    const bot = levelBot()
+    const seen = []
+    const brain = {
+      async decide() { return { action: 'follow', sprint: false, source: 'stub' } },
+      async ask(q) { seen.push(Object.keys(q.criteria)); return 'pillar_up' },
+    }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stuck = { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }
+    // A pillar_up just failed place-error: the next tick re-asks past it.
+    bot._tickerCtx.recovery = {
+      action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+      st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+      calledPlayer: false, endEpisode: false, lastDy: null,
+    }
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(seen.length, 1, 're-asked once')
+      assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+      assert.equal(r.decision.action, 'dig_up', `falls to the next climb prim, got ${r.decision.action}`)
+      assert.equal(r.decision.source, 'stub-fallback')
+      assert.ok(cap.lines.some((l) => l.includes('brain disagree')), 'overrule logged')
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  })
+})
+
+describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
+  // Bead 9sh: scaffold=0, pickaxe=no after death — no climb primitive, yet
+  // dirt walls dig by hand. Fixed: dig_step is in the menu and climbs out.
+  // E2E: the whole climb through ticker ticks, with a player online (paging
+  // stays feasible the whole time — self-exit must still win).
+  function dirtPit() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
+      solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
+    }
+    // Notch at the wall top: the second cycle picks its step standing on
+    // the first mount, and findDigStepDir vetoes without two air above the
+    // feet — (0,64,1) is that headroom cell. Load-bearing (verified:
+    // filling the notch fails the climb, the episode degrades to /tp).
+    solids.delete(key(0, 64, 1))
+    return solids
+  }
+
+  it('high goal dirt pit: dig_step first, climbs out, never pages', async () => {
+    const solids = dirtPit()
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: pos(50, 64, 0) } } }
+    const brain = { async decide() { return { action: 'follow', sprint: false, source: 'stub' } } } // FSM-only
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.stuck = { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }
+    // Harness collision (revmux core-1): the feet cell is dug by the
+    // primitive, never walked through; a solid dirt head cell is dug the
+    // way the prod executor digs it (mount GoalNear + canDig) instead of
+    // being mounted into. Anything else solid refuses the move.
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (g && typeof g.x === 'number') {
+        const bp = bot.entity.position
+        const dx = g.x - bp.x
+        const dz = g.z - bp.z
+        const d = Math.hypot(dx, dz)
+        if (d >= 0.05) {
+          const s = Math.min(0.4, d) / d
+          const nx = bp.x + dx * s
+          const nz = bp.z + dz * s
+          const feet = bot.blockAt({ x: nx, y: bp.y, z: nz })
+          const head = bot.blockAt({ x: nx, y: bp.y + 1, z: nz })
+          let ok = true
+          if (feet && feet.boundingBox !== 'empty') ok = false
+          else if (head && head.boundingBox !== 'empty') {
+            if (head.name !== 'dirt' || !head.position) ok = false
+            else solids.delete(key(head.position.x, head.position.y, head.position.z))
+          }
+          // A refused step never cancels the jump below: prod jumps in
+          // place against the step, then moves over once risen.
+          if (ok) bot.entity.position = pos(nx, bp.y, nz)
+        }
+      }
+      // Honest jump: at most one block above the cycle start floor — each
+      // new height needs a freshly dug step, not a free elevator.
+      const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
+      const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      if (bot.getControlState('jump') && bot.entity.position.y < capY) bot.entity.position.y += 0.5
+    }
+    const flush = async () => { for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r)) }
+    const cap = capture()
+    const actions = []
+    try {
+      let t = 0
+      for (; t < 200 && (bot._tickerCtx.stuck || bot._tickerCtx.recovery); t++) {
+        const r = await ticker.tick()
+        actions.push(r.decision && r.decision.action)
+        stepBody()
+        await flush()
+      }
+      assert.ok(t < 200, 'episode ends')
+      assert.equal(actions[0], 'dig_step', `first choice, got ${actions.join(',')}`)
+      assert.ok(Math.floor(bot.entity.position.y) >= 65, `climbed out, y=${bot.entity.position.y}`)
+      assert.equal(bot._tickerCtx.stuck, null, 'episode over')
+      assert.equal(bot._tickerCtx.recovery, null, 'episode over')
+      assert.deepEqual(bot.chats.filter((m) => m.startsWith("I'm stuck at")), [], 'self-exit, never paged')
     } finally {
       cap.release()
       ticker.destroy()

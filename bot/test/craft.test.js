@@ -246,3 +246,27 @@ describe('craft step', () => {
     assert.equal(BEHAVIOURS.craft, craft)
   })
 })
+
+describe('craft edges (idkcraft-l71)', () => {
+  it('throwing recipesFor reads as no recipes', () => {
+    const bot = mockBot({ ids: { stick: 1 }, recipes: {} })
+    bot.recipesFor = () => { throw new Error('registry busy') }
+    assert.deepEqual(craft.recipes(bot, 'stick', null), [])
+    bot.restoreError()
+  })
+
+  it('missing bot.craft fails the op instead of throwing', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks', 4) },
+    })
+    delete bot.craft
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft-oak_planks')
+    assert.ok(bot.errs[0].includes('bot.craft missing'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+})
