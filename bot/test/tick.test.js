@@ -829,6 +829,31 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(a2b) spawn never visible, prod hooks: give-up right after the 60-tick cap (im4)', async () => {
+    // The !ready give-up clause only matters with all three hooks (prod);
+    // workBot lacks findBlocks, so (a2) cannot pin it (revmux 01 minor).
+    // Deleting `!ready ||` stalls 5 grace ticks here instead of proceeding.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.blockAt = () => null // spawn cell never visible
+    bot.findBlocks = () => []
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    try {
+      for (let i = 0; i < 60; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.source, 'local-idle', `cap tick ${i + 1} waits`)
+      }
+      assert.equal(ctx.adoptDone, undefined, 'not done during the cap')
+      const r61 = await ticker.tick()
+      assert.equal(ctx.adoptDone, true, 'give-up on patience-out')
+      assert.notEqual(r61.decision.source, 'local-idle', 'work proceeds right after the cap')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
   it('(b) work + hostile at 5 blocks: fight preempts as before', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }

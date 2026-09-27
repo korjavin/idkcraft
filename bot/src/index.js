@@ -1073,6 +1073,10 @@ function fleeReflex(bot, ctx) {
             ctx.adoptDone = true
           } else {
             if (ctx.adoptReadyMisses <= 1) console.log('waiting for home chunks before work')
+            // A returned decision is not dispatched: stop a live goal (e.g.
+            // a follow the owner just revoked with 'go work') or it keeps
+            // driving the body through the grace (revmux 01 minor).
+            try { stopOnce() } catch (_) { /* stop best-effort */ }
             return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
           }
         }
