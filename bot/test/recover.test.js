@@ -1614,6 +1614,7 @@ describe('recover run-body edges (idkcraft-rcv)', () => {
         st: { dir: [1, 0], phase: 'dig', waited: 1000, digInFlight: true, digError: false, startFloor: 61 },
       },
     }
+    bot.setControlState('jump', true) // held by an earlier phase: the timeout must release it
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'failed:dig-timeout')
     assert.equal(bot.getControlState('jump'), false)
@@ -1712,24 +1713,34 @@ describe('recover dig in-flight wait (idkcraft-rcv)', () => {
     const solids = pitWorld()
     solids.add(key(0, 62, 0))
     const bot = worldBot(solids, [{ name: 'iron_pickaxe', count: 1 }])
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
     const ctx = {
       stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 }, key: 'follow:P' },
       recovery: { action: 'dig_up', status: 'running', st: { waited: 0, digInFlight: true, digError: false } },
     }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
   })
 
   it('dig_through waits while the dig is in flight within budget', () => {
     const solids = new Set([key(0, 60, 0), key(1, 61, 0)])
     const bot = worldBot(solids, [{ name: 'iron_pickaxe', count: 1 }])
     bot.entity.position = pos(0.5, 61, 0.5)
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
     const ctx = {
       stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
       recovery: { action: 'dig_through', status: 'running', st: { waited: 0, digInFlight: true, digError: false } },
     }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
   })
 
   it('dig_step waits while the hand dig is in flight within budget', () => {
@@ -1741,7 +1752,12 @@ describe('recover dig in-flight wait (idkcraft-rcv)', () => {
         st: { dir: [1, 0], phase: 'dig', waited: 0, digInFlight: true, digError: false, startFloor: 61 },
       },
     }
+    let digs = 0
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { digs++; return rawDig(b) }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
+    assert.equal(digs, 0, 'no second dig while one is in flight (yvi class)')
+    assert.equal(ctx.recovery.st.waited, 1)
   })
 })
