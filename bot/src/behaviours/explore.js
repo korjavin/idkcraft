@@ -18,6 +18,7 @@ const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
 const resources = require('../resources')
 const danger = require('../danger')
+const { say, clearGoal } = require('./util')
 
 const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
 // Inner rings first: a hands-only walker without tools closes 16-32
@@ -75,20 +76,7 @@ function pickTarget(visited, anchor, maxRadius, banned) {
   return null
 }
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
-// Drop a live pathfinder goal like stopOnce, but without stop(): its latch
-// would swallow the next setGoal issued on the same tick (gather pattern).
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 // Shared arrival: scan the new chunks into memory, consume the point,
 // report done with the one wedge line.

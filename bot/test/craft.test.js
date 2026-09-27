@@ -270,3 +270,324 @@ describe('craft edges (idkcraft-l71)', () => {
     bot.restoreError()
   })
 })
+
+describe('craft decision residuals (idkcraft-zaw)', () => {
+  it('bigger wood stack crafts first; ties break alphabetical', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 2 }, { name: 'birch_log', count: 5 }],
+      ids: { oak_planks: 18, birch_planks: 181 },
+      recipes: { oak_planks: recipeFor('oak_planks'), birch_planks: recipeFor('birch_planks') },
+    })
+    craft(bot, freshCtx(), null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 5)
+    assert.ok(bot.lines.join(' ').match(/crafted 5 birch_planks/))
+    bot.restoreError()
+    const tie = mockBot({
+      items: [{ name: 'oak_log', count: 3 }, { name: 'birch_log', count: 3 }],
+      ids: { oak_planks: 18, birch_planks: 181 },
+      recipes: { oak_planks: recipeFor('oak_planks'), birch_planks: recipeFor('birch_planks') },
+    })
+    craft(tie, freshCtx(), null, {})
+    await flush()
+    assert.ok(tie.lines.join(' ').match(/crafted 3 birch_planks/), 'tie: birch before oak')
+    tie.restoreError()
+  })
+
+  it('a throwing inventory reads as empty and finishes done', async () => {
+    const bot = mockBot({ items: [{ name: 'oak_log', count: 3 }], ids: IDS, recipes: {} })
+    bot.inventory.items = () => { throw new Error('no window') }
+    const ctx = freshCtx()
+    assert.doesNotThrow(() => craft(bot, ctx, null, {}))
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('does nothing without a body', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    bot.entity = null
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot.calls.setGoal, 0)
+    assert.equal(ctx.craftInFlight, undefined, 'no op started')
+    bot.restoreError()
+  })
+
+  it('a throwing table lookup rebuilds like a ghost claim', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    bot.blockAt = () => { throw new Error('chunk gone') }
+    const ctx = freshCtx()
+    ctx.claimedTable = { x: 1, y: 64, z: 0 }
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('crafting_table'))
+    bot.restoreError()
+  })
+
+  it('fewer than 4 planks never starts a table', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('does not re-issue the table walk on the same key', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(10, 64, 0)
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: pos(2, 64, 0) })
+    ctx.lastGoalKey = 'craft-table:2,64,0'
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.setGoal, 0, 'already walking there')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('fewer than 6 planks at the table never starts a door', () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 5 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: pos(2, 64, 0) })
+    craft(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+})
+
+describe('craft op residuals (idkcraft-zaw)', () => {
+  it('a recipe without a result count reports one per op', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: {} },
+    })
+    craft(bot, freshCtx(), null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3)
+    assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
+    bot.restoreError()
+  })
+
+  it('a throwing chat still completes the op without a rejection', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    bot.chat = () => { throw new Error('muted') }
+    const ctx = freshCtx()
+    let rejected = null
+    const onRej = (err) => { rejected = err }
+    process.on('unhandledRejection', onRej)
+    try {
+      craft(bot, ctx, null, {})
+      await flush()
+      await flush()
+    } finally {
+      process.removeListener('unhandledRejection', onRej)
+    }
+    assert.equal(bot.calls.craft.length, 3)
+    assert.equal(ctx.craftInFlight, false)
+    assert.equal(rejected, null, 'chat throw swallowed, nothing rejects')
+    bot.restoreError()
+  })
+
+  it('a message-less craft error still logs the failure', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+      craftImpl: async () => { throw ({ code: 'ESTRAND' }) },
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft-oak_planks')
+    assert.ok(bot.errs.join(' ').includes('[object Object]'), `raw err logged: ${bot.errs.join('|')}`)
+    bot.restoreError()
+  })
+
+  it('a failing error log never throws out of the step', () => {
+    const bot = mockBot({
+      items: [{ name: 'stripped_oak_log', count: 14 }],
+      ids: { ...IDS, stripped_oak_log: 21 },
+      recipes: {},
+    })
+    console.error = () => { throw new Error('log sink gone') }
+    const ctx = freshCtx()
+    try {
+      assert.doesNotThrow(() => craft(bot, ctx, null, {}))
+    } finally {
+      bot.restoreError()
+    }
+    assert.equal(ctx.stepStatus, 'failed:craft-stripped_oak_planks')
+  })
+
+  it('a null recipe list reads as no recipes', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    bot.recipesFor = () => null
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('a non-numeric registry id reads as no recipe', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: { oak_planks: 'eighteen' },
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('count-less stacks tally as one each', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log' }, { name: 'oak_log' }, { name: 'oak_log' }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    craft(bot, freshCtx(), null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3)
+    assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
+    bot.restoreError()
+  })
+
+  it('a door without a recipe is skipped, not failed', () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: {},
+      recipes: {},
+    })
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: pos(2, 64, 0) })
+    craft(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('a placed table suppresses a second table build', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: pos(2, 64, 0) })
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0, 'no duplicate table')
+    bot.restoreError()
+  })
+
+  it('a table in hand suppresses a second table build', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }, { name: 'crafting_table', count: 1 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    const ctx = freshCtx()
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0, 'no duplicate table')
+    bot.restoreError()
+  })
+
+  it('a door in hand suppresses a second door build', () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }, { name: 'oak_door', count: 1 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: pos(2, 64, 0) })
+    craft(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.craft.length, 0, 'no duplicate door')
+    bot.restoreError()
+  })
+
+  it('an unreadable grid sizes the batch from visible stock only', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 3 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    const slots = new Array(46).fill(null)
+    Object.defineProperty(slots, '1', { get() { throw new Error('slot gone') } })
+    bot.inventory = { slots, items: () => bot._items, selectedItem: null }
+    craft(bot, freshCtx(), null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3, 'no stranded bonus, no throw')
+    assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
+    bot.restoreError()
+  })
+})
+
+describe('craft stranded residuals (idkcraft-zaw)', () => {
+  // NOTE: no clickWindow-missing test: without it the per-slot click throws
+  // into the same per-kind catch (:125) that a silent server hits, so the
+  // :118 guard is an equivalent mutant. No putSelected-missing test either:
+  // the call throws into the cursor catch (:117), same outcome as the skip.
+  it('count-less stranded stacks size the batch as one each', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_log', count: 1 }],
+      ids: IDS,
+      recipes: { oak_planks: recipeFor('oak_planks') },
+    })
+    const slots = new Array(46).fill(null)
+    slots[1] = { name: 'oak_log' }
+    bot.inventory = { slots, items: () => bot._items, selectedItem: { name: 'oak_log' } }
+    bot.clickWindow = async (slot) => { bot.inventory.slots[slot] = null }
+    craft(bot, freshCtx(), null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3, '1 visible + grid 1 + cursor 1')
+    assert.ok(bot.lines.join(' ').match(/crafted 3 oak_planks/))
+    bot.restoreError()
+  })
+})

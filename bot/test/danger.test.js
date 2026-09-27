@@ -95,3 +95,25 @@ describe('danger spots', () => {
     assert.equal(danger.near(ctx, { x: 1, y: 64, z: 1 }, 6, 1000), true)
   })
 })
+
+describe('danger spots (rw4.12)', () => {
+  it('lists live marks for planning, stale ones filtered', () => {
+    const ctx = {}
+    danger.mark(ctx, { x: 10, y: 60, z: 0 }, 1000)
+    danger.mark(ctx, { x: 50, y: 64, z: 0 }, 1000 + danger.TTL_MS)
+    const live = danger.spots(ctx, 1000 + danger.TTL_MS + 1) // boundary inclusive, like near()
+    assert.deepEqual(live, [{ x: 50, y: 64, z: 0 }])
+  })
+
+  it('empty store means no spots, never throws', () => {
+    assert.deepEqual(danger.spots({}), [])
+    assert.deepEqual(danger.spots(null), [])
+  })
+
+  it('returns copies: planning cannot corrupt the memory', () => {
+    const ctx = {}
+    danger.mark(ctx, { x: 10, y: 60, z: 0 }, 1000)
+    danger.spots(ctx, 1000)[0].x = 999
+    assert.equal(danger.near(ctx, { x: 10, y: 60, z: 0 }, 6, 1000), true)
+  })
+})

@@ -16,6 +16,7 @@ const { goals } = require('mineflayer-pathfinder')
 const follow = require('./follow')
 const bring = require('./bring')
 const { countItems } = require('../perception')
+const { say, clearGoal, botPos } = require('./util')
 
 const DELIVER_RANGE = 3
 const TOSS_RANGE = DELIVER_RANGE + 0.5
@@ -27,18 +28,8 @@ const TOSS_RANGE = DELIVER_RANGE + 0.5
 const NO_PATH_TICKS = 20
 const MOVE_TOLERANCE = 0.5
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
-}
 
 
-function botPos(bot) {
-  try {
-    const p = bot && bot.entity && bot.entity.position
-    if (p && typeof p.x === 'number') return p
-  } catch (_) { /* no position */ }
-  return null
-}
 
 function dist(a, b) {
   try {
@@ -126,15 +117,6 @@ function followSatisfied(bp, entity) {
   }
 }
 
-// Drop a live pathfinder goal without stop() (explore/gather lesson).
-function clearGoal(bot, ctx) {
-  try {
-    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(null)
-    }
-  } catch (_) { /* body best-effort */ }
-  ctx.lastGoalKey = ''
-}
 
 function homeOrSpawn(bot, ctx) {
   try {

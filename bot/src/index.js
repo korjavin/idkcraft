@@ -45,6 +45,7 @@ const BEHAVIOURS = {
   gohome: homeMod.gohome,
   stay: homeMod.stay,
   build: require('./behaviours/build'),
+  light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
@@ -619,13 +620,17 @@ function fleeReflex(bot, ctx) {
   function scheduleNext(fast) {
     if (destroyed) return
     if (timer) { clearTimeout(timer); timer = null }
-    timer = setTimeout(() => { timer = null; void tick() }, fast ? tickMs : idleTickMs)
+    timer = setTimeout(() => { timer = null; void tick(true) }, fast ? tickMs : idleTickMs)
     if (timer && typeof timer.unref === 'function') timer.unref()
   }
 
-  async function tick() {
+  // scheduled: true only for timer-driven ticks. A manual tick() (tests,
+  // harness loops) must not arm the background timer — under contention a
+  // shadow tick lands mid-loop and advances recovery without the harness
+  // stepBody, which flaked the 9sh/pillar climb acceptances (8e9).
+  async function tick(scheduled = false) {
     const endTimer = metrics.tickDuration.startTimer()
-    const r = await runTick()
+    const r = await runTick(scheduled)
     // Disk memory (idkcraft-hlk): one throttled write per window covers
     // every in-place store mutation (table claim, build done, arrival
     // scans, danger marks) with no per-store hooks. No world key (unit
@@ -638,7 +643,7 @@ function fleeReflex(bot, ctx) {
     return r
   }
 
-  async function runTick() {
+  async function runTick(scheduled = false) {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
     // 0ay: tick-over-tick hp drops stamp taking-fire (unreachable archers,
@@ -1101,7 +1106,7 @@ function fleeReflex(bot, ctx) {
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      scheduleNext(lastVisible || reflexFast || workTickFast)
+      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast)
     }
   }
 
@@ -1323,7 +1328,7 @@ function fleeReflex(bot, ctx) {
         ctx.flat.by = by || ctx.flat.by
         ctx.flat.parked = false
         ctx.paused = false
-        return `resuming flat, ${ctx.flat.holes.length} holes left`
+        return flatMod.resumeLine(ctx.flat)
       }
       ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
       ctx.unseenTicks = 0

@@ -670,3 +670,71 @@ describe('rw4.14 tally days (revmux round 1)', () => {
     }
   })
 })
+
+describe('rw4.12 gohome detour', () => {
+  const danger = require('../src/danger')
+  const FAR = { x: 30, y: 64, z: 19 } // straight leg to OUTSIDE runs along z=19
+  const PIT = { x: 20, y: 60, z: 19 }
+
+  it('a pit on the leg diverts the first goal perpendicular', () => {
+    const bot = mockBot({ at: { ...FAR } })
+    const ctx = { home: ctxHome() }
+    danger.mark(ctx, PIT)
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(bot.calls.goals.length, 1)
+    const g = bot.calls.goals[0]
+    assert.equal(g.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g.x, z: g.z }, { x: 20, z: 11 })
+  })
+
+  it('reaching the waypoint re-issues direct to the door', () => {
+    const bot = mockBot({ at: { ...FAR } })
+    const ctx = { home: ctxHome() }
+    danger.mark(ctx, PIT)
+    home.gohome(bot, ctx) // issues the via goal
+    bot.entity.position = { x: 20, y: 64, z: 11 } // walked around
+    home.gohome(bot, ctx) // arrived at the waypoint, flips direct
+    home.gohome(bot, ctx) // issues the direct goal
+    assert.equal(bot.calls.goals.length, 2)
+    const g = bot.calls.goals[1]
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, OUTSIDE)
+  })
+
+  it('diagonal arrival fires from the pathfinder near cell', () => {
+    // The walk (40,0)->door is diagonal, so the raw waypoint is
+    // fractional; GoalNearXZ aims at the floored cell and arrival reads
+    // from its centre. The bot stops on the near cell (28,16).
+    const bot = mockBot({ at: { x: 40, y: 64, z: 0 } })
+    const ctx = { home: ctxHome() }
+    danger.mark(ctx, { x: 25.5, y: 60, z: 9.5 })
+    home.gohome(bot, ctx)
+    const g0 = bot.calls.goals[0]
+    assert.equal(g0.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g0.x, z: g0.z }, { x: 29, z: 16 })
+    bot.entity.position = { x: 28.5, y: 64, z: 16.5 } // near end cell
+    home.gohome(bot, ctx) // arrived: flips direct
+    home.gohome(bot, ctx) // issues the direct goal
+    assert.equal(bot.calls.goals.length, 2)
+    const g1 = bot.calls.goals[1]
+    assert.equal(g1.constructor.name, 'GoalNear')
+    assert.deepEqual({ x: g1.x, y: g1.y, z: g1.z }, OUTSIDE)
+  })
+
+  it('a dead detour leg falls back to direct, once', () => {
+    const bot = mockBot({ at: { ...FAR } }) // frozen: moving=false, never displaced
+    const ctx = { home: ctxHome() }
+    danger.mark(ctx, PIT)
+    for (let i = 0; i < 35; i++) home.gohome(bot, ctx) // via leg stalls out
+    assert.equal(ctx.stepStatus, 'running', 'detour death is not step death')
+    assert.equal(ctx.gohome.viaDone, true)
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.deepEqual({ x: last.x, y: last.y, z: last.z }, OUTSIDE, 'falls back direct')
+    let failed = null // direct leg dies too; catch it before the fresh episode
+    for (let i = 0; i < 40 && !failed; i++) {
+      home.gohome(bot, ctx)
+      if (String(ctx.stepStatus).startsWith('failed:')) failed = ctx.stepStatus
+    }
+    assert.equal(failed, 'failed:cannot-reach-home', 'direct death fails honestly')
+  })
+})

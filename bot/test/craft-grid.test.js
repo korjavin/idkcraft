@@ -318,3 +318,74 @@ describe('gxk 2x2 grid hang', () => {
     bot.restoreError()
   })
 })
+
+describe('craft grid residuals (idkcraft-zaw)', () => {
+  it('a failing table craft leaves the 2x2 grid alone', async () => {
+    // The error clear is 2x2-only: a 3x3 failure must not shift-click the
+    // bare grid (mineflayer closes the table window itself).
+    const bot = fakeBot({ gridLogs: 2, invLogs: 13 })
+    bot.craft = async () => { throw new Error('table gone') }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, { name: 'crafting_table' }), /table gone/)
+    assert.equal(bot.inventory.slots[1].count, 2, 'grid untouched')
+    assert.deepEqual(bot.calls.clicks, [])
+    assert.equal(bot.calls.closes, 0)
+    bot.restoreError()
+  })
+
+  it('a homeless cursor does not stop the grid clearing', async () => {
+    const bot = fakeBot({ gridLogs: 1, invLogs: 13 })
+    bot.inventory.selectedItem = logItem(2)
+    bot.putSelectedItemRange = async () => { throw new Error('nowhere to put it') }
+    let crafted = 0
+    bot.craft = async () => { crafted++ }
+    await craft.safeCraft(bot, {}, 1, null)
+    assert.equal(crafted, 1)
+    assert.equal(bot.inventory.slots[1], null, 'grid still cleared')
+    bot.restoreError()
+  })
+
+  it('an unreadable grid slot is skipped, the rest still clears', async () => {
+    const bot = fakeBot({ gridLogs: 1, invLogs: 13 })
+    Object.defineProperty(bot.inventory.slots, '2', { get() { throw new Error('slot gone') } })
+    let crafted = 0
+    bot.craft = async () => { crafted++ }
+    await craft.safeCraft(bot, {}, 1, null)
+    assert.equal(crafted, 1)
+    assert.equal(bot.inventory.slots[1], null)
+    bot.restoreError()
+  })
+
+  it('an open table window suppresses the resync close', async () => {
+    const bot = fakeBot({ invLogs: 14 })
+    bot.currentWindow = { title: 'table' }
+    bot.craft = async () => { throw new Error(TIMEOUT_MSG) }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, null), /did not fire within timeout/)
+    await assert.rejects(craft.safeCraft(bot, {}, 1, null), /did not fire within timeout/)
+    assert.equal(bot.calls.closes, 0, 'never closes a window the bot is using')
+    bot.restoreError()
+  })
+
+  it('a message-less timeout error still counts the streak', async () => {
+    const bot = fakeBot({ invLogs: 14 })
+    const silent = { toString: () => TIMEOUT_MSG }
+    bot.craft = async () => { throw silent }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, null))
+    assert.equal(bot.calls.closes, 0)
+    await assert.rejects(craft.safeCraft(bot, {}, 1, null))
+    assert.equal(bot.calls.closes, 1, 'second consecutive silence resyncs')
+    bot.restoreError()
+  })
+
+  it('a bound-less window homes the cursor to slots 9..44', async () => {
+    const bot = fakeBot({ invLogs: 13 })
+    bot.inventory.selectedItem = logItem(2)
+    delete bot.inventory.inventoryStart
+    delete bot.inventory.inventoryEnd
+    const ranges = []
+    bot.putSelectedItemRange = async (start, end) => { ranges.push([start, end]) }
+    bot.craft = async () => {}
+    await craft.safeCraft(bot, {}, 1, null)
+    assert.deepEqual(ranges, [[9, 45]])
+    bot.restoreError()
+  })
+})

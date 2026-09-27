@@ -290,3 +290,22 @@ describe('follow never gives up (idkcraft-5vv)', () => {
     assert.equal(ctx.followSeenStuck, 1)
   })
 })
+
+describe('follow position snapshot (idkcraft-g9k)', () => {
+  it('missing body snapshots null, restored body starts tracking', () => {
+    // Respawn/unload tick issues the goal with no body (snapshot null);
+    // the next tick with a body back starts displacement tracking instead
+    // of wedging on a null lastPos.
+    const bot = wedgedBot()
+    bot.entity = null
+    const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
+    const ctx = { lastGoalKey: '' }
+    follow(bot, ctx, target, {})
+    assert.equal(ctx.lastGoalKey, 'follow:P')
+    assert.equal(ctx.followLastPos, null)
+    bot.entity = { position: pos(-40.4, 64.4, -207.7) }
+    follow(bot, ctx, target, {})
+    assert.ok(ctx.followLastPos, 'tracking starts when the body returns')
+    assert.equal(ctx.followLastPos.x, -40.4)
+  })
+})

@@ -96,6 +96,8 @@ not derived by counting. On these the remote model is consulted and wins:
 | `crowd` | `nearby_hostiles >= 3` with a fight target (`hostile_distance` is a number or `hostile_near_player`) the pursuit has not written off (`hostile_reachable !== false`) | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it. A bare count (creepers, 8–16-block mobs) routes easy — the model can only phantom-fight it | model |
 | `hostile-vs-far-player` | reachable hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless). Unreachable routes easy (give-up latch respected; a player threat still fights via the FSM) | model |
 
+Futile-ask skip (idkcraft-uig): on `low-health-hostile` with nobody online `jevBrain.decide` answers the FSM's pick without the round-trip on non-jev remotes — laya answers follow ~98.5%+ there and the noplayer veto converts every follow to the FSM's answer anyway (prod VL 7d: 2991 follow vs <=45 fight on hostile-fact + hp<6 states), so no disagree line is emitted. The route still counts as hard; the route line carries the FSM answer with `source=fsm-noplayer` and no `veto=` word (a real veto always has one).
+
 ### What the model is asked
 
 Every named hard case is a fight-vs-follow judgement, so the wire question
@@ -190,7 +192,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `bring me food [count]` | Brings food from inventory or hunts animals | Second+ kill of one animal reuses the spot; `only got <n> <name>` when short |
 | `autonomous on\|off` | Stays and works with nobody online (free brain only) | Chat toggle lasts until restart; permanent default is `BOT_AUTONOMOUS` |
 | `share` | Hands over everything carried except gear | Keeps tools, weapons, armour and the 32-block pillar reserve |
-| `flat [radius]` / `make flat` / `flatten` | Fills holes and trenches around you up to level ground | Radius 4..64 (default 48); `stop` parks it, `flat` again resumes, `follow me`/`go work` cancel |
+| `flat [radius]` / `make flat` / `flatten` | Fills holes and shaves bumps around you to level ground | Radius 4..64 (default 48); `stop` parks it, `flat` again resumes, `follow me`/`go work` cancel |
 | `brain [laya\|jev\|off]` | Switches the remote brain, or reports it | With a follow target only they may switch; `jev` needs `TYPESAFE_API_KEY` |
 
 `find me <block>` also orders the bot to LEAD: it walks to the nearest match (`GoalNear` range 2), pauses when the player falls more than 12 blocks behind (`waiting for you, come to me (<N> blocks)`) and resumes once within 8 (`going on, <N> blocks left`), announces `here: <block> at <x> <y> <z>` on arrival, gives up with `cannot reach <block> at ...` when the vein stays unreachable or `giving up on <name>` when you never come back. The order overrides the brain like `stop` does, `fight` still preempts it, and `stop` / `follow me` cancel it. A successful `find me` unparks a stopped bot. Safety: ore more than 8 blocks below you is never led to blindly — the bot warns (`<name> is <N> blocks down, dig carefully`) and waits for `lead anyway`.

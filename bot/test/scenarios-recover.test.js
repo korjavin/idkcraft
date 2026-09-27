@@ -521,3 +521,52 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
     }
   })
 })
+
+describe('rw4.9.1: repeat episodes in one pit stay silent, the ask stands out', () => {
+  function pitSolids() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -1; z <= 1; z++) solids.add(key(x, 60, z))
+    }
+    for (let y = 61; y <= 64; y++) {
+      for (let x = -2; x <= 2; x++) { solids.add(key(x, y, -1)); solids.add(key(x, y, 1)) }
+      solids.add(key(-2, y, 0)); solids.add(key(2, y, 0))
+    }
+    return solids
+  }
+
+  it('episode 1 narrates, gave-up marks, episode 2 keeps only the /tp ask', async () => {
+    // Prod 2026-09-27 12:55-13:05: 25 stuck-chats drowned the rescue page.
+    // The first episode tells the story; repeats keep quiet so the
+    // call_player ask stays visible in the scrollback. Steve is online
+    // (fja shape): without a player the menu ends wait-done and lays no
+    // mark, and the idle branch would not route the fact at all.
+    const bot = worldBot(pitSolids(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: pos(50, 64, 0) } } }
+    const brain = { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    async function runEpisode(n) {
+      bot._tickerCtx.stuck = { by: 'no-displacement', goal: null, key: `pit:${n}` }
+      let t = 0
+      const cap = 400
+      for (; t < cap && (bot._tickerCtx.stuck || bot._tickerCtx.recovery); t++) {
+        await ticker.tick() // the trap holds: no displacement, budget burns, gave up
+      }
+      assert.ok(t < cap, 'episode ends')
+    }
+    const stuckCount = () => bot.chats.filter((m) => m.startsWith('stuck, trying')).length
+    const askCount = () => bot.chats.filter((m) => m.startsWith("I'm stuck at")).length
+    try {
+      await runEpisode(1) // episode 1: fresh pit
+      const firstStuck = stuckCount()
+      assert.ok(firstStuck >= 1, `episode 1 narrates: ${bot.chats.join(' | ')}`)
+      assert.equal(askCount(), 1, `episode 1 asks once: ${bot.chats.join(' | ')}`)
+      await runEpisode(2) // episode 2: same pit, live mark
+      assert.equal(stuckCount(), firstStuck, `episode 2 adds no stuck-chat: ${bot.chats.join(' | ')}`)
+      assert.equal(askCount(), 2, `the ask persists every episode: ${bot.chats.join(' | ')}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+})
