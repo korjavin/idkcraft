@@ -116,7 +116,9 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       // final through real ticks, exactly the yvi treadmill.
       let jumps = 0
       let t = 0
-      for (; t < 60 && ctx.stepStatus !== 'failed:unreachable'; t++) {
+      // Cap 24 < 3xSTALL_TICKS: only the place_error fast path (4 ticks per
+      // column) reaches the final in time — displacement-only needs 30+.
+      for (; t < 24 && ctx.stepStatus !== 'failed:unreachable'; t++) {
         bot.entity.position = pos(0, jumps % 2 ? 65.2 : 64, 5)
         bot.entity.onGround = !(jumps % 2)
         jumps++
@@ -124,10 +126,12 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
         const r = await ticker.tick()
         actions.push(r.decision && r.decision.action)
       }
-      assert.ok(t < 60, 'gather fails through ticks')
+      assert.ok(t < 24, 'gather fails through ticks (place_error fast path)')
       assert.deepEqual(bot.lines.filter((l) => l === 'cannot reach the trees'),
         ['cannot reach the trees'], 'one chat at the final')
       assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'detector raises, menu gets one shot')
+      assert.equal(bot.pathfinder.goal, null, 'dead goal dropped at the final (yvi)')
+      assert.equal(ctx.lastGoalKey, '', 'goal key cleared with it')
 
       // 2. The escape episode plays out: sidestep walks free sideways.
       bot.entity.position = pos(0, 64, 5)
@@ -157,14 +161,15 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       const r = await ticker.tick()
       actions.push(r.decision && r.decision.action)
       assert.equal(r.decision.action, 'rest')
+      const holdStart = actions.length - 1
       assert.ok(bot.lines.some((l) => l.includes('gather holds after failure')),
         `rest names the hold: ${bot.lines.join(' | ')}`)
       for (let i = 0; i < 10; i++) {
         const rr = await ticker.tick()
         actions.push(rr.decision && rr.decision.action)
       }
-      assert.ok(!actions.includes('gather') || actions.indexOf('gather') < actions.indexOf('rest'),
-        `no gather re-pick after the final: ${actions.join(',')}`)
+      assert.ok(!actions.slice(holdStart).includes('gather'),
+        `no gather re-pick after the final: ${actions.slice(holdStart).join(',')}`)
       assert.equal(actions[actions.length - 1], 'rest')
       assert.deepEqual(bot.lines.filter((l) => l === 'cannot reach the trees'),
         ['cannot reach the trees'], 'still exactly one chat')
@@ -618,7 +623,9 @@ describe('8si: the house drive keeps the door and the doorway', () => {
   // Prod 8si: the approach dug the oak door (breaking adopt — no door near
   // spawn) and misplaced planks into the doorway. Fixed: the guard covers
   // door/workbench cells and the doorway-interior invariant skips plank
-  // targets there. E2E: the full hostile-executor drive through work ticks.
+  // targets there. E2E: the full hostile-executor drive through work ticks,
+  // with one interior planks cell injected into the plan so the invariant
+  // half is reachable (stock BLUEPRINT has no interior targets).
   const BLUEPRINT = require('../src/behaviours/build').BLUEPRINT
   const goal = require('../src/goal')
 
@@ -744,6 +751,8 @@ describe('8si: the house drive keeps the door and the doorway', () => {
     bot.pathfinder.setGoal = hostileSetGoal(bot, world, transit)
     const cap = capture()
     const actions = []
+    const injected = { dx: 1, dy: 0, dz: 1, kind: 'planks' } // interior target
+    BLUEPRINT.splice(1, 0, injected)
     try {
       let t = 0
       for (; t < 450 && !ctx.home.built; t++) {
@@ -753,6 +762,9 @@ describe('8si: the house drive keeps the door and the doorway', () => {
         await settle(2)
       }
       assert.ok(ctx.home.built, `house completes in ${t} ticks`)
+      assert.ok(ctx.buildSkip.includes(1), 'interior cell skipped by the invariant')
+      // Drive over: restore the plan before adopt (it scans every cell).
+      BLUEPRINT.splice(BLUEPRINT.indexOf(injected), 1)
       assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_door') || n === 'crafting_table'),
         [], 'door and workbench never dug')
       assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door', 'doorway holds the door')
@@ -773,6 +785,8 @@ describe('8si: the house drive keeps the door and the doorway', () => {
       assert.equal(adopted.built, true, 'adopt sees it complete')
       assert.ok(actions.every((a) => a === 'build'), `build owns every tick: ${[...new Set(actions)].join(',')}`)
     } finally {
+      const ix = BLUEPRINT.indexOf(injected) // idempotent: already restored above unless an assert threw
+      if (ix >= 0) BLUEPRINT.splice(ix, 1)
       cap.release()
       ticker.destroy()
     }
