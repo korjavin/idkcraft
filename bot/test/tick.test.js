@@ -1340,6 +1340,8 @@ describe('work mode (epic rw4)', () => {
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     let resolveAsk
     const brain = {
+      // hg8: jev source — a [gather, rest] pair is shaped (unasked) for laya.
+      source: 'jev',
       decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
       ask: () => new Promise((resolve) => { resolveAsk = resolve }),
     }
@@ -1363,6 +1365,8 @@ describe('work mode (epic rw4)', () => {
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     let resolveAsk
     const brain = {
+      // hg8: jev source — a [gather, rest] pair is shaped (unasked) for laya.
+      source: 'jev',
       decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
       ask: () => new Promise((resolve) => { resolveAsk = resolve }),
     }

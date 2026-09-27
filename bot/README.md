@@ -93,8 +93,8 @@ not derived by counting. On these the remote model is consulted and wins:
 | --- | --- | --- | --- |
 | `low-health-hostile` | hostile fact (`hostile_distance` is a number or `hostile_near_player`) and `bot_health < 6` | Bot at 4.9 hp shadowing while the player was slain 5 times: fight (protect) vs follow (survive) is a real judgement | model |
 | `unreachable-hostile` | `hostile_reachable === false` (fight's give-up latch) | The rules already failed once on this mob; re-probe vs shadow the player is a guess | model |
-| `crowd` | `nearby_hostiles >= 3` | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it | model |
-| `hostile-vs-far-player` | hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless) | model |
+| `crowd` | `nearby_hostiles >= 3` with a fight target (`hostile_distance` is a number or `hostile_near_player`) the pursuit has not written off (`hostile_reachable !== false`) | The FSM roams into crowds; both bot deaths had 3-4 hostiles around it. A bare count (creepers, 8–16-block mobs) routes easy — the model can only phantom-fight it | model |
+| `hostile-vs-far-player` | reachable hostile fact and `distance_to_player > 8` | Chase the mob or run to the player; the legs are the question (the melee reflex swings regardless). Unreachable routes easy (give-up latch respected; a player threat still fights via the FSM) | model |
 
 ### What the model is asked
 
