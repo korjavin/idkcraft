@@ -12,8 +12,10 @@
 // ctx.flat is set the ticker dispatches here instead of the brain/work,
 // except fight which still preempts. Short errands (lead, bring) preempt the
 // long job tick-by-tick and it resumes when they end; a mode change
-// ('follow me', 'go work') cancels it, while 'stop' only parks it so a
-// second `flat` resumes the episode instead of re-scanning.
+// ('follow me', 'go work') cancels it, while 'stop' only parks it. A second
+// `flat` from anywhere inside the running square resumes the episode with
+// its progress instead of re-scanning (9k4: a stepped-aside retype wiped
+// the run); only a new area or an explicit new radius starts over.
 //
 // v2 (w52.1) shaves bumps above the level after filling the holes, top-down
 // per column. Digging is allowlisted to natural terrain (ores, containers,
@@ -29,10 +31,10 @@ const { countItems } = require('../perception')
 const danger = require('../danger')
 const { say, clearGoal } = require('./util')
 
-const FLAT_DEFAULT_RADIUS = 48
+const FLAT_DEFAULT_RADIUS = 8 // bare `flat` (owner 2026-09-27: 97x97 hid the bot for half an hour)
 const FLAT_MIN_RADIUS = 4
 const FLAT_MAX_RADIUS = 64
-const SCAN_PER_TICK = 1200 // columns per tick; a 97x97 area scans in ~8 ticks
+const SCAN_PER_TICK = 1200 // columns per tick; an r=48 field scans in ~8 ticks
 const SCAN_UP = 10 // scan ceiling = command-time feet + this
 const SCAN_DOWN = 70 // scan floor = ceiling - this (deeper reads as deep)
 const SCAN_UP_EXTEND = 30 // climb past a solid ceiling to find the true top
@@ -47,6 +49,8 @@ const SUPPORT_DEPTH = 4 // support fills below one cap before deferring
 const SELF_OCC_LIMIT = 6 // sidesteps out of our own cap cell before skip
 const SIDESTEPS = [[3, 0], [-3, 0], [0, 3], [0, -3]]
 const PROGRESS_MS = 120000 // progress chat cadence on the long job
+const FIRST_PROGRESS_MS = 25000 // first progress comes fast: 2 min of silence reads as broken
+const FIRST_PROGRESS_N = 10 // ...or after this many resolved cells, whichever first
 const BACKSTOP_TICKS = 180 // ticks without any placement/skip before giving up
 const DIG_TARGET = 32 // dirt to dig per restock episode
 const DIG_TICKS = 300 // restock budget before resuming with what is on hand
@@ -493,6 +497,7 @@ function parseRadius(arg) {
 // Resume line for a parked episode: counts both queues, so resuming into
 // the shave phase does not report a misleading "0 holes left".
 function resumeLine(f) {
+  if (f.phase === 'scan') return `still scanning ${2 * f.r + 1}x${2 * f.r + 1}…`
   const holes = f.holes.length
   const bumps = f.bumps.length
   if (f.totalBumps > 0) return `resuming flat, ${holes} holes + ${bumps} bumps left`
@@ -524,6 +529,7 @@ function startEpisode(cx, cz, r, yTop, by) {
     ticks: 0,
     lastProgressTick: 0,
     lastChat: 0,
+    progressChats: 0,
     dig: null,
   }
 }
@@ -657,6 +663,14 @@ function sidestep(bot, ctx, h, bp, x, y, z, tag) {
   }
 }
 
+// One log-safe token from a refused placement/dig: flat is otherwise
+// silent between the start line and the finish, so a refused cell logs
+// its coordinates and the reason instead of vanishing into a skip count.
+function shortErr(e) {
+  const m = e && typeof e.message === 'string' ? e.message : String(e)
+  return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
+}
+
 function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
   ctx.placeInFlight = true
   ;(async () => {
@@ -670,9 +684,12 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
       } else {
         shiftDone(f)
       }
-    } catch (_) {
+    } catch (e) {
       h.att++
-      if (h.att >= PLACE_ATTEMPTS) shiftSkip(f, 'refused')
+      if (h.att >= PLACE_ATTEMPTS) {
+        console.log(`flat refused-place ${p.x},${p.y},${p.z} att=${h.att} err=${shortErr(e)}`)
+        shiftSkip(f, 'refused')
+      }
     } finally {
       ctx.placeInFlight = false
     }
@@ -692,9 +709,12 @@ function digFlight(bot, ctx, f, h, block) {
       await bot.dig(block)
       h.pickup = at // walk the drop into the inventory (gather pattern)
       f.lastProgressTick = f.ticks
-    } catch (_) {
+    } catch (e) {
       h.att++
-      if (h.att >= DIG_ATTEMPTS) shiftBumpSkip(f, 'refused')
+      if (h.att >= DIG_ATTEMPTS) {
+        console.log(`flat refused-dig ${at.x},${at.y},${at.z} att=${h.att} err=${shortErr(e)}`)
+        shiftBumpSkip(f, 'refused')
+      }
     } finally {
       ctx.digInFlight = false
     }
@@ -873,10 +893,22 @@ function digTick(bot, ctx, f, bp) {
   }
 }
 
+function resolvedCount(f) {
+  let n = (f.filled || 0) + (f.shaved || 0)
+  const skip = f.skip || {}
+  for (const k of Object.keys(skip)) n += skip[k] || 0
+  return n
+}
+
 function progressChat(bot, f) {
   const now = Date.now()
-  if (now - (f.lastChat || 0) < PROGRESS_MS) return
+  if (f.progressChats) {
+    if (now - (f.lastChat || 0) < PROGRESS_MS) return
+  } else if (now - (f.lastChat || 0) < FIRST_PROGRESS_MS && resolvedCount(f) < FIRST_PROGRESS_N) {
+    return
+  }
   f.lastChat = now
+  f.progressChats = (f.progressChats || 0) + 1
   if (f.phase === 'shave') say(bot, `flat shave ${f.shaved}/${f.totalBumps} (level ${f.level})`)
   else say(bot, `flat ${f.filled}/${f.total} (level ${f.level})`)
 }
@@ -1312,3 +1344,6 @@ module.exports.SELF_OCC_LIMIT = SELF_OCC_LIMIT
 module.exports.findRef = findRef
 module.exports.parseRadius = parseRadius
 module.exports.startEpisode = startEpisode
+module.exports.progressChat = progressChat
+module.exports.FIRST_PROGRESS_MS = FIRST_PROGRESS_MS
+module.exports.FIRST_PROGRESS_N = FIRST_PROGRESS_N
