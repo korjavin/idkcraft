@@ -244,7 +244,7 @@ describe('gear tick', () => {
     const ctx = { home: home(), stepStatus: 'running' }
     gear(bot, ctx)
     assert.equal(ctx.gearInFlight, true)
-    await tick(60)
+    await tick(700)
     assert.equal(ctx.gearInFlight, false)
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.craft[0].table, false)
@@ -259,7 +259,7 @@ describe('gear tick', () => {
     const ctx = { home: home(), stepStatus: 'running' }
     gear(bot, ctx)
     assert.equal(ctx.gearInFlight, true)
-    await tick(60)
+    await tick(700)
     assert.equal(ctx.gearInFlight, false)
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.craft[0].table, true)
@@ -277,7 +277,7 @@ describe('gear tick', () => {
     })
     const ctx = { home: home(), stepStatus: 'running' }
     gear(bot, ctx)
-    await tick(60)
+    await tick(700)
     assert.deepEqual(ctx.haul || {}, {})
     assert.deepEqual(ctx.gearFinished || {}, {})
     assert.ok(bot.lines.some((l) => l.includes('forged iron_pickaxe for me')))
@@ -491,5 +491,255 @@ describe('gear finished-goods handover', () => {
     } finally {
       console.log = orig
     }
+  })
+})
+
+describe('gear round-2: collision, async legs, latch', () => {
+  it('losing the self pick never completes the owner pick rung', async () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      ids: { iron_pickaxe: 22 },
+      recipes: { iron_pickaxe: { provides: 'iron_pickaxe' } },
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx)
+    await tick(700)
+    assert.ok(!((ctx.gear.made || {}).iron_pickaxe), 'self forge leaves made empty')
+    bot._items = bot._items.filter((i) => i.name !== 'iron_pickaxe') // worn out digging
+    gear.reconcile(ctx, bot)
+    assert.deepEqual(ctx.gearGiven || {}, {})
+    const next = gear.deriveNext(bot, ctx)
+    assert.equal(next.name, 'iron_pickaxe')
+    assert.equal(next.owner, false)
+  })
+  it('toss then bank keeps the self pick and completes the rung', () => {
+    // Review case 1: owner pick forged (pack 2, haul 1, finished 1), tossed
+    // (pack 1, haul 0). The reserve must hold the bank and the empty haul
+    // must read as handed — no reforge, ladder advances.
+    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }] })
+    const ctx = {
+      gear: { made: { iron_pickaxe: true } }, gearFinished: { iron_pickaxe: 1 },
+      gearGiven: { iron_sword: 1 }, haul: { iron_pickaxe: 0 },
+    }
+    gear.reconcile(ctx, bot)
+    assert.equal(ctx.gearFinished.iron_pickaxe, 0, 'reserve clamps the stale claim')
+    assert.equal(ctx.gearGiven.iron_pickaxe, 1, 'toss detected via the empty haul')
+    assert.equal(gear.handoverWaiting(bot, ctx), false)
+    assert.deepEqual(stockpile.depositPlan(bot, ctx), [], 'reserve holds the self pick')
+    assert.equal(gear.deriveNext(bot, ctx).name, 'diamond_pickaxe', 'ladder advances, no reforge')
+  })
+  it('death with a stale haul reforges instead of forgiving', () => {
+    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }] }) // self hands kept
+    const ctx = { gear: { made: { iron_sword: true } }, gearFinished: { iron_sword: 1 }, gearGiven: {}, haul: { iron_sword: 1 } }
+    gear.reconcile(ctx, bot)
+    assert.equal(ctx.gearFinished.iron_sword, 0, 'clamped to the empty pack')
+    assert.deepEqual(ctx.gearGiven, {}, 'stale haul: died, not handed')
+    assert.equal(gear.deriveNext(bot, ctx).name, 'iron_sword', 'reforge the lost sword')
+  })
+  it('rung transition clears the latch: repeats announce again', () => {
+    const bot = mockBot({ items: [{ name: 'stick', count: 2 }] })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx) // rung 1: want-ore, announced
+    assert.equal(ctx.gear.saidNeed, 'want-ore')
+    bot._items.push({ name: 'iron_pickaxe', count: 1 }) // self pick forged
+    ctx.stepStatus = 'running'
+    gear(bot, ctx) // rung 2: same want-ore key, announced again
+    assert.equal(bot.lines.filter((l) => l.includes('more raw iron')).length, 2)
+  })
+  it('a synchronously read furnace stamp is consumed once', () => {
+    const bot = mockBot({ items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'coal', count: 8 }] })
+    const ctx = { home: home({ furnace: { x: 1, y: 64, z: 0 } }), stepStatus: 'running', gearLegs: { furnace: (b, c) => { c.furnace = { settled: true, result: 'done' } } } }
+    gear(bot, ctx)
+    assert.equal(ctx.furnace.result, null)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+  it('async furnace done continues the gear step silently', async () => {
+    const goal = require('../src/goal')
+    const bot = mockBot({ items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }] })
+    const ctx = { home: home(), step: 'gear', stepStatus: 'done', brain: {}, furnace: { settled: true, result: 'done' } }
+    const r = await goal.decide(bot, ctx)
+    assert.equal(r.action, 'gear')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.furnace.result, null)
+  })
+  it('async furnace no-fuel yields with an announce', async () => {
+    const goal = require('../src/goal')
+    const bot = mockBot({ items: [{ name: 'stick', count: 2 }, { name: 'raw_iron', count: 3 }] })
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:no-fuel', brain: {}, furnace: { settled: true, result: 'failed:no-fuel' } }
+    const r = await goal.decide(bot, ctx)
+    assert.equal(ctx.gear.saidNeed, 'want-coal')
+    assert.ok(bot.lines.some((l) => l.includes('coal above the reserve')))
+    assert.equal(r.action, 'explore', 'gear latched out, fetchers run')
+  })
+  it('async furnace stall fails under a gear name and holds', async () => {
+    const goal = require('../src/goal')
+    const bot = mockBot()
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:smelt-stalled', brain: {}, furnace: { settled: true, result: 'failed:smelt-stalled' } }
+    const r = await goal.decide(bot, ctx)
+    assert.equal(r.action, 'explore')
+    assert.ok(ctx.stepFail && ctx.stepFail.gear, 'hold recorded')
+  })
+  it('async-settling leg fake: clobber between ticks is consumed', async () => {
+    const goal = require('../src/goal')
+    const bot = mockBot({ items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'coal', count: 8 }] })
+    const ctx = {
+      home: home({ furnace: { x: 1, y: 64, z: 0 } }), step: 'gear', stepStatus: 'running', brain: {},
+      gearLegs: {
+        furnace: (b, c) => {
+          if (c.furnace) return
+          c.furnaceInFlight = true
+          setTimeout(() => {
+            c.furnace = { settled: true, result: 'done' }
+            c.furnaceInFlight = false
+            c.stepStatus = 'done' // the async clobber the review found
+          }, 20)
+        },
+      },
+    }
+    gear(bot, ctx) // drives; the sync read sees nothing
+    assert.equal(ctx.stepStatus, 'running')
+    await tick(700) // async lands between ticks
+    assert.equal(ctx.stepStatus, 'done', 'clobbered as the real leg does')
+    const r = await goal.decide(bot, ctx)
+    assert.equal(r.action, 'gear', 'consumed, step continues')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.furnace.result, null)
+  })
+  it('banking the owner pick clears its haul claim (no later toss)', async () => {
+    // Review case 2 shape at the bank: the haul must settle with the bank.
+    const ids = {}
+    let next = 1
+    const idOf = (name) => (ids[name] = ids[name] || next++)
+    idOf('iron_pickaxe')
+    const items = [{ name: 'iron_pickaxe', count: 2 }]
+    const lines = []
+    const bot = {
+      lines,
+      _items: items,
+      entity: { position: pos(5.5, 64.5, 1.5), onGround: true },
+      registry: { itemsByName: new Proxy({}, { get: (_, n) => ({ id: idOf(n) }) }) },
+      inventory: { items: () => bot._items },
+      blockAt: (p) => ({ name: 'chest', position: pos(p.x, p.y, p.z) }),
+      pathfinder: { setGoal: () => {}, isMoving: () => false },
+      openChest: async () => ({
+        containerItems: () => [],
+        deposit: async (type, _meta, count) => {
+          const name = Object.keys(ids).find((k) => ids[k] === type)
+          let n = count
+          for (let k = bot._items.length - 1; k >= 0 && n > 0; k--) {
+            if (bot._items[k].name !== name) continue
+            const take = Math.min(bot._items[k].count, n)
+            bot._items[k].count -= take
+            n -= take
+            if (bot._items[k].count <= 0) bot._items.splice(k, 1)
+          }
+        },
+        close: async () => {},
+      }),
+      chat: (line) => { lines.push(String(line)) },
+    }
+    const ctx = {
+      home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 5, y: 64, z: 1 } },
+      lastGoalKey: '', stepStatus: 'running',
+      gear: { made: { iron_pickaxe: true } }, gearFinished: { iron_pickaxe: 1 }, gearGiven: {},
+      haul: { iron_pickaxe: 1 },
+    }
+    stockpile(bot, ctx)
+    stockpile(bot, ctx)
+    await tick(80)
+    assert.equal(bot._items.length, 1, 'one pick stays: the self twin')
+    assert.equal(ctx.gearGiven.iron_pickaxe, 1)
+    assert.equal(ctx.gearFinished.iron_pickaxe, 0)
+    assert.equal(ctx.haul.iron_pickaxe, 0, 'haul settled with the bank')
+  })
+})
+
+describe('gear round-2: phantom crafts', () => {
+  it('death reforge keeps exactly one unhanded unit (idempotent forge)', async () => {
+    // Forge, lose the sword with a stale haul (death), reforge: the second
+    // landing must not stack haul+finished (with += the haul would read 2).
+    const bot = mockBot({
+      items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_ingot', count: 4 }, { name: 'stick', count: 2 }],
+      ids: { iron_sword: 21 },
+      recipes: { iron_sword: { provides: 'iron_sword' } },
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx)
+    await tick(700)
+    assert.deepEqual(ctx.haul, { iron_sword: 1 })
+    bot._items = bot._items.filter((i) => i.name !== 'iron_sword') // died; haul stays stale
+    ctx.stepStatus = 'running'
+    gear(bot, ctx)
+    await tick(700)
+    assert.equal(bot.calls.craft.length, 2)
+    assert.deepEqual(ctx.haul, { iron_sword: 1 })
+    assert.deepEqual(ctx.gearFinished, { iron_sword: 1 })
+    assert.equal(ctx.gearRun.phantomTicks || 0, 0)
+  })
+  it('phantom crafts retry silently, then fail loud', async () => {
+    // craftImpl resolves without adding anything (the live phantom): three
+    // silent retries, the fourth fails so the hold can park a persistent
+    // failure instead of looping forever.
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      ids: { iron_pickaxe: 22 },
+      recipes: { iron_pickaxe: { ignored: true } },
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    bot.craft = async (...a) => { bot.calls.craft.push(a) } // resolves, lands nothing
+    const ctx = { home: home(), stepStatus: 'running' }
+    for (let i = 0; i < 3; i++) {
+      ctx.stepStatus = 'running'
+      gear(bot, ctx)
+      await tick(700)
+      assert.equal(ctx.stepStatus, 'running', `retry ${i + 1} stays silent`)
+    }
+    ctx.stepStatus = 'running'
+    gear(bot, ctx)
+    await tick(700)
+    assert.equal(ctx.stepStatus, 'failed:gear-iron_pickaxe')
+    assert.equal(bot.calls.craft.length, 4, 'three silent retries plus the loud one')
+  })
+})
+
+describe('gear round-2: handover state and op span', () => {
+  it('inFlight stays up through the settle window', async () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      ids: { iron_pickaxe: 22 },
+      recipes: { iron_pickaxe: { provides: 'iron_pickaxe' } },
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx)
+    await tick(100)
+    assert.equal(ctx.gearInFlight, true, 'op still verifying')
+    await tick(700)
+    assert.equal(ctx.gearInFlight, false)
+    assert.ok(bot.lines.some((l) => l.includes('forged iron_pickaxe for me')))
+  })
+  it('forged-and-held reads as handover, never a mat want', () => {
+    const goal = require('../src/goal')
+    const counts = {
+      ironOre: 0, ingots: 0, diamonds: 0, sticks: 0, planks: 0, logs: 0,
+      iron_pickaxe: 1, iron_sword: 1, diamond_pickaxe: 0, diamond_sword: 0,
+      tablePlaced: true, furnaceClaim: false, furnaceItem: 0, cobble: 0, fuel: 0,
+    }
+    const ctx = { gear: { made: { iron_sword: true } }, gearGiven: {}, gearFinished: { iron_sword: 1 } }
+    const plan = gear.planFor(counts, ctx, {})
+    assert.equal(plan.state, 'hand')
+    assert.equal(plan.key, 'hand-iron_sword')
+    const facts = { home: 'built', ironPick: 1, ironSword: 1, tablePlaced: true }
+    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'handover steps own it')
+    assert.equal(goal.stepWhy('gear', facts, mockBot(), ctx, ''), 'gear: handing over iron_sword')
+  })
+  it('hand tick yields silently', () => {
+    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_sword', count: 1 }] })
+    const ctx = { home: home(), stepStatus: 'running', gear: { made: { iron_sword: true }, lastKey: 'iron:sword:give' }, gearFinished: { iron_sword: 1 }, gearGiven: {} }
+    gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.lines, [])
   })
 })

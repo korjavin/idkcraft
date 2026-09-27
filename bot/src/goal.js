@@ -202,7 +202,7 @@ const MENU = {
       } catch (_) {
         return false
       }
-      if (!plan || plan.state === 'done') return false
+      if (!plan || plan.state === 'done' || plan.state === 'hand') return false
       if (plan.state === 'ready') return true
       let said = null
       try {
@@ -556,7 +556,7 @@ function goalText(facts) {
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
-    `chest=${facts.chest} surplus=${facts.surplus} gear=${facts.gear}`
+    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear}`
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -610,7 +610,7 @@ const STEP_CRITERIA = {
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   deliver: 'haul is waiting: carry it to the player',
-  stockpile: 'chest is no or surplus is yes: place the home chest and bank the surplus',
+  stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
@@ -779,6 +779,7 @@ function stepWhy(name, facts, bot, ctx, text) {
         return 'gear: not feasible'
       }
       if (!plan || plan.state === 'done') return 'gear: ladder complete'
+      if (plan.state === 'hand') return `gear: handing over ${plan.name || 'finished goods'}`
       if (plan.state === 'ready') return 'gear: ready'
       return `gear: ${plan.line || plan.key}`
     }
@@ -868,6 +869,37 @@ async function decide(bot, ctx) {
     // A success retires its own hold: tomorrow's identical failure re-arms
     // from scratch instead of inheriting a stale record (round-1 major).
     try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
+  }
+  if (finished && prev === 'gear') {
+    let result = null
+    try {
+      const f = ctx && ctx.furnace
+      if (f && f.settled) result = f.result || null
+    } catch (_) { /* no leg outcome */ }
+    if (result) {
+      try {
+        ctx.furnace.result = null
+      } catch (_) { /* consume best-effort */ }
+      if (result === 'done') {
+        ctx.stepStatus = 'running'
+        return { action: 'gear', sprint: false, source: 'goal-fsm' }
+      }
+      const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
+      if (reason === 'no-cobble' || reason === 'no-fuel') {
+        const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
+        const line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+        try {
+          if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
+          if (ctx.gear.saidNeed !== key) {
+            ctx.gear.saidNeed = key
+            bot.chat(line)
+          }
+        } catch (_) { /* announce best-effort */ }
+        ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
+      } else {
+        ctx.stepStatus = `failed:gear-furnace-${reason}`
+      }
+    }
   }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt

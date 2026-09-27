@@ -92,9 +92,9 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no gear=done')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes gear=ready')
-    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gear: 'want' }).includes('unlit=few'), true)
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
+    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
   })
 })
 
@@ -268,6 +268,8 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     assert.ok(STEP_CRITERIA.forage.includes('known is near'))
     assert.ok(STEP_CRITERIA.deliver.includes('haul is waiting'))
     assert.ok(STEP_CRITERIA.explore.includes('known is none'))
+    assert.ok(STEP_CRITERIA.stockpile.includes('handover is waiting'))
+    assert.ok(STEP_CRITERIA.gear.includes('forge'))
   })
   it('decide picks forage when a find is known', async () => {
     const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })

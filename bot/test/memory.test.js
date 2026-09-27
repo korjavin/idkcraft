@@ -418,3 +418,53 @@ describe('followName persistence (idkcraft-p4s)', () => {
     assert.equal(ctx2.followName, 'Solo')
   })
 })
+
+describe('gear ledger persistence (idkcraft-ipn.3 round-2)', () => {
+  it('round-trips given, finished and made into a fresh ctx', () => {
+    const now = Date.now()
+    const ctx1 = {
+      gearGiven: { iron_sword: 1 },
+      gearFinished: { iron_pickaxe: 1 },
+      gear: { made: { iron_sword: true, iron_pickaxe: true } },
+    }
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true, 'gear alone is information')
+    const ctx2 = {}
+    const back = memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.ok(back)
+    assert.deepEqual(ctx2.gearGiven, { iron_sword: 1 })
+    assert.deepEqual(ctx2.gearFinished, { iron_pickaxe: 1 })
+    assert.deepEqual(ctx2.gear.made, { iron_sword: true, iron_pickaxe: true })
+    assert.equal(back.gear, 4)
+  })
+  it('empty ledger omits the key; old docs restore without it', () => {
+    const now = Date.now()
+    const ctx1 = {}
+    fillCtx(ctx1, now)
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal('gear' in doc, false)
+    const ctx2 = {}
+    memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.equal(ctx2.gearGiven, undefined)
+    assert.equal(ctx2.gearFinished, undefined)
+  })
+  it('hand-edited shapes sanitize on restore, never throw', () => {
+    const now = Date.now()
+    const doc = {
+      v: 1,
+      world: memory.worldKey(botAt(SPAWN_A)),
+      savedAt: now,
+      homes: [],
+      resources: [],
+      visited: [],
+      danger: [],
+      gear: { given: { iron_sword: 'x', [ 'y'.repeat(65) ]: 1 }, finished: 'nope', made: { iron_sword: 1 } },
+    }
+    fs.writeFileSync(file, JSON.stringify(doc))
+    const ctx = {}
+    const back = memory.restore(botAt(SPAWN_A), ctx, file, now)
+    assert.ok(back)
+    assert.equal(ctx.gearGiven, undefined, 'nothing valid, nothing assigned')
+    assert.equal(back.gear, 0)
+  })
+})

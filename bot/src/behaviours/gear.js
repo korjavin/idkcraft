@@ -37,7 +37,6 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
-const deliverMod = require('./deliver')
 const { COAL_RESERVE } = require('./light')
 const { countItems } = require('../perception')
 const { say } = require('./util')
@@ -66,6 +65,39 @@ const MAT_NEED = { pickaxe: 3, sword: 2 }
 const STICK_NEED = { pickaxe: 2, sword: 1 }
 // Owner wants per item name (tiers differ by name, so names are unique).
 const OWNER_WANT = { iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 }
+// Self reserve (round-2): owner pickaxes share the self pick's item name,
+// so handover math counts the pack MINUS the hands. Without it a toss plus
+// a bank spends the bot's own pick (live - 0) and knocks the ladder back to
+// iron. Swords have no self twin (the stone sword suffices), reserve 0.
+// Mirrored in stockpile.js GEAR_SELF_RESERVE (no shared import: stockpile
+// must not require gear — craft/goal cycle).
+const SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1 }
+function reserve(name) {
+  return SELF_RESERVE[name] || 0
+}
+function haulCount(ctx, name) {
+  try {
+    return (ctx && ctx.haul && ctx.haul[name]) || 0
+  } catch (_) {
+    return 0
+  }
+}
+// Tossed (pure, no mutation): forged for the owner, pack at/below the
+// reserve, and no channel still claims it. Banked pieces short-circuit on
+// the given ledger; deaths leave a stale haul and reforge.
+function tossed(name, haveCount, ctx) {
+  try {
+    const made = ctx && ctx.gear && ctx.gear.made
+    if (!made || !made[name]) return false
+    if (haulCount(ctx, name) > 0) return false
+    const fin = (ctx.gearFinished && ctx.gearFinished[name]) || 0
+    const live = Math.max(0, (haveCount || 0) - reserve(name))
+    if (Math.min(fin, live) > 0) return false
+    return (haveCount || 0) <= reserve(name)
+  } catch (_) {
+    return false
+  }
+}
 const WALK_GIVE_UP = 20
 
 function have(bot, name) {
@@ -112,7 +144,7 @@ function deriveNext(bot, ctx) {
       const piece = rung.pieces[pi]
       const name = `${rung.tier}_${piece.kind}`
       if (piece.owner) {
-        if ((given[name] || 0) < (OWNER_WANT[name] || 1)) {
+        if ((given[name] || 0) < (OWNER_WANT[name] || 1) && !tossed(name, have(bot, name), ctx)) {
           return { tier: rung.tier, tierIdx: ti, pieceIdx: pi, mat: rung.mat, kind: piece.kind, owner: true, name, needMat: MAT_NEED[piece.kind], needSticks: STICK_NEED[piece.kind] }
         }
       } else if (have(bot, name) <= 0) {
@@ -130,19 +162,18 @@ function deriveNext(bot, ctx) {
 // (deliver's 'brought'), and a death-forgiven loss must not be announced.
 function reconcile(ctx, bot) {
   let finished = null
-  let made = null
   try {
     if (!ctx.gearFinished || typeof ctx.gearFinished !== 'object') ctx.gearFinished = {}
     finished = ctx.gearFinished
-    made = (ctx.gear && ctx.gear.made) || {}
   } catch (_) {
     return
   }
   for (const name of Object.keys(OWNER_WANT)) {
     try {
       const live = have(bot, name)
-      if ((finished[name] || 0) > live) finished[name] = Math.max(0, live)
-      if (made[name] && (finished[name] || 0) <= 0 && live <= 0) {
+      const net = Math.max(0, live - reserve(name))
+      if ((finished[name] || 0) > net) finished[name] = net
+      if (tossed(name, live, ctx)) {
         if (!ctx.gearGiven || typeof ctx.gearGiven !== 'object') ctx.gearGiven = {}
         if ((ctx.gearGiven[name] || 0) < OWNER_WANT[name]) ctx.gearGiven[name] = OWNER_WANT[name]
       }
@@ -155,7 +186,7 @@ function handoverWaiting(bot, ctx) {
   try {
     const finished = (ctx && ctx.gearFinished) || {}
     for (const name of Object.keys(OWNER_WANT)) {
-      if ((finished[name] || 0) > 0 && have(bot, name) > 0) return true
+      if ((finished[name] || 0) > 0 && have(bot, name) > reserve(name)) return true
     }
   } catch (_) { /* none waiting */ }
   return false
@@ -220,18 +251,28 @@ function planFor(counts, ctx, impls, furnaceBusy) {
       const piece = rung.pieces[pi]
       const name = `${rung.tier}_${piece.kind}`
       if (piece.owner) {
-        if ((given[name] || 0) >= (OWNER_WANT[name] || 1)) continue
+        if ((given[name] || 0) >= (OWNER_WANT[name] || 1) || tossed(name, c[name] || 0, ctx)) continue
       } else if ((c[name] || 0) > 0) {
         continue
       }
-      return planPiece(rung, name, c, im, furnaceBusy)
+      return planPiece(rung, piece, name, c, im, furnaceBusy, ctx)
     }
   }
   return { state: 'done', key: 'done' }
 }
 
-function planPiece(rung, name, c, im, furnaceBusy) {
-  const kind = name.endsWith('_pickaxe') ? 'pickaxe' : 'sword'
+function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
+  const kind = piece.kind
+  // Awaiting handover: forged for the owner, still held past the reserve.
+  // Infeasible by design — deliver/stockpile own the next move — so the
+  // ladder yields silently instead of begging mats for a finished piece.
+  if (piece.owner) {
+    let made = false
+    try {
+      made = !!(ctx && ctx.gear && ctx.gear.made && ctx.gear.made[name])
+    } catch (_) { /* unmade */ }
+    if (made && (c[name] || 0) > reserve(name)) return { state: 'hand', key: `hand-${name}`, name }
+  }
   const needMat = MAT_NEED[kind]
   const needSticks = STICK_NEED[kind]
   const matHave = rung.tier === 'iron' ? (c.ingots || 0) : (c.diamonds || 0)
@@ -382,11 +423,17 @@ function opTool(bot, name, table) {
   return { item: name, recipe: found[0], count: 1, table }
 }
 
+const PHANTOM_RETRIES = 3
+const PHANTOM_SETTLE_MS = 500 // model packets land well inside this
 function runOp(bot, ctx, op, onDone) {
   if (typeof bot.craft !== 'function') {
     fail(ctx, op.item, new Error('bot.craft missing'))
     return
   }
+  let before = 0
+  try {
+    before = have(bot, op.item)
+  } catch (_) { /* unverifiable: trust the op */ }
   ctx.gearInFlight = true
   void (async () => {
     try {
@@ -396,7 +443,34 @@ function runOp(bot, ctx, op, onDone) {
       fail(ctx, op.item, err)
       return
     }
+    // Always settle before the single check: a ghost model entry (craft
+    // resolved, product visible, server reverts it within a round-trip)
+    // passes an immediate check. 500 ms of craft time is nothing next to
+    // a false forge (2 ingots + a rung of chat). inFlight stays up through
+    // the settle: the op is not done until verified, and a tick inside the
+    // window must not re-issue on a stale model.
+    await new Promise((resolve) => setTimeout(resolve, PHANTOM_SETTLE_MS))
     ctx.gearInFlight = false
+    let landed = true
+    try {
+      landed = have(bot, op.item) > before
+    } catch (_) { /* unverifiable: trust the op */ }
+    if (!landed) {
+      const r = runCtx(ctx)
+      const n = (r.phantomTicks || 0) + 1
+      r.phantomTicks = n
+      try {
+        console.error(`gear phantom craft item=${op.item} try=${n}`)
+      } catch (_) { /* logging best-effort */ }
+      if (n > PHANTOM_RETRIES) {
+        r.phantomTicks = 0
+        fail(ctx, op.item, new Error('craft-no-product'))
+      }
+      return // transient: re-plan re-issues next tick
+    }
+    try {
+      runCtx(ctx).phantomTicks = 0
+    } catch (_) { /* reset best-effort */ }
     try {
       if (typeof onDone === 'function') onDone()
     } catch (_) { /* completion best-effort */ }
@@ -407,7 +481,9 @@ function runOp(bot, ctx, op, onDone) {
 // gear-owned outcome: null while it runs, 'done', or 'failed:<reason>'.
 // The gear step's own status is saved and restored — a subroutine must never
 // end the step (ipn.1 contract: outcome reads result first, then the relay).
-function driveLeg(bot, ctx, impl, resultOf) {
+// A synchronously read stamp is consumed (nulled) so decide's async
+// reconciliation below never sees it twice.
+function driveLeg(bot, ctx, impl, resultOf, consume) {
   const keep = ctx.stepStatus
   try {
     ctx.stepStatus = 'running'
@@ -423,6 +499,11 @@ function driveLeg(bot, ctx, impl, resultOf) {
   let out = null
   try {
     out = resultOf(ctx)
+    if (out && typeof consume === 'function') {
+      try {
+        consume(ctx)
+      } catch (_) { /* consume best-effort */ }
+    }
     if (!out) {
       const s = ctx.stepStatus
       if (s && s !== 'running') out = s
@@ -443,6 +524,10 @@ function driveFurnace(bot, ctx, impl) {
     } catch (_) {
       return null
     }
+  }, (c) => {
+    try {
+      if (c.furnace) c.furnace.result = null
+    } catch (_) { /* consume best-effort */ }
   })
 }
 
@@ -457,12 +542,16 @@ function driveDeep(bot, ctx, impl) {
 function forged(bot, ctx, next) {
   const g = gearCtx(ctx)
   try {
-    if (!g.made) g.made = {}
-    g.made[next.name] = true
     if (next.owner) {
-      deliverMod.addHaul(ctx, { [next.name]: 1 })
+      if (!g.made) g.made = {}
+      g.made[next.name] = true
+      // Exact-set, not addHaul (+=): one piece per name per ladder, so the
+      // forge asserts exactly one unhanded unit. A retried craft (phantom
+      // first op, death reforge) must not stack claims per attempt.
+      if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
+      ctx.haul[next.name] = 1
       if (!ctx.gearFinished || typeof ctx.gearFinished !== 'object') ctx.gearFinished = {}
-      ctx.gearFinished[next.name] = (ctx.gearFinished[next.name] || 0) + 1
+      ctx.gearFinished[next.name] = 1
     }
   } catch (_) { /* ledger best-effort */ }
   say(bot, `forged ${next.name} for ${next.owner ? 'you' : 'me'}`)
@@ -510,10 +599,15 @@ function gear(bot, ctx, target, state) {
   const key = `${next.tier}:${next.kind}:${next.owner ? 'give' : 'self'}`
   if (g.lastKey !== key) {
     g.lastKey = key
+    g.saidNeed = null // new rung, new needs: the latch must not gag them
     say(bot, `next gear: ${next.name} for ${next.owner ? 'you' : 'me'}`)
     try {
       console.log(`gear rung ${key}`)
     } catch (_) { /* logging best-effort */ }
+  }
+  if (plan.state === 'hand') {
+    ctx.stepStatus = 'done' // handover steps own it; silent, nothing to say
+    return
   }
   if (plan.state === 'want' || plan.state === 'wait') {
     announceYield(ctx, g, bot, plan.key, plan.line)

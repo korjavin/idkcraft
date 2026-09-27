@@ -106,6 +106,10 @@ function invItems(bot) {
 // Inventory -> deposit list in inventory order, keeps skipped. Food keeps
 // the first FOOD_KEEP edibles (the eat reflex feeds from the inventory),
 // dirt+cobble keep the first SCAFFOLD_KEEP (the pillar reserve share keeps).
+// Self reserve, mirror of gear.js SELF_RESERVE (round-2): owner pickaxes
+// share the self pick's item name, so the allowance counts the pack minus
+// the hands — a toss plus a bank can never spend the bot's own pick.
+const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1 }
 // Finished-goods exception (ipn.3): forged owner tools bank up to the gear
 // ledger count (ctx.gearFinished); the rest of the kit stays. Without ctx
 // the behaviour is exactly the old one.
@@ -131,7 +135,10 @@ function depositPlan(bot, ctx) {
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {
       if (!finished) continue
-      if (!(i.name in allow)) allow[i.name] = Math.max(0, Math.min(finished[i.name] || 0, totals[i.name] || 0))
+      if (!(i.name in allow)) {
+        const net = Math.max(0, (totals[i.name] || 0) - (GEAR_SELF_RESERVE[i.name] || 0))
+        allow[i.name] = Math.max(0, Math.min(finished[i.name] || 0, net))
+      }
       const take = Math.min(allow[i.name], typeof i.count === 'number' ? i.count : 1)
       allow[i.name] -= take
       if (take > 0) plan.push({ name: i.name, count: take })
@@ -507,6 +514,9 @@ function stockpile(bot, ctx, target, state) {
               const c = Math.min(fin[name], bankedByName[name])
               fin[name] -= c
               ctx.gearGiven[name] = (ctx.gearGiven[name] || 0) + c
+              try {
+                if (ctx.haul && typeof ctx.haul === 'object') ctx.haul[name] = Math.max(0, (ctx.haul[name] || 0) - c)
+              } catch (_) { /* haul best-effort */ }
               handed.push(`${c} ${name}`)
             }
           }
