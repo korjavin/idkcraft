@@ -748,14 +748,14 @@ function fleeReflex(bot, ctx) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !ctx.flat) {
+      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked)) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
       // An active bring-me owns the body like work-alone: the bot fetches up
       // to 48 blocks out, past entity-tracking range, so the idle branch must
       // not park it and the homing walk must not steal it mid-order.
-      const workAlone = (ctx.work || ctx.bring || ctx.flat) && !target && (rosterOnline || ctx.autonomous) && !homing
+      const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked)) && !target && (rosterOnline || ctx.autonomous) && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -963,7 +963,9 @@ function fleeReflex(bot, ctx) {
       // above work, except fight which still preempts. Placed after
       // lead/bring so a short errand preempts the long job tick-by-tick and
       // the job resumes when the errand ends (only a mode change clears it).
-      if (ctx.flat && decision.action !== 'fight') {
+      // A parked episode (stop) never dispatches: any order that unparks the
+      // body (bring/share/lead) must not resurrect it — only `flat` resumes.
+      if (ctx.flat && !ctx.flat.parked && decision.action !== 'fight') {
         const handler = BEHAVIOURS.flat
         if (typeof handler === 'function') handler(bot, ctx, target, state)
         const flatDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
@@ -1116,8 +1118,11 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
-      // ctx.flat survives stop: the parked episode resumes on the next `flat`
-      // with the same area instead of re-scanning (w52 resumable job).
+      // ctx.flat survives stop as a parked episode: the next `flat` resumes
+      // it instead of re-scanning (w52 resumable job). The parked flag (not
+      // just paused) gates the dispatch, so an unrelated order that unparks
+      // the body cannot resurrect the job on its own (core-1).
+      if (ctx.flat) ctx.flat.parked = true
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
@@ -1239,7 +1244,7 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       return startBlockOrder(bot, ctx, { name, want, by }, res)
     },
-    setFlat: ({ radius, by }) => {
+    setFlat: ({ radius, by, explicit }) => {
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -1253,8 +1258,16 @@ function fleeReflex(bot, ctx) {
       const cz = anchor ? Math.floor(anchor.z) : 0
       const yTop = Math.floor(anchor ? anchor.y : 64) + flatMod.SCAN_UP
       const key = `${cx},${cz},${radius}`
-      if (ctx.flat && ctx.flat.key === key) {
+      const parked = ctx.flat && ctx.flat.parked
+      // A parked episode resumes from anywhere inside its own square, and a
+      // bare `flat` (no radius argument) reuses the parked radius: the owner
+      // should not have to stand on the exact order block (core-5).
+      const insideParked = parked &&
+        Math.abs(cx - ctx.flat.cx) <= ctx.flat.r && Math.abs(cz - ctx.flat.cz) <= ctx.flat.r
+      if ((parked && insideParked && (!explicit || radius === ctx.flat.r)) ||
+          (ctx.flat && !parked && ctx.flat.key === key)) {
         ctx.flat.by = by || ctx.flat.by
+        ctx.flat.parked = false
         ctx.paused = false
         return `resuming flat, ${ctx.flat.holes.length} holes left`
       }
@@ -1742,7 +1755,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+))?$/)
       const r = m ? flatMod.parseRadius(m[1]) : null
       if (r == null) bot.chat('try: flat 16')
-      else if (ticker && typeof ticker.setFlat === 'function') bot.chat(ticker.setFlat({ radius: r, by: playerName }))
+      else if (ticker && typeof ticker.setFlat === 'function') bot.chat(ticker.setFlat({ radius: r, by: playerName, explicit: m[1] != null }))
     } else if (msg === 'share') {
       if (ticker && typeof ticker.setShare === 'function') {
         const r = ticker.setShare({ by: playerName })

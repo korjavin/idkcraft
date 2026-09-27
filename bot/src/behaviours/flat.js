@@ -35,6 +35,8 @@ const WALK_STALLS = 10 // no-displacement walk ticks before defer (gather scale)
 const HOLE_DEFERS = 4 // queue rotations before an unplaceable hole is skipped
 const OCC_DEFERS = 6 // rotations before an occupied cell is skipped
 const SUPPORT_DEPTH = 4 // support fills below one cap before deferring
+const SELF_OCC_LIMIT = 6 // sidesteps out of our own cap cell before skip
+const SIDESTEPS = [[3, 0], [-3, 0], [0, 3], [0, -3]]
 const PROGRESS_MS = 120000 // progress chat cadence on the long job
 const BACKSTOP_TICKS = 180 // ticks without any placement/skip before giving up
 const DIG_TARGET = 32 // dirt to dig per restock episode
@@ -263,23 +265,37 @@ function dirtIds(bot) {
   return ids
 }
 
+function covers(ent, x, y, z) {
+  const p = ent && ent.position
+  if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+  const fx = Math.floor(p.x)
+  const fy = Math.floor(p.y)
+  const fz = Math.floor(p.z)
+  return fx === x && fz === z && (fy === y || fy + 1 === y)
+}
+
 // Never place into the bot's own feet/head or any visible player's feet/head.
-function cellOccupied(bot, x, y, z) {
-  const covers = (ent) => {
-    const p = ent && ent.position
-    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
-    const fx = Math.floor(p.x)
-    const fy = Math.floor(p.y)
-    const fz = Math.floor(p.z)
-    return fx === x && fz === z && (fy === y || fy + 1 === y)
-  }
+// Split three ways: self-occupancy steps aside (the bot can move), a camping
+// player counts toward the skip, and the union stays for support cells.
+function cellOccupiedSelf(bot, x, y, z) {
   try {
-    if (bot.entity && covers(bot.entity)) return true
+    return !!(bot.entity && covers(bot.entity, x, y, z))
+  } catch (_) {
+    return false
+  }
+}
+
+function cellOccupiedByPlayer(bot, x, y, z) {
+  try {
     for (const player of Object.values((bot && bot.players) || {})) {
-      if (player && player.entity && covers(player.entity)) return true
+      if (player && player.entity && covers(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
   return false
+}
+
+function cellOccupied(bot, x, y, z) {
+  return cellOccupiedSelf(bot, x, y, z) || cellOccupiedByPlayer(bot, x, y, z)
 }
 
 // Neighbor scan order: below first — a 1-deep hole's cap sits on the ground,
@@ -303,6 +319,47 @@ function findRef(bot, p) {
     }
   }
   return null
+}
+
+// Surface guard (body-4): while flat owns the body the pathfinder must not
+// dig steps out of the square it is leveling — a GoalPlaceBlock approach
+// across an uncapped trench would otherwise notch the surface behind the
+// scan. Same exclusionAreasBreak seam as build.guardOwnWalls, but the
+// predicate self-invalidates when the episode is gone, replaced or parked,
+// so a cancel path ('follow me', 'go work', 'stop') can never leak a live
+// guard into other behaviours.
+function guardFlatSurface(bot, ctx) {
+  try {
+    const mov = bot && bot.pathfinder && bot.pathfinder.movements
+    if (!mov || !Array.isArray(mov.exclusionAreasBreak)) return
+    const f = ctx && ctx.flat
+    const key = f ? f.key : null
+    if (ctx.flatGuardKey === key && ctx.flatGuardMov === mov) return
+    if (ctx.flatGuardFn) {
+      for (const m of new Set([ctx.flatGuardMov, mov])) {
+        if (m && Array.isArray(m.exclusionAreasBreak)) {
+          m.exclusionAreasBreak = m.exclusionAreasBreak.filter((fn) => fn !== ctx.flatGuardFn)
+        }
+      }
+      ctx.flatGuardFn = null
+    }
+    ctx.flatGuardMov = mov
+    ctx.flatGuardKey = key
+    if (!f) return
+    const fn = (block) => {
+      try {
+        const cur = ctx.flat
+        if (!cur || cur.key !== key || cur.parked || cur.level == null) return 0
+        const q = block && block.position
+        if (!q || typeof q.x !== 'number' || typeof q.y !== 'number' || typeof q.z !== 'number') return 0
+        if (q.y > cur.level) return 0
+        if (Math.abs(q.x - cur.cx) > cur.r || Math.abs(q.z - cur.cz) > cur.r) return 0
+        return 100
+      } catch (_) { return 0 }
+    }
+    mov.exclusionAreasBreak.push(fn)
+    ctx.flatGuardFn = fn
+  } catch (_) { /* best-effort: approach still walks */ }
 }
 
 // Chat radius argument: missing = default, numeric clamped to the 4..64
@@ -331,9 +388,8 @@ function startEpisode(cx, cz, r, yTop, by) {
     filled: 0,
     supports: 0,
     skip: { water: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0 },
-    goalKey: null,
+    parked: false,
     issuedKey: null,
-    occStreak: 0,
     ticks: 0,
     lastProgressTick: 0,
     lastChat: 0,
@@ -348,22 +404,17 @@ function startEpisode(cx, cz, r, yTop, by) {
 function shiftDone(f) {
   f.holes.shift()
   f.filled++
-  f.goalKey = null
-  f.occStreak = 0
   f.lastProgressTick = f.ticks
 }
 
 function shiftSkip(f, why) {
   f.holes.shift()
   if (f.skip[why] != null) f.skip[why]++
-  f.goalKey = null
-  f.occStreak = 0
   f.lastProgressTick = f.ticks
 }
 
 function rotate(f) {
   f.holes.push(f.holes.shift())
-  f.goalKey = null
 }
 
 function finish(bot, ctx, f, why) {
@@ -379,6 +430,7 @@ function finish(bot, ctx, f, why) {
   console.log(`flat finish filled=${f.filled} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)}`)
   clearGoal(bot, ctx)
   ctx.flat = null
+  guardFlatSurface(bot, ctx) // episode gone: the detach path below runs
 }
 
 function scanRecord(f, c, r) {
@@ -451,7 +503,6 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
       } else {
         shiftDone(f)
       }
-      f.occStreak = 0
     } catch (_) {
       h.att++
       if (h.att >= PLACE_ATTEMPTS) shiftSkip(f, 'refused')
@@ -463,10 +514,21 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
 
 function startDig(bot, ctx, f) {
   f.phase = 'dig'
-  f.goalKey = null
   f.dig = { pos: null, phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: null }
   f.lastProgressTick = f.ticks
   say(bot, 'out of fill blocks, digging dirt')
+}
+
+// Restock origin: findBlocks returns the matches nearest to its point, so
+// searching from the bot (inside the square) would return 64 inside blocks
+// and the outside filter would drop all of them (body-1). Search from just
+// past the nearest edge instead; the inside filter stays as a backstop.
+function restockPoint(f, bp) {
+  const dx = bp.x - f.cx
+  const dz = bp.z - f.cz
+  if (Math.abs(dx) > f.r || Math.abs(dz) > f.r) return new Vec3(bp.x, bp.y, bp.z)
+  if (Math.abs(dx) > Math.abs(dz)) return new Vec3(f.cx + Math.sign(dx || 1) * (f.r + 4), bp.y, bp.z)
+  return new Vec3(bp.x, bp.y, f.cz + Math.sign(dz || 1) * (f.r + 4))
 }
 
 // Nearest diggable dirt outside the flat square: mnx pit memory and the
@@ -476,7 +538,7 @@ function findDirt(bot, ctx, f, bp) {
   if (ids.length === 0) return null
   let found = []
   try {
-    found = bot.findBlocks({ matching: ids, maxDistance: DIRT_FIND_RADIUS, count: DIRT_FIND_COUNT }) || []
+    found = bot.findBlocks({ matching: ids, point: restockPoint(f, bp), maxDistance: DIRT_FIND_RADIUS, count: DIRT_FIND_COUNT }) || []
   } catch (_) {
     return null
   }
@@ -501,7 +563,6 @@ function endDig(bot, ctx, f, resume) {
   f.dig = null
   if (resume) {
     f.phase = 'fill'
-    f.goalKey = null
     f.lastProgressTick = f.ticks
     return
   }
@@ -539,7 +600,6 @@ function digTick(bot, ctx, f, bp) {
         bot.pathfinder.setGoal(new goals.GoalNear(d.pos.x, d.pos.y, d.pos.z, 2), false)
       } catch (_) { /* retry next tick */ return }
       ctx.lastGoalKey = key
-      f.goalKey = key
       d.stalls = 0
       d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
@@ -601,7 +661,6 @@ function digTick(bot, ctx, f, bp) {
         bot.pathfinder.setGoal(new goals.GoalBlock(d.pos.x, d.pos.y, d.pos.z), false)
       } catch (_) { /* retry next tick */ return }
       ctx.lastGoalKey = key
-      f.goalKey = key
       return
     }
     // Reached or gave up getting there: the drop is picked up by proximity
@@ -648,17 +707,35 @@ function fillTick(bot, ctx, f, bp) {
     shiftSkip(f, 'water')
     return
   }
-  if (cellOccupied(bot, cx, cy, cz)) {
+  const selfIn = cellOccupiedSelf(bot, cx, cy, cz)
+  const playerIn = cellOccupiedByPlayer(bot, cx, cy, cz)
+  if (selfIn && !playerIn) {
+    // Standing in our own cap cell (a 1-deep trench floor is a normal place
+    // goal parking spot): step aside so the cap can land. The offset rotates
+    // with the attempt count; a bot that cannot move skips the hole instead
+    // of orbiting it.
+    h.selfOcc = (h.selfOcc || 0) + 1
+    if (h.selfOcc > SELF_OCC_LIMIT) {
+      shiftSkip(f, 'occupied')
+      return
+    }
+    const step = SIDESTEPS[(h.selfOcc - 1) % SIDESTEPS.length]
+    const key = `flat-side:${cx},${cy},${cz}:${h.selfOcc}`
+    if (key !== ctx.lastGoalKey) {
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
+      } catch (_) { /* retry next tick */ return }
+      ctx.lastGoalKey = key
+    }
+    return
+  }
+  if (playerIn) {
     h.occ++
     if (h.occ > OCC_DEFERS) {
       shiftSkip(f, 'occupied')
       return
     }
     rotate(f)
-    f.occStreak++
-    // A full queue cycle with every head occupied: someone is camping the
-    // holes (usually an AFK player) — report instead of orbiting forever.
-    if (f.occStreak >= f.holes.length) finish(bot, ctx, f, 'in use')
     return
   }
   const key = `flat:${cx},${cy},${cz}`
@@ -678,16 +755,17 @@ function fillTick(bot, ctx, f, bp) {
     } catch (_) { /* retry next tick */ return }
     const prevKey = ctx.lastGoalKey
     ctx.lastGoalKey = key
-    f.goalKey = key
     if (key !== f.issuedKey || prevKey === '' || prevKey === 'idle') {
       // Fresh hole (or a fresh start): fresh stall budget. Retaking the
       // SAME hole after a fight/bring tick stole the body (68p rule) keeps
-      // stalls/lastPos and walks on below this same tick.
+      // stalls/lastPos. Either way the reach/stall checks run next tick:
+      // setGoal resets the path, so isMoving() reads false right after the
+      // issue and this same tick would burn a defer on a far hole (body-2).
       f.issuedKey = key
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-      return
     }
+    return
   }
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
@@ -703,7 +781,6 @@ function fillTick(bot, ctx, f, bp) {
         return
       }
       h.def++
-      f.goalKey = null
       if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
       else rotate(f)
     }
@@ -715,7 +792,6 @@ function fillTick(bot, ctx, f, bp) {
   // (build.js guard), counted so a permanently far hole still terminates.
   if (Math.hypot(bp.x - cx, bp.y - cy, bp.z - cz) > REACH_DIST) {
     try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-    f.goalKey = null
     h.def++
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
     return
@@ -746,8 +822,16 @@ function fillTick(bot, ctx, f, bp) {
     shiftSkip(f, 'water')
     return
   }
-  if (below === 'unloaded' || cellOccupied(bot, cx, cy - 1, cz)) {
-    rotate(f)
+  if (below === 'unloaded') {
+    h.def++
+    if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
+    else rotate(f)
+    return
+  }
+  if (cellOccupied(bot, cx, cy - 1, cz)) {
+    h.occ++
+    if (h.occ > OCC_DEFERS) shiftSkip(f, 'occupied')
+    else rotate(f)
     return
   }
   const sref = findRef(bot, new Vec3(cx, cy - 1, cz))
@@ -773,6 +857,7 @@ function flat(bot, ctx, target, state) {
   // One async flight at a time across behaviours: a build/gather flight
   // still resolving when flat takes the body must land first.
   if (ctx.placeInFlight || ctx.digInFlight) return
+  guardFlatSurface(bot, ctx)
   if (f.phase === 'scan') {
     scanTick(bot, ctx, f)
     return
@@ -818,6 +903,11 @@ module.exports.findFillItem = findFillItem
 module.exports.countFill = countFill
 module.exports.dirtIds = dirtIds
 module.exports.cellOccupied = cellOccupied
+module.exports.cellOccupiedSelf = cellOccupiedSelf
+module.exports.cellOccupiedByPlayer = cellOccupiedByPlayer
+module.exports.restockPoint = restockPoint
+module.exports.guardFlatSurface = guardFlatSurface
+module.exports.SELF_OCC_LIMIT = SELF_OCC_LIMIT
 module.exports.findRef = findRef
 module.exports.parseRadius = parseRadius
 module.exports.startEpisode = startEpisode

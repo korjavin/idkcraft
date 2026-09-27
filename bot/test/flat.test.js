@@ -8,11 +8,12 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { createTicker, handleChat } = require('../src/index')
+const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const flat = require('../src/behaviours/flat')
 const {
   probeColumn, spiralColumns, chooseLevel, detectHoles,
   isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode,
+  restockPoint, guardFlatSurface,
   FLAT_DEFAULT_RADIUS, FLAT_MIN_RADIUS, FLAT_MAX_RADIUS,
 } = flat
 
@@ -67,7 +68,7 @@ const DIRT_REGISTRY = {
   blocksByName: { dirt: { id: 1 }, grass_block: { id: 2 }, coarse_dirt: { id: 3 }, stone: { id: 4 } },
 }
 
-function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, dirtSpots = [], failPlace = false, registry = null } = {}) {
+function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, dirtSpots = [], failPlace = false, registry = null, moving = false } = {}) {
   const chats = []
   const calls = { goals: [], places: [], digs: [], equips: [] }
   const bot = {
@@ -86,13 +87,17 @@ function mockBot(world, { items = [], feet = pos(0, 64, 0), players = {}, dirtSp
     registry,
     blockAt: (p) => world.blockAt(p),
     // Dug spots stop matching, like a real findBlocks rescan.
-    findBlocks: () => dirtSpots.filter((p) => {
-      const b = world.blockAt(p)
-      return b && (b.name === 'dirt' || b.name === 'grass_block' || b.name === 'coarse_dirt')
-    }),
+    findBlocks: (opts) => {
+      calls.findBlocksOpts = opts
+      return dirtSpots.filter((p) => {
+        const b = world.blockAt(p)
+        return b && (b.name === 'dirt' || b.name === 'grass_block' || b.name === 'coarse_dirt')
+      })
+    },
+    _moving: !!moving,
     pathfinder: {
       goal: null,
-      isMoving: () => false,
+      isMoving: () => bot._moving,
       setGoal: (g) => { calls.goals.push(g); bot.pathfinder.goal = g },
       stop: () => {},
       setMovements: () => {},
@@ -322,6 +327,7 @@ describe('flat chat command', () => {
       assert.deepEqual(bot.chats, ['ok'], msg)
     }
     assert.deepEqual(seen.map((s) => s.radius), [48, 48, 48, 16, 10, 64, 4])
+    assert.deepEqual(seen.map((s) => s.explicit), [false, false, false, true, true, true, true])
     assert.ok(seen.every((s) => s.by === 'P'))
   })
 
@@ -406,11 +412,13 @@ describe('flat ticker wiring', () => {
       assert.equal(f.phase, 'fill')
       assert.equal(f.holes.length, 2)
       r.ticker.stop()
+      assert.equal(r.ctx.flat.parked, true, 'stop parks the episode')
       const parked = await r.ticker.tick()
       assert.equal(parked.decision.action, 'idle')
       assert.equal(r.ctx.flat, f, 'stop keeps the episode')
-      const line = r.ticker.setFlat({ radius: 4, by: 'P' })
+      const line = r.ticker.setFlat({ radius: 4, by: 'P', explicit: true })
       assert.match(line, /resuming flat/)
+      assert.equal(r.ctx.flat.parked, false, 'resume unparks')
       assert.equal(r.ctx.flat, f, 'same key resumes the same episode')
       assert.equal(r.ctx.flat.holes.length, 2, 'queue preserved, no rescan')
     } finally { r.done() }
@@ -427,6 +435,92 @@ describe('flat ticker wiring', () => {
       handleChat(r.bot, r.ticker, 'P', 'go work')
       assert.equal(r.ctx.flat, null)
     } finally { r.done() }
+  })
+
+  it('a parked job is not resurrected by a later errand', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world })
+    const origBring = BEHAVIOURS.bring
+    BEHAVIOURS.bring = (bot, ctx) => { ctx.bring = null } // errand ends at once
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      await r.ticker.tick() // scan completes, fill starts
+      assert.equal(r.ctx.flat.phase, 'fill')
+      r.ticker.stop()
+      assert.equal(r.ctx.flat.parked, true)
+      assert.equal(r.ticker.setShare({ by: 'P' }), null, 'share order accepted')
+      assert.ok(r.ctx.bring)
+      const t1 = await r.ticker.tick()
+      assert.equal(t1.decision.action, 'bring')
+      assert.equal(r.ctx.bring, null, 'errand ended')
+      const t2 = await r.ticker.tick()
+      assert.notEqual(t2.decision.action, 'flat', 'parked job stays parked')
+      assert.equal(r.ctx.flat.parked, true)
+    } finally { BEHAVIOURS.bring = origBring; r.done() }
+  })
+
+  it('a parked job resumes from inside its square with a bare flat', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const ent = { position: pos(0, 64, 0) }
+    const r = rig({ world, players: { P: { username: 'P', entity: ent } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      await r.ticker.tick()
+      const f = r.ctx.flat
+      r.ticker.stop()
+      ent.position = pos(2, 64, 2) // stepped away, still inside the square
+      handleChat(r.bot, r.ticker, 'P', 'flat') // bare: reuses the parked radius
+      assert.equal(r.ctx.flat, f, 'same episode resumed')
+      assert.equal(r.ctx.flat.r, 4, 'parked radius kept')
+      assert.equal(r.ctx.flat.parked, false)
+      assert.match(r.bot.chats.at(-1), /resuming flat/)
+    } finally { r.done() }
+  })
+
+  it('an explicit different radius starts over a parked episode', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world, players: { P: { username: 'P', entity: { position: pos(0, 64, 0) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      await r.ticker.tick()
+      const f = r.ctx.flat
+      r.ticker.stop()
+      r.ticker.setFlat({ radius: 8, by: 'P', explicit: true })
+      assert.notEqual(r.ctx.flat, f, 'new area, new episode')
+      assert.equal(r.ctx.flat.phase, 'scan')
+      assert.equal(r.ctx.flat.r, 8)
+    } finally { r.done() }
+  })
+
+  it('lead and bring preempt the job tick-by-tick and it resumes', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world })
+    const origLead = BEHAVIOURS.lead
+    const origBring = BEHAVIOURS.bring
+    BEHAVIOURS.lead = () => {}
+    BEHAVIOURS.bring = () => {}
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      const t0 = await r.ticker.tick()
+      assert.equal(t0.decision.action, 'flat')
+      const f = r.ctx.flat
+      r.ticker.setLead({ name: 'coal', pos: { x: 1, y: 63, z: 0 }, by: 'P', lastProgressAt: Date.now() })
+      const t1 = await r.ticker.tick()
+      assert.equal(t1.decision.action, 'lead')
+      assert.equal(r.ctx.flat, f, 'lead preempts, flat survives')
+      r.ticker.clearLead()
+      assert.equal(r.ticker.setShare({ by: 'P' }), null)
+      const t2 = await r.ticker.tick()
+      assert.equal(t2.decision.action, 'bring')
+      assert.equal(r.ctx.flat, f, 'bring preempts, flat survives')
+      r.ctx.bring = null // errand ends
+      const t3 = await r.ticker.tick()
+      assert.equal(t3.decision.action, 'flat', 'job resumes after the errands')
+    } finally { BEHAVIOURS.lead = origLead; BEHAVIOURS.bring = origBring; r.done() }
   })
 
   it('status names the job, including the parked episode', async () => {
@@ -529,15 +623,144 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 9 holes'), bot.chats.join('\n'))
   })
 
-  it('finishes honestly when a player camps the holes', async () => {
+  it('skips a hole camped by a player and reports it', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
     const players = { Q: { username: 'Q', entity: { position: pos(1, 62.5, 0) } } }
     const { bot, ctx } = started(world, { players })
-    await drive(bot, ctx, 10)
+    await drive(bot, ctx, 20)
     assert.equal(ctx.flat, null)
     assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'air', 'never placed into the player')
-    assert.ok(bot.chats.some((c) => c.includes('1 left (in use)')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
+  })
+
+  it('steps aside when standing in its own cap cell, skips when wedged', async () => {
+    const world = makeWorld({})
+    world.set(0, 63, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], feet: pos(0, 63.5, 0) })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    // No teleport: the body stands in the hole like after a trench park.
+    for (let i = 0; i < 20 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.calls.goals.length >= 1, 'a sidestep goal was issued')
+    assert.equal(world.blockAt({ x: 0, y: 63, z: 0 }).name, 'air', 'never placed into itself')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
+  })
+
+  it('skips an unreachable hole after walk stalls with no displacement', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], moving: true })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    // Executor drives, body stands still: no teleport, no progress.
+    for (let i = 0; i < 120 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 unreachable')), bot.chats.join('\n'))
+  })
+
+  it('skips a hole the body can never get near', async () => {
+    const world = makeWorld({})
+    world.set(4, 63, 4, 'air') // 5.7 blocks from spawn: past REACH_DIST
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 30 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 unreachable')), bot.chats.join('\n'))
+  })
+
+  it('keeps the stall budget when retaking a hole after a stolen tick', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    flat(bot, ctx, null, null); await settle() // scan
+    const f = ctx.flat
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // issue
+    const h = f.holes[0]
+    h.stalls = 4
+    h.lastPos = { x: 9, y: 64, z: 9 }
+    ctx.lastGoalKey = 'fight:1' // a fight tick stole the body
+    const goalsBefore = bot.calls.goals.length
+    flat(bot, ctx, null, null); await settle() // re-issue, keep budget
+    assert.equal(bot.calls.goals.length, goalsBefore + 1, 'goal re-issued')
+    assert.equal(h.stalls, 4, 'stalls preserved')
+    assert.deepEqual(h.lastPos, { x: 9, y: 64, z: 9 }, 'lastPos preserved')
+    assert.equal(f.issuedKey, 'flat:1,63,0')
+    assert.equal(f.holes.length, 1, 'no same-tick place after a re-issue (body-2)')
+  })
+
+  it('gives up restocking after three stalled dirt walks', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 21, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived, no item -> dig
+    assert.equal(ctx.flat.phase, 'dig')
+    bot._moving = true // dirt walks stall from here
+    for (let i = 0; i < 120 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('1 left (no fill blocks)')), bot.chats.join('\n'))
+  })
+
+  it('searches restock dirt from outside the square', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 2, y: 63, z: 0 }, { x: 20, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [20, 0], 'inside dirt filtered out')
+    const pt = bot.calls.findBlocksOpts && bot.calls.findBlocksOpts.point
+    assert.ok(pt && (Math.abs(pt.x) > 4 || Math.abs(pt.z) > 4), `search origin outside the square: ${pt && `${pt.x},${pt.z}`}`)
+  })
+
+  it('restockPoint exits past the nearest edge', () => {
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    const at = (p) => [p.x, p.y, p.z]
+    assert.deepEqual(at(restockPoint(f, { x: 1, y: 64, z: 0 })), [8, 64, 0])
+    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: -2 })), [0, 64, -8])
+    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: 0 })), [0, 64, 8])
+    assert.deepEqual(at(restockPoint(f, { x: 20, y: 64, z: 0 })), [20, 64, 0], 'already outside: search from the bot')
+  })
+
+  it('surface guard vetoes breaks at/below level inside the square only', () => {
+    const world = makeWorld({})
+    const bot = mockBot(world, {})
+    const mov = { exclusionAreasBreak: [] }
+    bot.pathfinder.movements = mov
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.level = 63
+    const ctx = { lastGoalKey: '', flat: f }
+    guardFlatSurface(bot, ctx)
+    assert.equal(mov.exclusionAreasBreak.length, 1)
+    const fn = mov.exclusionAreasBreak[0]
+    const veto = (x, y, z) => fn({ position: { x, y, z } })
+    assert.equal(veto(0, 62, 0), 100, 'below level inside')
+    assert.equal(veto(0, 63, 0), 100, 'at level inside')
+    assert.equal(veto(0, 64, 0), 0, 'above level: pass through')
+    assert.equal(veto(20, 62, 0), 0, 'outside the square')
+    f.parked = true
+    assert.equal(veto(0, 62, 0), 0, 'parked: no live guard')
+    f.parked = false
+    ctx.flat = startEpisode(10, 10, 4, 74, 'P')
+    assert.equal(veto(0, 62, 0), 0, 'replaced episode: stale guard no-ops')
+    ctx.flat = null
+    guardFlatSurface(bot, ctx)
+    assert.equal(mov.exclusionAreasBreak.length, 0, 'finish detaches')
   })
 
   it('digs dirt outside the area when out of blocks, then resumes', async () => {
