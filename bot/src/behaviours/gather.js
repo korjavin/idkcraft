@@ -2,9 +2,10 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./recover')
+const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
-const { startFarSearch, stepFarSearch } = require('./scout')
+const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -25,16 +26,12 @@ const FIND_RADIUS = 48
 const FIND_COUNT = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
-const MOVE_TOLERANCE = 0.5
 const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
 // not per column — acacia crowns branch into neighbouring x,z-columns, while
 // trunks a full 3 blocks apart still count as different trees
 const PLACE_ERROR_STALLS = 3 // consecutive place_error resets with no displacement count as a stall
 const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
 
-function keyOf(p) {
-  return `${p.x},${p.y},${p.z}`
-}
 
 function dist(a, b) {
   if (a && typeof a.distanceTo === 'function') return a.distanceTo(b)
@@ -87,13 +84,6 @@ function commitTarget(g, bp, p, name, far) {
   g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
 }
 
-// Progress is horizontal displacement or a new standing level. Tower jumps
-// pump y in place (64<->65.2 with x,z fixed): jumping is standing still.
-function progressed(bp, last, grounded) {
-  if (!last) return true
-  if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
-  return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
-}
 
 function failFinal(bot, ctx, g, logs, final) {
   g.final = final
@@ -253,7 +243,7 @@ function gather(bot, ctx, target, state) {
       // Stall by displacement, not isMoving (follow.js wedge lesson: a
       // wedged executor keeps reporting moving while the body stands still).
       const grounded = !bot.entity || bot.entity.onGround !== false
-      if (progressed(bp, g.lastPos, grounded)) {
+      if (bring.progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
         ctx.placeErrors = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
