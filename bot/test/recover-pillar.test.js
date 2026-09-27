@@ -176,7 +176,7 @@ describe('pillar_up equips scaffold (idkcraft-17b)', () => {
   })
 })
 
-describe('pillar_up issues only while rising (idkcraft-17b)', () => {
+describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
   it('falling sample at apex: no placement this tick', () => {
     // 1 Hz ticks sample the 0.6 s jump at a random phase: issuing while
     // already falling lets the server apply the placement after the feet
@@ -190,6 +190,19 @@ describe('pillar_up issues only while rising (idkcraft-17b)', () => {
     assert.equal(ctx.recovery.status, 'running')
     assert.equal(ctx.recovery.st.phase, 'jump')
     assert.equal(bot.getControlState('jump'), true)
+  })
+
+  it('near-apex fall (vy=-0.05): issues the placement', async () => {
+    // Revmux 01 core-1: a pure vy > 0 guard shrinks the window to ~150 ms,
+    // which 1 Hz sampling can miss for a whole episode; the first ~2 game
+    // ticks past the peak (feet still >= +1.18) stay inside the window.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.2, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.05, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(bot._places, 1)
   })
 
   it('rising sample at apex: issues the placement', async () => {
@@ -239,5 +252,50 @@ describe('pillar_up ravine climb e2e (idkcraft-17b)', () => {
     // The loop exits mid-jump at mouth height, so the third cycle's
     // placement is still queued: two landed blocks prove the climb.
     assert.ok(bot._places >= 2, `placed ${bot._places} pillar blocks`)
+  })
+})
+
+describe('recover digs equip the pickaxe (idkcraft-17b revmux 01 body-1)', () => {
+  function digRunBot() {
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0)) // stone-equivalent headroom over the shaft
+    const dirt = { name: 'dirt', count: 10 }
+    const pick = { name: 'stone_pickaxe', count: 1 }
+    const bot = strictBot(solids, [dirt, pick], { held: dirt })
+    bot.pathfinder.bestHarvestTool = () => pick
+    const digs = []
+    const origDig = bot.dig
+    bot.dig = async (b) => { digs.push([b.position.x, b.position.y, b.position.z]); return origDig(b) }
+    return { bot, digs, pick }
+  }
+
+  it('dig_up equips the pickaxe over held dirt', async () => {
+    const { bot, digs, pick } = digRunBot()
+    const ctx = { stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 } }, recovery: { action: 'dig_up', status: 'running', st: null } }
+    recover.run(bot, ctx)
+    await flush()
+    assert.deepEqual(bot._equips, [[pick.name, 'hand']])
+    assert.deepEqual(digs, [[0, 62, 0]])
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+
+  it('dig_through equips the pickaxe over held dirt', async () => {
+    const { bot, digs, pick } = digRunBot()
+    const ctx = { stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 } }, recovery: { action: 'dig_through', status: 'running', st: null } }
+    recover.run(bot, ctx)
+    await flush()
+    assert.deepEqual(bot._equips, [[pick.name, 'hand']])
+    assert.deepEqual(digs, [[1, 61, 0]])
+  })
+
+  it('dig_up without bestHarvestTool digs with the hand (lenient clients)', async () => {
+    const { bot, digs } = digRunBot()
+    delete bot.pathfinder.bestHarvestTool
+    const ctx = { stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 } }, recovery: { action: 'dig_up', status: 'running', st: null } }
+    recover.run(bot, ctx)
+    await flush()
+    assert.deepEqual(bot._equips, [])
+    assert.deepEqual(digs, [[0, 62, 0]])
   })
 })

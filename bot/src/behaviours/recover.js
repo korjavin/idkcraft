@@ -230,17 +230,32 @@ function findScaffoldItem(bot) {
   return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
 }
 
-// 1 Hz ticks sample the ~0.6 s jump at a random phase: issuing while
-// already falling lets the server apply the placement after the feet are
-// back inside the target cell, which the server refuses as
-// self-intersection. Issue only while rising; a missing velocity (mocks)
-// reads as rising.
-function rising(bot) {
+// Issue window: rising, plus the first ~2 game ticks past the peak
+// (vy > -0.1, feet still >= +1.18). A pure vy > 0 guard shrinks the window
+// to ~150 ms, which 1 Hz sampling of the ~600 ms jump cycle can miss for a
+// whole episode (revmux 01 core-1: failed:no-apex); the ~250 ms window
+// always catches a 200 ms-spaced phase, and the server still applies the
+// placement while the feet are above the cell. Falling faster means the
+// feet are back in the cell at apply time (self-intersection refusal), so
+// those samples wait for the next apex. A missing velocity (mocks) reads
+// as inside the window.
+function apexWindow(bot) {
   try {
     const v = bot && bot.entity && bot.entity.velocity
     if (!v || typeof v.y !== 'number') return true
-    return v.y > 0
+    return v.y > -0.1
   } catch (_) { return true }
+}
+
+// Dig with the right tool: pillar_up leaves scaffold in hand, and digging
+// stone bare-handed takes ~7.5 s instead of ~1 s (revmux 01 body-1). Same
+// bestHarvestTool pattern as forage.js; a missing tool reads as "dig with
+// whatever is in hand".
+function digTool(bot, cell) {
+  try {
+    if (bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function') return bot.pathfinder.bestHarvestTool(cell) || null
+  } catch (_) { /* tool best-effort */ }
+  return null
 }
 
 // One log-safe token from a place error: the prod line carries err= so the
@@ -463,7 +478,7 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + PILLAR_APEX && rising(bot)) {
+    if (bp.y >= st.startFloor + PILLAR_APEX && apexWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
     } else {
@@ -540,7 +555,11 @@ function digUpRun(bot, ctx) {
   const cell = solid(head1) ? head1 : head2
   st.digInFlight = true
   void (async () => {
-    try { await bot.dig(cell) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    try {
+      const tool = digTool(bot, cell)
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      await bot.dig(cell)
+    } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
   return 'running'
 }
@@ -847,7 +866,11 @@ function digThroughRun(bot, ctx) {
   const cell = solid(feet) ? feet : head
   st.digInFlight = true
   void (async () => {
-    try { await bot.dig(cell) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+    try {
+      const tool = digTool(bot, cell)
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      await bot.dig(cell)
+    } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
   return 'running'
 }
