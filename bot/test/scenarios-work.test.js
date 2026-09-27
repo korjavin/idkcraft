@@ -35,6 +35,16 @@ async function settle(n = 4) {
   for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r))
 }
 
+// xg9: paced batches take real time (60 ms/op); poll for N craft calls.
+async function untilCrafts(bot, n, timeoutMs = 12000) {
+  const t0 = Date.now()
+  while (bot.calls.craft < n) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`craft calls stuck at ${bot.calls.craft}, want ${n}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  await settle()
+}
+
 // Work-mode brain: the arbiter owns every non-fight tick, so the brain
 // answer only needs to stay out of the way.
 function workBrain() {
@@ -309,7 +319,7 @@ describe('gxk: stranded grid converts fully instead of hanging the craft', () =>
     try {
       const r1 = await ticker.tick()
       assert.equal(r1.decision.action, 'craft', 'a full load crafts first')
-      await settle()
+      await untilCrafts(bot, 15)
       assert.deepEqual(gridOf(bot.inventory), [], 'stranded log returned, grid clear')
       assert.equal(countIn(bot.inventory, 'oak_log'), 0, 'whole batch converted')
       assert.equal(countIn(bot.inventory, 'oak_planks'), 60)
