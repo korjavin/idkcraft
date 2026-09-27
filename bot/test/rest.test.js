@@ -230,3 +230,106 @@ describe('rest gave-up hold calls once (idkcraft-q0h round 3)', () => {
     assert.equal(bot.chats.filter((m) => m.startsWith("I'm stuck at")).length, 1)
   })
 })
+
+describe('rest lapse consumed without entity range (idkcraft-q0h body-1 follow-up)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('out-of-range owner: failed call still consumes the lapse', async () => {
+    // Round-3 body-1: the lapse used to survive a failed:no-player call, so
+    // a far-away online owner re-opened every episode. Any online gave-up
+    // while marked now consumes it.
+    const bot = pitBot()
+    const site = { x: 20, y: 65, z: 0 }
+    const ctx = {
+      work: true, step: 'rest', stepStatus: 'running',
+      home: { site }, brain: null,
+      stuck: { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' },
+    }
+    const failedEp = () => {
+      ctx.recovery = {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: null, attempts: 1, fails: 2, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null, placeError: false,
+      }
+    }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    ctx.stuck = { by: 'roam', goal: { x: 20, y: 65, z: 0 }, key: 'roam-back:undefined' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
+    bot.players = { Steve: { username: 'Steve' } } // roster only, no entity
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false, 'online lapses the hold')
+    ctx.stuck = { by: 'no-displacement', goal: { x: 20, y: 65, z: 0 }, key: 'ticker' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(ctx.recovery.action, 'call_player')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-player')
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(ctx.recovery, null, 'gave-up after the failed call')
+    assert.deepEqual(bot.chats.filter((m) => m.startsWith("I'm stuck at")), [], 'no chat without a name')
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true, 'lapse consumed anyway')
+  })
+})
+
+describe('rest lapse flag tied to the mark (idkcraft-q0h core-2 follow-up)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('a pre-mark call does not consume a later mark', async () => {
+    // Round-3 core-2/body-2: the flag used to be set by any rest episode
+    // that called, so a later offline mark started consumed. Only a gave-up
+    // while marked consumes.
+    const bot = pitBot()
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    const ctx = {
+      work: true, step: 'rest', stepStatus: 'running', brain: null,
+      stuck: { by: 'roam', goal: { x: 0, y: 70, z: 0 }, key: 'roam-back:undefined' },
+    }
+    const failedEp = () => {
+      ctx.recovery = {
+        action: 'sidestep', source: 'fsm', model: null, status: 'failed:no-progress',
+        st: null, attempts: 1, fails: 2, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null, placeError: false,
+      }
+    }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null) // online ep1: calls, gives up, no mark yet
+    assert.equal(ctx.recovery.action, 'call_player')
+    recover.run(bot, ctx)
+    await recover.decide(bot, ctx, {}, null)
+    assert.equal(ctx.recovery, null)
+    assert.equal(ctx.restGaveUps, 1)
+    assert.equal(ctx.restGaveUpAt || null, null)
+    assert.equal(ctx.restGaveUpCalled || false, false, 'no mark, no consume')
+    // Later, another pit marks offline; the owner login still gets one lapse.
+    bot.players = {}
+    ctx.stuck = { by: 'roam', goal: { x: 0, y: 70, z: 0 }, key: 'roam-back:undefined' }
+    failedEp()
+    await recover.decide(bot, ctx, {}, null)
+    assert.ok(ctx.restGaveUpAt, 'marked')
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(50, 64, 0) } } }
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false, 'fresh mark keeps its lapse')
+  })
+})
+
+describe('rest mark clears on unobserved relocation (idkcraft-q0h core-1 follow-up)', () => {
+  const recover = require('../src/behaviours/recover')
+
+  it('teleport out clears mark, flag and counter; return re-arms', () => {
+    const bot = pitBot()
+    const ctx = {
+      work: true, step: 'rest', restGaveUps: 0,
+      restGaveUpAt: { x: 0.5, y: 61, z: 0.5 }, restGaveUpCalled: true,
+    }
+    bot.players = { Steve: { username: 'Steve' } }
+    assert.equal(recover.restGaveUpHolds(ctx, bot), true, 'consumed hold mutes online')
+    bot.entity.position = pos(30, 70, 30) // clean /tp out, no detector fires
+    recover.clearRelocatedRestMark(ctx, bot) // every-tick sampling
+    assert.equal(ctx.restGaveUpAt, null)
+    assert.equal(ctx.restGaveUpCalled, false)
+    assert.equal(ctx.restGaveUps, 0)
+    bot.entity.position = pos(0.5, 61, 0.5) // walked back into the same pit
+    assert.equal(recover.restGaveUpHolds(ctx, bot), false, 're-entry re-arms the detectors')
+  })
+})

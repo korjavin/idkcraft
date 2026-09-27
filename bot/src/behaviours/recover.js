@@ -833,6 +833,23 @@ function anyPlayerOnline(bot) {
 }
 
 const REST_GIVE_UP_DIST = 2
+// Relocation ends the hold in any step or mode (core-1 follow-up): the
+// detectors consult the gate only when firing, so a clean /tp out would
+// otherwise leave a stale mark behind. Called every tick (noteDisplacement)
+// and from the gate itself.
+function clearRelocatedRestMark(ctx, bot) {
+  try {
+    const at = ctx && ctx.restGaveUpAt
+    if (!at || typeof at.x !== 'number') return
+    const bp = botPos(bot)
+    if (bp && Math.hypot(bp.x - at.x, bp.z - at.z) > REST_GIVE_UP_DIST) {
+      ctx.restGaveUpAt = null
+      ctx.restGaveUpCalled = false
+      ctx.restGaveUps = 0
+    }
+  } catch (_) { /* marker best-effort */ }
+}
+
 function restGaveUpHolds(ctx, bot) {
   try {
     if (!ctx || !ctx.work || ctx.step !== 'rest') return false
@@ -846,9 +863,7 @@ function restGaveUpHolds(ctx, bot) {
     const bp = botPos(bot)
     if (!bp) return true // no position: hold, never spin blind
     if (Math.hypot(bp.x - at.x, bp.z - at.z) > REST_GIVE_UP_DIST) {
-      ctx.restGaveUpAt = null
-      ctx.restGaveUpCalled = false
-      ctx.restGaveUps = 0
+      clearRelocatedRestMark(ctx, bot)
       return false
     }
     return true
@@ -948,12 +963,14 @@ function release(bot, ctx, how) {
         const bp = botPos(bot)
         ctx.restGaveUpAt = bp ? { x: bp.x, y: bp.y, z: bp.z } : null
       } catch (_) { ctx.restGaveUpAt = null }
+      ctx.restGaveUpCalled = false // fresh mark, fresh lapse
       ctx.stepStatus = 'failed:cannot-reach-home'
     }
-    // One lapse per hold (round 3): an episode that reached the player
-    // consumes the online lapse — afterwards the point holds even online
-    // until relocation, instead of paging every episode.
-    if (rec.calledPlayer) ctx.restGaveUpCalled = true
+    // One lapse per mark: a gave-up while marked and online consumes it —
+    // whether the /tp chat landed or the player was out of entity range
+    // (failed:no-player) — so the point then holds even online until
+    // relocation instead of paging or spinning every episode.
+    if (ctx.restGaveUpAt && anyPlayerOnline(bot)) ctx.restGaveUpCalled = true
   } else {
     ctx.restGaveUps = 0
     if (how === 'done') { ctx.restGaveUpAt = null; ctx.restGaveUpCalled = false }
@@ -1157,6 +1174,7 @@ module.exports = {
   chooseRecovery,
   setStuck,
   restGaveUpHolds,
+  clearRelocatedRestMark,
   clearStaleRoamLatch,
   decide,
   release,

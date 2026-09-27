@@ -509,6 +509,9 @@ function fleeReflex(bot, ctx) {
       }
     } else if (!moving) ctx.stuckTicks = 0
     if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    // A clean relocation (a /tp out) ends the rest gave-up hold even when no
+    // detector fires to consult the gate (core-1 follow-up).
+    if (ctx.restGaveUpAt) recover.clearRelocatedRestMark(ctx, bot)
   }
 
   // A hostile inside swing reach preempts recovery: the body fights first,

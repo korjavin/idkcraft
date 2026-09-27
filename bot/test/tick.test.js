@@ -3133,3 +3133,27 @@ describe('startup follow adoption (idkcraft-p4s)', () => {
     assert.equal(startupFollow(rosterBot([]), ''), '')
   })
 })
+
+describe('rest mark clears on relocation ticks (idkcraft-q0h core-1 follow-up)', () => {
+  it('a teleported body clears the gave-up mark on the next tick', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    try {
+      await ticker.tick() // follow goal issued, lastPos sampled
+      const ctx = bot._tickerCtx
+      ctx.restGaveUpAt = { x: 0, y: 64, z: 0 }
+      ctx.restGaveUpCalled = true
+      ctx.restGaveUps = 1
+      await ticker.tick() // still here: mark survives
+      assert.ok(ctx.restGaveUpAt, 'mark kept at the pit')
+      bot.entity.position = pos(10, 64, 0) // /tp out
+      await ticker.tick()
+      assert.equal(ctx.restGaveUpAt, null, 'relocation clears the mark')
+      assert.equal(ctx.restGaveUpCalled, false)
+      assert.equal(ctx.restGaveUps, 0)
+    } finally {
+      ticker.destroy()
+    }
+  })
+})
