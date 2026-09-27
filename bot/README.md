@@ -232,6 +232,16 @@ step and counts `idkcraft_bot_escalation_total{from,to,reason}`.
 `fight` still preempts every step. A failed step leaves the menu until the
 situation moves; `status` prints the current step.
 
+A full house cycle runs `gather` → `craft` → `build` → `gohome` → `stay` →
+morning: logs become planks at the placed table, the blueprint goes up plank
+by plank (`home done at <x> <y> <z>` in chat when the last cell lands), and at
+dusk the bot walks home, closes the door (`home for the night`) and holds
+`stay` till dawn. Observed on prod: 35 min with no deaths (Sep 24), 48 min
+with 4 night deaths (Sep 26). Once the home is built, `gather` and `build`
+report `home built` and leave the menu (build re-enters only when a blueprint
+cell is unfinished), and the steady loop is day steps plus `gohome` → `stay`
+at dusk.
+
 #### Recovery menu
 
 A no-displacement stall raises a stuck fact and the recover menu owns the
@@ -360,6 +370,8 @@ Line types:
 | `decision source=<s> action=<a> ...` | One per tick while a player is visible (at most one per minute when idle). Compare `source=laya` against the stub to judge the model. |
 | `brain route=easy fsm=<a>` / `brain route=hard reason=<r> model=<a> fsm=<b> source=<s>` | One per brain call: which route was taken and both answers on hard states. `route=hard` / all = how often the model is consulted. |
 | `brain disagree source=<s> model=<a> stub=<r> ...` | The model answered differently from the local reference policy (hard states only). A high rate means the prompt criteria and the rules drifted apart. |
+| `goal step=<s> prev=<p> source=<src> fsm=<f> why=<w> facts=...` | Work-mode step change: who chose (`laya`/`jev`/`only-option`/`goal-fsm`), the FSM reference step, and the goal facts at the decision. |
+| `goal disagree source=<s> model=<m> fsm=<f> facts=...` | The model picked a different step than the FSM reference (same meaning as `brain disagree`, for the goal menu). |
 | `scout <ore> x<n> at <x> <y> <z>` | New ore vein reported in chat (local reflex, at most 3 lines per 5 s scan). |
 | `stuck reason=<s> pos=<x,y,z> dist=<d>` | Follow stalled at unchanged position across terminal results, or follow/roam wedged with the executor still reporting moving (`reason=wedge`); triggers jump + 2-block sidestep nudge. |
 | `death health=<n> hostiles=<k> at <x> <y> <z>` | The bot died. Match its timestamp against the server log (`was slain by ...`, `was shot by ...`) for the cause; `hostiles=` is the nearby-hostile count at that moment. |
@@ -376,12 +388,13 @@ Both containers expose Prometheus metrics (compose labels
 `prometheus.scrape: "true"`; the house monitoring stack scrapes them
 into VictoriaMetrics — graph them in Grafana, no log grepping needed):
 
-- Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`, `idkcraft_bot_recover_total{action,source,outcome}` (stuck-escape menu), `idkcraft_bot_bring_total{outcome,kind}`.
+- Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`, `idkcraft_bot_autonomous`, `idkcraft_bot_escalation_total{from,to,reason}` (model-to-FSM fallbacks), `idkcraft_bot_search_duration_seconds{radius}` (staged block search), `idkcraft_bot_recover_total{action,source,outcome}` (stuck-escape menu), `idkcraft_bot_bring_total{outcome,kind}`.
 - Work-mode goal metrics (same endpoint): `idkcraft_bot_goal_steps_total{step,source}` (choices by step and chooser), `idkcraft_bot_goal_step{step}` (gauge: 1 on the running step, 0 elsewhere — the state-timeline), `idkcraft_bot_goal_disagreements_total{model,fsm}` (model vs FSM step choice), `idkcraft_bot_goal_choice_duration_seconds{source}` (step-choice latency, model calls only).
 - Sidecar `/metrics` on its API port (`laya/shim.py`): `laya_predict_duration_seconds` (model latency), `laya_answers_total{choice}` (fight vs follow + errors).
 
-Goal panel queries (no dashboard JSON lives in this repo — the Grafana
-instance belongs to the house monitoring stack, so build the panel there):
+Goal panel queries (the house Grafana dashboard, bot & LAYA brain, has a
+`House cycle (goal steps)` row built from these — the JSON lives there, not
+in this repo):
 
 ```promql
 # state-timeline: one series per step, 1 while running
@@ -418,6 +431,24 @@ far-player, 6 low-health-hostile).
   met). Owner vocabulary misses: `find me ore` fixed after the session (ore
   alias + plurals like `diamonds`); `rock` and typos such as `diamand`
   still answer `unknown block` (no fuzzy search, by design).
+
+### Prod acceptance (2026-09-27, house cycle on the live stack, no player)
+
+Two full builds observed via VictoriaLogs/VictoriaMetrics (brain `laya`,
+autonomous mode): Sep 24 01:23–01:58 UTC (35 min, no deaths, ~126 model
+calls: 18 goal + 59 combat hard-tick + 49 recover) and Sep 26 00:29–01:17
+(48 min with night combat, 4 deaths, ~80 calls: 15 + 45 + 20). First
+overnight stay Sep 26 01:25–01:35 (dusk to dawn inside, `step-done`).
+
+- Goal choices over 3 d: `laya` 1706, `only-option` 83; step-choice
+  latency p50 0.09 s, p95 0.19 s; `brain_requests` 13419 ok, zero errors.
+- Goal disagreement ~42% (718: `rest` vs `forage` 524, vs `explore` 194)
+  — LAYA leans to `rest`, including a 4-minute rest break mid-build and
+  `rest` over `gohome` at dusk.
+- Deaths 528 in 3 d (zombie/skeleton/witch); notable: a skeleton shot the
+  bot inside its closed house (Sep 27 08:25–08:28), then 7 more deaths
+  walking home at night. JEV comparison still open: switching brains needs
+  a player (`brain jev` in chat).
 
 ## Online-mode note
 
