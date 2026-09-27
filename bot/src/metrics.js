@@ -116,9 +116,14 @@ const escalation = new client.Counter({
   help: 'Escalation events by level transition and reason',
   labelNames: ['from', 'to', 'reason']
 })
+const light = new client.Counter({
+  name: 'idkcraft_bot_light_total',
+  help: 'Torch lighting by op (crafted batches|placed torches)',
+  labelNames: ['op']
+})
 const recover = new client.Counter({
   name: 'idkcraft_bot_recover_total',
   help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
   labelNames: ['action', 'source', 'outcome']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, setVitals, serve }
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, setVitals, serve }

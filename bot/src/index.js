@@ -45,6 +45,7 @@ const BEHAVIOURS = {
   gohome: homeMod.gohome,
   stay: homeMod.stay,
   build: require('./behaviours/build'),
+  light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
   deliver: require('./behaviours/deliver'),
