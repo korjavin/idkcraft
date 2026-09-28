@@ -185,14 +185,14 @@ describe('unpin detection', () => {
     }
     // HP-aware lethal falls: 8-block fall kills at 5 hp, not at 20.
     for (const [hp, want] of [[5, 'watching'], [20, 'nudged']]) {
-      const bot = { entity: { position: pos(0, 70, 0), onGround: false }, health: hp, blockAt: () => ({ name: 'air', boundingBox: 'empty' }) }
+      const bot = { entity: { position: pos(0, 70, 0.5), onGround: false }, health: hp, blockAt: () => ({ name: 'air', boundingBox: 'empty' }) }
       bot.blockAt = (p) => {
-        if (p.x === 1 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // face
-        if (p.x === 0 && p.y === 61 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // top 62, dist 8
+        if (p.x === 0 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.3, 0, 0, 1, 1, 1]] } // plane 0.3 = max-x: contact
+        if ((p.x === -1 || p.x === 0) && p.y === 61 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // top 62, dist 8, both footprint cols
         return { name: 'air', boundingBox: 'empty' }
       }
       const { ctx, sent } = armedCtx()
-      feedStorm(ctx, 10000, 10, { x: 0, y: 70, z: 0 })
+      feedStorm(ctx, 10000, 10, { x: 0, y: 70, z: 0.5 })
       assert.equal(unpin.unpinTick(bot, ctx, 12000), want, `hp${hp}`)
       assert.equal(sent.length, want === 'nudged' ? 1 : 0, `hp${hp}`)
     }
@@ -291,9 +291,9 @@ describe('unpin verify + bounds', () => {
     feedStorm(ctx, 21500, 10, { x: -30, y: 65.2, z: -212.6 })
     assert.equal(unpin.unpinTick(bot, ctx, 22000), 'watching') // stale+fresh mix: no verdict
     feedStorm(ctx, 23000, 10, { x: -30, y: 65.2, z: -212.6 })
-    bot.blockAt = (p) => { // fresh face + floor at the new spot
-      if (p.x === -29 && p.y === 65 && p.z === -213) return { name: 'stone', boundingBox: 'block' }
-      if (p.x === -30 && p.y === 63 && p.z === -213) return { name: 'stone', boundingBox: 'block' }
+    bot.blockAt = (p) => { // fresh touching face + floor (both footprint cols) at the new spot
+      if (p.x === -30 && p.y === 65 && p.z === -213) return { name: 'stone', boundingBox: 'block', shapes: [[0.3, 0, 0, 1, 1, 1]] } // plane -29.7 = max-x
+      if ((p.x === -31 || p.x === -30) && p.y === 63 && p.z === -213) return { name: 'stone', boundingBox: 'block' }
       return { name: 'air', boundingBox: 'empty' }
     }
     assert.equal(unpin.unpinTick(bot, ctx, 24000), 'nudged')
@@ -307,8 +307,8 @@ describe('unpin verify + bounds', () => {
     bot.blockAt = (p) => {
       if (p.x === -38 && p.y === 63 && p.z === -213) return { name: 'grass_block', boundingBox: 'block' } // floor stays
       if (!flip) return baseScan(p)
-      return (p.x === -38 && p.z === -212 && (p.y === 65 || p.y === 66))
-        ? { name: 'stone', boundingBox: 'block' } // +z face now
+      return (p.x === -38 && p.z === -213 && (p.y === 65 || p.y === 66))
+        ? { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0.7, 1, 1, 1]] } // +z plane at max-z: contact now
         : { name: 'air', boundingBox: 'empty' }
     }
     const { ctx, sent } = armedCtx()
@@ -409,6 +409,150 @@ describe('unpin verify + bounds', () => {
   })
 })
 
+describe('unpin round-2 probes (F3/F4/F5)', () => {
+  // Codex door probe: body x=0.4875 (min-x 0.1875) touches the east plane of
+  // a door slab in its own cell; a full wall 0.2125 past max-x must not
+  // generate a step back INTO the door.
+  function doorBot() {
+    return {
+      entity: { position: pos(0.4875, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 0 && p.z === 0 && (p.y === 70 || p.y === 71)) {
+          return { name: 'oak_door', boundingBox: 'block', shapes: [[0, 0, 0, 0.1875, 1, 1]] }
+        }
+        if (p.x === 1 && (p.y === 70 || p.y === 71)) return { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+        if (p.x === 0 && p.y === 69 && p.z === 0) return { name: 'stone', boundingBox: 'block' }
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+  }
+
+  it('door probe (F3): fires off the touching shape, never into it', () => {
+    const bot = doorBot()
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.4875, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    assert.equal(sent.length, 1)
+    assert.deepEqual([sent[0].dx, sent[0].dz], [0.01, 0]) // +x off the door; -x enters it
+  })
+
+  it('door guide (F3 unit): gap wall is not a face, door is', () => {
+    assert.deepEqual(unpin.orderNudgeDirs(doorBot()), [[0.01, 0]])
+  })
+
+  it('slot veto (F3): touching both sides with no free step stays silent', () => {
+    const bot = { // 0.6 body wedged between two slabs 0.6 apart: contact, no escape
+      entity: { position: pos(0.5, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 0.2, 1, 1], [0.8, 0, 0, 1, 1, 1]] }
+        if (p.x === 0 && p.y === 69 && p.z === 0) return { name: 'stone', boundingBox: 'block' }
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    assert.deepEqual(unpin.orderNudgeDirs(bot), [])
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.5, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
+  it('burst capture (F4): six packets in one tick record six targets', () => {
+    const handlers = {}
+    const bot = {
+      _client: { on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn) }, write() {} },
+      entity: { position: pos(0, 70, 0), onGround: false },
+    }
+    const ctx = {}
+    unpin.installUnpinTap(bot, ctx)
+    for (let i = 0; i < 6; i++) {
+      bot.entity.position = pos(i, 70, 0) // physics applies each packet before the next
+      for (const fn of handlers.position) fn({ x: i, y: 70, z: 0, flags: {} })
+    }
+    assert.equal(ctx.unpin.teleports.length, 6)
+    assert.deepEqual(ctx.unpin.teleports.map((t) => t.pos.x), [0, 1, 2, 3, 4, 5])
+  })
+
+  it('position tap registers after spawn (F4: physics applies first)', () => {
+    const handlers = {}
+    let spawnFn = null
+    const bot = {
+      once(ev, fn) { if (ev === 'spawn') spawnFn = fn },
+      _client: { on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn) }, write() {} },
+      entity: { position: pos(0, 70, 0), onGround: false },
+    }
+    const ctx = {}
+    unpin.installUnpinTap(bot, ctx)
+    assert.equal(handlers.position, undefined) // not before spawn: pre-apply reads
+    assert.equal(typeof spawnFn, 'function')
+    spawnFn()
+    assert.equal((handlers.position || []).length, 1)
+  })
+
+  it('nudge rebases onto the last correction, not live prediction (F5)', () => {
+    const bot = spotABot()
+    bot.entity.position = pos(-37.3, 65.2, -212.55) // drifted 0.05 along the face
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10) // corrections at PIN (-212.6)
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    assert.equal(sent.length, 1)
+    assert.deepEqual([sent[0].dx, sent[0].dz], [-0.01, 0])
+    assert.equal(sent[0].x, -37.3) // base passthrough (the real sender adds dx; see clone test)
+    assert.equal(sent[0].z, -212.6) // server pos, not the drifted -212.55
+  })
+
+  it('no fresh correction mid-episode drops (F5: never send blind)', () => {
+    const bot = spotABot()
+    const base = bot.blockAt
+    bot.blockAt = (p) => { // second touching face (+z plane at max-z), so try 2 exists to be denied
+      if (p.x === -38 && p.z === -213 && (p.y === 65 || p.y === 66)) return { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0.7, 1, 1, 1]] }
+      return base(p)
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10)
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    for (let i = 0; i < 10; i++) unpin.noteTeleport(ctx, 12200 + i * 100) // storm, no targets
+    assert.equal(unpin.unpinTick(bot, ctx, 14000), 'idle') // old evidence pruned: drop
+    assert.equal(sent.length, 1)
+  })
+
+  it('footprint below (F3): lava beside the landing vetoes', () => {
+    const bot = {
+      entity: { position: pos(1.0, 70, 0.5), onGround: false }, // straddles cols 0-1
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 1 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.3, 0, 0, 1, 1, 1]] } // plane 1.3 = max-x: contact
+        if (p.x === 2 && p.y === 70) return { name: 'stone', boundingBox: 'block' } // adjacency only
+        if (p.x === 0 && p.y === 65 && p.z === 0) return { name: 'lava', boundingBox: 'empty' } // off-centre, in the fall path
+        if (p.x === 1 && p.y === 60 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // centre landing
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 1.0, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
+  it('footprint below (F3): slab top sets the fall, not the cell top', () => {
+    const bot = {
+      entity: { position: pos(0.5, 66.6, 0.5), onGround: false },
+      health: 1,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 66 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.8, 0, 0, 1, 1, 1]] } // plane 0.8 = max-x: contact
+        if (p.x === 1 && p.y === 66) return { name: 'stone', boundingBox: 'block' } // adjacency only
+        if (p.x === 0 && p.y === 62 && p.z === 0) return { name: 'stone_slab', boundingBox: 'block', shapes: [[0, 0, 0, 1, 0.5, 1]] } // top 62.5: fall 4.1, dmg 1
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.5, y: 66.6, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching') // dmg 1 >= hp 1: lethal
+    assert.equal(sent.length, 0)
+  })
+})
+
 describe('unpin direction guide', () => {
   it('spot A: grass east -> the single away-step -x', () => {
     assert.deepEqual(unpin.orderNudgeDirs(spotABot()), [[-0.01, 0]])
@@ -419,14 +563,24 @@ describe('unpin direction guide', () => {
     assert.deepEqual(unpin.orderNudgeDirs(bot), [])
   })
 
-  it('pocket corner: one away per solid side, axis order', () => {
-    const bot = {
-      entity: { position: pos(0.2, 70, 0.2), onGround: false },
+  it('pocket corner: one away per touching side, axis order', () => {
+    const bot = { // max-x/max-z exactly 1.0: true contact with both walls
+      entity: { position: pos(0.7, 70, 0.7), onGround: false },
       blockAt: (p) => ((p.x === 1 && p.z === 0) || (p.x === 0 && p.z === 1)) && (p.y === 70 || p.y === 71)
         ? { name: 'stone', boundingBox: 'block' }
         : { name: 'air', boundingBox: 'empty' },
     }
     assert.deepEqual(unpin.orderNudgeDirs(bot), [[-0.01, 0], [0, -0.01]])
+  })
+
+  it('near but not touching: gap walls are not faces', () => {
+    const bot = { // max-x 0.5, half a block off the wall: adjacency without contact
+      entity: { position: pos(0.2, 70, 0.2), onGround: false },
+      blockAt: (p) => (p.x === 1 && p.z === 0 && (p.y === 70 || p.y === 71))
+        ? { name: 'stone', boundingBox: 'block' }
+        : { name: 'air', boundingBox: 'empty' },
+    }
+    assert.deepEqual(unpin.orderNudgeDirs(bot), [])
   })
 
   it('ladder and scaffold neighbours are not faces (passable sides)', () => {
@@ -440,8 +594,8 @@ describe('unpin direction guide', () => {
   })
 
   it('cactus neighbour is a face (solid inset sides can lock)', () => {
-    const bot = {
-      entity: { position: pos(0.2, 70, 0.2), onGround: false },
+    const bot = { // max-x exactly 1.0: touching the cactus cell
+      entity: { position: pos(0.7, 70, 0.2), onGround: false },
       blockAt: (p) => (p.x === 1 && p.z === 0 && p.y === 70 ? { name: 'cactus', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' }),
     }
     assert.deepEqual(unpin.orderNudgeDirs(bot), [[-0.01, 0]])
@@ -479,18 +633,15 @@ describe('unpin packet clone', () => {
     assert.deepEqual(w.params.flags, { onGround: false })
   })
 
-  it('teleport targets resolve absolute (relative packets ignored)', async () => {
+  it('teleport targets resolve absolute (relative packets ignored)', () => {
     const handlers = {}
-    const applied = pos(-37.3, 65.2, -212.6) // physics applied the packet before the sample
-    const bot = {
+    const bot = { // physics applied the packet first (post-spawn registration)
       _client: { on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn) }, write() {} },
-      entity: { position: applied, onGround: false },
+      entity: { position: pos(-37.3, 65.2, -212.6), onGround: false },
     }
     const ctx = {}
     unpin.installUnpinTap(bot, ctx)
     for (const fn of handlers.position) fn({ x: 0.01, y: -0.08, z: 0, flags: { x: true, y: true, z: true } })
-    assert.equal(ctx.unpin.teleports.length, 0) // post-dispatch sample, not sync
-    await new Promise((r) => setImmediate(r))
     assert.equal(ctx.unpin.teleports.length, 1)
     assert.deepEqual(ctx.unpin.teleports[0].pos, { x: -37.3, y: 65.2, z: -212.6 })
   })

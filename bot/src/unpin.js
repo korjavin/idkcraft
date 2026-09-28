@@ -44,7 +44,7 @@ function state(ctx) {
   return ctx.unpin
 }
 
-// pos is the server's teleport target (post-dispatch entity sample, always
+// pos is the server's teleport target (post-apply entity sample, always
 // absolute — see installUnpinTap): its spread is the displacement evidence.
 function noteTeleport(ctx, t, pos = null) {
   const st = state(ctx)
@@ -93,9 +93,83 @@ function solid(b) {
   return n !== '' && !n.endsWith('air') && n !== 'water' && n !== 'lava'
 }
 
-// A face that can lock: solid and not climb-or-passable.
-function faceSolid(b) {
-  return solid(b) && !CLIMBABLES.has(blockName(b))
+// Player body box (feet-centre pos): 0.6 wide, 1.8 tall.
+const BODY_W = 0.6
+const BODY_H = 1.8
+const CONTACT_EPS = 1e-3 // contact band: 1e3x the pin band, 10x below the nudge
+const CELL_EPS = 1e-7 // an exact upper bound touches the next cell but doesn't occupy it
+
+function bodyBox(p) {
+  return { x0: p.x - BODY_W / 2, x1: p.x + BODY_W / 2, y0: p.y, y1: p.y + BODY_H, z0: p.z - BODY_W / 2, z1: p.z + BODY_W / 2 }
+}
+
+function bodyCells(bb) {
+  const cells = []
+  for (let cx = Math.floor(bb.x0); cx <= Math.floor(bb.x1 - CELL_EPS); cx++) {
+    for (let cy = Math.floor(bb.y0); cy <= Math.floor(bb.y1 - CELL_EPS); cy++) {
+      for (let cz = Math.floor(bb.z0); cz <= Math.floor(bb.z1 - CELL_EPS); cz++) {
+        cells.push([cx, cy, cz])
+      }
+    }
+  }
+  return cells
+}
+
+// Collision shapes as absolute boxes. Live mineflayer blocks carry
+// state-specific .shapes; shapeless solid fakes fall back to a full cube.
+// Returns null for unknown cells (chunk hole) — distinct from empty.
+function shapeBoxes(bot, cx, cy, cz) {
+  const b = cellAt(bot, cx, cy, cz)
+  if (!b) return null
+  const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
+  return { name: blockName(b), boxes: rel.map((s) => [s[0] + cx, s[1] + cy, s[2] + cz, s[3] + cx, s[4] + cy, s[5] + cz]) }
+}
+
+function overlap1(a0, a1, b0, b1) { return a0 < b1 - CONTACT_EPS && a1 > b0 + CONTACT_EPS } // sub-mm = touching, not overlap (float dust at exact faces)
+
+// True shape contact on side (dx,dz): a solid plane within CONTACT_EPS of
+// the body's face with real tangential overlap. Checks body cells AND
+// outward neighbours (a door slab can live in the body's own cell).
+// Unknown cells prove nothing; climbables are excluded (climb vetoes own
+// those storms, same as before).
+function sideContact(bot, bb, dx, dz) {
+  const seen = new Set()
+  for (const [cx, cy, cz] of bodyCells(bb)) {
+    for (const q of [[cx, cz], [cx + dx, cz + dz]]) {
+      const key = `${q[0]},${cy},${q[1]}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const sb = shapeBoxes(bot, q[0], cy, q[1])
+      if (!sb || CLIMBABLES.has(sb.name)) continue
+      for (const s of sb.boxes) {
+        const plane = dx === -1 ? s[3] : dx === 1 ? s[0] : dz === -1 ? s[5] : s[2]
+        const face = dx === -1 ? bb.x0 : dx === 1 ? bb.x1 : dz === -1 ? bb.z0 : bb.z1
+        if (Math.abs(plane - face) > CONTACT_EPS) continue
+        const tang = dx !== 0
+          ? overlap1(s[1], s[4], bb.y0, bb.y1) && overlap1(s[2], s[5], bb.z0, bb.z1)
+          : overlap1(s[0], s[3], bb.x0, bb.x1) && overlap1(s[1], s[4], bb.y0, bb.y1)
+        if (tang) return true
+      }
+    }
+  }
+  return false
+}
+
+// Destination validation: the stepped body must not end inside solid
+// (strict overlap; touching is fine) nor in unknown cells. No name
+// carve-outs: any shape overlap vetoes (conservative = safe).
+function destFree(bot, p, dx, dz) {
+  const bb = bodyBox({ x: p.x + dx, y: p.y, z: p.z + dz })
+  for (const [cx, cy, cz] of bodyCells(bb)) {
+    const sb = shapeBoxes(bot, cx, cy, cz)
+    if (!sb) return false
+    for (const s of sb.boxes) {
+      if (overlap1(s[0], s[3], bb.x0, bb.x1) && overlap1(s[1], s[4], bb.y0, bb.y1) && overlap1(s[2], s[5], bb.z0, bb.z1)) {
+        return false
+      }
+    }
+  }
+  return true
 }
 
 function cellAt(bot, cx, cy, cz) {
@@ -133,9 +207,10 @@ function climbableAt(bot, pos) {
   return CLIMBABLES.has(blockName(cellAt(bot, fx, fy, fz))) || CLIMBABLES.has(blockName(cellAt(bot, fx, fy + 1, fz)))
 }
 
-// Away-steps off known faces only (unknown terrain never nudges). At most
-// one per solid neighbour; corners cure sequentially (parallel moves
-// preserve earlier gaps bit-exactly — no delta means no change).
+// Away-steps off proven shape contact only (unknown terrain never nudges),
+// each destination-validated: the stepped body must not end inside solid.
+// Corners cure sequentially (parallel moves preserve earlier gaps
+// bit-exactly — no delta means no change).
 const AXIS = [[-1, 0], [1, 0], [0, -1], [0, 1]]
 const nz = (v) => (v === 0 ? 0 : v) // -0 doubles as +0 except deepEqual and the wire
 function orderNudgeDirs(bot) {
@@ -143,12 +218,11 @@ function orderNudgeDirs(bot) {
   try {
     const p = posOf(bot)
     if (p) {
-      const fx = Math.floor(p.x)
-      const fy = Math.floor(p.y)
-      const fz = Math.floor(p.z)
+      const bb = bodyBox(p)
       for (const [dx, dz] of AXIS) {
-        if (faceSolid(cellAt(bot, fx + dx, fy, fz + dz)) || faceSolid(cellAt(bot, fx + dx, fy + 1, fz + dz))) {
-          away.push([nz(-dx * NUDGE_DIST), nz(-dz * NUDGE_DIST)])
+        const step = [nz(-dx * NUDGE_DIST), nz(-dz * NUDGE_DIST)]
+        if (sideContact(bot, bb, dx, dz) && destFree(bot, p, step[0], step[1])) {
+          away.push(step)
         }
       }
     }
@@ -156,22 +230,39 @@ function orderNudgeDirs(bot) {
   return away // ≤4 (one per axis): the tried-set over this universe bounds every episode
 }
 
-// Landing feasibility for the freed fall: the escape must not kill. Nearest
-// landing straight below wins (the still-air fall path; drift is the brain's
-// business post-free). Returns null when survivable, else a veto reason.
+// Landing feasibility for the freed fall: the escape must not kill. Scans
+// level by level under the whole body footprint (a straddler's edge counts);
+// the highest landing across columns wins (the still-air fall path; drift
+// is the brain's business post-free). Landing tops come from shapes (a slab
+// top is 0.5 below the cell top). Strict: any lava/unknown at or above the
+// landing vetoes; any water saves. Returns null when survivable, else why.
 function belowVeto(bot, pos) {
-  const fx = Math.floor(pos.x)
-  const fz = Math.floor(pos.z)
+  const bb = bodyBox(pos)
+  const cols = []
+  for (let cx = Math.floor(bb.x0); cx <= Math.floor(bb.x1 - CELL_EPS); cx++) {
+    for (let cz = Math.floor(bb.z0); cz <= Math.floor(bb.z1 - CELL_EPS); cz++) {
+      cols.push([cx, cz])
+    }
+  }
   const hp = bot && typeof bot.health === 'number' ? bot.health : 20 // real bots report; mocks fail open
-  for (let y = Math.floor(pos.y) - 1; (pos.y - (y + 1)) <= BELOW_SCAN_MAX; y--) {
-    const b = cellAt(bot, fx, y, fz)
-    if (!b) return 'unknown-below'
-    const n = blockName(b)
-    if (n.includes('lava')) return 'lava-below'
-    if (n.includes('water')) return null // any water breaks any fall
-    if (n === '' || n.endsWith('air') || CLIMBABLES.has(n) || !solid(b)) continue // pass-through
-    const dmg = Math.max(0, Math.floor((pos.y - (y + 1)) - 3)) // MC: floor(fall - 3)
-    return dmg >= hp ? 'lethal-below' : null
+  for (let y = Math.floor(bb.y0) - 1; (bb.y0 - (y + 1)) <= BELOW_SCAN_MAX; y--) {
+    let top = -Infinity
+    for (const [cx, cz] of cols) {
+      const b = cellAt(bot, cx, y, cz)
+      if (!b) return 'unknown-below'
+      const n = blockName(b)
+      if (n.includes('lava')) return 'lava-below'
+      if (n.includes('water')) return null // any water breaks any fall
+      if (CLIMBABLES.has(n)) continue
+      const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
+      for (const s of rel) {
+        if (s[4] + y > top) top = s[4] + y
+      }
+    }
+    if (top > -Infinity) {
+      const dmg = Math.max(0, Math.floor((bb.y0 - top) - 3)) // MC: floor(fall - 3)
+      return dmg >= hp ? 'lethal-below' : null
+    }
   }
   return 'lethal-below' // nothing to land on: void or death-certain
 }
@@ -181,8 +272,9 @@ function belowVeto(bot, pos) {
 // act, else the veto reason. The flag sample is NOT a verdict (every
 // teleport falsifies onGround until the next physics tick): proven rest
 // vetoes at detection, a down flag proceeds — re-pin locks read down and
-// need the cure, grounded-press episodes are harmless (verified, bounded)
-// and indistinguishable in one sample.
+// need the cure; grounded-press episodes are bounded (a live storm re-verifies
+// to tried-set exhaustion, then rests; each try is 1 cm) and indistinguishable
+// in one sample.
 function eligible(bot, pos, forRetry = false) {
   // No flag re-gate on retry (revmux-01 churn proof): a true read mid-storm
   // is a flap, and dropping on flaps resets tries forever instead of
@@ -197,12 +289,23 @@ function eligible(bot, pos, forRetry = false) {
   return belowVeto(bot, pos)
 }
 
-function sendTry(ctx, dir, pos) {
+function sendTry(ctx, dir, base) {
   const st = state(ctx)
   if (typeof st.sendNudge !== 'function') return false
   try {
-    return st.sendNudge(dir[0], dir[1], pos) === true
+    return st.sendNudge(dir[0], dir[1], base) === true
   } catch (_) { return false }
+}
+
+// Latest server correction still inside the evidence window: the only base
+// a nudge may rebase onto (F5: live prediction drags client error along,
+// so the claimed delta would not be the pure 1 cm step).
+function freshBase(st, now) {
+  for (let i = st.teleports.length - 1; i >= 0; i--) {
+    const tp = st.teleports[i]
+    if (tp.pos && now - tp.t < STORM_WINDOW_MS) return tp.pos
+  }
+  return null
 }
 
 function drop(ctx, reason, pos) {
@@ -300,7 +403,9 @@ function unpinTick(bot, ctx, now = Date.now()) {
     console.log(`unpin stand-down exhausted anchor=${a.x.toFixed(1)},${a.y.toFixed(1)},${a.z.toFixed(1)}`)
     return 'stood-down'
   }
-  if (sendTry(ctx, dir, pos)) {
+  const base = freshBase(st, now)
+  if (!base) return drop(ctx, 'no-target', pos) // corrections gone quiet/blank: never send blind
+  if (sendTry(ctx, dir, base)) {
     st.tries.push({ dx: dir[0], dz: dir[1], t: now, from: { ...pos }, verdict: null })
     console.log(`unpin nudge dx=${dir[0].toFixed(2)} dz=${dir[1].toFixed(2)} try=${st.tries.length}`)
     return 'nudged'
@@ -309,35 +414,41 @@ function unpinTick(bot, ctx, now = Date.now()) {
 }
 
 // Real-bot wiring (runOnce only). Idempotent. Teleport targets come from a
-// post-dispatch entity-position sample — always absolute, even for relative
-// teleports (physics applies synchronously during emit; the immediate runs
-// after). The write tap clones mineflayer's own last move packet for shape;
-// coordinates always come from the live entity position, so the nudge delta
-// is pure-horizontal.
+// post-apply entity-position sample — always absolute, even for relative
+// teleports (the listener registers after spawn, so physics has applied
+// each packet before the tap samples). The write tap clones mineflayer's
+// own last move packet for shape; coordinates always come from the latest
+// saved server correction, so the claimed delta is the pure 1 cm step.
 //
-// Non-interference (no pause/yield needed): the nudge is one absolute packet
-// on a disjoint control surface (no controls/goals touched); the server
-// serializes it with behaviour moves, and teleport-backs target server pos,
-// which includes an accepted nudge — behaviour moves can neither clobber it
-// (self-pin: client≈server, deltas stay valid) nor be broken by it.
+// Interleaving (no pause/yield by design): the nudge claims base+delta
+// where base is the server's own last correction. Follow-up behaviour
+// moves carry client coordinates WITHOUT the delta — but any follow-up
+// that re-touches the contact face is rejected back to the nudged server
+// pos (the pin's own reject storm defends the cure: same-pos teleports
+// target server pos, observed 10/s idle); a follow-up that clears the face
+// is accepted motion, i.e. the cure working. Clobber would need an accepted
+// delta-less re-touch, which face-touch validation forbids — end to end
+// proven by rig cures (A-spot 3/3 twice, freed on sustained displacement).
 function installUnpinTap(bot, ctx) {
   if (!bot || bot._unpinTapInstalled) return
   bot._unpinTapInstalled = true
   const client = bot._client
   if (client && typeof client.on === 'function') {
-    client.on('position', () => {
-      // Post-dispatch sample (revmux-02): this tap registers before
-      // mineflayer's physics handler (plugins inject on next tick), so a
-      // sync read would catch the pre-apply client pos. The immediate runs
-      // after every sync 'position' handler — physics has applied the
-      // packet by then. Bursts in one tick share the latest sample.
-      setImmediate(() => {
+    const reg = () => {
+      client.on('position', () => {
         try {
           const p = bot.entity && bot.entity.position
           noteTeleport(ctx, Date.now(), p)
         } catch (_) { /* counter best-effort */ }
       })
-    })
+    }
+    // After spawn: mineflayer's physics handler (plugins inject on next
+    // tick, long before login) is already registered, so it applies each
+    // packet before this tap samples — every burst element resolves after
+    // its own application, never as a copy of the final one (F4).
+    // Mocks without .once register immediately.
+    if (bot && typeof bot.once === 'function') bot.once('spawn', reg)
+    else reg()
   }
   if (client && typeof client.write === 'function') {
     const origWrite = client.write.bind(client)
