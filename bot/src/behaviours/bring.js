@@ -514,27 +514,54 @@ async function chooseBringSource(brain, text, exposed, buried, o) {
 // Cached far verdict (revmux 01 body-3): without it every dug unit re-runs
 // the full sliced shells while the bot stands still. Valid while the bot
 // is still near the cache origin with the same loaded edge (the same
-// invalidation stepFarSearch itself uses), the hit re-verified live and
-// re-costed from the live position. Returns the hit, null for a cached
-// empty verdict, or undefined when there is no usable cache.
+// invalidation stepFarSearch itself uses); each half is re-verified live
+// and re-costed from the live position. Returns { far, buried } (either
+// may be null), or undefined when there is no usable cache — a half that
+// was cached but no longer verifies rescans instead of silently dropping
+// (revmux 02). Search legs drop the cache on completion: legs relocate
+// for fresh coverage, so they always rescan.
 function takeFarCache(bot, o, bp) {
   try {
     const c = o && o.farCache
     if (!c || typeof c.x !== 'number') return undefined
     if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > 48) return undefined
     if (loadedSearchRadius(bot) !== c.edge) return undefined
-    if (!c.hit) return null
-    if (o.skip && typeof o.skip.has === 'function' && o.skip.has(skipKey(c.hit.pos))) return undefined
-    let now = false
-    try {
-      now = resources.exposedOf(bot, {
-        x: c.hit.pos.x, y: c.hit.pos.y, z: c.hit.pos.z, name: c.hit.name, exposed: true,
-      })
-    } catch (_) { now = false }
-    if (now !== true) return undefined // mined out or closed up: rescan
-    const distH = Math.hypot(c.hit.pos.x - bp.x, c.hit.pos.z - bp.z)
-    const dist = Math.hypot(c.hit.pos.x - bp.x, c.hit.pos.y - bp.y, c.hit.pos.z - bp.z)
-    return { ...c.hit, distH, dist, cost: walkCost(distH) }
+    const skipped = (pos) => o.skip && typeof o.skip.has === 'function' && o.skip.has(skipKey(pos))
+    let far = null
+    if (c.hit && !skipped(c.hit.pos)) {
+      let now = false
+      try {
+        now = resources.exposedOf(bot, {
+          x: c.hit.pos.x, y: c.hit.pos.y, z: c.hit.pos.z, name: c.hit.name, exposed: true,
+        })
+      } catch (_) { now = false }
+      if (now === true) {
+        const p = c.hit.pos
+        far = liveExposed(bp, {
+          name: c.hit.name, position: p,
+          distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: true,
+        })
+      }
+    }
+    let buried = null
+    if (c.buriedHit && !skipped(c.buriedHit.pos)) {
+      let there = false
+      try {
+        const blk = bot.blockAt && bot.blockAt({
+          x: Math.floor(c.buriedHit.pos.x), y: Math.floor(c.buriedHit.pos.y), z: Math.floor(c.buriedHit.pos.z),
+        })
+        there = !blk || (!!blk.name && blk.name === c.buriedHit.name)
+      } catch (_) { there = false }
+      if (there) {
+        const p = c.buriedHit.pos
+        buried = buriedCand(bp, {
+          name: c.buriedHit.name, position: p,
+          distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: false,
+        })
+      }
+    }
+    if ((c.hit && !far) || (c.buriedHit && !buried)) return undefined
+    return { far, buried }
   } catch (_) { return undefined }
 }
 
@@ -597,7 +624,12 @@ function commitSource(bot, ctx, o, exposed, buried, pick) {
   o.pos = res.position
   o.block = res.name
   o.exposed = res.exposed !== false
-  o.far = win.kind === 'memory'
+  // Unloaded is not gone (gather's far rule): memory targets always ride
+  // it, and so does a cached live hit whose chunk unloaded since the scan
+  // — otherwise walk re-finds every tick with no stall exit (revmux 02).
+  let readable = true
+  try { readable = !!(bot.blockAt && bot.blockAt(win.pos)) } catch (_) { readable = false }
+  o.far = win.kind === 'memory' || !readable
   o.drop = dropFor(res.name)
   if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
     const tier = requiredTier(res.name)
@@ -740,6 +772,7 @@ function walkSearch(bot, ctx, o) {
       o.searchLegs.legs += 1
       o.searchLegs.last = st === 'done' ? 'empty' : 'failed'
     }
+    o.farCache = null // a leg relocates for fresh coverage: the next find rescans (revmux 02)
     o.phase = 'find'
   }
 }
@@ -1163,12 +1196,12 @@ async function bring(bot, ctx, target, state) {
       // one cursor, no new scan starting while it runs.
       const cachedEmpty = takeFarCache(bot, o, bp)
       if (cachedEmpty !== undefined) {
-        const exposedEmpty = bestExposed(cachedEmpty, o.memKnown || null)
-        if (!exposedEmpty) {
+        const exposedEmpty = bestExposed(cachedEmpty.far, o.memKnown || null)
+        if (!exposedEmpty && !cachedEmpty.buried) {
           await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
           return
         }
-        await verdictSource(bot, ctx, o, exposedEmpty, null)
+        await verdictSource(bot, ctx, o, exposedEmpty, cachedEmpty.buried)
         return
       }
       o.search = startFarSearch(bot, o.name)
@@ -1208,7 +1241,7 @@ async function bring(bot, ctx, target, state) {
     // and memory above are always re-derived fresh and cheap.
     const cachedBuried = takeFarCache(bot, o, bp)
     if (cachedBuried !== undefined) {
-      await verdictSource(bot, ctx, o, bestExposed(cachedBuried, o.memKnown || null), o.buried)
+      await verdictSource(bot, ctx, o, bestExposed(cachedBuried.far, o.memKnown || null), o.buried)
       return
     }
     o.search = startFarSearch(bot, o.name)
@@ -1244,7 +1277,10 @@ async function bring(bot, ctx, target, state) {
     const exposed = bestExposed(far, o.memKnown || null)
     const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
     try {
-      o.farCache = { x: bp.x, y: bp.y, z: bp.z, edge, hit: far }
+      o.farCache = {
+        x: bp.x, y: bp.y, z: bp.z, edge, hit: far,
+        buriedHit: r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null,
+      }
     } catch (_) { /* cache best-effort */ }
     if (!exposed && !buried) {
       await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)

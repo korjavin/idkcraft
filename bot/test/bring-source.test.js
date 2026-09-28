@@ -415,6 +415,96 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     await bring(bot, ctx, null, {})
     assert.equal(ctx.bring.phase, 'find', 'loaded mismatch re-finds')
   })
+
+  it('dug-out 48 falls back to the cached buried far hit, no rescan (revmux 02)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '60,64,0': 'iron_ore',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
+    await bring(bot, ctx, null, {})
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [0, 59, 0])
+    delete names['0,59,0'] // vein dug out within 48
+    let scans = 0
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => { scans++; return inner(o) }
+    ctx.bring.pos = null
+    ctx.bring.phase = 'find'
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'cached buried far hit commits same tick')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(scans, 1, 'only the sync 48 scan ran')
+  })
+
+  it('a finished search leg drops the far cache: the next find rescans (revmux 02)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    delete bot.pathfinder.setGoal // broken executor fails the leg, like the pun test
+    const ctx = {
+      lastGoalKey: '', stepStatus: 'running',
+      bring: {
+        kind: 'block', name: 'coal_ore', phase: 'searchwalk',
+        farCache: { x: 0, y: 64, z: 0, edge: 48, hit: null, buriedHit: null },
+        searchLegs: { legs: 0, startedAt: Date.now(), announced: true, last: 'empty' },
+      },
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'find')
+    assert.equal(ctx.bring.farCache, null, 'leg completion drops the cache')
+  })
+
+  it('unloaded cached hit rides far: walk tolerates, no walk/find flip (revmux 02)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    bot._moving = true
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
+    await bring(bot, ctx, null, {})
+    await bring(bot, ctx, null, {})
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    delete names['60,64,0'] // chunk with the cached hit unloads
+    delete names['61,64,0']
+    ctx.bring.pos = null
+    ctx.bring.phase = 'find'
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'trusted-flag hit recommits')
+    assert.equal(ctx.bring.far, true, 'unreadable target rides far')
+    ctx.lastGoalKey = 'bring:60,64,0'
+    await bring(bot, ctx, null, {})
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'no walk/find flip without far')
+  })
+
+  it('refused completion grafts nothing onto a surviving order (revmux 02 core-1)', async () => {
+    const { advancePendingSearch } = require('../src/index')
+    const names = { '60,64,0': 'gold_ore', '61,64,0': 'air' }
+    const bot = mockBot({ spots: [pos(60, 64, 0)], names, items: [{ name: 'stone_pickaxe', count: 1 }] })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const old = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'walk', have: 0, announced: true }
+    ctx.bring = old
+    ctx.pendingSearch = {
+      cursor: {
+        blockName: 'gold_ore', ids: [32], queue: [], at: 0,
+        hits: new Map([['60,64,0', pos(60, 64, 0)]]),
+        stageMs: {}, stageScans: {}, edge: 160, origin: pos(0, 64, 0),
+      },
+      kind: 'bring', name: 'gold', want: 3, by: 'P',
+    }
+    await advancePendingSearch(bot, {}, ctx)
+    assert.ok(bot.lines.some((l) => l === 'need an iron pickaxe for gold_ore'), `lines: ${bot.lines}`)
+    assert.equal(ctx.bring, old, 'old order survives the refusal')
+    assert.equal(old.farCache, undefined, 'no cache grafted')
+    assert.equal(old.sourceAsked, undefined, 'no ask cache grafted')
+  })
 })
 
 describe('bring source helpers (idkcraft-atl.15)', () => {

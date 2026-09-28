@@ -2011,7 +2011,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
           have: 0, announced: false, searchSkipFar: true,
         }
         try {
-          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: null }
+          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: null, buriedHit: null }
         } catch (_) { /* cache best-effort */ }
         // The handover takes the body (jr2.2): a stale stay must not
         // survive, and a body asleep from the pending wait must wake.
@@ -2064,11 +2064,18 @@ async function advancePendingSearch(bot, ticker, ctx) {
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
       const win = pick === 'buried' ? buried : exposed
       const rival = pick === 'buried' ? exposed : buried
+      // A refusal (tier/unbringable) leaves a surviving older order in
+      // place: attach the verdict only to an order this commit created
+      // (revmux 02 core-1), never graft it onto the old one.
+      const prev = ctx.bring
       bot.chat(startBlockOrder(bot, ctx, p, bringMod.choiceRes(win, rival, bp0)))
-      if (ctx.bring) {
+      if (ctx.bring && ctx.bring !== prev) {
         if (cache.sourceAsked) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
         try {
-          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far }
+          ctx.bring.farCache = {
+            x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far,
+            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null,
+          }
         } catch (_) { /* cache best-effort */ }
       }
       return
