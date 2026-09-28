@@ -1148,3 +1148,14 @@ describe('jr2.2 pack beds cover before wool is hunted', () => {
     assert.equal(ctx.bring, undefined)
   })
 })
+
+describe('jr2.2 done branch', () => {
+  it('both standing: done with the completion chat', () => {
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed', [cellKey(B_FOOT)]: 'white_bed', [cellKey(B_HEAD)]: 'white_bed' }
+    const bot = mockBot({ items: [], cells })
+    const ctx = { home: v2home() }
+    beds(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.includes('both beds are in'))
+  })
+})
