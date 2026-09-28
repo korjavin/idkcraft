@@ -317,6 +317,15 @@ function countsFromFacts(facts, ctx) {
     iron_leggings: f.ironLeggings || 0, iron_boots: f.ironBoots || 0,
     diamond_helmet: f.diamondHelmet || 0, diamond_chestplate: f.diamondChestplate || 0,
     diamond_leggings: f.diamondLeggings || 0, diamond_boots: f.diamondBoots || 0,
+    // Worn counts ride beside the pack counts (revmux 01 core-1/body-1):
+    // owner math (tossed, hand) must read the pack only, or a worn self
+    // piece holds a tossed spare in 'hand' forever — gear infeasible, the
+    // tick never reconciles, the ladder freezes (survives restarts via
+    // the persisted ledger). Only the self branch adds worn.
+    worn_iron_helmet: f.wornIronHelmet || 0, worn_iron_chestplate: f.wornIronChestplate || 0,
+    worn_iron_leggings: f.wornIronLeggings || 0, worn_iron_boots: f.wornIronBoots || 0,
+    worn_diamond_helmet: f.wornDiamondHelmet || 0, worn_diamond_chestplate: f.wornDiamondChestplate || 0,
+    worn_diamond_leggings: f.wornDiamondLeggings || 0, worn_diamond_boots: f.wornDiamondBoots || 0,
     tablePlaced: !!f.tablePlaced, furnaceClaim,
     furnaceItem: f.furnaceItem || 0, cobble: f.cobble || 0, fuel: f.coal || 0,
   }
@@ -370,8 +379,12 @@ function planFor(counts, ctx, impls, furnaceBusy) {
       const name = pieceName(rung, piece)
       if (piece.owner) {
         if ((given[name] || 0) >= (OWNER_WANT[name] || 1) || tossed(name, c[name] || 0, ctx)) continue
-      } else if ((c[name] || 0) >= selfWant(name)) {
-        continue
+      } else {
+        // Self armour reads worn plus packed (deriveNext selfHave shape);
+        // tools read the pack. Worn adds ONLY here — the owner branch
+        // above and the hand check below stay pack-only (core-1/body-1).
+        const wornN = (piece.kind && ARMOR_DEST[piece.kind]) ? (c['worn_' + name] || 0) : 0
+        if ((c[name] || 0) + wornN >= selfWant(name)) continue
       }
       return planPiece(rung, piece, name, c, im, furnaceBusy, ctx)
     }
@@ -484,9 +497,10 @@ function liveCounts(bot, ctx) {
       !!stationStanding(bot, (ctx && ctx.claimedTable))
     furnaceClaim = !!(ctx && ctx.home && ctx.home.furnace)
   } catch (_) { /* no stations */ }
-  // Armour counts worn plus packed (selfHave shape): the menu and the tick
-  // share one source, so the plan never offers a rung the tick reads done.
-  const armor = (name) => have(bot, name) + wornItems(bot, name)
+  // Armour: pack counts under the item name (owner math reads these —
+  // revmux 01 core-1/body-1), worn counts beside them for the self branch.
+  const armor = (name) => have(bot, name)
+  const wornArmor = (name) => wornItems(bot, name)
   return {
     ironOre: have(bot, 'raw_iron'), ingots: have(bot, 'iron_ingot'), diamonds: have(bot, 'diamond'),
     sticks: have(bot, 'stick'), planks, logs,
@@ -497,6 +511,10 @@ function liveCounts(bot, ctx) {
     iron_leggings: armor('iron_leggings'), iron_boots: armor('iron_boots'),
     diamond_helmet: armor('diamond_helmet'), diamond_chestplate: armor('diamond_chestplate'),
     diamond_leggings: armor('diamond_leggings'), diamond_boots: armor('diamond_boots'),
+    worn_iron_helmet: wornArmor('iron_helmet'), worn_iron_chestplate: wornArmor('iron_chestplate'),
+    worn_iron_leggings: wornArmor('iron_leggings'), worn_iron_boots: wornArmor('iron_boots'),
+    worn_diamond_helmet: wornArmor('diamond_helmet'), worn_diamond_chestplate: wornArmor('diamond_chestplate'),
+    worn_diamond_leggings: wornArmor('diamond_leggings'), worn_diamond_boots: wornArmor('diamond_boots'),
     tablePlaced, furnaceClaim,
     furnaceItem: have(bot, 'furnace'), cobble: have(bot, 'cobblestone'),
     fuel: have(bot, 'coal') + have(bot, 'charcoal'),
@@ -935,6 +953,7 @@ function forged(bot, ctx, next) {
 // pack loss re-derives the rung). inFlight through the settle, fill shape.
 // Owner pieces never come here — only the tick's self branch calls this.
 const WEAR_SETTLE_MS = 500
+const WEAR_RETRIES = 3
 function wearSelf(bot, ctx, name, kind) {
   const dest = (kind && ARMOR_DEST[kind]) || null
   if (!dest || !bot || typeof bot.equip !== 'function') return
@@ -946,15 +965,21 @@ function wearSelf(bot, ctx, name, kind) {
   if (!item) return
   ctx.gearInFlight = true
   void (async () => {
-    try {
-      await bot.equip(item, dest)
-    } catch (_) { /* unverifiable below: the settle decides */ }
-    await new Promise((resolve) => setTimeout(resolve, WEAR_SETTLE_MS))
-    ctx.gearInFlight = false
+    // Bounded retries (revmux 01 core-2): a lag-rejected equip heals on
+    // the spot instead of stranding the self piece in the pack, where the
+    // owner twin would later spend it. A persistently failing equip still
+    // strands (logged) rather than stall — death heals it.
     let on = false
-    try {
-      on = wornItems(bot, name) > 0
-    } catch (_) { on = true }
+    for (let n = 0; n < WEAR_RETRIES && !on; n++) {
+      try {
+        await bot.equip(item, dest)
+      } catch (_) { /* unverifiable below: the settle decides */ }
+      await new Promise((resolve) => setTimeout(resolve, WEAR_SETTLE_MS))
+      try {
+        on = wornItems(bot, name) > 0
+      } catch (_) { on = true }
+    }
+    ctx.gearInFlight = false
     if (!on) {
       try {
         console.error(`gear wear failed item=${name}`)
@@ -966,10 +991,11 @@ function wearSelf(bot, ctx, name, kind) {
 // Pantry withdraw (ipn.6): draw the rung's shortfall from the adopted home
 // chest — ingots first (direct), then smeltable ore; diamonds exact. One
 // window per name (bringitem.withdrawCraftMats shape), stockpile deferred
-// (legImpl precedent — no new import edge). The seen latch lands even on an
-// empty/errored chest: a wedged lid must yield to the fetchers, not loop;
-// any future bank re-arms. Next tick re-plans (smelt/craft on stock, the
-// latched want/deep otherwise) — no fallback lines here.
+// (legImpl precedent — no new import edge). The seen latch lands on a
+// short or errored draw only: a wedged lid yields to the fetchers instead
+// of looping, while a satisfied draw keeps the batch open for the next
+// rung; any future bank re-arms. Next tick re-plans (smelt/craft on stock,
+// the latched want/deep otherwise) — no fallback lines here.
 function runWithdraw(bot, ctx, next) {
   let stockpileMod = null
   try {
@@ -984,20 +1010,30 @@ function runWithdraw(bot, ctx, next) {
   }
   ctx.gearInFlight = true
   void (async () => {
+    let requested = 0
+    let got = 0
+    let errored = false
     try {
-      if (next.tier === 'iron') {
-        const needIng = Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot'))
-        if (needIng > 0) await stockpileMod.withdrawFromChest(bot, ctx, 'iron_ingot', needIng)
-        const needOre = Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot') - have(bot, 'raw_iron'))
-        if (needOre > 0) await stockpileMod.withdrawFromChest(bot, ctx, 'raw_iron', needOre)
-      } else {
-        const needDia = Math.max(0, (next.needMat || 0) - have(bot, 'diamond'))
-        if (needDia > 0) await stockpileMod.withdrawFromChest(bot, ctx, 'diamond', needDia)
+      const draw = async (name, want) => {
+        if (!(want > 0)) return
+        requested += want
+        const res = await stockpileMod.withdrawFromChest(bot, ctx, name, want)
+        got += (res && typeof res.got === 'number') ? res.got : 0
       }
-    } catch (_) { /* empty chest reads as tried */ }
+      if (next.tier === 'iron') {
+        await draw('iron_ingot', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot')))
+        await draw('raw_iron', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot') - have(bot, 'raw_iron')))
+      } else {
+        await draw('diamond', Math.max(0, (next.needMat || 0) - have(bot, 'diamond')))
+      }
+    } catch (_) { errored = true }
     ctx.gearInFlight = false
     try {
-      g.pantrySeen = ctx.gearPantryBanked || 0
+      // Latch only on a short or errored draw (revmux 01 body-2): a fully
+      // satisfied draw leaves the pantry fresh, so the next mat-short
+      // rung draws from the same batch instead of digging past it. The
+      // latch still lands once the chest runs dry — one attempt per bank.
+      if (errored || got < requested || requested <= 0) g.pantrySeen = ctx.gearPantryBanked || 0
     } catch (_) { /* latch best-effort */ }
   })()
 }
@@ -1118,6 +1154,14 @@ function gear(bot, ctx, target, state) {
       return
     }
     if (dist3(bp, cpos) > craftMod.TABLE_REACH) {
+      // Latch on the give-up tick (revmux 01 body-3): walkTo fails below
+      // without recording, and an unlatched plan re-offers the same
+      // unreachable walk every pick instead of degrading to want/deep.
+      if ((runCtx(ctx).walkTicks || 0) >= WALK_GIVE_UP) {
+        try {
+          gearCtx(ctx).pantrySeen = ctx.gearPantryBanked || 0
+        } catch (_) { /* latch best-effort */ }
+      }
       walkTo(bot, ctx, `gear-chest:${cpos.x},${cpos.y},${cpos.z}`, cpos, 'chest-far')
       return
     }

@@ -223,28 +223,30 @@ describe('ipn.6 armour planning', () => {
     )
     assert.deepEqual([p.state, p.key], ['want', 'want-ore'])
   })
-  it('liveCounts armour reads worn plus packed', () => {
+  it('liveCounts splits pack and worn armour (revmux 01 core-1/body-1)', () => {
     const bot = mockBot({
       items: [...TOOLS, { name: 'iron_leggings', count: 1 }],
       slots: wornSet(['iron_helmet', 'iron_chestplate']),
     })
     const c = gear.liveCounts(bot, { home: home() })
-    assert.equal(c.iron_helmet, 1)
-    assert.equal(c.iron_chestplate, 1)
+    assert.equal(c.iron_helmet, 0, 'pack only under the item name')
     assert.equal(c.iron_leggings, 1)
-    assert.equal(c.iron_boots, 0)
+    assert.equal(c.worn_iron_helmet, 1, 'worn rides beside the pack')
+    assert.equal(c.worn_iron_chestplate, 1)
+    assert.equal(c.worn_iron_leggings, 0)
   })
   it('menuPlan maps armour facts and reads done only on the full set', () => {
     const facts = {
       ironPick: 1, waterBucket: 2, diamondPick: 1, ingots: 8, tablePlaced: true,
-      ironHelmet: 1, ironChestplate: 0, ironLeggings: 0, ironBoots: 0,
+      ironHelmet: 0, wornIronHelmet: 1,
     }
     const ctx = { gearGiven: { ...TOOLS_GIVEN } }
     assert.equal(gear.menuPlan(facts, ctx).state, 'ready')
+    // Worn-only completion reads done: the self branch adds worn.
     const full = {
       ...facts,
-      ironChestplate: 1, ironLeggings: 1, ironBoots: 1,
-      diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
+      wornIronChestplate: 1, wornIronLeggings: 1, wornIronBoots: 1,
+      wornDiamondHelmet: 1, wornDiamondChestplate: 1, wornDiamondLeggings: 1, wornDiamondBoots: 1,
     }
     const fullCtx = {
       gearGiven: {
@@ -253,6 +255,31 @@ describe('ipn.6 armour planning', () => {
       },
     }
     assert.equal(gear.menuPlan(full, fullCtx).state, 'done')
+  })
+  it('a tossed spare with the self twin worn never reads hand (core-1/body-1)', () => {
+    // The deadlock: worn-inclusive counts held the tossed spare in 'hand',
+    // gear went infeasible, the tick never reconciled, the ladder froze.
+    // Routed through goalFacts like prod: pre-fix facts inflated the pack
+    // count with the worn twin and the menu read 'hand' forever.
+    const goal = require('../src/goal')
+    const bot = mockBot({ items: [...TOOLS], slots: wornSet(['iron_helmet']) })
+    const ctx = {
+      home: { built: true },
+      gearGiven: { ...TOOLS_GIVEN },
+      gear: { made: { iron_helmet: true } }, gearFinished: { iron_helmet: 1 },
+      haul: { iron_helmet: 0 }, // tossed to the online owner
+    }
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.ironHelmet, 0, 'pack only, the worn twin excluded')
+    assert.equal(facts.wornIronHelmet, 1)
+    const p = gear.menuPlan(facts, ctx)
+    assert.notEqual(p.state, 'hand', 'tossed spare must not hold handover')
+    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), true, 'gear runs and reconciles')
+    // And the tick settles the ledger: given lands, the ladder advances.
+    const tctx = { ...ctx, home: home(), stepStatus: 'running' }
+    gear(bot, tctx)
+    assert.equal(tctx.gearGiven.iron_helmet, 1, 'reconcile marks the toss handed')
+    assert.equal(gear.deriveNext(bot, tctx).name, 'iron_chestplate')
   })
 })
 
@@ -353,6 +380,53 @@ describe('ipn.6 wear at the forge', () => {
     assert.equal(bot.inventory.slots[6].name, 'iron_chestplate')
     assert.equal(bot.inventory.slots[5].name, 'iron_helmet')
   })
+  it('a lag-rejected equip retries until worn (core-2)', async () => {
+    const slots = new Array(46).fill(null)
+    let tries = 0
+    const bot = mockBot({
+      items: [...TOOLS, { name: 'iron_ingot', count: 5 }],
+      ids: { iron_helmet: 31 },
+      recipes: { iron_helmet: { provides: 'iron_helmet' } },
+      cells: { '0,64,0': 'crafting_table' },
+      slots,
+      equipImpl: async (item, dest) => {
+        tries += 1
+        if (tries < 3) throw new Error('window lag')
+        const i = bot._items.findIndex((e) => e && e.name === item.name)
+        if (i >= 0) bot._items.splice(i, 1)
+        slots[5] = { name: item.name }
+      },
+    })
+    const ctx = { home: home(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN } }
+    gear(bot, ctx)
+    await tick(2600) // craft settle + 3 wear settles
+    assert.equal(tries, 3)
+    assert.equal(slots[5].name, 'iron_helmet')
+    assert.equal(ctx.gearInFlight, false)
+  })
+  it('a persistently failing equip strands loudly, never hangs (core-2)', async () => {
+    const errs = []
+    const orig = console.error
+    console.error = (...a) => { errs.push(a.join(' ')) }
+    try {
+      const bot = mockBot({
+        items: [...TOOLS, { name: 'iron_ingot', count: 5 }],
+        ids: { iron_helmet: 31 },
+        recipes: { iron_helmet: { provides: 'iron_helmet' } },
+        cells: { '0,64,0': 'crafting_table' },
+        slots: new Array(46).fill(null),
+        equipImpl: async () => { throw new Error('slot jammed') },
+      })
+      const ctx = { home: home(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN } }
+      gear(bot, ctx)
+      await tick(2600)
+      assert.equal(ctx.gearInFlight, false)
+      assert.ok(bot._items.some((i) => i.name === 'iron_helmet'), 'stranded in the pack')
+      assert.ok(errs.some((l) => l.includes('gear wear failed item=iron_helmet')), 'logged, not silent')
+    } finally {
+      console.error = orig
+    }
+  })
 })
 
 describe('ipn.6 pantry planning', () => {
@@ -435,8 +509,14 @@ describe('ipn.6 pantry tick', () => {
     assert.equal(ctx.gearInFlight, true, 'withdraw holds the window')
     await tick(300)
     assert.equal(ctx.gearInFlight, false)
-    assert.equal(ctx.gear.pantrySeen, 1)
+    assert.equal(ctx.gear.pantrySeen, undefined, 'full draw keeps the batch open (body-2)')
     assert.equal(stacks[0].count, 3, 'drew 5 of 8, the shortfall exactly')
+    // The next mat-short rung draws from the same batch, no new bank.
+    const p2 = gear.planFor({
+      ironOre: 0, ingots: 0, diamonds: 0, sticks: 0, planks: 0, logs: 0,
+      iron_pickaxe: 1, water_bucket: 2, iron_helmet: 1,
+    }, ctx, {})
+    assert.deepEqual([p2.state, p2.action], ['ready', 'withdraw'])
     // Re-plan on stock: the helmet crafts at the table.
     ctx.stepStatus = 'running'
     gear(bot, ctx)
@@ -461,6 +541,17 @@ describe('ipn.6 pantry tick', () => {
     assert.equal(counts.ironOre, 3)
     const p = gear.planFor(counts, ctx, { furnace: true })
     assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
+  })
+  it('a short draw latches: the chest ran dry (body-2)', async () => {
+    // Ingots run out mid-draw (2 of 5, no ore): got < requested latches,
+    // the rung stays short and yields want-ore on re-plan.
+    const stacks = chestOf([['iron_ingot', 2]])
+    const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: stacks })
+    const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1 }
+    gear(bot, ctx)
+    await tick(300)
+    assert.equal(ctx.gear.pantrySeen, 1)
+    assert.equal(stacks[0].count, 0)
   })
   it('empty chest latches and yields want-ore exactly once', async () => {
     const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: chestOf([]) })
@@ -487,6 +578,21 @@ describe('ipn.6 pantry tick', () => {
     assert.equal(stacks[0].count, 8, 'no window before arrival')
     assert.equal(ctx.stepStatus, 'running')
   })
+  it('an unreachable chest latches on give-up, then degrades to want (body-3)', () => {
+    const stacks = chestOf([['iron_ingot', 8]])
+    const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: stacks, at: pos(30, 64, 30) })
+    const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1, gearRun: { walkTicks: 20 } }
+    gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:gear-chest-far')
+    assert.equal(ctx.gear.pantrySeen, 1, 'give-up latches the pantry')
+    assert.equal(stacks[0].count, 8, 'no window on a failed walk')
+    // Next pick degrades to the fetchers instead of re-walking.
+    const p = gear.planFor({
+      ironOre: 0, ingots: 0, diamonds: 0, sticks: 0, planks: 0, logs: 0,
+      iron_pickaxe: 1, water_bucket: 2,
+    }, ctx, {})
+    assert.deepEqual([p.state, p.key], ['want', 'want-ore'])
+  })
   it('diamond shortfall draws exact from the chest', async () => {
     const stacks = chestOf([['diamond', 6]])
     const bot = mockBot({
@@ -504,7 +610,7 @@ describe('ipn.6 pantry tick', () => {
     gear(bot, ctx)
     await tick(300)
     assert.equal(stacks[0].count, 4, 'drew 2 of 6, the shortfall exactly')
-    assert.equal(ctx.gear.pantrySeen, 2)
+    assert.equal(ctx.gear.pantrySeen, undefined, 'exact draw stays fresh for the next rung')
   })
 })
 
@@ -628,16 +734,17 @@ describe('ipn.6 armour handover', () => {
 
 describe('ipn.6 goal facts', () => {
   const goal = require('../src/goal')
-  it('goalFacts carries armour counts, worn plus packed', () => {
+  it('goalFacts splits pack and worn armour (core-1/body-1)', () => {
     const bot = mockBot({
       items: [...TOOLS, { name: 'iron_leggings', count: 1 }],
       slots: wornSet(['iron_helmet', 'iron_chestplate']),
     })
     const facts = goal.goalFacts(bot, { home: { built: true } })
-    assert.equal(facts.ironHelmet, 1)
-    assert.equal(facts.ironChestplate, 1)
+    assert.equal(facts.ironHelmet, 0, 'pack only')
     assert.equal(facts.ironLeggings, 1)
-    assert.equal(facts.ironBoots, 0)
+    assert.equal(facts.wornIronHelmet, 1, 'worn beside the pack')
+    assert.equal(facts.wornIronChestplate, 1)
+    assert.equal(facts.wornIronLeggings, 0)
     assert.equal(facts.diamondHelmet, 0)
   })
   it('facts.gear reads done on the full worn set, ready without it', () => {
