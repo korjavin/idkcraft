@@ -100,6 +100,15 @@ describe('goalFacts', () => {
     assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done')
     assert.equal(goalText({ time: 'night', logs: 14, planks: 102, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
     assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
+    // Version-aware plank bucket (revmux body-2): a v1-sized kit reads
+    // 'enough' on a v1 home (so laya still matches build there) and 'few'
+    // on a v2 home or none.
+    const v1line = { time: 'day', logs: 0, planks: 50, table: 1, door: 1, home: 'site', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }
+    const v1home = { site: pos(6, 64, 0), v: 1 }
+    const v2home = siteFor(goalBot(), pos(0, 64, 0))
+    assert.ok(goalText(v1line, v1home).includes('planks=enough'), 'v1 budget met reads enough')
+    assert.ok(goalText(v1line, v2home).includes('planks=few'), 'same kit reads few on v2')
+    assert.ok(goalText(v1line).includes('planks=few'), 'no home defaults to the v2 budget')
   })
 })
 

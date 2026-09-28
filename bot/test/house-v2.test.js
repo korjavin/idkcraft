@@ -172,6 +172,62 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
     assert.equal(build.nextCellIdx(bot, home, []), BLUEPRINT_V2.findIndex((c) => c.kind === 'planks' && c.dy === 1))
   })
 
+  it('one missing front column still adopts v2 (revmux core-1)', () => {
+    // A refused corner plus its no-ref upper (the lay-order cascade) must
+    // not flip the version: either front column plus either back suffices.
+    for (const cx of [0, 6]) {
+      const world = makeWorld()
+      const site = { x: 10, y: 64, z: 10 }
+      paintPlan(world, site, BLUEPRINT_V2)
+      world.set(site.x + cx, site.y, site.z, 'air')
+      world.set(site.x + cx, site.y + 1, site.z, 'air')
+      const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+      const home = goal.adoptHome(bot)
+      assert.ok(home, `adopted with front-${cx === 0 ? 'west' : 'east'} empty`)
+      assert.equal(home.v, 2)
+      assert.deepEqual(home.site, site)
+    }
+  })
+
+  it('one terrain-filled front column still adopts v2 (revmux body-1)', () => {
+    // Slope fallback: the corner holds terrain, not planks.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    world.set(site.x + 6, site.y, site.z, 'dirt')
+    world.set(site.x + 6, site.y + 1, site.z, 'dirt')
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+  })
+
+  it('one missing back column still adopts v2', () => {
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    world.set(site.x + 0, site.y, site.z + 5, 'air')
+    world.set(site.x + 0, site.y + 1, site.z + 5, 'air')
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+  })
+
+  it('both front columns empty reads v1 (accepted catastrophic residual)', () => {
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    for (const cx of [0, 6]) {
+      world.set(site.x + cx, site.y, site.z, 'air')
+      world.set(site.x + cx, site.y + 1, site.z, 'air')
+    }
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 1)
+  })
+
   it('dark probe cells abort the adopt instead of misreading the version', () => {
     // A v2 house read as v1 would aim the door phases at a wall: when the
     // corner columns are unreadable (null blockAt, dark chunk) adoptHome

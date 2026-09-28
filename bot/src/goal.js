@@ -359,14 +359,13 @@ function siteFor(bot, around) {
 // home; findBlocks may return the UPPER half, so step down when the block
 // below is also a door. Since jr2.1 the door fits two origins —
 // door − (3,0,0) for a v2 house, door − (1,0,0) for a v1 hut — told apart
-// by the corner columns: a v2 house stands 7 wide, so both front corners
-// (either wall level: a skipped ground cell still carries its upper ring)
-// plus one back corner read planks. A lone v1 hut reads air there. An
+// by the corner columns (see isV2House). A lone v1 hut reads air there. An
 // unreadable probe (dark neighbour chunk) aborts the adopt — the callers
 // wait for chunks and retry — instead of misreading the version: a v2
-// house read as v1 would aim the door phases at a wall. built is lax on
-// purpose — presence (non-air) counts; exact repair is the build step's
-// job.
+// house read as v1 would run the v1 repair plan at the wrong origin (the
+// door itself is shared, but the walls, table cell and spots all shift).
+// built is lax on purpose — presence (non-air) counts; exact repair is
+// the build step's job.
 function adoptHome(bot) {
   try {
     const spawn = bot && bot.spawnPoint
@@ -418,6 +417,16 @@ function adoptHome(bot) {
 
 // True when planks stand at the v2 corner columns around the door at
 // (dx,dy,dz); false for a v1 hut; null when any probe cell is unreadable.
+// Shape: EITHER front corner column plus EITHER back corner column. One
+// column reads planks at either wall level (a skipped ground cell still
+// carries its upper ring — unless the upper skipped as no-ref too, which
+// the single-skip cascade in the lay order does cause). A single missing
+// column must never flip the version: with both fronts required, one
+// refused corner (mob in the cell, terrain jut) plus its no-ref upper
+// would read a v2 house as v1 and run the v1 repair plan at the wrong
+// origin. A lone v1 hut still reads air at all four columns. Accepted
+// residual: a house with a whole side (both fronts or both backs) empty
+// reads v1 — a catastrophic build no corner probe can save.
 function isV2House(bot, dx, dy, dz) {
   try {
     const ox = dx - 3
@@ -440,7 +449,7 @@ function isV2House(bot, dx, dy, dz) {
     const backW = colPlanks(0, 5)
     const backE = colPlanks(6, 5)
     if (frontW == null || frontE == null || backW == null || backE == null) return null
-    return frontW && frontE && (backW || backE)
+    return (frontW || frontE) && (backW || backE)
   } catch (_) {
     return null
   }
@@ -594,8 +603,11 @@ function goalFacts(bot, ctx) {
 function logBucket(n) {
   return n <= 0 ? 'none' : n < NEED_LOGS ? 'few' : 'enough'
 }
-function plankBucket(n) {
-  return n <= 0 ? 'none' : n < NEED_PLANKS ? 'few' : 'enough'
+// The plank bucket keys on the same versioned budget as the gather rule,
+// so the model's 'planks are enough' criterion keeps matching the FSM on
+// adopted v1 huts (revmux body-2). No home reads as a future v2 site.
+function plankBucket(n, home) {
+  return n <= 0 ? 'none' : n < needPlanks(home) ? 'few' : 'enough'
 }
 function unlitBucket(n) {
   return !(n > 0) ? 'none' : n < 5 ? 'few' : 'many'
@@ -604,9 +616,9 @@ function unlitBucket(n) {
 // whole-criterion similarity, so numbers go out, bucket words go in). The
 // decision point fires when a bucket flips — none->few->enough — instead of
 // on every picked-up log.
-function goalText(facts) {
+function goalText(facts, home) {
   const logs = logBucket(facts.logs)
-  const planks = plankBucket(facts.planks)
+  const planks = plankBucket(facts.planks, home)
   const table = facts.table > 0 ? 'yes' : 'no'
   const door = facts.door > 0 ? 'yes' : 'no'
   const health = facts.health < 6 ? 'low' : 'ok'
@@ -703,9 +715,9 @@ function shapeGoalMenu(names, model) {
 // method: stub brain or unit tests), <brain source> (model answered) or
 // fsm-fallback (model consulted and failed). model is the consulted brain
 // source or null when nothing was asked.
-async function chooseStep(brain, facts, feasible) {
+async function chooseStep(brain, facts, feasible, home) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
-  const text = goalText(facts)
+  const text = goalText(facts, home)
   const fsm = goalFsm(facts, names)
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
@@ -883,7 +895,7 @@ function restWhy(facts, bot, ctx, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let text = ''
   try {
-    text = goalText(facts)
+    text = goalText(facts, ctx && ctx.home)
   } catch (_) { /* wording best-effort */ }
   const out = []
   for (const n of STEP_ORDER) {
@@ -940,7 +952,7 @@ async function decide(bot, ctx) {
   // leaves inShelter true with no stay step to clear it, suppressing fight
   // all day (revmux 01-review loop+goal-3).
   if (ctx && facts.time === 'day') ctx.inShelter = false
-  const text = goalText(facts)
+  const text = goalText(facts, ctx && ctx.home)
   const prev = (ctx && ctx.step) || null
   let status = (ctx && ctx.stepStatus) || null
   let finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
@@ -1037,7 +1049,7 @@ async function decide(bot, ctx) {
     })
     const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : 'facts-changed'
     const t0 = Date.now()
-    const choice = await chooseStep(ctx && ctx.brain, facts, names)
+    const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     const ms = Date.now() - t0
     ctx.step = choice.step
     // A fresh equip pick starts with fresh run counters (revmux round-1):
