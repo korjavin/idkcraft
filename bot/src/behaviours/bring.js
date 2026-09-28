@@ -8,6 +8,7 @@ const exploreMod = require('./explore')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
+const woolMod = require('./wool')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -344,27 +345,12 @@ function hasRecipe(bot, resolved) {
   return false
 }
 
-function sheepNearby(bot) {
-  try {
-    const bp = bot && bot.entity && bot.entity.position
-    if (!bp) return false
-    for (const e of Object.values(bot.entities || {})) {
-      if (!e || !e.position || e.isValid === false || e.name !== 'sheep') continue
-      const d = animalDist(bp, e.position)
-      if (typeof d === 'number' && d <= FIND_RADIUS) return true
-    }
-  } catch (_) { return false }
-  return false
-}
-
-// Honest stub refusal for item orders (did.2-4 replace the branches): the
-// kept last tool, a future craft, sheep for wool, or nothing at all.
+// Honest stub refusal for item orders (did.2/did.4 replace the branches):
+// the kept last tool, a future craft, or nothing at all. Wool never
+// reaches it: the mob rung hunts sheep first (refuseItemOrHunt).
 function itemRefusal(bot, name, resolved, keptName) {
   if (keptName) return `my only ${keptName}, can't make another yet`
   if (hasRecipe(bot, resolved)) return `can't make ${name} yet (crafting comes next)`
-  const wool = resolved && Array.isArray(resolved.names) &&
-    resolved.names.some((n) => n === 'wool' || n.endsWith('_wool'))
-  if (wool && sheepNearby(bot)) return 'wool comes from sheep (next)'
   return `can't get ${name}: no recipe, no source`
 }
 
@@ -378,15 +364,31 @@ function animalDist(bp, epos) {
 
 // Nearest passive animal within 48; when drop is set (second+ kill of one
 // order) only animals dropping it, so one order tosses one food kind.
-function findAnimal(bot, drop) {
+// opts (did.3 wool) narrows the hunt: { prey, skipSheared, color,
+// skipIds }. Without opts the food shape is byte-identical (forage.js
+// relies on it). A color filter is strict — it only ever carries an
+// explicitly ordered color, which is a promise (bare families pass none
+// and hunt any sheep).
+function findAnimal(bot, drop, opts) {
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return null
+  const o = opts && typeof opts === 'object' ? opts : null
+  const prey = o && o.prey ? new Set(o.prey) : PREY_NAMES
   let best = null
   let bestDist = Infinity
   for (const e of Object.values(bot.entities || {})) {
     if (!e || !e.position || e.isValid === false) continue
-    if (!PREY_NAMES.has(e.name)) continue
-    if (drop && PREY_DROPS[e.name] !== drop) continue
+    if (!prey.has(e.name)) continue
+    if (!o) {
+      if (drop && PREY_DROPS[e.name] !== drop) continue
+    } else if (e.name === 'sheep') {
+      if (o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
+      if (o.skipSheared || o.color) {
+        const w = woolMod.sheepWool(bot, e)
+        if (o.skipSheared && w.sheared) continue
+        if (o.color && w.color !== o.color) continue
+      }
+    }
     const d = animalDist(bp, e.position)
     if (typeof d !== 'number' || d > FIND_RADIUS) continue
     if (d < bestDist) { bestDist = d; best = e }
@@ -441,7 +443,8 @@ const SEARCH_CRITERIA = {
 }
 
 function searchText(o, s) {
-  const what = (o.kind || 'block') === 'food' ? 'food' : (o.name || 'block')
+  const kind = o.kind || 'block'
+  const what = kind === 'food' ? 'food' : kind === 'wool' ? 'wool' : (o.name || 'block')
   return `search=${what} legs=${s.legs}/${searchLegs()} last=${s.last || 'empty'}`
 }
 
@@ -478,8 +481,18 @@ async function chooseBringSearch(brain, text, legsLeft) {
 // Honest end of a spent search: the legs walked, then what was found.
 function refuseExhausted(bot, ctx, o) {
   const n = o.searchLegs ? o.searchLegs.legs : 0
-  const food = (o.kind || 'block') === 'food'
-  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (food ? 'no animals' : `no ${o.name}`)
+  const kind = o.kind || 'block'
+  const woolNone = o.color ? `no ${o.color} sheep` : 'no sheep'
+  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
+  // A wool hunt that gathered something still hands it over instead of
+  // refusing with a full pack (the short-pack rung promised a top-up, and
+  // the legs proved none is coming).
+  if (kind === 'wool' && o.have > 0 && o.drop) {
+    say(bot, `searched ${n} areas, ${base}`)
+    o.phase = 'return'
+    o.saidWaiting = false
+    return
+  }
   refuse(bot, ctx, `searched ${n} areas, ${base}`)
 }
 
@@ -529,6 +542,12 @@ function canBringName(bot, name) {
 async function enterSearch(bot, ctx, o, legacy) {
   const s = o.searchLegs || (o.searchLegs = { legs: 0, startedAt: Date.now(), announced: false, last: 'empty' })
   if (!exploreMod.anchorOf(bot, ctx)) {
+    if ((o.kind || 'block') === 'wool' && o.have > 0 && o.drop) {
+      say(bot, legacy) // anchorless with stock: hand it over, like the legs path
+      o.phase = 'return'
+      o.saidWaiting = false
+      return
+    }
     refuse(bot, ctx, legacy)
     return
   }
@@ -545,7 +564,10 @@ async function enterSearch(bot, ctx, o, legacy) {
   }
   if (!s.announced) {
     s.announced = true
-    say(bot, (o.kind || 'block') === 'food' ? 'no animals nearby, searching…' : `no ${o.name} nearby, searching…`)
+    const kind = o.kind || 'block'
+    say(bot, kind === 'food' ? 'no animals nearby, searching…'
+      : kind === 'wool' ? (o.color ? `no ${o.color} sheep nearby, searching…` : 'no sheep nearby, searching…')
+      : `no ${o.name} nearby, searching…`)
   }
   o.phase = 'searchwalk'
   ctx.stepStatus = 'running'
@@ -581,20 +603,30 @@ function walkSearch(bot, ctx, o) {
   }
 }
 
+// Shared n7k prey find (food + did.3 wool): wool narrows to unsheared
+// sheep — to the requested color when one was ordered, else any sheep
+// (bare families never narrow: the toss color is picked at pickup).
 async function findFood(bot, ctx, o) {
-  const res = findAnimal(bot, o.drop || null)
+  const wool = (o.kind || 'block') === 'wool'
+  const color = wool ? (o.color || null) : null
+  const res = wool
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds })
+    : findAnimal(bot, o.drop || null)
   if (!res) {
-    await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks')
+    const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
+    await enterSearch(bot, ctx, o, wool ? woolLegacy : (o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks'))
     return
   }
   o.animal = { name: res.name, id: res.id }
   o.pos = res.position
-  o.drop = PREY_DROPS[res.name]
+  if (!wool) o.drop = PREY_DROPS[res.name]
   o.lastPos = { x: res.position.x, y: res.position.y, z: res.position.z }
   fenceFact(bot, res)
   if (!o.announced) {
     o.announced = true
-    say(bot, `going hunting: ${res.name} ${res.distance} blocks away`)
+    say(bot, wool
+      ? `going for wool: sheep ${res.distance} blocks away (${woolMod.hasShears(bot) ? 'shears' : 'no shears, hunting'})`
+      : `going hunting: ${res.name} ${res.distance} blocks away`)
   }
   o.phase = 'walk'
   o.stalls = 0
@@ -635,6 +667,35 @@ function killFood(bot, ctx, o, bp) {
   o.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
   const d = animalDist(bp, ent.position)
   if (d === null || d > fightMod.SWING_RANGE) { o.phase = 'walk'; return }
+  // Wool with shears in hand shears instead of killing (owner rule): one
+  // equip + useOn, then collect — the sheep lives and is skipped next
+  // time (o.shearedIds + the sheared metadata flag). No shears, or an
+  // unequippable mock bot, falls through to the swing below.
+  if ((o.kind || 'block') === 'wool') {
+    const sh = woolMod.shearsInPack(bot)
+    if (sh && typeof bot.equip === 'function' && typeof bot.useOn === 'function') {
+      if (o.shearInFlight) return // exactly one window op at a time (dig rule)
+      o.shearInFlight = true
+      void (async () => {
+        try {
+          await bot.equip(sh, 'hand')
+          if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-equip
+          const still = o.animal ? entityById(bot, o.animal.id) : null
+          if (still) {
+            try { bot.lookAt(still.position.offset(0, still.height * 0.8, 0), true) } catch (_) { /* aim best-effort */ }
+            try { bot.useOn(still) } catch (_) { /* server decides */ }
+            if (!o.shearedIds) o.shearedIds = new Set()
+            o.shearedIds.add(still.id)
+          }
+          o.dropPos = o.lastPos
+          o.phase = 'pickup'
+        } catch (_) { /* equip failed: retry next tick (or swing when the shears are gone) */ } finally {
+          o.shearInFlight = false
+        }
+      })()
+      return
+    }
+  }
   if (o.armedId !== ent.id) {
     o.armedId = ent.id
     try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
@@ -663,7 +724,13 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     }
     return
   }
-  // Walked over the drops: the inventory count is the truth.
+  // Walked over the drops: the inventory count is the truth. Wool with
+  // no ordered color tosses the best color in the pack (re-derived each
+  // pickup, so a gray first sheep never locks out white ones later).
+  if ((o.kind || 'block') === 'wool' && !o.color) {
+    const t = woolMod.topWoolColor(bot)
+    if (t) o.drop = t.name
+  }
   o.have = countDrop(bot, o.drop)
   if (o.have >= o.want) {
     o.phase = 'return'
@@ -672,6 +739,55 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     o.animal = null
     o.phase = 'find'
   }
+}
+
+// Wool orders (idkcraft-did.3) ride the shared n7k prey phases above —
+// find, walk, kill (shear when shears are held, else swing), pickup —
+// plus the same search legs. Only the return leg falls through to the
+// shared single-drop toss in bring(). No chest rung yet: step-2 wiring
+// (after did.1 merges) moves order creation into the item ladder; the
+// phases stay shared.
+async function gatherWool(bot, ctx, o, bp, grounded) {
+  if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
+  if (o.phase === 'find') { await findFood(bot, ctx, o); return }
+  if (o.phase === 'walk') { walkFood(bot, ctx, o, bp, grounded); return }
+  if (o.phase === 'kill') { killFood(bot, ctx, o, bp); return }
+  if (o.phase === 'pickup') { pickupFood(bot, ctx, o, bp, grounded); return }
+}
+
+// Mob rung (did.3): wool the pack and chest could not fill comes from
+// sheep. Morphs an item order into a wool hunt in place — the shared prey
+// phases + search legs take it from here. A single-name family locks the
+// color; a bare family tosses the best color in the pack (re-derived each
+// pickup). Partial pack/chest stock counts toward the want (recounted
+// against the concrete drop, the toss truth).
+function toWoolHunt(bot, o) {
+  const names = o.names || []
+  const color = names.length === 1 ? woolMod.dropColor(names[0]) : null
+  o.kind = 'wool'
+  if (!o.color) o.color = color
+  if (!o.drop) {
+    if (o.color) o.drop = `${o.color}_wool`
+    else {
+      const t = woolMod.topWoolColor(bot)
+      if (t) o.drop = t.name
+    }
+  }
+  o.have = o.drop ? countDrop(bot, o.drop) : 0
+  o.phase = 'find'
+  o.announced = false
+  o.animal = null
+  return o
+}
+
+// Item rung exhaustion: wool falls through to the sheep hunt; anything
+// else refuses with the item reason.
+function refuseItemOrHunt(bot, ctx, o) {
+  if (woolMod.isWoolFamily(o)) {
+    toWoolHunt(bot, o)
+    return
+  }
+  refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
 }
 
 // Fetch-first from the home chest (atl.14 phase 2): an order that opens
@@ -692,8 +808,8 @@ function chestFetch(bot, ctx, o, bp) {
   const item = (o.kind || 'block') === 'item'
   if (!c) {
     o.chestTried = true
-    if (item) { // adopted chest lost mid-order: no world fallback for items
-      refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+    if (item) { // adopted chest lost mid-order: wool hunts, the rest refuses
+      refuseItemOrHunt(bot, ctx, o)
       return
     }
     o.phase = 'find'
@@ -787,7 +903,7 @@ function chestFetch(bot, ctx, o, bp) {
       o.chestTried = true
       if (item) {
         if (!ctx || ctx.bring !== o) return
-        refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+        refuseItemOrHunt(bot, ctx, o)
       } else o.phase = 'find'
     }
   })()
@@ -813,6 +929,8 @@ async function fetchItem(bot, ctx, o) {
     if (plan.have >= o.want) {
       o.phase = 'return'
       o.saidWaiting = false
+    } else if (woolMod.isWoolFamily(o)) {
+      toWoolHunt(bot, o) // short or empty chest: the mob rung hunts the rest
     } else if (plan.have > 0) {
       say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
       o.phase = 'return'
@@ -824,7 +942,7 @@ async function fetchItem(bot, ctx, o) {
     o.chestInFlight = false
     o.chestTried = true
     if (!ctx || ctx.bring !== o) return
-    refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+    refuseItemOrHunt(bot, ctx, o)
   }
 }
 
@@ -836,14 +954,21 @@ async function bring(bot, ctx, target, state) {
   const grounded = !bot.entity || bot.entity.onGround !== false
   const food = (o.kind || 'block') === 'food'
 
+  // Wool hunts through the shared prey phases; 'return' falls through to
+  // the shared single-drop toss below (o.drop is concrete by then).
+  if ((o.kind || 'block') === 'wool' && o.phase !== 'return') {
+    await gatherWool(bot, ctx, o, bp, grounded)
+    return
+  }
+
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
 
   if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return }
 
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
-    if ((o.kind || 'block') === 'item') { // no diggable world form: the item reason, never 'unknown block'
-      refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+    if ((o.kind || 'block') === 'item') { // no diggable world form: wool hunts, else the item reason
+      refuseItemOrHunt(bot, ctx, o)
       return
     }
     if (o.searchSkipFar) { // pending far search just came up empty: skip the re-scan
@@ -1222,3 +1347,4 @@ module.exports.openPhase = openPhase
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
+module.exports.toWoolHunt = toWoolHunt

@@ -62,18 +62,45 @@ const LIGHT_SPOTS = [
   { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } },
 ]
 
+// v2 house (jr2.1): door-front first, a ring around the 7x6 shell, the roof
+// (staged from the door-front ground, 3.6 in place reach), then one common
+// room torch through the doorway (2.8 in reach — it lights the bedrooms
+// through the partition openings, level 8+ at the far bed cells).
+const LIGHT_SPOTS_V2 = [
+  { dx: 3, dz: -2 },
+  { dx: -2, dz: -2 }, { dx: 8, dz: -2 },
+  { dx: -2, dz: 1 }, { dx: 8, dz: 1 },
+  { dx: -2, dz: 4 }, { dx: 8, dz: 4 },
+  { dx: 3, dz: 7 },
+  { dx: 3, dy: 3, dz: 1, stage: { dx: 3, dz: -1 } },
+  { dx: 1, dz: 1, stage: { dx: 3, dz: -1 } },
+]
+
+// Spot plan by home version: v2 homes light the 7x6 ring, anything else
+// (v1, or a home that predates the version mark) the frozen 4x4 ring.
+function spotsFor(home) {
+  return home && home.v === 2 ? LIGHT_SPOTS_V2 : LIGHT_SPOTS
+}
+
 function spotAbs(home, spot) {
   return new Vec3(home.site.x + spot.dx, home.site.y + (spot.dy || 0), home.site.z + spot.dz)
 }
 
-// A spot the plan must never take: the workbench cell, the stockpile
-// chest cell (atl.14 ctx.home.chest contract), or the doorway walk
-// column gohome/stay legs step through.
+// A spot the plan must never take: a station cell (the workbench, the
+// stockpile chest — atl.14 ctx.home.chest contract — or the furnace), or
+// the doorway walk column gohome/stay legs step through (plus the v2 door
+// path cells behind it).
 function spotSkipped(home, spot) {
-  for (const key of ['table', 'chest']) {
+  for (const key of ['table', 'chest', 'furnace']) {
     const c = home && home[key]
     if (c && typeof c.x === 'number' && typeof c.z === 'number' &&
       Math.floor(c.x) === home.site.x + spot.dx && Math.floor(c.z) === home.site.z + spot.dz) return true
+  }
+  if (home && home.v === 2) {
+    // Ground cells only: the roof spot hangs above the door path (dz 1)
+    // but at dy 3, far above the legs.
+    if ((spot.dy || 0) <= 1 && spot.dx === 3 && (spot.dz === 0 || spot.dz === -1 || spot.dz === 1 || spot.dz === 2)) return true
+    return false
   }
   if (spot.dx === 1 && (spot.dz === 0 || spot.dz === -1)) return true
   return false
@@ -99,11 +126,12 @@ function spotLit(bot, home, spot) {
 function countUnlit(bot, home, skipped) {
   if (!home || !home.site) return 0
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
+  const spots = spotsFor(home)
   let n = 0
-  for (let i = 0; i < LIGHT_SPOTS.length; i++) {
-    if (skip.has(i) || spotSkipped(home, LIGHT_SPOTS[i])) continue
+  for (let i = 0; i < spots.length; i++) {
+    if (skip.has(i) || spotSkipped(home, spots[i])) continue
     try {
-      if (!spotLit(bot, home, LIGHT_SPOTS[i])) n++
+      if (!spotLit(bot, home, spots[i])) n++
     } catch (_) {
       n++ // unscannable reads as dark: the place flow skips what it cannot take
     }
@@ -113,10 +141,11 @@ function countUnlit(bot, home, skipped) {
 
 function nextSpotIdx(bot, home, skipped) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
-  for (let i = 0; i < LIGHT_SPOTS.length; i++) {
-    if (skip.has(i) || spotSkipped(home, LIGHT_SPOTS[i])) continue
+  const spots = spotsFor(home)
+  for (let i = 0; i < spots.length; i++) {
+    if (skip.has(i) || spotSkipped(home, spots[i])) continue
     try {
-      if (!spotLit(bot, home, LIGHT_SPOTS[i])) return i
+      if (!spotLit(bot, home, spots[i])) return i
     } catch (_) {
       return i
     }
@@ -235,7 +264,7 @@ function skipSpot(bot, home, ctx, idx, p, why) {
 // One torch placement, build.js place shape: (re)approach the spot, then
 // place from reach with the shared placeInFlight flight.
 function placeTick(bot, ctx, home, idx) {
-  const spot = LIGHT_SPOTS[idx]
+  const spot = spotsFor(home)[idx]
   const p = spotAbs(home, spot)
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
@@ -440,6 +469,9 @@ function light(bot, ctx) {
 module.exports = light
 module.exports.COAL_RESERVE = COAL_RESERVE
 module.exports.LIGHT_SPOTS = LIGHT_SPOTS
+module.exports.LIGHT_SPOTS_V2 = LIGHT_SPOTS_V2
+module.exports.spotsFor = spotsFor
+module.exports.spotSkipped = spotSkipped
 module.exports.countUnlit = countUnlit
 module.exports.nextSpotIdx = nextSpotIdx
 module.exports.spotLit = spotLit

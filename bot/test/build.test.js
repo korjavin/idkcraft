@@ -10,7 +10,7 @@ const { createTicker, handleChat } = require('../src/index')
 const goal = require('../src/goal')
 const build = require('../src/behaviours/build')
 const craft = require('../src/behaviours/craft')
-const { BLUEPRINT, PLANK_COUNT } = build
+const { BLUEPRINT, BLUEPRINT_V2, PLANK_COUNT, PLANK_COUNT_V2 } = build
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -73,9 +73,10 @@ function mockBot(world, { items = [], spawn = pos(0, 64, 0), doors = [], failPla
 }
 
 // Paint a whole correct house for `home` into the world (plan cells only;
-// the server-side door upper half is set explicitly where needed).
+// the server-side door upper half is set explicitly where needed). The plan
+// follows the home version: bare {site} homes (adopt tests) paint v1.
 function paintHouse(world, home) {
-  for (const cell of BLUEPRINT) {
+  for (const cell of build.blueprintFor(home)) {
     const name = cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks'
     world.set(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz, name)
   }
@@ -135,15 +136,37 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.equal(roof.length, 16)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
   })
+  it('v2 lays 94 cells: table, 21+door+21, 42 roof, 8 partition', () => {
+    assert.equal(BLUEPRINT_V2.length, 94)
+    assert.equal(PLANK_COUNT_V2, 92)
+    assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
+    const doorIdx = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
+    assert.deepEqual(BLUEPRINT_V2[doorIdx], { dx: 3, dy: 0, dz: 0, kind: 'door' })
+    const lower = BLUEPRINT_V2.slice(1, doorIdx)
+    assert.equal(lower.length, 21)
+    assert.ok(lower.every((c) => c.kind === 'planks' && c.dy === 0))
+    const upper = BLUEPRINT_V2.slice(doorIdx + 1, doorIdx + 22)
+    assert.equal(upper.length, 21)
+    assert.ok(upper.every((c) => c.kind === 'planks' && c.dy === 1))
+    const roof = BLUEPRINT_V2.slice(doorIdx + 22, doorIdx + 64)
+    assert.equal(roof.length, 42)
+    assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
+    const part = BLUEPRINT_V2.slice(doorIdx + 64)
+    assert.equal(part.length, 8)
+    assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]).sort((a, b) => a[0] - b[0] || a[2] - b[2] || a[1] - b[1]), [
+      [1, 0, 3], [1, 1, 3], [3, 0, 3], [3, 1, 3], [3, 0, 4], [3, 1, 4], [5, 0, 3], [5, 1, 3],
+    ])
+  })
 })
 
 describe('rw4.4 (c) site pick and facts none->site', () => {
-  it('takes the first flat 4x4 at radius 6', () => {
+  it('takes the first flat 7x6 at radius 6', () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const home = goal.siteFor(bot, pos(0, 64, 0))
     assert.deepEqual(home.site, { x: 6, y: 64, z: 0 })
-    assert.deepEqual(home.door, { x: 7, y: 64, z: 0 })
+    assert.deepEqual(home.door, { x: 9, y: 64, z: 0 })
+    assert.equal(home.v, 2)
     assert.equal(home.table, null) // claimed only once the workbench stands (rw4.3 station contract)
     assert.equal(home.built, false)
     assert.equal(goal.goalFacts(bot, {}).home, 'none')
@@ -224,10 +247,10 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
       { name: 'oak_door', count: 1 },
     ]
     const bot = mockBot(world, { items })
-    bot.entity.position = pos(10, 64, 2) // next to the table cell (placements are in-reach only)
+    bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 0/40'))
+    assert.ok(bot.chats.some((m) => m === 'building 0/94'))
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)
@@ -236,11 +259,11 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     assert.equal(bot.calls.places.length, 1)
     const [refBlock] = bot.calls.places[0]
     assert.ok(refBlock && refBlock.position, 'placeBlock gets a real block, not a Vec3')
-    assert.equal(world.get(10, 64, 1), 'crafting_table') // table at (4,0,1)+origin
+    assert.equal(world.get(11, 64, 1), 'crafting_table') // table at (5,0,1)+origin
     assert.equal(ctx.placeInFlight, false)
     paintHouse(world, ctx.home) // the rest goes up (e.g. between restarts)
     build(bot, ctx, null, null) // tick 3: nothing left -> done
-    assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, { x: 10, y: 64, z: 1 }) // table claimed on placement
+    assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, { x: 11, y: 64, z: 1 }) // table claimed on placement
     assert.equal(ctx.home.built, true)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.chats.some((m) => m === 'home done at 6 64 0'))
@@ -266,11 +289,11 @@ describe('rw4.4 roof above the door avoids the door reference', () => {
   it('places against the side roof neighbour (doors toggle on right-click)', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
-    bot.entity.position = pos(7, 67, 1) // next to the cell
+    bot.entity.position = pos(9, 67, 1) // next to the cell
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
     paintHouse(world, ctx.home)
-    world.set(7, 66, 0, 'air') // only the roof-above-door cell is missing
-    world.set(7, 65, 0, 'oak_door') // the placed door upper half (server-side)
+    world.set(9, 66, 0, 'air') // only the roof-above-door cell is missing
+    world.set(9, 65, 0, 'oak_door') // the placed door upper half (server-side)
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // place
     await settle()
@@ -278,7 +301,7 @@ describe('rw4.4 roof above the door avoids the door reference', () => {
     const [refBlock] = bot.calls.places[0]
     assert.deepEqual(
       { x: refBlock.position.x, y: refBlock.position.y, z: refBlock.position.z },
-      { x: 8, y: 66, z: 0 }, // east roof neighbour, not the door below
+      { x: 10, y: 66, z: 0 }, // east roof neighbour, not the door below
     )
   })
 })
@@ -306,7 +329,7 @@ describe('rw4.4 (g) three refusals skip the cell with one log line', () => {
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
     bot.entity.position = pos(6, 64, 1) // next to the first ring cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
-    world.set(10, 64, 1, 'crafting_table') // table done: first target is a wall plank
+    world.set(11, 64, 1, 'crafting_table') // table done: first target is a wall plank
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // flight 1: 1 refusal
     await settle()
@@ -362,7 +385,7 @@ describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
       planted.push(world.get(6, 64, 0))
     }
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
-    world.set(10, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    world.set(11, 64, 1, 'crafting_table') // table already stands: the ring cell is next
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // refuse -> dig -> retry lands
     await settle()
@@ -377,7 +400,7 @@ describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
     bot.entity.position = pos(6, 64, 1)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
-    world.set(10, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    world.set(11, 64, 1, 'crafting_table') // table already stands: the ring cell is next
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // refuse -> protected, no dig
     await settle()
@@ -409,13 +432,16 @@ describe('rw4.4 no solid neighbour skips instead of looping', () => {
 
   it('three no-ref ticks skip the cell with one log line', () => {
     const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
     // air pocket around the table cell: below, sides and top are all air
-    for (const [x, y, z] of [[10, 63, 1], [9, 64, 1], [11, 64, 1], [10, 64, 0], [10, 64, 2], [10, 65, 1]]) {
+    // (dug after siting: the pocket column sits inside the 7x6 footprint
+    // and would sink the site by a block)
+    const t = { x: ctx.home.site.x + 5, y: ctx.home.site.y, z: ctx.home.site.z + 1 }
+    for (const [x, y, z] of [[t.x, t.y - 1, t.z], [t.x - 1, t.y, t.z], [t.x + 1, t.y, t.z], [t.x, t.y, t.z - 1], [t.x, t.y, t.z + 1], [t.x, t.y + 1, t.z]]) {
       world.set(x, y, z, 'air')
     }
-    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
-    bot.entity.position = pos(10, 64, 2) // next to the cell (in reach, but nothing to build against)
-    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    bot.entity.position = pos(t.x, t.y, t.z + 1) // next to the cell (in reach, but nothing to build against)
     for (let i = 0; i < 8; i++) build(bot, ctx, null, null)
     assert.equal(ctx.buildSkip.length, 1)
     const norefs = lines.filter((l) => l.startsWith('build skip') && l.includes('no-ref'))
@@ -558,7 +584,7 @@ describe('8si the approach must not eat the door or the workbench', () => {
     bot.registry = { blocksByName: REG }
     bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
     const home = goal.siteFor(bot, pos(0, 64, 0))
-    bot.entity.position = pos(home.site.x + 4, home.site.y, home.site.z + 1)
+    bot.entity.position = pos(home.site.x + 5, home.site.y, home.site.z + 1)
     const transit = { n: 0 }
     bot._moving = false
     bot.pathfinder.isMoving = () => bot._moving
@@ -577,8 +603,8 @@ describe('8si the approach must not eat the door or the workbench', () => {
     build(bot, ctx, null, null)
     const mov = bot.pathfinder.movements
     const st = home.site
-    assert.ok(breakVetoed(mov, 'oak_door', 64, st.x + 1, st.y, st.z), 'door cell protected')
-    assert.ok(breakVetoed(mov, 'crafting_table', 998, st.x + 4, st.y, st.z + 1), 'workbench cell protected')
+    assert.ok(breakVetoed(mov, 'oak_door', 64, st.x + 3, st.y, st.z), 'door cell protected')
+    assert.ok(breakVetoed(mov, 'crafting_table', 998, st.x + 5, st.y, st.z + 1), 'workbench cell protected')
     assert.ok(breakVetoed(mov, 'oak_planks', 5, st.x, st.y, st.z), 'wall cell protected')
     assert.ok(!breakVetoed(mov, 'oak_planks', 5, st.x + 40, st.y, st.z), 'stray planks diggable')
     assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt inside the box diggable')
@@ -586,7 +612,7 @@ describe('8si the approach must not eat the door or the workbench', () => {
 
   it('full drive: door stands, doorway and interior stay plank-free, adopt stable', async () => {
     const { world, bot, home, ctx, transit } = driveHouse()
-    for (let i = 0; i < 400 && !home.built; i++) {
+    for (let i = 0; i < 900 && !home.built; i++) {
       if (transit.n > 0 && --transit.n === 0) bot._moving = false
       build(bot, ctx, null, null)
       await settle(2)
@@ -594,15 +620,15 @@ describe('8si the approach must not eat the door or the workbench', () => {
     assert.equal(home.built, true, 'house completes')
     assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_door') || n === 'crafting_table'), [], 'door and workbench never dug')
     const s = home.site
-    assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door', 'doorway holds the door')
-    for (const [dx, dz] of [[1, 1], [1, 2], [2, 1], [2, 2]]) {
+    assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'doorway holds the door')
+    for (const [dx, dz] of [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2], [2, 3], [4, 3], [1, 4], [2, 4], [4, 4], [5, 4]]) {
       assert.ok(world.get(s.x + dx, s.y, s.z + dz) !== 'oak_planks', `interior ${dx},${dz} plank-free`)
       assert.ok(world.get(s.x + dx, s.y + 1, s.z + dz) !== 'oak_planks', `interior ${dx},${dz}+1 plank-free`)
     }
     bot.spawnPoint = pos(s.x, s.y, s.z)
     bot.findBlocks = () => {
       const out = []
-      for (const [x, y, z] of [[s.x + 1, s.y, s.z], [s.x + 1, s.y + 1, s.z]]) {
+      for (const [x, y, z] of [[s.x + 3, s.y, s.z], [s.x + 3, s.y + 1, s.z]]) {
         if (String(world.get(x, y, z) || '').endsWith('_door')) out.push(pos(x, y, z))
       }
       return out
@@ -617,6 +643,10 @@ describe('8si the approach must not eat the door or the workbench', () => {
       if (cell.kind !== 'planks') continue
       assert.ok(!build.isDoorwayOrInterior(cell), `planks at ${cell.dx},${cell.dy},${cell.dz}`)
     }
+    for (const cell of BLUEPRINT_V2) {
+      if (cell.kind !== 'planks') continue
+      assert.ok(!build.isDoorwayOrInterior(cell, { v: 2 }), `v2 planks at ${cell.dx},${cell.dy},${cell.dz}`)
+    }
     // Predicate shape, doorway branch included: a killed doorway check must
     // fail here, not slip a future plan edit through.
     assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 0 }), true, 'door lower')
@@ -624,6 +654,15 @@ describe('8si the approach must not eat the door or the workbench', () => {
     assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 1 }), true, 'interior')
     assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 2, dz: 0 }), false, 'roof above the door is legit')
     assert.equal(build.isDoorwayOrInterior({ dx: 0, dy: 0, dz: 0 }), false, 'wall')
+    const v2 = { v: 2 }
+    assert.equal(build.isDoorwayOrInterior({ dx: 3, dy: 0, dz: 0 }, v2), true, 'v2 door lower')
+    assert.equal(build.isDoorwayOrInterior({ dx: 3, dy: 1, dz: 0 }, v2), true, 'v2 door upper')
+    assert.equal(build.isDoorwayOrInterior({ dx: 2, dy: 0, dz: 1 }, v2), true, 'v2 common room')
+    assert.equal(build.isDoorwayOrInterior({ dx: 2, dy: 0, dz: 3 }, v2), true, 'v2 partition opening')
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 4 }, v2), true, 'v2 bedroom')
+    assert.equal(build.isDoorwayOrInterior({ dx: 1, dy: 0, dz: 3 }, v2), false, 'v2 partition post is legit')
+    assert.equal(build.isDoorwayOrInterior({ dx: 3, dy: 0, dz: 4 }, v2), false, 'v2 bedroom divider is legit')
+    assert.equal(build.isDoorwayOrInterior({ dx: 3, dy: 2, dz: 0 }, v2), false, 'v2 roof above the door is legit')
   })
 })
 
@@ -690,7 +729,7 @@ describe('cww roof approach must not demolish its own wall', () => {
     assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt still diggable')
   })
 
-  it('roof completes with walls standing: 24/40 never flaps back', async () => {
+  it('roof completes with walls standing: 52/94 never flaps back', async () => {
     // Prod state (cww): walls+door+table stand, the bot is outside after the
     // wall ring, the first roof cell approach used to eat a wall corner and
     // the rebuild took priority every other tick (23/40<->24/40 for 10+ min).
@@ -699,18 +738,18 @@ describe('cww roof approach must not demolish its own wall', () => {
     bot.registry = { blocksByName: REG }
     bot.pathfinder.movements = { blocksCantBreak: new Set(), exclusionAreasBreak: [] }
     const home = goal.siteFor(bot, pos(0, 64, 0))
-    for (const cell of BLUEPRINT) {
+    for (const cell of BLUEPRINT_V2) {
       if (cell.dy === 2) continue // roof not started
       world.set(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz,
         cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks')
     }
-    bot.entity.position = pos(home.site.x + 4, home.site.y, home.site.z + 1)
+    bot.entity.position = pos(home.site.x + 3, home.site.y, home.site.z + 2)
     const transit = { n: 0 }
     bot._moving = false
     bot.pathfinder.isMoving = () => bot._moving
     bot.pathfinder.setGoal = diggingSetGoal(bot, world, transit)
     const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
-    for (let i = 0; i < 200 && !home.built; i++) {
+    for (let i = 0; i < 500 && !home.built; i++) {
       if (transit.n > 0 && --transit.n === 0) bot._moving = false
       build(bot, ctx, null, null)
       await settle(2)
@@ -746,8 +785,8 @@ describe('cjq guardOwnWalls is blueprint-scoped, not session-global', () => {
     build(bot, ctx, null, null)
     const s = home.site
     assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 1, s.y, s.z), true, 'wall cell guarded')
-    assert.equal(vetoed(bot.pathfinder.movements, 'oak_door', s.x + 1, s.y, s.z), true, 'door cell guarded')
-    assert.equal(vetoed(bot.pathfinder.movements, 'crafting_table', s.x + 4, s.y, s.z + 1), true, 'table cell guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'oak_door', s.x + 3, s.y, s.z), true, 'door cell guarded')
+    assert.equal(vetoed(bot.pathfinder.movements, 'crafting_table', s.x + 5, s.y, s.z + 1), true, 'table cell guarded')
     assert.equal(vetoed(bot.pathfinder.movements, 'oak_planks', s.x + 40, s.y, s.z + 40), false, 'stray planks diggable')
     assert.equal(vetoed(bot.pathfinder.movements, 'dirt', s.x + 1, s.y, s.z), false, 'dirt inside the box diggable')
   })
@@ -772,7 +811,7 @@ describe('cjq guardOwnWalls is blueprint-scoped, not session-global', () => {
 describe('xoj fresh-site menu deadlock: build starts at the table without the door', () => {
   function xojBot(world, items) {
     const bot = mockBot(world, { items })
-    bot.entity.position = pos(10, 64, 2) // next to the table cell at origin+(4,0,1)
+    bot.entity.position = pos(11, 64, 2) // next to the table cell at origin+(5,0,1)
     return bot
   }
 
@@ -801,8 +840,8 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)) }
     paintHouse(world, ctx.home)
     const s = ctx.home.site
-    world.set(s.x + 1, s.y, s.z, 'air') // only the door cell is open
-    ctx.home.table = pos(s.x + 4, s.y, s.z + 1)
+    world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
+    ctx.home.table = pos(s.x + 5, s.y, s.z + 1)
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(facts.door, 0)
     assert.equal(goal.MENU.build.feasible(facts, bot, ctx), false)
@@ -832,7 +871,7 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // place flight
     await settle()
-    assert.equal(world.get(s.x + 4, s.y, s.z + 1), 'crafting_table')
+    assert.equal(world.get(s.x + 5, s.y, s.z + 1), 'crafting_table')
     build(bot, ctx, null, null) // claims home.table, approaches the next cell
     assert.ok(ctx.home.table, 'table claimed once it stands')
 
@@ -849,15 +888,15 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
 
     // 3. with the door in hand build reaches the door cell and lays it.
     paintHouse(world, ctx.home)
-    world.set(s.x + 1, s.y, s.z, 'air') // only the door cell is open
-    bot.entity.position = pos(s.x + 1, s.y, s.z + 1) // next to the doorway
+    world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
+    bot.entity.position = pos(s.x + 3, s.y, s.z + 1) // next to the doorway
     const doorFacts = goal.goalFacts(bot, ctx)
     assert.equal(doorFacts.door, 1)
     assert.equal(goal.MENU.build.feasible(doorFacts, bot, ctx), true)
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // place flight
     await settle()
-    assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door')
+    assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door')
   })
 })
 
@@ -865,20 +904,22 @@ describe('build counting and guard edges (idkcraft-l71)', () => {
   it('countRemainingPlanks: none without a site, zero when laid, skips excluded', () => {
     const world = makeWorld()
     const bot = mockBot(world, {})
-    assert.equal(build.countRemainingPlanks(bot, null, []), PLANK_COUNT)
-    assert.equal(build.countRemainingPlanks(bot, {}, []), PLANK_COUNT)
+    assert.equal(build.countRemainingPlanks(bot, null, []), PLANK_COUNT_V2)
+    assert.equal(build.countRemainingPlanks(bot, {}, []), PLANK_COUNT_V2)
     const home = goal.siteFor(bot, pos(0, 64, 0))
-    assert.equal(build.countRemainingPlanks(bot, home, []), PLANK_COUNT, 'fresh site: every plank missing')
+    assert.equal(build.countRemainingPlanks(bot, home, []), PLANK_COUNT_V2, 'fresh site: every plank missing')
+    const v1home = { site: { x: home.site.x, y: home.site.y, z: home.site.z }, v: 1 }
+    assert.equal(build.countRemainingPlanks(bot, v1home, []), PLANK_COUNT, 'adopted v1 hut: the frozen count')
     const s = home.site
     const plankIdx = []
-    BLUEPRINT.forEach((c, i) => {
+    BLUEPRINT_V2.forEach((c, i) => {
       if (c.kind !== 'planks') return
       plankIdx.push(i)
       world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'oak_planks')
     })
     assert.equal(build.countRemainingPlanks(bot, home, []), 0)
     // One plank missing but skipped: excluded from the count, not blocking.
-    const missing = BLUEPRINT[plankIdx[0]]
+    const missing = BLUEPRINT_V2[plankIdx[0]]
     world.set(s.x + missing.dx, s.y + missing.dy, s.z + missing.dz, 'air')
     assert.equal(build.countRemainingPlanks(bot, home, [plankIdx[0]]), 0)
     assert.equal(build.countRemainingPlanks(bot, home, []), 1)

@@ -105,10 +105,24 @@ function tableFor(bot, ctx) {
   if (ctx.claimedTable && ctx.claimedTable !== st.tablePos) tables.push(ctx.claimedTable)
   let homeTable = null
   let homeBlock = null
+  let claimedDead = false
   for (const t of tables) {
     let block = null
-    try { block = bot.blockAt && bot.blockAt(t) } catch (_) { block = null }
+    let unreadable = false
+    // Vec3-normalised (h9z): claims arrive plain ({x,y,z} from the roadside
+    // write below or an older memory file) and prismarine-world calls
+    // pos.floored() — a raw read throws, the standing table reads as a
+    // ghost, and the next op fails no-table with the item already eaten.
+    // Null/throwing reads are unknown (unloaded chunk), never dead: only a
+    // verified-different block condemns the roadside claim below.
+    try {
+      if (bot.blockAt && t && typeof t.x === 'number') {
+        block = bot.blockAt(new Vec3(t.x, t.y, t.z))
+        if (!block) unreadable = true
+      } else unreadable = true
+    } catch (_) { block = null; unreadable = true }
     if (block && block.name === 'crafting_table') { homeTable = t; homeBlock = block; break }
+    if (!unreadable && t && t === ctx.claimedTable) claimedDead = true
   }
   if (homeTable) {
     if (dist3(bp, homeTable) <= TABLE_REACH) {
@@ -126,12 +140,13 @@ function tableFor(bot, ctx) {
     if (st.walkWaits > 20) return nope('table-unreachable')
     return Promise.resolve(null) // walking: retry on a later tick
   }
-  // No station standing: our claim (if any) lies — retract it so craft
-  // rebuilds from planks instead of deadlocking the kit. ctx.home.table is
-  // never retracted here: an unloaded chunk reads the same as a mined table,
-  // and build owns that claim.
+  // No station standing: retract a verified-dead roadside claim so craft
+  // rebuilds from planks instead of deadlocking the kit. An unreadable one
+  // (null/throwing: unloaded chunk) is kept — retracting it strands the
+  // standing table and litters a new one every episode. ctx.home.table is
+  // never retracted here: build owns that claim.
   try {
-    if (ctx.claimedTable) delete ctx.claimedTable
+    if (claimedDead) delete ctx.claimedTable
   } catch (_) { /* retract best-effort */ }
   const tableItem = itemsOf(bot).find((i) => i && i.name === 'crafting_table')
   if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table')
@@ -177,8 +192,11 @@ function tableFor(bot, ctx) {
     // its blueprint cell only while unset, so a roadside write would shadow
     // the site table forever and the house never finishes (revmux round-1).
     try {
-      st.tablePos = { x: at.x, y: at.y, z: at.z }
-      ctx.claimedTable = { x: at.x, y: at.y, z: at.z }
+      // Vec3, not plain (h9z): every consumer blockAt()s the claim and
+      // prismarine-world calls pos.floored() — a plain claim throws and
+      // reads as no station (craft then rebuilds a second table).
+      st.tablePos = new Vec3(at.x, at.y, at.z)
+      ctx.claimedTable = new Vec3(at.x, at.y, at.z)
     } catch (_) { /* claim best-effort */ }
     return { block, pos: at }
   }

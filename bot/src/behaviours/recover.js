@@ -172,6 +172,30 @@ function scanSides(bot) {
   return { walls, free }
 }
 
+// Pit fact (jsf.3, shared with jsf.2 water_up): at least TWO sides rise two
+// solid blocks (dy 0 AND 1) — hemmed in, not merely next to one trunk,
+// house wall or cliff face (revmux 01: a lone 2-high side on open ground
+// must keep sidestepping, not pillar dirt against the owner's base).
+// Nulls read as open (never claim a pit blind). Lava and water never
+// count (solid() reads them passable).
+function pitAt(bot) {
+  let high = 0
+  for (const [dx, dz] of SIDES) {
+    if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) high++
+  }
+  return high >= 2
+}
+
+// Climb arm for goal-less backstop episodes (jsf.3): the ticker backstop
+// fires between walk legs with no live goal (goalDist null), and a pit
+// around the body means up is the only way out (the 44-scaffold gave-up:
+// menu hop/dig_step/sidestep, pillar_up never offered). A level goal with
+// a known dist stays unclimbable even in a pit (4jr: the goal sits inside
+// the pit, a pillar to it is pointless).
+function pitClimb(facts) {
+  return !!facts && facts.goalDist === null && !!facts.pit
+}
+
 // Lava in or around the mount head: digging the cap would open a flow
 // onto the mount, and standing under lava is death either way. Mirrors the
 // executor's dontCreateFlow refusal (liquid above or beside the break).
@@ -390,6 +414,7 @@ function recoverFacts(bot, ctx, state, target) {
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
+    pit: pitAt(bot),
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
     playerOnline,
@@ -416,7 +441,7 @@ function recoverText(facts) {
   const player = !facts.playerOnline ? 'none' : facts.playerDist === null ? 'far' : facts.playerDist <= NEAR_PLAYER ? 'near' : 'far'
   return `stuck=${stuckBucket(facts.stuckTicks)} goal=${dy} dist=${dist} ` +
     `scaffold=${facts.scaffold} pickaxe=${facts.pickaxe ? 'yes' : 'no'} water=${facts.water ? 'yes' : 'no'} ` +
-    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} player=${player} ` +
+    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} pit=${facts.pit ? 'yes' : 'no'} player=${player} ` +
     `resets=${facts.resetsStuck}/${facts.resetsPlaceError} last=${facts.last}`
 }
 
@@ -432,8 +457,8 @@ function recoverFsm(facts, names) {
   const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
-  if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
-  if (facts.goalDy >= 2 && pick('dig_up')) return 'dig_up'
+  if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
+  if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_up')) return 'dig_up'
   if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
@@ -460,8 +485,8 @@ function recoverFsm(facts, names) {
 // 7/7 valid labels, disagreements are all safe (wait / call_player).
 const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
-  pillar_up: 'climb: goal is high, scaffold on hand, headroom free — jump and place one block under your feet',
-  dig_up: 'climb: goal is high, pickaxe on hand — dig above your head and climb',
+  pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
+  dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
   dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
@@ -1072,22 +1097,24 @@ function callPlayerRun(bot, ctx) {
 const RECOVER_MENU = {
   pillar_up: {
     // 4jr: a pillar to a level goal is pointless — laya took the first menu
-    // item anyway, 29 times in 16 min. Climb prims need the goal above.
+    // item anyway, 29 times in 16 min. Climb prims need the goal above —
+    // jsf.3 excepts a pit with NO goal (pitClimb): up is the only way out.
     // p4s: placing is what just failed (3 done / 49 failed:place-error a
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
     // sidestep own the escape, not the scaffold.
-    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
     run: pillarUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.placeError && !facts.water,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
   },
   dig_up: {
     // 9sq F1: headroom already free means nothing to dig — never offer, and
     // never chain onto free headroom either (the chain is an offer with no ask).
-    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
+    // jsf.3: like pillar_up, a pit with no goal climbs (head still blocked).
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
     run: digUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe && facts.headBlocked,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && facts.headBlocked,
     verb: 'digging up',
   },
   dig_step: {
@@ -1402,7 +1429,7 @@ async function decide(bot, ctx, state, target) {
     return { action: rec.action, sprint: false, source: rec.source }
   }
   if (!rec) {
-    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, placeError: (ctx.placeErrors || 0) > 0 }
+    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, lastY: null, flats: 0, placeError: (ctx.placeErrors || 0) > 0 }
     metrics.routes.inc({ route: 'hard', reason: 'stuck' })
     // Drop the stale goal first: a live GoalFollow/GoalNear keeps driving
     // the executor (jump/forward overrides at 20 Hz) and fights every
@@ -1443,13 +1470,42 @@ async function decide(bot, ctx, state, target) {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {
         return release(bot, ctx, rec.endEpisode ? 'gave-up' : 'done')
       }
-      rec.repeats = (rec.repeats || 0) + 1
       const fresh = recoverFacts(bot, ctx, state, target)
-      // Chain without re-asking only while the goal keeps getting closer: a
-      // no-gain done (fell back, verified an old block) ends the episode
-      // instead of burning the budget. repeatable() bounds the climb, so a
-      // rising goal cannot chain forever either.
-      const closer = rec.lastDy === null || fresh.goalDy < rec.lastDy
+      // Chain without re-asking only while making progress: toward the goal
+      // (goalDy falling) with a goal, upward without one — goalDy stays 0
+      // on the goal-less path, so the goal arm would stop a pit chain after
+      // one repeat (revmux 01: every goal-less episode climbed at most 2
+      // blocks). A done fires the tick the ack lands, often mid-air, so the
+      // next cycle starts at the old floor and re-verifies it once before
+      // the climb resumes (prod and mock alike): one flat twin chains free,
+      // a second flat or a fell-back done ends the episode. REPEATS counts
+      // risen dones, so a flat twin never eats the climb budget either way.
+      let closer
+      if (fresh.goalDist === null) {
+        // Verified height, not live height: the verified block (the
+        // cycle's startFloor) tracks the climb while live y samples the
+        // mid-air arc. Primitives without a startFloor (dig_up) fall back
+        // to the live floor.
+        const st = rec.st
+        const verifiedY = (st && typeof st.startFloor === 'number') ? st.startFloor : null
+        const bp = botPos(bot)
+        const feetY = verifiedY !== null ? verifiedY : (bp ? Math.floor(bp.y) : null)
+        // == null: null on entry, undefined on hand-built ctx — both first.
+        if (feetY !== null && (rec.lastY == null || feetY > rec.lastY)) {
+          rec.lastY = feetY
+          rec.flats = 0
+          rec.repeats = (rec.repeats || 0) + 1
+          closer = true
+        } else if (feetY !== null && feetY === rec.lastY && (rec.flats || 0) < 1) {
+          rec.flats = (rec.flats || 0) + 1
+          closer = true
+        } else {
+          closer = false
+        }
+      } else {
+        rec.repeats = (rec.repeats || 0) + 1
+        closer = rec.lastDy === null || fresh.goalDy < rec.lastDy
+      }
       if (closer && rec.repeats < REPEATS && RECOVER_MENU[prev].repeatable(fresh)) {
         rec.lastDy = fresh.goalDy
         rec.status = 'running'

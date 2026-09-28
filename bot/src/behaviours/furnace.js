@@ -1,8 +1,9 @@
 'use strict'
 
 // Furnace station (idkcraft-ipn.1): craft an 8-cobble furnace at the home
-// table, place it by the body, smelt raw iron on coal/charcoal above the
-// light.js reserve, take the ingots. BEHAVIOURS-shaped for the slice-C
+// table, place it (v1: by the body, roadside pattern; v2: at a fixed spot
+// inside the common room, jr2.1), smelt raw iron on coal/charcoal above
+// the light.js reserve, take the ingots. BEHAVIOURS-shaped for the slice-C
 // gear step; until then the live assay drives it directly.
 //
 // Station contract (chest precedent): ctx.home.furnace is plain { x, y, z },
@@ -17,6 +18,18 @@ const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const { COAL_RESERVE } = require('./light')
+
+// Fixed furnace cells inside the v2 common room (jr2.1): (4,0,1) first,
+// then fallbacks clear of the door path and bedroom approaches. Placed from
+// outside through the wall (the light.js interior-torch shape, live-verified
+// on the rig); a standing furnace at any of them adopts on sight, so a
+// restart never duplicates the station (memory drops the claim).
+const FURNACE_SPOTS = [
+  { dx: 4, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 2 },
+  { dx: 2, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 1 },
+]
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
 const ORE_PER_FUEL = 8 // one coal smelts eight ore
@@ -55,21 +68,42 @@ function freshRun() {
 // read, else null. Never trust the claim alone (mined table).
 function tableBlock(bot, ctx) {
   try {
-    const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
-    if (!tablePos || typeof tablePos.x !== 'number') return null
-    // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
-    const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-    if (!block || block.name !== 'crafting_table') return null
-    return { block, pos: tablePos }
+    // First verified-standing (h9z): a ghost home claim must not shadow
+    // the standing roadside table (craft.js pattern).
+    for (const tablePos of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+      if (!tablePos || typeof tablePos.x !== 'number') continue
+      // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
+      const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
+      if (block && block.name === 'crafting_table') return { block, pos: tablePos }
+    }
+    return null
   } catch (_) { return null }
 }
 
 // Verified furnace claim, else null. A ghost (verified non-furnace) is
-// retracted so the phases rebuild; null reads unloaded, never gone.
+// retracted so the phases rebuild; null reads unloaded, never gone. On a
+// v2 home with no claim a standing furnace at a fixed indoor spot adopts
+// on sight (memory drops the claim, so every restart re-adopts instead of
+// duplicating the station — the chest precedent).
 function furnaceSpot(bot, ctx) {
   try {
-    const spot = ctx.home && ctx.home.furnace
-    if (!spot || typeof spot.x !== 'number') return null
+    const home = ctx && ctx.home
+    const spot = home && home.furnace
+    if (!spot || typeof spot.x !== 'number') {
+      if (home && home.v === 2 && home.site && typeof home.site.x === 'number') {
+        for (const sp of FURNACE_SPOTS) {
+          let b = null
+          try {
+            b = bot.blockAt && bot.blockAt(new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz))
+          } catch (_) { b = null }
+          if (b && b.name === 'furnace') {
+            home.furnace = new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz)
+            return home.furnace
+          }
+        }
+      }
+      return null
+    }
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(spot.x, spot.y, spot.z)) } catch (_) { block = null }
     if (block && block.name !== 'furnace') {
@@ -132,18 +166,99 @@ function doCraft(bot, ctx, f) {
   })()
 }
 
-// Place the furnace beside the body (equip roadside-table pattern): first
-// free neighbour with solid ground. Claims only a verified block.
-function doPlace(bot, ctx, f) {
-  const bp = botPos(bot)
-  if (!bp) return
-  if (!ctx.home) { fail(ctx, 'no-home'); return }
+// Place the furnace at a fixed indoor spot (v2): walk into reach and place
+// through the wall (a standing furnace never reaches here — furnaceSpot
+// adopts it on sight first). Falls back to the roadside pattern when every
+// indoor spot is blocked — a working furnace outside beats a dead step.
+function doPlaceV2(bot, ctx, f) {
+  const home = ctx.home
+  const site = home && home.site
+  if (!site || typeof site.x !== 'number') { fail(ctx, 'no-home'); return }
   let item = null
   try {
     const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
     item = (items || []).find((i) => i && i.name === 'furnace') || null
   } catch (_) { item = null }
-  if (!item || typeof bot.placeBlock !== 'function' || !bot.blockAt) { fail(ctx, 'no-furnace-item'); return }
+  const nameAt = (x, y, z) => {
+    try {
+      const b = bot.blockAt && bot.blockAt(new Vec3(x, y, z))
+      return b && b.name
+    } catch (_) { return null }
+  }
+  let spot = null
+  for (const sp of FURNACE_SPOTS) {
+    const x = site.x + sp.dx
+    const y = site.y + sp.dy
+    const z = site.z + sp.dz
+    if (nameAt(x, y, z) !== 'air') continue
+    const below = nameAt(x, y - 1, z)
+    if (!below || below === 'air') continue
+    spot = { x, y, z }
+    break
+  }
+  if (!spot || !item) {
+    if (!item) { fail(ctx, 'no-furnace-item'); return }
+    doPlaceRoadside(bot, ctx, f, item)
+    return
+  }
+  const bp = botPos(bot)
+  if (!bp) return
+  if (dist3(bp, spot) > FURNACE_REACH) {
+    walkTo(bot, ctx, f, `furnace-place:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
+    return // walk into reach, place on a later tick
+  }
+  f.walkTicks = 0
+  let ref = null
+  try {
+    ref = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))
+  } catch (_) { ref = null }
+  if (!ref || !ref.position) { fail(ctx, 'no-spot'); return }
+  placeAt(bot, ctx, item, ref, new Vec3(spot.x, spot.y, spot.z))
+}
+
+// The shared place flight: hold the furnace item (never a tool), place,
+// claim only a verified block.
+function placeAt(bot, ctx, item, ref, at) {
+  ctx.furnaceInFlight = true
+  void (async () => {
+    try {
+      // mineflayer places the HELD item: hold the furnace (never a tool).
+      if (typeof bot.equip === 'function') {
+        try { await bot.equip(item, 'hand') } catch (_) { /* held already or bust: placement decides */ }
+      }
+      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      let block = null
+      try { block = bot.blockAt(at) } catch (_) { block = null }
+      if (!block || block.name !== 'furnace') throw new Error('furnace-place')
+      ctx.home.furnace = new Vec3(at.x, at.y, at.z) // Vec3, not plain (h9z): readers blockAt()s it
+      try { console.log(`furnace placed at ${at.x},${at.y},${at.z}`) } catch (_) { /* log best-effort */ }
+    } catch (err) {
+      ctx.furnaceInFlight = false
+      fail(ctx, 'furnace-place')
+      return
+    }
+    ctx.furnaceInFlight = false
+  })()
+}
+
+// Place the furnace beside the body (equip roadside-table pattern): first
+// free neighbour with solid ground. Claims only a verified block.
+function doPlace(bot, ctx, f) {
+  if (ctx && ctx.home && ctx.home.v === 2) { doPlaceV2(bot, ctx, f); return }
+  let item = null
+  try {
+    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    item = (items || []).find((i) => i && i.name === 'furnace') || null
+  } catch (_) { item = null }
+  if (!item) { fail(ctx, 'no-furnace-item'); return }
+  doPlaceRoadside(bot, ctx, f, item)
+}
+
+function doPlaceRoadside(bot, ctx, f, item) {
+  const bp = botPos(bot)
+  if (!bp) return
+  if (!ctx.home) { fail(ctx, 'no-home'); return }
+  if (typeof bot.placeBlock !== 'function' || !bot.blockAt) { fail(ctx, 'no-furnace-item'); return }
   const bx = Math.floor(bp.x)
   const by = Math.floor(bp.y)
   const bz = Math.floor(bp.z)
@@ -163,26 +278,7 @@ function doPlace(bot, ctx, f) {
     break
   }
   if (!ref) { fail(ctx, 'no-spot'); return }
-  ctx.furnaceInFlight = true
-  void (async () => {
-    try {
-      // mineflayer places the HELD item: hold the furnace (never a tool).
-      if (typeof bot.equip === 'function') {
-        try { await bot.equip(item, 'hand') } catch (_) { /* held already or bust: placement decides */ }
-      }
-      await bot.placeBlock(ref, new Vec3(0, 1, 0))
-      let block = null
-      try { block = bot.blockAt(at) } catch (_) { block = null }
-      if (!block || block.name !== 'furnace') throw new Error('furnace-place')
-      ctx.home.furnace = { x: at.x, y: at.y, z: at.z }
-      try { console.log(`furnace placed at ${at.x},${at.y},${at.z}`) } catch (_) { /* log best-effort */ }
-    } catch (err) {
-      ctx.furnaceInFlight = false
-      fail(ctx, 'furnace-place')
-      return
-    }
-    ctx.furnaceInFlight = false
-  })()
+  placeAt(bot, ctx, item, ref, at)
 }
 
 function slotCount(slot) {
@@ -354,7 +450,9 @@ function furnaceReady(bot, ctx) {
 }
 
 module.exports = furnace
+module.exports.FURNACE_SPOTS = FURNACE_SPOTS
 module.exports.furnaceReady = furnaceReady
+module.exports.tableBlock = tableBlock
 module.exports.fuelPieces = fuelPieces
 module.exports.FURNACE_REACH = FURNACE_REACH
 module.exports.ORE_PER_FUEL = ORE_PER_FUEL

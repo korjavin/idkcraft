@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const Vec3 = require('vec3')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -361,11 +362,18 @@ function craft(bot, ctx, target, state) {
   // the table branch below rebuilds one from planks every cycle. Verified
   // once: a ghost claim (mined table) reads as no station, so the table
   // branch rebuilds instead of the door branch walking to nothing forever.
-  const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
+  // First verified-standing of home.table / claimedTable (h9z): reads are
+  // Vec3-normalised (a plain claim throws inside prismarine-world, prod:
+  // 20 extra tables in 12 h) and a ghost home claim (mined table) must not
+  // shadow the equip step's standing roadside table (rig: the door branch
+  // below never fired while the table branch rebuilt).
   let tableBlock = null
-  if (tablePos) {
-    try { tableBlock = bot.blockAt && bot.blockAt(tablePos) } catch (_) { tableBlock = null }
-    if (!tableBlock || tableBlock.name !== 'crafting_table') tableBlock = null
+  let tablePos = null
+  for (const cand of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+    if (!cand || typeof cand.x !== 'number') continue
+    let b = null
+    try { b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z)) } catch (_) { b = null }
+    if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
   }
   let op = null
   for (const [wood, n] of sortedWoods(logs)) {

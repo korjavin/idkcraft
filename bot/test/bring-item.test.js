@@ -345,24 +345,25 @@ describe('bring me <item> from the chest (idkcraft-did.1)', () => {
   })
 
   it('a short chest returns a partial haul with an honest only-line', async () => {
-    const bot = mockBot({ chest: [{ name: 'white_wool', count: 2 }], playerPos: pos(30, 64, 0) })
+    // Bed, not wool: wool falls through to the sheep hunt (did.3 mob rung).
+    const bot = mockBot({ chest: [{ name: 'white_bed', count: 2 }], playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     chestHome(bot._tickerCtx)
-    handleChat(bot, ticker, 'P', 'bring me wool 3')
+    handleChat(bot, ticker, 'P', 'bring me bed 3')
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'no order created')
-    assert.ok(bot.lines.includes('only 2 white_wool, coming'), `lines: ${bot.lines}`)
-    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 2]])
+    assert.ok(bot.lines.includes('only 2 white_bed, coming'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 2]])
   })
 
   it('an empty chest ends the order with the honest reason', async () => {
     const bot = mockBot({ chest: [{ name: 'torch', count: 9 }], playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     chestHome(bot._tickerCtx)
-    handleChat(bot, ticker, 'P', 'bring me wool 3')
+    handleChat(bot, ticker, 'P', 'bring me bed 3')
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'no order created')
-    assert.ok(bot.lines.includes("can't get wool: no recipe, no source"), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes("can't get bed: no recipe, no source"), `lines: ${bot.lines}`)
     assert.equal(bot.tossCalls.length, 0)
   })
 
@@ -371,12 +372,12 @@ describe('bring me <item> from the chest (idkcraft-did.1)', () => {
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
     chestHome(ctx)
-    handleChat(bot, ticker, 'P', 'bring me wool 3')
+    handleChat(bot, ticker, 'P', 'bring me bed 3')
     ctx.home.chest = null // mined before the bot arrived
     await bring(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.bring, null)
-    assert.ok(bot.lines.includes("can't get wool: no recipe, no source"), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes("can't get bed: no recipe, no source"), `lines: ${bot.lines}`)
   })
 
   it("exact block names check the chest too ('bring me white wool')", async () => {
@@ -461,11 +462,11 @@ describe('bring me <item> refusals (idkcraft-did.1)', () => {
     assert.ok(!bot._tickerCtx.bring, 'no order created')
   })
 
-  it('wool with a sheep nearby names the sheep', () => {
+  it('wool with no pack stock opens the sheep hunt (did.3 mob rung)', () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(7, 10)] })
     handleChat(bot, tickerFor(bot), 'P', 'bring me wool')
-    assert.deepEqual(bot.lines, ['wool comes from sheep (next)'])
-    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.lines, ['looking for sheep'])
+    assert.equal(bot._tickerCtx.bring.kind, 'wool')
   })
 
   it('a recipe names the coming craft instead of nothing', () => {
