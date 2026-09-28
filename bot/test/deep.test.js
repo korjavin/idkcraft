@@ -1728,6 +1728,62 @@ describe('deep ssn return', () => {
     assert.equal(ctx.deep.steps.length, 0)
   })
 
+  it('ssn: third fill for the same crumb fails (fall-loop cap)', () => {
+    const bot = mockBot()
+    bot.blocks['56,-50,-202'] = 'air' // a standable mid EXISTS; the cap still fails
+    bot.blocks['56,-49,-202'] = 'air'
+    bot.entity.position = pos(55.6, -51, -201.7)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 33, z: -202, topY: -28, dx: 1, dz: 0 }, n: 22,
+      steps: [{ x: 55, y: -51, z: -202 }, { x: 56, y: -48, z: -202 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 55.6, y: -51, z: -201.7 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null, fillSeen: { '56,-48,-202': 2 },
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:lost-shaft')
+    assert.equal(ctx.deep, null)
+    assert.ok(ctx.stuck)
+  })
+
+  it('ssn: second fill for the same crumb is allowed (one fall retry)', () => {
+    const bot = mockBot()
+    bot.blocks['56,-50,-202'] = 'air'
+    bot.blocks['56,-49,-202'] = 'air'
+    bot.entity.position = pos(55.6, -51, -201.7)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 33, z: -202, topY: -28, dx: 1, dz: 0 }, n: 22,
+      steps: [{ x: 55, y: -51, z: -202 }, { x: 56, y: -48, z: -202 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 55.6, y: -51, z: -201.7 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null, fillSeen: { '56,-48,-202': 1 },
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.deep.steps.length, 3)
+    assert.equal(ctx.deep.fillSeen['56,-48,-202'], 2)
+  })
+
+  it('ssn: jiggling wedged body rides past 8, fails once static', () => {
+    const bot = mockBot() // default stone: contact + riser + blocked behind at both spots
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: null, issuedKey: 'x', startDrops: { diamond: 0 }, cameFrom: null,
+    }
+    for (let i = 0; i < 10; i++) { // jiggle 0.1 (resets stalls) while wedged
+      bot.entity.position = pos(i % 2 === 0 ? 10.05 : 10.15, -45, 0)
+      deep(bot, ctx, null, {})
+    }
+    assert.equal(ctx.stepStatus, 'running') // the stalls gate blocks the early fail
+    assert.ok((ctx.deep.wedgedTicks || 0) >= 10)
+    bot.entity.position = pos(10.15, -45, 0) // hold still: stalls climb, the fail lands
+    for (let i = 0; i < 8 && ctx.stepStatus === 'running'; i++) deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:lost-shaft')
+    assert.ok(ctx.stuck)
+  })
+
   it('multi-up with no standable mid fails early with the stuck fact', () => {
     const bot = mockBot() // default stone everywhere: no air mid at -50
     bot.entity.position = pos(55.6, -51, -201.7)

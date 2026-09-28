@@ -667,10 +667,16 @@ function deep(bot, ctx, target, state) {
     const above2 = { x: next.x, y: next.y + 2, z: next.z }
     for (const c of [next, above, above2]) {
       // R-stand (ssn): never dig the block underfoot — a straight-down
-      // tunnel step eats its own floor, dangles the crumb above, and drops
-      // the body into a pocket the return cannot climb (ssn leg1). Strike
-      // and reroute (down-ahead steps stay legal).
+      // tunnel step eats its own floor, and the fall-through landing never
+      // satisfies the latched arrival (in-cell + grounded), so the step
+      // strikes post-dig with a dangling crumb above (ssn leg1 pocket).
+      // tunnelNext descends ONLY straight down (no diagonal down-ahead),
+      // so this gate skips below-band diamonds by design: a dug descent
+      // cell is air that can host no mid-floor, making the drop
+      // unreversible. The strike reroutes to level targets (the band scan
+      // covers them); the skip is logged, never silent.
       if (c.x === head.x && c.y === head.y - 1 && c.z === head.z) {
+        console.log(`deep R-stand strike at ${c.x},${c.y},${c.z} (underfoot dig refused; below-band target skipped)`)
         strikeAndReplan(bot, ctx, d, t)
         return
       }
@@ -821,16 +827,27 @@ function deep(bot, ctx, target, state) {
     // Multi-up gap fill (ssn): the outbound can chain a 2-3 fall (a strike
     // mid-fall, a gated pickup gap) the 1-up latch cannot climb. Fill ONE
     // standable mid per engagement (marked, arrival-pop-only): mids ascend
-    // strictly toward the crumb (y-monotonic: termination), each mounts on
-    // its own latch budget. No standable mid (air shaft) fails honestly
-    // NOW — recover pillars what leaps cannot.
+    // strictly toward the crumb (y-monotonic: termination within one
+    // ascent), each mounts on its own latch budget. No standable mid (air
+    // shaft) fails honestly NOW — recover pillars what leaps cannot. Two
+    // fills per crumb max (revmux 01): a fall off a mounted mid re-fills
+    // the same cell with a fresh latch budget, so uncapped refills cycle
+    // mount-fall-remount forever; the third fill attempt fails honestly.
     if (next.y - Math.floor(bp.y) >= 2 && Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z) <= 1.5) {
+      const okey = `${next.x},${next.y},${next.z}`
+      d.fillSeen = d.fillSeen || {}
+      if ((d.fillSeen[okey] || 0) >= 2) {
+        try { recover.setStuck(ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
+        fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+        return
+      }
       const mid = fillMid(bot, bp, next)
       if (!mid) {
         try { recover.setStuck(ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
         fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
         return
       }
+      d.fillSeen[okey] = (d.fillSeen[okey] || 0) + 1
       crumbs.push({ x: mid.x, y: mid.y, z: mid.z, fill: true })
       return
     }
