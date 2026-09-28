@@ -141,18 +141,29 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
       try {
         const headers = { 'Content-Type': 'application/json' }
         if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-        const res = await doFetch(url, {
-          method: 'POST',
-          signal: AbortSignal.timeout(timeoutMs),
-          headers,
-          body: JSON.stringify({
-            model: JEV_MODEL,
-            state: bodyState,
-            questions: { action: { type: 'choice', instructions, criteria: bodyCriteria } }
+        // Node 22 (prod + CI): AbortSignal.timeout() runs on an unref'd timer, so a
+        // process with nothing else alive exits before the abort fires (first CI
+        // test run, brain.test.js 'stalled fetch'). A plain setTimeout is ref'd;
+        // the reason keeps err.name === 'TimeoutError' for the outcome metric.
+        const ac = new AbortController()
+        const timer = setTimeout(() => ac.abort(new DOMException('brain timeout', 'TimeoutError')), timeoutMs)
+        let data
+        try {
+          const res = await doFetch(url, {
+            method: 'POST',
+            signal: ac.signal,
+            headers,
+            body: JSON.stringify({
+              model: JEV_MODEL,
+              state: bodyState,
+              questions: { action: { type: 'choice', instructions, criteria: bodyCriteria } }
+            })
           })
-        })
-        if (!res.ok) throw new Error(`jev http ${res.status}`)
-        const data = await res.json()
+          if (!res.ok) throw new Error(`jev http ${res.status}`)
+          data = await res.json() // deadline covers the body read too, not just the headers
+        } finally {
+          clearTimeout(timer)
+        }
         const choice = data && data.answers && data.answers.action && data.answers.action.choice
         if (typeof choice !== 'string' || !bodyLabels.includes(choice)) throw new Error('jev missing action answer')
         endTimer()

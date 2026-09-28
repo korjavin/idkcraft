@@ -96,8 +96,9 @@ const CLEAR_CLICK_BUDGET_MS = 2000
 async function budgetedClick(bot, slot) {
   let timer = null
   const budget = new Promise((_, reject) => {
+    // ref'd on purpose: cleared in finally below; unref'd it never fires on Node 22
+    // when the click is the only thing pending (CI hang, 6x7.5)
     timer = setTimeout(() => reject(new Error('clear-budget')), CLEAR_CLICK_BUDGET_MS)
-    if (timer && typeof timer.unref === 'function') timer.unref()
   })
   try {
     await Promise.race([bot.clickWindow(slot, 0, 1), budget])
@@ -245,8 +246,7 @@ async function syncInventory(bot) {
   if (win && typeof bot._syncWindow === 'function') {
     let timer = null
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('consolidate-sync-timeout')), CONSOLIDATE_SYNC_MS)
-      if (timer && typeof timer.unref === 'function') timer.unref()
+      timer = setTimeout(() => reject(new Error('consolidate-sync-timeout')), CONSOLIDATE_SYNC_MS) // ref'd, cleared in finally (see budgetedClick)
     })
     try {
       await Promise.race([bot._syncWindow(win), timeout])

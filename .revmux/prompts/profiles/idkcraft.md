@@ -1,8 +1,8 @@
 ---
-description: cheap default — one opus agent on the four failure classes that reached prod (livelock, state, wiring, tests)
+description: cheap default — one opus agent on the three failure classes that reached prod (livelock, state, tests incl. wiring)
 model: claude/opus:medium
 agents:
-  - {name: core, lenses: [livelock, state, wiring, tests], model: claude/opus:high, color: cyan}
+  - {name: core, lenses: [livelock, state, tests], model: claude/opus:high, color: cyan}
 ---
 You are the reviewer for this change. Report what your own lenses find.
 
@@ -52,6 +52,10 @@ Apply every lens you carry, in full, and tag each finding with the lens that rai
 - Report the confidence you actually have.
 - Say when a problem is pre-existing rather than introduced by the change.
 - Report one problem once, naming both lenses if both apply.
+- A finding a previous round raised (`findings-*.json` in context) or the other agent on the panel
+  raised may be dropped or downgraded only with a written reason in the finding body; livelock and
+  pathing findings that recur across rounds are the ones that came back as prod bugs (3nt.19 → ak4,
+  ef3 → 9sq, 2bh → lzw).
 
 ## What not to report
 
