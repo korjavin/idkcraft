@@ -10,6 +10,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const flat = require('../src/behaviours/flat')
+const util = require('../src/behaviours/util')
 const {
   probeColumn, spiralColumns, chooseLevel, detectHoles,
   isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode, progressChat, buildSweep,
@@ -898,6 +899,148 @@ describe('flat behaviour', () => {
     assert.ok(pt && (Math.abs(pt.x) > 4 || Math.abs(pt.z) > 4), `search origin outside the square: ${pt && `${pt.x},${pt.z}`}`)
   })
 
+  it('restock digs at least RESTOCK_MIN_EDGE_GAP past the edge', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 10, y: 63, z: 0 }, { x: 20, y: 63, z: 0 }], // gap 6 (near, rejected) vs gap 16
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [20, 0], 'near-edge dirt filtered out')
+    const pt = bot.calls.findBlocksOpts && bot.calls.findBlocksOpts.point
+    const gap = Math.max(Math.abs(pt.x), Math.abs(pt.z)) - 4
+    assert.ok(gap >= 16, `search origin in the dig zone: ${pt && `${pt.x},${pt.z}`}`)
+  })
+
+  it('restock digs surface dirt below the square level', async () => {
+    // Live 2026-09-28: a square-relative floor (y >= level) starved restock
+    // to zero — the square sat at 65 while the whole dig zone was 57-63.
+    // The depth rule is local (surface-exposed), not square-relative.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(20, 63, 0, 'air') // expose the dirt below the square level
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 62, z: 0 }], // 1 below level 63, locally surfaced
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.equal(ctx.flat.phase, 'dig')
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.y, ctx.flat.dig.pos.z], [20, 62, 0], 'local-surface dirt accepted below the square level')
+  })
+
+  it('restock digs surface blocks only', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(20, 64, 0, 'stone') // buried: solid above
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'buried dirt filtered out')
+  })
+
+  it('restock prefers a bump over nearer flat dirt', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(30, 64, 0, 'dirt')
+    world.set(30, 65, 0, 'dirt') // a bump top above level 63
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 30, y: 65, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.y, ctx.flat.dig.pos.z], [30, 65, 0], 'bump top preferred')
+  })
+
+  it('restock skips dirt next to owner builds (interim gate)', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(19, 63, 0, 'oak_planks') // structure marker beside the tainted spot only
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // fill: issue
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: find + issue
+    assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'marker-adjacent dirt filtered out')
+  })
+
+  it('restock asks canBreak and skips denied blocks', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    util.canBreak = (b, block) => block.position.x !== 20
+    try {
+      flat(bot, ctx, null, null); await settle() // scan
+      flat(bot, ctx, null, null); await settle() // fill: issue
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle() // arrived -> dig
+      flat(bot, ctx, null, null); await settle() // dig: find + issue
+      assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'guard-denied dirt skipped')
+      assert.ok(!cap.lines.some((l) => l.includes('flat protected:')), 'quiet while a candidate remains')
+    } finally { delete util.canBreak }
+  })
+
+  it('restock logs one protected line when the guard denies everything', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    util.canBreak = () => false
+    try {
+      flat(bot, ctx, null, null); await settle() // scan
+      flat(bot, ctx, null, null); await settle() // fill: issue
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle() // arrived -> dig
+      flat(bot, ctx, null, null); await settle() // dig: find -> empty -> endDig
+      assert.equal(ctx.flat, null)
+      assert.ok(bot.chats.some((c) => c.includes('1 left (no fill blocks)')), bot.chats.join('\n'))
+      const prot = cap.lines.filter((l) => l.includes('flat protected:'))
+      assert.equal(prot.length, 1, cap.lines.join('\n'))
+      assert.ok(prot[0].includes('flat protected: dirt at 20 63 0'), prot[0])
+    } finally { delete util.canBreak }
+  })
+
   it('skips a hole whose support cell unloaded as floating', async () => {
     // Only the hole column goes dark; (2,62,0) stays loaded dirt under a
     // liquid (2,63,0), so a deleted below-unloaded branch would find a
@@ -941,13 +1084,14 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
   })
 
-  it('restockPoint exits past the nearest edge', () => {
+  it('restockPoint searches from the dig zone past the gap', () => {
     const f = startEpisode(0, 0, 4, 74, 'P')
     const at = (p) => [p.x, p.y, p.z]
-    assert.deepEqual(at(restockPoint(f, { x: 1, y: 64, z: 0 })), [8, 64, 0])
-    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: -2 })), [0, 64, -8])
-    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: 0 })), [0, 64, 8])
-    assert.deepEqual(at(restockPoint(f, { x: 20, y: 64, z: 0 })), [20, 64, 0], 'already outside: search from the bot')
+    assert.deepEqual(at(restockPoint(f, { x: 1, y: 64, z: 0 })), [20, 64, 0])
+    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: -2 })), [0, 64, -20])
+    assert.deepEqual(at(restockPoint(f, { x: 0, y: 64, z: 0 })), [0, 64, 20])
+    assert.deepEqual(at(restockPoint(f, { x: 6, y: 64, z: 0 })), [20, 64, 0], 'just outside: pushed out to the dig zone')
+    assert.deepEqual(at(restockPoint(f, { x: 30, y: 64, z: 0 })), [30, 64, 0], 'already in the dig zone: search from the bot')
   })
 
   it('surface guard vetoes breaks at/below level inside the square only', () => {
