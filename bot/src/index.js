@@ -1303,11 +1303,14 @@ function fleeReflex(bot, ctx) {
         return 'looking for animals'
       }
       // Item ladder (did.1): the pack first — the bot may already hold what
-      // the player wants, even when the world holds no such block.
+      // the player wants, even when the world holds no such block. A short
+      // pack still falls through for diggable names: the block path tops up
+      // from the chest and mines the rest, as before.
       const resolved = bringMod.resolveItem(bot, name)
       const need = want || bringMod.WANT_ORE
       const plan = resolved ? bringMod.planItemGive(bot, resolved, need) : null
-      if (plan && plan.have > 0) {
+      const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
+      if (plan && plan.have > 0 && (plan.have >= need || !worldFallback)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
@@ -1321,26 +1324,28 @@ function fleeReflex(bot, ctx) {
         const desc = plan.items.map((i) => `${i.count} ${i.name}`).join(', ')
         return plan.have >= need ? `coming with ${desc}` : `only ${desc}, coming`
       }
+      // Orders carry the canonical family name, so 'beds' reads as 'bed'
+      // everywhere. The chest rung runs for every name with no diggable world
+      // form — including exact block names like white_wool, dirt or torch.
+      const keptName = plan && plan.keptOnly ? resolved.family : null
+      if (resolved && !worldFallback && ctx.home && ctx.home.chest) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.bring = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+          phase: 'chestfetch', announced: true, keptName,
+        }
+        ctx.paused = false
+        return `checking the home chest for ${resolved.family}`
+      }
       const res = findNearest(bot, name)
       if (res === 'unknown') {
         if (!resolved) return `unknown item: ${name}`
-        // No such block and the pack came up short: the home chest is next,
-        // else the honest stub (did.2-4 replace its branches). Orders carry
-        // the canonical family name, so 'beds' reads as 'bed' everywhere.
-        const keptName = plan && plan.keptOnly ? resolved.family : null
-        if (ctx.home && ctx.home.chest) {
-          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
-          ctx.unseenTicks = 0
-          ctx.resumeWork = false
-          clearStuck()
-          ctx.bring = {
-            kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
-            items: [], drop: null, have: 0,
-            phase: 'chestfetch', announced: true, keptName,
-          }
-          ctx.paused = false
-          return `checking the home chest for ${resolved.family}`
-        }
+        // No diggable block, the pack came up short, and no adopted chest:
+        // the honest stub (did.2-4 replace its branches).
         return bringMod.itemRefusal(bot, resolved.family, resolved, keptName)
       }
       if (!res) {

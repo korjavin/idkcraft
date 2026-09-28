@@ -144,6 +144,30 @@ describe('bring me order', () => {
     assert.match(capBot.lines[0], /^going for 16 coal_ore, \d+ blocks away$/)
   })
 
+  it('a short coal pack falls through to the block order (tops up and mines)', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'coal', count: 2 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.match(bot.lines[0], /^going for 5 coal_ore, \d+ blocks away$/)
+    assert.equal(bot._tickerCtx.bring.kind, 'block')
+  })
+
+  it('a pack covering the full want gives at once without mining', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'coal', count: 5 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['coming with 5 coal'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
   it('unknown item and nothing in range refuse', () => {
     const weird = mockBot({})
     handleChat(weird, tickerFor(weird), 'P', 'bring me unobtanium')

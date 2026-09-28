@@ -242,31 +242,61 @@ function resolveItem(bot, name) {
   return null
 }
 
+// Pack contents as a plain {name: count} map; unreadable reads as empty.
+function packCounts(bot) {
+  const counts = {}
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string') continue
+        counts[i.name] = (counts[i.name] || 0) + (i.count || 0)
+      }
+    }
+  } catch (_) { /* unreadable inventory: empty plan */ }
+  return counts
+}
+
+// Material tier for the family keep rule; PICKAXE_RANK orders the shared
+// materials, unlisted (shears, shield, bow, …) keep as rank 0.
+function tierOf(name) {
+  const m = typeof name === 'string' && name.match(/^(\w+?)_(?:pickaxe|axe|shovel|hoe|sword)$/)
+  const mat = m && m[1]
+  return mat && mat in PICKAXE_RANK ? PICKAXE_RANK[mat] : 0
+}
+
 // Pack plan for a resolved item: concrete [{name,count}] up to want, honouring
 // the share keep-list — the last tool stays (axe/pickaxe/sword/shears, the
 // owner's standing rule), dirt/cobblestone keep the 32-block pillar reserve.
-// keptOnly is true when the pack holds the family but every piece is kept:
-// the ladder falls through to the chest, and the refusal names it.
-function planItemGive(bot, resolved, want) {
+// The tool keep spans the whole family (tools don't stack): wooden_axe +
+// stone_axe gives one, keeping the best tier. keptOnly is true when the pack
+// holds the family but every piece is kept: the ladder falls through to the
+// chest, and the refusal names it.
+// base (optional): per-name pack counts from before the order opened — the
+// keep-list and the reserve deduct from base while availability reads live.
+// Chest top-ups are the player's stock, not the bot's gear: a pack that held
+// no axe gives the fetched one instead of keeping it.
+function planItemGive(bot, resolved, want, base) {
   const names = (resolved && resolved.names) || []
   const target = want > 0 ? Math.min(want, WANT_MAX) : WANT_ORE
-  let list = []
-  try {
-    list = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
-  } catch (_) { list = [] }
-  const counts = new Map()
-  if (Array.isArray(list)) {
-    for (const i of list) {
-      if (!i || typeof i.name !== 'string') continue
-      counts.set(i.name, (counts.get(i.name) || 0) + (i.count || 0))
-    }
-  }
-  const dirt = counts.get('dirt') || 0
-  const cobble = counts.get('cobblestone') || 0
+  const live = packCounts(bot)
+  const bc = (base && typeof base === 'object') ? base : live
+  const dirt = bc.dirt || 0
+  const cobble = bc.cobblestone || 0
   const keepDirt = Math.min(SHARE_RESERVE, dirt)
   const keepCobble = Math.min(SHARE_RESERVE - keepDirt, cobble)
+  let baseTools = 0
+  for (const n of names) {
+    if (isShareKeep(n)) baseTools += bc[n] || 0
+  }
+  let keepName = null
+  if (baseTools > 0) {
+    const held = names.filter((n) => isShareKeep(n) && (live[n] || 0) > 0)
+    if (held.length > 0) keepName = held.slice().sort((a, b) => tierOf(b) - tierOf(a))[0]
+  }
   const giveable = (n, c) => {
-    if (isShareKeep(n)) return Math.max(0, c - 1)
+    if (n === keepName) return Math.max(0, c - 1)
+    if (isShareKeep(n)) return c
     if (n === 'dirt') return Math.max(0, c - keepDirt)
     if (n === 'cobblestone') return Math.max(0, c - keepCobble)
     return c
@@ -276,7 +306,7 @@ function planItemGive(bot, resolved, want) {
   let raw = 0
   let left = target
   for (const n of names) {
-    const c = counts.get(n) || 0
+    const c = live[n] || 0
     raw += c
     if (left <= 0) continue
     const take = Math.min(giveable(n, c), left)
@@ -747,28 +777,28 @@ function chestFetch(bot, ctx, o, bp) {
     } catch (_) {
       o.chestInFlight = false
       o.chestTried = true
-      if (item) refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
-      else o.phase = 'find'
+      if (item) {
+        if (!ctx || ctx.bring !== o) return
+        refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+      } else o.phase = 'find'
     }
   })()
 }
 
-// Item chest fetch (did.1): withdraw across the family names until the want
+// Item chest fetch (did.1): one window across the family names until the want
 // is met, then return with what the pack holds — or refuse honestly when the
-// chest adds nothing. No world fallback: item orders only open when the name
-// resolves as no block.
+// chest adds nothing. No world fallback: item orders only open for names with
+// no diggable world form. The keep-list deducts from the opening pack counts,
+// so fetched stock gives instead of stranding on the keep rule.
 async function fetchItem(bot, ctx, o) {
   try {
-    let need = Math.max(o.want - o.have, 0)
-    for (const n of o.names || []) {
-      if (need <= 0) break
-      const res = await stockpileMod.withdrawFromChest(bot, ctx, n, need)
-      need -= res && typeof res.got === 'number' ? res.got : 0
-    }
+    const need = Math.max(o.want - o.have, 0)
+    if (need > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, o.names || [], need)
+    if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-fetch: touch nothing
     o.chestInFlight = false
     o.chestTried = true
     ctx.chestFull = false // a fetch may have made room: re-arm the step
-    const plan = planItemGive(bot, { names: o.names || [] }, o.want) // inventory count is the truth
+    const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase) // inventory count is the truth
     o.items = plan.items
     o.have = plan.have
     o.drop = plan.items.length > 0 ? plan.items[0].name : null
@@ -785,6 +815,7 @@ async function fetchItem(bot, ctx, o) {
   } catch (_) {
     o.chestInFlight = false
     o.chestTried = true
+    if (!ctx || ctx.bring !== o) return
     refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
   }
 }
@@ -803,7 +834,7 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
-    if ((o.kind || 'block') === 'item') { // no world form: the item reason, never 'unknown block'
+    if ((o.kind || 'block') === 'item') { // no diggable world form: the item reason, never 'unknown block'
       refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
       return
     }
@@ -1115,6 +1146,7 @@ module.exports.isFoodRequest = isFoodRequest
 module.exports.normalizeBringName = normalizeBringName
 module.exports.resolveItem = resolveItem
 module.exports.planItemGive = planItemGive
+module.exports.packCounts = packCounts
 module.exports.itemRefusal = itemRefusal
 module.exports.tierArticle = tierArticle
 module.exports.findEdible = findEdible

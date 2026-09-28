@@ -19,16 +19,17 @@ function pos(x, y, z) {
 }
 
 const ITEMS = {
-  stone_axe: 101, iron_axe: 102, stone_pickaxe: 103, iron_sword: 104, shears: 105,
+  stone_axe: 101, iron_axe: 102, wooden_axe: 114, stone_pickaxe: 103, iron_sword: 104, shears: 105,
   white_wool: 106, gray_wool: 107, white_bed: 108, water_bucket: 109, bucket: 110,
   torch: 111, dirt: 112, cobblestone: 113,
 }
 
-function mockBot({ items = [], chest = [], playerPos = null, animals = [] } = {}) {
+function mockBot({ items = [], chest = [], playerPos = null, animals = [], blocks = {} } = {}) {
   const lines = []
   const tossCalls = []
   const calls = { setGoal: 0, goals: [], opens: 0 }
   const blocksByName = {}
+  for (const [name, id] of Object.entries(blocks)) blocksByName[name] = { id }
   const itemsByName = {}
   for (const [name, id] of Object.entries(ITEMS)) itemsByName[name] = { id }
   const entities = {}
@@ -149,7 +150,7 @@ describe('bring item resolver (idkcraft-did.1)', () => {
 
   it('families resolve to every *_<name>', () => {
     assert.deepEqual(bring.resolveItem(bot, 'wool'), { names: ['gray_wool', 'white_wool'], family: 'wool' })
-    assert.deepEqual(bring.resolveItem(bot, 'axe'), { names: ['iron_axe', 'stone_axe'], family: 'axe' })
+    assert.deepEqual(bring.resolveItem(bot, 'axe'), { names: ['iron_axe', 'stone_axe', 'wooden_axe'], family: 'axe' })
     assert.deepEqual(bring.resolveItem(bot, 'bed'), { names: ['white_bed'], family: 'bed' })
   })
 
@@ -210,6 +211,23 @@ describe('bring pack plan keep-list (idkcraft-did.1)', () => {
       items: [], have: 0, want: 3, keptOnly: false,
     })
   })
+
+  it('family keep spans materials: wooden+stone gives wooden, keeps stone', () => {
+    const bot = mockBot({ items: [{ name: 'wooden_axe', count: 1 }, { name: 'stone_axe', count: 1 }] })
+    const p = bring.planItemGive(bot, { names: ['iron_axe', 'stone_axe', 'wooden_axe'], family: 'axe' }, 3)
+    assert.deepEqual(p.items, [{ name: 'wooden_axe', count: 1 }])
+    assert.equal(p.have, 1)
+    assert.equal(p.keptOnly, false)
+  })
+
+  it('chest top-ups give: the keep deducts from the opening pack, not live', () => {
+    const bot = mockBot({ items: [{ name: 'stone_axe', count: 1 }] }) // withdrawn after the order opened
+    const p = bring.planItemGive(bot, { names: ['stone_axe'], family: 'axe' }, 1, {})
+    assert.deepEqual(p.items, [{ name: 'stone_axe', count: 1 }])
+    const dirtBot = mockBot({ items: [{ name: 'dirt', count: 5 }] })
+    const d = bring.planItemGive(dirtBot, { names: ['dirt'], family: 'dirt' }, 5, {})
+    assert.equal(d.have, 5)
+  })
 })
 
 describe('bring me <item> from the pack (idkcraft-did.1)', () => {
@@ -232,6 +250,18 @@ describe('bring me <item> from the pack (idkcraft-did.1)', () => {
     assert.deepEqual(bot.lines, ['coming with 1 stone_axe'])
     await drive(bot, bot._tickerCtx)
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
+  })
+
+  it('mixed axes give the worse tier and keep the best', async () => {
+    const bot = mockBot({
+      items: [{ name: 'wooden_axe', count: 1 }, { name: 'stone_axe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ['only 1 wooden_axe, coming'])
+    await drive(bot, bot._tickerCtx)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.wooden_axe, null, 1]])
+    assert.ok(bot.lines.includes('here are 1 wooden_axe'), `lines: ${bot.lines}`)
   })
 
   it("a single axe is kept and refused honestly when there is no chest", () => {
@@ -339,6 +369,63 @@ describe('bring me <item> from the chest (idkcraft-did.1)', () => {
     await flush()
     assert.equal(ctx.bring, null)
     assert.ok(bot.lines.includes("can't get wool: no recipe, no source"), `lines: ${bot.lines}`)
+  })
+
+  it("exact block names check the chest too ('bring me white wool')", async () => {
+    const bot = mockBot({
+      blocks: { white_wool: 201 },
+      chest: [{ name: 'white_wool', count: 5 }],
+      playerPos: pos(30, 64, 0),
+    })
+    const ticker = tickerFor(bot)
+    chestHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me white wool 3')
+    assert.deepEqual(bot.lines, ['checking the home chest for white_wool'])
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 3]])
+    assert.equal(bot.calls.opens, 1, 'one window for the whole fetch')
+  })
+
+  it('a single axe from the chest is given, not kept', async () => {
+    const bot = mockBot({ chest: [{ name: 'stone_axe', count: 1 }], playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    chestHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ['checking the home chest for axe'])
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.ok(bot.lines.includes('only 1 stone_axe, coming'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
+  })
+
+  it('chest dirt gives when the pack holds none', async () => {
+    const bot = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    chestHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me dirt 5')
+    assert.deepEqual(bot.lines, ['checking the home chest for dirt'])
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.dirt, null, 5]])
+    assert.ok(bot.lines.includes('here are 5 dirt'), `lines: ${bot.lines}`)
+  })
+
+  it('a fetch completed after a new order leaves the new order alone', async () => {
+    const bot = mockBot({ chest: [{ name: 'white_wool', count: 5 }], playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    chestHome(ctx)
+    handleChat(bot, ticker, 'P', 'bring me wool 3')
+    await bring(bot, ctx, null, {}) // walk leg: goal set
+    bot.entity.position = pos(5, 64, 1)
+    const p = bring(bot, ctx, null, {}) // arrival: fetch starts (async)
+    const newer = { kind: 'block', name: 'coal', phase: 'walk' }
+    ctx.bring = newer // a new order lands mid-fetch
+    await p
+    await flush()
+    assert.equal(ctx.bring, newer)
+    assert.deepEqual(bot.lines, ['checking the home chest for wool'])
   })
 })
 
