@@ -114,9 +114,10 @@ function isTreeLog(bot, block) {
     if (!isWoody(above) && !isWoody(below)) {
       // Trunk remnant: the lower logs are already chopped (air below) and
       // the crown sits directly above. Without this the last log of every
-      // trunk reads 'protected'. A lone log on dirt (below solid, above
-      // air) still fails: only leaves/wart directly above count.
-      if (above && (above.endsWith('_leaves') || above === 'nether_wart_block' || above === 'warped_wart_block') &&
+      // trunk reads 'protected'. Below MUST be air: a lone log on dirt or
+      // planks with leaves above is decor, not a remnant.
+      const airBelow = below === 'air' || below === 'cave_air' || below === 'void_air'
+      if (airBelow && above && (above.endsWith('_leaves') || above === 'nether_wart_block' || above === 'warped_wart_block') &&
           crownNear(bot, x, y, z)) return true
       return false
     }

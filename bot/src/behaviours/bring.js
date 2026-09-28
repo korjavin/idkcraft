@@ -625,7 +625,26 @@ async function bring(bot, ctx, target, state) {
       await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
       return
     }
-    const res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
+    // idkcraft-drq: pre-check the guard at find time, so a nearer build
+    // is skipped without walking to each of its blocks first. Only
+    // 'protected' counts here: trap rules depend on the dig-time stance
+    // and are judged at the dig site. Each loop either commits or grows
+    // o.skip, and find empties when all is skipped — it terminates.
+    let res = null
+    for (;;) {
+      res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
+      if (res === 'unknown' || !res || !res.position) break
+      let pre = null
+      try {
+        const blk = bot.blockAt && bot.blockAt(res.position)
+        pre = blk && denyReason(bot, blk, ctx)
+      } catch (_) { pre = null }
+      if (pre !== 'protected') break
+      logDeny({ name: res.name, position: res.position }, pre)
+      if (!o.skip) o.skip = new Set()
+      o.skip.add(skipKey(res.position))
+      res = null
+    }
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
@@ -772,7 +791,9 @@ async function bring(bot, ctx, target, state) {
       // skipped: a trap is a property of the stance, not the block.
       o.denyStrikes = (o.denyStrikes || 0) + 1
       if (o.denyStrikes > 3) {
-        refuse(bot, ctx, `could not reach ${o.block} safely`)
+        refuse(bot, ctx, o.have > 0
+          ? `only got ${o.have} ${o.drop} \u2014 could not reach ${o.block} safely`
+          : `could not reach ${o.block} safely`)
         return
       }
       o.pos = null

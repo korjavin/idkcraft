@@ -90,6 +90,8 @@ describe('canBreak guard (idkcraft-drq)', () => {
     assert.equal(canBreak(worldBot(remnant), blk('oak_log', 0, 64, 0), {}), true, 'chopped trunk remnant')
     const firewood = new Map([['3,64,3', 'oak_log'], ['3,63,3', 'dirt'], ['4,64,3', 'oak_leaves']])
     assert.equal(canBreak(worldBot(firewood), blk('oak_log', 3, 64, 3), {}), false, 'lone log on dirt refused')
+    const decor = new Map([['7,64,7', 'oak_log'], ['7,63,7', 'oak_planks'], ['7,65,7', 'oak_leaves'], ['8,65,7', 'oak_leaves']])
+    assert.equal(canBreak(worldBot(decor), blk('oak_log', 7, 64, 7), {}), false, 'log on planks under leaves is decor')
   })
 
   it('allows bot-placed blocks via ctx.placedByBot', () => {
@@ -261,6 +263,39 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.z], [20, 0], 'next candidate picked')
   })
 
+  it('bring skips protected candidates at find time, never walks to the build', async () => {
+    const bring = require('../src/behaviours/bring')
+    const spots = [new Vec3(2, 64, 0), new Vec3(20, 64, 0)]
+    const names = {
+      '2,64,0': 'oak_log',
+      '20,64,0': 'oak_log', '20,65,0': 'oak_log', '21,65,0': 'oak_leaves',
+    }
+    const goals = []
+    const bot = {
+      entity: { position: new Vec3(0, 64, 0), onGround: true },
+      registry: { blocksByName: { oak_log: { id: 17 } } },
+      findBlocks: (opts) => {
+        const want = new Set(Array.isArray(opts.matching) ? opts.matching : [opts.matching])
+        return spots.filter((q) => want.has(17) && names[`${q.x},${q.y},${q.z}`] === 'oak_log')
+      },
+      blockAt: (p) => {
+        const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+        return n ? { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
+      },
+      dig: async () => { throw new Error('must not dig') },
+      chat: () => {},
+      pathfinder: { goal: null, setGoal: (g) => goals.push(g), isMoving: () => false, stop() {} },
+    }
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'find', kind: 'block', name: 'oak_log', want: 2, have: 0 },
+    }
+    await bring(bot, ctx, null, {})
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.z], [20, 0], 'tree committed without visiting the cabin')
+    assert.ok(ctx.bring.skip.has('2,64,0'), 'cabin log skipped at find time')
+    assert.equal(goals.length, 0, 'no walk goal issued yet (walk phase next tick)')
+  })
+
   it('bring re-searches a trap denial 3 times, then refuses', async () => {
     const bring = require('../src/behaviours/bring')
     let digs = 0
@@ -291,6 +326,29 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     assert.equal(digs, 0, 'trap dirt never dug')
     assert.equal(ctx.bring, null, '4th denial refuses loudly')
     assert.ok(lines.some((l) => l.includes('could not reach dirt safely')), lines.join('\n'))
+  })
+
+  it('bring trap-refusal names the partial haul it keeps', async () => {
+    const bring = require('../src/behaviours/bring')
+    const lines = []
+    const bot = {
+      entity: { position: new Vec3(0, 63.2, 0), onGround: true },
+      blockAt: (p) => {
+        const y = Math.floor(p.y)
+        const n = y <= 63 ? 'dirt' : 'air'
+        return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)) }
+      },
+      dig: async () => {},
+      chat: (l) => lines.push(String(l)),
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
+    }
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: { x: 1, y: 62, z: 0 }, block: 'dirt', drop: 'dirt', have: 5, denyStrikes: 3 },
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring, null, 'order ends')
+    assert.ok(lines.some((l) => l.includes('only got 5 dirt') && l.includes('could not reach dirt safely')), lines.join('\n'))
   })
 })
 
