@@ -1862,6 +1862,227 @@ describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
   })
 })
 
+describe('equip wet-dig guard (idkcraft-dj3)', () => {
+  const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+
+  // Prod 2026-09-28 22:04: build here at the coast picked lakebed dirt and
+  // dug silently for ~3 min (digging in water is ~5x slower and the drop
+  // floats off, so the kit never fills).
+  it('submerged dirt is skipped, dry dirt is dug', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [
+        { x: 1, y: 63, z: 0, name: 'dirt' }, // nearer, but water above
+        { x: 0, y: 63, z: 1, name: 'dirt' }, // dry
+      ],
+      blockAtImpl: (p) => {
+        if (p.x === 1 && p.y === 64 && p.z === 0) return { name: 'water', position: p }
+        if (p.y >= 64) return { name: 'air', position: p }
+        return { name: 'dirt', position: p }
+      },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
+    assert.deepEqual([bot.calls.dig[0].x, bot.calls.dig[0].z], [0, 1], 'the dry dirt, not the nearer wet one')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('only wet dirt near fails no-dirt without digging', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+      blockAtImpl: (p) => {
+        if (p.x === 1 && p.y === 64 && p.z === 0) return { name: 'water', position: p }
+        if (p.y >= 64) return { name: 'air', position: p }
+        return { name: 'dirt', position: p }
+      },
+    })
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(String(l))
+    try {
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {})
+      await flush()
+      assert.equal(bot.calls.dig.length, 0)
+      assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+      assert.ok(bot.errs[0].includes('no-dirt'), `errs: ${bot.errs}`)
+      assert.ok(lines.some((l) => l.includes('skipped 1 wet dig target')), `lines: ${lines}`)
+    } finally { console.log = orig }
+    bot.restoreError()
+  })
+
+  it('unreadable neighbours read dry: null world still digs', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+      blockAtImpl: () => null, // unloaded chunk: unknown, never wet
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('five gainless digs fail dig-stall', async () => {
+    const bot = mockBot({
+      items: [...KIT], // no dirt: mock digs land nothing, the kit never grows
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 6; i++) {
+      equip(bot, ctx, null, {})
+      await flush()
+      await flush()
+      if (ctx.stepStatus !== 'running') break
+    }
+    assert.equal(bot.calls.dig.length, 5, 'five attempts, then the limit trips')
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs.join(' ').includes('dig-stall'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('a growing kit never trips the no-gain limit', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+      digImpl: async (block) => {
+        bot.calls.dig.push(block)
+        bot._items.push({ name: 'dirt', count: 1 }) // every dig lands
+      },
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 7; i++) {
+      equip(bot, ctx, null, {})
+      await flush()
+      await flush()
+    }
+    assert.equal(bot.calls.dig.length, 7)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.equip.noGain, 0, 'gains reset the strikes')
+    bot.restoreError()
+  })
+
+  it('a hung dig fails dig-stall on the deadline, settles exactly once', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      let release = null
+      const bot = mockBot({
+        items: [...KIT],
+        ids: IDS,
+        recipes: {},
+        findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+        digImpl: () => new Promise((r) => { release = r }), // hung driver
+      })
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {})
+      mock.timers.tick(10001)
+      await flush()
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+      assert.ok(bot.errs.join(' ').includes('dig-stall'), `errs: ${bot.errs}`)
+      assert.equal(ctx.equipDigInFlight, false, 'the flag releases for the next pick')
+      release() // the driver lands late: no second settlement
+      await flush()
+      await flush()
+      assert.equal(bot.errs.length, 1, `second settlement must be a no-op: ${bot.errs}`)
+      bot.restoreError()
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('a submerged body skips every candidate and fails fast', async () => {
+    // Rig lesson: a sunk body dug buried lakebed stone the target ring
+    // reads as dry — only the body check skips it (no 10 s timeout dig).
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+      blockAtImpl: (p) => {
+        if (p.x === 0 && (p.y === 64 || p.y === 65) && p.z === 0) return { name: 'water', position: p }
+        if (p.y >= 64) return { name: 'air', position: p }
+        return { name: 'dirt', position: p }
+      },
+    })
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(String(l))
+    try {
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {})
+      await flush()
+      assert.equal(bot.calls.dig.length, 0)
+      assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+      assert.ok(bot.errs[0].includes('no-dirt'), `errs: ${bot.errs}`)
+      assert.ok(lines.some((l) => l.includes('body underwater, skipped 1 dig target')), `lines: ${lines}`)
+    } finally { console.log = orig }
+    bot.restoreError()
+  })
+
+  it('wading feet still dig a dry bank', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 1, name: 'dirt' }],
+      blockAtImpl: (p) => {
+        if (p.x === 0 && p.y === 64 && p.z === 0) return { name: 'water', position: p } // feet wet, head dry
+        if (p.y >= 64) return { name: 'air', position: p }
+        return { name: 'dirt', position: p }
+      },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
+    assert.deepEqual([bot.calls.dig[0].x, bot.calls.dig[0].z], [1, 1])
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('each dig logs its target', async () => {
+    const bot = mockBot({
+      items: [...KIT],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(String(l))
+    try {
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {})
+      await flush()
+      await flush()
+      assert.equal(bot.calls.dig.length, 1)
+      assert.ok(lines.some((l) => l === 'equip digging dirt at 1 63 0 scaffold=0'), `lines: ${lines}`)
+    } finally { console.log = orig }
+    bot.restoreError()
+  })
+})
+
 // NOTE (idkcraft-17a mutant review): the following source mutants survive the
 // suite and are equivalent, not coverage gaps — verified by probing, not by
 // inspection alone:
