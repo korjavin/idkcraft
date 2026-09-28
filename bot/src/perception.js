@@ -66,6 +66,23 @@ function snapHostiles(bot) {
   return { count, name, dist }
 }
 
+// Worn-armour counter (ipn.6): inventory.items() covers slots 9-44 only, so
+// a worn piece is invisible to countItems. Reads the armour slots directly
+// (mineflayer head=5, torso=6, legs=7, feet=8, fight.js ARMOR_SLOTS). Counts
+// units, not stacks — armour never stacks. Best-effort 0.
+function wornItems(bot, name) {
+  let n = 0
+  try {
+    const slots = bot && bot.inventory && bot.inventory.slots
+    if (!Array.isArray(slots)) return 0
+    for (const s of [5, 6, 7, 8]) {
+      const it = slots[s]
+      if (it && it.name === name) n += 1
+    }
+  } catch (_) { /* inventory not ready: count 0 */ }
+  return n
+}
+
 // Inventory counter for goal facts: sums item counts whose name matches pred
 // (e.g. n => n.endsWith('_log')). Best-effort 0 when the inventory is not ready.
 function countItems(bot, pred) {
@@ -194,4 +211,4 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   return state
 }
 
-module.exports = { findTarget, resolvePlayer, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems }
+module.exports = { findTarget, resolvePlayer, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems, wornItems }

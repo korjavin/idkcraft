@@ -164,6 +164,45 @@ describe("'bring me food' (idkcraft-n7k)", () => {
     assert.ok(bot.lines.some((l) => l === 'could not reach cow'), `lines: ${bot.lines}`)
   })
 
+  it('a stalled chase re-finds the next cow instead of refusing (8gc)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10), cow(12, 14)] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me food 1')
+    const ctx = bot._tickerCtx
+    let killSeen = 0
+    for (let i = 0; i < 80 && ctx.bring; i++) {
+      bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      if (o.phase === 'kill' && o.animal && ++killSeen >= 3) {
+        const ent = bot.entities[o.animal.id]
+        if (ent) ent.isValid = false
+        bot._items.push({ name: 'beef', count: 1 })
+      }
+      const gk = ctx.lastGoalKey || ''
+      if (gk.startsWith('bring-hunt:') && o.pos) {
+        // Penned cow 11: the body never closes. Cow 12 walks free.
+        if (!o.animal || o.animal.id !== 11) {
+          bot.entity.position = pos(o.pos.x + 1, o.pos.y, o.pos.z)
+          bot._moving = false
+        }
+      } else if (gk.startsWith('bring-food-pickup:')) {
+        bot._moving = false
+        const dp = o.dropPos
+        bot.entity.position = pos(dp.x, dp.y, dp.z)
+      } else if (gk.startsWith('bring-return:')) {
+        bot._moving = false
+        const pp = bot.players.P.entity.position
+        bot.entity.position = pos(pp.x, pp.y, pp.z)
+      }
+    }
+    assert.ok(bot.lines.some((l) => l === 'here is 1 beef'), `lines: ${bot.lines}`)
+    assert.equal(bot.entities[11].isValid, true, 'the penned cow stands')
+    assert.equal(bot.entities[12].isValid, false, 'the free cow died')
+    assert.ok(bot.attackCalls.length > 0 && bot.attackCalls.every((id) => id === 12), `swings: ${bot.attackCalls}`)
+    assert.equal(bot.lines.filter((l) => l.startsWith('going hunting')).length, 1, 'one announcement, silent re-chase')
+  })
+
   it('stop mid-hunt cancels the order', async () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [cow(11, 10)] })
     bot._moving = true

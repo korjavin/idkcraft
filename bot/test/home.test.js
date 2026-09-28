@@ -13,7 +13,7 @@ const DOOR = { x: 11, y: 64, z: 20 }
 const OUTSIDE = { x: 11, y: 64, z: 19 }
 const INSIDE = { x: 11, y: 64, z: 21 }
 
-function mockBot({ at, timeOfDay = 12500, day = 5, doorOpen = false, moving = false, door = true } = {}) {
+function mockBot({ at, timeOfDay = 12500, day = 5, doorOpen = false, moving = false, door = true, doorFacing, doorHinge } = {}) {
   const chats = []
   const calls = { goals: [], activates: 0, looks: [], controls: [], clears: 0 }
   const state = { doorOpen }
@@ -35,7 +35,7 @@ function mockBot({ at, timeOfDay = 12500, day = 5, doorOpen = false, moving = fa
       const fy = Math.floor(p.y)
       const fz = Math.floor(p.z)
       if (door && fx === DOOR.x && (fy === DOOR.y || fy === DOOR.y + 1) && fz === DOOR.z) {
-        return { name: 'oak_door', position: { x: fx, y: fy, z: fz }, getProperties: () => ({ open: state.doorOpen }) }
+        return { name: 'oak_door', position: { x: fx, y: fy, z: fz }, getProperties: () => ({ open: state.doorOpen, facing: doorFacing, hinge: doorHinge }) }
       }
       return { name: 'air', boundingBox: 'empty', position: { x: fx, y: fy, z: fz } }
     },
@@ -736,5 +736,154 @@ describe('rw4.12 gohome detour', () => {
       if (String(ctx.stepStatus).startsWith('failed:')) failed = ctx.stepStatus
     }
     assert.equal(failed, 'failed:cannot-reach-home', 'direct death fails honestly')
+  })
+})
+
+describe('bv6 door lane', () => {
+  // The open panel leaves a 0.8125 gap; the 0.6 body crossing at cell centre
+  // clears it by ~1 cm, and diagonal entries rub for the whole 60-tick leg
+  // (rig-m4: two nights failed:cannot-reach-home, door left open). The legs
+  // cross on the free-gap lane instead: cell centre +/- half a panel.
+  const LANE = 0.09375
+  const OUT_CENTRE = { x: OUTSIDE.x + 0.5, y: OUTSIDE.y, z: OUTSIDE.z + 0.5 }
+  const near = (v, want) => assert.ok(Math.abs(v - want) < 1e-9, `${v} ~= ${want}`)
+
+  function enterAt(at, { facing = 'north', hinge = 'left', open = true } = {}) {
+    const bot = mockBot({ at, doorOpen: open, doorFacing: facing, doorHinge: hinge })
+    const ctx = {
+      home: ctxHome(), step: 'gohome', stepStatus: 'running',
+      gohome: { phase: 'enter', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }
+    return { bot, ctx }
+  }
+
+  function lastLook(bot) {
+    return bot.calls.looks[bot.calls.looks.length - 1]
+  }
+
+  it('enter aims the door leg at the free-gap lane, away from the panel', () => {
+    // facing=north hinge=left: the panel hugs the west slice (mc-data
+    // [0,0,0,0.1875,1,1]), so the lane sits east of centre, at the door
+    // cell's near edge so the correction completes before the panel plane.
+    const { bot, ctx } = enterAt({ ...OUT_CENTRE }, { hinge: 'left' })
+    home.gohome(bot, ctx)
+    const look = lastLook(bot)
+    near(look.x, DOOR.x + 0.5 + LANE)
+    near(look.z, DOOR.z + 0.1)
+  })
+
+  it('hinge=right mirrors the lane to the west side', () => {
+    const { bot, ctx } = enterAt({ ...OUT_CENTRE }, { hinge: 'right' })
+    home.gohome(bot, ctx)
+    const look = lastLook(bot)
+    near(look.x, DOOR.x + 0.5 - LANE)
+    near(look.z, DOOR.z + 0.1)
+  })
+
+  it('south-facing doors mirror the hinge mapping', () => {
+    // mc-data: south/left hugs east, south/right hugs west.
+    for (const [hinge, sign] of [['left', -1], ['right', 1]]) {
+      const { bot, ctx } = enterAt({ ...OUT_CENTRE }, { facing: 'south', hinge })
+      home.gohome(bot, ctx)
+      const look = lastLook(bot)
+      near(look.x, DOOR.x + 0.5 + sign * LANE)
+      near(look.z, DOOR.z + 0.1)
+    }
+  })
+
+  it('east/west facing, closed, or unreadable props keep the centre crossing', () => {
+    // No z gap (east/west panel spans the full width), nothing to lane on
+    // when shut, fail closed when unreadable: the bare centre, exactly as
+    // before (no near edge either).
+    const cases = [
+      mockBot({ at: { ...OUT_CENTRE }, doorOpen: true, doorFacing: 'east', doorHinge: 'left' }),
+      mockBot({ at: { ...OUT_CENTRE }, doorOpen: true, doorFacing: 'west', doorHinge: 'right' }),
+      mockBot({ at: { ...OUT_CENTRE }, doorOpen: true }),
+      mockBot({ at: { ...OUT_CENTRE }, doorOpen: false, doorFacing: 'north', doorHinge: 'left' }),
+    ]
+    for (const bot of cases) {
+      const ctx = {
+        home: ctxHome(), step: 'gohome', stepStatus: 'running',
+        gohome: { phase: 'enter', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+      }
+      home.gohome(bot, ctx)
+      const look = lastLook(bot)
+      near(look.x, DOOR.x + 0.5)
+      near(look.z, DOOR.z + 0.5)
+    }
+  })
+
+  it('exit crosses on the lane at the south near edge', () => {
+    const bot = mockBot({ at: { x: INSIDE.x + 0.5, y: INSIDE.y, z: INSIDE.z + 0.5 }, timeOfDay: 1000, doorOpen: true, doorFacing: 'north', doorHinge: 'left' })
+    const ctx = {
+      home: ctxHome(), step: 'stay', stepStatus: 'running',
+      stay: { phase: 'exit', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }
+    home.stay(bot, ctx)
+    const look = lastLook(bot)
+    near(look.x, DOOR.x + 0.5 + LANE)
+    near(look.z, DOOR.z + 0.9)
+  })
+
+  it('the door leg advances on crossing the plane, not the window', () => {
+    // Within 0.6 of the near-edge aim but still north of the plane: the leg
+    // must keep aiming at the near edge (steep correction), not swap to the
+    // far aim early and cut the corner into the panel.
+    const { bot, ctx } = enterAt({ x: DOOR.x + 0.55, y: DOOR.y, z: DOOR.z - 0.35 }, { hinge: 'left' })
+    ctx.gohome.legIdx = 1
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.legIdx, 1)
+    const look = lastLook(bot)
+    near(look.x, DOOR.x + 0.5 + LANE)
+    near(look.z, DOOR.z + 0.1)
+    bot.entity.position = { x: DOOR.x + 0.55, y: DOOR.y, z: DOOR.z + 0.05 } // over the plane
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.legIdx, 2)
+  })
+
+  it('enter reaches inside from typical walk-ends with panel clearance, either hinge', () => {
+    // Bead acceptance: enter driven to inside in the harness. The mock walks
+    // the look vector with a clamped step — the bot picks aims, physics
+    // executes, so the test pins the aims' geometry — and tracks the
+    // body-to-panel gap while the body centre crosses the door cell (a
+    // leading-corner graze on approach slides; an engaged body wedges).
+    // Pre-fix the centre crossing clears the panel by 0.0125 and fails
+    // the 0.05 bar. At prod cadence (~1.3 blocks per 1s tick) the near-edge
+    // aim can overshoot the lane into a shallow panel slide — steeper
+    // pre-fix pushes wedge instead; the 4/4 live rig nights (both hinges,
+    // PR evidence) are the proof the slide resolves (revmux 01 core-1).
+    for (const hinge of ['left', 'right']) {
+      const panelWest = hinge === 'left' // facing=north (mc-data slices)
+      const face = panelWest ? DOOR.x + 0.1875 : DOOR.x + 0.8125
+      for (const at of [
+        { ...OUT_CENTRE },
+        { x: OUTSIDE.x + 0.2, y: OUTSIDE.y, z: OUTSIDE.z + 0.3 },
+        { x: OUTSIDE.x + 0.8, y: OUTSIDE.y, z: OUTSIDE.z + 0.6 },
+      ]) {
+        const { bot, ctx } = enterAt({ ...at }, { hinge })
+        let minGap = Infinity
+        let ticks = 0
+        for (; ticks < 40 && ctx.gohome.phase === 'enter'; ticks++) {
+          home.gohome(bot, ctx)
+          if (ctx.gohome.phase !== 'enter') break
+          const look = lastLook(bot)
+          const p = bot.entity.position
+          const dx = look.x - p.x
+          const dz = look.z - p.z
+          const d = Math.hypot(dx, dz)
+          const step = Math.min(0.4, d)
+          if (d > 1e-9) bot.entity.position = { x: p.x + (dx / d) * step, y: p.y, z: p.z + (dz / d) * step }
+          const q = bot.entity.position
+          if (q.z >= DOOR.z && q.z <= DOOR.z + 1) {
+            const gap = panelWest ? (q.x - 0.3) - face : face - (q.x + 0.3)
+            if (gap < minGap) minGap = gap
+          }
+        }
+        const where = `hinge=${hinge} start=${JSON.stringify(at)}`
+        assert.equal(ctx.gohome.phase, 'close', `${where} reaches close (got ${ctx.gohome.phase}@${ticks})`)
+        assert.notEqual(ctx.stepStatus, 'failed:cannot-reach-home', where)
+        assert.ok(minGap >= 0.05, `${where} clears the panel by ${minGap}`)
+      }
+    }
   })
 })

@@ -944,7 +944,11 @@ describe('jr2.2 decide picks beds over explore until both are in', () => {
     assert.equal(r.action, 'beds')
     assert.ok(bot.chats.includes('next: making beds (goal-fsm)'), `chats: ${bot.chats}`)
     const bot2 = ladenBot({ [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed', [cellKey(B_FOOT)]: 'white_bed', [cellKey(B_HEAD)]: 'white_bed' })
+    // Full kit (ipn.6 armor ladder included): gear reads done, explore wins.
+    for (const n of ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots', 'iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']) bot2._items.push({ name: n, count: 1 })
+    bot2._items.push({ name: 'water_bucket', count: 2 })
     const ctx2 = ladenCtx(v2home())
+    ctx2.gearGiven = { iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1, water_bucket: 2, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1, diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1 }
     const r2 = await goal.decide(bot2, ctx2)
     assert.equal(r2.action, 'explore')
   })

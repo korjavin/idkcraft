@@ -103,6 +103,28 @@ describe('haul bookkeeping', () => {
     assert.equal(live.total, 3)
     assert.equal(deliver.haulTotal(bot, ctx), 3)
   })
+  it('ledger twins toss only above the gear self reserve (revmux jsf.5-01 core-1/body-1)', () => {
+    // Death before the handover leaves a stale haul=1 (persisted across the
+    // rejoin); the reforged self kit must not read as handable goods.
+    const staleBucket = (n) => {
+      const bot = mockBot()
+      bot.inv.push({ name: 'water_bucket', count: n })
+      return deliver.haulTotal(bot, { haul: { water_bucket: 1 } })
+    }
+    assert.equal(staleBucket(1), 0, 'one refilled bucket is not a spare')
+    assert.equal(staleBucket(2), 0, 'the reserve pair is not handable')
+    assert.equal(staleBucket(3), 1, 'pair plus the forged spare tosses one')
+    const stalePick = (n) => {
+      const bot = mockBot()
+      bot.inv.push({ name: 'iron_pickaxe', count: n })
+      return deliver.haulTotal(bot, { haul: { iron_pickaxe: 1 } })
+    }
+    assert.equal(stalePick(1), 0, 'stale pick haul keeps the self hands')
+    assert.equal(stalePick(2), 1, 'twin plus the spare tosses one')
+    const bot = mockBot()
+    bot.inv.push({ name: 'coal', count: 3 })
+    assert.equal(deliver.haulTotal(bot, { haul: { coal: 3 } }), 3, 'forage loot untouched')
+  })
 })
 
 describe('deliver behaviour', () => {
