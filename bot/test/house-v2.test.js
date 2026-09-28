@@ -87,19 +87,22 @@ function mockBot(world, { items = [], doors = [], spawn = pos(0, 64, 0) } = {}) 
 const settle = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
 
 describe('jr2.1 phases lay in order: table, shell, roof, partition', () => {
-  it('plan indexes rise table < ring0 < door < ring1 < roof < partition', () => {
+  it('plan indexes rise table < floor < ring0 < door < ring1 < roof < partition', () => {
     const door = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
-    assert.equal(door, 22)
-    const ring0 = BLUEPRINT_V2.slice(1, 22)
+    assert.equal(door, 27)
+    const floor = BLUEPRINT_V2.slice(1, 6)
+    assert.equal(floor.length, 5)
+    assert.ok(floor.every((c) => c.kind === 'fill' && c.dy === -1))
+    const ring0 = BLUEPRINT_V2.slice(6, 27)
     assert.equal(ring0.length, 21)
     assert.ok(ring0.every((c) => c.kind === 'planks' && c.dy === 0))
-    const ring1 = BLUEPRINT_V2.slice(23, 44)
+    const ring1 = BLUEPRINT_V2.slice(28, 49)
     assert.equal(ring1.length, 21)
     assert.ok(ring1.every((c) => c.kind === 'planks' && c.dy === 1))
-    const roof = BLUEPRINT_V2.slice(44, 86)
+    const roof = BLUEPRINT_V2.slice(49, 91)
     assert.equal(roof.length, 42)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
-    const part = BLUEPRINT_V2.slice(86)
+    const part = BLUEPRINT_V2.slice(91)
     assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]), [
       [1, 0, 3], [3, 0, 3], [5, 0, 3], [3, 0, 4],
       [1, 1, 3], [3, 1, 3], [5, 1, 3], [3, 1, 4],
