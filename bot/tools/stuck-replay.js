@@ -69,7 +69,7 @@ async function rcon(cmd) {
   // so assert on the output text instead of the exit code.
   const out = String(stdout)
   if ((cmd.startsWith('tp ') && !out.includes('Teleported')) ||
-      ((cmd.startsWith('clear ') || cmd.startsWith('give ')) && /No entity was found|Unknown|incorrect/i.test(out))) {
+      ((cmd.startsWith('clear ') || cmd.startsWith('give ') || cmd.startsWith('effect ')) && /No entity was found|Unknown|incorrect/i.test(out))) {
     throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
   return String(stdout)
@@ -159,6 +159,13 @@ function waitFor(em, ev, ms, what) {
     (async () => { for (let i = 0; i < 240 && !follower.entity; i++) await sleep(250) })(),
   ])
   await sleep(3000)
+  // Park the body for setups: without this the ticker walks during the
+  // multi-second tp/kit/settle phase and rows measure pre-window walking
+  // (baseline-1 EP0 reached in 1 s with maxDisp 0.0). ctx.paused is the
+  // bot's own 'stop' park (brain skipped, idle dispatched); each window
+  // unparks after its boundary reset.
+  const tickCtx = () => follower._tickerCtx
+  if (tickCtx()) tickCtx().paused = true
 
   console.log(`stuck-replay tag=${TAG} variant=${process.env.REPLAY_VARIANT || '?'} ` +
     `worldsha=${(process.env.REPLAY_WORLDSHA || '?').slice(0, 12)} gitsha=${process.env.REPLAY_GITSHA || '?'} ` +
@@ -168,21 +175,46 @@ function waitFor(em, ev, ms, what) {
   let guideDied = false
   guide.on('death', () => { guideDied = true })
   for (const s of spots) {
-    // Guide beyond the goal (horizontal projection; falls to ground, settle
-    // below): the follow walk passes through the goal point. Degenerate
-    // vertical goals fall back to +x.
+    guideDied = false
+    if (tickCtx()) tickCtx().paused = true
+    // Guide beyond the goal (horizontal projection): the follow walk passes
+    // through the goal point. Degenerate vertical goals fall back to +x.
+    // Start above both ends, then verify headroom: a guide tp'd into rock
+    // suffocates (baseline-1 S6) and a buried guide near spawn fakes
+    // reached (baseline-1 EP0/S4).
     let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
     let len = Math.hypot(dx, dz)
     if (!(len > 0.01)) { dx = 1; dz = 0; len = 1 }
     const L = Math.max(14, Math.hypot(s.goal[0] - s.spawn[0], s.goal[1] - s.spawn[1], s.goal[2] - s.spawn[2]) + 6)
     const gx = s.spawn[0] + (dx / len) * L; const gz = s.spawn[2] + (dz / len) * L
-    await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${s.spawn[1] + 1} ${gz.toFixed(1)}`)
+    let gy = Math.max(s.spawn[1], s.goal[1]) + 1
+    await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
     // Fresh kit per spot (repeatability: drops picked up mid-run reset).
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
     if (s.pickaxe) await rcon(`give ${FOLLOWER} stone_pickaxe 1`)
+    // Anti-noise effects (death ends windows early and corrupts stuck
+    // measurement): guides stand in water/lava lakes, followers walk them.
+    for (const who of [GUIDE, FOLLOWER]) {
+      await rcon(`effect give ${who} minecraft:water_breathing 200`)
+      await rcon(`effect give ${who} minecraft:fire_resistance 200`)
+    }
     await sleep(2000) // chunks in, guide landed
+    for (let i = 0; i < 6 && !guideDied; i++) {
+      let head = null
+      try { head = guide.blockAt(guide.entity.position.offset(0, 1, 0)) } catch (_) { head = null }
+      if (head && (head.name === 'air' || head.name === 'cave_air' || head.name === 'water')) break
+      gy += 2
+      await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
+      await sleep(500)
+    }
+    if (guideDied || !guide.entity) {
+      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-DIED' })
+      console.log(`${s.name.padEnd(9)} ${String(false).padEnd(7)} ${String(0).padEnd(6)} ` +
+        `${String(0).padEnd(4)} ${String(false).padEnd(6)} ${String(0).padEnd(6)} ${(0).toFixed(1).padEnd(8)} GUIDE-DIED`)
+      continue
+    }
     const gl = guide.entity.position.clone()
     // Deterministic episode boundary (a tp is already unfaithful; a clean
     // cut beats a timed quiesce): mirror index.js clearStuck plus the
@@ -193,21 +225,21 @@ function waitFor(em, ev, ms, what) {
       c.stuck = null; c.recovery = null; c.recoverLatch = null; c.retreat = null
       c.stuckTicks = 0; c.stuckResets = 0; c.placeErrors = 0; c.lastGoalKey = ''
     }
-    try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
-    for (const k of ['jump', 'back', 'forward', 'sprint', 'sneak']) {
-      try { follower.setControlState(k, false) } catch (_) { /* control best-effort */ }
-    }
     stuckEps = []
     resets = {}
     chats = []
     died = false
+    if (c) c.paused = false
     const t0 = Date.now()
+    try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+    for (const k of ['jump', 'back', 'forward', 'sprint', 'sneak']) {
+      try { follower.setControlState(k, false) } catch (_) { /* control best-effort */ }
+    }
     const p0 = follower.entity.position.clone()
     let minDist = Infinity
     let minGuide = Infinity
     let maxDisp = 0
     let reached = false
-    guideDied = false
     const tx = s.goal[0]; const ty = s.goal[1]; const tz = s.goal[2]
     while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
       await sleep(500)
