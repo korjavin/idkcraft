@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const fightMod = require('./fight')
+const { canBreak, denyReason, logDeny } = require('./util')
 
 // equip: rebuild the starter kit after death (idkcraft-atl.6, owner
 // 2026-09-24: stone_pickaxe, stone_sword, ~32 scaffold blocks). Order is
@@ -376,8 +377,10 @@ function digTick(bot, ctx, st, bp) {
     cands.push({ v, blk, name, hard, d: Math.hypot(v.x - bp.x, v.y - bp.y, v.z - bp.z) })
   }
   cands.sort((a, b) => ((a.hard ? 1 : 0) - (b.hard ? 1 : 0)) || (a.d - b.d))
-  const pick = cands[0]
+  const blockOf = (c) => c.blk || { name: c.name, position: c.v }
+  const pick = cands.find((c) => canBreak(bot, blockOf(c), ctx))
   if (!pick) {
+    if (cands[0]) { const d0 = denyReason(bot, blockOf(cands[0]), ctx); logDeny(blockOf(cands[0]), d0) } // idkcraft-drq: scaffold, not the hut
     fail(ctx, 'blocks', new Error('no-dirt'))
     return
   }

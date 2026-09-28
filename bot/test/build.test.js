@@ -370,6 +370,21 @@ describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
     assert.deepEqual(planted, ['oak_planks'])
     assert.equal(ctx.buildFails, 0)
   })
+
+  it('a foreign torch in the cell is kept, never dug (drq protected)', async () => {
+    const world = makeWorld()
+    world.set(6, 64, 0, 'torch') // owner's torch in a ring cell
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
+    bot.entity.position = pos(6, 64, 1)
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    world.set(10, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // refuse -> protected, no dig
+    await settle()
+    assert.deepEqual(bot.calls.digs, [], 'torch never dug')
+    assert.equal(world.get(6, 64, 0), 'torch', 'torch still stands')
+    assert.ok(ctx.buildFails > 0, 'refusal counted, cell skips after 3')
+  })
 })
 
 describe('rw4.4 rest walks a plain-coords home site', () => {

@@ -764,7 +764,7 @@ describe('equip helper residuals (idkcraft-17a)', () => {
       ids: IDS,
       recipes: {},
       findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'stone' }],
-      blockAtImpl: () => ({ name: 'stone' }),
+      blockAtImpl: (q) => ({ name: q && q.y >= 64 ? 'air' : 'stone' }), // open ground: stone below, air at feet
     })
     let calls = 0
     bot.inventory.items = () => {

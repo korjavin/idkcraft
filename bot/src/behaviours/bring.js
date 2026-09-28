@@ -7,7 +7,7 @@ const fightMod = require('./fight')
 const exploreMod = require('./explore')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal } = require('./util')
+const { say, clearGoal, denyReason, logDeny } = require('./util')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -157,6 +157,10 @@ function countDrop(bot, drop) {
 
 function bringKind(ctx) {
   return (ctx.bring && ctx.bring.kind) || 'block'
+}
+
+function skipKey(p) {
+  return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 }
 
 function refuse(bot, ctx, line) {
@@ -621,7 +625,26 @@ async function bring(bot, ctx, target, state) {
       await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
       return
     }
-    const res = findNearest(bot, o.name)
+    // idkcraft-drq: pre-check the guard at find time, so a nearer build
+    // is skipped without walking to each of its blocks first. Only
+    // 'protected' counts here: trap rules depend on the dig-time stance
+    // and are judged at the dig site. Each loop either commits or grows
+    // o.skip, and find empties when all is skipped — it terminates.
+    let res = null
+    for (;;) {
+      res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
+      if (res === 'unknown' || !res || !res.position) break
+      let pre = null
+      try {
+        const blk = bot.blockAt && bot.blockAt(res.position)
+        pre = blk && denyReason(bot, blk, ctx)
+      } catch (_) { pre = null }
+      if (pre !== 'protected') break
+      logDeny({ name: res.name, position: res.position }, pre)
+      if (!o.skip) o.skip = new Set()
+      o.skip.add(skipKey(res.position))
+      res = null
+    }
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
@@ -671,7 +694,7 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'searchfar') {
     if (food) { await findFood(bot, ctx, o); return }
-    const r = stepFarSearch(bot, o.search)
+    const r = stepFarSearch(bot, o.search, o.skip ? { exclude: (q) => o.skip.has(skipKey(q)) } : undefined)
     if (!r.done) return
     o.search = null
     if (r.result === 'unknown') {
@@ -749,6 +772,34 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
+    const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
+    if (bDeny) {
+      logDeny(block, bDeny)
+      if (bDeny === 'protected') {
+        // Skip it and take the next candidate: a nearer build must not
+        // end an order while terrain blocks exist further away. Refusal
+        // happens when find comes up empty (the have>0 path delivers).
+        if (!o.skip) o.skip = new Set()
+        o.skip.add(skipKey(o.pos))
+        o.pos = null
+        o.phase = 'find'
+        return
+      }
+      // Trap denial (below-feet/gravity): the stance may change, so look
+      // again — but a capped number of times, or find re-picks the same
+      // nearest block forever (walk flips straight back to dig). Never
+      // skipped: a trap is a property of the stance, not the block.
+      o.denyStrikes = (o.denyStrikes || 0) + 1
+      if (o.denyStrikes > 3) {
+        refuse(bot, ctx, o.have > 0
+          ? `only got ${o.have} ${o.drop} \u2014 could not reach ${o.block} safely`
+          : `could not reach ${o.block} safely`)
+        return
+      }
+      o.pos = null
+      o.phase = 'find'
+      return
+    }
     ctx.digInFlight = true
     void (async () => {
       try {
@@ -760,6 +811,7 @@ async function bring(bot, ctx, target, state) {
         await bot.dig(block)
       } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
+      o.denyStrikes = 0 // a completed dig is progress: fresh strike budget
       o.phase = 'pickup'
     })()
     return
