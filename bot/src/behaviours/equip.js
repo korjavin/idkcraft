@@ -84,6 +84,16 @@ function resetRunCounters(ctx) {
 }
 
 function fail(ctx, item, err) {
+  // Stale async settlement (revmux dj3 round-1): equipDigInFlight is not in
+  // decide's preemption guard, so a facts-changed re-decide can switch
+  // steps mid-dig — a late fail must not mark the NEW step failed (the
+  // hold would poison it). Drop the report, but still spend the run
+  // counters so a later re-pick starts fresh. An unset step (unit tests,
+  // direct dispatch) fails loudly as before.
+  if (ctx.step && ctx.step !== 'equip') {
+    resetRunCounters(ctx)
+    return
+  }
   ctx.stepStatus = `failed:equip-${item}`
   resetRunCounters(ctx)
   try {

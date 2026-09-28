@@ -2013,11 +2013,15 @@ describe('equip wet-dig guard (idkcraft-dj3)', () => {
   it('a submerged body skips every candidate and fails fast', async () => {
     // Rig lesson: a sunk body dug buried lakebed stone the target ring
     // reads as dry — only the body check skips it (no 10 s timeout dig).
+    // The candidate sits where the ring reads dry (revmux round-1: at
+    // (1,63,0) the ring already sees the body's feet water, so the test
+    // would pass without the sunk filter); here deleting `sunk ||`
+    // digs instead of failing.
     const bot = mockBot({
       items: [...KIT],
       ids: IDS,
       recipes: {},
-      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 1, name: 'dirt' }],
       blockAtImpl: (p) => {
         if (p.x === 0 && (p.y === 64 || p.y === 65) && p.z === 0) return { name: 'water', position: p }
         if (p.y >= 64) return { name: 'air', position: p }
@@ -2059,6 +2063,37 @@ describe('equip wet-dig guard (idkcraft-dj3)', () => {
     assert.deepEqual([bot.calls.dig[0].x, bot.calls.dig[0].z], [1, 1])
     assert.equal(ctx.stepStatus, 'running')
     bot.restoreError()
+  })
+
+  it('a late timeout after a step switch drops the fail, spends the counters', async () => {
+    // Revmux dj3 round-1: equipDigInFlight is not in decide's preemption
+    // guard, so a facts-changed re-decide can switch steps mid-dig — the
+    // late fail must not poison the new step's hold.
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const bot = mockBot({
+        items: [...KIT],
+        ids: IDS,
+        recipes: {},
+        findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+        digImpl: () => new Promise(() => {}), // hung driver
+      })
+      const ctx = freshCtx()
+      equip(bot, ctx, null, {}) // dig starts under equip
+      ctx.step = 'build' // facts-changed re-decide switches mid-dig
+      ctx.stepStatus = 'running'
+      mock.timers.tick(10001)
+      await flush()
+      await flush()
+      assert.equal(ctx.stepStatus, 'running', 'the new step is not marked failed')
+      assert.deepEqual(bot.errs, [], 'no late failure logged')
+      assert.equal(ctx.equipDigInFlight, false, 'the flag still releases')
+      assert.equal(ctx.equip.digs, undefined, 'the run budget is spent anyway')
+      bot.restoreError()
+    } finally {
+      mock.timers.reset()
+    }
   })
 
   it('each dig logs its target', async () => {
