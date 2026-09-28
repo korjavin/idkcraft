@@ -18,7 +18,6 @@ const buildMod = require('./behaviours/build')
 const forageMod = require('./behaviours/forage')
 const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
-const BLUEPRINT = buildMod.BLUEPRINT
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 
@@ -316,7 +315,7 @@ function tableYieldToBuild(facts, bot, ctx) {
     if (!home || !home.site) return true
     const skip = Array.isArray(ctx.buildSkip) ? ctx.buildSkip : []
     if (skip.includes(0)) return false
-    return !buildMod.cellDone(bot, home, BLUEPRINT[0])
+    return !buildMod.cellDone(bot, home, buildMod.blueprintFor(home)[0])
   } catch (_) {
     return false
   }

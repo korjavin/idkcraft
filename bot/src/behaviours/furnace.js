@@ -97,7 +97,7 @@ function furnaceSpot(bot, ctx) {
             b = bot.blockAt && bot.blockAt(new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz))
           } catch (_) { b = null }
           if (b && b.name === 'furnace') {
-            home.furnace = { x: home.site.x + sp.dx, y: home.site.y + sp.dy, z: home.site.z + sp.dz }
+            home.furnace = new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz)
             return home.furnace
           }
         }

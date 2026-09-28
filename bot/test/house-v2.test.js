@@ -381,7 +381,7 @@ describe('jr2.1 stations target the common room', () => {
     const s = home.site
     world.set(s.x + 4, s.y, s.z + 1, 'furnace')
     furnace(bot, ctx, null, {})
-    assert.deepEqual(ctx.home.furnace, { x: s.x + 4, y: s.y, z: s.z + 1 })
+    assert.deepEqual({ x: ctx.home.furnace.x, y: ctx.home.furnace.y, z: ctx.home.furnace.z }, { x: s.x + 4, y: s.y, z: s.z + 1 })
   })
 
   it('furnace places at (4,0,1) from outside through the wall', async () => {
@@ -393,7 +393,7 @@ describe('jr2.1 stations target the common room', () => {
     bot.entity.position = pos(s.x + 7, s.y, s.z + 1) // outside the east wall, in reach
     furnace(bot, ctx, null, {})
     await settle()
-    assert.deepEqual(ctx.home.furnace, { x: s.x + 4, y: s.y, z: s.z + 1 })
+    assert.deepEqual({ x: ctx.home.furnace.x, y: ctx.home.furnace.y, z: ctx.home.furnace.z }, { x: s.x + 4, y: s.y, z: s.z + 1 })
     assert.equal(world.get(s.x + 4, s.y, s.z + 1), 'furnace')
   })
 
