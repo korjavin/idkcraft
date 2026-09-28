@@ -350,8 +350,12 @@ function liveCounts(bot, ctx) {
   try {
     // Verified like the menu world (h9z: countsFromFacts reads the verified
     // facts.tablePlaced): a ghost claim waits for a rebuild instead of
-    // failing no-table every pick. Null reads unloaded, never gone.
-    tablePlaced = !!stationStanding(bot, (ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
+    // failing no-table every pick. Null reads unloaded, never gone. Both
+    // claims verify (goalFacts mirror, revmux 01 major): a ghost home.table
+    // must not shadow the standing roadside table or the tick yields
+    // wait-table forever while the menu offers gear.
+    tablePlaced = !!stationStanding(bot, (ctx && ctx.home && ctx.home.table)) ||
+      !!stationStanding(bot, (ctx && ctx.claimedTable))
     furnaceClaim = !!(ctx && ctx.home && ctx.home.furnace)
   } catch (_) { /* no stations */ }
   return {
@@ -726,3 +730,4 @@ module.exports.planFor = planFor
 module.exports.countsFromFacts = countsFromFacts
 module.exports.handoverWaiting = handoverWaiting
 module.exports.tableBlock = tableBlock
+module.exports.liveCounts = liveCounts

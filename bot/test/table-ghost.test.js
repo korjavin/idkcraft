@@ -499,10 +499,14 @@ describe('h9z goal: a done with no visible effect holds like a failure', () => {
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'craft')
   })
-  it('equip and gear dones never hold (invisible effects, documented yields)', async () => {
-    // Equip's kit and gear's rung yields must re-plan next tick: a stale
-    // text hold would strand re-arming once scaffold is spent.
-    for (const step of ['equip', 'gear']) {
+  it('effectful-but-sub-text dones never hold (revmux 01 major)', async () => {
+    // forage banks 8-drop batches, deliver tosses partial hauls, stockpile
+    // has its own parks, equip/gear effects are text-invisible, and the
+    // self-advancing steps re-target by construction: holding any of these
+    // on a same-text done strands real progress (forage batch -> explore
+    // detour instead of the next batch). Only craft/build/gather/light —
+    // steps whose every productive path moves the facts text — hold.
+    for (const step of ['equip', 'gear', 'forage', 'deliver', 'stockpile', 'explore', 'gohome', 'stay']) {
       const { bot, ctx } = logsCtx()
       ctx.step = step
       ctx.askedKey = 'stale'
@@ -634,5 +638,20 @@ describe('h9z equip: unreadable claims are kept, verified ghosts retract', () =>
     const ctx = { lastGoalKey: '', stepStatus: 'running', home: null, claimedTable: { x: 50, y: 64, z: 50 } }
     await runFailNoTable(bot, ctx)
     assert.equal(ctx.claimedTable, undefined)
+  })
+})
+
+describe('h9z gear liveCounts mirrors the menu world (revmux 01 major)', () => {
+  it('ghost home.table + standing claimedTable reads placed on the tick', () => {
+    // liveCounts used `home.table || claimedTable`: the ghost short-circuit
+    // hid the roadside table, so the tick yielded wait-table forever while
+    // the menu (both verified) kept offering gear.
+    const rw = realWorld()
+    rw.set('crafting_table', 1, 64, 0)
+    const bot = { inventory: { items: () => [] }, blockAt: (p) => rw.blockAt(p) }
+    const ctx = { home: { table: { x: 9, y: 64, z: 9 } }, claimedTable: { x: 1, y: 64, z: 0 } }
+    assert.equal(gear.liveCounts(bot, ctx).tablePlaced, true)
+    const ghostOnly = { home: { table: { x: 9, y: 64, z: 9 } } }
+    assert.equal(gear.liveCounts(bot, ghostOnly).tablePlaced, false)
   })
 })

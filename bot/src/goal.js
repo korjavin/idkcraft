@@ -630,13 +630,16 @@ const REFAIL_DIST = 32
 // spiral after one river and strand the night walk. The guard bars the
 // steps that would otherwise replay the failure identically.
 const SELF_ADVANCING = { explore: true, gohome: true, stay: true }
-// Done-hold exemptions (h9z): self-advancing steps re-pick new targets by
-// construction; equip's effects (wooden kit, scaffold count) are invisible
-// in the facts text and done implies kit-complete hence infeasible (a stale
-// hold would strand re-arming once scaffold is spent); gear's dones are
-// documented no-hold yields ("re-plan next tick").
+// Done-holdable steps (h9z, revmux 01 major): ONLY steps whose every
+// productive path moves the facts text, so a same-text done proves no
+// effect. craft consumes its logs / flips table/door; gather crosses the
+// log bucket; build flips home; light clears unlit. forage/deliver move
+// real items below bucket granularity (8-drop batches, partial tosses);
+// equip/gear effects are text-invisible; stockpile has its own parks; the
+// self-advancing steps re-target by construction. Holding any of those
+// strands real progress instead of breaking a loop.
 function doneHoldable(name) {
-  return !SELF_ADVANCING[name] && name !== 'equip' && name !== 'gear'
+  return name === 'craft' || name === 'build' || name === 'gather' || name === 'light'
 }
 function failHolds(ctx, name, text, bot) {
   try {
