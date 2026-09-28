@@ -3,7 +3,7 @@
 // water column on Paper 26.1.2? Bare bot + rcon kit on a private copy of the
 // prod world; measures pour/swim/rim/deep/scoop, y(t) at 100 ms and server
 // position-correction counts (forcedMove events).
-// Usage: node water-assay.js <recon|recon2|recon3|pour|place|swim|rim> [arg]
+// Usage: node water-assay.js <recon|recon2|recon3|pour|place|swim|rim|climb2> [arg]
 // Env: ASSAY_HOST (127.0.0.1), ASSAY_PORT (25577),
 //   ASSAY_CONTAINER (idk-rig-m12, docker exec rcon-cli),
 //   ASSAY_TAG (bot name suffix; default random), ASSAY_OUT (JSON results path),
@@ -659,7 +659,7 @@ async function topOut(bot, RIM_Y) {
 
 // --- climb2: the viable 2-pour climb: pour high (feet+5) from the floor,
 // swim to the tall plateau, rim-pour + overflow + hop + exit + strip.
-// Usage: rim2 [N]. ASSAY_HIGH_DY (default 5): first-pour height.
+// Usage: climb2 [N]. ASSAY_HIGH_DY (default 5): first-pour height.
 async function cmdClimb2(bot) {
   const rows = []
   const N = parseInt(process.argv[3] || '3', 10)
@@ -730,6 +730,7 @@ async function main() {
   const cmd = process.argv[2] || 'recon'
   const bot = await connect()
   console.log(`assay tag=${TAG} bot=${BOT} port=${PORT} pit=${PIT.join(',')} cmd=${cmd}`)
+  let code = 0
   try {
     if (cmd === 'recon') await cmdRecon(bot)
     else if (cmd === 'recon2') await cmdRecon2(bot, process.argv[3])
@@ -739,11 +740,14 @@ async function main() {
     else if (cmd === 'swim') await cmdSwim(bot)
     else if (cmd === 'rim') await cmdRim(bot)
     else if (cmd === 'climb2') await cmdClimb2(bot)
-    else throw new Error(`unknown cmd: ${cmd} (recon|pour|swim|rim|deep|scoop|full)`)
+    else throw new Error(`unknown cmd: ${cmd} (recon|recon2|recon3|pour|place|swim|rim|climb2)`)
+  } catch (e) {
+    code = 2
+    console.error('ASSAY-ERROR', e && e.message ? e.message : e)
   } finally {
     try { bot.quit() } catch (_) {}
     await sleep(800)
-    process.exit(0)
+    process.exit(code)
   }
 }
 
