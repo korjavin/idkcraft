@@ -1196,8 +1196,10 @@ function aheadHead(bot, bp, next) {
 // Ghost-break escalation: the 800 ms blind dig broke nothing and the press
 // persists, so break (not poke) every client-air suspect at once — the
 // leap-landing notch ahead-head plus the behind column feet+head. Bare
-// hand, one hold: gravel/sand/dirt fall-in breaks (~0.6 s), stone/real
-// walls only crack (safe), server-air no-ops. Each cell air-gated here
+// hand, one hold: insta-blocks break, stone/real walls only crack (safe),
+// server-air no-ops. NOTE the hold cannot break dirt/gravel/sand fall-in
+// by hand (2.5-3 s hand time) — that needs longer holds or a selected
+// tool (follow-up idkcraft-ssn). Each cell air-gated here
 // (never eat a client-solid wall); motion afterwards is the confirm (the
 // client already sees air, so no break is ever visible locally).
 function ghostBreak(bot, cells) {
@@ -1233,7 +1235,9 @@ function ghostBreak(bot, cells) {
 // Blind ghost-dig: START a real dig on a client-air cell the server keeps
 // rejecting moves into (dug-area gravel-fall the client missed). No air
 // check (that IS the condition); the guarded CANCEL still stands down for
-// live digs, and unbreakable just cracks (safe).
+// live digs. Bare-hand holds under ~3 s only break insta-blocks (hand
+// dirt/gravel/sand run 2.5-3 s, not tool times) — breaking fall-in needs
+// longer holds or tool-selected digs (follow-up idkcraft-ssn).
 function ghostDig(bot, cell) {
   try {
     if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
@@ -1294,9 +1298,9 @@ function riserAhead(bot, bp, next) {
 // down if a real dig started meanwhile (don't steal its abort).
 const UNFREEZE_ABORT_MS = 150
 const WEDGED_DIG_TICKS = 3 // wedged/inch-pinned ticks before a blind ghost-dig behind (server-solid the client shows as air)
-const GHOSTDIG_ABORT_MS = 800 // ghost-dig START lives long enough to break falls (gravel/dirt); guarded CANCEL still stands down for live digs
+const GHOSTDIG_ABORT_MS = 800 // ghost-dig START probe (breaks insta-blocks only by hand; guarded CANCEL still stands down for live digs)
 const GHOSTBREAK_TICKS = 6 // inch-press ticks before the ghost-break escalation (3 past the blind dig: it broke nothing)
-const GHOSTBREAK_HOLD_MS = 1200 // ghost-break START hold: gravel/sand/dirt (~0.6 s) breaks, stone+ only cracks
+const GHOSTBREAK_HOLD_MS = 1200 // ghost-break START hold (insta-blocks break; dirt/gravel need 2.5-3 s hand — see idkcraft-ssn)
 function unfreeze(bot, extra) {
   try {
     if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
