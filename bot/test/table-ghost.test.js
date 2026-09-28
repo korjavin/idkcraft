@@ -148,6 +148,22 @@ describe('h9z menu on the prod facts (153 planks, ghost table, home=site)', () =
     ctx.buildSkip = [0] // table cell refused x3: roadside is the only station left
     assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
   })
+  it('v1 home: equip waits on the v1 plan cell (+4), not v2 (+5)', () => {
+    // Round-3 gap: the ghost tests moved to v2 with siteFor, leaving the v1
+    // branch of tableYieldToBuild unpinned. A v2-cell-everywhere refactor
+    // would read air at +5 on a v1 hut and hold the rearm forever.
+    const world = makeWorld()
+    const items = [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }]
+    const bot = baseBot(world, items)
+    const ctx = { home: { site: { x: 6, y: 64, z: 0 }, v: 1 }, buildSkip: [] }
+    const s = ctx.home.site
+    ctx.home.table = pos(s.x + 4, s.y, s.z + 1) // ghost: claimed, cell is air
+    assert.equal(goal.MENU.build.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
+    assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
+    assert.equal(goal.stepWhy('equip', goal.goalFacts(bot, ctx), bot, ctx, ''), 'equip: waiting for the house table')
+    world.set(s.x + 4, s.y, s.z + 1, 'crafting_table') // build laid it
+    assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
+  })
   it('homeless bot with a table yields to build when build can lay it', () => {
     const world = makeWorld()
     const bot = baseBot(world, [
