@@ -144,6 +144,76 @@ describe('pickaxe ladder menu (jsf.4)', () => {
   })
 })
 
+describe('revmux jsf.4-01 fixes', () => {
+  const pick = [{ name: 'iron_pickaxe', count: 1 }]
+  const factsFor = (bot) => recover.recoverFacts(
+    bot, { stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 } } }, null, null)
+
+  it('cobble staircase never shadows a natural side; cobble-only still offered', () => {
+    // Major: foreign cobble refuses at denyReason (drq-protected), so a
+    // cobble side first in scan order burned the episode on refusals while
+    // a working andesite side waited. Cobble scans last now.
+    const solids = new Set([
+      key(0, 60, 0),
+      key(1, 61, 0), key(1, 62, 0), // east: cobble above
+      key(-1, 61, 0), key(-1, 62, 0), // west: andesite above
+    ])
+    const names = new Map([
+      [key(1, 61, 0), 'stone'], [key(1, 62, 0), 'cobblestone'],
+      [key(-1, 61, 0), 'stone'], [key(-1, 62, 0), 'andesite'],
+    ])
+    const bot = worldBot(solids, pick, names)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    assert.deepEqual(factsFor(bot).digStep, [-1, 0], 'natural side wins over cobble')
+    // Cobble alone is still a staircase (own-session pillars ladder through
+    // placedByBot); removing the fallback fails this.
+    const solo = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)]), pick,
+      new Map([[key(1, 61, 0), 'stone'], [key(1, 62, 0), 'cobblestone']]))
+    solo.entity.position = pos(0.5, 61, 0.5)
+    assert.deepEqual(factsFor(solo).digStep, [1, 0], 'only-cobble still offered')
+  })
+
+  it('lava behind above skips the side (far lava veto)', () => {
+    // Minor: breaking above with lava two out lets it flow into the dug
+    // cell and toward the head. lavaNear's ±1 cube never saw it (capLavaAt
+    // already covers the cap's whole surround, so only above height is new).
+    const solids = new Set([
+      key(0, 60, 0),
+      key(1, 61, 0), key(1, 62, 0), key(2, 62, 0), // east + lava behind above
+      key(-1, 61, 0), // west step, open above
+    ])
+    const names = new Map([
+      [key(1, 61, 0), 'andesite'], [key(1, 62, 0), 'andesite'], [key(2, 62, 0), 'lava'],
+      [key(-1, 61, 0), 'andesite'],
+    ])
+    const bot = worldBot(solids, pick, names)
+    bot.entity.position = pos(0.5, 61, 0.5)
+    assert.deepEqual(factsFor(bot).digStep, [-1, 0], 'above-far lava skips east')
+  })
+
+  it('preset side with far lava re-scans instead of digging', () => {
+    const bot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0), key(2, 62, 0)]), pick,
+      new Map([[key(1, 61, 0), 'andesite'], [key(1, 62, 0), 'andesite'], [key(2, 62, 0), 'lava']]))
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const dug = []
+    const rawDig = bot.dig.bind(bot)
+    bot.dig = async (b) => { dug.push(b.name); return rawDig(b) }
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      recovery: {
+        action: 'dig_step', source: 'fsm', model: null, status: 'running',
+        st: { dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 61 },
+        attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.equal(ctx.recovery.st.dir, null, 'far-lava side dropped before digging')
+    assert.deepEqual(dug, [], 'nothing dug')
+  })
+})
+
 describe('pickaxe dig equips the tool (jsf.4)', () => {
   it('digs andesite above then cap with the pickaxe equipped', async () => {
     // Bare-handed stone takes ~7.5 s instead of ~1 s (revmux 01 body-1 on

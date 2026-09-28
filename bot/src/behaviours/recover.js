@@ -216,14 +216,24 @@ function capLavaAt(bot, dx, dz) {
     isLava(cellAt(bot, dx, 2, dz + 1)) || isLava(cellAt(bot, dx, 2, dz - 1))
 }
 
+// Lava behind the above cell (revmux jsf.4-01 minor): breaking above lets it
+// flow into the dug cell and on toward the head. lavaNear's ±1 cube covers
+// above's other neighbours and capLavaAt covers the cap's whole surround —
+// the two-out cell at above height is the gap (hand-dig had it too, but the
+// stone ladder reaches the depths where lava sits).
+function farLavaAt(bot, dx, dz) {
+  return isLava(cellAt(bot, dx * 2, 1, dz * 2))
+}
+
 // A dug staircase cycle (9sh hand, jsf.4 pickaxe): the side cell at feet
 // level stays as the step to mount, the side cell above it is air or digs
 // (by hand, or stone with a pickaxe on hand), the mount head above that is
 // air or digs the same way (adv: the 1.8 body stands the mount with its
-// head in (dx,2,dz)), no lava in or around the head, and the head has room
-// to jump. Returns the side [dx, dz] or null.
+// head in (dx,2,dz)), no lava in or around the head, none behind the dig,
+// and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
+  let cobbleSide = null
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
     if (!solid(step)) continue
@@ -232,9 +242,18 @@ function findDigStepDir(bot) {
     const cap = cellAt(bot, dx, 2, dz)
     if (cap && solid(cap) && !diggable(bot, cap)) continue
     if (capLavaAt(bot, dx, dz)) continue
+    if (farLavaAt(bot, dx, dz)) continue
+    // Cobble last (revmux jsf.4-01 major): foreign cobble is drq-protected
+    // and refuses at denyReason — never let it shadow a natural side that
+    // digs. An only-cobble staircase is still offered (own-session pillars
+    // ladder through placedByBot).
+    if ((above && above.name === 'cobblestone') || (cap && cap.name === 'cobblestone')) {
+      if (!cobbleSide) cobbleSide = [dx, dz]
+      continue
+    }
     return [dx, dz]
   }
-  return null
+  return cobbleSide
 }
 
 // A plain +1 mount (cjq): the side cell at feet level is solid, the cell
@@ -735,6 +754,7 @@ function digStepRun(bot, ctx) {
   // the cells under lava would pour a flow onto the mount. The find skips
   // these sides, so this terminates.
   if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
+  if (farLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
     if (!diggable(bot, above)) { st.dir = null; return 'running' }
