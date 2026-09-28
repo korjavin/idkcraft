@@ -143,6 +143,37 @@ function doorOpen(block) {
   }
 }
 
+// Door-crossing lane (bv6): an open door leaves a 0.8125-wide gap beside its
+// 0.1875 panel, so the 0.6 body crossing at cell centre clears the panel by
+// ~1 cm — and a diagonal entry (the walk ends up to 1.5 off-centre, the legs
+// cut corners at the 0.6 met radius) pushes the body INTO the panel face at
+// a steep angle, where friction holds it: no slide, the unstick backs up and
+// re-drives the same line, 60 ticks, failed:cannot-reach-home (two nights in
+// a row on rig-m4, door left standing open). The lane is the free gap's
+// centre — cell centre +/- half a panel — on the side AWAY from the open
+// panel. Panel slices per mc-data collision boxes (prismarine-block): with
+// open=true, north/left and south/right hug the west edge, north/right and
+// south/left the east edge. North-wall doors cross along z, so only
+// north/south facings lane; east/west (no z gap), closed, or unreadable
+// doors read 0 and keep today's centre crossing.
+const DOOR_LANE_DX = 0.09375
+function doorLaneDX(bot, home) {
+  try {
+    const door = doorBlock(bot, home)
+    if (!door || !doorOpen(door)) return 0
+    const props = typeof door.getProperties === 'function' && door.getProperties()
+    if (!props) return 0
+    const { facing, hinge } = props
+    if (facing !== 'north' && facing !== 'south') return 0
+    if (hinge !== 'left' && hinge !== 'right') return 0
+    // Open panel on the west slice -> lane east of centre, and vice versa.
+    const panelWest = (facing === 'north') === (hinge === 'left')
+    return panelWest ? DOOR_LANE_DX : -DOOR_LANE_DX
+  } catch (_) {
+    return 0
+  }
+}
+
 // A player at the door (revmux jr2.3-02 core-2/body-3): the meet is the
 // one mode where the owner is expected through that door, so the night
 // hold never shuts it on them — it closes once they clear it. Anyone on
@@ -247,8 +278,9 @@ function walkTo(bot, ctx, st, key, goal, arrived) {
 // Doorway legs (enter/exit) walk by direct control, not the pathfinder
 // (see header). Sneak pace: a full-speed tick overshoots the small arrival
 // window, sneak cannot. Legs stage through cell centres (out-centre, then
-// inn-centre or vice versa) so a leg never cuts a wall corner. Returns true
-// on arrival. The tick cap is purely anti-hang — no displacement stall, so
+// inn-centre or vice versa) so a leg never cuts a wall corner — shifted onto
+// the door lane when laneDX is live (bv6, see legAims). Returns true on
+// arrival. The tick cap is purely anti-hang — no displacement stall, so
 // there is no false-fail mode on fast ticks.
 const DOOR_LEG_TICKS = 60
 // Unstick: a 1-wide doorway scrapes the frame with no lateral room, so a
@@ -257,11 +289,34 @@ const DOOR_LEG_TICKS = 60
 const UNSTICK_TICKS = 8
 const UNSTICK_TOLERANCE = 0.1
 
-function legMet(bp, t) {
-  return Math.hypot(bp.x - (t.x + 0.5), bp.z - (t.z + 0.5)) <= 0.6
+function legMet(bp, p) {
+  return Math.hypot(bp.x - p.x, bp.z - p.z) <= 0.6
 }
 
-function stepThrough(bot, ctx, st, legs, arrived) {
+// Door-plane crossing (bv6): with a live lane the middle (door) leg advances
+// on CROSSING the door plane, never on the 0.6 window — an early advance
+// from the near side would swap the steep near-edge correction for a shallow
+// far aim and cut the corner into the panel anyway. Direction mirrors
+// legAims (staging leg's side decides).
+function doorCrossed(bp, legs) {
+  return legs[0].z < legs[1].z ? bp.z >= legs[1].z : bp.z <= legs[1].z + 1
+}
+
+// Aim points for the legs: cell centres, shifted onto the door lane when one
+// is live (bv6). Every leg shares the lane x — stage aligned, cross aligned,
+// arrive aligned. The MIDDLE leg is always the door cell (all four call sites
+// pass [stage, door, far]) and aims at the door cell's NEAR edge — derived
+// from which side the staging leg stands on — so the lateral correction
+// completes before the panel plane instead of halfway across it. With no lane
+// (0/unreadable) every leg aims at the bare cell centre, exactly as before.
+function legAims(legs, laneDX) {
+  const dx = (typeof laneDX === 'number' && Number.isFinite(laneDX)) ? laneDX : 0
+  const edge = (!dx || legs.length < 3) ? 0.5 : (legs[0].z < legs[1].z ? 0.1 : 0.9)
+  return legs.map((t, i) => ({ x: t.x + 0.5 + dx, z: t.z + (dx && i === 1 && legs.length >= 3 ? edge : 0.5) }))
+}
+
+function stepThrough(bot, ctx, st, legs, arrived, laneDX) {
+  const aims = legAims(legs, laneDX)
   const bp = botPos(bot)
   if (!bp) return false
   if (arrived(bp)) {
@@ -274,7 +329,12 @@ function stepThrough(bot, ctx, st, legs, arrived) {
     return true
   }
   let idx = st.legIdx || 0
-  if (idx < legs.length && legMet(bp, legs[idx])) {
+  const laneLive = typeof laneDX === 'number' && Number.isFinite(laneDX) &&
+    laneDX !== 0 && aims.length >= 3
+  const advanced = idx === 1 && laneLive
+    ? doorCrossed(bp, legs)
+    : (idx < aims.length && legMet(bp, aims[idx]))
+  if (idx < aims.length && advanced) {
     idx++
     st.legStall = 0
     st.backing = 0
@@ -299,7 +359,7 @@ function stepThrough(bot, ctx, st, legs, arrived) {
     st.backing = UNSTICK_TICKS
     st.legStall = 0
   }
-  const leg = legs[Math.min(idx, legs.length - 1)]
+  const leg = aims[Math.min(idx, aims.length - 1)]
   // Kill any live path so the executor doesn't fight manual control (the
   // pathfinder never clears control states itself).
   try {
@@ -317,7 +377,7 @@ function stepThrough(bot, ctx, st, legs, arrived) {
     return false
   }
   try {
-    bot.lookAt(new Vec3(leg.x + 0.5, bp.y + 1.62, leg.z + 0.5))
+    bot.lookAt(new Vec3(leg.x, bp.y + 1.62, leg.z))
     // Back must be released too: forward+back cancel in physics, so a leg
     // that backed out of frame contact would never drive again (revmux 8kc).
     bot.setControlState('back', false)
@@ -462,7 +522,7 @@ function gohome(bot, ctx, target, state) {
     // cannot shut the panel into the bot (revmux 03-review).
     const door = doorPos(home)
     const through = stepThrough(bot, ctx, st, [out, door, inn],
-      (bp) => isInside(bot, home) && bp.z >= inn.z + 0.3)
+      (bp) => isInside(bot, home) && bp.z >= inn.z + 0.3, doorLaneDX(bot, home))
     if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
     else {    return }
@@ -559,7 +619,7 @@ function stay(bot, ctx, target, state) {
     // One-sided like enter: arrival only with the whole body north of the
     // door cell, never standing in the doorway (revmux 03-review).
     const door = doorPos(home)
-    const through = stepThrough(bot, ctx, st, [inn, door, out], (bp) => bp.z <= out.z + 0.7)
+    const through = stepThrough(bot, ctx, st, [inn, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
     if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
     else {    return }
@@ -722,7 +782,7 @@ function exitMeet(bot, ctx, home, order) {
   }
   if (order.phase === 'exit') {
     const door = doorPos(home)
-    const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7)
+    const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       const keepBy = order.by
       ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false }
@@ -852,7 +912,7 @@ function comehome(bot, ctx, target, state) {
     // cannot shut the panel into the bot.
     const door = doorPos(home)
     const through = stepThrough(bot, ctx, order, [out, door, meet],
-      (bp) => isInside(bot, home) && bp.z >= meet.z + 0.3)
+      (bp) => isInside(bot, home) && bp.z >= meet.z + 0.3, doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       failMeet(bot, ctx, 'failed:cannot-reach-home')
       return
