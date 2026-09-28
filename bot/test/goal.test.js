@@ -346,12 +346,17 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
   })
   it('a done step retires its own hold: the next identical failure re-arms fresh', async () => {
     // Round-1 major: records never expired, so a stale failure re-armed
-    // hours later. A success deletes its own record.
+    // hours later. A success deletes its own record. h9z: the success must
+    // move the facts — a same-text done holds instead (see the done-hold
+    // test below), so the simulated rerun really crafts the load first.
     const bot = logsBot(14)
     const ctx = { home: { site: pos(10, 64, 10) }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
     await decide(bot, ctx) // records + holds craft
     assert.ok(ctx.stepFail && ctx.stepFail.craft, 'recorded')
-    ctx.step = 'craft' // the step runs again and finishes done
+    const inv = bot.inventory.items() // the rerun crafts: logs -> planks
+    inv.length = 0
+    inv.push({ name: 'oak_planks', count: 48 })
+    ctx.step = 'craft' // finishes done with moved facts
     ctx.stepStatus = 'done'
     const r = await decide(bot, ctx)
     assert.equal(ctx.stepFail.craft, undefined, 'retired by the success')
@@ -507,14 +512,29 @@ describe('decide decision point', () => {
   })
 
   it('done step re-decides (logs only on change)', async () => {
-    const bot = goalBot()
-    const ctx = {}
-    await decide(bot, ctx)
-    ctx.stepStatus = 'done'
+    // h9z: a same-text done now holds its step (see the done-hold test), so
+    // the silent-restart path runs through an exempt step — explore re-picks
+    // while craft's recorded hold keeps the FSM off the higher rung.
+    const items = []
+    for (let i = 0; i < 14; i++) items.push({ name: 'oak_log', count: 1 })
+    const bot = goalBot({ items })
+    const ctx = {
+      home: { built: true, chest: { x: 5, y: 64, z: 1 } },
+      gear: { saidNeed: 'want-ore' },
+      step: 'explore',
+      stepStatus: 'done',
+    }
+    ctx.goalText = goalText(goalFacts(bot, ctx)) // same facts
+    ctx.askedKey = 'stale'
+    const bp = { x: 0, y: 64, z: 0 }
+    ctx.stepFail = {
+      craft: { status: 'failed:x', text: ctx.goalText, pos: bp },
+      gear: { status: 'failed:x', text: ctx.goalText, pos: bp }, // ready rung held too: explore is the re-pick
+    }
     lines.length = 0
     bot.chats.length = 0
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'gather')
+    assert.equal(r.action, 'explore')
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(goalLines(), []) // same step again: silent restart
     assert.deepEqual(bot.chats, [])
