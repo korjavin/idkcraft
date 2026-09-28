@@ -168,11 +168,11 @@ const MENU = {
     // batch craft gate can never take — rest forever with work remaining.
     // atl.4: a still-holding gather failure is not feasible — the behaviour
     // replays the same final while the log count stands (decide's stepFail
-    // is the menu-wide twin of this gate).
+    // is the menu-wide twin of this gate). gyw: relocation past the
+    // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
       try {
-        const g = ctx && ctx.gather
-        if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) return false
+        if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
       if (facts.home === 'built') return false
       const total = facts.planks + facts.logs * 4
@@ -237,9 +237,22 @@ const MENU = {
     verb: 'foraging',
   },
   explore: {
-    // Blind search only once the house stands: pre-house gaps rest (rw4
-    // owns the body until built), night pre-house never wanders.
-    feasible: (facts) => facts.home === 'built',
+    // Blind search once the house stands; pre-house gaps rest (rw4 owns the
+    // body until built) — except the stranded hard state (gyw): a
+    // failed-holding gather on an alone day opens the home-anchored bounded
+    // spiral, so the menu moves the bot to new ground instead of idling
+    // where gather died. Night pre-house never wanders, and neither does a
+    // bot with anyone online (p4s: stay with the player, the owner sees).
+    feasible: (facts, bot, ctx) => {
+      if (facts.home === 'built') return true
+      if (facts.time !== 'day') return false
+      if (facts.player !== 'none') return false
+      try {
+        return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
+      } catch (_) {
+        return false
+      }
+    },
     chat: () => 'on my own: exploring outward',
     verb: 'exploring',
   },
@@ -786,6 +799,26 @@ function failHolds(ctx, name, text, bot) {
     return false
   }
 }
+// Shared gather-failure hold (idkcraft-gyw): the behaviour latch and the
+// menu gate above read one rule. A failed gather holds while the log count
+// stands AND the body stays within REFAIL_DIST of the failure point;
+// relocation past it releases for a fresh try at new ground (nearer trees,
+// other wood). Same distance rule as failHolds, one place. An unknown
+// failure point (legacy ctx, missing body) holds: the atl.4 livelock guard
+// stays for everything that never recorded where it failed.
+function gatherFailedHolds(g, logs, bot) {
+  try {
+    if (!g || typeof g.final !== 'string' || !g.final.startsWith('failed:')) return false
+    if (g.atLogs !== logs) return false
+    const fp = g.failPos
+    if (!fp || typeof fp.x !== 'number') return true
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return true
+    return Math.hypot(bp.x - fp.x, bp.z - fp.z) <= REFAIL_DIST
+  } catch (_) {
+    return false
+  }
+}
 
 function goalFsm(facts, feasibleNames) {
   const ok = new Set(Array.isArray(feasibleNames) ? feasibleNames : [])
@@ -911,10 +944,10 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
   } catch (_) { /* wording best-effort */ }
   if (name === 'gather') {
-    // atl.4 inline hold (not via failHolds): same final, same log count.
+    // Shared hold (gyw twin of the feasible gate): same final, same log
+    // count, body still at the failure point.
     try {
-      const g = ctx && ctx.gather
-      if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) {
+      if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) {
         return 'gather holds after failure'
       }
     } catch (_) { /* fall through to facts */ }
@@ -1242,4 +1275,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds }

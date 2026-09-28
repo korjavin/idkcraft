@@ -116,7 +116,10 @@ describe('q0h: rest pit escalates instead of spinning episodes', () => {
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
     const ctx = bot._tickerCtx
     // Post-'cannot reach the trees' state (the prod precondition): gather
-    // held, rest running, one gave-up already counted.
+    // held, rest running, one gave-up already counted. Night pin (gyw): an
+    // alone day with a holding gather now explores, but the wedge/gave-up
+    // mechanics under test are time-blind — night keeps the steady rest.
+    bot.time = { timeOfDay: 18000 }
     ctx.work = true
     ctx.home = { site: { x: 20, y: 65, z: 0 } }
     ctx.step = 'rest'
