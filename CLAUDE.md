@@ -141,10 +141,13 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   profile pick, scope/goal from the bead, archive in the MAIN checkout's `.revmux/tasks/` (a worktree's
   archive dies with the worktree), prints critical/major only, exit 1 while any is open.
 - Profile is picked from the diff: `idkcraft-risky` (two agents, synthesis on) when it touches
-  `bot/src/index.js`, `goal.js`, `brain.js`, `stuck.js`, `behaviours/recover.js`, `follow.js`, any
-  `Movements`/pathfinder setting or `laya/`; else `idkcraft` (one agent, `--no-synthesis`).
-- Risky files: the review archive is **mandatory** for merge, and the PR carries `bot/tools/stuck-run.sh`
-  before/after numbers. Compose/Dockerfile/CI/env-only diffs: `--lenses tests`.
+  `bot/src/index.js`, `goal.js`, `brain.js`, `behaviours/recover.js`, `follow.js`, the pathfinder
+  customisations (`jumpcost.js`, `nocorner.js`, `swim.js`, `snow.js`), the packet taps (`unpin.js`,
+  `decontact.js`, `detour.js`), any `Movements` setting or `laya/`; else `idkcraft` (one agent,
+  `--no-synthesis`). Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
+  (`LENSES=` overrides).
+- Risky files: the review archive is **mandatory** for merge, and the round gets the
+  `bot/tools/stuck-run.sh` before/after output via `STUCKRUN=<file>` (lands in `input/context/`).
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
   .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta). Minors are fixed in the same commit
   and never trigger another round. Max 3 rounds; whatever is still gating is outstanding in the handoff.
