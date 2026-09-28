@@ -400,7 +400,7 @@ describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
     bot.entity.position = pos(6, 64, 1)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
-    world.set(10, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    world.set(11, 64, 1, 'crafting_table') // table already stands: the ring cell is next
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // refuse -> protected, no dig
     await settle()
