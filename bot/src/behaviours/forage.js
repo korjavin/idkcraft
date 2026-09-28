@@ -94,6 +94,42 @@ function bestMemoryCell(bot, ctx, bp) {
   return best
 }
 
+// Best remembered DIAMOND cell for the deep leg (ipn.2): nearest cell
+// whose name holds diamond, unstruck, iron-tier gated like bestMemoryCell
+// (emeralds excluded — the gear ladder wants diamonds). Grounded cells
+// (solid floor below, verified by read) sort before ungrounded ones:
+// their drops stay at the bot's feet, while drops over voids fall out of
+// pickup reach (live assay). Unreadable reads as ungrounded, which also
+// biases toward nearby loaded cells. Null when none.
+function bestDiamondCell(bot, ctx, bp) {
+  const mem = ctx && ctx.resources
+  if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
+  let skip = null
+  try { skip = (ctx && ctx.forageSkip) || null } catch (_) { skip = null }
+  let best = null
+  let bestRank = 2
+  let bestDist = Infinity
+  for (const item of mem.items.values()) {
+    if (!item || typeof item.x !== 'number') continue
+    if (typeof item.name !== 'string' || !item.name.includes('diamond')) continue
+    if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
+    if (!bring.hasPickaxe(bot, item.name)) continue
+    let below = null
+    try {
+      const b = bot.blockAt && bot.blockAt(new Vec3(item.x, item.y - 1, item.z))
+      below = (b && b.name) || null
+    } catch (_) { below = null }
+    const rank = (typeof below === 'string' && below && below !== 'air' && below !== 'cave_air' && below !== 'water' && !below.includes('lava')) ? 0 : 1
+    const d = dist(bp, item)
+    if (rank < bestRank || (rank === bestRank && d < bestDist)) {
+      bestRank = rank
+      bestDist = d
+      best = item
+    }
+  }
+  return best
+}
+
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
@@ -217,13 +253,19 @@ function trackDrop(f, drop) {
   f.drops[drop] = true
 }
 
-// One strike on a memory cell: skip it (never forget — the atl.4 hold
-// needs stable memory) and count it. Three strikes fail the step.
-function strikeCell(ctx, f, p) {
+// Skip one memory cell (never forget — the atl.4 hold needs stable
+// memory). Shared with the deep leg (tunnel strikes).
+function skipCell(ctx, p) {
   try {
     const skip = skipSet(ctx)
     if (skip && p && typeof p.x === 'number') skip.add(cellKey(p))
   } catch (_) { /* skip best-effort */ }
+}
+
+// One strike on a memory cell: skip it and count it. Three strikes fail
+// the step.
+function strikeCell(ctx, f, p) {
+  skipCell(ctx, p)
   f.streak = (f.streak || 0) + 1
 }
 
@@ -589,4 +631,6 @@ function forage(bot, ctx, target, state) {
 
 module.exports = forage
 module.exports.planForage = planForage
+module.exports.bestDiamondCell = bestDiamondCell
+module.exports.skipCell = skipCell
 module.exports.FORAGE_WANT = FORAGE_WANT
