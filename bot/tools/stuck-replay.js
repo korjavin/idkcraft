@@ -3,9 +3,12 @@
 // prod-world snapshot with the REAL bot stack (runOnce + stubBrain following
 // a guide parked on the logged goal) and print a per-spot table:
 //   spot | reached? | stuck resets | recover episodes | call_player? | time
-// Spots are data: the 4 rig spots are embedded, or pass a JSON file:
-//   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],"secs":75}]
-// (muse-5's extended list drops in as a file, no code change).
+// Spots are data (default: stuck-spots.json next to this file, 9 rig
+// spots with per-spot kit; argv[2]/REPLAY_SPOTS overrides with another file):
+//   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],
+//     "secs":75,"scaffold":0,"pickaxe":true}]
+// secs/scaffold/pickaxe are optional (defaults 75 / 64 dirt / stone pickaxe).
+// The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
 //   REPLAY_QUIET=0 (keep per-tick ticker chatter; default filters it so the
@@ -61,14 +64,18 @@ async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', CONTAINER, 'rcon-cli', cmd])
   // rcon-cli exits 0 even when the command fails ("No entity was found"),
   // so assert on the output text instead of the exit code.
-  if (cmd.startsWith('tp ') && !String(stdout).includes('Teleported')) {
-    throw new Error(`rcon tp failed: ${String(stdout).trim().slice(0, 160)}`)
+  const out = String(stdout)
+  if ((cmd.startsWith('tp ') && !out.includes('Teleported')) ||
+      ((cmd.startsWith('clear ') || cmd.startsWith('give ')) && /No entity was found|Unknown|incorrect/i.test(out))) {
+    throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
   return String(stdout)
 }
 
 function loadSpots() {
-  const file = process.argv[2] || process.env.REPLAY_SPOTS || null
+  const path = require('node:path')
+  const bundled = path.join(__dirname, 'stuck-spots.json')
+  const file = process.argv[2] || process.env.REPLAY_SPOTS || (fs.existsSync(bundled) ? bundled : null)
   const list = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : DEFAULT_SPOTS
   if (!Array.isArray(list) || list.length === 0) throw new Error('spots: non-empty array expected')
   return list.map((s, i) => {
@@ -77,7 +84,10 @@ function loadSpots() {
     }
     const secs = s.secs == null ? DEFAULT_SECS : Number(s.secs)
     if (!Number.isFinite(secs) || secs <= 0) throw new Error(`spots[${i}]: bad secs`)
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs }
+    const scaffold = s.scaffold == null ? 64 : Number(s.scaffold)
+    if (!Number.isFinite(scaffold) || scaffold < 0 || scaffold > 2304) throw new Error(`spots[${i}]: bad scaffold`)
+    const pickaxe = s.pickaxe == null ? true : !!s.pickaxe
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe }
   })
 }
 
@@ -152,6 +162,10 @@ function waitFor(em, ev, ms, what) {
   for (const s of spots) {
     await rcon(`tp ${GUIDE} ${s.goal[0]} ${s.goal[1]} ${s.goal[2]}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
+    // Fresh kit per spot (repeatability: drops picked up mid-run reset).
+    await rcon(`clear ${FOLLOWER}`)
+    if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
+    if (s.pickaxe) await rcon(`give ${FOLLOWER} stone_pickaxe 1`)
     await sleep(2000)
     // Quiesce: a recover episode in flight would bleed into this window.
     for (let i = 0; i < 40; i++) {

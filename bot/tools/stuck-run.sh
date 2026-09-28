@@ -30,11 +30,16 @@ tar -xf "$PRODWORLD/world.tar" -C "$D"
 GITSHA="$(git -C "$TREE" rev-parse --short HEAD 2>/dev/null || echo '?')"
 LOG="/tmp/stuck-run-$VARIANT.log"
 echo "boot: $VARIANT (log $LOG)"
-sh "$PRODWORLD/START.sh" "$VARIANT" >"$LOG" 2>&1 </dev/null &
+FIFO="/tmp/stuck-stdin-$$.fifo"
+mkfifo "$FIFO"
+exec 9<> "$FIFO" # held open: Paper's console reader blocks instead of EOF-exiting (muse-5: START.sh dies on stdin EOF)
+sh "$PRODWORLD/START.sh" "$VARIANT" >"$LOG" 2>&1 <&9 &
 SRVPID=$!
 cleanup() {
   docker stop -t 5 idk-replay >/dev/null 2>&1 || true
   kill "$SRVPID" >/dev/null 2>&1 || true
+  exec 9<&- || true
+  rm -f "$FIFO" || true
   SHA_AFTER="$(sha_of "$PRODWORLD/world.tar")"
   if [ "$SHA_AFTER" = "$SHA_BEFORE" ]; then echo "pristine world.tar untouched ($SHA_AFTER)"; else echo "PRISTINE world.tar CHANGED: $SHA_BEFORE -> $SHA_AFTER"; fi
 }

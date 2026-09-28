@@ -1,0 +1,11 @@
+[
+  {"name": "EP1", "spawn": [-61.3, 66, -210.5], "goal": [-72, 65, -218], "scaffold": 0, "pickaxe": true},
+  {"name": "CLUSTER", "spawn": [-59.6, 54, -211.3], "goal": [-59, 58, -205], "scaffold": 64, "pickaxe": true},
+  {"name": "EP2", "spawn": [-37.5, 61, -219.3], "goal": [-37, 65, -212], "scaffold": 64, "pickaxe": true},
+  {"name": "EP0", "spawn": [-56.4, 63, -194.5], "goal": [-60, 64, -200], "scaffold": 51, "pickaxe": true},
+  {"name": "S3", "spawn": [-47.5, 57, -207.5], "goal": [-48, 62, -208], "scaffold": 56, "pickaxe": true},
+  {"name": "S4", "spawn": [-34.5, 61, -206.5], "goal": [-36, 63, -209], "scaffold": 4, "pickaxe": false},
+  {"name": "S5", "spawn": [-57.4, 61, -196.5], "goal": [-62, 61, -200], "scaffold": 27, "pickaxe": true},
+  {"name": "S6", "spawn": [-46.6, 61, -220.5], "goal": [-47, 63, -230], "scaffold": 51, "pickaxe": true},
+  {"name": "S7", "spawn": [-41.5, 61, -199.5], "goal": [-40, 62, -200], "scaffold": 29, "pickaxe": true}
+]
