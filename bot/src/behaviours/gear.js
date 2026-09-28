@@ -731,3 +731,7 @@ module.exports.countsFromFacts = countsFromFacts
 module.exports.handoverWaiting = handoverWaiting
 module.exports.tableBlock = tableBlock
 module.exports.liveCounts = liveCounts
+// Craft-any reuse (idkcraft-did.2): the verified single-op path, unmodified.
+module.exports.opSticks = opSticks
+module.exports.opPlanks = opPlanks
+module.exports.runOp = runOp

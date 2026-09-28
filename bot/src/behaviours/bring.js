@@ -8,6 +8,17 @@ const exploreMod = require('./explore')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
+
+// Deferred require: bring loads during goal's load (goal->forage/deliver->
+// bring) while craftany->craft->goal closes the loop — a top-level require
+// here would hand forage a half-loaded bring (forage.bring.hasPickaxe
+// throws, forage reads infeasible, explore wins). First call happens long
+// after load (stockpile.js craftMod precedent).
+let craftanyMod = null
+function craftany() {
+  if (!craftanyMod) craftanyMod = require('./craftany')
+  return craftanyMod
+}
 const woolMod = require('./wool')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
@@ -300,7 +311,12 @@ function planItemGive(bot, resolved, want, base) {
   }
   let keepName = null
   if (baseTools > 0) {
-    const held = names.filter((n) => isShareKeep(n) && (live[n] || 0) > 0)
+    // The keep pins the base's best piece (the bot's own gear), not the
+    // live best: fetched or freshly crafted stock gives while the original
+    // tool stays — otherwise a forged iron axe would strand on the keep
+    // while the bot hands over its old stone one (revmux 01). Pack orders
+    // pass no base (bc is live), so their rule is unchanged.
+    const held = names.filter((n) => isShareKeep(n) && (bc[n] || 0) > 0 && (live[n] || 0) > 0)
     if (held.length > 0) keepName = held.slice().sort((a, b) => tierOf(b) - tierOf(a))[0]
   }
   const giveable = (n, c) => {
@@ -781,13 +797,68 @@ function toWoolHunt(bot, o) {
 }
 
 // Item rung exhaustion: wool falls through to the sheep hunt; anything
-// else refuses with the item reason.
+// else falls through to the craft rung, then the honest refusal.
 function refuseItemOrHunt(bot, ctx, o) {
   if (woolMod.isWoolFamily(o)) {
     toWoolHunt(bot, o)
     return
   }
+  enterCraftOrRefuse(bot, ctx, o)
+}
+
+// Craft candidates best-tier-first (iron > stone > wooden, the keep-list
+// rank); non-tools keep resolver order (stable sort). The planner tries in
+// order and crafts the first covered, so 'bring me axe' forges the best
+// axe the pack can feed while 'bring me iron axe' stays exact.
+function orderCraftNames(names) {
+  const list = Array.isArray(names) ? names.slice() : []
+  list.sort((a, b) => tierOf(b) - tierOf(a))
+  return list
+}
+
+// Craft rung (did.2): after the chest (and the wool hunt), before the
+// honest refusal. One batch per order — tools land one piece, torch lands
+// four — then the pack plan gives full or partial, as after a chest fetch.
+// did.4 routes bed-ingredient gaps back through here.
+function enterCraftOrRefuse(bot, ctx, o) {
+  const plan = craftany().planCraft(bot, ctx, orderCraftNames(o.names || []), 1)
+  if (plan.ok) {
+    o.phase = 'craft'
+    o.craftTarget = plan.target
+    try {
+      ctx.craftany = null // a cancelled run must not resume under the new one
+    } catch (_) { /* state best-effort */ }
+    say(bot, `making you a ${plan.target}`)
+    return
+  }
+  if (plan.fail === 'missing' || plan.fail === 'no-table') {
+    refuse(bot, ctx, plan.line)
+    return
+  }
   refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+}
+
+function craftTick(bot, ctx, o) {
+  const res = craftany()(bot, ctx, orderCraftNames(o.names || []), 1)
+  if (res === 'running') return
+  if (res && res.done) {
+    const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase)
+    o.items = plan.items
+    o.have = plan.have
+    o.drop = plan.items.length > 0 ? plan.items[0].name : null
+    if (plan.have >= o.want) {
+      o.phase = 'return'
+      o.saidWaiting = false
+    } else if (plan.have > 0) {
+      say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
+      o.phase = 'return'
+      o.saidWaiting = false
+    } else {
+      refuse(bot, ctx, `could not craft ${res.target || o.name}`)
+    }
+    return
+  }
+  refuse(bot, ctx, (res && res.line) || `can't make ${o.name}: crafting failed`)
 }
 
 // Fetch-first from the home chest (atl.14 phase 2): an order that opens
@@ -936,7 +1007,7 @@ async function fetchItem(bot, ctx, o) {
       o.phase = 'return'
       o.saidWaiting = false
     } else {
-      refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+      enterCraftOrRefuse(bot, ctx, o)
     }
   } catch (_) {
     o.chestInFlight = false
@@ -964,6 +1035,8 @@ async function bring(bot, ctx, target, state) {
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
 
   if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return }
+
+  if (o.phase === 'craft') { craftTick(bot, ctx, o); return }
 
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
@@ -1327,6 +1400,7 @@ module.exports.isFoodRequest = isFoodRequest
 module.exports.normalizeBringName = normalizeBringName
 module.exports.resolveItem = resolveItem
 module.exports.planItemGive = planItemGive
+module.exports.orderCraftNames = orderCraftNames
 module.exports.packCounts = packCounts
 module.exports.itemRefusal = itemRefusal
 module.exports.tierArticle = tierArticle
