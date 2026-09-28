@@ -397,4 +397,25 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.ok(bot.lines.some((l) => l === 'no sheep within 48 blocks'), `lines: ${bot.lines}`)
     assert.equal(bot._tickerCtx.bring, null)
   })
+
+  it('spent legs with partial stock hand it over instead of refusing', async () => {
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 1 }], playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    anchor(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me wool 3')
+    assert.deepEqual(bot.lines, ['looking for sheep'])
+    await drive(bot, bot._tickerCtx, null, 600)
+    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, only got 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+  })
+
+  it('anchorless with partial stock hands it over at once', async () => {
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 1 }], playerPos: pos(30, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 3')
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(bot.lines.some((l) => l === 'only got 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+  })
 })

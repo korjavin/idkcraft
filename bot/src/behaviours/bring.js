@@ -484,6 +484,15 @@ function refuseExhausted(bot, ctx, o) {
   const kind = o.kind || 'block'
   const woolNone = o.color ? `no ${o.color} sheep` : 'no sheep'
   const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
+  // A wool hunt that gathered something still hands it over instead of
+  // refusing with a full pack (the short-pack rung promised a top-up, and
+  // the legs proved none is coming).
+  if (kind === 'wool' && o.have > 0 && o.drop) {
+    say(bot, `searched ${n} areas, ${base}`)
+    o.phase = 'return'
+    o.saidWaiting = false
+    return
+  }
   refuse(bot, ctx, `searched ${n} areas, ${base}`)
 }
 
@@ -533,6 +542,12 @@ function canBringName(bot, name) {
 async function enterSearch(bot, ctx, o, legacy) {
   const s = o.searchLegs || (o.searchLegs = { legs: 0, startedAt: Date.now(), announced: false, last: 'empty' })
   if (!exploreMod.anchorOf(bot, ctx)) {
+    if ((o.kind || 'block') === 'wool' && o.have > 0 && o.drop) {
+      say(bot, legacy) // anchorless with stock: hand it over, like the legs path
+      o.phase = 'return'
+      o.saidWaiting = false
+      return
+    }
     refuse(bot, ctx, legacy)
     return
   }
