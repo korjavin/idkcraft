@@ -114,7 +114,7 @@ describe('canBreak guard (idkcraft-drq)', () => {
     try {
       logDeny(blk('dirt', -10, 56, 124), 'below-feet')
     } finally { console.log = orig }
-    assert.ok(lines.some((l) => l.startsWith('selftrap: dirt at -10 56 124')), lines.join('\n'))
+    assert.ok(lines.some((l) => l === 'selftrap: refused dig dirt at -10 56 124 (below-feet)'), lines.join('\n'))
   })
 
   it('CLEAR_FLORA is exported for stockpile', () => {

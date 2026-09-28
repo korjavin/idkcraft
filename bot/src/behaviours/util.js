@@ -184,7 +184,7 @@ function logDeny(block, reason) {
       ? `${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`
       : '? ? ?'
     if (reason === 'below-feet') {
-      console.log(`selftrap: ${n} at ${at} (below feet)`)
+      console.log(`selftrap: refused dig ${n} at ${at} (${reason})`)
     } else {
       console.log(`protected: ${n} at ${at}`)
     }
