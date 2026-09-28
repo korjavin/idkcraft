@@ -220,6 +220,13 @@ describe('bring pack plan keep-list (idkcraft-did.1)', () => {
     assert.equal(p.keptOnly, false)
   })
 
+  it('armour keep ranks tiers: leather+netherite gives leather', () => {
+    const bot = mockBot({ items: [{ name: 'leather_helmet', count: 1 }, { name: 'netherite_helmet', count: 1 }] })
+    const p = bring.planItemGive(bot, { names: ['leather_helmet', 'netherite_helmet'], family: 'helmet' }, 2)
+    assert.deepEqual(p.items, [{ name: 'leather_helmet', count: 1 }])
+    assert.equal(p.keptOnly, false)
+  })
+
   it('chest top-ups give: the keep deducts from the opening pack, not live', () => {
     const bot = mockBot({ items: [{ name: 'stone_axe', count: 1 }] }) // withdrawn after the order opened
     const p = bring.planItemGive(bot, { names: ['stone_axe'], family: 'axe' }, 1, {})
@@ -334,6 +341,7 @@ describe('bring me <item> from the chest (idkcraft-did.1)', () => {
     assert.ok(!bot._tickerCtx.bring, 'no order created')
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 3]])
     assert.ok(bot.lines.includes('here are 3 white_wool'), `lines: ${bot.lines}`)
+    assert.equal(bot.calls.opens, 1, 'one window for the whole family fetch')
   })
 
   it('a short chest returns a partial haul with an honest only-line', async () => {
@@ -412,7 +420,8 @@ describe('bring me <item> from the chest (idkcraft-did.1)', () => {
   })
 
   it('a fetch completed after a new order leaves the new order alone', async () => {
-    const bot = mockBot({ chest: [{ name: 'white_wool', count: 5 }], playerPos: pos(30, 64, 0) })
+    // Empty of wool: the unguarded code would refuse and wipe the new order.
+    const bot = mockBot({ chest: [{ name: 'torch', count: 9 }], playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
     chestHome(ctx)

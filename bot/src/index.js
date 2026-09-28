@@ -1310,7 +1310,7 @@ function fleeReflex(bot, ctx) {
       const need = want || bringMod.WANT_ORE
       const plan = resolved ? bringMod.planItemGive(bot, resolved, need) : null
       const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
-      if (plan && plan.have > 0 && (plan.have >= need || !worldFallback)) {
+      const openPackOrder = () => {
         if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
@@ -1324,6 +1324,7 @@ function fleeReflex(bot, ctx) {
         const desc = plan.items.map((i) => `${i.count} ${i.name}`).join(', ')
         return plan.have >= need ? `coming with ${desc}` : `only ${desc}, coming`
       }
+      if (plan && plan.have > 0 && (plan.have >= need || !worldFallback)) return openPackOrder()
       // Orders carry the canonical family name, so 'beds' reads as 'bed'
       // everywhere. The chest rung runs for every name with no diggable world
       // form — including exact block names like white_wool, dirt or torch.
@@ -1355,7 +1356,11 @@ function fleeReflex(bot, ctx) {
         const search = startFarSearch(bot, name)
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
-          if (!bringMod.canSearch(bot, ctx)) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          if (!bringMod.canSearch(bot, ctx)) {
+            // No legs to walk: a short pack still gives instead of refusing.
+            if (plan && plan.have > 0) return openPackOrder()
+            return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          }
           if (!bringMod.canBringName(bot, name)) return `can't bring ${name} — ores and logs only`
           if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
@@ -1372,7 +1377,10 @@ function fleeReflex(bot, ctx) {
         return `nothing within 48, widening the search for ${name}…`
       }
       clearStuck()
-      return startBlockOrder(bot, ctx, { name, want, by }, res)
+      const answer = startBlockOrder(bot, ctx, { name, want, by }, res)
+      // A refused block order (pickaxe tier) still gives a short pack.
+      if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
+      return answer
     },
     setFlat: ({ radius, by, explicit }) => {
       clearPendingSearch(ctx)

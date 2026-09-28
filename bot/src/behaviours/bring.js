@@ -257,12 +257,16 @@ function packCounts(bot) {
   return counts
 }
 
-// Material tier for the family keep rule; PICKAXE_RANK orders the shared
-// materials, unlisted (shears, shield, bow, …) keep as rank 0.
+// Material tier for the family keep rule: tools use PICKAXE_RANK, armour its
+// own ladder. Unlisted keep items (shears, shield, bow, …) rank 0; an unknown
+// material on a known suffix ranks below all (give the mystery piece first,
+// keep the known-good one).
+const ARMOR_RANK = { leather: 0, golden: 0, turtle: 1, chainmail: 1, iron: 2, diamond: 3, netherite: 4 }
 function tierOf(name) {
-  const m = typeof name === 'string' && name.match(/^(\w+?)_(?:pickaxe|axe|shovel|hoe|sword)$/)
-  const mat = m && m[1]
-  return mat && mat in PICKAXE_RANK ? PICKAXE_RANK[mat] : 0
+  const m = typeof name === 'string' && name.match(/^(\w+?)_(pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boots)$/)
+  if (!m) return 0
+  const rank = /^(helmet|chestplate|leggings|boots)$/.test(m[2]) ? ARMOR_RANK : PICKAXE_RANK
+  return m[1] in rank ? rank[m[1]] : -1
 }
 
 // Pack plan for a resolved item: concrete [{name,count}] up to want, honouring

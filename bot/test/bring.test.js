@@ -168,6 +168,25 @@ describe('bring me order', () => {
     assert.equal(bot._tickerCtx.bring.kind, 'item')
   })
 
+  it('a short pack still gives when the block order refuses (pickaxe tier)', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'coal', count: 2 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['only 2 coal, coming'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
+  it('a short pack still gives when there is nothing to mine and no anchor', () => {
+    const bot = mockBot({ items: [{ name: 'coal', count: 2 }] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['only 2 coal, coming'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
   it('unknown item and nothing in range refuse', () => {
     const weird = mockBot({})
     handleChat(weird, tickerFor(weird), 'P', 'bring me unobtanium')
