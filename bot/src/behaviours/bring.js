@@ -5,6 +5,7 @@ const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveF
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
+const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
@@ -24,11 +25,14 @@ const woolMod = require('./wool')
 //
 // Owner direction: no branching rescue logic. Failure points refuse with a
 // message (the ef3/rw4.6 stuck menu owns the choices); the FSM reserve is a
-// plain refusal. Bring explicitly raises NO stuck facts: a stall refuses and
-// ends the order instead of starting an episode (unlike follow/roam/lead,
-// whose detectors feed the menu, and gather, which reports at its final).
-// The ticker place_error/no-displacement backstops still catch a bring that
-// loops without refusing, and release() resumes ctx.bring untouched.
+// plain refusal. Bring raises exactly one stuck fact: a below-feet trap
+// denial in the dig phase (atl.17 — the stance is a property of the place,
+// re-finding the same nearest block never changes it, so the menu owns the
+// sidestep). Every other stall refuses and ends the order instead of
+// starting an episode (unlike follow/roam/lead, whose detectors feed the
+// menu, and gather, which reports at its final). The ticker
+// place_error/no-displacement backstops still catch a bring that loops
+// without refusing, and release() resumes ctx.bring untouched.
 const FIND_RADIUS = 48
 const WANT_ORE = 3
 const WANT_LOGS = 4
@@ -378,7 +382,10 @@ async function enterSearch(bot, ctx, o, legacy) {
     refuse(bot, ctx, legacy)
     return
   }
-  if (s.legs >= searchLegs() || Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) {
+  // A time-expired search is exhausted even with legs left (revmux
+  // 01-review): self wool hunts must fail, never reopen 3 more searches.
+  if (Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) s.timedOut = true
+  if (s.legs >= searchLegs() || s.timedOut) {
     refuseExhausted(bot, ctx, o)
     return
   }
@@ -641,6 +648,17 @@ function openPhase(ctx) {
   return 'find'
 }
 
+// Day gate for self orders (goalFacts mirror): day is timeOfDay < 12000,
+// unknown reads as day (never cancel on an unreadable clock).
+function isDaytime(bot) {
+  try {
+    const t = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
+    return !(t >= 0) ? true : t < 12000
+  } catch (_) {
+    return true
+  }
+}
+
 function chestFetch(bot, ctx, o, bp) {
   const c = ctx && ctx.home && ctx.home.chest
   const food = (o.kind || 'block') === 'food'
@@ -753,6 +771,17 @@ function chestFetch(bot, ctx, o, bp) {
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
+  // Self orders (jr2.2 bed wool) end at dusk: the night belongs to gohome/
+  // stay, and the dispatch runs bring over every goal step but fight, so an
+  // uncancelled hunt would own the body past dark. Silent — gohome announces
+  // — and the owning step reopens in the morning (a short cancelled hunt
+  // reads as reopen, not failure, there).
+  if (o.self && !isDaytime(bot)) {
+    metrics.bring.inc({ outcome: 'cancelled', kind: (o.kind || 'block') })
+    ctx.bring = null
+    clearSearchLeg(ctx)
+    return
+  }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const grounded = !bot.entity || bot.entity.onGround !== false
@@ -953,6 +982,17 @@ async function bring(bot, ctx, target, state) {
           : `could not reach ${o.block} safely`)
         return
       }
+      if (bDeny === 'below-feet') {
+        // atl.17: below-feet is a property of the PLACE — find re-picks the
+        // same nearest block and the stance never changes, so the dig
+        // refuses 3 times with the bot standing still (prod 2026-09-28).
+        // Raise the stuck fact and let the recover menu change the stance
+        // (sidestep); release() resumes ctx.bring untouched, find re-picks
+        // the same block from the new stance, and the dig passes. One
+        // episode per strike at most (setStuck latches while one runs);
+        // denyStrikes stays the ceiling.
+        try { recover.setStuck(ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
+      }
       o.pos = null
       o.phase = 'find'
       return
@@ -1009,6 +1049,9 @@ async function bring(bot, ctx, target, state) {
       itemMod.resumeSub(bot, ctx, o)
       return
     }
+    // Self orders keep the goods: no walk, no toss (jr2.2 wool stays packed
+    // for the beds). The owning step reads the pack, not the order.
+    if (o.self) { done(bot, ctx); return }
     const p = bot.players && bot.players[o.by] && bot.players[o.by].entity
     if (!p || !p.position) {
       // 3a7 honesty: no coordinates for an out-of-range player — say where

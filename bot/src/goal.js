@@ -140,6 +140,16 @@ const MENU = {
     chat: () => 'on my own: building the house',
     verb: 'building the house',
   },
+  beds: {
+    // The two bedroom beds (jr2.2): wool hunt, craft at the table, place in
+    // the bedrooms — the bot's first (sleep sets the home respawn). Day only:
+    // the hunt owns the body and must not run past dark (bring dusk-cancels
+    // self orders, but the step never opens one at night in the first place).
+    // Non-v2 homes read beds='both' (nothing owed), so no version check here.
+    feasible: (facts) => facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'),
+    chat: () => 'on my own: making the beds',
+    verb: 'making beds',
+  },
   light: {
     // Day shift only: walking the yard at night is the danger being fixed.
     // Fuel floor mirrors the behaviour's reserve (deferred require: the
@@ -176,7 +186,19 @@ const MENU = {
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
-      if (facts.home === 'built') return false
+      if (facts.home === 'built') {
+        // Post-build top-up for the beds only (jr2.2): the house budget
+        // usually leaves 6+ planks, but a tight exact-wood remainder must not
+        // strand the beds with nobody left to chop. Single-wood count — bed
+        // variants bind one wood, so a mixed 2+2+2 is still short. A partial
+        // log load never reads as covered (craft only converts full 14-log
+        // batches — 3 leftover logs would otherwise strand between this gate
+        // and the batch gate with nothing converting them). Bounded by the
+        // bed need: once both beds are in (or the planks cover them), the bot
+        // never farms again.
+        if (facts.beds !== 'none' && facts.beds !== 'one') return false
+        return (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS
+      }
       const total = facts.planks + facts.logs * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS)
@@ -340,7 +362,7 @@ function tableYieldToBuild(facts, bot, ctx) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -680,7 +702,7 @@ function goalFacts(bot, ctx) {
   let surplus = 'no'
   try {
     const batch = (stockpileMod && stockpileMod.SURPLUS_BATCH) || 16
-    if (stockpileMod.surplusCount(bot) >= batch) surplus = 'yes'
+    if (stockpileMod.surplusCount(bot, ctx) >= batch) surplus = 'yes'
   } catch (_) { /* no surplus */ }
   // Furnace claim (ipn.1 station, chest/table contract): set when the block
   // stands. Handover (ipn.3): forged owner goods still on hand flip the
@@ -730,6 +752,13 @@ function goalFacts(bot, ctx) {
   try {
     player = deliverMod.playerStatus(bot).level
   } catch (_) { /* nobody online */ }
+  // Bedroom beds (jr2.2): none/one/both placed. Deferred require (the light
+  // precedent — goal.js loads inside the behaviour chain). Unreadable reads
+  // both: beds yields, nothing churns.
+  let beds = 'both'
+  try {
+    beds = require('./behaviours/beds').bedsFact(bot, ctx && ctx.home) || 'both'
+  } catch (_) { /* unreadable beds */ }
   // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
   // Unreadable reads done (light precedent): gear yields, nothing churns.
   let gear = 'done'
@@ -748,7 +777,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -784,10 +813,11 @@ function goalText(facts, home) {
   // menu never offers stay/gohome) goes steady.
   const inside = facts.time === 'day' ? 'no' : facts.inside
   const unlit = unlitBucket(facts.unlit)
+  const beds = facts.beds === 'none' || facts.beds === 'one' ? facts.beds : 'both'
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
-    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear}`
+    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}`
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -865,9 +895,10 @@ function goalFsm(facts, feasibleNames) {
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
-  gather: 'logs is none or few and home is not built: chop trees',
+  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few: chop trees',
   craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
+  beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -1030,6 +1061,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       return 'build: nothing left to build'
     }
+    case 'beds':
+      if (facts.time !== 'day') return 'beds: daytime job'
+      if (facts.home !== 'built') return 'beds: house not built yet'
+      if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
       const home = ctx && ctx.home

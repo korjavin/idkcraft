@@ -1359,6 +1359,19 @@ describe('work mode (epic rw4)', () => {
     ticker.destroy()
   })
 
+  it('follow me wakes a sleeping body (night orders obey)', async () => {
+    const bot = workBot()
+    bot.isSleeping = true
+    let wakes = 0
+    bot.wake = async () => { wakes++; bot.isSleeping = false }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'follow me')
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+    assert.equal(wakes, 1, 'the order leaves the bed')
+    ticker.destroy()
+  })
+
   describe('follow me from an unseen player (3a7)', () => {
     function unseenBot() {
       const bot = workBot()
