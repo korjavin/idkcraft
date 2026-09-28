@@ -14,7 +14,7 @@
 //   REPLAY_QUIET=0 (keep per-tick ticker chatter; default filters it so the
 //   table stays readable — recover/stuck lines always print),
 //   REPLAY_HOST (127.0.0.1), REPLAY_PORT (25571),
-//   REPLAY_CONTAINER (idk-replay, docker exec rcon-cli for tp),
+//   REPLAY_CONTAINER (idk-replay, docker exec rcon-cli for tp/op),
 //   REPLAY_TAG (bot name suffix; default random), REPLAY_OUT (optional JSON
 //   results path), REPLAY_VARIANT/REPLAY_WORLDSHA/REPLAY_GITSHA (run header,
 //   set by stuck-run.sh). The rig server must already be up.
@@ -71,6 +71,7 @@ async function rcon(cmd) {
   // so assert on the output text instead of the exit code.
   const out = String(stdout)
   if ((cmd.startsWith('tp ') && !out.includes('Teleported')) ||
+      (cmd.startsWith('op ') && !out.toLowerCase().includes('operator')) ||
       ((cmd.startsWith('clear ') || cmd.startsWith('give ') || cmd.startsWith('effect ')) && /No entity was found|Unknown|incorrect/i.test(out))) {
     throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
@@ -181,6 +182,16 @@ async function main() {
     (async () => { for (let i = 0; i < 240 && !follower.entity; i++) await sleep(250) })(),
   ])
   await sleep(3000)
+  // Operator status (idkcraft-3ro): every replay spot sits inside the
+  // spawn-protection radius (world spawn (-48,65,-208), r=16, regenerated
+  // from defaults at every boot), so a non-op bot gets each dig and place
+  // refused and the baseline measures protection, not behaviour (3/10 —
+  // only the pure-walk spots pass). Op both bots once per run, before the
+  // first spot; rcon asserts, so a run that lost op fails loud instead of
+  // drifting the baseline again. rcon cannot set spawn-protection and
+  // START.sh lives outside the repo, so self-op is the harness-side fix.
+  await rcon(`op ${GUIDE}`)
+  await rcon(`op ${FOLLOWER}`)
   // Park the body for setups: without this the ticker walks during the
   // multi-second tp/kit/settle phase and rows measure pre-window walking
   // (baseline-1 EP0 reached in 1 s with maxDisp 0.0). ctx.paused is the
