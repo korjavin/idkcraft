@@ -138,7 +138,9 @@ function scan(bot, ctx, opts) {
 // Read rule for bring/forage (atl.16): when the cell's chunk is loaded,
 // exposure is recomputed from the live world (the vein may have opened
 // up or been buried since the note); otherwise the remembered flag is
-// trusted — which is undefined for pre-flag records. Never throws.
+// trusted — which is undefined for pre-flag records. A loaded cell whose
+// block no longer matches the note (mined out) reads as undefined, not
+// as a confident boolean for an empty hole. Never throws.
 function exposedOf(bot, item) {
   const remembered = item && typeof item.exposed === 'boolean' ? item.exposed : undefined
   try {
@@ -146,7 +148,9 @@ function exposedOf(bot, item) {
       typeof item.y !== 'number' || typeof item.z !== 'number') return remembered
     // Real blockAt wants a Vec3 (b50); memory cells are plain objects.
     const v = new Vec3(Math.floor(item.x), Math.floor(item.y), Math.floor(item.z))
-    if (!bot.blockAt(v)) return remembered
+    const live = bot.blockAt(v)
+    if (!live) return remembered // chunk unloaded: trust the flag
+    if (typeof item.name === 'string' && live.name !== item.name) return undefined
     return scout.isExposed(bot, v)
   } catch (_) {
     return remembered

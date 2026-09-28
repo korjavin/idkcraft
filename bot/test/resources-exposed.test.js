@@ -108,6 +108,16 @@ describe('exposedOf read rule (atl.16)', () => {
     assert.equal(resources.exposedOf(shut, cell(true)), false)
   })
 
+  it('a mined-out loaded cell reads undefined, not a confident boolean', () => {
+    // Dug out with the tunnel beside it: neighbours say exposed, but the
+    // vein is gone — must not read true.
+    const dug = worldBot({ names: { '10,60,0': 'air', '11,60,0': 'air' } })
+    assert.equal(resources.exposedOf(dug, cell(true)), undefined)
+    // Filled with stone: must not read a confident false either.
+    const filled = worldBot({ names: { '10,60,0': 'stone' } })
+    assert.equal(resources.exposedOf(filled, cell(true)), undefined)
+  })
+
   it('unloaded chunk trusts the remembered flag', () => {
     const bot = worldBot({})
     bot.blockAt = () => null
