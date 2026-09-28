@@ -522,6 +522,31 @@ function fleeReflex(bot, ctx) {
     return null
   }
 
+  // Idle-while-far probe (idkcraft-rra): a noPath verdict empties the
+  // executor, so moving reads false and the moving-only watch never counts —
+  // the trap stays silent forever. A live but unsatisfied goal with an idle
+  // executor counts the same stillness instead. Only the goal itself knows
+  // its radius, so satisfaction is asked of it; a goal without coordinates
+  // reads as no goal (conservative: no stuck).
+  function idleFarFromGoal(bp) {
+    let g = null
+    try { g = bot.pathfinder && bot.pathfinder.goal } catch (_) { return false }
+    if (!g) return false
+    try {
+      if (typeof g.isEnd === 'function') {
+        const node = bp && typeof bp.floored === 'function'
+          ? bp.floored()
+          : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+        return !g.isEnd(node)
+      }
+    } catch (_) { /* fall through to the distance check */ }
+    const gp = backstopGoal()
+    if (!gp || !bp) return false
+    let d = null
+    try { d = Math.hypot(bp.x - gp.x, bp.y - gp.y, bp.z - gp.z) } catch (_) { return false }
+    return typeof d === 'number' && d > 3
+  }
+
   function noteDisplacement() {
     if (ctx.paused) return
     let bp = null
@@ -533,6 +558,20 @@ function fleeReflex(bot, ctx) {
     if (bp && ctx.lastPos && moving) {
       if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       else {
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuck = null
+      }
+    } else if (!moving && bp && ctx.lastPos) {
+      // Idle executor (idkcraft-rra): stillness counts only against a live
+      // unsatisfied goal after a terminal planner verdict (noPath/timeout).
+      // Normal idle at goal, without a goal, or mid-plan (none/success)
+      // resets — a placing build holds unsatisfiable approach goals with an
+      // idle executor for minutes, and must never trip this.
+      const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
+      if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
+        if (terminal && idleFarFromGoal(bp)) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+        else ctx.stuckTicks = 0
+      } else {
         ctx.stuckTicks = 0
         if (!ctx.recovery) ctx.stuck = null
       }
