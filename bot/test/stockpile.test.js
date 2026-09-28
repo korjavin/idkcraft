@@ -315,7 +315,8 @@ describe('stockpile behaviour', () => {
     const bot = mockBot({ cells: { '5,64,1': 'chest' }, inv: [{ name: 'bread', count: 3 }] })
     const ctx = homeCtx({ ctx: { chestFull: true, chestFullAt: 1, chestErrorAt: 2, chestNoSpotAt: 3 } })
     stockpile(bot, ctx)
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
+    assert.equal(typeof ctx.home.chest.floored, 'function', 'Vec3 claim (h9z): withChest blockAt()s it')
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.chestFull, false) // a claim proves the chest works: parks cleared
     assert.equal(ctx.chestErrorAt, null)
@@ -331,7 +332,7 @@ describe('stockpile behaviour', () => {
     bot.entity.position = pos(5, 64, 1) // arrived
     stockpile(bot, ctx) // arrived: place
     await flush()
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
     assert.ok(bot.chats.includes('placed the home chest'))
   })
 
@@ -483,7 +484,7 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx)
     await flush()
     assert.deepEqual(bot.calls.digs, ['short_grass'])
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
   })
 
   it('a refused dig fails the step loudly', async () => {
@@ -506,7 +507,7 @@ describe('stockpile behaviour', () => {
     bot.entity.position = pos(8.5, 64, 3.5)
     stockpile(bot, ctx)
     await flush()
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
   })
 
   it('a failed craft fails the step loudly', async () => {
@@ -824,7 +825,7 @@ describe('stockpile place residuals (idkcraft-cq7 batch B2)', () => {
     stockpile(bot, ctx)
     await flush()
     await flush()
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 })
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
     assert.equal(ctx.stepStatus, 'running')
   })
 

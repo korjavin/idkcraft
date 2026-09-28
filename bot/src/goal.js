@@ -630,6 +630,14 @@ const REFAIL_DIST = 32
 // spiral after one river and strand the night walk. The guard bars the
 // steps that would otherwise replay the failure identically.
 const SELF_ADVANCING = { explore: true, gohome: true, stay: true }
+// Done-hold exemptions (h9z): self-advancing steps re-pick new targets by
+// construction; equip's effects (wooden kit, scaffold count) are invisible
+// in the facts text and done implies kit-complete hence infeasible (a stale
+// hold would strand re-arming once scaffold is spent); gear's dones are
+// documented no-hold yields ("re-plan next tick").
+function doneHoldable(name) {
+  return !SELF_ADVANCING[name] && name !== 'equip' && name !== 'gear'
+}
 function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
@@ -759,7 +767,13 @@ function chatStep(bot, ctx, line) {
 
 function stepWhy(name, facts, bot, ctx, text) {
   try {
-    if (failHolds(ctx, name, text, bot)) return `${name} holds after failure`
+    if (failHolds(ctx, name, text, bot)) {
+      try {
+        const st = ctx && ctx.stepFail && ctx.stepFail[name] && ctx.stepFail[name].status
+        if (st === 'done') return `${name} holds after an unchanged done`
+      } catch (_) { /* fall through to the failure line */ }
+      return `${name} holds after failure`
+    }
   } catch (_) { /* wording best-effort */ }
   if (name === 'gather') {
     // atl.4 inline hold (not via failHolds): same final, same log count.
@@ -992,10 +1006,22 @@ async function decide(bot, ctx) {
       const bp = bot && bot.entity && bot.entity.position
       ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
     } catch (_) { /* guard best-effort */ }
-  } else if (finished && prev && status === 'done' && ctx.stepFail && typeof ctx.stepFail === 'object') {
-    // A success retires its own hold: tomorrow's identical failure re-arms
-    // from scratch instead of inheriting a stale record (round-1 major).
-    try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
+  } else if (finished && prev && status === 'done') {
+    if (ctx.goalText === text && doneHoldable(prev)) {
+      // Done with no visible effect holds like a failure (h9z): a step that
+      // ends 'done' without moving the facts would otherwise re-pick forever
+      // (prod: silent craft loop, 287 ticks, 0 failures). New facts or
+      // relocation release it, same as the failure hold.
+      try {
+        if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
+        const bp2 = bot && bot.entity && bot.entity.position
+        ctx.stepFail[prev] = { status, text, pos: bp2 ? { x: bp2.x, y: bp2.y, z: bp2.z } : null }
+      } catch (_) { /* guard best-effort */ }
+    } else if (ctx.stepFail && typeof ctx.stepFail === 'object') {
+      // A success retires its own hold: tomorrow's identical failure re-arms
+      // from scratch instead of inheriting a stale record (round-1 major).
+      try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
+    }
   }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
@@ -1022,7 +1048,10 @@ async function decide(bot, ctx) {
   const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
   if (!prev || finished || ctx.goalText !== text || chainOwns) {
     const askKey = `${text}\n${status || ''}`
-    if (prev && ctx.askedKey === askKey && !chainOwns) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    // The shortcut must respect holds (h9z): it returns the finished step
+    // without choosing, so a held step would bypass its own hold and
+    // re-pick forever.
+    if (prev && ctx.askedKey === askKey && !chainOwns && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {

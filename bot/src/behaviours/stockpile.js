@@ -259,7 +259,7 @@ function farStalled(ctx, key) {
 // placed-station contract as the table: a ghost claim would walk bring to
 // an empty cell).
 function adopted(ctx, spot) {
-  ctx.home.chest = { x: spot.x, y: spot.y, z: spot.z }
+  ctx.home.chest = new Vec3(spot.x, spot.y, spot.z) // Vec3, not plain (h9z): withChest blockAt()s it
   ctx.chestFull = false
   ctx.chestFullAt = null
   ctx.chestErrorAt = null
@@ -558,13 +558,18 @@ function placeChest(bot, ctx, spot, bp) {
     // a top-level require here would hand craft a half-loaded goal.
     let craftMod = null
     try { craftMod = require('./craft') } catch (_) { craftMod = null }
-    const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
     let tableBlock = null
-    if (tablePos && craftMod) {
-      try {
-        const b = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-        if (b && b.name === 'crafting_table') tableBlock = b
-      } catch (_) { tableBlock = null }
+    let tablePos = null
+    if (craftMod) {
+      // First verified-standing (h9z): a ghost home claim must not shadow
+      // the standing roadside table (craft.js pattern).
+      for (const cand of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+        if (!cand || typeof cand.x !== 'number') continue
+        try {
+          const b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z))
+          if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
+        } catch (_) { /* unreadable: try the next claim */ }
+      }
     }
     if (!tableBlock) {
       fail(ctx, 'no-chest')

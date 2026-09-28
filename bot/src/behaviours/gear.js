@@ -412,11 +412,14 @@ function walkTo(bot, ctx, key, p, reason) {
 // else null. Never trust the claim alone (mined table).
 function tableBlock(bot, ctx) {
   try {
-    const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
-    if (!tablePos || typeof tablePos.x !== 'number') return null
-    const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-    if (!block || block.name !== 'crafting_table') return null
-    return { block, pos: tablePos }
+    // First verified-standing (h9z): a ghost home claim must not shadow
+    // the standing roadside table (craft.js pattern).
+    for (const tablePos of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+      if (!tablePos || typeof tablePos.x !== 'number') continue
+      const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
+      if (block && block.name === 'crafting_table') return { block, pos: tablePos }
+    }
+    return null
   } catch (_) {
     return null
   }
@@ -722,3 +725,4 @@ module.exports.menuPlan = menuPlan
 module.exports.planFor = planFor
 module.exports.countsFromFacts = countsFromFacts
 module.exports.handoverWaiting = handoverWaiting
+module.exports.tableBlock = tableBlock

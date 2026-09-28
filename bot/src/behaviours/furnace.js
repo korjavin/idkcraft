@@ -55,12 +55,15 @@ function freshRun() {
 // read, else null. Never trust the claim alone (mined table).
 function tableBlock(bot, ctx) {
   try {
-    const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
-    if (!tablePos || typeof tablePos.x !== 'number') return null
-    // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
-    const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-    if (!block || block.name !== 'crafting_table') return null
-    return { block, pos: tablePos }
+    // First verified-standing (h9z): a ghost home claim must not shadow
+    // the standing roadside table (craft.js pattern).
+    for (const tablePos of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+      if (!tablePos || typeof tablePos.x !== 'number') continue
+      // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
+      const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
+      if (block && block.name === 'crafting_table') return { block, pos: tablePos }
+    }
+    return null
   } catch (_) { return null }
 }
 
@@ -174,7 +177,7 @@ function doPlace(bot, ctx, f) {
       let block = null
       try { block = bot.blockAt(at) } catch (_) { block = null }
       if (!block || block.name !== 'furnace') throw new Error('furnace-place')
-      ctx.home.furnace = { x: at.x, y: at.y, z: at.z }
+      ctx.home.furnace = new Vec3(at.x, at.y, at.z) // Vec3, not plain (h9z): readers blockAt()s it
       try { console.log(`furnace placed at ${at.x},${at.y},${at.z}`) } catch (_) { /* log best-effort */ }
     } catch (err) {
       ctx.furnaceInFlight = false
@@ -355,6 +358,7 @@ function furnaceReady(bot, ctx) {
 
 module.exports = furnace
 module.exports.furnaceReady = furnaceReady
+module.exports.tableBlock = tableBlock
 module.exports.fuelPieces = fuelPieces
 module.exports.FURNACE_REACH = FURNACE_REACH
 module.exports.ORE_PER_FUEL = ORE_PER_FUEL
