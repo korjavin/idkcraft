@@ -146,20 +146,23 @@ function doorOpen(block) {
 // A player at the door (revmux jr2.3-02 core-2/body-3): the meet is the
 // one mode where the owner is expected through that door, so the night
 // hold never shuts it on them — it closes once they clear it. Anyone on
-// the roster counts; the bot itself never does.
+// the roster counts; the bot itself never does. Only the doorway side
+// counts (revmux jr2.3-03): past the door plane they are in, so the hold
+// shuts the door behind them instead of standing it open all night.
 const DOOR_GRACE_BLOCKS = 2.5
 function playerAtDoor(bot, home) {
   try {
     const door = doorPos(home)
     const cx = door.x + 0.5
     const cz = door.z + 0.5
+    const roomZ = insidePos(home).z
     const players = (bot && bot.players) || {}
     for (const key of Object.keys(players)) {
       if (key === bot.username) continue
       const ent = players[key] && players[key].entity
       const p = ent && ent.position
       if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') continue
-      if (Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
+      if (p.z < roomZ && Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
     }
   } catch (_) { /* unreadable roster: the old rule stands */ }
   return false

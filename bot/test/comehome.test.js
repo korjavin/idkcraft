@@ -293,6 +293,25 @@ describe('jr2.3 hold secures the night door, never fights the owner by day', () 
     assert.equal(ctx.comehome.phase, 'hold')
   })
 
+  it('night + open shuts behind an owner already in the room', async () => {
+    const inRoom = { Steve: { username: 'Steve', entity: { position: { x: 12.5, y: 64, z: 21.5 } } } }
+    const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: inRoom })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }, inShelter: true }
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 1, 'in for the night: secure the door')
+  })
+
+  it('night + open waits for an owner mid-doorway', async () => {
+    const midDoor = { Steve: { username: 'Steve', entity: { position: { x: 13.5, y: 64, z: 20.5 } } } }
+    const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: midDoor })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }, inShelter: true }
+    home.comehome(bot, ctx)
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 0, 'never shuts the panel on them')
+  })
+
   it('night + open still shuts once the owner clears the door', async () => {
     const away = { Steve: { username: 'Steve', entity: { position: { x: 30, y: 64, z: 30 } } } }
     const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: away })
