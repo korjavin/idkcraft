@@ -138,13 +138,18 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.equal(roof.length, 16)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
   })
-  it('v2 lays 94 cells: table, 21+door+21, 42 roof, 8 partition', () => {
-    assert.equal(BLUEPRINT_V2.length, 94)
+  it('v2 lays 99 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition', () => {
+    assert.equal(BLUEPRINT_V2.length, 99)
     assert.equal(PLANK_COUNT_V2, 92)
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
+    const floor = BLUEPRINT_V2.slice(1, 6)
+    assert.deepEqual(floor.map((c) => [c.dx, c.dy, c.dz, c.kind]), [
+      [1, -1, 4, 'fill'], [2, -1, 4, 'fill'], [4, -1, 4, 'fill'], [5, -1, 4, 'fill'],
+      [3, -1, 0, 'fill'],
+    ])
     const doorIdx = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
     assert.deepEqual(BLUEPRINT_V2[doorIdx], { dx: 3, dy: 0, dz: 0, kind: 'door' })
-    const lower = BLUEPRINT_V2.slice(1, doorIdx)
+    const lower = BLUEPRINT_V2.slice(6, doorIdx)
     assert.equal(lower.length, 21)
     assert.ok(lower.every((c) => c.kind === 'planks' && c.dy === 0))
     const upper = BLUEPRINT_V2.slice(doorIdx + 1, doorIdx + 22)
@@ -252,7 +257,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 0/94'))
+    assert.ok(bot.chats.some((m) => m === 'building 5/99')) // the dirt floor reads done from the start
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)
@@ -731,7 +736,7 @@ describe('cww roof approach must not demolish its own wall', () => {
     assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt still diggable')
   })
 
-  it('roof completes with walls standing: 52/94 never flaps back', async () => {
+  it('roof completes with walls standing: 57/99 never flaps back', async () => {
     // Prod state (cww): walls+door+table stand, the bot is outside after the
     // wall ring, the first roof cell approach used to eat a wall corner and
     // the rebuild took priority every other tick (23/40<->24/40 for 10+ min).
@@ -962,7 +967,7 @@ describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
 
   // Prod 2026-09-28: approach GoalPlaceBlock says arrived, the feet-to-corner
   // reach check says 'far' and resets — setGoal into an already-reached goal
-  // forever, 'building 2/94' every 10 s. The stand below (5 under the cell,
+  // forever, 'building 2/99' every 10 s. The stand below (5 under the cell,
   // a slope/hole) reproduces the metric split against the REAL goal class.
   it('goal-reached stand places within 5 ticks instead of re-approaching', async () => {
     const world = makeWorld()

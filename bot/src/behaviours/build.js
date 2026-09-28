@@ -19,12 +19,16 @@
 //        workbench INSIDE the common room at (5,0,1)
 //   y=0..1 partition posts (1,3),(3,3),(5,3) + bedroom divider (3,4)
 //        (8 planks, laid last)
+//   y=-1 bedroom floor (1c4): ground-fill under the four bed halves
+//        (1,4),(2,4),(4,4),(5,4) plus the doorway (3,0) — the door hangs
+//        on the block below like a bed. Done means SOLID ground (dirt
+//        counts), so flat sites place nothing and only dips take a plank.
 //
 // Both plans are in LAY ORDER: table first (crafting precedes walls — the
 // door is crafted at the table while it still stands on open ground), then
-// the lower ring, the door, the upper ring, the roof, then (v2) the
-// partition. Every ring sits on the previous one, so the block below is
-// always the place reference.
+// (v2) the bedroom floor like a foundation, the lower ring, the door, the
+// upper ring, the roof, then (v2) the partition. Every ring sits on the
+// previous one, so the block below is always the place reference.
 //
 // One behaviour tick advances at most one async place flight (guarded by
 // ctx.placeInFlight, same seam as eatInFlight/doEat). Materials are checked
@@ -69,6 +73,15 @@ const BLUEPRINT = (() => {
 
 const BLUEPRINT_V2 = (() => {
   const plan = [{ dx: 5, dy: 0, dz: 1, kind: 'table' }]
+  // Bedroom floor (idkcraft-1c4): ground-fill under the jr2.2 bed halves
+  // plus the doorway — the v2 bedrooms used to sit on raw terrain and a
+  // dip stranded bed placement (rig-proven: air under A-foot); the door
+  // hangs on the block below like a bed, so its dip strands it the same
+  // way (rig-proven: air under (3,0) refused the door 3x). Bed cells
+  // pinned to beds.cellsOf.
+  for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4], [3, 0]]) {
+    plan.push({ dx, dy: -1, dz, kind: 'fill' })
+  }
   const ring = (dy) => {
     for (const dx of [0, 1, 2, 4, 5, 6]) plan.push({ dx, dy, dz: 0, kind: 'planks' })
     for (let dx = 0; dx <= 6; dx++) plan.push({ dx, dy, dz: 5, kind: 'planks' })
@@ -112,6 +125,17 @@ function isReplaceable(name) {
   return typeof name === 'string' && (REPLACEABLE.has(name) || name.endsWith('_tulip'))
 }
 
+// Ground a bed can stand on (idkcraft-1c4 floor rule): anything solid.
+// Air-like, water and flora take a plank patch; lava reads missing too —
+// the placement refuses, the cell skips after 3, and the beds step fails
+// loud instead of burning a patch.
+function isSolidGround(name) {
+  if (typeof name !== 'string') return false
+  if (name === 'air' || name === 'cave_air' || name === 'void_air') return false
+  if (name === 'water' || name === 'lava') return false
+  return !isReplaceable(name)
+}
+
 function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
@@ -152,6 +176,7 @@ function cellDone(bot, home, cell) {
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
+  if (cell.kind === 'fill') return isSolidGround(name)
   return name.endsWith('_planks')
 }
 
