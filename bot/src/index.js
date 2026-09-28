@@ -7,7 +7,7 @@ const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT,
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
-const { addSwimExits } = require('./swim')
+const { addSwimExits, addSwimPrune } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
@@ -1223,7 +1223,7 @@ function fleeReflex(bot, ctx) {
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments: follow.js toggles it per tick on far level
     // pursuit (5vv), and runTick restores the default on every other tick.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
