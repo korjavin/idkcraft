@@ -60,6 +60,7 @@ const BEHAVIOURS = {
   dig_step: (bot, ctx) => recover.run(bot, ctx),
   hop_step: (bot, ctx) => recover.run(bot, ctx),
   sidestep: (bot, ctx) => recover.run(bot, ctx),
+  prod_free: (bot, ctx) => recover.run(bot, ctx),
   dig_through: (bot, ctx) => recover.run(bot, ctx),
   wait: (bot, ctx) => recover.run(bot, ctx),
   call_player: (bot, ctx) => recover.run(bot, ctx),

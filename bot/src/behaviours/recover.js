@@ -43,8 +43,10 @@ const PROGRESS_TOLERANCE = 0.5
 const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
+const PROD_STOP_MS = 100 // dig-start stop delay: far below any full-block barehand break (~350 ms+)
+const PROD_VERIFY_TICKS = 8 // post-prod walk budget, sidestep-shaped
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'prod_free', 'dig_through', 'wait', 'call_player']
 
 // Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
 // the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
@@ -281,6 +283,120 @@ function digTool(bot, cell) {
   return null
 }
 
+// Wiring point for idkcraft-drq (muse-2): his region canBreak guard lands
+// in this file; call it by real name here at rebase. Until then: refuse
+// anything but solid FULL blocks (boundingBox block where the client
+// reports it — flora/torches/rails never qualify), lava always, and defer
+// to canDigBlock where the client offers it. The 100 ms start-stop cannot
+// break a full block anyway; the guard is belt-and-braces. Note the target
+// is the load-bearing below-rest cell, so instant-break flora is already
+// near-impossible there (nothing stands on a torch).
+// Instant-break flora a 100 ms prod could actually snap (torches, rails,
+// plates, carpets, snow layers): never a prod target, even where the
+// client reports no boundingBox.
+const PROD_NEVER = new Set([
+  'torch', 'soul_torch', 'redstone_torch', 'rail', 'powered_rail',
+  'detector_rail', 'activator_rail', 'snow', 'tripwire', 'redstone_wire',
+  'ladder', 'vine', 'glow_lichen', 'scaffolding',
+])
+function prodInstantName(n) {
+  if (typeof n !== 'string' || n === '') return false
+  if (PROD_NEVER.has(n)) return true
+  return n.endsWith('_carpet') || n.endsWith('_plate') || n.endsWith('_button') || n.endsWith('_torch')
+}
+function prodBreakOk(bot, cell) {
+  if (!cell || !solid(cell)) return false
+  if (isLava(cell)) return false
+  if (prodInstantName(cell.name)) return false
+  if (typeof cell.boundingBox === 'string' && cell.boundingBox !== 'block') return false
+  try {
+    if (bot && typeof bot.canDigBlock === 'function' && !bot.canDigBlock(cell)) return false
+  } catch (_) { return false }
+  return true
+}
+
+// Feasible exactly once per sidestep failure, with room to work: head
+// free, at most one wall, no lava (9sq F1: never offer blind — sidestep
+// stays the primary, the prod is the escalation when it fails). The
+// below-cell itself is vetted at runtime (failed:no-target /
+// failed:protected); zero displacement is the episode entry condition,
+// not re-checked here.
+function prodFreeFeasible(facts) {
+  if (!facts) return false
+  if (!/^sidestep:failed/.test((facts && facts.last) || '')) return false
+  return !facts.headBlocked && typeof facts.walls === 'number' && facts.walls <= 1 && !facts.lavaNear
+}
+
+// Prod free (7tr): one dig-start on the block under the feet, stopped after
+// ~100 ms (never breaks it), then a short self-driven step. The dig-start
+// packet clears Paper's move suppression where jump/look/sidestep stay
+// frozen (rig EP1: aborted prod restored movement 2/2, disp 5.74/4.89 vs
+// jump 0.00 / look 0.02). Done keeps the F2 rule: measured displacement or
+// failed:no-progress, never a blind done.
+function prodFreeRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { phase: 'prod', start: null, dir: null, waited: 0, prodInFlight: false, prodded: false, issued: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.phase === 'prod') {
+    const below = cellAt(bot, 0, -1, 0)
+    let cell = below && solid(below) ? below : null
+    if (!cell) {
+      // Mid-air freeze (rig EP1: gravity itself suppressed, air below):
+      // prod any adjacent solid cell instead — the packet, not the
+      // position, is the unfreezer. Same no-break guards apply.
+      const ring = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1], [0, -2, 0]]
+      for (const [dx, dy, dz] of ring) {
+        const c = cellAt(bot, dx, dy, dz)
+        if (c && solid(c)) { cell = c; break }
+      }
+    }
+    if (!cell) return 'failed:no-target'
+    if (!prodBreakOk(bot, cell)) return 'failed:protected'
+    if (typeof bot.dig !== 'function' || typeof bot.stopDigging !== 'function') return 'failed:no-dig'
+    if (!st.start) st.start = { x: bp.x, y: bp.y, z: bp.z }
+    if (st.prodInFlight) return 'running'
+    if (!st.prodded) {
+      st.prodded = true
+      st.prodInFlight = true
+      void (async () => {
+        try {
+          const p = bot.dig(cell)
+          if (p && typeof p.catch === 'function') p.catch(() => {})
+          await new Promise((r) => setTimeout(r, PROD_STOP_MS))
+          try { bot.stopDigging() } catch (_) { /* stop best-effort */ }
+        } catch (_) { /* prod best-effort */ } finally { st.prodInFlight = false }
+      })()
+      return 'running'
+    }
+    st.phase = 'step'
+    st.waited = 0
+  }
+  if (!st.start) st.start = { x: bp.x, y: bp.y, z: bp.z }
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (displaced(st, bp, grounded)) {
+    setJump(bot, false)
+    return 'done'
+  }
+  if (++st.waited > PROD_VERIFY_TICKS) { setJump(bot, false); return 'failed:no-progress' }
+  if (!st.issued) {
+    st.issued = true
+    let dir = null
+    try {
+      const sides = scanSides(bot)
+      if (sides.free.length > 0) dir = sides.free[Math.floor(Math.random() * sides.free.length)]
+    } catch (_) { dir = null }
+    if (!dir) dir = [1, 0]
+    st.dir = dir
+    try {
+      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
+        bot.pathfinder.setGoal(new goals.GoalNear(bp.x + dir[0] * SIDESTEP_DIST, bp.y, bp.z + dir[1] * SIDESTEP_DIST, 1), false)
+      }
+    } catch (_) { /* goal best-effort */ }
+  }
+  return 'running'
+}
+
 // One log-safe token from a place error: the prod line carries err= so the
 // next session review sees WHY the server refused, not just that it did.
 function shortErr(e) {
@@ -393,7 +509,7 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|prod_free|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
@@ -410,6 +526,7 @@ function recoverFsm(facts, names) {
   // path=success, and sidestep displacement just re-queues the same wedge).
   if (Math.abs(facts.goalDy) <= 1 && pick('hop_step')) return 'hop_step'
   if (pick('sidestep')) return 'sidestep'
+  if (pick('prod_free')) return 'prod_free'
   if (pick('dig_through')) return 'dig_through'
   if (pick('call_player')) return 'call_player'
   return 'wait'
@@ -429,6 +546,7 @@ const RECOVER_CRITERIA = {
   dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
+  prod_free: 'unfreeze: sidestep just failed, headroom free — tap the block below to unstick movement, then step',
   dig_through: 'tunnel: pickaxe on hand, no lava near — dig 1-wide 2-tall toward the goal',
   wait: 'wait: the blockage looks temporary — stand still',
   call_player: 'help: a player is online and no escape works — ask the player for a teleport',
@@ -448,7 +566,7 @@ async function chooseRecovery(brain, facts, feasible) {
   // Kept when it is the only option; the FSM fallback below still sees it.
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
-  const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|prod_free|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
   // already out, so shaping never hides the dig it escalates to. Before
@@ -989,6 +1107,11 @@ const RECOVER_MENU = {
     run: sidestepRun,
     verb: 'sidestepping',
   },
+  prod_free: {
+    feasible: prodFreeFeasible,
+    run: prodFreeRun,
+    verb: 'prodding the ground',
+  },
   dig_through: {
     // 9sq F1: nothing solid toward the goal means nothing to tunnel.
     feasible: (facts) => facts.pickaxe && !facts.lavaNear && facts.throughBlocked,
@@ -1433,4 +1556,6 @@ module.exports = {
   decide,
   release,
   run,
+  prodFreeRun,
+  prodFreeFeasible,
 }
