@@ -27,15 +27,20 @@ describe('stuck-run.sh anti-noise (idkcraft-3ro)', () => {
     for (const cmd of ['difficulty peaceful', 'gamerule fall_damage false', 'gamerule advance_weather false', 'weather clear']) {
       assert.ok(script.includes(`rcon_assert "${cmd}"`), `not asserted: ${cmd}`)
     }
+    // The helper must reject failure output and fail the run, not just echo:
+    // pin the rejection arm and its exit so a gutted helper fails here.
+    assert.ok(script.includes('*Incorrect*|*Unknown*'), 'missing rejection patterns')
+    assert.ok(script.includes('exit 2'), 'rejection must exit 2')
   })
 })
 
 // idkcraft-3ro root cause: every replay spot sits inside the
-// spawn-protection radius (r=16 around (-48,65,-208)), so a non-op bot gets
-// each dig and place refused and the baseline collapses to 3/10 (only the
-// pure-walk spots pass). The replay must op both bots after spawn — with
-// an asserted rcon call, so a run that lost op fails loud instead of
-// drifting the baseline again.
+// spawn-protection radius (r=16 around (-48,65,-208)), and Paper enforces
+// protection once ops.json is non-empty — one afternoon op armed it for
+// every later run and the baseline collapsed to 3/10 with no code change
+// (only the pure-walk spots pass unopped). The replay must op both bots
+// after spawn — with an asserted rcon call, so a run that lost op fails
+// loud instead of drifting the baseline again.
 describe('stuck-replay.js self-op (idkcraft-3ro)', () => {
   const replay = fs.readFileSync(path.join(__dirname, '..', 'tools', 'stuck-replay.js'), 'utf8')
 
@@ -47,6 +52,9 @@ describe('stuck-replay.js self-op (idkcraft-3ro)', () => {
   })
 
   it('asserts the op call on its output text', () => {
-    assert.ok(replay.includes("cmd.startsWith('op ')"), 'rcon has no op branch')
+    // Pin the full predicate: a substring-only check would still pass with
+    // the negation dropped (throw-on-success) or the output match deleted.
+    assert.ok(replay.includes("cmd.startsWith('op ') && !out.toLowerCase().includes('operator')"),
+      'rcon op assert weakened')
   })
 })

@@ -183,13 +183,16 @@ async function main() {
   ])
   await sleep(3000)
   // Operator status (idkcraft-3ro): every replay spot sits inside the
-  // spawn-protection radius (world spawn (-48,65,-208), r=16, regenerated
-  // from defaults at every boot), so a non-op bot gets each dig and place
-  // refused and the baseline measures protection, not behaviour (3/10 —
-  // only the pure-walk spots pass). Op both bots once per run, before the
-  // first spot; rcon asserts, so a run that lost op fails loud instead of
-  // drifting the baseline again. rcon cannot set spawn-protection and
-  // START.sh lives outside the repo, so self-op is the harness-side fix.
+  // spawn-protection radius (world spawn (-48,65,-208), r=16), and Paper
+  // enforces protection once ops.json is non-empty — one afternoon op
+  // (another rig's probes, 2026-09-28) armed it for every later run and
+  // the baseline collapsed to 3/10 with no code change anywhere (only
+  // the pure-walk spots pass unopped). Op both bots once per run, before
+  // the first spot, so the etalon never depends on ambient ops.json
+  // state again; rcon asserts, so a run that lost op fails loud. rcon
+  // cannot set spawn-protection and START.sh lives outside the repo, so
+  // self-op is the harness-side fix (resetting ops.json would delete
+  // other rigs' live entries).
   await rcon(`op ${GUIDE}`)
   await rcon(`op ${FOLLOWER}`)
   // Park the body for setups: without this the ticker walks during the
