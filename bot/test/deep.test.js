@@ -219,17 +219,31 @@ describe('deep safety reads', () => {
   })
 
   it('pickDir refuses +X when lava sits at step-2 feet (rules-assay lava must inject mid-drive)', () => {
-    // fsg: the assay plants lava at step-2 feet to prove the descend-time
-    // guard — but tubeClean sees the whole tube, so pre-planted lava refuses
-    // +X at pick time and the scenario direction is never walked. Pin the
-    // mechanism: the harness must inject mid-drive, never a tubeClean
-    // carve-out — full-tube lava refusal is the safety invariant.
+    // fsg/b20: the assay plants lava at step-2 feet to prove the descend-time
+    // guard — but step 2 sits inside the pre-scan window, so pre-planted
+    // lava refuses +X at pick time and the scenario direction is never
+    // walked. Pin the mechanism: the harness must inject mid-drive, never a
+    // tubeClean carve-out — in-window refusal is the safety invariant.
     const bot = mockBot()
     const mouth = { x: 0, z: -3, topY: 64 }
     const feet2 = deep.stairCells({ x: mouth.x, z: mouth.z, topY: mouth.topY, dx: 1, dz: 0 }, 2).digs[0]
     bot.blocks[`${feet2.x},${feet2.y},${feet2.z}`] = 'lava'
     const d = deep.pickDir(bot, mouth)
     assert.ok(d && (d.dx !== 1 || d.dz !== 0), 'step-2 lava must refuse +X')
+  })
+
+  it('pickDir starts into dirt past the pre-scan window (b20 K-window)', () => {
+    const K = deep.PRESCAN_STEPS
+    const bot = mockBot()
+    const mouth = { x: 0, z: -3, topY: -30 }
+    const shaft = { x: mouth.x, z: mouth.z, topY: mouth.topY, dx: 1, dz: 0 }
+    const deepFeet = deep.stairCells(shaft, K + 2).digs[0]
+    bot.blocks[`${deepFeet.x},${deepFeet.y},${deepFeet.z}`] = 'lava'
+    assert.equal(deep.pickDir(bot, mouth).dx, 1, 'dirt past K must not refuse +X')
+    const nearFeet = deep.stairCells(shaft, K - 1).digs[0]
+    bot.blocks[`${nearFeet.x},${nearFeet.y},${nearFeet.z}`] = 'lava'
+    const d2 = deep.pickDir(bot, mouth)
+    assert.ok(d2 && (d2.dx !== 1 || d2.dz !== 0), 'dirt inside K must refuse +X')
   })
 })
 
@@ -428,6 +442,97 @@ describe('deep behaviour aborts', () => {
     deep(bot, ctx2, null, {})
     assert.equal(ctx2.deep.phase, 'return')
   })
+
+  // Mid-shaft descend state: body stands on the step n-1 crumb, working
+  // step n. Crumbs include the current stand (lostCheck needs one near).
+  function midShaftCtx(n) {
+    const bot = mockBot()
+    const shaft = { x: 0, z: 0, topY: -30, dx: 1, dz: 0 }
+    const prev = n > 0 ? deep.stairCells(shaft, n - 1).stand : { x: 0, y: -30, z: 0 }
+    bot.entity.position = pos(prev.x + 0.5, prev.y, prev.z + 0.5)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'descend', shaft, n,
+      steps: [{ x: 0, y: -30, z: 0 }, { x: prev.x, y: prev.y, z: prev.z }],
+      target: null, dug: 0, stalls: 0, lastPos: null, issuedKey: null,
+      startDrops: { diamond: 0 }, cameFrom: null,
+    }
+    return { bot, ctx, shaft }
+  }
+
+  it('guard at the window edge (n=K-1) still fails in place', () => {
+    const K = deep.PRESCAN_STEPS
+    const { bot, ctx, shaft } = midShaftCtx(K - 1)
+    const st = deep.stairCells(shaft, K - 1)
+    bot.blocks[`${st.digs[0].x},${st.digs[0].y},${st.digs[0].z}`] = 'lava'
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:lava')
+    assert.equal(ctx.deep, null, 'in-window guard fails, never retreats')
+  })
+
+  it('beyond-K guard retreats up the crumbs and fails honestly at the mouth', () => {
+    const K = deep.PRESCAN_STEPS
+    const { bot, ctx, shaft } = midShaftCtx(K)
+    const st = deep.stairCells(shaft, K)
+    // Lava 2 off the feet dig but 3 off the body: the dig guard (not the
+    // body guard) must trip.
+    bot.blocks[`${st.digs[0].x + 2},${st.digs[0].y},${st.digs[0].z}`] = 'lava'
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.phase, 'return', 'beyond-K guard aborts to return')
+    assert.equal(ctx.deep.retreatReason, 'lava')
+    assert.equal(ctx.deep.steps.length, 2, 'breadcrumbs preserved for the climb')
+    assert.equal(ctx.stepStatus, 'running', 'no terminal status mid-retreat')
+    const spots = (ctx.danger && ctx.danger.spots) || []
+    assert.ok(spots.some((s) => s.x === st.digs[0].x && s.z === 0), 'hazard marked')
+    assert.ok(spots.some((s) => s.x === 0 && s.z === 0), 'mouth marked')
+    assert.ok(bot.chats.some((m) => m.includes('lava in the shaft')))
+    // Arrival at the mouth ends the leg failed:lava, honestly.
+    bot.entity.position = pos(0.5, -30, 0.5)
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:lava')
+    assert.equal(ctx.deep, null)
+  })
+
+  it('landing battery refuses lava below a pre-open step', () => {
+    const { bot, ctx, shaft } = midShaftCtx(1)
+    const st = deep.stairCells(shaft, 1)
+    for (const c of st.digs) bot.blocks[`${c.x},${c.y},${c.z}`] = 'air'
+    bot.blocks[`${st.stand.x},${st.stand.y - 1},${st.stand.z}`] = 'lava' // 3 off the body: battery, not body guard
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:lava', 'lava floor under open step must refuse')
+  })
+
+  it('landing battery refuses water below a pre-open step', () => {
+    const { bot, ctx, shaft } = midShaftCtx(1)
+    const st = deep.stairCells(shaft, 1)
+    for (const c of st.digs) bot.blocks[`${c.x},${c.y},${c.z}`] = 'air'
+    bot.blocks[`${st.stand.x},${st.stand.y - 1},${st.stand.z}`] = 'water' // 1-deep puddle over stone
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:water', '1-deep water under open step must refuse')
+  })
+
+  it('a dig completing after a retreat does not clobber the return phase', async () => {
+    const K = deep.PRESCAN_STEPS
+    const { bot, ctx, shaft } = midShaftCtx(K)
+    let release = null
+    bot.dig = (block) => new Promise((res) => {
+      release = () => {
+        bot.blocks[`${block.position.x},${block.position.y},${block.position.z}`] = 'air'
+        res()
+      }
+    })
+    deep(bot, ctx, null, {}) // tick 1: clean reads, the swing launches
+    assert.equal(ctx.digInFlight, true)
+    const st = deep.stairCells(shaft, K)
+    bot.blocks[`${st.digs[0].x + 2},${st.digs[0].y},${st.digs[0].z}`] = 'lava' // flows in mid-swing
+    deep(bot, ctx, null, {}) // tick 2: guard trips -> retreat
+    assert.equal(ctx.deep.phase, 'return')
+    release()
+    await tick()
+    await tick()
+    assert.equal(ctx.deep.phase, 'return', 'late dig completion must not clobber return')
+    assert.equal(ctx.digInFlight, false)
+  })
 })
 
 describe('deep tunnel caps', () => {
@@ -457,6 +562,29 @@ describe('deep tunnel caps', () => {
     }
     assert.ok(!ctx.deep || ctx.deep.phase !== 'tunnel', 'tunnel terminates')
     assert.ok(!ctx.forageSkip || ctx.forageSkip.has('40,-45,0'), 'far cell struck')
+  })
+
+  it('tunnel strikes a pre-open next with lava below instead of walking in', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    bot.entity.position = pos(3.5, -45, 0.5)
+    const next = { x: 5, y: -45, z: 0 }
+    bot.blocks['5,-45,0'] = 'air'
+    bot.blocks['5,-44,0'] = 'air'
+    bot.blocks['5,-46,0'] = 'lava' // 3 off the head: battery, not body guard
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'tunnel', shaft: { x: 0, z: 0, topY: -44, dx: 1, dz: 0 }, n: 1,
+      steps: [{ x: 3, y: -45, z: 0 }], target: { x: 50, y: -45, z: 0, name: 'diamond_ore' },
+      dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: { diamond: 0 },
+      tunnelDigs: 0, tunnelSteps: 0, tunnelSeen: new Set(['3,-45,0']), cameFrom: null,
+      tunnelGoal: next,
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.phase, 'plan', 'lava landing strikes the target')
+    assert.equal(ctx.deep.target, null)
+    const spots = (ctx.danger && ctx.danger.spots) || []
+    assert.ok(spots.some((s) => s.x === 5 && s.z === 0), 'refused landing marked')
   })
 })
 

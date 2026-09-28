@@ -25,6 +25,9 @@
 //   R-tier: diamond digs need an iron pick (bring tier check); without one
 //     the leg fails honestly (failed:need-iron-pick) — the gear step must
 //     only send equipped bots (interface contract, asserted in assay).
+//   R-retreat: a descend guard firing past the pre-scan window retreats up
+//     the breadcrumbs (abort-to-return) and fails honestly at the mouth;
+//     inside the window it fails in place. A failed climb is lost-shaft.
 // Return: breadcrumb reverse-walk, hybrid drive — manual mount (back to
 // leap stance when pressed, leap WITH forward thrust — the hop_step shape:
 // Paper zeroes a leap from contact) for 1-up steps, pathfinder for level
@@ -64,6 +67,14 @@ const RET_MOUNT_TICKS = 20 // per-crumb climb cap: hang-back-leap cycles displac
 const PROG_EPS = 0.05 // progress margin: closing less than this per tick counts as circling, not approaching
 const SITE_RINGS = [3, 4, 5, 6, 7, 8] // mouth offsets from the anchor
 const SITE_RAYS = 8
+// Pre-scan window (b20): pickDir/tubeClean verdict only the first K steps;
+// deeper dirt is met by the per-step descend guards, which abort-to-return
+// (retreat) instead of failing in place. K=10 from the prod-world rig
+// (worldsha 85a1422228ef, 6 fixed stride-20 spawn columns): near dirt
+// (steps 0-6: lakes, aquifers, gravel) still refuses at pick, deep dirt
+// (12+) starts and retreats honestly; starts 5/6 (was 3/6 full-tube — the
+// holdout is step-0 lake water, unstartable at any K).
+const PRESCAN_STEPS = 10
 const DIRS = [{ dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
 
 function fname(bot, x, y, z) {
@@ -137,6 +148,22 @@ function lavaNear(bot, x, y, z) {
   return false
 }
 
+// Landing verdict for a step about to be walked into (b20, Codex condition):
+// the dig-loop guards only run on SOLID cells, so a pre-open (cave) step
+// skips them — lava directly below reads as standing ground (dropBelow
+// returns 0 for a lava floor) and 1-deep water as a 1-drop. The battery
+// re-verdicts stand+below regardless of open. Returns the refusal reason
+// ('lava'|'water'|'drop') or null. (No loose arm: gravel at feet/head is
+// solid, so the dig loop always sees it first — a battery loose check is
+// unreachable by construction.) On solid steps it agrees with
+// the dig loop (same predicates), so only pre-open steps gain verdicts.
+function landingHazard(bot, c) {
+  if (lavaNear(bot, c.x, c.y, c.z) || isLavaName(fname(bot, c.x, c.y - 1, c.z))) return 'lava'
+  if (fname(bot, c.x, c.y, c.z) === 'water' || fname(bot, c.x, c.y - 1, c.z) === 'water' || waterNear(bot, c.x, c.y, c.z)) return 'water'
+  if (dropBelow(bot, c.x, c.y, c.z) > DROP_MAX) return 'drop'
+  return null
+}
+
 // Air cells below (x, y, z) before solid ground, capped at 6. 0 = stands
 // on solid. Unreadable below reads as solid (chunk edge, not a void).
 function dropBelow(bot, x, y, z) {
@@ -196,10 +223,11 @@ function stairCells(shaft, n) {
   }
 }
 
-// First shaft direction whose whole tube is lava-free and whose step-0
-// cells are diggable. Pure geometry + reads; null when every direction is
-// refused. The tube scan is best-effort (deep chunks may not be loaded
-// yet — null reads as clear) with the per-tick guards as backstop.
+// First shaft direction whose pre-scan window (first PRESCAN_STEPS steps)
+// is lava/water/loose-free and whose step-0 cells are diggable. Pure
+// geometry + reads; null when every direction is refused. Dirt past the
+// window is met step by step: the descend guards abort-to-return (retreat)
+// instead of failing in place.
 function pickDir(bot, mouth) {
   for (const d of DIRS) {
     const shaft = { x: mouth.x, z: mouth.z, topY: mouth.topY, dx: d.dx, dz: d.dz }
@@ -217,10 +245,14 @@ function pickDir(bot, mouth) {
   return null
 }
 
-// Every stair step down to the band: dig cells + landing + one below
-// must be lava-free (radius 2) and above the floor.
+// The first PRESCAN_STEPS stair steps: dig cells + landing + one below
+// must be lava/water/loose-free (radius 2) and above the floor. A short
+// window, not the whole tube (b20): on real terrain every 115-deep tube
+// holds water/lava/gravel somewhere, so a full-tube scan refuses every
+// direction and the leg never starts. Dirt past the window trips the
+// per-step descend guards, which retreat up the breadcrumbs.
 function tubeClean(bot, shaft) {
-  for (let n = 0; shaft.topY - n > TARGET_Y && shaft.topY - n > FLOOR_Y + 2; n++) {
+  for (let n = 0; n < PRESCAN_STEPS && shaft.topY - n > TARGET_Y && shaft.topY - n > FLOOR_Y + 2; n++) {
     const st = stairCells(shaft, n)
     const cells = [...st.digs, st.stand, { x: st.stand.x, y: st.stand.y - 1, z: st.stand.z }]
     for (const c of cells) {
@@ -355,6 +387,28 @@ function fail(bot, ctx, d, reason, markP, chatLine) {
   finish(bot, ctx, d, false, reason, d.dug)
 }
 
+// Abort-to-return (b20): a descend guard firing inside the pre-scan window
+// fails in place (the tube was vetted clean — a hazard there means the
+// world changed under us; the rules assay pins this); a guard firing PAST
+// the window — the expected case now that the window is short — retreats
+// up the dug breadcrumbs instead of stranding the bot mid-shaft.
+// Breadcrumbs stay intact so the return phase can climb out; arrival
+// finishes failed:<reason> (honest), and a failed climb is the lost-shaft
+// hard case (ssn owns the return mechanics).
+function guardTrip(bot, ctx, d, reason, markP, chatLine) {
+  if (d.n < PRESCAN_STEPS) {
+    fail(bot, ctx, d, reason, markP, chatLine)
+    return
+  }
+  try {
+    const marks = Array.isArray(markP) ? markP : [markP]
+    for (const m of marks) if (m) danger.mark(ctx, m)
+  } catch (_) { /* mark best-effort */ }
+  if (chatLine) say(bot, chatLine)
+  d.retreatReason = reason
+  d.phase = 'return'
+}
+
 // One walk goal with the 68p rule (body-theft re-issue keeps the stall
 // budget) and displacement stall counting. Returns 'arrived' | 'walking'
 // | 'stalled'. arrivalR/distR tune per leg.
@@ -447,7 +501,9 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
       }
     }
     ctx.digInFlight = false
-    if (ctx.deep === d) d.phase = nextPhase
+    // A guard may have retreated mid-dig (reads changed while the swing was
+    // in flight): the return phase owns d.phase now, never clobber it back.
+    if (ctx.deep === d && d.phase !== 'return') d.phase = nextPhase
   })()
 }
 
@@ -505,7 +561,7 @@ function deep(bot, ctx, target, state) {
     // the dig cells): fail fast while the return path is still walkable.
     if (lavaNear(bot, Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))) {
       const here = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
-      fail(bot, ctx, d, 'lava', [here, mouthOf(d)], 'lava closing in, backing out')
+      guardTrip(bot, ctx, d, 'lava', [here, mouthOf(d)], 'lava closing in, backing out')
       return
     }
     if (Math.floor(bp.y) <= TARGET_Y) {
@@ -516,33 +572,37 @@ function deep(bot, ctx, target, state) {
     const st = stairCells(d.shaft, d.n)
     for (const c of st.digs) {
       if (c.y <= FLOOR_Y) {
-        fail(bot, ctx, d, 'floor', c, 'hit the dig floor, backing out')
+        guardTrip(bot, ctx, d, 'floor', c, 'hit the dig floor, backing out')
         return
       }
       const n = fname(bot, c.x, c.y, c.z)
       if (n === null || isAirName(n)) continue
       if (lavaNear(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'lava', [c, mouthOf(d)], 'lava in the shaft, backing out')
+        guardTrip(bot, ctx, d, 'lava', [c, mouthOf(d)], 'lava in the shaft, backing out')
         return
       }
       if (fallingAbove(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'loose', [c, mouthOf(d)], 'loose rock above, backing out')
+        guardTrip(bot, ctx, d, 'loose', [c, mouthOf(d)], 'loose rock above, backing out')
         return
       }
       if (fname(bot, c.x, c.y, c.z) === 'water' || waterNear(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'water', [c, mouthOf(d)], 'water in the shaft, backing out')
+        guardTrip(bot, ctx, d, 'water', [c, mouthOf(d)], 'water in the shaft, backing out')
         return
       }
       if (!canDig(bot, c)) {
-        fail(bot, ctx, d, 'bedrock', [c, mouthOf(d)], 'unbreakable rock in the shaft')
+        guardTrip(bot, ctx, d, 'bedrock', [c, mouthOf(d)], 'unbreakable rock in the shaft')
         return
       }
       digOne(bot, ctx, d, c, n, 'descend')
       return
     }
-    // All three open: landing check, then walk the step.
-    if (dropBelow(bot, st.stand.x, st.stand.y, st.stand.z) > DROP_MAX) {
-      fail(bot, ctx, d, 'drop', [st.stand, mouthOf(d)], 'void under the next step, backing out')
+    // All three open: landing battery (b20: pre-open steps skip the dig
+    // loop, so the battery re-verdicts stand+below), then walk the step.
+    // Same reason/chat vocabulary as the dig loop — no new strings.
+    const hz = landingHazard(bot, st.stand)
+    if (hz) {
+      const lines = { lava: 'lava in the shaft, backing out', water: 'water in the shaft, backing out', drop: 'void under the next step, backing out' }
+      guardTrip(bot, ctx, d, hz, [st.stand, mouthOf(d)], lines[hz])
       return
     }
     const key = `deep-descend:${d.n}`
@@ -680,7 +740,9 @@ function deep(bot, ctx, target, state) {
       digOne(bot, ctx, d, c, n, 'tunnel')
       return
     }
-    if (dropBelow(bot, next.x, next.y, next.z) > DROP_MAX) {
+    const lhz = landingHazard(bot, next)
+    if (lhz) {
+      try { danger.mark(ctx, next) } catch (_) { /* mark best-effort */ }
       strikeAndReplan(bot, ctx, d, t)
       return
     }
@@ -761,6 +823,13 @@ function deep(bot, ctx, target, state) {
   if (d.phase === 'return') {
     const mouth = { x: d.shaft.x, y: d.shaft.topY, z: d.shaft.z }
     if (Math.hypot(bp.x - mouth.x, bp.z - mouth.z) <= 2.5 && bp.y >= mouth.y - 1) {
+      // Retreat arrival (b20, own hunk — ssn owns the pop gate below): the
+      // leg ends failed:<reason> at the mouth, honestly, with the bot out
+      // of the shaft. The guard already chatted at trip time.
+      if (d.retreatReason) {
+        finish(bot, ctx, d, false, d.retreatReason, d.dug)
+        return
+      }
       finish(bot, ctx, d, true, null, d.dug)
       return
     }
@@ -1436,10 +1505,12 @@ module.exports.TARGET_Y = TARGET_Y
 module.exports.FLOOR_Y = FLOOR_Y
 module.exports.TUNNEL_MAX = TUNNEL_MAX
 module.exports.DEEP_WANT = DEEP_WANT
+module.exports.PRESCAN_STEPS = PRESCAN_STEPS
 module.exports.waterNear = waterNear
 module.exports.fallingAbove = fallingAbove
 module.exports.lavaNear = lavaNear
 module.exports.dropBelow = dropBelow
+module.exports.landingHazard = landingHazard
 module.exports.pickSite = pickSite
 module.exports.pickDir = pickDir
 module.exports.stairCells = stairCells

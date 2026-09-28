@@ -113,14 +113,16 @@ async function untilDescend(bot, ctx, timeoutMs) {
 
 async function rules(bot) {
   let pass = true
-  // Pad site (fsg): pickDir scans the whole 115-deep tube, and on the
-  // prod-world copy raw terrain refuses EVERY direction near spawn (6/6
-  // stride-20 columns pickDir=null in all 4 dirs — a clean-column search
-  // cannot work). The rules assay proves the step 0-2 GUARDS, not
-  // tube-finding in the wild (the leg assay covers that on natural terrain),
-  // so RCON-clean the +X corridor to stone: pickDir(+X) then passes by
-  // construction, deterministically. Anchor (sx,sz) -> mouth r=3/a=0 ->
-  // (sx, sz-3), topY = pad top.
+  // Pad site (fsg/b20): pickDir pre-scans the first K tube steps, and on
+  // the prod-world copy raw terrain refuses near spawn (fsg: 6/6 stride-20
+  // columns pickDir=null in all 4 dirs under the full-tube scan — a
+  // clean-column search cannot work). The rules assay proves the step 0-2
+  // GUARDS, not tube-finding in the wild (the leg assay covers that on
+  // natural terrain), so RCON-clean the +X corridor to stone: pickDir(+X)
+  // then passes by construction, deterministically. Anchor (sx,sz) ->
+  // mouth r=3/a=0 -> (sx, sz-3), topY = pad top. The corridor covers the
+  // whole tube (a superset of the K window) so the retreat scenario can
+  // plant dirt past K in known-stone surroundings.
   const sx = Math.round(bot.entity.position.x)
   const sz = Math.round(bot.entity.position.z)
   const padY = 70
@@ -184,7 +186,7 @@ async function rules(bot) {
   const fx = sx + 1
   const fz = sz - 3
 
-  async function scenario(name, setup, want, inject, settle) {
+  async function scenario(name, setup, want, inject, settle, opt) {
     await rcon(`fill ${fx - 2} ${padY - 8} ${fz - 2} ${fx + 2} ${padY + 2} ${fz + 2} stone`)
     await rcon(`fill ${sx - 2} ${padY} ${sz - 5} ${sx + 2} ${padY + 2} ${sz - 1} air`)
     await setup()
@@ -229,10 +231,20 @@ async function rules(bot) {
       await inject()
       await sleep(1000)
     }
-    const st = await drive(bot, ctx, 90000, name)
-    const marked = danger.near(ctx, { x: fx, z: fz }, 8)
-    const ok = st === want && (want === 'done' ? true : marked)
-    console.log(`${ok ? 'PASS' : 'FAIL'}: ${name} status=${st} marked=${marked} (want ${want}+mark)`)
+    const o = opt || {}
+    const st = await drive(bot, ctx, o.timeoutMs || 90000, name)
+    const markAt = o.markAt || { x: fx, z: fz }
+    const marked = danger.near(ctx, markAt, 8)
+    let nearOk = true
+    let nearLine = ''
+    if (o.wantNear) {
+      const p = bot.entity.position
+      const dd = Math.hypot(p.x - o.wantNear.x, p.y - o.wantNear.y, p.z - o.wantNear.z)
+      nearOk = dd <= o.wantNear.r
+      nearLine = ` pos=${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)} dd=${dd.toFixed(1)}`
+    }
+    const ok = st === want && (want === 'done' ? true : marked) && nearOk
+    console.log(`${ok ? 'PASS' : 'FAIL'}: ${name} status=${st} marked=${marked}${nearLine} (want ${want}+mark)`)
     if (!ok) pass = false
   }
 
@@ -256,6 +268,22 @@ async function rules(bot) {
     const ok = st === 'failed:need-iron-pick'
     console.log(`${ok ? 'PASS' : 'FAIL'}: tier status=${st}`)
     if (!ok) pass = false
+  }
+
+  // Retreat (b20, runs last): lava pre-planted at step K+2 feet is invisible
+  // to the K pre-scan BY DESIGN (no mid-drive inject needed — this is the
+  // beyond-window case), the descend guard trips at step K+1 and the leg
+  // must abort-to-return: failed:lava + mark + the body back at the mouth.
+  // A stone pick keeps the 11 descend digs fast (guards are read-based).
+  {
+    const K = deep.PRESCAN_STEPS
+    const lx = sx + K + 3
+    const ly = padY - K - 2
+    await scenario('retreat', async () => {
+      await rcon(`fill ${lx} ${ly} ${fz} ${lx} ${ly} ${fz} lava`)
+      await rcon(`give ${NAME} stone_pickaxe 1`)
+    }, 'failed:lava', null, [[lx, ly, fz, 'lava']],
+    { timeoutMs: 300000, markAt: { x: sx + K + 2, z: fz }, wantNear: { x: mouth.x, y: mouth.topY, z: mouth.z, r: 5 } })
   }
   return pass
 }
