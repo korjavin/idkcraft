@@ -48,7 +48,6 @@ const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: 
 const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
-const PILLAR_PLACE_RETRIES = 2 // fresh jump+ref retries after a place TIMEOUT (silence may be transient); fast reverts fail at once (deterministic)
 
 const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
@@ -431,32 +430,6 @@ function shortErr(e) {
   return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
 }
 
-// Timeout (server said nothing for 5 s) vs revert (server said no fast):
-// only the silence earns a retry (cm0) — a revert is deterministic.
-function isPlaceTimeout(e) {
-  const m = e && typeof e.message === 'string' ? e.message : String(e)
-  return /did not fire within timeout/i.test(m)
-}
-
-// Fire-phase evidence (cm0): jump height/velocity and ms-since-arm at the
-// issue, logged with the next place error so a timeout carries the phase
-// it applied from instead of a bare cell.
-function fireInfo(bot, st) {
-  let vy = null
-  try {
-    const v = bot && bot.entity && bot.entity.velocity
-    if (v && typeof v.y === 'number') vy = v.y
-  } catch (_) { vy = null }
-  let ms = null
-  try { if (st && typeof st.jumpAt === 'number') ms = Date.now() - st.jumpAt } catch (_) { ms = null }
-  let y = null
-  try {
-    const bp = botPos(bot)
-    if (bp && typeof bp.y === 'number') y = bp.y
-  } catch (_) { y = null }
-  return { ms, y, vy }
-}
-
 function hasPickaxe(bot) {
   return countItems(bot, (n) => n.endsWith('_pickaxe')) > 0
 }
@@ -681,17 +654,6 @@ function pillarUpRun(bot, ctx) {
       st.timerArmed = true
       st.jumpAt = Date.now()
       st.armedAt = st.jumpAt
-      // The floor anchor re-seeds with a RE-arm only (revmux-02): after a
-      // dead chain the body may have landed somewhere the chain never
-      // sampled, and the issue targets fy=startFloor. The first arm keeps
-      // the arm height (the timer's descend rule corrects it on landing):
-      // anchoring mid-air would hold the liftoff clock in slide forever.
-      const rearm = typeof st.lowY === 'number'
-      st.lowY = bp.y // post-arm low, seeded at arm (cm0): the fire issues on
-      // rise-since-arm, so an inherited mid-air flight must land and re-rise
-      // first. Seeding on the first fire sample instead would miss fast
-      // first-rises (the +150 ms fire sees +1.00 already).
-      if (rearm) st.startFloor = Math.floor(bp.y)
       try {
         const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_ISSUE_MS)
         if (t && typeof t.unref === 'function') t.unref()
@@ -715,7 +677,7 @@ function pillarUpRun(bot, ctx) {
   // matches pillarTriggerDy, and no-self-intersection comes from apply
   // timing (see risingWindow), not from this line.
   if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) {
-    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null; st.lowY = bp.y; st.startFloor = Math.floor(bp.y)
+    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null
     return 'running'
   }
   const reason = issuePillarPlace(bot, st)
@@ -746,18 +708,7 @@ function firePillarTimer(bot, ctx, st) {
     if (st.phase !== 'jump' || st.placed || st.placeInFlight || st.placeError || st.syncFail) return
     const bp = botPos(bot)
     if (!bp || st.startFloor === null) return
-    // Rise-since-arm (cm0): an arm inherited mid-air (flat's approach jump
-    // still flying when stuck fired) must not issue into the stale flight —
-    // the body lands first (low tracks down), then the next rise issues.
-    // Ground arms read identical to the old startFloor height. The floor
-    // anchor descends with the landing (revmux-01): issuePillarPlace
-    // targets fy=startFloor, so a mid-air-seeded anchor would place one
-    // cell too high, into the cell the rising body occupies.
-    if (typeof st.lowY !== 'number' || bp.y < st.lowY) {
-      st.lowY = bp.y
-      st.startFloor = Math.floor(bp.y)
-    }
-    if (bp.y - st.lowY >= pillarTriggerDy(bot) && risingWindow(bot)) {
+    if (bp.y >= st.startFloor + pillarTriggerDy(bot) && risingWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
       const reason = issuePillarPlace(bot, st)
@@ -815,36 +766,12 @@ function issuePillarPlace(bot, st) {
   const item = heldScaffold(bot) ? bot.heldItem : findScaffoldItem(bot)
   if (!item) { setJump(bot, false); return 'no-scaffold' }
   st.placeInFlight = true
-  st.fire = fireInfo(bot, st)
-  const dest = ref.position.plus(face)
   void (async () => {
     try {
       if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
       await bot.placeBlock(ref, face)
       st.placed = true
-    } catch (e) {
-      // Timeout (cm0): the server said nothing — a late success looks
-      // identical to a refusal, so re-read the cell before failing, and
-      // retry a still-air cell with a fresh jump and a fresh reference: a
-      // transient silence succeeds on retry. Fast reverts fail at once.
-      if (isPlaceTimeout(e)) {
-        let landed = null
-        try { landed = bot.blockAt && bot.blockAt(dest) } catch (_) { landed = null }
-        if (solid(landed)) { st.placed = true; return }
-        st.retries = (st.retries || 0) + 1
-        if (st.retries > PILLAR_PLACE_RETRIES) {
-          st.placeError = true
-          st.placeErr = shortErr(e)
-        } else {
-          console.log(`pillar retry ${st.retries}/${PILLAR_PLACE_RETRIES} after place timeout`)
-          st.phase = 'jump'; st.waited = 0; st.timerArmed = false
-          st.jumpAt = null; st.armedAt = null; st.startFloor = null; st.lowY = null
-        }
-      } else {
-        st.placeError = true
-        st.placeErr = shortErr(e)
-      }
-    } finally { st.placeInFlight = false }
+    } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
   return null
 }
@@ -1502,15 +1429,6 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
       const pe = ctx && ctx.recovery && ctx.recovery.st && ctx.recovery.st.placeErr
       if (pe) extra += ` err=${pe}`
     } catch (_) { /* err best-effort */ }
-    try {
-      const fr = ctx && ctx.recovery && ctx.recovery.st && ctx.recovery.st.fire
-      if (fr && (fr.ms !== null || fr.y !== null)) {
-        const fms = typeof fr.ms === 'number' ? `+${fr.ms}ms` : '+?ms'
-        const fy = typeof fr.y === 'number' ? (Number.isInteger(fr.y) ? fr.y : fr.y.toFixed(2)) : '?'
-        const fvy = typeof fr.vy === 'number' ? fr.vy.toFixed(2) : '?'
-        extra += ` fire=${fms}@${fy}:vy${fvy}`
-      }
-    } catch (_) { /* fire best-effort */ }
   }
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
 }
@@ -1813,7 +1731,6 @@ module.exports = {
   DISPLACE_TIMEOUT_TICKS,
   STUCK_TICKS_ENTRY,
   PLACE_ERROR_ENTRY,
-  PILLAR_PLACE_RETRIES,
   recoverFacts,
   recoverText,
   recoverFsm,
