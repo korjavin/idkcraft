@@ -305,7 +305,9 @@ describe('dig-site wiring (idkcraft-drq)', () => {
       entity: { position: new Vec3(0, 63.2, 0), onGround: true },
       blockAt: (p) => {
         const y = Math.floor(p.y)
-        const n = y <= 63 ? 'dirt' : 'air'
+        // atl.20: air under the target — a real drop, so the strike path
+        // still denies (solid below now digs instead of striking).
+        const n = (y === 63 || y === 62) ? 'dirt' : 'air'
         return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)) }
       },
       dig: async () => { digs++ },
@@ -335,7 +337,8 @@ describe('dig-site wiring (idkcraft-drq)', () => {
       entity: { position: new Vec3(0, 63.2, 0), onGround: true },
       blockAt: (p) => {
         const y = Math.floor(p.y)
-        const n = y <= 63 ? 'dirt' : 'air'
+        // atl.20: air under the target — a real drop (solid below now digs).
+        const n = (y === 63 || y === 62) ? 'dirt' : 'air'
         return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)) }
       },
       dig: async () => {},

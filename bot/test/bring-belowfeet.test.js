@@ -201,3 +201,145 @@ describe('atl.17 bring below-feet stance (fake-player e2e)', () => {
     assert.ok(!bot.lines.some((l) => l.includes('could not reach iron_ore safely')), 'never refused')
   })
 })
+
+// atl.20: the shaft-bottom loop (atl.18 5/9) died on the below-feet denial
+// with SOLID stone under the ore — a safe 1-block drop, what a player
+// does. Bring digs it instead of striking; the refusal stays for real
+// hazards (air/water/lava/unknown below). The guard itself is untouched:
+// every other behaviour keeps the old denial.
+const { solidBelow } = require('../src/behaviours/util')
+
+describe('atl.20 below-feet onto solid (unit)', () => {
+  it('solidBelow proves only a known solid landing', () => {
+    const bot = (below) => ({
+      blockAt: () => below === undefined ? null : below,
+    })
+    assert.equal(solidBelow(bot({ name: 'stone' }), pos(0, 62, 0)), true, 'stone lands')
+    assert.equal(solidBelow(bot({ name: 'dirt' }), pos(0, 62, 0)), true, 'dirt lands')
+    assert.equal(solidBelow(bot({ name: 'deepslate_iron_ore' }), pos(0, 62, 0)), true, 'ore lands')
+    assert.equal(solidBelow(bot({ name: 'air' }), pos(0, 62, 0)), false, 'air is a drop')
+    assert.equal(solidBelow(bot({ name: 'cave_air' }), pos(0, 62, 0)), false, 'cave air is a drop')
+    assert.equal(solidBelow(bot({ name: 'water' }), pos(0, 62, 0)), false, 'water is a hazard')
+    assert.equal(solidBelow(bot({ name: 'lava' }), pos(0, 62, 0)), false, 'lava is a hazard')
+    assert.equal(solidBelow(bot({ name: 'short_grass' }), pos(0, 62, 0)), false, 'flora is not a landing')
+    assert.equal(solidBelow(bot(undefined), pos(0, 62, 0)), false, 'unknown stays denied')
+    assert.equal(solidBelow(bot({ name: 'dirt', boundingBox: 'empty' }), pos(0, 62, 0)), false, 'walk-through stays denied')
+    assert.equal(solidBelow(bot({ name: 'dirt', boundingBox: 'block' }), pos(0, 62, 0)), true, 'real solid lands')
+    assert.equal(solidBelow(null, pos(0, 62, 0)), false, 'null bot denies')
+  })
+
+  it('solid below: the ore is dug with no strike and no stuck fact', async () => {
+    const cells = shaftCells()
+    cells['0,61,0'] = 'dirt' // proven landing under the ore
+    const bot = shaftBot(cells)
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: pos(0, 62, 0), block: 'iron_ore', drop: 'raw_iron', have: 0 },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {})
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.digCalls, 1, 'ore dug')
+    assert.ok(!('0,62,0' in cells), 'ore gone from the world')
+    assert.equal(ctx.bring.phase, 'pickup', 'dig advances the order')
+    assert.equal(ctx.bring.denyStrikes || 0, 0, 'no strike counted')
+    assert.ok(!ctx.stuck, 'no stuck fact: no episode needed')
+    assert.ok(cap.logged.some((l) => l.includes('onto solid') && l.includes('(atl.20)')), cap.logged.join('\n'))
+    assert.ok(!cap.logged.some((l) => l.includes('refused dig iron_ore')), 'never refused')
+  })
+
+  it('solid below a BUILD still skips it, never digs (revmux 01 core-1)', async () => {
+    // denyReason returns 'below-feet' before it checks protection, so the
+    // exemption must unmask the type rules first — or bring would dig the
+    // cabin floor it stands on.
+    const cells = shaftCells()
+    cells['0,62,0'] = 'oak_planks' // a build under the feet ...
+    cells['0,61,0'] = 'dirt' // ... over a proven landing
+    const bot = shaftBot(cells)
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: pos(0, 62, 0), block: 'oak_planks', drop: 'oak_planks', have: 0 },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {})
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.digCalls, 0, 'build never dug')
+    assert.equal(ctx.bring.phase, 'find', 'take the next candidate')
+    assert.ok(ctx.bring.skip && ctx.bring.skip.has('0,62,0'), 'build skipped')
+    assert.ok(!ctx.stuck, 'a build is skipped, not struck')
+    assert.ok(cap.logged.some((l) => l === 'protected: oak_planks at 0 62 0'), cap.logged.join('\n'))
+    assert.ok(!cap.logged.some((l) => l.includes('onto solid')), 'exemption never fires on a build')
+  })
+
+  it('air below: the strike path still denies and raises the stuck fact', async () => {
+    const cells = shaftCells()
+    cells['0,61,0'] = 'air' // explicit drop under the ore: a real hazard
+    const bot = shaftBot(cells)
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: pos(0, 62, 0), block: 'iron_ore', drop: 'raw_iron', have: 0 },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {})
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.digCalls, 0, 'hazard never dug')
+    assert.equal(ctx.bring.phase, 'find', 'search again after the strike')
+    assert.equal(ctx.bring.denyStrikes, 1, 'one strike counted')
+    assert.ok(ctx.stuck && ctx.stuck.by === 'bring', 'stuck fact raised (atl.17 path)')
+    assert.ok(cap.logged.some((l) => l === 'selftrap: refused dig iron_ore at 0 62 0 (below-feet)'), cap.logged.join('\n'))
+  })
+})
+
+describe('atl.20 below-feet onto solid (fake-player e2e)', () => {
+  it('shaft stance over solid: no selftrap, ore dug, here is 1 raw_iron', async () => {
+    const cells = shaftCells()
+    cells['0,61,0'] = 'dirt' // the atl.18 shaft bottom: stone under the ore
+    const bot = shaftBot(cells)
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }, // no ask: FSM reserve
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    handleChat(bot, ticker, 'P', 'bring me iron_ore 1')
+    const ctx = bot._tickerCtx
+    const stepBody = () => {
+      const g = bot.pathfinder.goal
+      if (!g || typeof g.x !== 'number') return
+      const bp = bot.entity.position
+      const dx = g.x - bp.x
+      const dz = g.z - bp.z
+      const d = Math.hypot(dx, dz)
+      if (d < 0.05) return
+      const s = Math.min(0.6, d) / d
+      bot.entity.position = pos(bp.x + dx * s, 63, bp.z + dz * s)
+    }
+    const cap = capture()
+    try {
+      let t = 0
+      for (; t < 150 && ctx.bring; t++) {
+        await ticker.tick()
+        stepBody()
+      }
+      assert.ok(!ctx.bring, 'order finished')
+    } finally {
+      cap.release()
+    }
+    assert.ok(!cap.logged.some((l) => l.includes('refused dig iron_ore')), `no refusal:\n${cap.logged.join('\n')}`)
+    assert.ok(!bot.lines.some((l) => l.startsWith('stuck, trying')), `no episode needed: ${bot.lines.join(' | ')}`)
+    assert.ok(!('0,62,0' in cells), 'ore dug')
+    assert.ok(bot.lines.includes('here is 1 raw_iron'), `chats: ${bot.lines.join(' | ')}`)
+    assert.ok(!bot.lines.some((l) => l.includes('could not reach iron_ore safely')), 'never refused')
+  })
+})

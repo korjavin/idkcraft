@@ -9,7 +9,7 @@ const exploreMod = require('./explore')
 const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, denyReason, logDeny } = require('./util')
+const { say, clearGoal, denyReason, logDeny, solidBelow, protectedReason } = require('./util')
 const itemMod = require('./bringitem')
 const Vec3 = require('vec3')
 
@@ -1355,8 +1355,26 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
-    const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
-    if (bDeny) {
+    let bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
+    if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && protectedReason(bot, block, ctx) !== null) {
+      // revmux 01 core-1: the trap denial masks protection (denyReason
+      // returns 'below-feet' before it checks the type rules), so a
+      // below-feet stance over solid may sit on a build. Unmask it: the
+      // protected path skips the block instead of striking or digging.
+      bDeny = 'protected'
+    }
+    if (bDeny === 'below-feet' && solidBelow(bot, o.pos)) {
+      // atl.20: the shaft-bottom loop (atl.18 5/9: selftrap → sidestep →
+      // re-find the same block → walk back on top → refuse) died on this
+      // denial with SOLID stone under the ore. Digging it is what a player
+      // does — a safe 1-block drop onto a proven landing — so dig instead
+      // of striking. Falls through to the dig below with no strike and no
+      // stuck fact. The refusal stays for real hazards (air/water/lava or
+      // unknown below), and the guard itself is untouched for every other
+      // behaviour (equip's no-deepen rule, forage/flat skips). The block
+      // itself is type-clean here (protected was unmasked above).
+      try { console.log(`below-feet ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} onto solid — digging (atl.20)`) } catch (_) { /* logging never breaks a dig */ }
+    } else if (bDeny) {
       logDeny(block, bDeny)
       if (bDeny === 'protected') {
         // Skip it and take the next candidate: a nearer build must not
