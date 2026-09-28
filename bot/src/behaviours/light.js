@@ -373,7 +373,7 @@ function placeTick(bot, ctx, home, idx) {
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)
         if (clearDeny) {
-          logDeny(cell, clearDeny) // idkcraft-drq: never clear foreign torches to light
+          logDeny(cell, clearDeny) // idkcraft-drq: the clear dig obeys the guard (torches short-circuit above)
         } else {
           try {
             await bot.dig(cell || bot.blockAt(p))
