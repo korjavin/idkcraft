@@ -41,6 +41,7 @@ const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
 const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
+const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
@@ -253,20 +254,18 @@ function findScaffoldItem(bot) {
   return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
 }
 
-// Issue window: rising, plus the first ~2 game ticks past the peak
-// (vy > -0.1, feet still >= +1.18). A pure vy > 0 guard shrinks the window
-// to ~150 ms, which 1 Hz sampling of the ~600 ms jump cycle can miss for a
-// whole episode (revmux 01 core-1: failed:no-apex); the ~250 ms window
-// always catches a 200 ms-spaced phase, and the server still applies the
-// placement while the feet are above the cell. Falling faster means the
-// feet are back in the cell at apply time (self-intersection refusal), so
-// those samples wait for the next apex. A missing velocity (mocks) reads
-// as inside the window.
-function apexWindow(bot) {
+// Ascent issue window (2bh): fire placeBlock while RISING (vy > 0 past
+// +0.6), not at the apex. The async issue (equip + send + ack, ~100-300 ms)
+// lands the server apply at the apex; issuing AT the apex lands it on the
+// fall, feet back in the cell (self-intersection refusal). Rig paper-base,
+// S3 pit: +250/+350 ms post-jump PLACED 2/2, +450 ms refused 3/3; prod
+// post-#158 still 0/4 placed with the apex trigger. A missing velocity
+// (mocks) reads as inside the window.
+function risingWindow(bot) {
   try {
     const v = bot && bot.entity && bot.entity.velocity
     if (!v || typeof v.y !== 'number') return true
-    return v.y > -0.1
+    return v.y > 0
   } catch (_) { return true }
 }
 
@@ -502,7 +501,7 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + PILLAR_APEX && apexWindow(bot)) {
+    if (bp.y >= st.startFloor + PILLAR_ISSUE_DY && risingWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
     } else {
@@ -518,11 +517,11 @@ function pillarUpRun(bot, ctx) {
   }
   if (st.placeError) return 'failed:place-error'
   if (st.placeInFlight) return 'running'
-  // Fell below the apex while the ack was in flight (slow server,
+  // Fell below the issue height before the ack went out (slow server,
   // knockback): jump again, never place from below into the occupied feet
   // cell. Already solid (a twin call, an earlier cycle): verify instead of
   // stacking a second placement into the cell (the yvi loop).
-  if (bp.y < st.startFloor + PILLAR_APEX - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
+  if (bp.y < st.startFloor + PILLAR_ISSUE_DY - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
   if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return 'running' }
   // Reference: a solid neighbour of the feet cell, ground below first.
   const fx = Math.floor(bp.x)
@@ -1433,4 +1432,5 @@ module.exports = {
   decide,
   release,
   run,
+  pillarUpRun,
 }
