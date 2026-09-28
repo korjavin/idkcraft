@@ -11,6 +11,7 @@ const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
 const itemMod = require('./bringitem')
+const Vec3 = require('vec3')
 
 const woolMod = require('./wool')
 
@@ -596,11 +597,21 @@ function goingForLine(want, res) {
   return base
 }
 
+// Verdict positions must be real Vec3 for the walk/dig reads: real
+// mineflayer blockAt throws on a plain object (WorldSync.getBlock calls
+// pos.floored()), which reads as an unloaded chunk and stalls a memory
+// hike into 'could not reach' at the vein (idkcraft-t9k). Every bring
+// verdict routes through here, so normalize once; live hits pass through.
+function asVec3(p) {
+  if (!p || typeof p.floored === 'function') return p
+  return new Vec3(p.x, p.y, p.z)
+}
+
 // Announcement shape shared by the find verdict and order creation:
 // the winning candidate as a scout-like result, plus the choice suffix
 // (iff a rival was feasible) and the far flag for memory targets.
 function choiceRes(win, rival, bp) {
-  const res = { name: win.name, position: win.pos, distance: Math.round(win.dist), exposed: win.kind !== 'buried' }
+  const res = { name: win.name, position: asVec3(win.pos), distance: Math.round(win.dist), exposed: win.kind !== 'buried' }
   if (rival) {
     if (win.kind === 'buried') {
       res.choice = 'digging'
