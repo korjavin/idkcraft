@@ -672,6 +672,25 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
+    // Descending floor anchor (cm0.2): the cycle may arm mid-flight — an
+    // approach jump still airborne when stuck fires (prod 09:36:48 armed at
+    // +0.8 with feet=air; the 5 s place silence followed). A first tick
+    // that samples the body a block too high parks the trigger above the
+    // apex and the cycle jumps to no-apex (rig 3/3). Follow the body down;
+    // never up (a rise is the jump the timer is timing). A grounded sample
+    // below re-seeds at once; airborne samples need two in a row (1 Hz
+    // ticks phase-lock against the 600 ms hop and can miss the ~50 ms
+    // grounded window between bunny-hops, but a single correction blip is
+    // not a landing).
+    if (st.startFloor !== null && Math.floor(bp.y) < st.startFloor) {
+      st.belowFloor = (st.belowFloor || 0) + 1
+      if ((bot.entity && bot.entity.onGround) || st.belowFloor >= 2) {
+        st.startFloor = Math.floor(bp.y)
+        st.belowFloor = 0 // every re-seed needs its own confirmation
+      }
+    } else {
+      st.belowFloor = 0
+    }
     // The timer owns issuance; jump-phase ticks only hold jump and the
     // no-apex budget. Armed once per cycle (the re-jump guard below resets
     // the flags so a fresh cycle arms a fresh timer).
