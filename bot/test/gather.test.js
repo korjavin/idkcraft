@@ -85,7 +85,11 @@ describe('gather step', () => {
       gather(bot, ctx, null, {})
     }
     assert.ok(ctx.gather.gskip.has('2,64,0'), 'owner log denied')
-    bot._items = [{ name: 'oak_log', count: 1 }] // a tree log landed: skip clears
+    // A tree log landed elsewhere: the drop-landed clear wipes skip, the
+    // next find must still not re-pick the denied owner log.
+    ctx.gather.skip.clear()
+    ctx.gather.pos = null
+    bot._items = [{ name: 'oak_log', count: 1 }]
     gather(bot, ctx, null, {})
     assert.match(ctx.lastGoalKey, /^gather:8,64,0$/, 'guard denial survives the clear')
   })
