@@ -78,9 +78,29 @@ function cellName(bot, x, y, z) {
   } catch (_) { return null }
 }
 
-// A log/stem is a tree only with a woody column above or below AND leaves
-// (or nether wart blocks) within 2 — a placed pillar or wall beam has
-// neither. Fails closed without a world view.
+function crownNear(bot, x, y, z) {
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if (dx === 0 && dy === 0 && dz === 0) continue
+        const n = cellName(bot, x + dx, y + dy, z + dz)
+        if (!n) continue
+        if (n.endsWith('_leaves') || n === 'nether_wart_block' || n === 'warped_wart_block') return true
+      }
+    }
+  }
+  return false
+}
+
+// A log/stem is a tree only with a woody column above or below AND a leaf
+// crown (or nether wart) around the column TOP: walk the woody cells up
+// from the target (bounded) and look for leaves there. Judging at the
+// target instead accepts cabin pillars under a canopy (leaves beside the
+// middle of the pillar) and refuses the low logs of tall trunks (no
+// leaves within 2 of the bottom). A solid cap directly above the top
+// (planks, slabs: a roof, not sky) vetoes. Fails closed without a world
+// view. Residual: a placed pillar deliberately crowned with leaves reads
+// as a tree — indistinguishable, accepted.
 function isTreeLog(bot, block) {
   try {
     if (!bot || typeof bot.blockAt !== 'function' || !block || !block.position) return false
@@ -92,17 +112,15 @@ function isTreeLog(bot, block) {
     const above = cellName(bot, x, y + 1, z)
     const below = cellName(bot, x, y - 1, z)
     if (!isWoody(above) && !isWoody(below)) return false
-    for (let dx = -2; dx <= 2; dx++) {
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dz = -2; dz <= 2; dz++) {
-          if (dx === 0 && dy === 0 && dz === 0) continue
-          const n = cellName(bot, x + dx, y + dy, z + dz)
-          if (!n) continue
-          if (n.endsWith('_leaves') || n === 'nether_wart_block' || n === 'warped_wart_block') return true
-        }
-      }
+    let top = y
+    for (let i = 1; i <= 32; i++) {
+      if (!isWoody(cellName(bot, x, y + i, z))) break
+      top = y + i
     }
-    return false
+    const cap = cellName(bot, x, top + 1, z)
+    if (cap && isWall(cap) && !cap.endsWith('_leaves') &&
+        cap !== 'nether_wart_block' && cap !== 'warped_wart_block') return false
+    return crownNear(bot, x, top, z)
   } catch (_) { return false }
 }
 
@@ -115,29 +133,35 @@ function isWall(name) {
     name !== 'void_air' && !CLEAR_FLORA.has(name) && !NOT_WALL.has(name)
 }
 
-// True when a horizontal neighbour at the feet plane is solid, i.e. the
-// bot stands in a depression and a below-feet dig would deepen it. Fires
-// only on proven walls: unknown cells never count. (Asymmetry is
-// deliberate: protection fails closed because a destroyed build is
-// unrecoverable, while the trap rule needs proof because over-denying
-// bricks legitimate digging such as flat restock on open ground.)
-function feetWalled(bot, feet) {
+// Solid horizontal neighbours at the feet plane (0-4). Only proven walls
+// count: unknown cells never do. (Asymmetry is deliberate: protection
+// fails closed because a destroyed build is unrecoverable, while the trap
+// rule needs proof because over-denying bricks legitimate digging such as
+// flat restock on open ground.)
+function walledSides(bot, feet) {
   try {
-    if (!bot || typeof bot.blockAt !== 'function') return false
+    if (!bot || typeof bot.blockAt !== 'function') return 0
     const fx = Math.floor(feet.x)
     const fy = Math.floor(feet.y)
     const fz = Math.floor(feet.z)
     const offs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    let n = 0
     for (const [dx, dz] of offs) {
       let b = null
       try { b = bot.blockAt(new Vec3(fx + dx, fy, fz + dz)) } catch (_) { b = null }
       if (!b) continue
       if (b.boundingBox === 'empty') continue
-      if (isWall(b.name)) return true
+      if (isWall(b.name)) n++
     }
-    return false
-  } catch (_) { return false }
+    return n
+  } catch (_) { return 0 }
 }
+
+// A below-feet dig is a trap only in a real depression: one wall (a trunk,
+// a bump, the rim of the hole flat is filling) still leaves a 1-deep dig
+// jumpable, and so does a corner; three walls mean the deepened cell has
+// no same-level way out.
+const TRAP_WALLS = 3
 
 // Blocks that fall when their support is dug (sand, gravel, concrete
 // powder): digging one of these directly is safe (it breaks into item
@@ -148,7 +172,7 @@ function isGravityBlock(name) {
 }
 
 // Name of the gravity block directly above pos, or null. Unknown cells
-// return null: trap rules need proof (see feetWalled above).
+// return null: trap rules need proof (see walledSides above).
 function gravityAbove(bot, pos) {
   try {
     if (!bot || typeof bot.blockAt !== 'function' || !pos) return null
@@ -177,17 +201,22 @@ function denyReason(bot, block, ctx) {
     const feet = botPos(bot)
     const pos = block.position
     if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) < Math.floor(feet.y)) {
-      if (feetWalled(bot, feet)) return 'below-feet'
+      const near = Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 &&
+        Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1
+      if (near && walledSides(bot, feet) >= TRAP_WALLS) return 'below-feet'
     }
     // Never dig a support out from under a gravity block in the bot's own
-    // column: the stack falls onto the bot. Digging the gravity block
-    // itself stays allowed — clearing sand by hand is safe, and digging
-    // out is the escape when already buried. Below-feet targets stay with
-    // the rule above (a gravity block directly above the floor is the feet
-    // cell itself, i.e. already buried).
+    // column: the stack falls onto the bot. The exemption is only the body
+    // cells (feet, head): digging the sand out of the cell you already
+    // occupy is the escape when buried. A gravity block HIGHER up with
+    // more gravity above it is itself a support — digging it drops the
+    // stack through your air cells onto your head. Below-feet targets stay
+    // with the rule above (a gravity block directly above the floor is the
+    // feet cell itself, i.e. already buried).
     if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) >= Math.floor(feet.y)) {
+      const ty = Math.floor(pos.y)
       if (Math.floor(feet.x) === Math.floor(pos.x) && Math.floor(feet.z) === Math.floor(pos.z) &&
-          !isGravityBlock(name) && gravityAbove(bot, pos)) {
+          gravityAbove(bot, pos) && !(isGravityBlock(name) && ty <= Math.floor(feet.y) + 1)) {
         return 'gravity'
       }
     }

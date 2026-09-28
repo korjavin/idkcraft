@@ -752,7 +752,19 @@ async function bring(bot, ctx, target, state) {
     const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
     if (bDeny) {
       logDeny(block, bDeny)
-      o.pos = null // denied mid-order: search again, like a vanished block
+      if (bDeny === 'protected') {
+        refuse(bot, ctx, `${o.block} there is part of a build`)
+        return
+      }
+      // Trap denial (below-feet/gravity): the stance may change, so look
+      // again — but a capped number of times, or find re-picks the same
+      // nearest block forever (walk flips straight back to dig).
+      o.denyStrikes = (o.denyStrikes || 0) + 1
+      if (o.denyStrikes > 3) {
+        refuse(bot, ctx, `could not reach ${o.block} safely`)
+        return
+      }
+      o.pos = null
       o.phase = 'find'
       return
     }
@@ -767,6 +779,7 @@ async function bring(bot, ctx, target, state) {
         await bot.dig(block)
       } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
+      o.denyStrikes = 0 // a completed dig is progress: fresh strike budget
       o.phase = 'pickup'
     })()
     return

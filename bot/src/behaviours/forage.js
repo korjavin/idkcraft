@@ -545,7 +545,10 @@ function forage(bot, ctx, target, state) {
     const fDeny = denyReason(bot, block, ctx) // idkcraft-drq: never strip owner structures
     if (fDeny) {
       logDeny(block, fDeny)
-      try { resources.forget(ctx, t.pos.x, t.pos.y, t.pos.z) } catch (_) { /* memory best-effort */ }
+      try {
+        if (fDeny === 'protected') resources.forget(ctx, t.pos.x, t.pos.y, t.pos.z)
+        else strikeCell(ctx, f, t.pos) // trap: transient stance, skip it, keep memory (atl.4)
+      } catch (_) { /* memory best-effort */ }
       if (!replan(bot, ctx, f, bp)) return
       return
     }

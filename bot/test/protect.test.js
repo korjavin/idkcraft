@@ -67,6 +67,24 @@ describe('canBreak guard (idkcraft-drq)', () => {
     assert.equal(canBreak(bot, blk('crimson_stem', 5, 64, 0), ctx), false, 'bare stem')
   })
 
+  it('tree crown: low logs of tall trunks allowed, cabin pillars refused', () => {
+    const birch = new Map()
+    for (let y = 64; y <= 70; y++) birch.set(`0,${y},0`, 'birch_log')
+    birch.set('1,70,0', 'birch_leaves')
+    birch.set('0,71,0', 'birch_leaves')
+    assert.equal(canBreak(worldBot(birch), blk('birch_log', 0, 64, 0), {}), true, 'low log, crown at top')
+    assert.equal(canBreak(worldBot(birch), blk('birch_log', 0, 68, 0), {}), true, 'mid log, crown at top')
+    const cabin = new Map()
+    for (let y = 64; y <= 67; y++) cabin.set(`5,${y},5`, 'oak_log')
+    cabin.set('5,68,5', 'oak_planks') // roof directly above the pillar top
+    cabin.set('6,65,5', 'oak_leaves') // hedge beside the middle: not a crown
+    cabin.set('6,66,5', 'oak_leaves')
+    assert.equal(canBreak(worldBot(cabin), blk('oak_log', 5, 65, 5), {}), false, 'pillar with a roof vetoed')
+    const bare = new Map()
+    for (let y = 64; y <= 67; y++) bare.set(`9,${y},9`, 'oak_log')
+    assert.equal(canBreak(worldBot(bare), blk('oak_log', 9, 65, 9), {}), false, 'leafless pillar refused')
+  })
+
   it('allows bot-placed blocks via ctx.placedByBot', () => {
     const bot = worldBot(new Map())
     const ctx = { placedByBot: new Set(['7,64,0']) }
@@ -200,15 +218,16 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     } finally { console.log = orig }
   })
 
-  it('bring re-searches when its dig target is protected', async () => {
+  it('bring refuses loudly when its dig target is protected (no re-find loop)', async () => {
     const bring = require('../src/behaviours/bring')
     let digs = 0
+    const lines = []
     const bot = {
       entity: { position: new Vec3(0, 64, 0), onGround: true },
       blockAt: () => ({ name: 'oak_planks', position: new Vec3(2, 64, 0) }),
       dig: async () => { digs++ },
-      chat: () => {},
-      pathfinder: { goal: null, setGoal() {}, isMoving: () => false },
+      chat: (l) => lines.push(String(l)),
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
     }
     const ctx = {
       lastGoalKey: '',
@@ -216,8 +235,40 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     }
     await bring(bot, ctx, null, {})
     assert.equal(digs, 0, 'planks never dug')
-    assert.equal(ctx.bring.phase, 'find', 'denied mid-order: search again')
-    assert.equal(ctx.bring.pos, null, 'denied target dropped')
+    assert.equal(ctx.bring, null, 'order ends instead of re-picking the same block')
+    assert.ok(lines.some((l) => l.includes('part of a build')), lines.join('\n'))
+  })
+
+  it('bring re-searches a trap denial 3 times, then refuses', async () => {
+    const bring = require('../src/behaviours/bring')
+    let digs = 0
+    const lines = []
+    const bot = {
+      // 4-wall pit: the adjacent below-feet dirt is a trap denial.
+      entity: { position: new Vec3(0, 63.2, 0), onGround: true },
+      blockAt: (p) => {
+        const y = Math.floor(p.y)
+        const n = y <= 63 ? 'dirt' : 'air'
+        return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)) }
+      },
+      dig: async () => { digs++ },
+      chat: (l) => lines.push(String(l)),
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
+    }
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: { x: 1, y: 62, z: 0 }, block: 'dirt' },
+    }
+    for (let i = 0; i < 3; i++) {
+      await bring(bot, ctx, null, {})
+      assert.equal(ctx.bring.phase, 'find', `strike ${i + 1}: search again`)
+      ctx.bring.phase = 'dig' // find re-picks the same nearest block
+      ctx.bring.pos = { x: 1, y: 62, z: 0 }
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(digs, 0, 'trap dirt never dug')
+    assert.equal(ctx.bring, null, '4th denial refuses loudly')
+    assert.ok(lines.some((l) => l.includes('could not reach dirt safely')), lines.join('\n'))
   })
 })
 
@@ -272,6 +323,14 @@ describe('recover dig guards (idkcraft-drq)', () => {
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'failed:gravity')
     assert.deepEqual(bot.digs, [], 'support never dug')
+  })
+
+  it('dig_up refuses sand at head2 under more sand (support, not rescue)', () => {
+    const bot = recBot(new Map([['0,66,0', 'sand'], ['0,67,0', 'sand']]))
+    const ctx = recCtx('dig_up')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:gravity')
+    assert.deepEqual(bot.digs, [], 'sand support never dug')
   })
 
   it('dig_up still clears a sand ceiling directly (self-rescue allowed)', async () => {
@@ -356,6 +415,18 @@ describe('self-trap rule (idkcraft-drq)', () => {
     assert.equal(denyReason(meadow, blk('dirt', 0, 63, 0), ctx), null, 'flora/water neighbours: open')
   })
 
+  it('denyReason: below-feet needs 3+ walls and a near target', () => {
+    const oneWall = feetBot(new Map([['1,64,0', 'dirt']]))
+    assert.equal(denyReason(oneWall, blk('dirt', 0, 63, 0), {}), null, 'one wall (trunk, bump): jumpable, allowed')
+    const twoWall = feetBot(new Map([['1,64,0', 'dirt'], ['0,64,1', 'dirt']]))
+    assert.equal(denyReason(twoWall, blk('dirt', 0, 63, 0), {}), null, 'corner: escapable sideways, allowed')
+    const threeWall = feetBot(new Map([['1,64,0', 'dirt'], ['-1,64,0', 'dirt'], ['0,64,1', 'dirt']]))
+    assert.equal(denyReason(threeWall, blk('dirt', 0, 63, 0), {}), 'below-feet', 'alcove: denied')
+    assert.equal(denyReason(threeWall, blk('dirt', 5, 60, -3), {}), null, 'far target: not your pit, allowed')
+    // The flat-restock shape: walled stance, surface dirt far away.
+    assert.equal(denyReason(pitBot(), blk('dirt', 20, 62, 0), {}), null, 'restock candidate far from the pit allowed')
+  })
+
   it('canBreak stays the boolean face of denyReason', () => {
     assert.equal(canBreak(pitBot(), blk('dirt', 1, 62, 0), {}), false)
     assert.equal(canBreak(feetBot(new Map()), blk('dirt', 1, 63, 0), {}), true)
@@ -391,11 +462,11 @@ describe('self-trap rule (idkcraft-drq)', () => {
     } finally { console.log = orig }
   })
 
-  it('forage forgets a below-feet ore in a pit instead of digging down', () => {
+  it('forage strikes (keeps memory of) a below-feet ore in a pit instead of digging down', () => {
     const forage = require('../src/behaviours/forage')
     let digs = 0
     const bot = {
-      entity: { position: new Vec3(0, 63, 0), onGround: true },
+      entity: { position: new Vec3(1, 63, 0), onGround: true },
       inventory: { items: () => [] },
       blockAt: (p) => {
         const fx = Math.floor(p.x) === 0 && Math.floor(p.z) === 0
@@ -405,12 +476,15 @@ describe('self-trap rule (idkcraft-drq)', () => {
       dig: async () => { digs++ },
       pathfinder: { goal: null, setGoal() {}, isMoving: () => false },
     }
+    const items = new Map([['2,62,0', { x: 2, y: 62, z: 0, name: 'coal_ore' }]])
     const ctx = {
-      lastGoalKey: '', stepStatus: 'running', resources: { items: new Map() },
+      lastGoalKey: '', stepStatus: 'running', resources: { items },
       forage: { phase: 'dig', target: { kind: 'block', pos: { x: 2, y: 62, z: 0 }, name: 'coal_ore' } },
     }
     forage(bot, ctx, null, {})
     assert.equal(digs, 0, 'below-feet ore in a pit never dug')
+    assert.equal(items.size, 1, 'transient stance: memory kept, not forgotten')
+    assert.ok(ctx.forageSkip && ctx.forageSkip.has('2,62,0'), 'cell skipped')
   })
 
   it('denyReason: digging a support under sand/gravel in own column denies gravity', () => {
@@ -422,9 +496,15 @@ describe('self-trap rule (idkcraft-drq)', () => {
     assert.equal(denyReason(under('white_concrete_powder'), blk('stone', 0, 66, 0), {}), 'gravity', 'powder above')
     assert.equal(denyReason(under('sandstone'), blk('stone', 0, 66, 0), {}), null, 'solid cap: no fall')
     assert.equal(denyReason(under('air'), blk('stone', 0, 66, 0), {}), null, 'open sky: no fall')
-    // Digging the gravity block itself is self-clearing, never a trap.
-    assert.equal(denyReason(under('sand'), blk('sand', 0, 66, 0), {}), null, 'sand itself allowed')
-    assert.equal(denyReason(under('gravel'), blk('gravel', 0, 66, 0), {}), null, 'gravel itself allowed')
+    // Digging the gravity block itself is the escape only in body cells
+    // (feet, head): higher up it is itself a support for the stack above.
+    const buried = feetBot(new Map([['0,64,0', 'sand'], ['0,65,0', 'sand'], ['0,66,0', 'sand'], ['0,67,0', 'sand']]))
+    assert.equal(denyReason(buried, blk('sand', 0, 64, 0), {}), null, 'sand at feet allowed (self-rescue)')
+    assert.equal(denyReason(buried, blk('sand', 0, 65, 0), {}), null, 'sand at head allowed (self-rescue)')
+    assert.equal(denyReason(buried, blk('sand', 0, 66, 0), {}), 'gravity', 'sand at head2 under sand denied')
+    assert.equal(denyReason(under('gravel'), blk('gravel', 0, 66, 0), {}), 'gravity', 'gravel at head2 under gravel denied')
+    const single = feetBot(new Map([['0,66,0', 'sand'], ['0,67,0', 'stone']]))
+    assert.equal(denyReason(single, blk('sand', 0, 66, 0), {}), null, 'single sand layer, nothing above to fall')
     // Adjacent column: the stack falls beside the bot, not onto it.
     const side = feetBot(new Map([['1,66,0', 'stone'], ['1,67,0', 'sand']]))
     assert.equal(denyReason(side, blk('stone', 1, 66, 0), {}), null, 'neighbour column allowed')

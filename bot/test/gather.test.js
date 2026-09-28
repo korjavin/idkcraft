@@ -75,6 +75,21 @@ describe('gather step', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
+  it('drq a denied owner log is not re-walked after the next chopped log', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(8, 64, 0)],
+      names: { '2,64,0': 'oak_log', '8,64,0': 'oak_log', '8,65,0': 'oak_log', '9,65,0': 'oak_leaves' },
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 6 && !(ctx.gather && ctx.gather.gskip && ctx.gather.gskip.has('2,64,0')); i++) {
+      gather(bot, ctx, null, {})
+    }
+    assert.ok(ctx.gather.gskip.has('2,64,0'), 'owner log denied')
+    bot._items = [{ name: 'oak_log', count: 1 }] // a tree log landed: skip clears
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:8,64,0$/, 'guard denial survives the clear')
+  })
+
   it('(mnx) remembered logs within a gave-up spot are skipped', () => {
     const bot = mockBot({ spots: [], names: {} })
     const ctx = freshCtx()
