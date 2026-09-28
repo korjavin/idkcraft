@@ -110,6 +110,10 @@ async function flush() {
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
 }
 
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
 function captureLog() {
   const lines = []
   const orig = console.log
@@ -206,16 +210,163 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(ctx.recovery.st.phase, 'jump')
   })
 
-  it('rising sample mid-ascent (+0.7): issues the placement early', async () => {
-    // 2bh core: fire on the way up so the server apply lands at the apex
-    // (rig: +250/+350 ms PLACED 2/2). The old apex trigger waited here.
+  it('rising sample mid-ascent (+0.7): tick holds jump, the +150 ms timer issues', async () => {
+    // lzw core: issuance is physics-timed, not tick-phased. The tick must
+    // not place even with a perfect in-window sample (deleting the timer
+    // and re-adding a tick trigger fails the first assertion).
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
     bot.entity.position = pos(0.5, 61.7, 0.5)
     bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
     await flush()
-    assert.equal(bot._places, 1)
+    assert.equal(bot._places, 0, 'no tick-phase issue')
+    assert.equal(ctx.recovery.st.phase, 'jump')
+    assert.equal(bot.getControlState('jump'), true)
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1, 'the +150 ms timer issues')
+    assert.equal(ctx.recovery.st.phase, 'place')
+  })
+
+  it('fresh read at fire time: below the trigger at tick, risen by fire', async () => {
+    // lzw core: the timer reads height/velocity at fire time, not at arm
+    // time. The body rises between the tick and the fire; old tick-phase
+    // code with no second tick would never issue here.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.3, 0.5) // below the +0.6 trigger
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    bot.entity.position = pos(0.5, 61.8, 0.5) // the jump rises before the fire
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1, 'fire-time read sees the risen body')
+  })
+
+  it('stall at cycle start: grounded fires slide the ceiling, the late rise still issues', async () => {
+    // Liftoff-anchored patience (rig: a jump that left 750 ms late burned
+    // the fixed ceiling into no-apex). Fires while grounded re-anchor the
+    // clock; when the body finally rises, the next fire issues. Old
+    // tick-phase code with no second tick would never issue here.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5) // grounded at the start height
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(350) // past the +300 ceiling, still grounded: no give-up
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+    bot.entity.position = pos(0.5, 61.8, 0.5) // the stall clears, the jump rises
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    await sleep(150)
+    await flush()
+    assert.equal(bot._places, 1, 'a held jump issues into the late rise')
+  })
+
+  it('jump that never rises: the no-apex tick budget still fails the cycle', () => {
+    // The liftoff slide must not spin forever: 21 jump-phase ticks with a
+    // body that never rises fail no-apex, and the episode retries fresh.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    for (let i = 0; i < 21; i++) recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-apex')
+    assert.equal(bot._places, 0)
+  })
+
+  it('chain died by the ceiling: the next jump tick re-arms and a later rise issues', async () => {
+    // Revmux body-1: a mid-air arm catches apex/fall only, so the chain
+    // dies — but the cycle must not jump to no-apex. The dead chain yields
+    // (timerArmed=false) and the next jump-phase tick arms fresh.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.05, 0.5) // airborne falling
+    bot.entity.velocity = { x: 0, y: -0.3, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(450) // past the +300 ceiling: chain dead, nothing issued
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.timerArmed, false, 'dead chain yields')
+    bot.entity.position = pos(0.5, 61.8, 0.5) // the next rise (jump held)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.timerArmed, true, 'next jump tick re-arms')
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1, 'a later rise still issues')
+  })
+
+  it('stall past absolute patience yields the chain (quit bounds it)', async () => {
+    // Revmux core-3: the liftoff slide must not poll forever — past 5 s
+    // per arm the chain yields; with no ticks (quit) nothing re-arms.
+    // (armedAt faked: waiting out 5 s of wall clock is not a unit test.)
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    ctx.recovery.st.armedAt = Date.now() - 6000
+    await sleep(250)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.timerArmed, false, 'exhausted chain yields')
+  })
+
+  it('timer-path sync failure surfaces as failed:no-reference on the next tick', async () => {
+    // Revmux core-1: air everywhere means no reference block; the timer
+    // records syncFail and the next tick fails honestly instead of
+    // re-jumping into a 20 s no-apex stall (the body lands first, so the
+    // guard would take a syncFail-less chain back to jump).
+    const bot = strictBot(new Set(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.8, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(250)
+    assert.equal(bot._places, 0)
+    bot.entity.position = pos(0.5, 61, 0.5) // landed before the next tick
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-reference')
+  })
+
+  it('stale timer after release or chain never issues (identity guard)', async () => {
+    // Revmux core-2: the fire between arm and +150 ms must die when the
+    // episode moved on — released (stop/follow me) or chained (fresh st).
+    const bot1 = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot1.entity.position = pos(0.5, 61.8, 0.5)
+    bot1.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx1 = pillarCtx({ phase: 'jump' })
+    recover.run(bot1, ctx1)
+    ctx1.recovery = null
+    await sleep(250)
+    await flush()
+    assert.equal(bot1._places, 0, 'released episode never issues')
+    assert.deepEqual(bot1._equips, [], 'released episode never equips')
+    const bot2 = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot2.entity.position = pos(0.5, 61.8, 0.5)
+    bot2.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx2 = pillarCtx({ phase: 'jump' })
+    recover.run(bot2, ctx2)
+    ctx2.recovery.st = { phase: 'jump', waited: 0, placeInFlight: false, placed: false, placeError: false, startFloor: 61 }
+    await sleep(250)
+    await flush()
+    assert.equal(bot2._places, 0, 'chained episode never issues from the stale fire')
+  })
+
+  it('falling at fire time and past the ceiling: never issues', async () => {
+    // A falling body at every fire (static mock) re-arms until the +300 ms
+    // ceiling, then gives up the cycle: no placement, still jumping.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.3, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(450)
+    await flush()
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+    assert.equal(ctx.recovery.status, 'running')
   })
 
   it('fast path (dirt in hand): t2 sample waits for t3+', () => {
@@ -243,6 +394,7 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush()
     assert.equal(bot._places, 1)
     assert.strictEqual(bot.heldItem, heldDirt)
@@ -255,6 +407,7 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush()
     assert.equal(bot._places, 1)
   })
@@ -288,6 +441,7 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush() // equip runs first, the place lands a microtask later
     assert.equal(bot._places, 1)
   })
@@ -298,6 +452,7 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(bot.entity.velocity, undefined)
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush() // equip runs first, the place lands a microtask later
     assert.equal(bot._places, 1)
   })
@@ -317,12 +472,19 @@ describe('pillar_up ravine climb e2e (idkcraft-17b)', () => {
     for (; ticks < 80 && Math.floor(bot.entity.position.y) < 64; ticks++) {
       await ticker.tick()
       await flush()
-      // Harness physics: jump lifts, gravity settles onto solid ground.
-      if (bot.getControlState('jump')) bot.entity.position.y += 0.5
+      // Harness physics: jump lifts (honest: at most one block above the
+      // cycle start floor), gravity settles onto solid ground. Real airtime
+      // between ticks: the +150 ms pillar timer fires on wall clock (lzw).
+      const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
+      const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      if (bot.getControlState('jump') && bot.entity.position.y < capY) {
+        bot.entity.position.y = Math.min(bot.entity.position.y + 0.5, capY)
+      }
       const below = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
       if ((!below || below.boundingBox === 'empty') && !bot.getControlState('jump')) {
         bot.entity.position.y = Math.max(60.5, bot.entity.position.y - 0.5)
       }
+      await sleep(25)
     }
     assert.equal(Math.floor(bot.entity.position.y), 64, `pillared out in ${ticks} ticks`)
     assert.ok(bot._equips.length >= 1, 'equipped scaffold at least once')

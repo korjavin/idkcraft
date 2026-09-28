@@ -105,6 +105,10 @@ async function flush() {
   for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
 }
 
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
 function facts(over) {
   return {
     by: 'no-displacement', goalDy: 0, goalDist: null, scaffold: 0, pickaxe: false,
@@ -247,8 +251,23 @@ describe('goal-less pit escape e2e (jsf.3)', () => {
       } else {
         recover.run(bot, ctx)
         step()
+        // Honest jump (lzw): cap the rise at one block above the cycle
+        // start floor — jump-held only, so a chain tick never drags a
+        // gained height back down — and land falls on solid tops, so the
+        // next cycle starts from the placed block instead of mid-air.
+        // Real airtime between ticks: the +150 ms pillar timer fires on
+        // wall clock, and 200 ticks take 200 s in prod, not 4 ms.
+        if (bot.getControlState('jump')) {
+          const st = ctx.recovery && ctx.recovery.st
+          const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+          if (bot.entity.position.y > capY) bot.entity.position.y = capY
+        } else {
+          const top = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+          if (top && top.boundingBox !== 'empty') bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+        }
       }
       await flush()
+      await sleep(25)
     }
     assert.equal(first[0], 'pillar_up', `first choice, got ${first}`)
     assert.ok(ticks < 200, 'episode ends')

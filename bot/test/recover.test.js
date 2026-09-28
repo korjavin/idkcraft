@@ -120,6 +120,10 @@ async function flush() {
   for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
 }
 
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
 async function metricText() {
   return metrics.client.register.metrics()
 }
@@ -138,6 +142,22 @@ describe('recover pit climb (acceptance 1)', () => {
       await ticker.tick()
       await flush()
       step()
+      // Honest jump (lzw): cap the rise at one block above the cycle start
+      // floor, with real airtime between ticks for the +150 ms pillar timer.
+      // Jump-held only: on chain ticks st is null and the cap must not drag
+      // a gained height back down.
+      if (bot.getControlState('jump')) {
+        const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
+        const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+        if (bot.entity.position.y > capY) bot.entity.position.y = capY
+      } else {
+        // Honest landing: a fall onto a solid top stands on it, so the next
+        // cycle starts from the placed block instead of mid-air (without
+        // this the chain stalls a block short and the episode releases).
+        const top = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+        if (top && top.boundingBox !== 'empty') bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+      }
+      await sleep(25)
     }
     assert.equal(Math.floor(bot.entity.position.y), 64, `climbed out in ${ticks} ticks`)
     assert.equal(bot._pending.maxInFlight, 1, 'placeBlock never parallel')
@@ -1515,6 +1535,7 @@ describe('pillar_up place-error at runtime (idkcraft-p4s)', () => {
         await ticker.tick()
         await flush()
         step()
+        await sleep(10) // the +150 ms pillar timer fires on wall clock (lzw)
       }
       const actions = chosen()
       assert.equal(actions[0], 'pillar_up', 'first choice climbs')
