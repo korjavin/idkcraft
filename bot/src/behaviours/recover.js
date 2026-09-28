@@ -29,8 +29,7 @@ const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
 const DISPLACE_TIMEOUT_TICKS = 8 // dug-open patience (9sq): clear-but-still ticks before failed:no-progress
-const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
-const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles
+const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles (jsf.4: dig_step mounts through the same drive)
 const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
 const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample at most
 const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held while stalled
@@ -42,6 +41,11 @@ const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
 const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
 const PILLAR_FAST_DY = 0.9 // fast-path issue height (round-3: see below)
+const PILLAR_ISSUE_MS = 150 // jump-start → place issue delay (lzw: physics, not tick phase)
+const PILLAR_REARM_MS = 50 // fire-time window miss (jump not registered yet): retry step
+const PILLAR_ISSUE_LAST_MS = 300 // ceiling: re-arms stop here (see firePillarTimer)
+const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: the ceiling slides)
+const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
@@ -154,6 +158,23 @@ function handDiggable(bot, b) {
   return true
 }
 
+// Stone a pickaxe breaks fast (jsf.4): pit andesite/granite/diorite/stone
+// walls ladder with a pick on hand. No ores — forage owns those.
+const PICK_DIG = new Set([
+  'stone', 'andesite', 'granite', 'diorite', 'cobblestone',
+  'deepslate', 'tuff', 'calcite', 'sandstone', 'dripstone_block',
+])
+function diggable(bot, b) {
+  if (handDiggable(bot, b)) return true
+  if (!b || typeof b.name !== 'string') return false
+  if (!hasPickaxe(bot)) return false
+  if (!PICK_DIG.has(b.name)) return false
+  try {
+    if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
+  } catch (_) { /* reach check best-effort */ }
+  return true
+}
+
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 function scanSides(bot) {
@@ -200,24 +221,44 @@ function capLavaAt(bot, dx, dz) {
     isLava(cellAt(bot, dx, 2, dz + 1)) || isLava(cellAt(bot, dx, 2, dz - 1))
 }
 
-// A hand-dug staircase cycle (9sh): the side cell at feet level stays as
-// the step to mount, the side cell above it is air or digs by hand, the
-// mount head above that is air or digs by hand (adv: the 1.8 body stands
-// the mount with its head in (dx,2,dz)), no lava in or around the head,
+// Lava behind the above cell (revmux jsf.4-01 minor): breaking above lets it
+// flow into the dug cell and on toward the head. lavaNear's ±1 cube covers
+// above's other neighbours and capLavaAt covers the cap's whole surround —
+// the two-out cell at above height is the gap (hand-dig had it too, but the
+// stone ladder reaches the depths where lava sits).
+function farLavaAt(bot, dx, dz) {
+  return isLava(cellAt(bot, dx * 2, 1, dz * 2))
+}
+
+// A dug staircase cycle (9sh hand, jsf.4 pickaxe): the side cell at feet
+// level stays as the step to mount, the side cell above it is air or digs
+// (by hand, or stone with a pickaxe on hand), the mount head above that is
+// air or digs the same way (adv: the 1.8 body stands the mount with its
+// head in (dx,2,dz)), no lava in or around the head, none behind the dig,
 // and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
+  let cobbleSide = null
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
     if (!solid(step)) continue
     const above = cellAt(bot, dx, 1, dz)
-    if (above && solid(above) && !handDiggable(bot, above)) continue
+    if (above && solid(above) && !diggable(bot, above)) continue
     const cap = cellAt(bot, dx, 2, dz)
-    if (cap && solid(cap) && !handDiggable(bot, cap)) continue
+    if (cap && solid(cap) && !diggable(bot, cap)) continue
     if (capLavaAt(bot, dx, dz)) continue
+    if (farLavaAt(bot, dx, dz)) continue
+    // Cobble last (revmux jsf.4-01 major): foreign cobble is drq-protected
+    // and refuses at denyReason — never let it shadow a natural side that
+    // digs. An only-cobble staircase is still offered (own-session pillars
+    // ladder through placedByBot).
+    if ((above && above.name === 'cobblestone') || (cap && cap.name === 'cobblestone')) {
+      if (!cobbleSide) cobbleSide = [dx, dz]
+      continue
+    }
     return [dx, dz]
   }
-  return null
+  return cobbleSide
 }
 
 // A plain +1 mount (cjq): the side cell at feet level is solid, the cell
@@ -299,21 +340,19 @@ function findScaffoldItem(bot) {
   return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
 }
 
-// Ascent issue window (2bh): fire placeBlock while RISING (vy > 0 past
-// +0.6), not at the apex. Measured jump: +0.42/+0.75/+1.00/+1.17 at
+// Fire-time rise check (2bh window, lzw timer): the +150 ms jump-start timer
+// issues placeBlock only while RISING (vy > 0 past the trigger height),
+// never on the fall. Measured jump: +0.42/+0.75/+1.00/+1.17 at
 // +50/+100/+150/+200 ms, apex +1.25 at +250 (vy +0.003), feet re-enter the
 // cell falling at ~+410. The async issue lands the server apply L later
 // (prod L ~100-300: equip + look + tick align — the old +1.0 window's 0/79
-// proves L is large, not localhost-small): +100 ms issues apply +200..+400
+// proves L is large, not localhost-small): +150 ms issues apply +250..+450
 // with the feet clear, while apex (+250) issues apply up to +550, feet
 // back in the cell (self-intersection refusal).
-// Deliberately NO vy floor above 0 (round-2): 1 Hz ticks against the exact
-// 600 ms jump cycle phase-lock onto 3 fixed phases per episode (rig:
-// 15 ticks, zero drift), so any window under ~200 ms can miss the whole
-// episode — a vy > 0.1 floor timed out 0/3 on the rig. Residual: apex
-// samples (vy ~+0.003) still issue and refuse at high L; the principled
-// fix is a physics-timed issue (fire at +150 ms after jump-start instead
-// of on tick phase) — idkcraft-lzw, not this bead.
+// Deliberately NO vy floor above 0 (round-2): with tick-phase issuance
+// 1 Hz ticks against the exact 600 ms jump cycle phase-locked onto 3 fixed
+// phases per episode (rig: 15 ticks, zero drift), so any window under
+// ~200 ms could miss the whole episode — a vy > 0.1 floor timed out 0/3.
 // (Fast-apply race: +100 ms issues refuse when L < 50 applies before the
 // feet exit at +154 — happens whenever scaffold is already in hand, prod
 // included (every block after the first). pillarTriggerDy answers it: the
@@ -484,7 +523,7 @@ const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
-  dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
+  dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
   dig_through: 'tunnel: pickaxe on hand, no lava near — dig 1-wide 2-tall toward the goal',
@@ -546,8 +585,9 @@ async function chooseRecovery(brain, facts, feasible) {
 // --- primitives: one tick each, multi-tick state in ctx.recovery.st ---
 // Every primitive returns 'running' | 'done' | 'failed:<reason>'.
 
-// Pillar up: jump, wait for the apex (feet +1.0), place ONE block into the
-// feet cell, verify. Exactly one placement in flight at a time — parallel
+// Pillar up: jump, issue ONE placeBlock into the feet cell from a +150 ms
+// jump-start timer (lzw — tick phase phase-locks against the 600 ms jump),
+// verify. Exactly one placement in flight at a time — parallel
 // placeBlock calls into one cell share one server ack and loop forever
 // (idkcraft-yvi: 438 place_error, 7.5 min in place).
 function pillarUpRun(bot, ctx) {
@@ -560,14 +600,21 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + pillarTriggerDy(bot) && risingWindow(bot)) {
-      st.phase = 'place'
-      setJump(bot, false)
-    } else {
-      setJump(bot, true)
-      if (++st.waited > APEX_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-apex' }
-      return 'running'
+    // The timer owns issuance; jump-phase ticks only hold jump and the
+    // no-apex budget. Armed once per cycle (the re-jump guard below resets
+    // the flags so a fresh cycle arms a fresh timer).
+    if (!st.timerArmed) {
+      st.timerArmed = true
+      st.jumpAt = Date.now()
+      st.armedAt = st.jumpAt
+      try {
+        const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_ISSUE_MS)
+        if (t && typeof t.unref === 'function') t.unref()
+      } catch (_) { /* timer best-effort */ }
     }
+    setJump(bot, true)
+    if (++st.waited > APEX_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-apex' }
+    return 'running'
   }
   if (st.placed) {
     // Verify the block is really there before claiming done: the target is
@@ -575,16 +622,75 @@ function pillarUpRun(bot, ctx) {
     return solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0)) ? 'done' : 'failed:no-place'
   }
   if (st.placeError) return 'failed:place-error'
+  if (st.syncFail) return 'failed:' + st.syncFail
   if (st.placeInFlight) return 'running'
   // Fell below the issue height with a stale place phase and nothing in
-  // flight (slow server, knockback): jump again. Same-tick fall-through
-  // from the trigger above forces this guard to match pillarTriggerDy —
-  // a higher guard would bounce the early-rise trigger it just set.
-  // No-self-intersection comes from apply timing (see risingWindow), not
-  // from this line. Already solid (a twin call, an earlier cycle): verify
-  // instead of stacking a second placement into the cell (the yvi loop).
-  if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
-  if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return 'running' }
+  // flight (knockback): jump again and re-arm. The timer issues atomically
+  // with the transition, so a live episode rarely lands here — the guard
+  // matches pillarTriggerDy, and no-self-intersection comes from apply
+  // timing (see risingWindow), not from this line.
+  if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) {
+    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null
+    return 'running'
+  }
+  const reason = issuePillarPlace(bot, st)
+  if (reason) return 'failed:' + reason
+  return 'running'
+}
+
+// Physics-timed issue (lzw): fire placeBlock ~150 ms after jump start with
+// a FRESH height/velocity read at fire time, not on tick phase. The 1 Hz
+// tick against the exact 600 ms jump cycle phase-locks onto 3 fixed phases
+// per episode (rig: 15 ticks, zero drift), so a tick-phase trigger can miss
+// the ~150 ms rise window the whole episode; the timer cannot. A fire-time
+// miss re-arms every 50 ms — ceiling: the feet re-enter the cell falling
+// at ~+410 (rig +450 refused 3/3), so re-arms stop at +300 past liftoff
+// and even a slow-path apply (L ~100-300) lands before the return. The
+// ceiling is liftoff-anchored: while the body is still at the start height
+// the 600 ms cycle hasn't begun (stall at cycle start — rig: a jump that
+// left 750 ms late), so the clock slides instead of burning and a held
+// jump issues into the next rise. Absolute patience per arm is 5 s (a stall
+// past that yields; with no ticks — quit — nothing re-arms and the chain
+// ends instead of polling a dead bot). A dead chain always yields: the
+// next jump-phase tick arms a fresh timer, so a later rise still issues
+// instead of jumping to no-apex (a mid-air arm catches apex/fall only).
+// Stale timers (the episode chained or released under us) only ever return.
+function firePillarTimer(bot, ctx, st) {
+  try {
+    if (!st || !ctx || ctx.recovery == null || ctx.recovery.st !== st) return
+    if (st.phase !== 'jump' || st.placed || st.placeInFlight || st.placeError || st.syncFail) return
+    const bp = botPos(bot)
+    if (!bp || st.startFloor === null) return
+    if (bp.y >= st.startFloor + pillarTriggerDy(bot) && risingWindow(bot)) {
+      st.phase = 'place'
+      setJump(bot, false)
+      const reason = issuePillarPlace(bot, st)
+      if (reason) st.syncFail = reason
+      return
+    }
+    const now = Date.now()
+    if (bp.y < st.startFloor + PILLAR_LIFTOFF_DY) st.jumpAt = now
+    if (now - (st.jumpAt || 0) < PILLAR_ISSUE_LAST_MS && now - (st.armedAt || st.jumpAt || 0) < PILLAR_STALL_MS) {
+      try {
+        const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_REARM_MS)
+        if (t && typeof t.unref === 'function') t.unref()
+      } catch (_) { /* timer best-effort */ }
+    } else {
+      st.timerArmed = false
+    }
+  } catch (_) { /* timer best-effort */ }
+}
+
+// Synchronous half of the place issue, shared by the jump-start timer and
+// the tick path: finds the reference, equips scaffold, starts the async
+// placement. Returns a fail reason, or null once the async issue is in
+// flight (or an already-solid cell verified instead). Never throws.
+function issuePillarPlace(bot, st) {
+  const bp = botPos(bot)
+  if (!bp) return 'no-pos'
+  // Already solid (a twin call, an earlier cycle): verify instead of
+  // stacking a second placement into the cell (the yvi loop).
+  if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return null }
   // Reference: a solid neighbour of the feet cell, ground below first.
   const fx = Math.floor(bp.x)
   const fz = Math.floor(bp.z)
@@ -602,16 +708,16 @@ function pillarUpRun(bot, ctx) {
     const c = cellAt(bot, fx - Math.floor(bp.x) + r.d[0], fy - Math.floor(bp.y) + r.d[1], fz - Math.floor(bp.z) + r.d[2])
     if (solid(c)) { ref = c; face = new Vec3(r.f[0], r.f[1], r.f[2]); break }
   }
-  if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-reference'
+  if (!ref || typeof bot.placeBlock !== 'function') return 'no-reference'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
-  // pillar_ups, 0 placed). Prefer the held stack: the fast trigger above
+  // pillar_ups, 0 placed). Prefer the held stack: the fast trigger
   // assumed its instant apply, while findScaffoldItem returns main
   // inventory first and would pay a window move (round-3 core-1/body-2).
-  // The count gate above already vetoed an empty stock; this covers an
-  // inventory that changed mid-jump.
+  // The count gate in pillarUpRun already vetoed an empty stock; this
+  // covers an inventory that changed mid-jump.
   const item = heldScaffold(bot) ? bot.heldItem : findScaffoldItem(bot)
-  if (!item) { setJump(bot, false); return 'failed:no-scaffold' }
+  if (!item) { setJump(bot, false); return 'no-scaffold' }
   st.placeInFlight = true
   void (async () => {
     try {
@@ -620,7 +726,7 @@ function pillarUpRun(bot, ctx) {
       st.placed = true
     } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
-  return 'running'
+  return null
 }
 
 // Dig up: remove headroom (feet+1, then feet+2) with the pickaxe. Done needs
@@ -665,9 +771,10 @@ function digUpRun(bot, ctx) {
   return 'running'
 }
 
-// Dig a step by hand and mount it (9sh): no scaffold, no pickaxe, dirt
-// pit. One cycle digs the wall above the side step plus the mount head
-// above that (adv), then jumps onto the step top — done on floor rise,
+// Dig a step and mount it (9sh hand, jsf.4 pickaxe ladder): no scaffold,
+// dirt pit bare-handed, stone pit with a pick. One cycle digs the wall
+// above the side step plus the mount head above that (adv), then mounts
+// the step top through the shared hop leap — done on floor rise,
 // repeatable to the mouth. st.dir re-scans when its step collapses
 // mid-cycle.
 function digStepRun(bot, ctx) {
@@ -681,18 +788,46 @@ function digStepRun(bot, ctx) {
   // pit floor is not an escape. (The step column itself is not required: a
   // natural +1 ledge nearby is genuine progress too.)
   const grounded = !bot.entity || !!bot.entity.onGround
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  // Release drive controls every tick (the leap holds forward into the
+  // step — without this a chained cycle walks on while digging). The mount
+  // below re-asserts what it needs same-tick.
+  setForward(bot, false)
+  setBack(bot, false)
   if (!st.dir) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
+  }
+  if (st.stepPos) {
+    // Mount in progress: validate the ABSOLUTE anchor, hop-style — the
+    // relative step cell reads the dug above-cell once the leap rises, so
+    // a relative check collapses every leap mid-arc. The leap owns the
+    // tick: no digging mid-arc.
+    let anchored = null
+    try {
+      if (bot.blockAt) anchored = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+    } catch (_) { /* anchor read best-effort */ }
+    if (!solid(anchored)) {
+      st.dir = null
+      st.stepPos = null
+      st.leapt = false
+      st.armed = false
+      st.settled = false
+      setJump(bot, false)
+      setForward(bot, false)
+      setBack(bot, false)
+      return 'running'
+    }
+    return mountStep(bot, st, st.stepPos)
   }
   // Lava in or around the mount head re-scans before any digging: opening
   // the cells under lava would pour a flow onto the mount. The find skips
   // these sides, so this terminates.
   if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
+  if (farLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
-    if (!handDiggable(bot, above)) { st.dir = null; return 'running' }
+    if (!diggable(bot, above)) { st.dir = null; return 'running' }
     if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
     if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
     if (st.digInFlight) {
@@ -704,7 +839,11 @@ function digStepRun(bot, ctx) {
     if (denyAbove) { setJump(bot, false); logDeny(above, denyAbove); return 'failed:' + denyAbove } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
-      try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+      try {
+        const tool = digTool(bot, above)
+        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        await bot.dig(above)
+      } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
@@ -713,7 +852,7 @@ function digStepRun(bot, ctx) {
   // relying on the executor's canDig to clear it mid-mount.
   const cap = cellAt(bot, st.dir[0], 2, st.dir[1])
   if (cap && solid(cap)) {
-    if (!handDiggable(bot, cap)) { st.dir = null; return 'running' }
+    if (!diggable(bot, cap)) { st.dir = null; return 'running' }
     if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
     if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
     if (st.digInFlight) {
@@ -725,49 +864,52 @@ function digStepRun(bot, ctx) {
     if (denyCap) { setJump(bot, false); logDeny(cap, denyCap); return 'failed:' + denyCap } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
-      try { await bot.dig(cap) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+      try {
+        const tool = digTool(bot, cap)
+        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        await bot.dig(cap)
+      } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
-  // Headroom dug: mount the step. The step collapsing under us re-scans.
+  // Headroom dug: fix the absolute anchor and mount through the shared hop
+  // leap (jsf.4) — direct drive only, no executor goal: a GoalNear would
+  // fight the leap at 20 Hz (7gt), and a leap from wall contact never
+  // leaves the ground on Paper (wqt). The relative cell goes stale the
+  // moment the body walks (floor(bp) shifts), so the target is fixed once
+  // here; the mount branch above validates the anchor, never the cell.
   const step = cellAt(bot, st.dir[0], 0, st.dir[1])
   if (!solid(step)) { st.dir = null; return 'running' }
-  if (st.phase !== 'step') {
-    st.phase = 'step'
-    st.waited = 0
-    try {
-      const p = step.position
-      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function' && p) {
-        bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y + 1, p.z, 1), false)
-      }
-    } catch (_) { /* goal best-effort */ }
-  }
-  setJump(bot, true)
-  if (++st.waited > DIG_STEP_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
-  return 'running'
+  st.phase = 'step'
+  st.waited = 0
+  st.leapt = false
+  st.armed = false
+  st.stall = 0
+  st.settled = false
+  const q = step && step.position
+  st.stepPos = q ? { x: q.x, y: q.y, z: q.z } : null
+  if (!st.stepPos) { st.dir = null; return 'running' }
+  return mountStep(bot, st, st.stepPos)
 }
 
-// Hop a plain +1 step (cjq): no digging, level goal only. Paper 26.1.2
-// silently rejects (server teleport, no log) any move whose arc meets a wall,
-// so a leap from contact never leaves the ground (wqt: rise 0.00, ~20
-// rejects/s; vanilla mounts the same leap). A 1 Hz tick cannot time a run-up
-// leap — the body walks 4+ blocks between ticks and is always already
-// pressed — so there is no run-up: pressed (under HOP_PRESS_DIST of the
-// anchor) backs to leap stance on a 100 ms timer (gap 0.25-0.5, measured)
-// and leaps from the standstill (measured 4/4 mounts, 0 rejects); open
-// floor walks in without jumping, in-flight arcs coast with thrust held.
-// A failed leap lands back pressed and re-backs (self-retry inside
-// HOP_MOUNT_TICKS). No executor goal the whole
-// primitive — direct drive only, so the lib never fights the leap. Done on
-// a grounded floor rise (same apex-sampling guard as dig_step) or grounded
-// past the step (an arc overflowing a narrow top still escapes). Single
-// shot, never repeatable: one mount ends the episode.
-function hopStepRun(bot, ctx) {
-  const rec = ctx.recovery
-  const st = rec.st || (rec.st = { dir: null, stepPos: null, waited: 0, startFloor: null, leapt: false, armed: false, stall: 0, settled: false })
+// Shared +1 mount drive (jsf.4): the hop_step leap both climbers mount
+// through. Paper 26.1.2 silently rejects (server teleport, no log) any move
+// whose arc meets a wall, so a leap from contact never leaves the ground
+// (wqt: rise 0.00, ~20 rejects/s; vanilla mounts the same leap). A 1 Hz
+// tick cannot time a run-up leap — the body walks 4+ blocks between ticks
+// and is always already pressed — so there is no run-up: pressed (under
+// HOP_PRESS_DIST of the anchor) backs to leap stance on a 100 ms timer
+// (gap 0.25-0.5, measured) and leaps from the standstill (measured 4/4
+// mounts, 0 rejects); open floor walks in without jumping, in-flight arcs
+// coast with thrust held, airborne stalls unwedge (ak4). A failed leap
+// lands back pressed and re-backs (self-retry inside HOP_MOUNT_TICKS). No
+// executor goal the whole mount — direct drive only, so the lib never
+// fights the leap (7gt). st carries dir/waited/leapt/armed/stall/settled/
+// startFloor; stepPos is the absolute anchor the caller fixed (the relative
+// cell goes stale once the body walks). Returns running | done | failed:*.
+function mountStep(bot, st, stepPos) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
-  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
   setBack(bot, false) // the back-offs below re-assert it every tick they hold
   // Airborne-stall samples (ak4): hang time at vel.y=0 with no ground reads
@@ -776,30 +918,8 @@ function hopStepRun(bot, ctx) {
     ? bot.entity.velocity.y : null
   if (!grounded && hopVy !== null && Math.abs(hopVy) < HOP_STALL_VY) st.stall = (st.stall || 0) + 1
   else st.stall = 0
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
-  if (!st.dir) {
-    const gp = ctx.stuck && ctx.stuck.goal
-    st.dir = findHopStepDir(bot, gp)
-    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    // Absolute anchor: the relative cell goes stale the moment the body
-    // walks (floor(bp) shifts), so the mount target is fixed once here.
-    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
-    const q = step && step.position
-    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    st.stepPos = { x: q.x, y: q.y, z: q.z }
-  }
-  let step = null
-  try {
-    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
-  } catch (_) { /* anchor read best-effort */ }
-
-  if (!solid(step)) {
-    st.dir = null; st.stepPos = null; st.leapt = false; st.armed = false; st.settled = false
-    setJump(bot, false); setForward(bot, false)
-    return 'running'
-  }
-  const sx = st.stepPos.x + 0.5
-  const sz = st.stepPos.z + 0.5
+  const sx = stepPos.x + 0.5
+  const sz = stepPos.z + 0.5
   const dx = sx - bp.x
   const dz = sz - bp.z
   // Past the step on the ground: an arc overflowing a narrow top lands
@@ -812,8 +932,8 @@ function hopStepRun(bot, ctx) {
     if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
     return 'running'
   }
-  if (st.stepPos && Math.floor(bp.y) > st.startFloor &&
-      Math.hypot(bp.x - (st.stepPos.x + 0.5), bp.z - (st.stepPos.z + 0.5)) < 0.5) {
+  if (Math.floor(bp.y) > st.startFloor &&
+      Math.hypot(bp.x - (stepPos.x + 0.5), bp.z - (stepPos.z + 0.5)) < 0.5) {
     // Over the top (airborne or landed): cut thrust and settle. Holding jump
     // bunny-hops past the top while the anchor-facing look walks the body
     // back off the ledge. Not released on floor rise alone: mid-leap over
@@ -877,6 +997,44 @@ function hopStepRun(bot, ctx) {
   }
   if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   return 'running'
+}
+
+// Hop a plain +1 step (cjq): no digging, level goal only. Finds the
+// goalward step, fixes the absolute anchor, re-scans when it is gone, and
+// mounts through mountStep — done on a grounded floor rise (same
+// apex-sampling guard as dig_step) or grounded past the step (an arc
+// overflowing a narrow top still escapes). Single shot, never repeatable:
+// one mount ends the episode.
+function hopStepRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { dir: null, stepPos: null, waited: 0, startFloor: null, leapt: false, armed: false, stall: 0, settled: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  if (!st.dir) {
+    const gp = ctx.stuck && ctx.stuck.goal
+    st.dir = findHopStepDir(bot, gp)
+    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    // Absolute anchor: the relative cell goes stale the moment the body
+    // walks (floor(bp) shifts), so the mount target is fixed once here.
+    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
+    const q = step && step.position
+    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    st.stepPos = { x: q.x, y: q.y, z: q.z }
+  }
+  let step = null
+  try {
+    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+  } catch (_) { /* anchor read best-effort */ }
+
+  if (!solid(step)) {
+    st.dir = null; st.stepPos = null; st.leapt = false; st.armed = false; st.settled = false
+    setJump(bot, false); setForward(bot, false)
+    return 'running'
+  }
+  return mountStep(bot, st, st.stepPos)
 }
 
 // Sidestep: the old wedge/nudge action, now a primitive — 2 blocks toward
@@ -1385,12 +1543,12 @@ async function decide(bot, ctx, state, target) {
     // Failed primitives leave a log line, not just a metric (ak4): done
     // already logs through release(), failures never did.
     if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
-    // A finished goal-owner (dig_step/sidestep) leaves its GoalNear live,
-    // and the next primitive's direct drive would fight the lib at 20 Hz
-    // (7gt: revmux-01 found hop's instance) — decide() is the one choke
-    // point between primitives, so the stale goal dies here. Chains are
-    // safe: pillar/dig_up set no goals, dig_step re-sets its own on the
-    // step phase, and release() clears again anyway.
+    // A finished goal-owner (sidestep) leaves its GoalNear live, and the
+    // next primitive's direct drive would fight the lib at 20 Hz (7gt:
+    // revmux-01 found hop's instance) — decide() is the one choke point
+    // between primitives, so the stale goal dies here. Chains are safe:
+    // pillar/dig_up/dig_step set no goals (dig_step mounts direct since
+    // jsf.4), and release() clears again anyway.
     try {
       if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
         bot.pathfinder.setGoal(null)

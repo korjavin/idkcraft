@@ -329,10 +329,11 @@ describe('4jr: level goal never offers climb, failed prims are not repeated', ()
   // 16 min, ~20 s standing per attempt. Fixed twice: climb prims leave the
   // feasible menu on level goals, and the just-failed prim leaves the ask
   // menu (a stubborn repeat reads invalid and falls back to the FSM).
-  const kit = [{ name: 'dirt', count: 5 }, { name: 'iron_pickaxe', count: 1 }]
+  const kit = [{ name: 'dirt', count: 5 }] // no pickaxe: the 4jr pin is the exclusion, not the dig menu
 
-  // Floor + one dirt wall with a stone cap: walls=1, but no dig_step (the
-  // cap never digs by hand) — the 4jr menu case exactly.
+  // Floor + one dirt wall with a stone cap, no pickaxe on hand: walls=1,
+  // but no dig_step (the stone cap needs a pick since jsf.4) — the 4jr
+  // menu case exactly.
   function levelBot() {
     // Headroom stays FREE (revmux-01 body-1): a head block would exclude
     // pillar_up by itself and mask the failed-action rules under test.
@@ -433,6 +434,8 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
     const bot = worldBot(solids, [])
     bot.entity.position = pos(0.5, 61, 0.5)
     bot.players = { Steve: { username: 'Steve', entity: { id: 7, username: 'Steve', position: pos(50, 64, 0) } } }
+    bot._yaw = 0
+    bot.look = (yaw) => { bot._yaw = yaw }
     const brain = { async decide() { return { action: 'follow', sprint: false, source: 'stub' } } } // FSM-only
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.stuck = { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }
@@ -441,24 +444,33 @@ describe('9sh: dig_step climbs a dirt pit by hand through ticks', () => {
     // (digs (dx,2,dz) by hand before the mount), so the climb must pass on
     // primitive digging alone.
     const stepBody = () => {
-      const g = bot.pathfinder.goal
-      if (g && typeof g.x === 'number') {
-        const bp = bot.entity.position
-        const dx = g.x - bp.x
-        const dz = g.z - bp.z
-        const d = Math.hypot(dx, dz)
-        if (d >= 0.05) {
-          const s = Math.min(0.4, d) / d
-          const nx = bp.x + dx * s
-          const nz = bp.z + dz * s
-          const feet = bot.blockAt({ x: nx, y: bp.y, z: nz })
-          const head = bot.blockAt({ x: nx, y: bp.y + 1, z: nz })
-          let ok = true
-          if (feet && feet.boundingBox !== 'empty') ok = false
-          else if (head && head.boundingBox !== 'empty') ok = false
-          // A refused step never cancels the jump below: prod jumps in
-          // place against the step, then moves over once risen.
-          if (ok) bot.entity.position = pos(nx, bp.y, nz)
+      const bp = bot.entity.position
+      const tryMove = (nx, nz) => {
+        const feet = bot.blockAt({ x: nx, y: bp.y, z: nz })
+        const head = bot.blockAt({ x: nx, y: bp.y + 1, z: nz })
+        let ok = true
+        if (feet && feet.boundingBox !== 'empty') ok = false
+        else if (head && head.boundingBox !== 'empty') ok = false
+        // A refused step never cancels the jump below: prod jumps in
+        // place against the step, then moves over once risen.
+        if (ok) bot.entity.position = pos(nx, bp.y, nz)
+      }
+      // Direct drive first (jsf.4: the mount sets no goal), goal walk after.
+      const yaw = bot._yaw || 0
+      if (bot.getControlState('forward')) {
+        tryMove(bp.x - Math.sin(yaw) * 0.4, bp.z - Math.cos(yaw) * 0.4)
+      } else if (bot.getControlState('back')) {
+        tryMove(bp.x + Math.sin(yaw) * 0.4, bp.z + Math.cos(yaw) * 0.4)
+      } else {
+        const g = bot.pathfinder.goal
+        if (g && typeof g.x === 'number') {
+          const dx = g.x - bp.x
+          const dz = g.z - bp.z
+          const d = Math.hypot(dx, dz)
+          if (d >= 0.05) {
+            const s = Math.min(0.4, d) / d
+            tryMove(bp.x + dx * s, bp.z + dz * s)
+          }
         }
       }
       // Honest jump + gravity (adv): a held jump impulses +1.0 from the
