@@ -248,7 +248,7 @@ describe('bring me <item> from the pack (idkcraft-did.1)', () => {
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'no order created')
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
-    assert.ok(bot.lines.includes('here are 1 stone_axe'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here is 1 stone_axe'), `lines: ${bot.lines}`)
   })
 
   it("'bring me axe 1' with two axes is exact, not partial", async () => {
@@ -268,7 +268,7 @@ describe('bring me <item> from the pack (idkcraft-did.1)', () => {
     assert.deepEqual(bot.lines, ['only 1 wooden_axe, coming'])
     await drive(bot, bot._tickerCtx)
     assert.deepEqual(bot.tossCalls, [[ITEMS.wooden_axe, null, 1]])
-    assert.ok(bot.lines.includes('here are 1 wooden_axe'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here is 1 wooden_axe'), `lines: ${bot.lines}`)
   })
 
   it("a single axe is kept and refused honestly when there is no chest", () => {
@@ -291,7 +291,7 @@ describe('bring me <item> from the pack (idkcraft-did.1)', () => {
     assert.deepEqual(bot.lines, ['only 1 white_bed, coming'])
     await drive(bot, bot._tickerCtx)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
-    assert.ok(bot.lines.includes('here are 1 white_bed'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
   })
 
   it("'bring me water bucket' is giveable from the pack", async () => {

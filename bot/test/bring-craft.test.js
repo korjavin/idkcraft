@@ -277,7 +277,7 @@ describe('bring me axe crafted (idkcraft-did.2)', () => {
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'order completed')
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
-    assert.ok(bot.lines.includes('here are 1 stone_axe'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here is 1 stone_axe'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.calls.craft, ['stone_axe'])
   })
 
@@ -426,7 +426,7 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
 
     const poor = mockBot({ playerPos: pos(30, 64, 0) })
     handleChat(poor, tickerFor(poor), 'P', 'bring me bucket')
-    assert.deepEqual(poor.lines, ["can't make bucket: need 3 iron_ingot (have 0)"])
+    assert.deepEqual(poor.lines, ['need iron_ingot (smelting not part of bring)'])
     assert.ok(!poor._tickerCtx.bring, 'no order created')
   })
 
@@ -488,15 +488,21 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
   })
 
-  it('four planks fund the table or the sticks, never both', () => {
+  it('four planks fund the table: the stick gap opens a log sub-order (idkcraft-did.4)', async () => {
     const bot = mockBot({
       items: [{ name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }],
       playerPos: pos(30, 64, 0),
     })
     handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
-    assert.deepEqual(bot.lines, ["can't make stone_axe: need 2 stick (have 0)"])
-    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.lines, ['making you a stone_axe: need 2 sticks, going for logs'])
+    const o = bot._tickerCtx.bring
+    assert.equal(o && o.kind, 'block')
+    assert.equal(o && o.name, 'oak_log')
+    assert.equal(o && o.subFor, 'stone_axe')
     assert.deepEqual(bot.calls.craft, [], 'no stray table burned')
+    await drive(bot, bot._tickerCtx) // the mock world holds no logs: one honest line
+    assert.ok(!bot._tickerCtx.bring, 'order refused')
+    assert.ok(bot.lines.includes('could not get 2 sticks for the stone_axe in time'), `lines: ${bot.lines}`)
   })
 
   it('mixed woods: the table burns the spare wood, not the recipe wood', async () => {

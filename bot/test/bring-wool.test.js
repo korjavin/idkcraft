@@ -277,7 +277,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.equal(bot.attackCalls.length, 0)
     assert.equal(bot.entities[11].isValid, true)
     assert.equal(bot.held, 'shears')
-    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
   })
 
   it('a sheared sheep is skipped for the next one', async () => {
@@ -300,7 +300,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.ok(bot.attackCalls.length >= 1, 'swung at the white sheep')
     assert.ok(bot.attackCalls.every((id) => id === 12), `swings: ${bot.attackCalls}`)
     assert.equal(bot.entities[11].isValid, true)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
   })
 
@@ -406,7 +406,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.deepEqual(bot.lines, ['looking for sheep'])
     await drive(bot, bot._tickerCtx, null, 600)
     assert.ok(bot.lines.some((l) => l === 'searched 24 areas, only got 1 white_wool'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
   })
 
@@ -415,7 +415,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     handleChat(bot, tickerFor(bot), 'P', 'bring me wool 3')
     await drive(bot, bot._tickerCtx, null)
     assert.ok(bot.lines.some((l) => l === 'only got 1 white_wool'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
   })
 })

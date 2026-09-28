@@ -189,26 +189,34 @@ function tableWoodOf(recipe, idToName) {
   return null
 }
 
-// The table variant to make: the first affordable one that burns no wood
-// the final needs directly — otherwise the make-op eats the recipe's own
-// stack on mixed-wood packs (revmux 02: 5 oak + 4 birch promised a birch
-// axe, burned the birch into the table, then refused). Falls back to the
-// first affordable variant when every wood is direct (or none is).
-function pickTableRecipe(bot, idToName, needs) {
+// The table variant to make: the first affordable (4+ of its wood in the
+// pack) one that burns no wood the final needs directly — otherwise the
+// make-op eats the recipe's own stack on mixed-wood packs (revmux 02: 5
+// oak + 4 birch promised a birch axe, burned the birch into the table,
+// then refused). Falls back to the first affordable variant when every
+// wood is direct (or none is). Null when no variant is affordable: the
+// planner must not promise a table the pack cannot fund (did.4 rig: 4 oak
+// promised a spruce table, then failed loud at execution).
+function pickTableRecipe(bot, idToName, needs, pack) {
   let found = []
   try {
     found = craftMod.recipes(bot, 'crafting_table', null) || []
   } catch (_) { found = [] }
   if (!Array.isArray(found) || found.length === 0) return null
+  const affordable = found.filter((r) => {
+    const w = tableWoodOf(r, idToName)
+    return w && ((pack && pack[w]) || 0) >= 4
+  })
+  if (affordable.length === 0) return null
   const direct = new Set()
   for (const { name } of needs) {
     if (isPlanks(name)) direct.add(name)
   }
-  if (direct.size === 0) return found[0]
-  return found.find((r) => {
+  if (direct.size === 0) return affordable[0]
+  return affordable.find((r) => {
     const w = tableWoodOf(r, idToName)
     return w && !direct.has(w)
-  }) || found[0]
+  }) || affordable[0]
 }
 
 // Pack minus the 4 planks the made table eats from its own variant's wood:
@@ -246,6 +254,7 @@ function planCraft(bot, ctx, names, count) {
     if (reach === 'make' && craftMod.recipes(bot, 'crafting_table', null).length === 0) reach = null
   } catch (_) { reach = null }
   let refusal = null
+  let tableBlocked = null
   for (const target of cands) {
     const e = byName[target]
     if (!e || typeof e.id !== 'number') continue
@@ -262,8 +271,19 @@ function planCraft(bot, ctx, names, count) {
       let trec = null
       let fund = pack
       if (requiresTable && reach === 'make') {
-        trec = pickTableRecipe(bot, idToName, needs)
-        fund = packMinusTable(pack, trec && tableWoodOf(trec, idToName))
+        trec = pickTableRecipe(bot, idToName, needs, pack)
+        if (!trec) {
+          // No affordable table variant (split woods, or no table recipe
+          // at all): this recipe cannot run. A mats-covered recipe records
+          // the table block — the honest no-table line wins below; a short
+          // one competes its mats normally against the unreduced pack.
+          if (gapOf(needs, pack, times).length === 0) {
+            if (!tableBlocked) tableBlocked = target
+            continue
+          }
+        } else {
+          fund = packMinusTable(pack, tableWoodOf(trec, idToName))
+        }
       }
       const missing = gapOf(needs, requiresTable ? fund : pack, times)
       if (missing.length === 0) {
@@ -276,7 +296,11 @@ function planCraft(bot, ctx, names, count) {
       if (!refusal || gapCmp(cand, refusal) <= 0) refusal = cand
     }
   }
-  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing) }
+  if (tableBlocked) return { ok: false, fail: 'no-table', target: tableBlocked, line: 'need a crafting table' }
+  // The structured gaps ride along for did.4 sub-orders (the winning
+  // variant's [{name, need, have}]); existing callers read ok/fail/target/
+  // line only and are unaffected.
+  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing), missing: refusal.missing }
   return { ok: false, fail: 'no-recipe' }
 }
 

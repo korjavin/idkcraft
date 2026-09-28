@@ -5,7 +5,7 @@
 // connect the assay bot, RCON-seed stock, run the REAL chat->setBring->
 // bring path in-process against REAL recipesAll/bot.craft, and assert.
 // Leg 1 (axe): cobble x3 + stick x2 + home table -> 'making you a
-// stone_axe' -> craft -> return -> toss, 'here are 1 stone_axe'.
+// stone_axe' -> craft -> return -> toss, 'here is 1 stone_axe'.
 // Leg 2 (shears): empty pack -> one honest 'can't make shears: need 2
 // iron_ingot (have 0)', no order opened.
 // Leg 3 (torch): coal + stick, no table -> 2x2 craft -> 'here are 3 torch'.
@@ -114,7 +114,7 @@ async function main() {
     throw new Error(`leg 1: missing making line, got ${JSON.stringify(lines)}`)
   }
   await tickUntilDone('leg 1')
-  if (!lines.includes('here are 1 stone_axe')) {
+  if (!lines.includes('here is 1 stone_axe')) {
     throw new Error(`leg 1: missing tossed line, got ${JSON.stringify(lines)}`)
   }
   if (count(bot, 'stone_axe') !== 0) throw new Error('leg 1: axe still in pack after toss')
