@@ -143,6 +143,28 @@ function doorOpen(block) {
   }
 }
 
+// A player at the door (revmux jr2.3-02 core-2/body-3): the meet is the
+// one mode where the owner is expected through that door, so the night
+// hold never shuts it on them — it closes once they clear it. Anyone on
+// the roster counts; the bot itself never does.
+const DOOR_GRACE_BLOCKS = 2.5
+function playerAtDoor(bot, home) {
+  try {
+    const door = doorPos(home)
+    const cx = door.x + 0.5
+    const cz = door.z + 0.5
+    const players = (bot && bot.players) || {}
+    for (const key of Object.keys(players)) {
+      if (key === bot.username) continue
+      const ent = players[key] && players[key].entity
+      const p = ent && ent.position
+      if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') continue
+      if (Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
+    }
+  } catch (_) { /* unreadable roster: the old rule stands */ }
+  return false
+}
+
 // A close into a missing door is a failure, never a silent done (rw4.8):
 // prod stood a whole night 'sheltered' with arrows coming through. Failing
 // surfaces the fault to the arbiter (day picks can send build to repair
@@ -761,7 +783,7 @@ function comehome(bot, ctx, target, state) {
     else {
       let nightish = false
       try { nightish = goalFacts(bot, ctx).time !== 'day' } catch (_) { nightish = false }
-      if (nightish && doorOpen(held)) tryToggle(bot, order, held)
+      if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, order, held)
     }
     holdStill(bot, ctx)
     return
@@ -852,11 +874,14 @@ function comehome(bot, ctx, target, state) {
       return
     }
     setWalkDig(bot, false)
+    // Arrival matches the settle radius (revmux jr2.3-02 body-2): a
+    // tighter band strands a seat that stops in (1.2, 1.5] — inside the
+    // room, failing 'cannot reach the common room'.
     const arrived = walkTo(bot, ctx, order, 'comehome-seat', new goals.GoalNear(meet.x, meet.y, meet.z, 1), (bp) => {
       try {
         const dx = bp.x - (meet.x + 0.5)
         const dz = bp.z - (meet.z + 0.5)
-        return Math.hypot(dx, dz) <= 1.2
+        return Math.hypot(dx, dz) <= SEAT_FAR
       } catch (_) { return false }
     })
     if (order.phase === 'failed') {

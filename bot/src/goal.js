@@ -562,10 +562,14 @@ function goalFacts(bot, ctx) {
   try {
     const bp = bot && bot.entity && bot.entity.position
     const interior = ctx && ctx.home && ctx.home.interior
+    // Floored like home.isInside (revmux jr2.3-02): the box holds
+    // inclusive block coords, and a raw float reads the back row outside
+    // while the helper reads it inside — gohome then finishes 'done' and
+    // is re-picked every tick all night.
     if (bp && interior && interior.min && interior.max &&
-      bp.x >= interior.min.x && bp.x <= interior.max.x &&
-      bp.y >= interior.min.y && bp.y <= interior.max.y &&
-      bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
+      Math.floor(bp.x) >= interior.min.x && Math.floor(bp.x) <= interior.max.x &&
+      Math.floor(bp.y) >= interior.min.y && Math.floor(bp.y) <= interior.max.y &&
+      Math.floor(bp.z) >= interior.min.z && Math.floor(bp.z) <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.

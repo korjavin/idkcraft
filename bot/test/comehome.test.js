@@ -23,13 +23,15 @@ const DOOR1 = { x: 11, y: 64, z: 20 }
 const OUT1 = { x: 11, y: 64, z: 19 }
 const MEET1 = { x: 11, y: 64, z: 21 }
 
-function doorBot({ at, door = DOOR2, timeOfDay = 6000, day = 5, doorOpen = false, moving = false, hasDoor = true } = {}) {
+function doorBot({ at, door = DOOR2, timeOfDay = 6000, day = 5, doorOpen = false, moving = false, hasDoor = true, players = {} } = {}) {
   const chats = []
   const calls = { goals: [], activates: 0, looks: [], controls: [], clears: 0 }
   const state = { doorOpen }
   const bot = {
     chats,
     calls,
+    username: 'IdkBot',
+    players,
     entity: { position: { x: at.x, y: at.y, z: at.z } },
     time: { timeOfDay, day },
     pathfinder: {
@@ -223,6 +225,14 @@ describe('jr2.3 settle walks a bedroom to the common room, never holds it', () =
     assert.equal(bot.pathfinder.movements.canDig, true)
   })
 
+  it('a seat stopping at 1.4 arrives (no dead band past GoalNear)', () => {
+    const bot = doorBot({ at: { x: MEET2.x + 1.9, y: MEET2.y, z: MEET2.z + 0.5 } }) // 1.4 off centre
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'seat' } }
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'hold')
+    assert.deepEqual(bot.chats, ['home'])
+  })
+
   it('seat teleported out walks back instead', () => {
     const bot = doorBot({ at: { x: 20, y: 64, z: 14 } })
     const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'seat' } }
@@ -270,6 +280,35 @@ describe('jr2.3 hold secures the night door, never fights the owner by day', () 
     home.comehome(bot, ctx)
     assert.equal(bot.calls.activates, 0, 'never re-closes into the owner by day')
     assert.equal(ctx.inShelter, true)
+  })
+
+  it('night + open + owner at the door waits for them to clear it', async () => {
+    const atDoor = { Steve: { username: 'Steve', entity: { position: { x: 13.5, y: 64, z: 19 } } } }
+    const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: atDoor })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }, inShelter: true }
+    home.comehome(bot, ctx)
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 0, 'never shuts the door on the owner')
+    assert.equal(ctx.comehome.phase, 'hold')
+  })
+
+  it('night + open still shuts once the owner clears the door', async () => {
+    const away = { Steve: { username: 'Steve', entity: { position: { x: 30, y: 64, z: 30 } } } }
+    const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: away })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }, inShelter: true }
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 1, 'secures the empty house')
+  })
+
+  it('the grace counts the roster, never the bot itself', async () => {
+    const self = { IdkBot: { username: 'IdkBot', entity: { position: { x: 13.5, y: 64, z: 19 } } } }
+    const bot = doorBot({ at: { ...MEET2 }, timeOfDay: 15000, doorOpen: true, players: self })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }, inShelter: true }
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 1, 'a self entry must not disarm the night rule')
   })
 })
 
@@ -941,6 +980,23 @@ describe('jr2.3 a fractional bedroom order seats, never walks at the door', () =
     }
     assert.equal(ctx.comehome.phase, 'hold')
     assert.ok(bot.chats.includes('home'), `heard [${bot.chats.join('|')}]`)
+  })
+})
+
+describe('jr2.3 night work in a back-row cell stays, never loops gohome', () => {
+  it('fractional back row picks stay once, never chats home-for-the-night', async () => {
+    const bot = tickBot({ at: { x: 12.5, y: 64, z: 24.5 }, timeOfDay: 15000, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    ctx.work = true
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) await ticker.tick()
+    } finally {
+      cap.release()
+    }
+    assert.equal(ctx.step, 'stay')
+    assert.ok(!bot.chats.includes('home for the night'), `loop chats: [${bot.chats.join('|')}]`)
   })
 })
 
