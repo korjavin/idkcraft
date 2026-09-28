@@ -89,13 +89,16 @@ function hasShears(bot) {
 // the highest count, first-max wins ties. Null when the pack holds no
 // wool. Bare-family orders toss this color; the hunt itself never
 // narrows (any sheep will do), so no first-color lock can strand them.
-function topWoolColor(bot) {
+// excl (a Set of color names, did.4 lock release) hides stranded wool
+// from the argmax, so the next pickup re-locks a live colour.
+function topWoolColor(bot, excl) {
   try {
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
     const counts = new Map()
     if (Array.isArray(items)) {
       for (const i of items) {
         if (!i || typeof i.name !== 'string' || !i.name.endsWith('_wool')) continue
+        if (excl && typeof excl.has === 'function' && excl.has(dropColor(i.name))) continue
         counts.set(i.name, (counts.get(i.name) || 0) + (typeof i.count === 'number' ? i.count : 1))
       }
     }

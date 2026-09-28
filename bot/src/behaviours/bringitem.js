@@ -444,6 +444,7 @@ function openSubOrder(bot, ctx, o, gap, target, color) {
     o.announced = false
     o.animal = null
     o.shearedIds = null
+    o.deadColors = null
     o.chestTried = false
     o.subFor = target
     o.subWant = gap.need
@@ -524,6 +525,7 @@ function resumeSub(bot, ctx, o) {
   o.search = null
   o.searchSkipFar = false
   o.shearedIds = null
+  o.deadColors = null
   o.craftTarget = null
   enterCraftOrRefuse(bot, ctx, o)
 }

@@ -178,10 +178,14 @@ function findAnimal(bot, drop, opts) {
       if (drop && PREY_DROPS[e.name] !== drop) continue
     } else if (e.name === 'sheep') {
       if (o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
-      if (o.skipSheared || o.color) {
+      const skipColors = o.skipColors && typeof o.skipColors.has === 'function' && o.skipColors.size ? o.skipColors : null
+      if (o.skipSheared || o.color || skipColors) {
         const w = woolMod.sheepWool(bot, e)
         if (o.skipSheared && w.sheared) continue
         if (o.color && w.color !== o.color) continue
+        // Dead colours (did.4 lock release): stranded, never hunted again
+        // this sub-order. Unreadable metadata hunts fail-open.
+        if (skipColors && w.color && skipColors.has(w.color)) continue
       }
     }
     const d = animalDist(bp, e.position)
@@ -406,9 +410,23 @@ function walkSearch(bot, ctx, o) {
 async function findFood(bot, ctx, o) {
   const wool = (o.kind || 'block') === 'wool'
   const color = wool ? (o.color || null) : null
-  const res = wool
-    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds })
+  let res = wool
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds, skipColors: o.deadColors })
     : findAnimal(bot, o.drop || null)
+  if (!res && wool && o.lockColor && o.color) {
+    // The provisional lock stranded (did.4 rig: one light_gray in a brown
+    // flock): no more of this colour in range. Release it and hunt any
+    // live colour instead — the stranded wool stays in the pack as
+    // surplus, the count restarts, the next pickup re-locks. Explicit
+    // colours (lockColor false) never release: the order is the promise.
+    if (!o.deadColors) o.deadColors = new Set()
+    o.deadColors.add(o.color)
+    say(bot, `no more ${o.color} sheep, trying another colour`)
+    o.color = null
+    o.drop = null
+    o.have = 0
+    res = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: o.shearedIds, skipColors: o.deadColors })
+  }
   if (!res) {
     const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
     await enterSearch(bot, ctx, o, wool ? woolLegacy : (o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks'))
@@ -525,9 +543,10 @@ function pickupFood(bot, ctx, o, bp, grounded) {
   // no ordered color tosses the best color in the pack (re-derived each
   // pickup, so a gray first sheep never locks out white ones later). A bed
   // sub-order (did.4) locks the first pickup instead: the bed needs three
-  // of one colour, so the hunt narrows from here on.
+  // of one colour, so the hunt narrows from here on. After a lock release
+  // the argmax hides stranded colours, so the re-lock lands live.
   if ((o.kind || 'block') === 'wool' && !o.color) {
-    const t = woolMod.topWoolColor(bot)
+    const t = woolMod.topWoolColor(bot, o.deadColors)
     if (t) o.drop = t.name
   }
   if (o.lockColor && !o.color && o.drop) o.color = woolMod.dropColor(o.drop)

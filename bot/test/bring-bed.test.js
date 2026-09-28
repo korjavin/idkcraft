@@ -10,6 +10,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
 const bed = require('../src/behaviours/bed')
+const wool = require('../src/behaviours/wool')
 const { handleChat, createTicker } = require('../src/index')
 
 function pos(x, y, z) {
@@ -262,6 +263,15 @@ function killWhite(bot, o) {
   if (ent && ent.isValid !== false) {
     ent.isValid = false
     bot._items.push({ name: 'white_wool', count: 1 })
+  }
+}
+
+function killTrueColor(bot, o) {
+  const ent = bot.entities[o.animal.id]
+  if (ent && ent.isValid !== false) {
+    ent.isValid = false
+    const byte = ent.metadata ? ent.metadata[SHEEP_KEYS.indexOf('wool')] : 0
+    bot._items.push({ name: `${wool.WOOL_COLORS[(byte || 0) & 0x0f]}_wool`, count: 1 })
   }
 }
 
@@ -761,5 +771,58 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     await drive(bot, bot._tickerCtx, killWhite)
     assert.ok(!bot._tickerCtx.bring, 'order completed')
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+  })
+})
+
+describe('stranded lock release (idkcraft-did.4 rig)', () => {
+  it('one light_gray in a white flock: release, re-lock white, toss', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      animals: [sheep(11, 10, 0x08), sheep(12, 14, 0x00), sheep(13, 16, 0x00), sheep(14, 18, 0x00)],
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    bot._moving = true
+    const ticker = tickerFor(bot)
+    tableHome(bot._tickerCtx, 0, 64, 0)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['making you a bed: need 3 wool, going for sheep'])
+    await drive(bot, bot._tickerCtx, killTrueColor)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.ok(bot.lines.includes('no more light_gray sheep, trying another colour'), `lines: ${bot.lines}`)
+    assert.deepEqual([11, 12, 13, 14].map((id) => bot.entities[id].isValid), [false, false, false, false])
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
+    assert.ok(bot._items.some((i) => i.name === 'light_gray_wool' && i.count === 1), 'stranded wool stays as surplus')
+  })
+
+  it('findAnimal skips dead colours but hunts unknown metadata', () => {
+    const bot = mockBot({ animals: [sheep(11, 10, 0x08), sheep(12, 14, 0x00), sheep(13, 40)] })
+    assert.equal(bring.findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null }).id, 11)
+    const dead = new Set(['light_gray'])
+    assert.equal(bring.findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipColors: dead }).id, 12)
+    const bot2 = mockBot({ animals: [sheep(11, 10, 0x08), sheep(13, 12)] })
+    assert.equal(bring.findAnimal(bot2, null, { prey: ['sheep'], skipSheared: true, color: null, skipColors: dead }).id, 13)
+  })
+
+  it('topWoolColor hides excluded colours', () => {
+    const bot = mockBot({ items: [{ name: 'light_gray_wool', count: 2 }, { name: 'white_wool', count: 1 }] })
+    assert.equal(wool.topWoolColor(bot).name, 'light_gray_wool')
+    assert.equal(wool.topWoolColor(bot, new Set(['light_gray'])).name, 'white_wool')
+    assert.equal(wool.topWoolColor(bot, new Set(['light_gray', 'white'])), null)
+  })
+
+  it('explicit colour subs never release the lock', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me red_bed')
+    assert.deepEqual(bot.lines, ['making you a red_bed: need 3 wool, going for sheep'])
+    await drive(bot, bot._tickerCtx, null)
+    assert.equal(bot._tickerCtx.bring, null)
+    assert.ok(bot.lines.includes('could not get 3 wool for the red_bed in time'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('trying another colour')), `lines: ${bot.lines}`)
   })
 })
