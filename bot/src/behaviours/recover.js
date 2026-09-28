@@ -29,8 +29,7 @@ const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
 const DISPLACE_TIMEOUT_TICKS = 8 // dug-open patience (9sq): clear-but-still ticks before failed:no-progress
-const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
-const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles
+const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles (jsf.4: dig_step mounts through the same drive)
 const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
 const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample at most
 const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held while stalled
@@ -107,8 +106,54 @@ function isWater(b) {
   return !!b && typeof b.name === 'string' && b.name.includes('water')
 }
 
-function headBlockedAt(bot) {
+// Own-column headroom: the two cells the 1.8 body rises through. dig_up's
+// gate (9sq F1): it digs exactly these cells, so free own headroom means
+// nothing to dig even when a neighbour lip vetoes the pillar (oz8).
+function ownHeadBlockedAt(bot) {
   return solid(cellAt(bot, 0, 1, 0)) || solid(cellAt(bot, 0, 2, 0))
+}
+
+// Headroom for a jump (oz8): the own column plus a neighbouring lip the
+// drifting 0.6-wide body can reach. Rig 2026-09-28 (CLUSTER pocket, stance
+// frac-x 0.30): own column free, west lip at dy+2 with air below — the jump
+// wedged and failed no-apex over 20 ticks while the scan read free. A
+// neighbour threatens only when the body can drift into it (dy+0 AND dy+1
+// free — a dy+1-solid neighbour can never hold the 1.8 body, it is a wall
+// to slide along, so chimney climbs and feet-level notches read free)
+// with rock two above, and only inside the body's XZ reach (half-width 0.3
+// + margin). Diagonals need both orthogonal neighbours enterable too (a
+// wall in either seals the corner). The margin covers float noise at
+// exact-boundary stances plus sub-tick drift; it must stay well under 0.2,
+// past which centered stances (frac 0.5) would catch the side columns and
+// veto working chimney jumps.
+const HEAD_DRIFT_MARGIN = 0.05
+function headBlockedAt(bot) {
+  if (ownHeadBlockedAt(bot)) return true
+  let bp = null
+  try { bp = botPos(bot) } catch (_) { bp = null }
+  if (!bp) return false
+  const reach = 0.3 + HEAD_DRIFT_MARGIN
+  const fx = Math.floor(bp.x)
+  const fz = Math.floor(bp.z)
+  for (let cx = Math.floor(bp.x - reach); cx <= Math.floor(bp.x + reach); cx++) {
+    for (let cz = Math.floor(bp.z - reach); cz <= Math.floor(bp.z + reach); cz++) {
+      const dx = cx - fx
+      const dz = cz - fz
+      if (dx === 0 && dz === 0) continue
+      // A diagonal lip is reachable only past both orthogonal neighbours:
+      // a wall in either seals the corner (revmux 01).
+      if (dx !== 0 && dz !== 0) {
+        if (solid(cellAt(bot, dx, 0, 0)) || solid(cellAt(bot, dx, 1, 0))) continue
+        if (solid(cellAt(bot, 0, 0, dz)) || solid(cellAt(bot, 0, 1, dz))) continue
+      }
+      // A lip needs TWO free cells below the rock (revmux 01): with dy+1
+      // solid the 1.8 body can never be inside the column at any jump
+      // phase, so that neighbour is a wall to slide along, never a bonk.
+      if (!solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz)) &&
+        solid(cellAt(bot, dx, 2, dz))) return true
+    }
+  }
+  return false
 }
 
 // Goalward 1x2 solidity for the dig_through menu fact (9sq F1): stuck.goal
@@ -153,6 +198,23 @@ function handDiggable(bot, b) {
   // The name set governs; canDigBlock only confirms reach where present.
   if (!b || typeof b.name !== 'string' || b.name === 'air') return false
   if (!HAND_DIG.has(b.name) && !b.name.endsWith('_leaves')) return false
+  try {
+    if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
+  } catch (_) { /* reach check best-effort */ }
+  return true
+}
+
+// Stone a pickaxe breaks fast (jsf.4): pit andesite/granite/diorite/stone
+// walls ladder with a pick on hand. No ores — forage owns those.
+const PICK_DIG = new Set([
+  'stone', 'andesite', 'granite', 'diorite', 'cobblestone',
+  'deepslate', 'tuff', 'calcite', 'sandstone', 'dripstone_block',
+])
+function diggable(bot, b) {
+  if (handDiggable(bot, b)) return true
+  if (!b || typeof b.name !== 'string') return false
+  if (!hasPickaxe(bot)) return false
+  if (!PICK_DIG.has(b.name)) return false
   try {
     if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
   } catch (_) { /* reach check best-effort */ }
@@ -205,24 +267,44 @@ function capLavaAt(bot, dx, dz) {
     isLava(cellAt(bot, dx, 2, dz + 1)) || isLava(cellAt(bot, dx, 2, dz - 1))
 }
 
-// A hand-dug staircase cycle (9sh): the side cell at feet level stays as
-// the step to mount, the side cell above it is air or digs by hand, the
-// mount head above that is air or digs by hand (adv: the 1.8 body stands
-// the mount with its head in (dx,2,dz)), no lava in or around the head,
+// Lava behind the above cell (revmux jsf.4-01 minor): breaking above lets it
+// flow into the dug cell and on toward the head. lavaNear's ±1 cube covers
+// above's other neighbours and capLavaAt covers the cap's whole surround —
+// the two-out cell at above height is the gap (hand-dig had it too, but the
+// stone ladder reaches the depths where lava sits).
+function farLavaAt(bot, dx, dz) {
+  return isLava(cellAt(bot, dx * 2, 1, dz * 2))
+}
+
+// A dug staircase cycle (9sh hand, jsf.4 pickaxe): the side cell at feet
+// level stays as the step to mount, the side cell above it is air or digs
+// (by hand, or stone with a pickaxe on hand), the mount head above that is
+// air or digs the same way (adv: the 1.8 body stands the mount with its
+// head in (dx,2,dz)), no lava in or around the head, none behind the dig,
 // and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
   if (solid(cellAt(bot, 0, 2, 0))) return null
+  let cobbleSide = null
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
     if (!solid(step)) continue
     const above = cellAt(bot, dx, 1, dz)
-    if (above && solid(above) && !handDiggable(bot, above)) continue
+    if (above && solid(above) && !diggable(bot, above)) continue
     const cap = cellAt(bot, dx, 2, dz)
-    if (cap && solid(cap) && !handDiggable(bot, cap)) continue
+    if (cap && solid(cap) && !diggable(bot, cap)) continue
     if (capLavaAt(bot, dx, dz)) continue
+    if (farLavaAt(bot, dx, dz)) continue
+    // Cobble last (revmux jsf.4-01 major): foreign cobble is drq-protected
+    // and refuses at denyReason — never let it shadow a natural side that
+    // digs. An only-cobble staircase is still offered (own-session pillars
+    // ladder through placedByBot).
+    if ((above && above.name === 'cobblestone') || (cap && cap.name === 'cobblestone')) {
+      if (!cobbleSide) cobbleSide = [dx, dz]
+      continue
+    }
     return [dx, dz]
   }
-  return null
+  return cobbleSide
 }
 
 // A plain +1 mount (cjq): the side cell at feet level is solid, the cell
@@ -410,6 +492,7 @@ function recoverFacts(bot, ctx, state, target) {
     pickaxe: hasPickaxe(bot),
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
+    ownHeadBlocked: ownHeadBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
@@ -487,7 +570,7 @@ const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
-  dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
+  dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
   dig_through: 'tunnel: pickaxe on hand, no lava near — dig 1-wide 2-tall toward the goal',
@@ -735,9 +818,10 @@ function digUpRun(bot, ctx) {
   return 'running'
 }
 
-// Dig a step by hand and mount it (9sh): no scaffold, no pickaxe, dirt
-// pit. One cycle digs the wall above the side step plus the mount head
-// above that (adv), then jumps onto the step top — done on floor rise,
+// Dig a step and mount it (9sh hand, jsf.4 pickaxe ladder): no scaffold,
+// dirt pit bare-handed, stone pit with a pick. One cycle digs the wall
+// above the side step plus the mount head above that (adv), then mounts
+// the step top through the shared hop leap — done on floor rise,
 // repeatable to the mouth. st.dir re-scans when its step collapses
 // mid-cycle.
 function digStepRun(bot, ctx) {
@@ -751,18 +835,46 @@ function digStepRun(bot, ctx) {
   // pit floor is not an escape. (The step column itself is not required: a
   // natural +1 ledge nearby is genuine progress too.)
   const grounded = !bot.entity || !!bot.entity.onGround
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); return 'done' }
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  // Release drive controls every tick (the leap holds forward into the
+  // step — without this a chained cycle walks on while digging). The mount
+  // below re-asserts what it needs same-tick.
+  setForward(bot, false)
+  setBack(bot, false)
   if (!st.dir) {
     st.dir = findDigStepDir(bot)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
+  }
+  if (st.stepPos) {
+    // Mount in progress: validate the ABSOLUTE anchor, hop-style — the
+    // relative step cell reads the dug above-cell once the leap rises, so
+    // a relative check collapses every leap mid-arc. The leap owns the
+    // tick: no digging mid-arc.
+    let anchored = null
+    try {
+      if (bot.blockAt) anchored = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+    } catch (_) { /* anchor read best-effort */ }
+    if (!solid(anchored)) {
+      st.dir = null
+      st.stepPos = null
+      st.leapt = false
+      st.armed = false
+      st.settled = false
+      setJump(bot, false)
+      setForward(bot, false)
+      setBack(bot, false)
+      return 'running'
+    }
+    return mountStep(bot, st, st.stepPos)
   }
   // Lava in or around the mount head re-scans before any digging: opening
   // the cells under lava would pour a flow onto the mount. The find skips
   // these sides, so this terminates.
   if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
+  if (farLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
-    if (!handDiggable(bot, above)) { st.dir = null; return 'running' }
+    if (!diggable(bot, above)) { st.dir = null; return 'running' }
     if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
     if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
     if (st.digInFlight) {
@@ -774,7 +886,11 @@ function digStepRun(bot, ctx) {
     if (denyAbove) { setJump(bot, false); logDeny(above, denyAbove); return 'failed:' + denyAbove } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
-      try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+      try {
+        const tool = digTool(bot, above)
+        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        await bot.dig(above)
+      } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
@@ -783,7 +899,7 @@ function digStepRun(bot, ctx) {
   // relying on the executor's canDig to clear it mid-mount.
   const cap = cellAt(bot, st.dir[0], 2, st.dir[1])
   if (cap && solid(cap)) {
-    if (!handDiggable(bot, cap)) { st.dir = null; return 'running' }
+    if (!diggable(bot, cap)) { st.dir = null; return 'running' }
     if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
     if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
     if (st.digInFlight) {
@@ -795,49 +911,52 @@ function digStepRun(bot, ctx) {
     if (denyCap) { setJump(bot, false); logDeny(cap, denyCap); return 'failed:' + denyCap } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
-      try { await bot.dig(cap) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+      try {
+        const tool = digTool(bot, cap)
+        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        await bot.dig(cap)
+      } catch (_) { st.digError = true } finally { st.digInFlight = false }
     })()
     return 'running'
   }
-  // Headroom dug: mount the step. The step collapsing under us re-scans.
+  // Headroom dug: fix the absolute anchor and mount through the shared hop
+  // leap (jsf.4) — direct drive only, no executor goal: a GoalNear would
+  // fight the leap at 20 Hz (7gt), and a leap from wall contact never
+  // leaves the ground on Paper (wqt). The relative cell goes stale the
+  // moment the body walks (floor(bp) shifts), so the target is fixed once
+  // here; the mount branch above validates the anchor, never the cell.
   const step = cellAt(bot, st.dir[0], 0, st.dir[1])
   if (!solid(step)) { st.dir = null; return 'running' }
-  if (st.phase !== 'step') {
-    st.phase = 'step'
-    st.waited = 0
-    try {
-      const p = step.position
-      if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function' && p) {
-        bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y + 1, p.z, 1), false)
-      }
-    } catch (_) { /* goal best-effort */ }
-  }
-  setJump(bot, true)
-  if (++st.waited > DIG_STEP_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
-  return 'running'
+  st.phase = 'step'
+  st.waited = 0
+  st.leapt = false
+  st.armed = false
+  st.stall = 0
+  st.settled = false
+  const q = step && step.position
+  st.stepPos = q ? { x: q.x, y: q.y, z: q.z } : null
+  if (!st.stepPos) { st.dir = null; return 'running' }
+  return mountStep(bot, st, st.stepPos)
 }
 
-// Hop a plain +1 step (cjq): no digging, level goal only. Paper 26.1.2
-// silently rejects (server teleport, no log) any move whose arc meets a wall,
-// so a leap from contact never leaves the ground (wqt: rise 0.00, ~20
-// rejects/s; vanilla mounts the same leap). A 1 Hz tick cannot time a run-up
-// leap — the body walks 4+ blocks between ticks and is always already
-// pressed — so there is no run-up: pressed (under HOP_PRESS_DIST of the
-// anchor) backs to leap stance on a 100 ms timer (gap 0.25-0.5, measured)
-// and leaps from the standstill (measured 4/4 mounts, 0 rejects); open
-// floor walks in without jumping, in-flight arcs coast with thrust held.
-// A failed leap lands back pressed and re-backs (self-retry inside
-// HOP_MOUNT_TICKS). No executor goal the whole
-// primitive — direct drive only, so the lib never fights the leap. Done on
-// a grounded floor rise (same apex-sampling guard as dig_step) or grounded
-// past the step (an arc overflowing a narrow top still escapes). Single
-// shot, never repeatable: one mount ends the episode.
-function hopStepRun(bot, ctx) {
-  const rec = ctx.recovery
-  const st = rec.st || (rec.st = { dir: null, stepPos: null, waited: 0, startFloor: null, leapt: false, armed: false, stall: 0, settled: false })
+// Shared +1 mount drive (jsf.4): the hop_step leap both climbers mount
+// through. Paper 26.1.2 silently rejects (server teleport, no log) any move
+// whose arc meets a wall, so a leap from contact never leaves the ground
+// (wqt: rise 0.00, ~20 rejects/s; vanilla mounts the same leap). A 1 Hz
+// tick cannot time a run-up leap — the body walks 4+ blocks between ticks
+// and is always already pressed — so there is no run-up: pressed (under
+// HOP_PRESS_DIST of the anchor) backs to leap stance on a 100 ms timer
+// (gap 0.25-0.5, measured) and leaps from the standstill (measured 4/4
+// mounts, 0 rejects); open floor walks in without jumping, in-flight arcs
+// coast with thrust held, airborne stalls unwedge (ak4). A failed leap
+// lands back pressed and re-backs (self-retry inside HOP_MOUNT_TICKS). No
+// executor goal the whole mount — direct drive only, so the lib never
+// fights the leap (7gt). st carries dir/waited/leapt/armed/stall/settled/
+// startFloor; stepPos is the absolute anchor the caller fixed (the relative
+// cell goes stale once the body walks). Returns running | done | failed:*.
+function mountStep(bot, st, stepPos) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
-  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   const grounded = !bot.entity || !!bot.entity.onGround
   setBack(bot, false) // the back-offs below re-assert it every tick they hold
   // Airborne-stall samples (ak4): hang time at vel.y=0 with no ground reads
@@ -846,30 +965,8 @@ function hopStepRun(bot, ctx) {
     ? bot.entity.velocity.y : null
   if (!grounded && hopVy !== null && Math.abs(hopVy) < HOP_STALL_VY) st.stall = (st.stall || 0) + 1
   else st.stall = 0
-  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
-  if (!st.dir) {
-    const gp = ctx.stuck && ctx.stuck.goal
-    st.dir = findHopStepDir(bot, gp)
-    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    // Absolute anchor: the relative cell goes stale the moment the body
-    // walks (floor(bp) shifts), so the mount target is fixed once here.
-    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
-    const q = step && step.position
-    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
-    st.stepPos = { x: q.x, y: q.y, z: q.z }
-  }
-  let step = null
-  try {
-    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
-  } catch (_) { /* anchor read best-effort */ }
-
-  if (!solid(step)) {
-    st.dir = null; st.stepPos = null; st.leapt = false; st.armed = false; st.settled = false
-    setJump(bot, false); setForward(bot, false)
-    return 'running'
-  }
-  const sx = st.stepPos.x + 0.5
-  const sz = st.stepPos.z + 0.5
+  const sx = stepPos.x + 0.5
+  const sz = stepPos.z + 0.5
   const dx = sx - bp.x
   const dz = sz - bp.z
   // Past the step on the ground: an arc overflowing a narrow top lands
@@ -882,8 +979,8 @@ function hopStepRun(bot, ctx) {
     if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
     return 'running'
   }
-  if (st.stepPos && Math.floor(bp.y) > st.startFloor &&
-      Math.hypot(bp.x - (st.stepPos.x + 0.5), bp.z - (st.stepPos.z + 0.5)) < 0.5) {
+  if (Math.floor(bp.y) > st.startFloor &&
+      Math.hypot(bp.x - (stepPos.x + 0.5), bp.z - (stepPos.z + 0.5)) < 0.5) {
     // Over the top (airborne or landed): cut thrust and settle. Holding jump
     // bunny-hops past the top while the anchor-facing look walks the body
     // back off the ledge. Not released on floor rise alone: mid-leap over
@@ -947,6 +1044,44 @@ function hopStepRun(bot, ctx) {
   }
   if (++st.waited > HOP_MOUNT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   return 'running'
+}
+
+// Hop a plain +1 step (cjq): no digging, level goal only. Finds the
+// goalward step, fixes the absolute anchor, re-scans when it is gone, and
+// mounts through mountStep — done on a grounded floor rise (same
+// apex-sampling guard as dig_step) or grounded past the step (an arc
+// overflowing a narrow top still escapes). Single shot, never repeatable:
+// one mount ends the episode.
+function hopStepRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { dir: null, stepPos: null, waited: 0, startFloor: null, leapt: false, armed: false, stall: 0, settled: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (Math.floor(bp.y) > st.startFloor && grounded) { setJump(bot, false); setForward(bot, false); return 'done' }
+  if (!st.dir) {
+    const gp = ctx.stuck && ctx.stuck.goal
+    st.dir = findHopStepDir(bot, gp)
+    if (!st.dir) { setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    // Absolute anchor: the relative cell goes stale the moment the body
+    // walks (floor(bp) shifts), so the mount target is fixed once here.
+    const step = cellAt(bot, st.dir[0], 0, st.dir[1])
+    const q = step && step.position
+    if (!q) { st.dir = null; setJump(bot, false); setForward(bot, false); return 'failed:no-step' }
+    st.stepPos = { x: q.x, y: q.y, z: q.z }
+  }
+  let step = null
+  try {
+    if (bot.blockAt && st.stepPos) step = bot.blockAt(new Vec3(st.stepPos.x, st.stepPos.y, st.stepPos.z))
+  } catch (_) { /* anchor read best-effort */ }
+
+  if (!solid(step)) {
+    st.dir = null; st.stepPos = null; st.leapt = false; st.armed = false; st.settled = false
+    setJump(bot, false); setForward(bot, false)
+    return 'running'
+  }
+  return mountStep(bot, st, st.stepPos)
 }
 
 // Sidestep: the old wedge/nudge action, now a primitive — 2 blocks toward
@@ -1112,9 +1247,11 @@ const RECOVER_MENU = {
     // 9sq F1: headroom already free means nothing to dig — never offer, and
     // never chain onto free headroom either (the chain is an offer with no ask).
     // jsf.3: like pillar_up, a pit with no goal climbs (head still blocked).
-    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
+    // oz8: the own-column gate — a neighbour lip vetoes the pillar above but
+    // leaves nothing to dig; the fallback keeps stand/tests literals working.
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && (facts.ownHeadBlocked ?? facts.headBlocked),
     run: digUpRun,
-    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && facts.headBlocked,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && (facts.ownHeadBlocked ?? facts.headBlocked),
     verb: 'digging up',
   },
   dig_step: {
@@ -1455,12 +1592,12 @@ async function decide(bot, ctx, state, target) {
     // Failed primitives leave a log line, not just a metric (ak4): done
     // already logs through release(), failures never did.
     if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
-    // A finished goal-owner (dig_step/sidestep) leaves its GoalNear live,
-    // and the next primitive's direct drive would fight the lib at 20 Hz
-    // (7gt: revmux-01 found hop's instance) — decide() is the one choke
-    // point between primitives, so the stale goal dies here. Chains are
-    // safe: pillar/dig_up set no goals, dig_step re-sets its own on the
-    // step phase, and release() clears again anyway.
+    // A finished goal-owner (sidestep) leaves its GoalNear live, and the
+    // next primitive's direct drive would fight the lib at 20 Hz (7gt:
+    // revmux-01 found hop's instance) — decide() is the one choke point
+    // between primitives, so the stale goal dies here. Chains are safe:
+    // pillar/dig_up/dig_step set no goals (dig_step mounts direct since
+    // jsf.4), and release() clears again anyway.
     try {
       if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
         bot.pathfinder.setGoal(null)

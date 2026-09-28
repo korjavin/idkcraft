@@ -451,3 +451,5 @@ function digTick(bot, ctx, st, bp) {
 module.exports = equip
 module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
+// Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
+module.exports.tableFor = tableFor

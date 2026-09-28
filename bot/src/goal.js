@@ -414,12 +414,35 @@ function siteFor(bot, around) {
 // below is also a door. Since jr2.1 the door fits two origins —
 // door − (3,0,0) for a v2 house, door − (1,0,0) for a v1 hut — told apart
 // by the corner columns (see isV2House). A lone v1 hut reads air there. An
-// unreadable probe (dark neighbour chunk) aborts the adopt — the callers
+// unreadable probe (dark neighbour chunk) skips the candidate — the callers
 // wait for chunks and retry — instead of misreading the version: a v2
 // house read as v1 would run the v1 repair plan at the wrong origin (the
 // door itself is shared, but the walls, table cell and spots all shift).
-// built is lax on purpose — presence (non-air) counts; exact repair is
-// the build step's job.
+// A door alone is not a house (idkcraft-6bl): the candidate origin must
+// hold the workbench at its plan cell plus ADOPT_QUORUM plan cells with
+// the RIGHT block (cellDone kind match — planks/table/door at exact
+// offsets, never mere non-air), else the door is foreign and the scan
+// moves to the next door. The table is the discriminator: no vanilla
+// structure generates a crafting table, while our build lays it FIRST,
+// before the door (plan[0] on both blueprints) — so any door-carrying
+// own house attempted it, and a count alone cannot separate: the live
+// 6bl structure scores 26+ plank matches, above an own mid-build house
+// (v1: 13, v2: 23). Accepted tail: an own house whose table was mined
+// (or skipped) meets a wiped memory with a reject and founds a new site
+// instead of repairing — the safe direction. Dark cells read as
+// mismatches: a dark own house misses and the callers retry once chunks
+// stream in.
+// built is exact, not lax (idkcraft-hlf): done means the repair plan is
+// empty — the same nextCellIdx===-1 definition the build step and the
+// work-tick revalidation use. The old any-non-air presence called
+// terrain-filled cells done and froze half-verdicts with no retry.
+const ADOPT_QUORUM = 10
+// Distinct doors tried per adopt scan: with rejection now possible the
+// nearest door may be foreign while ours stands behind it — first passing
+// wins. findBlocks returns both halves of every door, so the scan reads
+// twice the budget and dedupes to lower halves below (revmux 01 minors:
+// 5 raw hits cover ~2.5 doors, and 3 nearer foreign doors would fill it).
+const ADOPT_DOORS = 5
 function adoptHome(bot) {
   try {
     const spawn = bot && bot.spawnPoint
@@ -427,46 +450,72 @@ function adoptHome(bot) {
     const found = bot.findBlocks({
       matching: (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_door'),
       maxDistance: 32,
-      count: 1,
+      count: ADOPT_DOORS * 2,
     })
     if (!found || !found.length) return null
-    let dx = Math.floor(found[0].x)
-    let dy = Math.floor(found[0].y)
-    let dz = Math.floor(found[0].z)
-    try {
-      const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
-      if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
-    } catch (_) { /* keep as found */ }
-    const v2 = isV2House(bot, dx, dy, dz)
-    if (v2 == null) return null // probe dark: wait for chunks, retry later
-    const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)
-    const plan = buildMod.blueprintFor(home)
-    // Claim the table coords only when the workbench block is really there
-    // (same placed-station contract as a fresh site).
-    try {
-      const t = plan[0]
-      const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
-      if (tb && tb.name === 'crafting_table') {
-        home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
+    const tried = new Set()
+    for (const door of found) {
+      if (tried.size >= ADOPT_DOORS) break
+      const lo = doorLower(bot, door)
+      const key = `${lo.x},${lo.y},${lo.z}`
+      if (tried.has(key)) continue
+      tried.add(key)
+      const home = tryAdoptDoor(bot, door)
+      if (home) {
+        try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
+        return home
       }
-    } catch (_) { /* unverifiable: leave unclaimed */ }
-    let allPresent = true
-    for (const cell of plan) {
-      let name = null
-      try {
-        const b = bot.blockAt(new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz))
-        name = b && b.name
-      } catch (_) {
-        name = null
-      }
-      if (!name || name === 'air') { allPresent = false; break }
     }
-    home.built = allPresent
-    try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
-    return home
+    return null
   } catch (_) {
     return null
   }
+}
+
+// Lower-half normalize: findBlocks may return the UPPER half, so step down
+// when the block below is also a door. Shared by the scan dedupe above and
+// the per-door verify below.
+function doorLower(bot, at) {
+  let dx = Math.floor(at.x)
+  let dy = Math.floor(at.y)
+  let dz = Math.floor(at.z)
+  try {
+    const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
+    if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
+  } catch (_) { /* keep as found */ }
+  return { x: dx, y: dy, z: dz }
+}
+
+function tryAdoptDoor(bot, at) {
+  const lo = doorLower(bot, at)
+  const dx = lo.x
+  const dy = lo.y
+  const dz = lo.z
+  const v2 = isV2House(bot, dx, dy, dz)
+  if (v2 == null) return null // probe dark: next door, callers retry later
+  const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)
+  const plan = buildMod.blueprintFor(home)
+  // The workbench first: our build lays it before the door, no vanilla
+  // structure has one — a missing table is a foreign door, full stop.
+  if (!buildMod.cellDone(bot, home, plan[0])) return null
+  let kindred = 0
+  for (const cell of plan) {
+    try {
+      if (buildMod.cellDone(bot, home, cell)) kindred++
+    } catch (_) { /* unscannable reads as mismatch */ }
+  }
+  if (kindred < ADOPT_QUORUM) return null // foreign door: keep looking
+  // Claim the table coords only when the workbench block is really there
+  // (same placed-station contract as a fresh site).
+  try {
+    const t = plan[0]
+    const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
+    if (tb && tb.name === 'crafting_table') {
+      home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
+    }
+  } catch (_) { /* unverifiable: leave unclaimed */ }
+  home.built = buildMod.nextCellIdx(bot, home, []) === -1
+  return home
 }
 
 // True when planks stand at the v2 corner columns around the door at
@@ -562,10 +611,14 @@ function goalFacts(bot, ctx) {
   try {
     const bp = bot && bot.entity && bot.entity.position
     const interior = ctx && ctx.home && ctx.home.interior
+    // Floored like home.isInside (revmux jr2.3-02): the box holds
+    // inclusive block coords, and a raw float reads the back row outside
+    // while the helper reads it inside — gohome then finishes 'done' and
+    // is re-picked every tick all night.
     if (bp && interior && interior.min && interior.max &&
-      bp.x >= interior.min.x && bp.x <= interior.max.x &&
-      bp.y >= interior.min.y && bp.y <= interior.max.y &&
-      bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
+      Math.floor(bp.x) >= interior.min.x && Math.floor(bp.x) <= interior.max.x &&
+      Math.floor(bp.y) >= interior.min.y && Math.floor(bp.y) <= interior.max.y &&
+      Math.floor(bp.z) >= interior.min.z && Math.floor(bp.z) <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.

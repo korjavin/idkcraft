@@ -411,28 +411,58 @@ describe('recover dig_step climbs a dirt pit by hand (9sh)', () => {
     const bot = worldBot(dirtPit(), [])
     bot.entity.position = pos(0.5, 61, 0.5)
     bot.players = {} // autonomous: call_player infeasible, self-exit only
+    bot._yaw = 0
+    bot.look = (yaw) => { bot._yaw = yaw }
     const ctx = {
       stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
       brain: null, // FSM reserve picks
     }
     const first = []
     const stepBody = () => {
-      const g = bot.pathfinder.goal
-      if (g && typeof g.x === 'number') {
-        const bp = bot.entity.position
-        const dx = g.x - bp.x
-        const dz = g.z - bp.z
-        const d = Math.hypot(dx, dz)
-        if (d >= 0.05) {
-          const s = Math.min(0.4, d) / d
-          bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+      // Direct drive (jsf.4: the mount sets no goal) plus the goal walk
+      // other prims may issue.
+      const bp = bot.entity.position
+      const yaw = bot._yaw || 0
+      if (bot.getControlState('forward')) {
+        bot.entity.position = pos(bp.x - Math.sin(yaw) * 0.4, bp.y, bp.z - Math.cos(yaw) * 0.4)
+      } else if (bot.getControlState('back')) {
+        bot.entity.position = pos(bp.x + Math.sin(yaw) * 0.4, bp.y, bp.z + Math.cos(yaw) * 0.4)
+      } else {
+        const g = bot.pathfinder.goal
+        if (g && typeof g.x === 'number') {
+          const dx = g.x - bp.x
+          const dz = g.z - bp.z
+          const d = Math.hypot(dx, dz)
+          if (d >= 0.05) {
+            const s = Math.min(0.4, d) / d
+            bot.entity.position = pos(bp.x + dx * s, bp.y, bp.z + dz * s)
+          }
         }
       }
-      // Honest jump: at most one block above the cycle start floor — each
-      // new height needs a freshly dug step, not a free elevator.
+      // Honest jump + gravity (jsf.4: the leap lands the body on the step
+      // top — done must read grounded feet over the dug column, not a
+      // mid-air sample beside the wall): a held jump impulses +1.0 from the
+      // ground only; airborne ticks fall, and solid ground below snaps the
+      // feet and grounds.
       const st = ctx.recovery && ctx.recovery.st
-      const cap = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
-      if (bot.getControlState('jump') && bot.entity.position.y < cap) bot.entity.position.y += 0.5
+      const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      const jumping = bot.getControlState('jump')
+      if (jumping && bot.entity.onGround && bot.entity.position.y < capY) bot.entity.position.y += 1.0
+      const below = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+      if (below && below.boundingBox !== 'empty') {
+        bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+        bot.entity.onGround = true
+      } else if (!jumping || !bot.entity.onGround) {
+        bot.entity.position.y -= 0.5
+        bot.entity.onGround = false
+        const land = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+        if (land && land.boundingBox !== 'empty') {
+          bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+          bot.entity.onGround = true
+        }
+      } else {
+        bot.entity.onGround = false
+      }
     }
     for (let t = 0; t < 200 && (ctx.stuck || ctx.recovery); t++) {
       if (!ctx.recovery || ctx.recovery.status !== 'running') {
@@ -492,11 +522,12 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
   // level goals and repeated it after place-error fails. 29 pillar_ups in
   // 16 min, ~20 s standing per attempt.
   function levelWorld() {
-    // Floor + one dirt wall with a stone cap: walls=1, but no dig_step
-    // (the cap never digs by hand), so the menu is the 4jr case exactly.
-    // Headroom stays FREE on purpose (revmux-01 body-1): a head block would
-    // exclude pillar_up by itself and mask the failed-action rules below.
-    // The dig_up fallback lives in its own buried-head test instead.
+    // Floor + one dirt wall with a stone cap, no pickaxe on hand: walls=1,
+    // but no dig_step (the stone cap needs a pick since jsf.4), so the menu
+    // is the 4jr case exactly. Headroom stays FREE on purpose (revmux-01
+    // body-1): a head block would exclude pillar_up by itself and mask the
+    // failed-action rules below. The dig_up fallback lives in its own
+    // buried-head test instead.
     const solids = new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)])
     return { solids, cap: key(1, 62, 0) }
   }
@@ -513,7 +544,7 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
     }
     return bot
   }
-  const kit = [{ name: 'dirt', count: 5 }, { name: 'iron_pickaxe', count: 1 }]
+  const kit = [{ name: 'dirt', count: 5 }] // no pickaxe: the 4jr pin is the exclusion, not the dig menu
 
   it('level goal: ask menu lacks pillar_up/dig_up, first label gets sidestep', async () => {
     const bot = levelBot(levelWorld().cap)
@@ -578,7 +609,7 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
     // high goal when the model repeats the failed prim.
     const w = levelWorld()
     w.solids.add(key(0, 62, 0))
-    const bot = worldBot(w.solids, kit)
+    const bot = worldBot(w.solids, [...kit, { name: 'iron_pickaxe', count: 1 }]) // dig_up needs the pick
     const raw = bot.blockAt.bind(bot)
     bot.blockAt = (p) => {
       const b = raw(p)
@@ -2148,8 +2179,9 @@ describe('dig_step owns the mount head (idkcraft-adv)', () => {
     await flush()
     assert.ok(dug.includes(key(1, 63, 0)), `cap dug, got ${dug}`)
     recover.run(bot, ctx)
-    assert.ok(bot.pathfinder.goal, 'mount goal set once the head is air')
-    assert.ok(bot.getControlState('jump'), 'mount jumps')
+    assert.equal(bot.pathfinder.goal, null, 'mount sets no executor goal (jsf.4 direct leap)')
+    assert.ok(bot.getControlState('forward'), 'mount walks in from open floor')
+    assert.ok(!bot.getControlState('jump'), 'no run-up leap from a metre out')
   })
   it('stone-capped side re-scans to a diggable side', async () => {
     const bot = worldBot(pitWorld(), [])
