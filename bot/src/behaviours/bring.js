@@ -242,7 +242,7 @@ function fenceFact(bot, animal) {
     const p = animal.position
     const around = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
     for (const [ox, oy, oz] of around) {
-      const b = bot.blockAt && bot.blockAt({ x: Math.floor(p.x) + ox, y: Math.floor(p.y) + oy, z: Math.floor(p.z) + oz })
+      const b = bot.blockAt && bot.blockAt(new Vec3(Math.floor(p.x) + ox, Math.floor(p.y) + oy, Math.floor(p.z) + oz))
       if (b && typeof b.name === 'string' && b.name.endsWith('_fence')) {
         console.log(`hunt animal near fences: ${animal.name} at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}`)
         return
@@ -409,7 +409,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     if (now !== true) return null // closed up or mined out since noted
     let pre = null
     try {
-      const blk = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) })
+      const blk = bot.blockAt && bot.blockAt(new Vec3(Math.floor(item.x), Math.floor(item.y), Math.floor(item.z)))
       pre = blk && denyReason(bot, blk, ctx)
     } catch (_) { pre = null }
     if (pre === 'protected') return null // owner build: same rule as the live loop
@@ -551,9 +551,9 @@ function takeFarCache(bot, o, bp) {
     if (c.buriedHit && !skipped(c.buriedHit.pos)) {
       let there = false
       try {
-        const blk = bot.blockAt && bot.blockAt({
-          x: Math.floor(c.buriedHit.pos.x), y: Math.floor(c.buriedHit.pos.y), z: Math.floor(c.buriedHit.pos.z),
-        })
+        const blk = bot.blockAt && bot.blockAt(new Vec3(
+          Math.floor(c.buriedHit.pos.x), Math.floor(c.buriedHit.pos.y), Math.floor(c.buriedHit.pos.z),
+        ))
         there = !blk || (!!blk.name && blk.name === c.buriedHit.name)
       } catch (_) { there = false }
       if (there) {

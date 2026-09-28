@@ -9,6 +9,7 @@ const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS, gatherFailedHolds } = require('../goal')
 const { countItems } = require('../perception')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
+const Vec3 = require('vec3')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
 // function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
@@ -58,11 +59,22 @@ function logIds(bot) {
 
 
 
+// Walk/dig reads need a real Vec3: real mineflayer blockAt throws on a
+// plain object (WorldSync.getBlock calls pos.floored()), which reads as
+// an unloaded chunk and stalls a memory hike into 'failed:unreachable'
+// at the trees (idkcraft-t9u, the same flaw as bring's t9k). Every
+// gather target routes through here, so normalize once; live hits pass
+// through untouched.
+function asVec3(p) {
+  if (!p || typeof p.floored === 'function') return p
+  return new Vec3(p.x, p.y, p.z)
+}
+
 // Commit a walk target: shared init for the sync-48 hit, a resource-memory
 // point and a far-search hit. far marks a fallback origin: if it reads back
 // as gone, the point joins skip so the next fallback takes another, not it.
 function commitTarget(g, bp, p, name, far) {
-  g.pos = p
+  g.pos = asVec3(p)
   g.name = name || 'log'
   g.far = !!far
   g.lastFound = [p]
