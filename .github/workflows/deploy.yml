@@ -3,10 +3,26 @@ name: Deploy
 on:
   push:
     branches: [master]
+  pull_request:
   workflow_dispatch:
 
 jobs:
+  # Process audit 2026-09-29: until now CI ran zero tests and "suite green"
+  # was only the agent's word in the PR. Red tests block the deploy job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+      - run: cd bot && npm ci && npm test
+
   deploy:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write

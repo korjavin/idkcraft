@@ -20,3 +20,15 @@ stuck detector the diff adds or touches, walk the ticks after it fires:
   or re-fires every few seconds on the same unreachable target
 
 Report the exact tick sequence: state before, what fires, what the next tick picks, why it never ends.
+- "done"/"progress" judged by a jump apex, a sub-block sidestep (0.9 on a pit floor) or a float that
+  moves while the body stays on the same block (fja, ak4, 1wj) — progress is a new block position that
+  holds for a tick after the action ended
+- an escalation (recover episode, call_player, gave-up, model ask) with no cap **per spot**: the same
+  block coordinates re-enter the loop after the latch clears and the sequence starts over (q0h: 82 min
+  at one site; 9sq F2)
+- a fix that only works if the server accepts the action: Paper 26.1.2 zeroes movement when the bbox
+  starts wedged, refuses a place at the jump apex (needs +250–350 ms on the ascent), refuses every
+  dig/place inside spawn protection for a non-op bot. Say what Paper does to the packet the fix sends;
+  a fix verified only on the fake harness for one of these classes is a **major**
+- a finding of this lens raised in a previous round (`findings-r*.json` in context) or by the other
+  agent on the panel may not be dropped or downgraded without a written reason in the finding body

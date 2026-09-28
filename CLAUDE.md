@@ -137,11 +137,18 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 
 ## Review (revmux)
 
-- Privacy pre-check, zero tokens, before any round (must print nothing):
+- One command, run from the branch's worktree: `.revmux/review.sh <bead> 01-review` — privacy pre-check,
+  profile pick, scope/goal from the bead, archive in the MAIN checkout's `.revmux/tasks/` (a worktree's
+  archive dies with the worktree), prints critical/major only, exit 1 while any is open.
+- Profile is picked from the diff: `idkcraft-risky` (two agents, synthesis on) when it touches
+  `bot/src/index.js`, `goal.js`, `brain.js`, `stuck.js`, `behaviours/recover.js`, `follow.js`, any
+  `Movements`/pathfinder setting or `laya/`; else `idkcraft` (one agent, `--no-synthesis`).
+- Risky files: the review archive is **mandatory** for merge, and the PR carries `bot/tools/stuck-run.sh`
+  before/after numbers. Compose/Dockerfile/CI/env-only diffs: `--lenses tests`.
+- Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
+  .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta). Minors are fixed in the same commit
+  and never trigger another round. Max 3 rounds; whatever is still gating is outstanding in the handoff.
+- A livelock/pathing finding raised in two rounds or by both agents is never dropped or downgraded
+  without a written reason (the ones that were came back as prod bugs: 3nt.19→ak4, ef3→9sq, 2bh→lzw).
+- Privacy pre-check by hand (must print nothing):
   `git diff origin/master...HEAD | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\b|(api[_-]?key|secret|token)\s*[:=]\s*\S{8,})'`
-- Default: `revmux --task <bead> --run 01-review --profile idkcraft --no-tui --no-synthesis` (one agent).
-- Use `--profile idkcraft-risky` when the diff touches `bot/src/index.js` ticker/`setMovements`, `goal.js`,
-  `brain.js`, `behaviours/recover.js`, any `Movements`/pathfinder settings, or `laya/`.
-- Compose/Dockerfile/CI/env-only diffs: `--lenses wiring`.
-- Rounds 2+: only if a critical/major was fixed; scope = the fix delta (`git diff <reviewed-sha>..HEAD`)
-  plus the previous `findings.json` in context, same profile. Minors never trigger another round.
