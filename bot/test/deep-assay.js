@@ -409,6 +409,7 @@ async function main() {
   const movements = new Movements(bot)
   movements.allowSprinting = false
   require('../src/swim').addSwimExits(movements)
+  require('../src/swim').addSwimPrune(movements)
   require('../src/nocorner').addNoCornerCut(movements)
   require('../src/snow').addSnowGround(movements)
   require('../src/jumpcost').addJumpUpCost(movements)

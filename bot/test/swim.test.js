@@ -19,7 +19,7 @@ const { Movements, goals } = require('mineflayer-pathfinder')
 const AStar = require('mineflayer-pathfinder/lib/astar')
 const Move = require('mineflayer-pathfinder/lib/move')
 const { createTicker } = require('../src/index')
-const { addSwimExits } = require('../src/swim')
+const { addSwimExits, addSwimPrune } = require('../src/swim')
 
 // nameAt with tunable banks/water; lava pit + dry wall only in the main world.
 function makeNameAt({ bankTop = 62, waterLo = 60, waterHi = 62, extras = true }) {
@@ -224,5 +224,151 @@ describe("swim primitive (idkcraft-be7, idkcraft-b50)", () => {
     const bi = r.path.findIndex((m) => m.x >= 10 && m.y === 63)
     assert.ok(bi > 0, 'path reaches the far bank')
     assert.equal(r.path[bi - 1].y, 62, `exit launches from the surface, not ${r.path[bi - 1].y}`)
+  })
+})
+
+describe('swim prune (idkcraft-e8t)', () => {
+  // East bank is a +4 cliff (stone to y=65) instead of a flush bank; the
+  // river and west bank match the main world. Water->water descents and
+  // rises ending above a floor are unexecutable and must not be offered;
+  // level cruises — even head-on into the cliff — arrive fine (rig:
+  // goal_reached, fm=0) and must stay.
+  function cliffNameAt(x, y, z) {
+    const river = x >= 4 && x <= 9
+    if (x >= 10) {
+      if (y <= 65) return 'stone'
+      return 'air'
+    }
+    if (river) {
+      if (y < 60) return 'stone'
+      if (y <= 62) return 'water'
+      return 'air'
+    }
+    if (y < 60) return 'stone'
+    if (y <= 61) return 'dirt'
+    if (y === 62) return 'grass_block'
+    return 'air'
+  }
+
+  function swimOnly(nameFn) {
+    const movements = new Movements(worldBot(nameFn))
+    addSwimExits(movements)
+    return movements
+  }
+
+  function swimPress(nameFn) {
+    const movements = new Movements(worldBot(nameFn))
+    addSwimExits(movements)
+    addSwimPrune(movements)
+    return movements
+  }
+
+  it('keeps level cruises, even head-on into the 2+ cliff face', () => {
+    // The prune targets descents and floor-rises only: a level approach
+    // ending adjacent to the cliff must survive — it arrives fine live
+    // (rig: goal_reached, fm=0), so pruning it would only cost detours.
+    const before = swimOnly(cliffNameAt).getNeighbors(new Move(8, 62, 0, 0, 0))
+    const after = swimPress(cliffNameAt).getNeighbors(new Move(8, 62, 0, 0, 0))
+    assert.ok(before.some((m) => m.x === 9 && m.y === 62), 'the lib offers the head-on approach')
+    assert.ok(after.some((m) => m.x === 9 && m.y === 62), 'the head-on level approach survives')
+    assert.ok(after.some((m) => m.x === 7), 'the cruise back west survives')
+    assert.ok(after.some((m) => m.x === 8 && m.z === 1), 'the along-wall cruise survives')
+    const hash = (ns) => ns.map((m) => m.hash).sort().join(' ')
+    assert.equal(hash(after), hash(before), 'no level move is pruned here')
+  })
+
+  it('prunes diagonal dives (the executor holds jump and never sinks)', () => {
+    // Air pocket beside a water node (cave mouth behind water): the lib
+    // offers the diagonal dive into it; the executor cannot descend to
+    // it (jump held every tick while isInWater), so it must go.
+    const pocket = (x, y, z) => (x === 6 && y === 62 && z === 1) ? 'air' : cliffNameAt(x, y, z)
+    const before = swimOnly(pocket).getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(before.some((m) => m.x === 6 && m.y === 61 && m.z === 1), 'the lib offers the dive without the prune')
+    const after = swimPress(pocket).getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!after.some((m) => m.x === 6 && m.y === 61 && m.z === 1), 'the dive is pruned')
+    assert.ok(after.some((m) => m.x === 6 && m.y === 62 && m.z === 0), 'the level cruise survives')
+  })
+
+  it('prunes rises up onto a shelf, keeps flat wading cruises', () => {
+    // Shelf ridge at x=7 (floor dirt 61, water 62 1-deep) mid-river:
+    // rising onto it from the bottom storms (E7 — the rise runs in
+    // contact with the shelf face); level wading along it walks (E8).
+    const shelf = (x, y, z) => (x === 7 && y <= 61) ? 'dirt' : cliffNameAt(x, y, z)
+    const before = swimOnly(shelf).getNeighbors(new Move(6, 61, 0, 0, 0))
+    assert.ok(before.some((m) => m.x === 7 && m.y === 62), 'the rise onto the shelf exists without the prune')
+    const up = swimPress(shelf).getNeighbors(new Move(6, 61, 0, 0, 0))
+    assert.ok(!up.some((m) => m.x === 7 && m.y === 62), 'no rise up onto the shelf from the bottom')
+    const along = swimPress(shelf).getNeighbors(new Move(7, 62, 0, 0, 0))
+    assert.ok(along.some((m) => m.x === 7 && m.z === 1), 'wading along the shelf survives')
+    const off = swimPress(shelf).getNeighbors(new Move(7, 62, 0, 0, 0))
+    assert.ok(off.some((m) => m.x === 6 && m.y === 62), 'level cruise off the shelf into depth survives')
+  })
+
+  it('a +1 bank approach and mount survive', () => {
+    // Flush-bank world: the level approach and the dry mount target are
+    // outside both prune rules, so the h04 exit shape stays plannable.
+    const after = swimPress(nameAt).getNeighbors(new Move(8, 62, 0, 0, 0))
+    assert.ok(after.some((m) => m.x === 9 && m.y === 62), 'approach to the +1 bank kept')
+    const exit = swimPress(nameAt).getNeighbors(new Move(9, 62, 0, 0, 0))
+    assert.ok(exit.some((m) => m.x === 10 && m.y === 63), 'the +1 mount kept')
+  })
+
+  it('dry sources and double-installs are untouched', () => {
+    const hash = (ns) => ns.map((m) => m.hash).sort().join(' ')
+    const dryA = hash(swimOnly(cliffNameAt).getNeighbors(new Move(0, 63, 0, 0, 0)))
+    const dryB = hash(swimPress(cliffNameAt).getNeighbors(new Move(0, 63, 0, 0, 0)))
+    assert.equal(dryB, dryA)
+    const movements = new Movements(worldBot(cliffNameAt))
+    addSwimExits(movements)
+    addSwimPrune(movements)
+    addSwimPrune(movements)
+    const twice = hash(movements.getNeighbors(new Move(8, 62, 0, 0, 0)))
+    const once = hash(swimPress(cliffNameAt).getNeighbors(new Move(8, 62, 0, 0, 0)))
+    assert.equal(twice, once)
+  })
+
+  it('a plan at an unexitable cliff holds no dive or floor-rise', () => {
+    // The east top (feet 66) is unreachable from water: no +1 exit
+    // anywhere. The search must still never emit an unexecutable water
+    // move — no descents the executor cannot sink to, no rises ending
+    // above a floor. Head-on level approaches may appear: they arrive.
+    const movements = wiredMovements(cliffNameAt)
+    const astar = new AStar(new Move(0, 63, 0, 0, 0), movements, new goals.GoalBlock(14, 66, 0), 10000, 9000)
+    const r = astar.compute()
+    assert.notEqual(r.status, 'success')
+    const wet = (x, y, z) => cliffNameAt(x, y, z) === 'water'
+    const solid = (x, y, z) => {
+      const n = cliffNameAt(x, y, z)
+      return n !== 'air' && n !== 'water'
+    }
+    let prev = { x: 0, y: 63, z: 0 }
+    for (const m of r.path) {
+      if (wet(prev.x, prev.y, prev.z) && wet(m.x, m.y, m.z)) {
+        const dy = m.y - prev.y
+        assert.ok(dy >= 0, `plan dives at ${m.x},${m.y},${m.z}`)
+        if (dy > 0) assert.ok(!solid(m.x, m.y - 1, m.z), `plan rises onto a floor at ${m.x},${m.y},${m.z}`)
+      }
+      prev = m
+    }
+  })
+
+  it('the planner rounds the cliff to a +1 notch instead of pinning', () => {
+    // One flush notch in the cliff at z=6: the only way up. The plan
+    // must cruise the river, round along the face, and mount there.
+    const notch = (x, y, z) => {
+      if (x === 10 && z === 6) {
+        if (y <= 61) return 'stone'
+        if (y === 62) return 'grass_block'
+        return 'air'
+      }
+      return cliffNameAt(x, y, z)
+    }
+    const movements = wiredMovements(notch)
+    const astar = new AStar(new Move(0, 63, 0, 0, 0), movements, new goals.GoalBlock(10, 63, 6), 20000, 19000)
+    const r = astar.compute()
+    assert.equal(r.status, 'success')
+    const last = r.path[r.path.length - 1]
+    assert.deepEqual([last.x, last.y, last.z], [10, 63, 6])
+    assert.ok(r.path.some((m) => m.x === 9 && m.y === 62 && m.z === 6), 'mount launches beside the notch')
   })
 })
