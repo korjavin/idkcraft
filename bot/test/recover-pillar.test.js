@@ -214,15 +214,19 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     // lzw core: issuance is physics-timed, not tick-phased. The tick must
     // not place even with a perfect in-window sample (deleting the timer
     // and re-adding a tick trigger fails the first assertion).
+    // cm0: armed grounded, risen mid-ascent by the fire (a static mid-air
+    // pose is a hover and must not issue).
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 61.7, 0.5)
-    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
     await flush()
     assert.equal(bot._places, 0, 'no tick-phase issue')
     assert.equal(ctx.recovery.st.phase, 'jump')
     assert.equal(bot.getControlState('jump'), true)
+    bot.entity.position = pos(0.5, 61.7, 0.5) // the jump rises before the fire
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
     await sleep(250)
     await flush()
     assert.equal(bot._places, 1, 'the +150 ms timer issues')
@@ -233,13 +237,15 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     // lzw core: the timer reads height/velocity at fire time, not at arm
     // time. The body rises between the tick and the fire; old tick-phase
     // code with no second tick would never issue here.
+    // cm0: armed grounded (rise-since-arm reads from the arm height).
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 61.3, 0.5) // below the +0.6 trigger
-    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5) // below the +0.6 trigger
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
     assert.equal(bot._places, 0)
     bot.entity.position = pos(0.5, 61.8, 0.5) // the jump rises before the fire
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
     await sleep(250)
     await flush()
     assert.equal(bot._places, 1, 'fire-time read sees the risen body')
@@ -289,10 +295,12 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     await sleep(450) // past the +300 ceiling: chain dead, nothing issued
     assert.equal(bot._places, 0)
     assert.equal(ctx.recovery.st.timerArmed, false, 'dead chain yields')
-    bot.entity.position = pos(0.5, 61.8, 0.5) // the next rise (jump held)
-    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5) // landed (cm0: the re-arm seeds the low here)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.st.timerArmed, true, 'next jump tick re-arms')
+    bot.entity.position = pos(0.5, 61.9, 0.5) // the next rise (jump held)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
     await sleep(250)
     await flush()
     assert.equal(bot._places, 1, 'a later rise still issues')
@@ -318,11 +326,14 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     // records syncFail and the next tick fails honestly instead of
     // re-jumping into a 20 s no-apex stall (the body lands first, so the
     // guard would take a syncFail-less chain back to jump).
+    // cm0: armed grounded, risen by the fire.
     const bot = strictBot(new Set(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 61.8, 0.5)
-    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 61.8, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
     await sleep(250)
     assert.equal(bot._places, 0)
     bot.entity.position = pos(0.5, 61, 0.5) // landed before the next tick
@@ -387,13 +398,16 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     // Round-3 core-1/body-2: with scaffold held AND a stack in main
     // inventory, the apply must use the held one (instant) — a window
     // move would make it the slow path the +0.9 trigger did not budget.
+    // cm0: armed grounded, risen by the fire.
     const heldDirt = { name: 'dirt', count: 5 }
     const mainDirt = { name: 'dirt', count: 10 }
     const bot = strictBot(pitWorld(), [mainDirt], { held: heldDirt })
-    bot.entity.position = pos(0.5, 62.0, 0.5)
-    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
     await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush()
     assert.equal(bot._places, 1)
@@ -401,12 +415,15 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
   })
 
   it('fast path at t3 (+1.0): issues the placement', async () => {
+    // cm0: armed grounded, risen by the fire.
     const dirt = { name: 'dirt', count: 10 }
     const bot = strictBot(pitWorld(), [dirt], { held: dirt })
-    bot.entity.position = pos(0.5, 62.0, 0.5)
-    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
     await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush()
     assert.equal(bot._places, 1)
@@ -436,22 +453,27 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
   })
 
   it('rising sample at apex: issues the placement', async () => {
+    // cm0: armed grounded, risen by the fire.
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 62.05, 0.5)
-    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
     await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush() // equip runs first, the place lands a microtask later
     assert.equal(bot._places, 1)
   })
 
   it('missing velocity reads as rising (lenient mocks keep working)', async () => {
+    // cm0: armed grounded, risen by the fire.
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 62.05, 0.5)
+    bot.entity.position = pos(0.5, 61, 0.5)
     assert.equal(bot.entity.velocity, undefined)
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 62.05, 0.5)
     await sleep(250) // lzw: the +150 ms timer issues, not the tick
     await flush() // equip runs first, the place lands a microtask later
     assert.equal(bot._places, 1)
@@ -477,8 +499,13 @@ describe('pillar_up ravine climb e2e (idkcraft-17b)', () => {
       // between ticks: the +150 ms pillar timer fires on wall clock (lzw).
       const st = bot._tickerCtx.recovery && bot._tickerCtx.recovery.st
       const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+      const floorY = st && typeof st.startFloor === 'number' ? st.startFloor : 61
       if (bot.getControlState('jump') && bot.entity.position.y < capY) {
         bot.entity.position.y = Math.min(bot.entity.position.y + 0.5, capY)
+      } else if (bot.getControlState('jump')) {
+        // Apex passed: fall back, the held jump re-lifts next tick. A body
+        // parked at the cap is a hover (cm0: must not issue into it).
+        bot.entity.position.y = Math.max(floorY, bot.entity.position.y - 0.5)
       }
       const below = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
       if ((!below || below.boundingBox === 'empty') && !bot.getControlState('jump')) {
@@ -539,5 +566,136 @@ describe('recover digs equip the pickaxe (idkcraft-17b revmux 01 body-1)', () =>
     await flush()
     assert.deepEqual(bot._equips, [])
     assert.deepEqual(digs, [[0, 62, 0]])
+  })
+})
+
+describe('pillar_up timeout hardening (idkcraft-cm0)', () => {
+  const TIMEOUT = 'Event blockUpdate:(0, 61, 0) did not fire within timeout of 5000ms'
+
+  it('timeout with the block landed reads done, not failed (verify-before-fail)', async () => {
+    // Prod 2026-09-28: a 5 s server silence failed the primitive although a
+    // late success looks identical. Re-read the cell first.
+    const solids = pitWorld()
+    const bot = strictBot(solids, [{ name: 'dirt', count: 10 }])
+    bot.placeBlock = async (ref, face) => {
+      bot._places++
+      const d = ref.position.plus(face)
+      solids.add(key(d.x, d.y, d.z)) // success whose ack was lost
+      throw new Error(TIMEOUT)
+    }
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    const ctx = pillarCtx()
+    recover.run(bot, ctx)
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'landed block reads done')
+    assert.equal(bot._places, 1, 'no retry after a verified landing')
+  })
+
+  it('timeout on still-air retries with a fresh cycle instead of failing', async () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.placeBlock = async () => { bot._places++; throw new Error(TIMEOUT) }
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    const ctx = pillarCtx()
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(ctx.recovery.status, 'running', 'first silence retries, not fails')
+    assert.equal(ctx.recovery.st.retries, 1)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+    assert.equal(ctx.recovery.st.timerArmed, false)
+    assert.equal(ctx.recovery.st.startFloor, null, 'floor re-sampled after landing')
+    bot.entity.position = pos(0.5, 61, 0.5) // landed during the 5 s wait
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.timerArmed, true, 'next jump tick re-arms')
+    assert.equal(ctx.recovery.st.startFloor, 61)
+  })
+
+  it('third consecutive timeout exhausts the retry budget and fails', async () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.placeBlock = async () => { bot._places++; throw new Error(TIMEOUT) }
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    const ctx = pillarCtx()
+    for (let i = 0; i < 3; i++) {
+      bot.entity.position = pos(0.5, 61, 0.5) // landed during the wait
+      recover.run(bot, ctx) // jump tick: re-sample floor, re-arm
+      await flush()
+      ctx.recovery.st.phase = 'place' // tick-path issue per cycle
+      bot.entity.position = pos(0.5, 62.05, 0.5) // risen
+      recover.run(bot, ctx)
+      await flush()
+    }
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 3, 'initial issue plus two retries')
+    assert.equal(ctx.recovery.status, 'failed:place-error')
+    assert.equal(ctx.recovery.st.retries, 3)
+  })
+
+  it('fast revert fails at once with no retry (deterministic)', async () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }], { refusePlace: true })
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    const ctx = pillarCtx()
+    recover.run(bot, ctx)
+    await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:place-error')
+    assert.equal(bot._places, 1, 'a server no needs no second chance')
+    assert.ok(ctx.recovery.st.retries == null, 'no retry counted')
+  })
+
+  it('mid-air arm rising never issues into the inherited flight (liftoff gate)', async () => {
+    // The arm inherited flat's approach jump still flying: pre-fix the
+    // +150 ms fire issues into it and the apply lands after touchdown
+    // (self-intersection refusal). Post-fix the body lands first.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(450) // past the +300 ceiling: chain dies, nothing issued
+    await flush()
+    assert.equal(bot._places, 0, 'no issue into the inherited flight')
+    assert.equal(ctx.recovery.st.timerArmed, false, 'dead chain yields')
+    bot.entity.position = pos(0.5, 61, 0.5) // landed
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 61.9, 0.5) // the next rise (jump held)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1, 'a fresh rise after touchdown issues')
+  })
+
+  it('ground arm issues from +0.6 rise (boundary pin)', async () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 61.61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1)
+  })
+
+  it('place error line carries fire-phase evidence', async () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }], { refusePlace: true })
+    bot.entity.position = pos(0.5, 62.05, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    const ctx = pillarCtx()
+    const cap = captureLog()
+    try {
+      recover.run(bot, ctx)
+      await flush()
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'failed:place-error')
+      await recover.decide(bot, ctx, {}, null)
+    } finally {
+      cap.done()
+    }
+    const line = cap.lines.find((l) => l.includes('recover action=pillar_up') && l.includes('outcome=failed:place-error'))
+    assert.ok(line, `place-error logged, got: ${cap.lines.join(' | ')}`)
+    assert.ok(line.includes('err=Server_refused_to_place_dirt'), `reason attached, got: ${line}`)
+    assert.ok(line.includes('fire=') && line.includes('@62.05'), `fire phase attached, got: ${line}`)
   })
 })

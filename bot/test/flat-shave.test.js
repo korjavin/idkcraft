@@ -798,3 +798,106 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'cobblestone', 'foreign cobble kept')
   })
 })
+
+describe('shave pickup: drop following (cm0)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  // Scan, approach and dig one dirt bump; returns with h.pickup queued.
+  async function dugPickup(world, botOpts = {}) {
+    const world0 = world
+    world0.set(1, 64, 0, 'dirt')
+    const bot = mockBot(world0, { items: [], ...botOpts })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // shave: issue approach
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // arrived: dig flight
+    assert.ok(ctx.flat && ctx.flat.bumps[0].pickup, 'pickup queued after the dig')
+    return { bot, ctx }
+  }
+
+  it('pickup walks to the live drop, not the dig cell', async () => {
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    bot.entities = { 7: { id: 7, name: 'item', position: pos(4.2, 64, 2.3), isValid: true } }
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // pickup: issue GoalNear
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g.x, 4, 'walk targets the scattered drop')
+    assert.equal(g.z, 2, 'walk targets the scattered drop')
+    delete bot.entities[7] // vacuumed on the walk
+    for (let i = 0; i < 10 && ctx.flat; i++) {
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('pickup arrival with a live drop re-walks, then litters', async () => {
+    // The drop rolls mid-walk and never vacuums: the column is dug but its
+    // delta is contaminated — done with a litter log, never protected.
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    const items = bot.inventory.items()
+    items.find((i) => i.name === 'dirt').count -= 1 // missed vacuum: delta 0
+    bot.entities = { 7: { id: 7, name: 'item', position: pos(4.2, 64, 2.3), isValid: true } }
+    const goalsBefore = bot.calls.goals.length
+    for (let i = 0; i < 12 && ctx.flat; i++) {
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.calls.goals.length > goalsBefore + 1, 'arrival re-issues the walk')
+    assert.ok(cap.lines.some((l) => l.includes('flat litter 1,64,0')), cap.lines.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
+  })
+
+  it('stalled pickup litters the column instead of protecting it', async () => {
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    const items = bot.inventory.items()
+    items.find((i) => i.name === 'dirt').count -= 1 // missed vacuum: delta 0
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // pickup: issue walk
+    bot._moving = true // wedged: the walk never progresses
+    for (let i = 0; i < 14 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null, 'column still completes')
+    assert.ok(cap.lines.some((l) => l.includes('flat litter 1,64,0')), cap.lines.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
+  })
+
+  it('vacuumed-but-spent column completes (gross beats net)', async () => {
+    // Bridge scaffolds spend dirt while shaving: a column whose drops were
+    // vacuumed (gross > 0) but spent (net delta 0) is done, not protected.
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    const items = bot.inventory.items()
+    items.find((i) => i.name === 'dirt').count -= 1 // spent on a bridge: delta 0
+    bot._cm0got = (ctx.flat.bumps[0].gotBefore || 0) + 1 // ...but vacuumed first
+    for (let i = 0; i < 10 && ctx.flat; i++) {
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
+  })
+
+  it('collect hook counts only our own pickups', async () => {
+    const handlers = {}
+    const bot = { entity: { id: 5 }, on: (ev, fn) => { handlers[ev] = fn } }
+    flat.hookCollect(bot)
+    flat.hookCollect(bot) // second call is a no-op
+    assert.equal(typeof handlers.playerCollect, 'function')
+    handlers.playerCollect({ id: 5 }, { id: 9 }) // ours
+    handlers.playerCollect({ id: 6 }, { id: 10 }) // someone else's
+    handlers.playerCollect(null, { id: 11 }) // malformed
+    assert.equal(flat.gotCount(bot), 1)
+    assert.equal(flat.gotCount({}), 0, 'unhooked bot reads 0')
+  })
+})

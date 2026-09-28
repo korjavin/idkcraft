@@ -64,7 +64,12 @@ const DIG_TICKS = 300 // restock budget before resuming with what is on hand
 const DIG_STALLS = 10
 const DIG_STREAK = 3
 const PLACE_RANGE = 4 // GoalPlaceBlock range, like build.js
-const REACH_DIST = 5 // past this the approach goal is stale (build.js guard)
+const EYE_HEIGHT = 1.62 // survival eye height above the feet
+const EYE_REACH = 4.4 // server survival block reach (4.5) minus pose/float margin
+const PROT_GATE_R = 4 // shave skips bumps within this Chebyshev (x,z) of a refused cell (cm0)
+const PROT_GATE_N = 2 // refused cells near the bump before the gate fires: one is a sample (cm0)
+const DROP_SCAN_R = 5 // item-drop search radius around the dug cell for the pickup walk (cm0)
+const DROP_RETARGETS = 2 // re-walks while the targeted drop is still live on arrival (cm0)
 const MOVE_TOLERANCE = 0.5
 const DIRT_FIND_RADIUS = 48
 const DIRT_FIND_COUNT = 64
@@ -116,6 +121,11 @@ const DIG_ALLOWLIST = new Set([
 function isDiggable(name) {
   return typeof name === 'string' && DIG_ALLOWLIST.has(name)
 }
+
+// No-drop dig mats (cm0): phantom-unverifiable, excluded from the
+// inventory-delta check (snow layers, ice and packed ice drop nothing, so
+// a zero delta there proves nothing and must never flag a real dig).
+const NODROP_DIG = new Set(['snow', 'ice', 'packed_ice'])
 
 // Conservative gate: a dig target with any of these within one block is left
 // alone, so the job never eats into a house, a farm, a mine with torches or
@@ -197,6 +207,46 @@ function progressed(bp, last, grounded) {
   if (!last) return true
   if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
   return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
+}
+
+// Gross pickup counter (cm0): the phantom delta is NET — bridge scaffolds
+// spend dirt while shaving, so vacuumed drops can net to zero. The collect
+// packet counts GROSS vacuumed drops; hooked once per bot, read per column.
+function hookCollect(bot) {
+  try {
+    if (!bot || bot._cm0gotHooked || typeof bot.on !== 'function') return
+    bot._cm0gotHooked = true
+    if (typeof bot._cm0got !== 'number') bot._cm0got = 0
+    bot.on('playerCollect', (collector) => {
+      try {
+        if (collector && bot.entity && collector.id === bot.entity.id) bot._cm0got++
+      } catch (_) { /* counting best-effort */ }
+    })
+  } catch (_) { /* hook best-effort */ }
+}
+
+function gotCount(bot) {
+  try { return typeof bot._cm0got === 'number' ? bot._cm0got : 0 } catch (_) { return 0 }
+}
+
+// Nearest live item-drop entity within r of (x,y,z), or null. Drops pop
+// sideways off the dug cell, so the pickup walk follows the drop, not the
+// dig position (cm0: walking the dig cell misses scattered drops ~15%).
+function nearestDrop(bot, x, y, z, r) {
+  let best = null
+  let bestD = Infinity
+  let ents = []
+  try { ents = Object.values((bot && bot.entities) || {}) } catch (_) { return null }
+  for (const e of ents) {
+    if (!e || !e.position) continue
+    const nm = (e.name || '').toLowerCase()
+    if (nm !== 'item' && nm !== 'item_stack') continue
+    if (e.isValid === false) continue
+    const d = Math.hypot(e.position.x - x, e.position.y - y, e.position.z - z)
+    if (!(d <= r)) continue
+    if (d < bestD) { bestD = d; best = e }
+  }
+  return best
 }
 
 // One cell read: 'solid' | 'air' | 'liquid' | 'unloaded'.
@@ -442,6 +492,59 @@ const REF_DIRS = [
   [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0],
 ]
 
+// Verified stand (cm0): the approach goal was validated for the goal's own
+// faces from a hypothetical node, but the body places from wherever the
+// pathfinder actually stalled — possibly a partial-end with the clicked
+// face out of eye reach or behind a wall. Re-check the ACTUAL click from
+// the LIVE body position before every attempt: eyes within server reach of
+// the clicked face point, and the same ray the server traces (eyes along
+// the face-center aim) must hit the reference block. A missing raycast
+// (unit mocks) falls back to the reach gate only, so old harnesses keep
+// today's behavior.
+function facePoint(refPos, face) {
+  return new Vec3(refPos.x + 0.5 + face.x * 0.5, refPos.y + 0.5 + face.y * 0.5, refPos.z + 0.5 + face.z * 0.5)
+}
+
+function standVerified(bot, bp, ref, face) {
+  const eyes = new Vec3(bp.x, bp.y + EYE_HEIGHT, bp.z)
+  const to = facePoint(ref.position, face)
+  const dx = to.x - eyes.x
+  const dy = to.y - eyes.y
+  const dz = to.z - eyes.z
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (!(dist <= EYE_REACH)) return false
+  let hit = null
+  try {
+    if (!bot.world || typeof bot.world.raycast !== 'function') return true
+    const len = dist || 1
+    hit = bot.world.raycast(eyes, new Vec3(dx / len, dy / len, dz / len), EYE_REACH)
+  } catch (_) {
+    return true // unverifiable: reach gate only (lenient mocks)
+  }
+  if (!hit) return false // ref vanished (dug?) or ray unreadable: don't burn
+  try {
+    const hp = hit.position
+    const rp = ref.position
+    return !!hp && !!rp && hp.x === rp.x && hp.y === rp.y && hp.z === rp.z
+  } catch (_) {
+    return true
+  }
+}
+
+// Server said no (fast revert) vs server said nothing (5 s timeout): a
+// revert from a verified stand is deterministic (spawn protection, cm0), a
+// timeout may be transient (lag) and earns one retry. Anything else (equip
+// errors and other client-side failures) keeps the plain attempt counter.
+function isTimeoutErr(e) {
+  const m = e && typeof e.message === 'string' ? e.message : String(e)
+  return /did not fire within timeout/i.test(m)
+}
+
+function isRevertErr(e) {
+  const m = e && typeof e.message === 'string' ? e.message : String(e)
+  return /Server refused to place/i.test(m)
+}
+
 // The reference is a real Block, not a position: bot.placeBlock derefs
 // referenceBlock.position on the first line, so a bare Vec3 rejects every
 // placement (build.js live bug).
@@ -548,7 +651,10 @@ function startEpisode(cx, cz, r, yTop, by) {
     bumps: [],
     totalBumps: 0,
     shaved: 0,
-    skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0 },
+    skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0, protected: 0 },
+    protN: 0,
+    protChatted: false,
+    protCells: [], // refused-verified cells: the shave gate skips near these (cm0)
     abortWhy: null,
     parked: false,
     issuedKey: null,
@@ -591,6 +697,38 @@ function shiftBumpSkip(f, why) {
   f.bumps.shift()
   if (f.skip[why] != null) f.skip[why]++
   f.lastProgressTick = f.ticks
+}
+
+// Column-done with phantom verification (cm0): a column whose checkable
+// digs added nothing to the inventory was "shaved" as client ghosts (spawn
+// protection resolves digs without breaking). Stray pickups only inflate
+// the delta, so this errs toward done, never toward a false skip.
+function bumpDoneOrPhantom(bot, f, h) {
+  if (h && h.littered) {
+    // A drop was left as litter (stalled walk, rolled away): the column is
+    // dug but the delta is contaminated — done, never protection (cm0).
+    console.log(`flat litter ${h.x},${h.topY},${h.z} dug=${h.dugN || 0}`)
+    shiftBumpDone(f)
+    return
+  }
+  if (h && (h.dugN || 0) > 0 && h.denseBefore != null) {
+    let denseNow = h.denseBefore + 1
+    try { denseNow = countItems(bot, () => true) } catch (_) { /* unreadable: done */ }
+    let gotN = 0
+    try { gotN = gotCount(bot) - (h.gotBefore || 0) } catch (_) { gotN = 0 }
+    if (gotN > 0) {
+      // Gross vacuumed drops: real digs happened (ghosts drop nothing), so
+      // a flat NET delta is bridge spending, not protection (cm0).
+      shiftBumpDone(f)
+      return
+    }
+    if (denseNow <= h.denseBefore) {
+      skipProtected(bot, f, { x: h.x, y: h.topY, z: h.z })
+      shiftBumpSkip(f, 'protected')
+      return
+    }
+  }
+  shiftBumpDone(f)
 }
 
 function rotateBump(f) {
@@ -713,7 +851,29 @@ function shortErr(e) {
   return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
 }
 
+function skipProtected(bot, f, p) {
+  f.protN = (f.protN || 0) + 1
+  try { (f.protCells = f.protCells || []).push({ x: p.x, y: p.y, z: p.z }) } catch (_) { /* cells best-effort */ }
+  let from = '?'
+  try {
+    const bp = bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number') {
+      const fx = (n) => (Number.isInteger(n) ? n : n.toFixed(1))
+      from = `${fx(bp.x)},${fx(bp.y)},${fx(bp.z)}`
+    }
+  } catch (_) { /* from best-effort */ }
+  console.log(`flat protected ${p.x},${p.y},${p.z} from=${from}`)
+  if (!f.protChatted) {
+    f.protChatted = true
+    say(bot, "can't build here, looks like spawn protection — skipping blocked cells")
+  }
+}
+
 function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
+  const bp = bot.entity && bot.entity.position
+  const ax = bp && typeof bp.x === 'number' ? bp.x : null
+  const ay = ax === null ? null : bp.y
+  const az = ax === null ? null : bp.z
   ctx.placeInFlight = true
   ;(async () => {
     try {
@@ -727,8 +887,25 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
         shiftDone(f)
       }
     } catch (e) {
+      // A failure after the body moved (preemption) is stale, not evidence.
+      // A revert from a verified stand is deterministic (spawn protection,
+      // cm0): skip at once instead of burning all three attempts. A timeout
+      // may be transient (lag) and earns one retry.
+      let moved = true
+      try {
+        const np = bot.entity && bot.entity.position
+        if (ax !== null && np && typeof np.x === 'number') {
+          moved = Math.hypot(np.x - ax, np.y - ay, np.z - az) > 1
+        }
+      } catch (_) { /* unreadable: conservative, count the attempt */ }
       h.att++
-      if (h.att >= PLACE_ATTEMPTS) {
+      if (!moved && isRevertErr(e)) {
+        skipProtected(bot, f, p)
+        shiftSkip(f, 'protected')
+      } else if (!moved && isTimeoutErr(e) && h.att >= 2) {
+        skipProtected(bot, f, p)
+        shiftSkip(f, 'protected')
+      } else if (h.att >= PLACE_ATTEMPTS) {
         console.log(`flat refused-place ${p.x},${p.y},${p.z} att=${h.att} err=${shortErr(e)}`)
         shiftSkip(f, 'refused')
       }
@@ -741,6 +918,14 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
 function digFlight(bot, ctx, f, h, block) {
   ctx.digInFlight = true
   const at = { x: block.position.x, y: block.position.y, z: block.position.z }
+  // Phantom baseline (cm0): a dig under spawn protection resolves without
+  // breaking anything (client ghost-air, server intact). Checkable digs
+  // always drop at least one item, so the column-done check below verifies
+  // via the inventory delta instead of trusting the resolve.
+  if (!NODROP_DIG.has(block.name)) {
+    if (h.dugN == null) { h.dugN = 0; h.denseBefore = countItems(bot, () => true); h.gotBefore = gotCount(bot); hookCollect(bot) }
+    h.dugN++
+  }
   ;(async () => {
     try {
       // Stone by hand takes ~7.5 s and drops nothing; the harvest tool
@@ -750,6 +935,7 @@ function digFlight(bot, ctx, f, h, block) {
       if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
       await bot.dig(block)
       h.pickup = at // walk the drop into the inventory (gather pattern)
+      h.retarget = null
       f.lastProgressTick = f.ticks
     } catch (e) {
       h.att++
@@ -930,6 +1116,7 @@ function digTick(bot, ctx, f, bp) {
         return
       }
       ctx.digInFlight = true
+      d.dugHave = countFill(bot)
       ;(async () => {
         try { await bot.dig(block) } catch (_) { /* gone or interrupted: recount anyway */ }
         ctx.digInFlight = false
@@ -959,10 +1146,22 @@ function digTick(bot, ctx, f, bp) {
       return
     }
     // Reached or gave up getting there: the drop is picked up by proximity
-    // and the inventory count is the truth — move to the next dirt.
+    // and the inventory count is the truth — move to the next dirt. A dig
+    // that resolved without filling anything is a phantom (spawn protection
+    // resolves digs without breaking, cm0): count it like a stall so
+    // restock ends after a few instead of digging air for five minutes.
     d.pos = null
     d.phase = 'walk'
-    if (countFill(bot) > have) {
+    const dugHave = d.dugHave
+    d.dugHave = null
+    const now = countFill(bot)
+    if (dugHave != null && now > dugHave) {
+      f.lastProgressTick = f.ticks
+      d.streak = 0
+    } else if (dugHave != null) {
+      d.streak++
+      if (d.streak >= DIG_STREAK) endDig(bot, ctx, f, countFill(bot) > 0)
+    } else if (now > have) {
       f.lastProgressTick = f.ticks
       d.streak = 0
     }
@@ -1051,6 +1250,27 @@ function fillTick(bot, ctx, f, bp) {
     rotate(f)
     return
   }
+  if (Math.floor(bp.x) === cx && Math.floor(bp.z) === cz && Math.floor(bp.y) < cy) {
+    // Standing below our own cap cell (a 2+-deep hole we dropped into; the
+    // 1-deep head-in-cap case sidesteps above): capping from down here would
+    // entomb the body under its own fill — the support lands in the head
+    // cell and never places (cm0). Step out once (a body that can move must
+    // not sit still spinning the stuck detector), then rotate: a truly
+    // trapped body shows no displacement and the ticker backstop hands it
+    // to recover, while a free body walks out and approaches normally.
+    if (!h.f2step) {
+      h.f2step = true
+      sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-f2')
+      return
+    }
+    h.occ++
+    if (h.occ > OCC_DEFERS) {
+      shiftSkip(f, 'occupied')
+      return
+    }
+    rotate(f)
+    return
+  }
   const key = `flat:${cx},${cy},${cz}`
   if (key !== ctx.lastGoalKey) {
     let g = null
@@ -1099,19 +1319,22 @@ function fillTick(bot, ctx, f, bp) {
     }
     return
   }
-  // Arrived (or the walk never started): place — but only in reach. A
-  // preemption that carried the body away leaves a stale goal: attempting
-  // from out there burns refusals, so force a fresh approach instead
-  // (build.js guard), counted so a permanently far hole still terminates.
-  if (Math.hypot(bp.x - cx, bp.y - cy, bp.z - cz) > REACH_DIST) {
-    try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-    h.def++
-    if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
-    return
-  }
+  // Arrived (or the walk never started): place — but only from a
+  // verified stand (cm0). A preemption that carried the body away leaves a
+  // stale goal, and a partial-end the pathfinder settled for may face a
+  // wall: attempting from either burns refusals, so force a fresh approach
+  // instead (the old build.js feet-distance guard, now eye-based with a
+  // line-of-sight check on the actual click), counted so a permanently far
+  // hole still terminates.
   const p = new Vec3(cx, cy, cz)
   const ref = findRef(bot, p)
   if (ref) {
+    if (!standVerified(bot, bp, ref.ref, ref.face)) {
+      try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
+      h.def++
+      if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
+      return
+    }
     const item = findFillItem(bot)
     if (!item) {
       startDig(bot, ctx, f)
@@ -1152,6 +1375,12 @@ function fillTick(bot, ctx, f, bp) {
     h.def++
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
     else rotate(f)
+    return
+  }
+  if (!standVerified(bot, bp, sref.ref, sref.face)) {
+    try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
+    h.def++
+    if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
     return
   }
   const item = findFillItem(bot)
@@ -1237,19 +1466,28 @@ function shaveTick(bot, ctx, f, bp) {
   }
   const h = f.bumps[0]
   if (h.pickup) {
+    // Follow the live drop, not the dig cell: drops pop sideways, and a
+    // walk to the empty dig cell arrives clean while the drop sits two
+    // blocks away — a zero delta the phantom check reads as protection
+    // (cm0). No visible drop (ghost dig, already vacuumed) falls back to
+    // the dig cell.
+    let tgt = h.pickup
+    let dropId = null
+    const drop = nearestDrop(bot, h.pickup.x, h.pickup.y, h.pickup.z, DROP_SCAN_R)
+    if (drop) { tgt = drop.position; dropId = drop.id }
     // A drop 2+ above the feet needs a tower to reach — more scaffold than
     // the drop is worth. Skip the walk: the drop rides the column down as
     // the dig descends and gets vacuumed at the bottom (core-3).
-    if (h.pickup.y - Math.floor(bp.y) >= 2) {
+    if (tgt.y - Math.floor(bp.y) >= 2) {
       h.pickup = null
       h.stalls = 0
       f.lastProgressTick = f.ticks
       return
     }
-    const key = `flat-shave-pickup:${h.pickup.x},${h.pickup.y},${h.pickup.z}`
+    const key = `flat-shave-pickup:${Math.floor(tgt.x)},${Math.floor(tgt.y)},${Math.floor(tgt.z)}`
     if (key !== ctx.lastGoalKey) {
       try {
-        bot.pathfinder.setGoal(new goals.GoalNear(h.pickup.x, h.pickup.y, h.pickup.z, 1), false)
+        bot.pathfinder.setGoal(new goals.GoalNear(tgt.x, tgt.y, tgt.z, 1), false)
       } catch (_) { /* retry next tick */ return }
       ctx.lastGoalKey = key
       h.stalls = 0
@@ -1259,7 +1497,25 @@ function shaveTick(bot, ctx, f, bp) {
     let moving = false
     try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
     if (!moving) {
+      // Arrived with the targeted drop still live: it rolled mid-walk.
+      // Re-walk to its new spot; a drop that never vacuums is litter, not
+      // evidence of protection.
+      if (dropId !== null) {
+        let live = false
+        try { const e = bot.entities && bot.entities[dropId]; live = !!(e && e.isValid !== false) } catch (_) { live = false }
+        if (live) {
+          h.retarget = (h.retarget || 0) + 1
+          if (h.retarget <= DROP_RETARGETS) {
+            try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
+            h.stalls = 0
+            f.lastProgressTick = f.ticks
+            return
+          }
+          h.littered = true
+        }
+      }
       h.pickup = null
+      h.retarget = null
       h.stalls = 0
       f.lastProgressTick = f.ticks
       return
@@ -1269,7 +1525,9 @@ function shaveTick(bot, ctx, f, bp) {
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++h.stalls >= PICKUP_STALLS) {
-      h.pickup = null // the drop stays as litter; the column still advances
+      h.littered = true // the drop stays as litter; the column still advances
+      h.pickup = null
+      h.retarget = null
       h.stalls = 0
       f.lastProgressTick = f.ticks
     }
@@ -1293,7 +1551,7 @@ function shaveTick(bot, ctx, f, bp) {
   if (y < h.y) h.selfOcc = 0 // new level, fresh sidestep budget (core-2)
   h.y = y
   if (y <= f.level) {
-    shiftBumpDone(f)
+    bumpDoneOrPhantom(bot, f, h)
     return
   }
   const target = cellAt(bot, h.x, y, h.z)
@@ -1326,6 +1584,20 @@ function shaveTick(bot, ctx, f, bp) {
       return
     }
     h.gateY = y
+  }
+  // Protection gate (cm0): protection is area-coherent (a 33-wide square),
+  // so a bump near refused-verified cells is almost surely undiggable too
+  // — skip it without the approach walk, the dig and the pickup walk
+  // (verified shaving costs ~40 s/cell there, mostly stuck cycles). Fill
+  // holes keep their one verified attempt each (cheap, honest per-cell
+  // evidence); only the expensive shave verification gates. The gate needs
+  // a cluster (PROT_GATE_N): one refusal is a sample, and a lone
+  // mislabelled column must not cascade across the field.
+  const protNear = (f.protCells || []).filter((c) => Math.abs(c.x - h.x) <= PROT_GATE_R && Math.abs(c.z - h.z) <= PROT_GATE_R).length
+  if (protNear >= PROT_GATE_N) {
+    skipProtected(bot, f, { x: h.x, y, z: h.z })
+    shiftBumpSkip(f, 'protected')
+    return
   }
   const selfThreat = threatenedSelf(bot, h.x, y, h.z)
   const playerThreat = threatenedByPlayer(bot, h.x, y, h.z)
@@ -1495,3 +1767,7 @@ module.exports.startEpisode = startEpisode
 module.exports.progressChat = progressChat
 module.exports.FIRST_PROGRESS_MS = FIRST_PROGRESS_MS
 module.exports.FIRST_PROGRESS_N = FIRST_PROGRESS_N
+module.exports.EYE_HEIGHT = EYE_HEIGHT
+module.exports.EYE_REACH = EYE_REACH
+module.exports.hookCollect = hookCollect
+module.exports.gotCount = gotCount

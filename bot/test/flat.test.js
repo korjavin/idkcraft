@@ -831,7 +831,7 @@ describe('flat behaviour', () => {
 
   it('skips a hole the body can never get near', async () => {
     const world = makeWorld({})
-    world.set(4, 63, 4, 'air') // 5.7 blocks from spawn: past REACH_DIST
+    world.set(4, 63, 4, 'air') // 5.7 blocks from spawn: past eye reach
     const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
     for (let i = 0; i < 30 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
@@ -1256,5 +1256,233 @@ describe('flat behaviour', () => {
     assert.equal(ctx.flat, null)
     assert.ok(bot.chats.some((c) => c.includes('0 holes, 4 unloaded')), bot.chats.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 0 holes'), bot.chats.join('\n'))
+  })
+})
+
+describe('flat verified stands + protection (idkcraft-cm0)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  async function drive(bot, ctx, n) {
+    for (let i = 0; i < n && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      } else if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+  }
+
+  function started(world, botOpts = {}) {
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], ...botOpts })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    return { bot, ctx }
+  }
+
+  const REVERT = 'Server refused to place dirt at (1, 63, 0): the block is still air'
+  const TIMEOUT = 'Event blockUpdate:(1, 63, 0) did not fire within timeout of 5000ms'
+
+  // Prod 2026-09-28: 11 holes inside spawn protection burned 3 attempts
+  // each. A revert from a verified stand is deterministic — skip at once.
+  it('verified-stand revert skips as protected after ONE attempt', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => ({ position: { x: 1, y: 62, z: 0 } })
+    let places = 0
+    bot.placeBlock = async () => { places++; throw new Error(REVERT) }
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(places, 1, 'one attempt, not three')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('spawn protection')), bot.chats.join('\n'))
+    assert.ok(!cap.lines.some((l) => l.includes('flat refused-place')), cap.lines.join('\n'))
+    assert.ok(cap.lines.some((l) => l.includes('flat protected 1,63,0 from=')), cap.lines.join('\n'))
+  })
+
+  it('verified-stand timeout earns one retry, then protected', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => ({ position: { x: 1, y: 62, z: 0 } })
+    let places = 0
+    bot.placeBlock = async () => { places++; throw new Error(TIMEOUT) }
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(places, 2, 'one retry for a possibly-transient silence')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
+  })
+
+  it('failure after the body moved keeps the 3-strike path (stale, not evidence)', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => ({ position: { x: 1, y: 62, z: 0 } })
+    let places = 0
+    bot.placeBlock = async () => {
+      places++
+      bot.entity.position = pos(30, 64, 30) // preemption carried the body away
+      throw new Error(REVERT)
+    }
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(places, 3, 'stale failures still burn all three attempts')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 refused')), bot.chats.join('\n'))
+  })
+
+  it('wall between eyes and face: no attempt, hole defers to unreachable', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => ({ position: { x: 2, y: 64, z: 0 } }) // a wall, not the ref
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 0, 'never attempts through a wall')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 unreachable')), bot.chats.join('\n'))
+  })
+
+  it('out of eye reach: no attempt, hole defers to unreachable', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entity.position = pos(12, 64, 12) // far: eyes ~15 from the face
+    for (let i = 0; i < 15 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 0, 'never attempts out of reach')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 unreachable')), bot.chats.join('\n'))
+  })
+
+  it('own column below the cap: steps out once, never attempts, skips occupied', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(1, 62, 0, 'air') // 2-deep: feet at 61 stand below the cap
+    const { bot, ctx } = started(world)
+    bot.entity.position = pos(1.5, 61, 0.5)
+    for (let i = 0; i < 5 && ctx.flat && ctx.flat.phase === 'scan'; i++) { flat(bot, ctx, null, null); await settle() }
+    flat(bot, ctx, null, null)
+    await settle()
+    assert.ok(ctx.lastGoalKey.startsWith('flat-f2:'), `one step out first, got ${ctx.lastGoalKey}`)
+    for (let i = 0; i < 14 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 0, 'never caps from inside the pit')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
+  })
+
+  it('shave gate: bump near refused cells skips without digging', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = [{ x: 2, z: 0, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }]
+    f.totalBumps = 1
+    f.protCells = [{ x: 1, y: 63, z: 0 }, { x: 3, y: 63, z: 1 }] // a refused cluster nearby
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.digs.length, 0, 'no approach, no dig, no pickup walk')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
+  })
+
+  it('shave gate: lone refusal still verifies (no cascade)', async () => {
+    // One refused cell is a sample, not area evidence: a bump near a single
+    // refusal pays one verification instead of cascade-skipping (cm0).
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = [{ x: 2, z: 0, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }]
+    f.totalBumps = 1
+    f.protCells = [{ x: 1, y: 63, z: 0 }] // lone refusal 1 away: gate stays open
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.digs.length, 1, 'verified dig proceeds')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('shave gate: far bump still digs normally', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = [{ x: 2, z: 0, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }]
+    f.totalBumps = 1
+    f.protCells = [{ x: 30, y: 63, z: 30 }] // far away: gate stays open
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.digs.length, 1, 'verified dig proceeds')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('throwing raycast still attempts (lenient fallback)', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => { throw new Error('no ray in this client') }
+    await drive(bot, ctx, 10)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'reach gate alone still places')
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt')
+  })
+
+  it('dirt phantom dig: column skips as protected, not shaved', async () => {
+    // Under spawn protection digs resolve without breaking (client
+    // ghost-air, server intact): the inventory delta exposes it.
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt') // bump over the level-63 ground
+    const { bot, ctx } = started(world)
+    bot.dig = async (b) => {
+      bot.calls.digs.push(b.name)
+      world.set(b.position.x, b.position.y, b.position.z, 'air') // ghost only
+    }
+    const f = ctx.flat
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = [{ x: 2, z: 0, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }]
+    f.totalBumps = 1
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('real dirt dig: column completes as shaved (regression pin)', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = [{ x: 2, z: 0, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }]
+    f.totalBumps = 1
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
+  })
+
+  it('restock phantom streak ends the dig phase', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 21, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    bot.dig = async (b) => { bot.calls.digs.push(b.name) } // phantom: no drop
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 40 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null)
+    assert.ok(bot.chats.some((c) => c.includes('no fill blocks')), bot.chats.join('\n'))
   })
 })
