@@ -213,10 +213,10 @@ function climbableAt(bot, pos) {
 // bit-exactly — no delta means no change).
 const AXIS = [[-1, 0], [1, 0], [0, -1], [0, 1]]
 const nz = (v) => (v === 0 ? 0 : v) // -0 doubles as +0 except deepEqual and the wire
-function orderNudgeDirs(bot) {
+function orderNudgeDirs(bot, at = null) {
   const away = []
   try {
-    const p = posOf(bot)
+    const p = at || posOf(bot) // guides default to live; the tick passes the correction
     if (p) {
       const bb = bodyBox(p)
       for (const [dx, dz] of AXIS) {
@@ -234,8 +234,10 @@ function orderNudgeDirs(bot) {
 // level by level under the whole body footprint (a straddler's edge counts);
 // the highest landing across columns wins (the still-air fall path; drift
 // is the brain's business post-free). Landing tops come from shapes (a slab
-// top is 0.5 below the cell top). Strict: any lava/unknown at or above the
-// landing vetoes; any water saves. Returns null when survivable, else why.
+// top is 0.5 below the cell top). Each level decides as a whole: any lava
+// or unknown vetoes; a solid landing decides by its top (same-level water
+// ignored — the body may land dry beside it); a pure water level saves.
+// Returns null when survivable, else why.
 function belowVeto(bot, pos) {
   const bb = bodyBox(pos)
   const cols = []
@@ -247,12 +249,13 @@ function belowVeto(bot, pos) {
   const hp = bot && typeof bot.health === 'number' ? bot.health : 20 // real bots report; mocks fail open
   for (let y = Math.floor(bb.y0) - 1; (bb.y0 - (y + 1)) <= BELOW_SCAN_MAX; y--) {
     let top = -Infinity
+    let water = false
     for (const [cx, cz] of cols) {
       const b = cellAt(bot, cx, y, cz)
       if (!b) return 'unknown-below'
       const n = blockName(b)
       if (n.includes('lava')) return 'lava-below'
-      if (n.includes('water')) return null // any water breaks any fall
+      if (n.includes('water')) { water = true; continue } // decided with the level, never alone
       if (CLIMBABLES.has(n)) continue
       const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
       for (const s of rel) {
@@ -263,13 +266,16 @@ function belowVeto(bot, pos) {
       const dmg = Math.max(0, Math.floor((bb.y0 - top) - 3)) // MC: floor(fall - 3)
       return dmg >= hp ? 'lethal-below' : null
     }
+    if (water) return null // pure water level: the fall ends wet
   }
   return 'lethal-below' // nothing to land on: void or death-certain
 }
 
 // Full eligibility, checked at detection AND before every retry (stable
-// gates only on retry — see below). Returns null when the watchdog may
-// act, else the veto reason. The flag sample is NOT a verdict (every
+// gates only on retry — see below). pos is the server correction the nudge
+// would rebase onto, so the checked step is the sent step. Returns null
+// when the watchdog may act, else the veto reason. The flag sample is NOT
+// a verdict (every
 // teleport falsifies onGround until the next physics tick): proven rest
 // vetoes at detection, a down flag proceeds — re-pin locks read down and
 // need the cure; grounded-press episodes are bounded (a live storm re-verifies
@@ -285,7 +291,7 @@ function eligible(bot, pos, forRetry = false) {
   if (liquidAt(bot, pos, 'lava')) return 'lava'
   if (bot.entity.vehicle != null) return 'mounted'
   if (climbableAt(bot, pos)) return 'climb'
-  if (orderNudgeDirs(bot).length === 0) return 'noface'
+  if (orderNudgeDirs(bot, pos).length === 0) return 'noface'
   return belowVeto(bot, pos)
 }
 
@@ -364,11 +370,16 @@ function unpinTick(bot, ctx, now = Date.now()) {
   }
 
   const inEpisode = !!st.anchor
+  // All geometry runs at the correction, not live prediction: the checked
+  // step must be the sent step (R3 minor). Live pos stays for motion only
+  // (moved-gate, re-arm, verify displacement).
+  const base = freshBase(st, now)
   if (!inEpisode) {
     if (st.teleports.length < STORM_MIN_TPS) return st.teleports.length > 0 ? 'watching' : 'idle'
     const spread = stormSpread(st)
     if (spread === null || spread >= STORM_MAX_DISP) return 'watching'
-    if (eligible(bot, pos) !== null) return 'watching'
+    if (!base) return 'watching' // storm-proven targets exist; belt-and-braces
+    if (eligible(bot, base) !== null) return 'watching'
     if (st.stoodDown) return 'watching'
     const rapidWins = (st.wins || []).filter((w) => dist3(pos, w) < REARM_DIST && now - w.t < PRESS_WINDOW_MS).length
     if (rapidWins >= PRESS_MAX_WINS) {
@@ -387,12 +398,13 @@ function unpinTick(bot, ctx, now = Date.now()) {
   if (st.anchor && dist3(pos, { x: st.anchor.x, y: st.anchor.y, z: st.anchor.z }) >= STORM_MAX_DISP) {
     return drop(ctx, 'moved', pos)
   }
+  if (!base) return drop(ctx, 'no-target', pos) // corrections gone quiet/blank: never send blind
   // Re-gate every retry (conditions change mid-episode: splashes, mounts,
   // climbs, faces gone, landing turned lethal). Each drop condition persists
   // into a detection veto — no churn.
-  const veto = eligible(bot, pos, true)
+  const veto = eligible(bot, base, true)
   if (veto !== null) return drop(ctx, veto, pos)
-  const order = orderNudgeDirs(bot)
+  const order = orderNudgeDirs(bot, base)
   const tried = new Set(st.tries.map((tr) => `${tr.dx},${tr.dz}`))
   const dir = order.find(([x, z]) => !tried.has(`${x},${z}`))
   if (!dir) {
@@ -403,8 +415,6 @@ function unpinTick(bot, ctx, now = Date.now()) {
     console.log(`unpin stand-down exhausted anchor=${a.x.toFixed(1)},${a.y.toFixed(1)},${a.z.toFixed(1)}`)
     return 'stood-down'
   }
-  const base = freshBase(st, now)
-  if (!base) return drop(ctx, 'no-target', pos) // corrections gone quiet/blank: never send blind
   if (sendTry(ctx, dir, base)) {
     st.tries.push({ dx: dir[0], dz: dir[1], t: now, from: { ...pos }, verdict: null })
     console.log(`unpin nudge dx=${dir[0].toFixed(2)} dz=${dir[1].toFixed(2)} try=${st.tries.length}`)

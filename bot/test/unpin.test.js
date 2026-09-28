@@ -535,6 +535,66 @@ describe('unpin round-2 probes (F3/F4/F5)', () => {
     assert.equal(sent.length, 0)
   })
 
+  it('footprint below (R3 major): same-level water must not blind a lethal landing', () => {
+    const bot = {
+      entity: { position: pos(1.0, 70, 0.5), onGround: false }, // straddles cols 0-1
+      health: 1,
+      blockAt: (p) => {
+        if (p.x === 1 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.3, 0, 0, 1, 1, 1]] } // contact
+        if (p.x === 0 && p.y === 65 && p.z === 0) return { name: 'water', boundingBox: 'empty' } // same level, earlier column
+        if (p.x === 1 && p.y === 65 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // top 66: fall 4, dmg 1
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 1.0, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching') // lethal solid decides, not the water
+    assert.equal(sent.length, 0)
+  })
+
+  it('footprint below (R3 major): same-level water must not blind lava', () => {
+    const bot = {
+      entity: { position: pos(1.0, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 1 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.3, 0, 0, 1, 1, 1]] } // contact
+        if (p.x === 0 && p.y === 65 && p.z === 0) return { name: 'water', boundingBox: 'empty' } // earlier column
+        if (p.x === 1 && p.y === 65 && p.z === 0) return { name: 'lava', boundingBox: 'empty' } // later column: veto
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 1.0, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
+  it('geometry runs at the correction (R3 minor): live off-face still fires', () => {
+    const bot = spotABot()
+    bot.entity.position = pos(-37.25, 65.2, -212.6) // live 0.05 off the face: no live contact
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10) // base at PIN: touching
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    assert.equal(sent.length, 1)
+    assert.deepEqual([sent[0].dx, sent[0].dz], [-0.01, 0])
+  })
+
+  it('fall measured from the server (R3 minor): live-allow + base-lethal vetoes', () => {
+    const bot = {
+      entity: { position: pos(0.5, 66.55, 0.5), onGround: false }, // live 0.05 under base
+      health: 1,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 66 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.8, 0, 0, 1, 1, 1]] } // contact
+        if (p.x === 0 && p.y === 62 && p.z === 0) return { name: 'stone_slab', boundingBox: 'block', shapes: [[0, 0, 0, 1, 0.6, 1]] } // top 62.6
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.5, y: 66.65, z: 0.5 }) // base fall 4.05: dmg 1 >= hp 1
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching') // live fall 3.95 would allow
+    assert.equal(sent.length, 0)
+  })
+
   it('footprint below (F3): slab top sets the fall, not the cell top', () => {
     const bot = {
       entity: { position: pos(0.5, 66.6, 0.5), onGround: false },
