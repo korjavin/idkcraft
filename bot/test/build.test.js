@@ -6,6 +6,8 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
+const Vec3 = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
 const { createTicker, handleChat } = require('../src/index')
 const goal = require('../src/goal')
 const build = require('../src/behaviours/build')
@@ -136,13 +138,18 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.equal(roof.length, 16)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
   })
-  it('v2 lays 94 cells: table, 21+door+21, 42 roof, 8 partition', () => {
-    assert.equal(BLUEPRINT_V2.length, 94)
+  it('v2 lays 99 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition', () => {
+    assert.equal(BLUEPRINT_V2.length, 99)
     assert.equal(PLANK_COUNT_V2, 92)
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
+    const floor = BLUEPRINT_V2.slice(1, 6)
+    assert.deepEqual(floor.map((c) => [c.dx, c.dy, c.dz, c.kind]), [
+      [1, -1, 4, 'fill'], [2, -1, 4, 'fill'], [4, -1, 4, 'fill'], [5, -1, 4, 'fill'],
+      [3, -1, 0, 'fill'],
+    ])
     const doorIdx = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
     assert.deepEqual(BLUEPRINT_V2[doorIdx], { dx: 3, dy: 0, dz: 0, kind: 'door' })
-    const lower = BLUEPRINT_V2.slice(1, doorIdx)
+    const lower = BLUEPRINT_V2.slice(6, doorIdx)
     assert.equal(lower.length, 21)
     assert.ok(lower.every((c) => c.kind === 'planks' && c.dy === 0))
     const upper = BLUEPRINT_V2.slice(doorIdx + 1, doorIdx + 22)
@@ -250,7 +257,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 0/94'))
+    assert.ok(bot.chats.some((m) => m === 'building 5/99')) // the dirt floor reads done from the start
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)
@@ -729,7 +736,7 @@ describe('cww roof approach must not demolish its own wall', () => {
     assert.ok(!breakVetoed(mov, 'dirt', 3, st.x, st.y, st.z), 'dirt still diggable')
   })
 
-  it('roof completes with walls standing: 52/94 never flaps back', async () => {
+  it('roof completes with walls standing: 57/99 never flaps back', async () => {
     // Prod state (cww): walls+door+table stand, the bot is outside after the
     // wall ring, the first roof cell approach used to eat a wall corner and
     // the rebuild took priority every other tick (23/40<->24/40 for 10+ min).
@@ -949,5 +956,163 @@ describe('build counting and guard edges (idkcraft-l71)', () => {
     build(bot, ctx, null, null)
     assert.equal(ctx.home, null)
     assert.deepEqual(ctx.buildSkip, [])
+  })
+})
+
+describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
+  let origLog
+  let lines
+  beforeEach(() => { origLog = console.log; lines = []; console.log = (l) => { lines.push(String(l)) } })
+  afterEach(() => { console.log = origLog })
+
+  // Prod 2026-09-28: approach GoalPlaceBlock says arrived, the feet-to-corner
+  // reach check says 'far' and resets — setGoal into an already-reached goal
+  // forever, 'building 2/99' every 10 s. The stand below (5 under the cell,
+  // a slope/hole) reproduces the metric split against the REAL goal class.
+  it('goal-reached stand places within 5 ticks instead of re-approaching', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const p = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // table cell
+    // Fake pathfinder world: solid ground under the cell, clear sight line.
+    const below = new Vec3(p.x, p.y - 1, p.z)
+    const fakeWorld = {
+      getBlock: (ref) => {
+        try {
+          if (ref && ref.x === below.x && ref.y === below.y && ref.z === below.z) {
+            return { shapes: [[0, 0, 0, 1, 1, 1]] } // full cube
+          }
+        } catch (_) { /* no block */ }
+        return null
+      },
+      raycast: () => ({ position: new Vec3(below.x, below.y, below.z), face: 1 }),
+    }
+    const realGoal = new goals.GoalPlaceBlock(new Vec3(p.x, p.y, p.z), fakeWorld, { range: build.PLACE_RANGE })
+    const stand = { x: p.x + 0.5, y: p.y - 5, z: p.z + 0.5 }
+    // Premise: the goal says arrived, the old feet-to-corner check says far.
+    assert.equal(realGoal.isEnd(new Vec3(Math.floor(stand.x), Math.floor(stand.y), Math.floor(stand.z))), true)
+    assert.ok(Math.hypot(stand.x - p.x, stand.y - p.y, stand.z - p.z) > 5, 'old metric reads far')
+    bot.entity.position = pos(stand.x, stand.y, stand.z)
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let t = 0; t < 5 && bot.calls.places.length === 0 && ctx.buildSkip.length === 0; t++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    assert.ok(bot.calls.places.length === 1 || ctx.buildSkip.length === 1, 'places or skips within 5 ticks, not an endless setGoal loop')
+    assert.ok(bot.calls.goals.length <= 2, `no repeated re-approach (setGoal x${bot.calls.goals.length})`)
+  })
+
+  it('a genuinely far body skips the cell after 3 counted resets', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    // entity stays at spawn (0,65,0): ~11 head-to-centre from the table cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let t = 0; t < 7 && ctx.buildSkip.length === 0; t++) build(bot, ctx, null, null)
+    assert.equal(ctx.buildSkip.length, 1)
+    assert.equal(bot.calls.places.length, 0)
+    const skips = lines.filter((l) => l.startsWith('build skip') && l.includes('unreachable'))
+    assert.equal(skips.length, 1)
+  })
+
+  // Revmux 01 major: a long walk-in crosses far-idle ticks between A*
+  // timeout segments — each stop nearer than the last forgives the streak,
+  // so an approaching body never skips, then places on arrival.
+  it('a walk-in that keeps getting closer is forgiven, then places', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const p = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // table cell
+    const dist = (fx) => Math.hypot(fx - (p.x + 0.5), (64 + 1.6) - (p.y + 0.5), 1.5 - (p.z + 0.5))
+    const legs = [-8.5, -3.4, 1.56, 6.01] // head-to-centre ≈ 20, 15, 10, 5.6
+    for (let i = 1; i < legs.length; i++) {
+      assert.ok(dist(legs[i]) < dist(legs[i - 1]) - 1, 'each leg shortens by >1')
+    }
+    assert.ok(dist(legs[3]) > build.PLACE_REACH, 'last leg still reads far')
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    legs.forEach((fx, i) => {
+      bot.entity.position = pos(fx, 64, 1.5)
+      build(bot, ctx, null, null) // (re)approach
+      build(bot, ctx, null, null) // far-idle tick at the nearer stand
+      assert.equal(ctx.buildFarFails, i === 0 ? 1 : 0, `leg ${i} at ${fx}`)
+    })
+    assert.deepEqual(ctx.buildSkip, [])
+    bot.entity.position = pos(9, 64, 1.5) // in reach: the walk ends
+    build(bot, ctx, null, null)
+    build(bot, ctx, null, null)
+    await settle()
+    assert.equal(bot.calls.places.length, 1)
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  // Revmux 01 major: far resets run on their own streak — two refusals
+  // plus one preemption resume must not combine into a skip.
+  it('refusals and a resume reset do not combine into a skip', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }], failPlace: true })
+    bot.entity.position = pos(9, 64, 1.5) // in reach of the table cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // flight 1: refusal 1
+    await settle()
+    build(bot, ctx, null, null) // flight 2: refusal 2
+    await settle()
+    assert.equal(ctx.buildFails, 2)
+    bot.entity.position = pos(-8.5, 64, 1.5) // preemption carries the body far
+    build(bot, ctx, null, null) // resume reset: far streak 1, refusals untouched
+    assert.equal(ctx.buildFails, 2)
+    assert.equal(ctx.buildFarFails, 1)
+    assert.deepEqual(ctx.buildSkip, [])
+    bot.entity.position = pos(9, 64, 1.5) // walked back; the blockage cleared
+    bot.placeBlock = async (ref, face) => {
+      bot.calls.places.push([ref, face])
+      const rp = (ref && ref.position) || ref
+      world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+    }
+    build(bot, ctx, null, null) // re-approach
+    build(bot, ctx, null, null) // flight 3: lands
+    await settle()
+    assert.equal(bot.calls.places.length, 3, 'two refused attempts + the landing')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  // Revmux 02 minor: reach proven clears the far streak — repeated
+  // preemptions with returns in between never accumulate into a skip.
+  it('repeated preemptions with returns do not accumulate far strikes', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }], failPlace: true })
+    let moving = false
+    bot.pathfinder.isMoving = () => moving
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    bot.entity.position = pos(-8.5, 64, 1.5)
+    build(bot, ctx, null, null) // approach
+    for (let e = 0; e < 3; e++) {
+      moving = false
+      bot.entity.position = pos(-8.5, 64, 1.5)
+      build(bot, ctx, null, null) // far-idle: fresh streak 1, never 2 or 3
+      assert.equal(ctx.buildFarFails, 1, `episode ${e}`)
+      assert.deepEqual(ctx.buildSkip, [])
+      bot.entity.position = pos(9, 64, 1.5)
+      moving = true
+      build(bot, ctx, null, null) // walking back: setGoal leg, no eval
+      build(bot, ctx, null, null) // still walking: no eval
+      moving = false
+      build(bot, ctx, null, null) // idle in reach: refusal, streak cleared
+      await settle()
+      assert.equal(ctx.buildFarFails, 0, `cleared episode ${e}`)
+    }
+    // Three genuine refusals still skip — but as refused, not unreachable.
+    assert.equal(ctx.buildSkip.length, 1)
+    assert.ok(lines.some((l) => l.startsWith('build skip') && l.includes('after 3 refusals')))
+    assert.ok(!lines.some((l) => l.includes('unreachable')))
+  })
+
+  // Revmux 02 minor: a fresh home starts the far streak fresh.
+  it('founding a home resets the far streak index', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const ctx = { buildFarIdx: 0, buildFarFails: 2, buildFarDist: 8 } // stale, home gone
+    build(bot, ctx, null, null)
+    assert.ok(ctx.home && ctx.home.site, 'home founded from spawn')
+    assert.equal(ctx.buildFarIdx, -1)
   })
 })

@@ -5,6 +5,7 @@ const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveF
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
+const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
@@ -24,17 +25,20 @@ const woolMod = require('./wool')
 //
 // Owner direction: no branching rescue logic. Failure points refuse with a
 // message (the ef3/rw4.6 stuck menu owns the choices); the FSM reserve is a
-// plain refusal. Bring explicitly raises NO stuck facts: a stall refuses and
-// ends the order instead of starting an episode (unlike follow/roam/lead,
-// whose detectors feed the menu, and gather, which reports at its final).
-// The ticker place_error/no-displacement backstops still catch a bring that
-// loops without refusing, and release() resumes ctx.bring untouched.
+// plain refusal. Bring raises exactly one stuck fact: a below-feet trap
+// denial in the dig phase (atl.17 — the stance is a property of the place,
+// re-finding the same nearest block never changes it, so the menu owns the
+// sidestep). Every other stall refuses and ends the order instead of
+// starting an episode (unlike follow/roam/lead, whose detectors feed the
+// menu, and gather, which reports at its final). The ticker
+// place_error/no-displacement backstops still catch a bring that loops
+// without refusing, and release() resumes ctx.bring untouched.
 const FIND_RADIUS = 48
 const WANT_ORE = 3
 const WANT_LOGS = 4
 const WANT_FOOD = 3
 const WANT_MAX = 16
-const WALK_STALL_TICKS = 10 // stationary ticks before refusing an unreachable target
+const WALK_STALL_TICKS = 10 // stationary ticks before skipping an unreachable target
 const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
   // far reading is often a recovering pathfinder, not an unreachable chest)
 const MOVE_TOLERANCE = 0.5
@@ -157,13 +161,27 @@ function animalDist(bp, epos) {
   } catch (_) { return null }
 }
 
+// Same-block test (8gc): the pickup counts only once the body stands in
+// the death-spot block — the GoalBlock arrival cell (the pathfinder
+// floors both sides). A 3D sphere would count drops a block below from
+// the rim (revmux 01 core-1): the server picks up ±1 across but only
+// ~0.5 down.
+function sameCell(bp, dp) {
+  try {
+    return Math.floor(bp.x) === Math.floor(dp.x) &&
+      Math.floor(bp.y) === Math.floor(dp.y) &&
+      Math.floor(bp.z) === Math.floor(dp.z)
+  } catch (_) { return false }
+}
+
 // Nearest passive animal within 48; when drop is set (second+ kill of one
 // order) only animals dropping it, so one order tosses one food kind.
 // opts (did.3 wool) narrows the hunt: { prey, skipSheared, color,
-// skipIds }. Without opts the food shape is byte-identical (forage.js
-// relies on it). A color filter is strict — it only ever carries an
-// explicitly ordered color, which is a promise (bare families pass none
-// and hunt any sheep).
+// skipIds, skipColors }. Without opts the food shape is byte-identical
+// (forage.js relies on it). A color filter is strict — it only ever
+// carries an explicitly ordered color, which is a promise (bare families
+// pass none and hunt any sheep). skipIds (8gc stall skips) applies to
+// every prey kind, sheep filters only to sheep.
 function findAnimal(bot, drop, opts) {
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return null
@@ -174,10 +192,9 @@ function findAnimal(bot, drop, opts) {
   for (const e of Object.values(bot.entities || {})) {
     if (!e || !e.position || e.isValid === false) continue
     if (!prey.has(e.name)) continue
-    if (!o) {
-      if (drop && PREY_DROPS[e.name] !== drop) continue
-    } else if (e.name === 'sheep') {
-      if (o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
+    if (drop && PREY_DROPS[e.name] !== drop) continue
+    if (o && o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
+    if (o && e.name === 'sheep') {
       const skipColors = o.skipColors && typeof o.skipColors.has === 'function' && o.skipColors.size ? o.skipColors : null
       if (o.skipSheared || o.color || skipColors) {
         const w = woolMod.sheepWool(bot, e)
@@ -201,6 +218,19 @@ function entityById(bot, id) {
     if (e && e.id === id && e.isValid !== false && e.position) return e
   }
   return null
+}
+
+// Union of the wool id skips (8gc): shorn sheep plus stall-struck ones.
+// Either side alone returns as-is; the union allocates only while a hunt
+// has struck out on an animal it cannot reach.
+function preySkipIds(o) {
+  const a = o.shearedIds
+  const b = o.unreachIds
+  const na = !a || typeof a.size !== 'number' || a.size === 0
+  const nb = !b || typeof b.size !== 'number' || b.size === 0
+  if (na) return nb ? null : b
+  if (nb) return a
+  return new Set([...a, ...b])
 }
 
 // Fence fact (n7k): log only — whether the prey stands near player fences
@@ -410,16 +440,17 @@ function walkSearch(bot, ctx, o) {
 async function findFood(bot, ctx, o) {
   const wool = (o.kind || 'block') === 'wool'
   const color = wool ? (o.color || null) : null
+  const skip = wool ? preySkipIds(o) : (o.unreachIds && o.unreachIds.size ? o.unreachIds : null)
   let res = wool
-    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds, skipColors: o.deadColors })
-    : findAnimal(bot, o.drop || null)
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: skip, skipColors: o.deadColors })
+    : findAnimal(bot, o.drop || null, skip ? { skipIds: skip } : undefined)
   if (!res && wool && o.lockColor && o.color) {
     // The provisional lock stranded (did.4 rig: one light_gray in a brown
     // flock) — but only release onto sheep actually present (revmux 03
     // core-1): with none in range at all the flock stands a leg away, so
     // the lock stays and the legs relocate. Releasing there would burn
     // the pack colour for the whole order.
-    const any = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: o.shearedIds, skipColors: o.deadColors })
+    const any = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: skip, skipColors: o.deadColors })
     if (any) {
       if (!o.deadColors) o.deadColors = new Set()
       o.deadColors.add(o.color)
@@ -429,6 +460,13 @@ async function findFood(bot, ctx, o) {
       o.have = 0
       res = any
     }
+  }
+  if (!res && o.animal) {
+    // A stalled chase re-found nothing (8gc): the order ends on the
+    // chase it could not finish. Only the stall path reaches find with
+    // o.animal still set — every other re-find nulls it first.
+    refuse(bot, ctx, `could not reach ${o.animal.name}`)
+    return
   }
   if (!res) {
     // Legs move areas (revmux 03 core-1): dead colours are a per-area
@@ -475,7 +513,16 @@ function walkFood(bot, ctx, o, bp, grounded) {
     o.stalls = 0
     o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
   } else if (++o.stalls >= WALK_STALL_TICKS) {
-    refuse(bot, ctx, `could not reach ${o.animal.name}`)
+    // The chase cannot close (pen, water, Y-gap under a satisfied goal):
+    // strike this animal and re-find while candidates remain (8gc) —
+    // refusing with sheep nearby ended the did.4 rig run. The animal
+    // stays on o (not nulled) so an empty re-find refuses with the
+    // chase it could not finish, not an empty-field line.
+    if (!o.unreachIds) o.unreachIds = new Set()
+    if (o.animal) o.unreachIds.add(o.animal.id)
+    o.stalls = 0
+    o.lastBotPos = null
+    o.phase = 'find'
   }
 }
 
@@ -530,14 +577,16 @@ function pickupFood(bot, ctx, o, bp, grounded) {
   if (!dp) { o.animal = null; o.phase = 'find'; return }
   const key = `bring-food-pickup:${Math.round(dp.x)},${Math.round(dp.y)},${Math.round(dp.z)}`
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(dp.x, dp.y, dp.z, 1), false)
+    // GoalBlock, not GoalNear (8gc): Near(1) stops satisfied at the node
+    // boundary, up to ~2 from the drops, and the old d<=2 gate then
+    // counted a pack the bot never walked onto — wool stayed behind.
+    bot.pathfinder.setGoal(new goals.GoalBlock(dp.x, dp.y, dp.z), false)
     ctx.lastGoalKey = key
     o.stalls = 0
     o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
     return
   }
-  const d = animalDist(bp, dp)
-  if (d === null || d > 2) {
+  if (!sameCell(bp, dp)) {
     if (progressed(bp, o.lastBotPos, grounded)) {
       o.stalls = 0
       o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -907,6 +956,17 @@ async function bring(bot, ctx, target, state) {
           ? `only got ${o.have} ${o.drop} \u2014 could not reach ${o.block} safely`
           : `could not reach ${o.block} safely`)
         return
+      }
+      if (bDeny === 'below-feet') {
+        // atl.17: below-feet is a property of the PLACE — find re-picks the
+        // same nearest block and the stance never changes, so the dig
+        // refuses 3 times with the bot standing still (prod 2026-09-28).
+        // Raise the stuck fact and let the recover menu change the stance
+        // (sidestep); release() resumes ctx.bring untouched, find re-picks
+        // the same block from the new stance, and the dig passes. One
+        // episode per strike at most (setStuck latches while one runs);
+        // denyStrikes stays the ceiling.
+        try { recover.setStuck(ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }
       o.pos = null
       o.phase = 'find'

@@ -33,12 +33,12 @@ function goalBot({ items = [], timeOfDay = 6000, at = pos(0, 64, 0), spawn = pos
 describe('goal constants and menu shape', () => {
   it('house budget constants', () => {
     assert.equal(NEED_LOGS, 14)
-    assert.equal(NEED_PLANKS, 102) // v2: 92 walls+roof+partition + table 4 + door 6
+    assert.equal(NEED_PLANKS, 107) // v2: 92 walls+roof+partition + 5 floor + table 4 + door 6
     assert.equal(NEED_PLANKS_V1, 48) // adopted v1 huts keep the old budget
-    assert.equal(needPlanks(null), 102) // no home: a new site is founded v2
+    assert.equal(needPlanks(null), 107) // no home: a new site is founded v2
     assert.equal(needPlanks({ site: pos(1, 2, 3) }), 48) // unmarked home: a pre-patch v1
     assert.equal(needPlanks({ site: pos(1, 2, 3), v: 1 }), 48)
-    assert.equal(needPlanks({ site: pos(1, 2, 3), v: 2 }), 102)
+    assert.equal(needPlanks({ site: pos(1, 2, 3), v: 2 }), 107)
   })
 
   it('menu has all thirteen steps with feasible and chat functions', () => {
@@ -98,7 +98,7 @@ describe('goalFacts', () => {
 
   it('goalText is the canonical facts line', () => {
     assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 102, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 107, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
     assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
     // Version-aware plank bucket (revmux body-2): a v1-sized kit reads
     // 'enough' on a v1 home (so laya still matches build there) and 'few'
@@ -128,7 +128,7 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), false)
     // Sufficient material but no site: build defaults the site to spawn
     // (bead .4 batch gate); the owner moves it with 'build here'.
-    const ready = { ...base, logs: 0, planks: 104, table: 1, door: 1, home: 'none' }
+    const ready = { ...base, logs: 0, planks: 108, table: 1, door: 1, home: 'none' }
     assert.equal(F('gather', ready), false)
     assert.equal(F('craft', ready), false)
     assert.equal(F('build', ready, goalBot(), {}), true)
@@ -247,7 +247,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     // all refuse, explore stays gated, rest fills the gap.
     const bot = goalBot({
       // Geared (atl.6): a tool-less kit with a table would rearm first.
-      items: [{ name: 'oak_planks', count: 104 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
+      items: [{ name: 'oak_planks', count: 108 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
         { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }],
       spawn: null,
     })
@@ -308,22 +308,24 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     if (Array.isArray(extra)) items.push(...extra)
     return goalBot({ items, at: at || pos(0, 64, 0) })
   }
-  it('failed gather is infeasible while the log count stands, decide rests', async () => {
-    // Bead-literal: no house yet, so explore is gated too — rest, not gather.
+  it('failed gather is infeasible while the log count stands, alone day explores', async () => {
+    // gyw: gather still holds (atl.4), but the stranded hard state opens
+    // pre-build explore on an alone day — the menu moves instead of idling.
+    // Night and company still rest (see gather-relocate.test.js).
     const bot = logsBot(9)
     const ctx = { home: { site: pos(10, 64, 10) }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
     const facts = goalFacts(bot, ctx)
     assert.equal(facts.logs, 9)
     assert.equal(MENU.gather.feasible(facts, bot, ctx), false)
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'explore')
   })
   it('failed gather routes to explore once the house stands', async () => {
     // atl.2 menu: the atLogs final outlives the home transition, so the
     // FSM takes explore instead of re-picking gather or idling on rest.
     // (9 held logs sit under the atl.14 surplus batch, so no banking.)
     const bot = logsBot(9, null, [{ name: 'stick', count: 2 }])
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {}, gear: { saidNeed: 'want-ore' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {}, gear: { saidNeed: 'want-ore', pantrySeen: 0 }, gearPantryBanked: 0 }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'explore')
   })

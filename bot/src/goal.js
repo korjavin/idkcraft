@@ -12,7 +12,7 @@
 // Model choice (bead .6) asks at the same decision points with the FSM as
 // fallback and disagreement reference, exactly like hybridBrain.
 
-const { countItems } = require('./perception')
+const { countItems, wornItems } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
 const forageMod = require('./behaviours/forage')
@@ -22,13 +22,14 @@ const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 
 // House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
-// loose-plank target for a NEW (v2) house — 92 walls+roof+partition, plus
-// the table (4) and door (6) the gather formula adds on top, like the v1
-// budget did (38 + 4 + 6 = 48). Loads stay 14 logs (the v1-proven batch):
-// a v2 house takes ~2 full loads. Adopted v1 houses keep their old budget
-// via needPlanks(home), so a small repair never triggers a v2-sized gather.
+// loose-plank target for a NEW (v2) house — 92 walls+roof+partition plus 5
+// bedroom floor (1c4), plus the table (4) and door (6) the gather formula
+// adds on top, like the v1 budget did (38 + 4 + 6 = 48). Loads stay 14 logs
+// (the v1-proven batch): a v2 house takes ~2 full loads. Adopted v1 houses
+// keep their old budget via needPlanks(home), so a small repair never
+// triggers a v2-sized gather.
 const NEED_LOGS = 14
-const NEED_PLANKS = 102
+const NEED_PLANKS = 107
 const NEED_PLANKS_V1 = 48
 function needPlanks(home) {
   if (home && home.site && home.v !== 2) return NEED_PLANKS_V1
@@ -109,7 +110,8 @@ const MENU = {
         for (let i = 0; i < plan.length; i++) {
           if (skip.has(i)) continue
           if (!buildMod.cellDone(bot, home, plan[i])) {
-            if (plan[i].kind === 'planks') planks++
+            // A floor patch (1c4) spends a loose plank like a wall cell.
+            if (plan[i].kind === 'planks' || plan[i].kind === 'fill') planks++
             else other++
           }
         }
@@ -168,11 +170,11 @@ const MENU = {
     // batch craft gate can never take — rest forever with work remaining.
     // atl.4: a still-holding gather failure is not feasible — the behaviour
     // replays the same final while the log count stands (decide's stepFail
-    // is the menu-wide twin of this gate).
+    // is the menu-wide twin of this gate). gyw: relocation past the
+    // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
       try {
-        const g = ctx && ctx.gather
-        if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) return false
+        if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
       if (facts.home === 'built') return false
       const total = facts.planks + facts.logs * 4
@@ -237,9 +239,22 @@ const MENU = {
     verb: 'foraging',
   },
   explore: {
-    // Blind search only once the house stands: pre-house gaps rest (rw4
-    // owns the body until built), night pre-house never wanders.
-    feasible: (facts) => facts.home === 'built',
+    // Blind search once the house stands; pre-house gaps rest (rw4 owns the
+    // body until built) — except the stranded hard state (gyw): a
+    // failed-holding gather on an alone day opens the home-anchored bounded
+    // spiral, so the menu moves the bot to new ground instead of idling
+    // where gather died. Night pre-house never wanders, and neither does a
+    // bot with anyone online (p4s: stay with the player, the owner sees).
+    feasible: (facts, bot, ctx) => {
+      if (facts.home === 'built') return true
+      if (facts.time !== 'day') return false
+      if (facts.player !== 'none') return false
+      try {
+        return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
+      } catch (_) {
+        return false
+      }
+    },
     chat: () => 'on my own: exploring outward',
     verb: 'exploring',
   },
@@ -501,7 +516,10 @@ function tryAdoptDoor(bot, at) {
   let kindred = 0
   for (const cell of plan) {
     try {
-      if (buildMod.cellDone(bot, home, cell)) kindred++
+      // Fill cells carry no authorship evidence (revmux 01 body-2): dirt
+      // under a foreign door reads done, so counting them spends 5 of the
+      // 10 quorum points on mere terrain.
+      if (cell.kind !== 'fill' && buildMod.cellDone(bot, home, cell)) kindred++
     } catch (_) { /* unscannable reads as mismatch */ }
   }
   if (kindred < ADOPT_QUORUM) return null // foreign door: keep looking
@@ -582,6 +600,30 @@ function goalFacts(bot, ctx) {
   const ironSword = countItems(bot, (n) => n === 'iron_sword')
   const diamondPick = countItems(bot, (n) => n === 'diamond_pickaxe')
   const diamondSword = countItems(bot, (n) => n === 'diamond_sword')
+  const bucket = countItems(bot, (n) => n === 'bucket')
+  const waterBucket = countItems(bot, (n) => n === 'water_bucket')
+  // Armour (ipn.6): pack counts under the piece name (tools convention),
+  // worn counts beside them — the menu must read done once the set is on
+  // the body (else gear stays feasible forever and starves the steps
+  // below it), while owner math stays pack-only (revmux 01 core-1/body-1:
+  // a worn self piece must never hold a tossed spare in 'hand').
+  const armor = (name) => countItems(bot, (n) => n === name)
+  const ironHelmet = armor('iron_helmet')
+  const ironChestplate = armor('iron_chestplate')
+  const ironLeggings = armor('iron_leggings')
+  const ironBoots = armor('iron_boots')
+  const diamondHelmet = armor('diamond_helmet')
+  const diamondChestplate = armor('diamond_chestplate')
+  const diamondLeggings = armor('diamond_leggings')
+  const diamondBoots = armor('diamond_boots')
+  const wornIronHelmet = wornItems(bot, 'iron_helmet')
+  const wornIronChestplate = wornItems(bot, 'iron_chestplate')
+  const wornIronLeggings = wornItems(bot, 'iron_leggings')
+  const wornIronBoots = wornItems(bot, 'iron_boots')
+  const wornDiamondHelmet = wornItems(bot, 'diamond_helmet')
+  const wornDiamondChestplate = wornItems(bot, 'diamond_chestplate')
+  const wornDiamondLeggings = wornItems(bot, 'diamond_leggings')
+  const wornDiamondBoots = wornItems(bot, 'diamond_boots')
   const furnaceItem = countItems(bot, (n) => n === 'furnace')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
@@ -693,7 +735,7 @@ function goalFacts(bot, ctx) {
   let gear = 'done'
   try {
     const gm = require('./behaviours/gear')
-    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
+    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
   } catch (_) { /* unreadable ladder */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
@@ -706,7 +748,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, furnaceItem, furnace, gearHandover, gear }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -780,6 +822,26 @@ function failHolds(ctx, name, text, bot) {
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return true
     return Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) <= REFAIL_DIST
+  } catch (_) {
+    return false
+  }
+}
+// Shared gather-failure hold (idkcraft-gyw): the behaviour latch and the
+// menu gate above read one rule. A failed gather holds while the log count
+// stands AND the body stays within REFAIL_DIST of the failure point;
+// relocation past it releases for a fresh try at new ground (nearer trees,
+// other wood). Same distance rule as failHolds, one place. An unknown
+// failure point (legacy ctx, missing body) holds: the atl.4 livelock guard
+// stays for everything that never recorded where it failed.
+function gatherFailedHolds(g, logs, bot) {
+  try {
+    if (!g || typeof g.final !== 'string' || !g.final.startsWith('failed:')) return false
+    if (g.atLogs !== logs) return false
+    const fp = g.failPos
+    if (!fp || typeof fp.x !== 'number') return true
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return true
+    return Math.hypot(bp.x - fp.x, bp.z - fp.z) <= REFAIL_DIST
   } catch (_) {
     return false
   }
@@ -909,10 +971,10 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
   } catch (_) { /* wording best-effort */ }
   if (name === 'gather') {
-    // atl.4 inline hold (not via failHolds): same final, same log count.
+    // Shared hold (gyw twin of the feasible gate): same final, same log
+    // count, body still at the failure point.
     try {
-      const g = ctx && ctx.gather
-      if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) {
+      if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) {
         return 'gather holds after failure'
       }
     } catch (_) { /* fall through to facts */ }
@@ -1240,4 +1302,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds }

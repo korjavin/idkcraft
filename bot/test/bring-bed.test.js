@@ -72,6 +72,29 @@ function sheep(id, x, woolByte = null, y = 64, z = 0) {
   return e
 }
 
+// Uncollected drops (8gc): kills leave wool on the ground — the pack
+// holds it only after the body walks over, inside the server's pickup
+// box (revmux 01 core-1): ±1.5 across, no more than 0.5 below the feet.
+// Perfect-collection mocks hid the pickup bug.
+function dropLoot(bot, name, count, p) {
+  if (!bot._drops) bot._drops = []
+  bot._drops.push({ name, count, x: p.x, y: p.y, z: p.z })
+}
+function collectDrops(bot) {
+  if (!bot._drops || bot._drops.length === 0) return
+  const bp = bot.entity.position
+  bot._drops = bot._drops.filter((d) => {
+    const down = bp.y - d.y // feet above the drop
+    if (Math.hypot(bp.x - d.x, bp.z - d.z) <= 1.5 && down <= 0.5 && down >= -2) {
+      const at = bot._items.find((i) => i.name === d.name)
+      if (at) at.count += d.count
+      else bot._items.push({ name: d.name, count: d.count })
+      return false
+    }
+    return true
+  })
+}
+
 // A trunk the dig guard reads as a tree: woody column plus a leaf crown
 // around the top (util.js isTreeLog/crownNear).
 function treeCells(x, y, z) {
@@ -223,6 +246,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // explore legs, return.
 async function drive(bot, ctx, onKill, maxTicks = 200) {
   for (let i = 0; i < maxTicks && ctx.bring; i++) {
+    collectDrops(bot) // last tick's steps land before this tick's count
     await bring(bot, ctx, null, {})
     const o = ctx.bring
     if (!o) break
@@ -262,7 +286,7 @@ function killWhite(bot, o) {
   const ent = bot.entities[o.animal.id]
   if (ent && ent.isValid !== false) {
     ent.isValid = false
-    bot._items.push({ name: 'white_wool', count: 1 })
+    dropLoot(bot, 'white_wool', 1, ent.position)
   }
 }
 
@@ -271,7 +295,7 @@ function killTrueColor(bot, o) {
   if (ent && ent.isValid !== false) {
     ent.isValid = false
     const byte = ent.metadata ? ent.metadata[SHEEP_KEYS.indexOf('wool')] : 0
-    bot._items.push({ name: `${wool.WOOL_COLORS[(byte || 0) & 0x0f]}_wool`, count: 1 })
+    dropLoot(bot, `${wool.WOOL_COLORS[(byte || 0) & 0x0f]}_wool`, 1, ent.position)
   }
 }
 
@@ -480,7 +504,7 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
       const ent = b.entities[o.animal.id]
       if (ent && ent.isValid !== false) {
         ent.isValid = false
-        b._items.push({ name: 'gray_wool', count: 1 })
+        dropLoot(b, 'gray_wool', 1, ent.position)
       }
     })
     assert.ok(!bot._tickerCtx.bring, 'order completed')
@@ -577,7 +601,7 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
         ent.isValid = false
         const byte = ent.metadata ? ent.metadata[ent.metadata.length - 1] : 0
         const color = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray'][byte & 0x0f]
-        b._items.push({ name: `${color}_wool`, count: 1 })
+        dropLoot(b, `${color}_wool`, 1, ent.position)
       }
     })
     assert.ok(!bot._tickerCtx.bring, 'order completed')

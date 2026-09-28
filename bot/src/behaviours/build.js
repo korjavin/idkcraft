@@ -19,12 +19,16 @@
 //        workbench INSIDE the common room at (5,0,1)
 //   y=0..1 partition posts (1,3),(3,3),(5,3) + bedroom divider (3,4)
 //        (8 planks, laid last)
+//   y=-1 bedroom floor (1c4): ground-fill under the four bed halves
+//        (1,4),(2,4),(4,4),(5,4) plus the doorway (3,0) — the door hangs
+//        on the block below like a bed. Done means SOLID ground (dirt
+//        counts), so flat sites place nothing and only dips take a plank.
 //
 // Both plans are in LAY ORDER: table first (crafting precedes walls — the
 // door is crafted at the table while it still stands on open ground), then
-// the lower ring, the door, the upper ring, the roof, then (v2) the
-// partition. Every ring sits on the previous one, so the block below is
-// always the place reference.
+// (v2) the bedroom floor like a foundation, the lower ring, the door, the
+// upper ring, the roof, then (v2) the partition. Every ring sits on the
+// previous one, so the block below is always the place reference.
 //
 // One behaviour tick advances at most one async place flight (guarded by
 // ctx.placeInFlight, same seam as eatInFlight/doEat). Materials are checked
@@ -34,6 +38,17 @@
 const Vec3 = require('vec3')
 const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
+
+const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
+const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
+// Reach check: head (eyes) to cell CENTRE. GoalPlaceBlock.isEnd measures
+// head-to-face-centre <= PLACE_RANGE; the clicked face centre sits up to
+// ~1 off the cell centre and the float head up to ~0.9 off the
+// pathfinder's node-centred head, so range + 1.5 accepts every valid end
+// node. Feet-to-corner over-measured by ~2 on slopes (the +1.6 head, the
+// corner vs the centre) and livelocked: goal reached, check 'far', reset,
+// setGoal into an already-reached goal — 2/94 forever (idkcraft-jr2.4).
+const PLACE_REACH = PLACE_RANGE + 1.5
 
 // Plan entry: cell offset from the home origin (SW corner, ground level)
 // plus what belongs there.
@@ -58,6 +73,15 @@ const BLUEPRINT = (() => {
 
 const BLUEPRINT_V2 = (() => {
   const plan = [{ dx: 5, dy: 0, dz: 1, kind: 'table' }]
+  // Bedroom floor (idkcraft-1c4): ground-fill under the jr2.2 bed halves
+  // plus the doorway — the v2 bedrooms used to sit on raw terrain and a
+  // dip stranded bed placement (rig-proven: air under A-foot); the door
+  // hangs on the block below like a bed, so its dip strands it the same
+  // way (rig-proven: air under (3,0) refused the door 3x). Bed cells
+  // pinned to beds.cellsOf.
+  for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4], [3, 0]]) {
+    plan.push({ dx, dy: -1, dz, kind: 'fill' })
+  }
   const ring = (dy) => {
     for (const dx of [0, 1, 2, 4, 5, 6]) plan.push({ dx, dy, dz: 0, kind: 'planks' })
     for (let dx = 0; dx <= 6; dx++) plan.push({ dx, dy, dz: 5, kind: 'planks' })
@@ -101,6 +125,42 @@ function isReplaceable(name) {
   return typeof name === 'string' && (REPLACEABLE.has(name) || name.endsWith('_tulip'))
 }
 
+// Ground a bed can stand on (idkcraft-1c4 floor rule): anything solid.
+// Air-like, water and flora take a plank patch; lava reads missing too —
+// the placement refuses, the cell skips after 3, and the beds step fails
+// loud instead of burning a patch.
+function isSolidGround(name) {
+  if (typeof name !== 'string') return false
+  if (name === 'air' || name === 'cave_air' || name === 'void_air') return false
+  if (name === 'water' || name === 'lava') return false
+  return !isReplaceable(name)
+}
+
+// Collision half of the floor rule (revmux 01 core-1/body-1): the name
+// rule cannot enumerate every flora (mushrooms, lilies, carpets...), but
+// everything without collision shares the empty bounding box — the same
+// solidity signal findRef uses. Unreadable reads missing, never done.
+function hasCollision(bot, p) {
+  try {
+    const b = bot.blockAt(p)
+    return !!b && b.boundingBox !== 'empty'
+  } catch (_) { return false }
+}
+
+// A fill dip can hold unlisted flora the name rule never heard of: any
+// NAMED block without collision clears like flora so the patch lands
+// (air-likes and water are placeable as-is and never need a dig). Walls
+// keep the strict REPLACEABLE allowlist.
+function clearableFillGround(bot, p, cell) {
+  if (!cell || cell.kind !== 'fill') return false
+  try {
+    const b = bot.blockAt(p)
+    if (!b || typeof b.name !== 'string') return false
+    if (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air' || b.name === 'water') return false
+    return b.boundingBox === 'empty'
+  } catch (_) { return false }
+}
+
 function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
@@ -141,6 +201,7 @@ function cellDone(bot, home, cell) {
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
+  if (cell.kind === 'fill') return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
   return name.endsWith('_planks')
 }
 
@@ -304,6 +365,7 @@ function build(bot, ctx, target, state) {
     ctx.buildSkip = []
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
+    ctx.buildFarIdx = -1
   }
   if (ctx.placeInFlight) return
   if (!ctx.home) return
@@ -360,7 +422,7 @@ function build(bot, ctx, target, state) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
-    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: 4 })) } catch (_) { /* retry next tick */ }
+    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE })) } catch (_) { /* retry next tick */ }
     return
   }
   if (moving) return
@@ -368,13 +430,35 @@ function build(bot, ctx, target, state) {
   // At the cell (or the walk never started): place — but only in reach.
   // A preemption that carried the body away (fight, flee, lead, follow me)
   // leaves a stale buildGoalIdx: attempting from out there burns refusals
-  // and skips a good cell, so force a fresh approach instead.
+  // and skips a good cell, so force a fresh approach instead. Counted on
+  // its own streak, forgiven by approach progress: a long walk-in crosses
+  // far-idle ticks between A* timeout segments (the pathfinder never
+  // chains them by itself), and those must not spend refusal strikes nor
+  // combine with them — only a stand that stops getting closer skips the
+  // cell as 'unreachable' (revmux 01 major).
   try {
     const bp = bot.entity && bot.entity.position
-    if (bp && typeof bp.x === 'number' && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > 5) {
-      ctx.buildGoalIdx = -1
+    const farDist = bp && typeof bp.x === 'number'
+      ? Math.hypot(bp.x - (p.x + 0.5), (bp.y + 1.6) - (p.y + 0.5), bp.z - (p.z + 0.5))
+      : -1
+    if (farDist > PLACE_REACH) {
+      if (ctx.buildFarIdx !== idx) {
+        ctx.buildFarIdx = idx
+        ctx.buildFarFails = 0
+        ctx.buildFarDist = farDist
+      }
+      if (farDist < ctx.buildFarDist - FAR_PROGRESS) ctx.buildFarFails = 0
+      else ctx.buildFarFails = (ctx.buildFarFails || 0) + 1
+      ctx.buildFarDist = farDist
+      if (ctx.buildFarFails >= 3) skipCell(ctx, idx, p, 'unreachable')
+      else ctx.buildGoalIdx = -1
       return
     }
+    // Reach proven: a later far episode starts its streak fresh, so
+    // repeated preemptions with returns in between never accumulate
+    // into a skip (revmux 02 minor). A static far stand never reaches
+    // this line, so it still skips after 3.
+    ctx.buildFarFails = 0
   } catch (_) { /* unverifiable: attempt anyway */ }
   if (cellDone(bot, ctx.home, cell)) return // lagged double-place guard
   let ref
@@ -414,7 +498,7 @@ function build(bot, ctx, target, state) {
       const occupier = blockNameAt(bot, p)
       if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
-      } else if (occupier != null && occupier !== 'air' && isReplaceable(occupier)) {
+      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)
@@ -451,3 +535,5 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.PLACE_RANGE = PLACE_RANGE
+module.exports.PLACE_REACH = PLACE_REACH

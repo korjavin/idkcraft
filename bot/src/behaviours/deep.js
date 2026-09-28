@@ -16,8 +16,11 @@
 //     aborts honestly (failed:lava) and danger-marks the cell.
 //   R-stand: the block underfoot is never dug (staircase geometry digs
 //     forward/down/head only).
-//   R-up: tunnel/descend never dig upward (falling gravel/sand, lava
-//     above) — cells above the head are struck, not chased.
+//   R-up: upward digs are headroom-only (+2 above feet, fully guarded:
+//     lava/loose/water/canDig like every dig) — the return leap needs 3
+//     clear and a 2-high tube ceilings every arc (ssn (48,-40) lip). Cells
+//     above the headroom are struck, not chased; the tunnel never routes
+//     upward (tunnelNext still refuses +Y steps).
 //   R-drop: every step-landing is drop-checked (<=1) before walking in;
 //     deeper voids fail honestly (failed:drop) + danger-mark. 1 is the
 //     reversibility limit: the return leg must climb every step back.
@@ -25,6 +28,9 @@
 //   R-tier: diamond digs need an iron pick (bring tier check); without one
 //     the leg fails honestly (failed:need-iron-pick) — the gear step must
 //     only send equipped bots (interface contract, asserted in assay).
+//   R-retreat: a descend guard firing past the pre-scan window retreats up
+//     the breadcrumbs (abort-to-return) and fails honestly at the mouth;
+//     inside the window it fails in place. A failed climb is lost-shaft.
 // Return: breadcrumb reverse-walk, hybrid drive — manual mount (back to
 // leap stance when pressed, leap WITH forward thrust — the hop_step shape:
 // Paper zeroes a leap from contact) for 1-up steps, pathfinder for level
@@ -64,6 +70,14 @@ const RET_MOUNT_TICKS = 20 // per-crumb climb cap: hang-back-leap cycles displac
 const PROG_EPS = 0.05 // progress margin: closing less than this per tick counts as circling, not approaching
 const SITE_RINGS = [3, 4, 5, 6, 7, 8] // mouth offsets from the anchor
 const SITE_RAYS = 8
+// Pre-scan window (b20): pickDir/tubeClean verdict only the first K steps;
+// deeper dirt is met by the per-step descend guards, which abort-to-return
+// (retreat) instead of failing in place. K=10 from the prod-world rig
+// (worldsha 85a1422228ef, 6 fixed stride-20 spawn columns): near dirt
+// (steps 0-6: lakes, aquifers, gravel) still refuses at pick, deep dirt
+// (12+) starts and retreats honestly; starts 5/6 (was 3/6 full-tube — the
+// holdout is step-0 lake water, unstartable at any K).
+const PRESCAN_STEPS = 10
 const DIRS = [{ dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
 
 function fname(bot, x, y, z) {
@@ -137,6 +151,22 @@ function lavaNear(bot, x, y, z) {
   return false
 }
 
+// Landing verdict for a step about to be walked into (b20, Codex condition):
+// the dig-loop guards only run on SOLID cells, so a pre-open (cave) step
+// skips them — lava directly below reads as standing ground (dropBelow
+// returns 0 for a lava floor) and 1-deep water as a 1-drop. The battery
+// re-verdicts stand+below regardless of open. Returns the refusal reason
+// ('lava'|'water'|'drop') or null. (No loose arm: gravel at feet/head is
+// solid, so the dig loop always sees it first — a battery loose check is
+// unreachable by construction.) On solid steps it agrees with
+// the dig loop (same predicates), so only pre-open steps gain verdicts.
+function landingHazard(bot, c) {
+  if (lavaNear(bot, c.x, c.y, c.z) || isLavaName(fname(bot, c.x, c.y - 1, c.z))) return 'lava'
+  if (fname(bot, c.x, c.y, c.z) === 'water' || fname(bot, c.x, c.y - 1, c.z) === 'water' || waterNear(bot, c.x, c.y, c.z)) return 'water'
+  if (dropBelow(bot, c.x, c.y, c.z) > DROP_MAX) return 'drop'
+  return null
+}
+
 // Air cells below (x, y, z) before solid ground, capped at 6. 0 = stands
 // on solid. Unreadable below reads as solid (chunk edge, not a void).
 function dropBelow(bot, x, y, z) {
@@ -177,8 +207,12 @@ function pickSite(bot, ctx, anchor) {
   return null
 }
 
-// Stair step n (0-based): stand cell S, then the 3 dig cells (feet, head,
-// down-last so footing reads stay stable mid-cycle).
+// Stair step n (0-based): stand cell S, then the 4 dig cells (feet, head,
+// headroom, down-last so footing reads stay stable mid-cycle). The headroom
+// (+2) is load-bearing, not luxury: a leap rises 1.25 with a 1.8 body, so a
+// 2-high tube ceilings every arc at 0.2 (ssn rig: (48,-40) lip vs takeoff
+// 47.7 — 6/6 faceplants). The descend/tubeClean guard loops cover the extra
+// cell unchanged (R-up bends deliberately here, guarded; see the header).
 function stairCells(shaft, n) {
   const sx = shaft.x + n * shaft.dx
   const sz = shaft.z + n * shaft.dz
@@ -191,15 +225,17 @@ function stairCells(shaft, n) {
     digs: [
       { x: nx, y: sy, z: nz },
       { x: nx, y: sy + 1, z: nz },
+      { x: nx, y: sy + 2, z: nz },
       { x: nx, y: ny, z: nz },
     ],
   }
 }
 
-// First shaft direction whose whole tube is lava-free and whose step-0
-// cells are diggable. Pure geometry + reads; null when every direction is
-// refused. The tube scan is best-effort (deep chunks may not be loaded
-// yet — null reads as clear) with the per-tick guards as backstop.
+// First shaft direction whose pre-scan window (first PRESCAN_STEPS steps)
+// is lava/water/loose-free and whose step-0 cells are diggable. Pure
+// geometry + reads; null when every direction is refused. Dirt past the
+// window is met step by step: the descend guards abort-to-return (retreat)
+// instead of failing in place.
 function pickDir(bot, mouth) {
   for (const d of DIRS) {
     const shaft = { x: mouth.x, z: mouth.z, topY: mouth.topY, dx: d.dx, dz: d.dz }
@@ -217,10 +253,14 @@ function pickDir(bot, mouth) {
   return null
 }
 
-// Every stair step down to the band: dig cells + landing + one below
-// must be lava-free (radius 2) and above the floor.
+// The first PRESCAN_STEPS stair steps: dig cells + landing + one below
+// must be lava/water/loose-free (radius 2) and above the floor. A short
+// window, not the whole tube (b20): on real terrain every 115-deep tube
+// holds water/lava/gravel somewhere, so a full-tube scan refuses every
+// direction and the leg never starts. Dirt past the window trips the
+// per-step descend guards, which retreat up the breadcrumbs.
 function tubeClean(bot, shaft) {
-  for (let n = 0; shaft.topY - n > TARGET_Y && shaft.topY - n > FLOOR_Y + 2; n++) {
+  for (let n = 0; n < PRESCAN_STEPS && shaft.topY - n > TARGET_Y && shaft.topY - n > FLOOR_Y + 2; n++) {
     const st = stairCells(shaft, n)
     const cells = [...st.digs, st.stand, { x: st.stand.x, y: st.stand.y - 1, z: st.stand.z }]
     for (const c of cells) {
@@ -355,6 +395,28 @@ function fail(bot, ctx, d, reason, markP, chatLine) {
   finish(bot, ctx, d, false, reason, d.dug)
 }
 
+// Abort-to-return (b20): a descend guard firing inside the pre-scan window
+// fails in place (the tube was vetted clean — a hazard there means the
+// world changed under us; the rules assay pins this); a guard firing PAST
+// the window — the expected case now that the window is short — retreats
+// up the dug breadcrumbs instead of stranding the bot mid-shaft.
+// Breadcrumbs stay intact so the return phase can climb out; arrival
+// finishes failed:<reason> (honest), and a failed climb is the lost-shaft
+// hard case (ssn owns the return mechanics).
+function guardTrip(bot, ctx, d, reason, markP, chatLine) {
+  if (d.n < PRESCAN_STEPS) {
+    fail(bot, ctx, d, reason, markP, chatLine)
+    return
+  }
+  try {
+    const marks = Array.isArray(markP) ? markP : [markP]
+    for (const m of marks) if (m) danger.mark(ctx, m)
+  } catch (_) { /* mark best-effort */ }
+  if (chatLine) say(bot, chatLine)
+  d.retreatReason = reason
+  d.phase = 'return'
+}
+
 // One walk goal with the 68p rule (body-theft re-issue keeps the stall
 // budget) and displacement stall counting. Returns 'arrived' | 'walking'
 // | 'stalled'. arrivalR/distR tune per leg.
@@ -447,7 +509,9 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
       }
     }
     ctx.digInFlight = false
-    if (ctx.deep === d) d.phase = nextPhase
+    // A guard may have retreated mid-dig (reads changed while the swing was
+    // in flight): the return phase owns d.phase now, never clobber it back.
+    if (ctx.deep === d && d.phase !== 'return') d.phase = nextPhase
   })()
 }
 
@@ -505,7 +569,7 @@ function deep(bot, ctx, target, state) {
     // the dig cells): fail fast while the return path is still walkable.
     if (lavaNear(bot, Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))) {
       const here = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
-      fail(bot, ctx, d, 'lava', [here, mouthOf(d)], 'lava closing in, backing out')
+      guardTrip(bot, ctx, d, 'lava', [here, mouthOf(d)], 'lava closing in, backing out')
       return
     }
     if (Math.floor(bp.y) <= TARGET_Y) {
@@ -516,33 +580,37 @@ function deep(bot, ctx, target, state) {
     const st = stairCells(d.shaft, d.n)
     for (const c of st.digs) {
       if (c.y <= FLOOR_Y) {
-        fail(bot, ctx, d, 'floor', c, 'hit the dig floor, backing out')
+        guardTrip(bot, ctx, d, 'floor', c, 'hit the dig floor, backing out')
         return
       }
       const n = fname(bot, c.x, c.y, c.z)
       if (n === null || isAirName(n)) continue
       if (lavaNear(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'lava', [c, mouthOf(d)], 'lava in the shaft, backing out')
+        guardTrip(bot, ctx, d, 'lava', [c, mouthOf(d)], 'lava in the shaft, backing out')
         return
       }
       if (fallingAbove(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'loose', [c, mouthOf(d)], 'loose rock above, backing out')
+        guardTrip(bot, ctx, d, 'loose', [c, mouthOf(d)], 'loose rock above, backing out')
         return
       }
       if (fname(bot, c.x, c.y, c.z) === 'water' || waterNear(bot, c.x, c.y, c.z)) {
-        fail(bot, ctx, d, 'water', [c, mouthOf(d)], 'water in the shaft, backing out')
+        guardTrip(bot, ctx, d, 'water', [c, mouthOf(d)], 'water in the shaft, backing out')
         return
       }
       if (!canDig(bot, c)) {
-        fail(bot, ctx, d, 'bedrock', [c, mouthOf(d)], 'unbreakable rock in the shaft')
+        guardTrip(bot, ctx, d, 'bedrock', [c, mouthOf(d)], 'unbreakable rock in the shaft')
         return
       }
       digOne(bot, ctx, d, c, n, 'descend')
       return
     }
-    // All three open: landing check, then walk the step.
-    if (dropBelow(bot, st.stand.x, st.stand.y, st.stand.z) > DROP_MAX) {
-      fail(bot, ctx, d, 'drop', [st.stand, mouthOf(d)], 'void under the next step, backing out')
+    // All three open: landing battery (b20: pre-open steps skip the dig
+    // loop, so the battery re-verdicts stand+below), then walk the step.
+    // Same reason/chat vocabulary as the dig loop — no new strings.
+    const hz = landingHazard(bot, st.stand)
+    if (hz) {
+      const lines = { lava: 'lava in the shaft, backing out', water: 'water in the shaft, backing out', drop: 'void under the next step, backing out' }
+      guardTrip(bot, ctx, d, hz, [st.stand, mouthOf(d)], lines[hz])
       return
     }
     const key = `deep-descend:${d.n}`
@@ -651,10 +719,27 @@ function deep(bot, ctx, target, state) {
       }
     }
     const next = d.tunnelGoal
-    // Two-high tube (live assay: a 1-high tube is unwalkable, so the
-    // return leg could never backtrack it): feet cell, then head cell.
+    // Three-high tube (ssn: a leap rises 1.25 with a 1.8 body, so 2-high
+    // ceilings every arc (the stair-lip faceplant); a 1-high tube is
+    // unwalkable, so the return could never backtrack it): feet, head,
+    // headroom. The guard loop below covers all three unchanged.
     const above = { x: next.x, y: next.y + 1, z: next.z }
-    for (const c of [next, above]) {
+    const above2 = { x: next.x, y: next.y + 2, z: next.z }
+    for (const c of [next, above, above2]) {
+      // R-stand (ssn): never dig the block underfoot — a straight-down
+      // tunnel step eats its own floor, and the fall-through landing never
+      // satisfies the latched arrival (in-cell + grounded), so the step
+      // strikes post-dig with a dangling crumb above (ssn leg1 pocket).
+      // tunnelNext descends ONLY straight down (no diagonal down-ahead),
+      // so this gate skips below-band diamonds by design: a dug descent
+      // cell is air that can host no mid-floor, making the drop
+      // unreversible. The strike reroutes to level targets (the band scan
+      // covers them); the skip is logged, never silent.
+      if (c.x === head.x && c.y === head.y - 1 && c.z === head.z) {
+        console.log(`deep R-stand strike at ${c.x},${c.y},${c.z} (underfoot dig refused; below-band target skipped)`)
+        strikeAndReplan(bot, ctx, d, t)
+        return
+      }
       const n = fname(bot, c.x, c.y, c.z)
       if (n === null || isAirName(n)) continue
       if (fallingAbove(bot, c.x, c.y, c.z)) {
@@ -680,7 +765,11 @@ function deep(bot, ctx, target, state) {
       digOne(bot, ctx, d, c, n, 'tunnel')
       return
     }
-    if (dropBelow(bot, next.x, next.y, next.z) > DROP_MAX) {
+    const lhz = landingHazard(bot, next)
+    if (lhz) {
+      // Drops strike unmarked (pre-b20 shape): danger marks are xz-only, so
+      // a deep-cave drop mark would steer surface site selection for 2h.
+      if (lhz !== 'drop') { try { danger.mark(ctx, next) } catch (_) { /* mark best-effort */ } }
       strikeAndReplan(bot, ctx, d, t)
       return
     }
@@ -731,7 +820,12 @@ function deep(bot, ctx, target, state) {
     try {
       const crumbs = d.steps || []
       const last = crumbs[crumbs.length - 1]
-      if (last && dist3(bp, last) > PICKUP_CRUMB_GAP) {
+      // Grounded only (ssn): the magnet walk falls through air the return
+      // cannot stand on — an airborne crumb strands the climb under a
+      // floorless cell (ssn leg1: (56,-48) chased from a pocket 3 below).
+      // Standing on it is the standability proof (physics already checked).
+      const chainGrounded = !bot.entity || bot.entity.onGround !== false
+      if (last && chainGrounded && dist3(bp, last) > PICKUP_CRUMB_GAP) {
         crumbs.push({ x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) })
       }
     } catch (_) { /* chain best-effort */ }
@@ -761,6 +855,13 @@ function deep(bot, ctx, target, state) {
   if (d.phase === 'return') {
     const mouth = { x: d.shaft.x, y: d.shaft.topY, z: d.shaft.z }
     if (Math.hypot(bp.x - mouth.x, bp.z - mouth.z) <= 2.5 && bp.y >= mouth.y - 1) {
+      // Retreat arrival (b20, own hunk — ssn owns the pop gate below): the
+      // leg ends failed:<reason> at the mouth, honestly, with the bot out
+      // of the shaft. The guard already chatted at trip time.
+      if (d.retreatReason) {
+        finish(bot, ctx, d, false, d.retreatReason, d.dug)
+        return
+      }
       finish(bot, ctx, d, true, null, d.dug)
       return
     }
@@ -786,10 +887,39 @@ function deep(bot, ctx, target, state) {
     const popGrounded = !bot.entity || bot.entity.onGround !== false
     const popFloor = fname(bot, next.x, next.y - 1, next.z)
     const popStandable = popFloor !== null && isSolidName(popFloor)
+    // Filled mids pop by arrival only (ssn): the radius would pop the mid
+    // from the floor below and re-fill it forever, budget-free.
     if ((inCell(bp, next) && (popGrounded || !popStandable)) ||
-        (dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5 && popGrounded)) {
+        (!next.fill && dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5 && popGrounded)) {
       crumbs.pop()
       if (d.retMode === 'up') manualBrake(bot)
+      return
+    }
+    // Multi-up gap fill (ssn): the outbound can chain a 2-3 fall (a strike
+    // mid-fall, a gated pickup gap) the 1-up latch cannot climb. Fill ONE
+    // standable mid per engagement (marked, arrival-pop-only): mids ascend
+    // strictly toward the crumb (y-monotonic: termination within one
+    // ascent), each mounts on its own latch budget. No standable mid (air
+    // shaft) fails honestly NOW — recover pillars what leaps cannot. Two
+    // fills per crumb max (revmux 01): a fall off a mounted mid re-fills
+    // the same cell with a fresh latch budget, so uncapped refills cycle
+    // mount-fall-remount forever; the third fill attempt fails honestly.
+    if (next.y - Math.floor(bp.y) >= 2 && Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z) <= 1.5) {
+      const okey = `${next.x},${next.y},${next.z}`
+      d.fillSeen = d.fillSeen || {}
+      if ((d.fillSeen[okey] || 0) >= 2) {
+        try { recover.setStuck(ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
+        fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+        return
+      }
+      const mid = fillMid(bot, bp, next)
+      if (!mid) {
+        try { recover.setStuck(ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
+        fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+        return
+      }
+      d.fillSeen[okey] = (d.fillSeen[okey] || 0) + 1
+      crumbs.push({ x: mid.x, y: mid.y, z: mid.z, fill: true })
       return
     }
     // Hybrid drive: the pathfinder sprints into 1-up stair risers and the
@@ -891,8 +1021,6 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
     d.stalls = 0
     d.primed = false
     d.retAirStall = 0
-    d.inchStall = 0
-    d.lastInchGap = undefined
     d.wedgedTicks = 0
     d.retWaited = 0
     d.retProgBest = Infinity
@@ -910,10 +1038,11 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
     return
   }
   try {
-    // Aim the CELL CENTER, never the crumb corner: crumbs are integer
-    // corners and the tunnel is 1-wide, so corner-aiming steers the nose
-    // into the wall face (bbox grinds: 0.1/tick + hover-flicker forever).
-    const r = bot.lookAt(new Vec3(next.x + 0.5, bp.y + 1.6, next.z + 0.5))
+    // Axis-locked aim (see aimDir): the look shares the samplers' drift-free
+    // direction, so backs and leaps run parallel to the tube wall instead of
+    // pressing it (the press seeds the server snap storm that eats the climb).
+    const ad = aimDir(bp, next) || { dx: 1, dz: 0 }
+    const r = bot.lookAt(new Vec3(bp.x + ad.dx * 2, bp.y + 1.6, bp.z + ad.dz * 2))
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch (_) { /* look best-effort */ }
   // Still-band votes first (two in-band samples is a server pin, never a
@@ -922,6 +1051,21 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
     ? bot.entity.velocity.y : null
   if (vy !== null && Math.abs(vy) < RET_AIR_VY) d.retAirStall = (d.retAirStall || 0) + 1
   else d.retAirStall = 0
+  // Hover arrival, ahead of the grounded test: a still-band hover INSIDE the
+  // crumb over a standable floor is a landed touch the touchdown gate cannot
+  // see — pop it here or the held forward walks the step off before the next
+  // tick (ipn.2 shaft 33 coast walkoff: landed 48.3, drifted +1.4 and fell).
+  // Arc midpoints carry vy and never match (no pop-lie); undermined cells
+  // pop pre-drive already, so a hover that reaches the coast stands over a
+  // solid floor. Hoisted above ghostContact (ssn): a contact hover just short
+  // of the crumb centre used to hold still in the grounded branch instead of
+  // popping.
+  if (inCell(bp, next) && (d.retAirStall || 0) >= RET_AIR_TICKS) {
+    dbg('coast-pop')
+    d.steps.pop()
+    manualBrake(bot)
+    return
+  }
   // Ghost contact: airborne + pinned + floor below + face at the nose. The
   // server stands the body (it accepts jumps) while the client hovers, so
   // drive the zone as if grounded (inch/rim/leap) instead of unwedging
@@ -961,19 +1105,15 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
       return
     }
     dbg(`coast vy=${vy}`)
-    // Hover arrival: a still-band hover INSIDE the crumb over a standable
-    // floor is a landed touch the touchdown gate cannot see (popGrounded
-    // false + popStandable true) — pop it here or the held forward walks
-    // the step off before the next tick (ipn.2 shaft 33 coast walkoff:
-    // landed 48.3, drifted +1.4 and fell). Arc midpoints carry vy and
-    // never match (no pop-lie); undermined cells pop pre-drive already.
-    if (inCell(bp, next) && (d.retAirStall || 0) >= RET_AIR_TICKS) {
-      // Standable is proven: the pre-drive gate pops every undermined
-      // hover (inCell + !popStandable), so a hover that reaches the coast
-      // stands over a solid floor. Arc midpoints carry vy (no pop-lie).
-      dbg('coast-pop')
-      d.steps.pop()
-      manualBrake(bot)
+    // Pressed hover (ssn): a still-band hover OUTSIDE the crumb is pressed
+    // to the face (an apex crosses the still band for one sample at most,
+    // and falling leaves it within 150 ms) — holding forward grinds the
+    // press and seeds the server snap storm, so release everything and let
+    // the stall budget decide. Arcs (vy) fly through to the thrust below.
+    if (!inCell(bp, next) && (d.retAirStall || 0) >= RET_AIR_TICKS) {
+      dbg('coast-hover-brake')
+      setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
+      retStall(bot, ctx, d, bp, next)
       return
     }
     if (inCell(bp, next) && vy !== null && Math.abs(vy) < RET_AIR_VY) {
@@ -1055,41 +1195,22 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
       }
       if (!backFloor(bot, bp, next) || backBlocked(bot, bp, next)) {
         // Wedged: contact + solid face + no back-room (1-deep step edge or
-        // rear wall). Backing exits/pins, leaping faceplants — release
-        // everything and let the stall budget fail honestly (recover owns
-        // the escape). Client-air behind that still rejects is a
-        // server-side ghost-wall (dug-area gravel the client missed):
-        // blind-dig it after 3 (real seen walls never dig).
+        // rear wall). Backing exits/pins, leaping faceplants — release and,
+        // once wedged AND static for 8 (a sliding body escapes on its own;
+        // the stall counter proves stillness), fail early: recover owns the
+        // escape, and the full 15-tick budget is just holding still. The
+        // retStall poke runs first (one last resync before the handoff).
         dbg(`wedged fgap=${fgap.toFixed(2)}`)
         d.wedgedTicks = (d.wedgedTicks || 0) + 1
-        if (d.wedgedTicks === WEDGED_DIG_TICKS) {
-          const bb = backCell(bot, bp, next)
-          const bn = bb && fname(bot, bb.x, bb.y, bb.z)
-          if (bn === null || isAirName(bn)) ghostDig(bot, bb)
-        }
         setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
         retStall(bot, ctx, d, bp, next)
+        if (d.wedgedTicks >= WEDGED_FAIL_TICKS && d.stalls >= WEDGED_FAIL_TICKS && ctx.stepStatus === 'running') {
+          try { recover.setStuck(ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
+          fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+        }
         return
       }
       dbg(`inch fgap=${fgap.toFixed(2)}`)
-      if (typeof d.lastInchGap === 'number' && Math.abs(fgap - d.lastInchGap) < 0.03) d.inchStall = (d.inchStall || 0) + 1
-      else d.inchStall = 0
-      d.lastInchGap = fgap
-      // Backs rejected into client air (static gap) are a server-side
-      // ghost-wall: blind-dig it (the inch gate already proved client air).
-      if (d.inchStall === WEDGED_DIG_TICKS) {
-        const bb = backCell(bot, bp, next)
-        if (bb) ghostDig(bot, bb)
-      }
-      // The blind dig broke nothing and the press persists: escalate to a
-      // real break of every client-air suspect (leap-landing notch plus
-      // behind column) — rolled-back landings are fall-in the poke cannot
-      // move (ipn.2 shaft 33: notch air on descend, solid on return).
-      if (d.inchStall === GHOSTBREAK_TICKS) {
-        const bb = backCell(bot, bp, next)
-        const ah = aheadHead(bot, bp, next)
-        ghostBreak(bot, [ah, bb, bb && { x: bb.x, y: bb.y + 1, z: bb.z }])
-      }
       setC('forward', false); setC('jump', false); setC('sprint', false)
       setC('back', true); setC('sneak', true)
       try { setTimeout(() => { setC('back', false); setC('sneak', false) }, RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
@@ -1163,113 +1284,52 @@ function walkOpen(bot, bp, t) {
 // and wedges pockets the climb could back out of (ipn.2 tunnel pocket
 // 55,-51: zone at 0.4 back, wall at 1.0 — 1.0-vision pinned it).
 const BACK_SAMPLE_DIST = 0.5
-function backFloor(bot, bp, next) {
-  const dx = bp.x - (next.x + 0.5)
-  const dz = bp.z - (next.z + 0.5)
+// Climb aim (ssn): ONE axis-locked direction shared by the look and every
+// sampler. Aiming at the crumb CENTER from an off-center body adds a
+// sideways drift into the tube wall (ssn rig: z=-201.7 aim → -z drift →
+// server "moved wrongly" snap storm → the snap-ratchet eats every back and
+// leap: 0.0 m in 1.5 s, 29 snaps; centered: -1.3 m free, 6 snaps). The
+// dominant axis runs parallel to the wall (no press, no snaps); the
+// deadband keeps true diagonals on the true ray (axis-pure can never close
+// a >=0.5 minor offset, so corners keep the old geometry).
+const AIM_DEADBAND = 0.35
+function aimDir(bp, next) {
+  const dx = next.x + 0.5 - bp.x
+  const dz = next.z + 0.5 - bp.z
   const len = Math.hypot(dx, dz)
-  if (len < 0.05) return false
-  const bx = Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST)
-  const bz = Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST)
+  if (len < 0.05) return null
+  if (Math.abs(dx) >= Math.abs(dz)) {
+    if (Math.abs(dz) < AIM_DEADBAND) return { dx: dx > 0 ? 1 : -1, dz: 0 }
+  } else if (Math.abs(dx) < AIM_DEADBAND) {
+    return { dx: 0, dz: dz > 0 ? 1 : -1 }
+  }
+  return { dx: dx / len, dz: dz / len }
+}
+function backFloor(bot, bp, next) {
+  const ad = aimDir(bp, next)
+  if (!ad) return false
+  const bx = Math.floor(bp.x - ad.dx * BACK_SAMPLE_DIST)
+  const bz = Math.floor(bp.z - ad.dz * BACK_SAMPLE_DIST)
   const y = Math.floor(bp.y)
   if (fname(bot, bx, y, bz) === null) return false
   return dropBelow(bot, bx, y, bz) <= 1
 }
 
-// Feet cell behind the body at the motion horizon (the back-off landing / dig).
-function backCell(bot, bp, next) {
-  const dx = bp.x - (next.x + 0.5)
-  const dz = bp.z - (next.z + 0.5)
-  const len = Math.hypot(dx, dz)
-  if (len < 0.05) return null
-  return { x: Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST), y: Math.floor(bp.y), z: Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST) }
-}
-
-// Head cell a full block ahead of the body (the leap-landing notch).
-function aheadHead(bot, bp, next) {
-  const dx = next.x + 0.5 - bp.x
-  const dz = next.z + 0.5 - bp.z
-  const len = Math.hypot(dx, dz)
-  if (len < 0.05) return null
-  return { x: Math.floor(bp.x + (dx / len) * 1.0), y: Math.floor(bp.y) + 1, z: Math.floor(bp.z + (dz / len) * 1.0) }
-}
-
-// Ghost-break escalation: the 800 ms blind dig broke nothing and the press
-// persists, so break (not poke) every client-air suspect at once — the
-// leap-landing notch ahead-head plus the behind column feet+head. Bare
-// hand, one hold: insta-blocks break, stone/real walls only crack (safe),
-// server-air no-ops. NOTE the hold cannot break dirt/gravel/sand fall-in
-// by hand (2.5-3 s hand time) — that needs longer holds or a selected
-// tool (follow-up idkcraft-ssn). Each cell air-gated here
-// (never eat a client-solid wall); motion afterwards is the confirm (the
-// client already sees air, so no break is ever visible locally).
-function ghostBreak(bot, cells) {
-  try {
-    if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
-    if (typeof bot._client.write !== 'function') return false
-    if (bot.targetDigBlock) return false
-    if (!Array.isArray(cells) || cells.length === 0) return false
-    const dug = []
-    for (const cell of cells) {
-      if (!cell || typeof cell.x !== 'number') continue
-      const n = fname(bot, cell.x, cell.y, cell.z)
-      if (!(n === null || isAirName(n))) continue
-      bot._client.write('block_dig', { status: 0, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
-      dug.push(cell)
-    }
-    if (dug.length === 0) return false
-    try {
-      setTimeout(() => {
-        try {
-          if (bot.targetDigBlock) return
-          for (const cell of dug) bot._client.write('block_dig', { status: 1, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
-        } catch (_) { /* abort best-effort */ }
-      }, GHOSTBREAK_HOLD_MS)
-    } catch (_) { /* timer best-effort */ }
-    console.log(`deep ghostbreak at ${dug.map((c) => `${c.x},${c.y},${c.z}`).join(' ')}`)
-    return true
-  } catch (_) {
-    return false
-  }
-}
-
-// Blind ghost-dig: START a real dig on a client-air cell the server keeps
-// rejecting moves into (dug-area gravel-fall the client missed). No air
-// check (that IS the condition); the guarded CANCEL still stands down for
-// live digs. Bare-hand holds under ~3 s only break insta-blocks (hand
-// dirt/gravel/sand run 2.5-3 s, not tool times) — breaking fall-in needs
-// longer holds or tool-selected digs (follow-up idkcraft-ssn).
-function ghostDig(bot, cell) {
-  try {
-    if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
-    if (typeof bot._client.write !== 'function') return false
-    if (bot.targetDigBlock) return false
-    if (!cell || typeof cell.x !== 'number') return false
-    bot._client.write('block_dig', { status: 0, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
-    try {
-      setTimeout(() => {
-        try {
-          if (bot.targetDigBlock) return
-          bot._client.write('block_dig', { status: 1, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
-        } catch (_) { /* abort best-effort */ }
-      }, GHOSTDIG_ABORT_MS)
-    } catch (_) { /* timer best-effort */ }
-    console.log(`deep ghostdig at ${cell.x},${cell.y},${cell.z}`)
-    return true
-  } catch (_) {
-    return false
-  }
-}
+// NOTE (ssn): the ghostDig/ghostBreak START+CANCEL escalation lived here.
+// Deleted: 0-for-16 across five rig legs (every firing followed by an
+// unchanged pin and an honest fail), RCON server-truth agrees with the
+// client on every pin cell (no block ghost to break), and the pin/faceplant
+// mechanism is the aim-drift snap-ratchet (see aimDir), which no dig packet
+// addresses. The unfreeze resync poke stays (independent 2/2 evidence).
 
 // Solid feet-or-head cell on the back-off line (away from the crumb along
 // the aim ray), a full block back. Null reads as clear (the tubeClean
 // precedent); liquids are open (backing into water is fine).
 function backBlocked(bot, bp, next) {
-  const dx = bp.x - (next.x + 0.5)
-  const dz = bp.z - (next.z + 0.5)
-  const len = Math.hypot(dx, dz)
-  if (len < 0.05) return false
+  const ad = aimDir(bp, next)
+  if (!ad) return false
   for (const dy of [0, 1]) {
-    const n = fname(bot, Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST), Math.floor(bp.y) + dy, Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST))
+    const n = fname(bot, Math.floor(bp.x - ad.dx * BACK_SAMPLE_DIST), Math.floor(bp.y) + dy, Math.floor(bp.z - ad.dz * BACK_SAMPLE_DIST))
     if (n === null || isAirName(n) || n === 'water' || n === 'lava') continue
     return true
   }
@@ -1277,13 +1337,37 @@ function backBlocked(bot, bp, next) {
 }
 
 function riserAhead(bot, bp, next) {
-  const dx = next.x + 0.5 - bp.x
-  const dz = next.z + 0.5 - bp.z
-  const len = Math.hypot(dx, dz)
-  if (len < 0.05) return false
-  const n = fname(bot, Math.floor(bp.x + (dx / len) * 0.75), Math.floor(bp.y), Math.floor(bp.z + (dz / len) * 0.75))
+  const ad = aimDir(bp, next)
+  if (!ad) return false
+  const n = fname(bot, Math.floor(bp.x + ad.dx * 0.75), Math.floor(bp.y), Math.floor(bp.z + ad.dz * 0.75))
   if (n === null || isAirName(n)) return false
   return n !== 'water' && n !== 'lava'
+}
+
+// One standable mid-step 1-up from the body toward a multi-up crumb (ssn
+// gap fill). Strict reads: feet+head must be KNOWN air, the floor KNOWN
+// solid (a fill onto a ghost floor strands the latch). Nearest-to-crumb
+// wins (progress-directed). Null when the shaft is air.
+function fillMid(bot, bp, next) {
+  const y = Math.floor(bp.y) + 1
+  let best = null
+  let bestD = Infinity
+  for (let ox = -1; ox <= 1; ox++) {
+    for (let oz = -1; oz <= 1; oz++) {
+      const cx = Math.floor(bp.x) + ox
+      const cz = Math.floor(bp.z) + oz
+      if (Math.hypot(cx + 0.5 - bp.x, cz + 0.5 - bp.z) > 1.5) continue
+      const feet = fname(bot, cx, y, cz)
+      const head = fname(bot, cx, y + 1, cz)
+      const floor = fname(bot, cx, y - 1, cz)
+      if (feet === null || !isAirName(feet)) continue
+      if (head === null || !isAirName(head)) continue
+      if (floor === null || !isSolidName(floor)) continue
+      const dd = Math.hypot(cx - next.x, cz - next.z)
+      if (dd < bestD) { bestD = dd; best = { x: cx, y, z: cz } }
+    }
+  }
+  return best
 }
 
 // Paper open-air freeze / ghost-block wedge (muse-5 prod-world rig 2/2):
@@ -1297,10 +1381,7 @@ function riserAhead(bot, bp, next) {
 // dig runs (targetDigBlock), never over air; the delayed CANCEL stands
 // down if a real dig started meanwhile (don't steal its abort).
 const UNFREEZE_ABORT_MS = 150
-const WEDGED_DIG_TICKS = 3 // wedged/inch-pinned ticks before a blind ghost-dig behind (server-solid the client shows as air)
-const GHOSTDIG_ABORT_MS = 800 // ghost-dig START probe (breaks insta-blocks only by hand; guarded CANCEL still stands down for live digs)
-const GHOSTBREAK_TICKS = 6 // inch-press ticks before the ghost-break escalation (3 past the blind dig: it broke nothing)
-const GHOSTBREAK_HOLD_MS = 1200 // ghost-break START hold (insta-blocks break; dirt/gravel need 2.5-3 s hand — see idkcraft-ssn)
+const WEDGED_FAIL_TICKS = 8 // wedged ticks before the honest fail (recover owns the escape; the stall budget would take 15)
 function unfreeze(bot, extra) {
   try {
     if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
@@ -1436,13 +1517,15 @@ module.exports.TARGET_Y = TARGET_Y
 module.exports.FLOOR_Y = FLOOR_Y
 module.exports.TUNNEL_MAX = TUNNEL_MAX
 module.exports.DEEP_WANT = DEEP_WANT
+module.exports.PRESCAN_STEPS = PRESCAN_STEPS
 module.exports.waterNear = waterNear
 module.exports.fallingAbove = fallingAbove
 module.exports.lavaNear = lavaNear
 module.exports.dropBelow = dropBelow
+module.exports.landingHazard = landingHazard
 module.exports.pickSite = pickSite
 module.exports.pickDir = pickDir
 module.exports.stairCells = stairCells
 module.exports.tunnelNext = tunnelNext
 module.exports.unfreeze = unfreeze
-module.exports.ghostDig = ghostDig
+module.exports.aimDir = aimDir

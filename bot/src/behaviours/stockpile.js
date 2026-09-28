@@ -54,6 +54,11 @@ const TOOL_KEEP = /_(pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boo
 const EXACT_KEEP = new Set([
   'shears', 'flint_and_steel', 'bow', 'crossbow', 'trident', 'arrow', 'shield',
   'torch', 'coal', 'charcoal', 'stick',
+  // Escape kit (jsf.5): the filled bucket stays for the pit climb, the
+  // empty stays for the gear fill sub-step (a banked empty would reforge
+  // instead of refill). Owner spares bank through the finished-goods
+  // allowance below, like the forged swords and picks.
+  'bucket', 'water_bucket',
 ])
 const FOOD_KEEP = 10
 const SCAFFOLD_KEEP = 32
@@ -123,7 +128,7 @@ function invItems(bot) {
 // Self reserve, mirror of gear.js SELF_RESERVE (round-2): owner pickaxes
 // share the self pick's item name, so the allowance counts the pack minus
 // the hands — a toss plus a bank can never spend the bot's own pick.
-const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1 }
+const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 }
 // Finished-goods exception (ipn.3): forged owner tools bank up to the gear
 // ledger count (ctx.gearFinished); the rest of the kit stays. Without ctx
 // the behaviour is exactly the old one.
@@ -592,6 +597,14 @@ function stockpile(bot, ctx, target, state) {
             }
           }
         } catch (_) { /* ledger best-effort */ }
+        // Pantry signal (ipn.6): ladder mats banked mid-rung re-arm gear's
+        // chest withdraw. Names mirror gear's RUNGS mats + smeltable ore
+        // (no shared import: this module must not require gear — cycle).
+        try {
+          if ((bankedByName.raw_iron || 0) > 0 || (bankedByName.iron_ingot || 0) > 0 || (bankedByName.diamond || 0) > 0) {
+            ctx.gearPantryBanked = (ctx.gearPantryBanked || 0) + 1
+          }
+        } catch (_) { /* signal best-effort */ }
         ctx.chestFull = false
         ctx.chestFullAt = null
         ctx.chestErrorAt = null

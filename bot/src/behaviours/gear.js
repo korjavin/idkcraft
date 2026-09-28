@@ -4,20 +4,25 @@
 // and hands finished goods to the owner: one MENU step with an internal rung
 // machine, no per-rung steps.
 //
-// Ladder (iron, then diamond): self pickaxe, owner sword, owner pickaxe.
-// Self first: diamond ore needs an iron pick in the inventory (bring.js tier
-// gate), so the bot forges its own hands before the owner's kit. Stone is
-// equip's job and the precondition, not a rung. Armour is a follow-up (the
-// RUNGS table extends by data).
+// Ladder (iron, then diamond): self pickaxe, self bucket, owner sword,
+// owner pickaxe, owner buckets, then armour (ipn.6): self
+// helmet/chestplate/leggings/boots, then the owner's spares. Self tools
+// first: diamond ore needs an iron pick in the inventory (bring.js tier
+// gate), so the bot forges its own hands before the owner's kit; its own
+// water-bucket pair (jsf.5, the pit escape) outranks the owner's sword.
+// Armour trails the tools (no rung gates on it) but keeps the self-before-
+// owner shape. Stone is equip's job and the precondition, not a rung.
 //
 // The rung machine derives its position from the inventory every tick — no
 // monotonic phase counter — so death, displacement, or a gifted tool move it
-// correctly (a lost self pick regresses the ladder to iron). Owner pieces
-// are craft-once: once forged and vanished from the pack they read as handed
-// over, whether tossed to a player (deliver) or banked (stockpile). A death
-// that eats an unhanded owner piece is forgiven, not remade: tracking it
-// would need a death marker across steps, and the reconcile below stays
-// silent rather than claim a handover it cannot prove (chat honesty).
+// correctly (a lost self pick regresses the ladder to iron). Self armour
+// counts worn plus packed (worn is invisible to items(), slots 9-44 only)
+// and goes on the body at the forge; owner pieces are craft-once: once
+// forged and vanished from the pack they read as handed over, whether
+// tossed to a player (deliver) or banked (stockpile). A death that eats an
+// unhanded owner piece is forgiven, not remade: tracking it would need a
+// death marker across steps, and the reconcile below stays silent rather
+// than claim a handover it cannot prove (chat honesty).
 //
 // Subroutines (owned by slices A and B, driven here, no MENU steps of their
 // own): furnace(bot, ctx) smelts raw iron behind ctx.furnace.result, deep()
@@ -30,26 +35,47 @@
 // gear can accumulate ore, so the ladder effectively progresses with nobody
 // online (E's night acceptance). That is the epic's shape, not a bug: the
 // day bot fetches raw, the night bot forges. Stranded chest batches (ore
-// banked at SURPLUS_BATCH while fuel-short) are waste, not a stall — coal is
-// never banked (EXACT_KEEP), so fuel always recovers on hand. Pantry
-// withdraw is a follow-up, not v1.
+// banked at SURPLUS_BATCH mid-rung) withdraw on demand (ipn.6 pantry):
+// stockpile bumps ctx.gearPantryBanked when it banks ladder mats, and a
+// mat-short rung draws the shortfall before it yields to the fetchers or
+// the deep leg. Coal never banks (EXACT_KEEP), so fuel always recovers on
+// hand — no withdraw for it.
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const { COAL_RESERVE } = require('./light')
-const { countItems } = require('../perception')
+const { countItems, wornItems } = require('../perception')
 const { say } = require('./util')
 
 // Ladder data: tiers in order, pieces in order. kind+owner name the want;
-// the item name is `${tier}_${kind}`.
+// the item name is `${tier}_${kind}` unless the piece overrides it. Buckets
+// (jsf.5) override both ends: crafted as `bucket`, handed over filled as
+// `water_bucket` — the `${tier}_${kind}` template would read iron_bucket.
+// Armour (ipn.6) trails each tier's tools, self set then owner spares.
+const SELF_ARMOR = [
+  { kind: 'helmet', owner: false },
+  { kind: 'chestplate', owner: false },
+  { kind: 'leggings', owner: false },
+  { kind: 'boots', owner: false },
+]
+const OWNER_ARMOR = [
+  { kind: 'helmet', owner: true },
+  { kind: 'chestplate', owner: true },
+  { kind: 'leggings', owner: true },
+  { kind: 'boots', owner: true },
+]
 const RUNGS = [
   {
     tier: 'iron', mat: 'iron_ingot',
     pieces: [
       { kind: 'pickaxe', owner: false },
+      { kind: 'bucket', owner: false, item: 'bucket', filled: 'water_bucket' },
       { kind: 'sword', owner: true },
       { kind: 'pickaxe', owner: true },
+      { kind: 'bucket', owner: true, item: 'bucket', filled: 'water_bucket' },
+      ...SELF_ARMOR,
+      ...OWNER_ARMOR,
     ],
   },
   {
@@ -58,22 +84,53 @@ const RUNGS = [
       { kind: 'pickaxe', owner: false },
       { kind: 'sword', owner: true },
       { kind: 'pickaxe', owner: true },
+      ...SELF_ARMOR,
+      ...OWNER_ARMOR,
     ],
   },
 ]
-const MAT_NEED = { pickaxe: 3, sword: 2 }
-const STICK_NEED = { pickaxe: 2, sword: 1 }
+const MAT_NEED = { pickaxe: 3, sword: 2, bucket: 3, helmet: 5, chestplate: 8, leggings: 7, boots: 4 }
+const STICK_NEED = { pickaxe: 2, sword: 1, bucket: 0, helmet: 0, chestplate: 0, leggings: 0, boots: 0 }
 // Owner wants per item name (tiers differ by name, so names are unique).
-const OWNER_WANT = { iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 }
+// water_bucket is the multi-unit want (2 spares for the owner, one at a
+// time — the given ledger counts units, see reconcile).
+const OWNER_WANT = {
+  iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1, water_bucket: 2,
+  iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+  diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+}
+// Armour equip destinations (mineflayer bot.equip words, fight.js shape).
+// Doubles as the armour-kind test: a kind in this map counts worn+packed
+// and goes on the body at the forge.
+const ARMOR_DEST = { helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet' }
 // Self reserve (round-2): owner pickaxes share the self pick's item name,
 // so handover math counts the pack MINUS the hands. Without it a toss plus
 // a bank spends the bot's own pick (live - 0) and knocks the ladder back to
 // iron. Swords have no self twin (the stone sword suffices), reserve 0.
+// The escape buckets (jsf.5) are shared-name twins like the picks: two stay
+// in the pack (owner 2026-09-28: 'simple solution — get another bucket',
+// SELF_RESERVE 2 feeds the jsf.2 two-bucket climb), spares hand over.
 // Mirrored in stockpile.js GEAR_SELF_RESERVE (no shared import: stockpile
 // must not require gear — craft/goal cycle).
-const SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1 }
+// Armour (ipn.6) needs no reserve entry: the worn set is invisible to pack
+// counts (items() skips slots 5-8), so handover math can never spend it —
+// the slots themselves are the reserve. No mirror changes either.
+const SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 }
+// Finished-good name: the ledger name (have-checks, made, haul, given).
+function pieceName(rung, piece) {
+  try {
+    if (piece && typeof piece.filled === 'string' && piece.filled) return piece.filled
+  } catch (_) { /* template below */ }
+  return `${rung.tier}_${piece.kind}`
+}
 function reserve(name) {
   return SELF_RESERVE[name] || 0
+}
+// Self pieces complete when the hands are full: the reserve depth (picks 1,
+// buckets 2), at least one — a self want without a reserve entry still
+// forges a single unit.
+function selfWant(name) {
+  return Math.max(1, reserve(name))
 }
 function haulCount(ctx, name) {
   try {
@@ -108,6 +165,34 @@ function have(bot, name) {
   }
 }
 
+// Self completion count: tools read the pack, armour reads worn plus packed
+// (a forged self piece is on the body or still in the pack mid-wear — both
+// read complete, so a lagged equip never reforges). Owner math stays
+// pack-only (have): a worn self piece must never satisfy an owner want.
+function selfHave(bot, name, kind) {
+  const pack = have(bot, name)
+  try {
+    if (kind && ARMOR_DEST[kind]) return pack + wornItems(bot, name)
+  } catch (_) { /* pack-only */ }
+  return pack
+}
+
+// Pantry freshness (ipn.6): stockpile bumps ctx.gearPantryBanked when it
+// banks ladder mats, the withdraw below records what it saw. Fresh means a
+// bank landed that no withdraw has drawn yet — attempt, don't yield. No
+// adopted chest reads stale (no pantry to draw); an unlatched session reads
+// fresh, so pre-restart strands withdraw on the first mat-short visit.
+function pantryFresh(ctx) {
+  try {
+    if (!ctx || !ctx.home || !ctx.home.chest) return false
+    const banked = ctx.gearPantryBanked || 0
+    const seen = ctx.gear && typeof ctx.gear.pantrySeen === 'number' ? ctx.gear.pantrySeen : -1
+    return banked !== seen
+  } catch (_) {
+    return false
+  }
+}
+
 function gearCtx(ctx) {
   try {
     if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
@@ -138,17 +223,24 @@ function deriveNext(bot, ctx) {
   } catch (_) {
     given = {}
   }
+  let noWater = false
+  try {
+    noWater = !!(ctx && ctx.gear && ctx.gear.noWater)
+  } catch (_) { /* water unknown: rungs flow */ }
   for (let ti = 0; ti < RUNGS.length; ti++) {
     const rung = RUNGS[ti]
     for (let pi = 0; pi < rung.pieces.length; pi++) {
       const piece = rung.pieces[pi]
-      const name = `${rung.tier}_${piece.kind}`
+      // Dry home (jsf.5): the bucket rung is skipped, the ladder walks on.
+      if (piece.filled && noWater) continue
+      const name = pieceName(rung, piece)
+      const craft = (piece && piece.item) || name
       if (piece.owner) {
         if ((given[name] || 0) < (OWNER_WANT[name] || 1) && !tossed(name, have(bot, name), ctx)) {
-          return { tier: rung.tier, tierIdx: ti, pieceIdx: pi, mat: rung.mat, kind: piece.kind, owner: true, name, needMat: MAT_NEED[piece.kind], needSticks: STICK_NEED[piece.kind] }
+          return { tier: rung.tier, tierIdx: ti, pieceIdx: pi, mat: rung.mat, kind: piece.kind, owner: true, name, craft, fill: !!piece.filled, needMat: MAT_NEED[piece.kind], needSticks: STICK_NEED[piece.kind] }
         }
-      } else if (have(bot, name) <= 0) {
-        return { tier: rung.tier, tierIdx: ti, pieceIdx: pi, mat: rung.mat, kind: piece.kind, owner: false, name, needMat: MAT_NEED[piece.kind], needSticks: STICK_NEED[piece.kind] }
+      } else if (selfHave(bot, name, piece.kind) < selfWant(name)) {
+        return { tier: rung.tier, tierIdx: ti, pieceIdx: pi, mat: rung.mat, kind: piece.kind, owner: false, name, craft, fill: !!piece.filled, needMat: MAT_NEED[piece.kind], needSticks: STICK_NEED[piece.kind] }
       }
     }
   }
@@ -172,10 +264,25 @@ function reconcile(ctx, bot) {
     try {
       const live = have(bot, name)
       const net = Math.max(0, live - reserve(name))
-      if ((finished[name] || 0) > net) finished[name] = net
+      const prevFin = finished[name] || 0
+      if (prevFin > net) finished[name] = net
       if (tossed(name, live, ctx)) {
         if (!ctx.gearGiven || typeof ctx.gearGiven !== 'object') ctx.gearGiven = {}
-        if ((ctx.gearGiven[name] || 0) < OWNER_WANT[name]) ctx.gearGiven[name] = OWNER_WANT[name]
+        // Toss-channel accounting, incremental like the bank channel
+        // (stockpile): each vanished finished unit counts once toward the
+        // want, capped. Single-unit wants land exactly as before.
+        const handed = Math.max(0, prevFin - (finished[name] || 0))
+        if (handed > 0 && (ctx.gearGiven[name] || 0) < OWNER_WANT[name]) {
+          ctx.gearGiven[name] = Math.min(OWNER_WANT[name], (ctx.gearGiven[name] || 0) + handed)
+        }
+        // A settled unit leaves the pipeline: with both channels at zero,
+        // made clears so the next unit of a multi-unit want (water_bucket
+        // x2, jsf.5) re-derives instead of reading handed forever.
+        if ((finished[name] || 0) <= 0 && haulCount(ctx, name) <= 0) {
+          try {
+            if (ctx.gear && ctx.gear.made) delete ctx.gear.made[name]
+          } catch (_) { /* ledger best-effort */ }
+        }
       }
     } catch (_) { /* ledger best-effort */ }
   }
@@ -205,6 +312,20 @@ function countsFromFacts(facts, ctx) {
     sticks: f.sticks || 0, planks: f.maxPlanks || 0, logs: f.logs || 0,
     iron_pickaxe: f.ironPick || 0, iron_sword: f.ironSword || 0,
     diamond_pickaxe: f.diamondPick || 0, diamond_sword: f.diamondSword || 0,
+    bucket: f.bucket || 0, water_bucket: f.waterBucket || 0,
+    iron_helmet: f.ironHelmet || 0, iron_chestplate: f.ironChestplate || 0,
+    iron_leggings: f.ironLeggings || 0, iron_boots: f.ironBoots || 0,
+    diamond_helmet: f.diamondHelmet || 0, diamond_chestplate: f.diamondChestplate || 0,
+    diamond_leggings: f.diamondLeggings || 0, diamond_boots: f.diamondBoots || 0,
+    // Worn counts ride beside the pack counts (revmux 01 core-1/body-1):
+    // owner math (tossed, hand) must read the pack only, or a worn self
+    // piece holds a tossed spare in 'hand' forever — gear infeasible, the
+    // tick never reconciles, the ladder freezes (survives restarts via
+    // the persisted ledger). Only the self branch adds worn.
+    worn_iron_helmet: f.wornIronHelmet || 0, worn_iron_chestplate: f.wornIronChestplate || 0,
+    worn_iron_leggings: f.wornIronLeggings || 0, worn_iron_boots: f.wornIronBoots || 0,
+    worn_diamond_helmet: f.wornDiamondHelmet || 0, worn_diamond_chestplate: f.wornDiamondChestplate || 0,
+    worn_diamond_leggings: f.wornDiamondLeggings || 0, worn_diamond_boots: f.wornDiamondBoots || 0,
     tablePlaced: !!f.tablePlaced, furnaceClaim,
     furnaceItem: f.furnaceItem || 0, cobble: f.cobble || 0, fuel: f.coal || 0,
   }
@@ -245,15 +366,25 @@ function planFor(counts, ctx, impls, furnaceBusy) {
   } catch (_) {
     given = {}
   }
+  let noWater = false
+  try {
+    noWater = !!(ctx && ctx.gear && ctx.gear.noWater)
+  } catch (_) { /* water unknown: rungs flow */ }
   for (let ti = 0; ti < RUNGS.length; ti++) {
     const rung = RUNGS[ti]
     for (let pi = 0; pi < rung.pieces.length; pi++) {
       const piece = rung.pieces[pi]
-      const name = `${rung.tier}_${piece.kind}`
+      // Dry home (jsf.5): the bucket rung is skipped, the ladder walks on.
+      if (piece.filled && noWater) continue
+      const name = pieceName(rung, piece)
       if (piece.owner) {
         if ((given[name] || 0) >= (OWNER_WANT[name] || 1) || tossed(name, c[name] || 0, ctx)) continue
-      } else if ((c[name] || 0) > 0) {
-        continue
+      } else {
+        // Self armour reads worn plus packed (deriveNext selfHave shape);
+        // tools read the pack. Worn adds ONLY here — the owner branch
+        // above and the hand check below stay pack-only (core-1/body-1).
+        const wornN = (piece.kind && ARMOR_DEST[piece.kind]) ? (c['worn_' + name] || 0) : 0
+        if ((c[name] || 0) + wornN >= selfWant(name)) continue
       }
       return planPiece(rung, piece, name, c, im, furnaceBusy, ctx)
     }
@@ -273,6 +404,10 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
     } catch (_) { /* unmade */ }
     if (made && (c[name] || 0) > reserve(name)) return { state: 'hand', key: `hand-${name}`, name }
   }
+  // Bucket fill (jsf.5): an empty on hand fills before anything new is
+  // crafted — a fresh forge and a leftover (lost scoop refill, gifted
+  // empty) rejoin the same sub-step.
+  if (piece.filled && (c[piece.item] || 0) > 0) return { state: 'ready', key: 'ready', action: 'fill' }
   const needMat = MAT_NEED[kind]
   const needSticks = STICK_NEED[kind]
   const matHave = rung.tier === 'iron' ? (c.ingots || 0) : (c.diamonds || 0)
@@ -289,6 +424,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   }
   const short = needMat - matHave
   if (rung.tier === 'diamond') {
+    // Pantry first (ipn.6): stranded chest diamonds beat an expedition.
+    if (pantryFresh(ctx)) return { state: 'ready', key: 'ready', action: 'withdraw' }
     // Buried cells are undiggable by forage (ipn.2): without the deep leg
     // the want is unactionable, so it waits instead of announcing a dig.
     if (!im.deep) return { state: 'wait', key: 'wait-deep', line: 'waiting on the deep shaft for diamonds' }
@@ -305,6 +442,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
     }
     return { state: 'ready', key: 'ready', action: 'smelt' }
   }
+  // Pantry first (ipn.6): a banked batch draws before the fetchers walk.
+  if (pantryFresh(ctx)) return { state: 'ready', key: 'ready', action: 'withdraw' }
   return { state: 'want', key: 'want-ore', line: `need ${short} more raw iron, going to dig` }
 }
 
@@ -358,11 +497,24 @@ function liveCounts(bot, ctx) {
       !!stationStanding(bot, (ctx && ctx.claimedTable))
     furnaceClaim = !!(ctx && ctx.home && ctx.home.furnace)
   } catch (_) { /* no stations */ }
+  // Armour: pack counts under the item name (owner math reads these —
+  // revmux 01 core-1/body-1), worn counts beside them for the self branch.
+  const armor = (name) => have(bot, name)
+  const wornArmor = (name) => wornItems(bot, name)
   return {
     ironOre: have(bot, 'raw_iron'), ingots: have(bot, 'iron_ingot'), diamonds: have(bot, 'diamond'),
     sticks: have(bot, 'stick'), planks, logs,
     iron_pickaxe: have(bot, 'iron_pickaxe'), iron_sword: have(bot, 'iron_sword'),
     diamond_pickaxe: have(bot, 'diamond_pickaxe'), diamond_sword: have(bot, 'diamond_sword'),
+    bucket: have(bot, 'bucket'), water_bucket: have(bot, 'water_bucket'),
+    iron_helmet: armor('iron_helmet'), iron_chestplate: armor('iron_chestplate'),
+    iron_leggings: armor('iron_leggings'), iron_boots: armor('iron_boots'),
+    diamond_helmet: armor('diamond_helmet'), diamond_chestplate: armor('diamond_chestplate'),
+    diamond_leggings: armor('diamond_leggings'), diamond_boots: armor('diamond_boots'),
+    worn_iron_helmet: wornArmor('iron_helmet'), worn_iron_chestplate: wornArmor('iron_chestplate'),
+    worn_iron_leggings: wornArmor('iron_leggings'), worn_iron_boots: wornArmor('iron_boots'),
+    worn_diamond_helmet: wornArmor('diamond_helmet'), worn_diamond_chestplate: wornArmor('diamond_chestplate'),
+    worn_diamond_leggings: wornArmor('diamond_leggings'), worn_diamond_boots: wornArmor('diamond_boots'),
     tablePlaced, furnaceClaim,
     furnaceItem: have(bot, 'furnace'), cobble: have(bot, 'cobblestone'),
     fuel: have(bot, 'coal') + have(bot, 'charcoal'),
@@ -427,6 +579,210 @@ function tableBlock(bot, ctx) {
   } catch (_) {
     return null
   }
+}
+
+// ---- bucket fill (jsf.5) ----
+
+// Fill search radius (bead ~32, from home or self); candidates per scan;
+// scoop reach (TABLE_REACH shape — the server raycast is 4.5, waterup
+// USE_REACH); the dry latch only fires with home in range, so a far leg
+// walks home instead of skipping the rung on an unloaded chunk; per-cell
+// patience (WALK_GIVE_UP shape); verify window (phantom-settle shape).
+const FILL_SEARCH = 32
+const FILL_FIND_COUNT = 8
+const FILL_REACH = 4
+const FILL_NEAR_HOME = 16
+const FILL_WALK_TICKS = 20
+const FILL_SETTLE_MS = 500
+
+function waterId(bot) {
+  try {
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    const e = byName.water
+    if (e && typeof e.id === 'number') return e.id
+  } catch (_) { /* unresolvable */ }
+  return null
+}
+
+// Nearest-first water cells from the body, tried ones excluded. Fill
+// wherever water is; the home anchor below only gates the dry latch.
+// The scan widens by the tried count (revmux jsf.5-01 core-2/body-2):
+// findBlocks slices to count BEFORE we filter, so a fixed count hides
+// farther cells behind tried ones and latches a wet home dry. Nearest
+// 8+tried minus tried reads empty only when no untried water is left.
+function findWater(bot, tried) {
+  try {
+    if (!bot || typeof bot.findBlocks !== 'function') return []
+    const id = waterId(bot)
+    if (id === null) return []
+    const skip = tried ? Object.keys(tried).length : 0
+    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_FIND_COUNT + skip }) || []
+    const out = []
+    for (const p of found) {
+      if (!p || typeof p.x !== 'number') continue
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (tried && tried[key]) continue
+      out.push({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), key })
+    }
+    return out
+  } catch (_) {
+    return []
+  }
+}
+
+function nearHomeSite(bot, ctx, r) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    const s = ctx && ctx.home && ctx.home.site
+    if (!bp || !s || typeof s.x !== 'number') return false
+    return Math.hypot(bp.x - s.x, bp.y - s.y, bp.z - s.z) <= r
+  } catch (_) {
+    return false
+  }
+}
+
+function findBucket(bot) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) {
+      for (const i of items) {
+        if (i && i.name === 'bucket') return i
+      }
+    }
+  } catch (_) { /* unscannable */ }
+  return null
+}
+
+// Fill one empty at a water cell: equip, aim, use (buckets work ONLY via
+// lookAt + activateItem, the server raycast — placeBlock is silently
+// ignored for buckets on Paper, jsf.1 verdict), then verify water_bucket
+// +1. The ledger lands here, not at the craft: forged() on an empty would
+// hand deliver a claim for a bucket that holds no water yet.
+function runFillOp(bot, ctx, next, t, aim) {
+  if (typeof bot.activateItem !== 'function') {
+    fail(ctx, 'fill-no-use')
+    return
+  }
+  let before = 0
+  try {
+    before = have(bot, 'water_bucket')
+  } catch (_) { /* unverifiable: trust the op */ }
+  const snap = { name: next.name, owner: next.owner }
+  ctx.gearInFlight = true
+  void (async () => {
+    try {
+      const item = findBucket(bot)
+      if (!item) {
+        ctx.gearInFlight = false
+        return // raced the empty: re-plan retries or re-forges
+      }
+      if (typeof bot.equip !== 'function') {
+        ctx.gearInFlight = false
+        fail(ctx, 'fill-no-equip')
+        return
+      }
+      await bot.equip(item, 'hand')
+      try {
+        bot.lookAt(aim, true)
+      } catch (_) { /* aim best-effort */ }
+      bot.activateItem()
+    } catch (_) {
+      ctx.gearInFlight = false
+      return // transient window race: re-plan retries the same cell
+    }
+    await new Promise((resolve) => setTimeout(resolve, FILL_SETTLE_MS))
+    ctx.gearInFlight = false
+    let landed = false
+    try {
+      landed = have(bot, 'water_bucket') > before
+    } catch (_) { /* unverifiable: trust the op */ }
+    if (!landed) {
+      // Flowing cell or a missed raycast (only sources fill): next one.
+      try {
+        const r = runCtx(ctx)
+        if (!r.fillTried || typeof r.fillTried !== 'object') r.fillTried = {}
+        r.fillTried[t.key] = true
+      } catch (_) { /* retry best-effort */ }
+      return
+    }
+    try {
+      forged(bot, ctx, snap)
+    } catch (_) { /* completion best-effort */ }
+  })()
+}
+
+function fillTick(bot, ctx, next) {
+  const g = gearCtx(ctx)
+  const r = runCtx(ctx)
+  // The tried-set lives one empty: a fresh empty re-arms every cell.
+  let empties = 0
+  try {
+    empties = have(bot, 'bucket')
+  } catch (_) { /* unscannable */ }
+  if (r.fillEmpties !== empties) {
+    r.fillEmpties = empties
+    r.fillTried = {}
+    r.fillTarget = null
+    r.fillWalkKey = null
+    r.fillWalkTicks = 0
+  }
+  if (!r.fillTried || typeof r.fillTried !== 'object') r.fillTried = {}
+  // Locked target (revmux jsf.5-01 body-3): re-picking the nearest cell
+  // every tick resets the walk give-up whenever the body moves past a
+  // nearer cell, so an unreachable cell is never marked tried. The lock
+  // holds until the cell fills, fails, or times out.
+  if (!r.fillTarget || r.fillTried[r.fillTarget.key]) r.fillTarget = null
+  const cands = findWater(bot, r.fillTried)
+  if (cands.length === 0) {
+    if (nearHomeSite(bot, ctx, FILL_NEAR_HOME)) {
+      // Dry home: say once, skip the rung, the ladder walks on. The latch
+      // is session-scoped — water near home is static, and a re-scan every
+      // gear visit would cost a scan per rung forever.
+      try {
+        g.noWater = true
+      } catch (_) { /* latch best-effort */ }
+      try {
+        r.fillTried = {}
+      } catch (_) { /* reset best-effort */ }
+      announceYield(ctx, g, bot, 'want-water', 'need water for the bucket')
+      return
+    }
+    // Water may wait at home: walk there like the table walk (craft
+    // precedent — the give-up fails loud instead of idling far away).
+    const s = ctx.home.site
+    walkTo(bot, ctx, `gear-home:${s.x},${s.y},${s.z}`, s, 'home-far')
+    return
+  }
+  if (!r.fillTarget) r.fillTarget = cands[0]
+  const t = r.fillTarget
+  const bp = bot.entity.position
+  const aim = new Vec3(t.x + 0.5, t.y + 0.5, t.z + 0.5)
+  if (dist3(bp, aim) > FILL_REACH) {
+    const key = `gear-water:${t.key}`
+    if (r.fillWalkKey !== key) {
+      r.fillWalkKey = key
+      r.fillWalkTicks = 0
+    }
+    if (key !== ctx.lastGoalKey) {
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(t.x, t.y, t.z, 2), false)
+      } catch (_) { /* retry next tick */ }
+      ctx.lastGoalKey = key
+    }
+    r.fillWalkTicks = (r.fillWalkTicks || 0) + 1
+    if (r.fillWalkTicks > FILL_WALK_TICKS) {
+      // Unreachable cell: try the next one, never fail the ladder — water
+      // behind a wall reads as no water (skip, don't stall).
+      r.fillTried[t.key] = true
+      r.fillTarget = null
+      r.fillWalkKey = null
+      r.fillWalkTicks = 0
+    }
+    return
+  }
+  r.fillWalkKey = null
+  r.fillWalkTicks = 0
+  runFillOp(bot, ctx, next, t, aim)
 }
 
 // One 2x2 op (sticks, planks) or 3x3 tool op. { fail } when stuck.
@@ -589,6 +945,102 @@ function forged(bot, ctx, next) {
   } catch (_) { /* logging best-effort */ }
 }
 
+// Self armour goes on the body at the forge (ipn.6): find the fresh piece
+// in the pack and equip it to its slot (an upgrade swaps the old tier down
+// to the pack — TOOL_KEEP holds it there, clutter, not a stall). The rung
+// reads complete from worn+packed either way, so a failed equip strands the
+// piece in the pack instead of stalling or reforging; death heals it (the
+// pack loss re-derives the rung). inFlight through the settle, fill shape.
+// Owner pieces never come here — only the tick's self branch calls this.
+const WEAR_SETTLE_MS = 500
+const WEAR_RETRIES = 3
+function wearSelf(bot, ctx, name, kind) {
+  const dest = (kind && ARMOR_DEST[kind]) || null
+  if (!dest || !bot || typeof bot.equip !== 'function') return
+  let item = null
+  try {
+    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) item = items.find((i) => i && i.name === name) || null
+  } catch (_) { item = null }
+  if (!item) return
+  ctx.gearInFlight = true
+  void (async () => {
+    // Bounded retries (revmux 01 core-2): a lag-rejected equip heals on
+    // the spot instead of stranding the self piece in the pack, where the
+    // owner twin would later spend it. A persistently failing equip still
+    // strands (logged) rather than stall — death heals it.
+    let on = false
+    for (let n = 0; n < WEAR_RETRIES && !on; n++) {
+      try {
+        await bot.equip(item, dest)
+      } catch (_) { /* unverifiable below: the settle decides */ }
+      await new Promise((resolve) => setTimeout(resolve, WEAR_SETTLE_MS))
+      try {
+        on = wornItems(bot, name) > 0
+      } catch (_) { on = true }
+    }
+    ctx.gearInFlight = false
+    if (!on) {
+      try {
+        console.error(`gear wear failed item=${name}`)
+      } catch (_) { /* logging best-effort */ }
+    }
+  })()
+}
+
+// Pantry withdraw (ipn.6): draw the rung's shortfall from the adopted home
+// chest — ingots first (direct), then smeltable ore; diamonds exact. One
+// window per name (bringitem.withdrawCraftMats shape), stockpile deferred
+// (legImpl precedent — no new import edge). The seen latch lands on a
+// short or errored draw only: a wedged lid yields to the fetchers instead
+// of looping, while a satisfied draw keeps the batch open for the next
+// rung; any future bank re-arms. Next tick re-plans (smelt/craft on stock,
+// the latched want/deep otherwise) — no fallback lines here.
+function runWithdraw(bot, ctx, next) {
+  let stockpileMod = null
+  try {
+    stockpileMod = require('./stockpile')
+  } catch (_) { stockpileMod = null }
+  const g = gearCtx(ctx)
+  if (!stockpileMod || typeof stockpileMod.withdrawFromChest !== 'function') {
+    try {
+      g.pantrySeen = ctx.gearPantryBanked || 0
+    } catch (_) { /* latch best-effort */ }
+    return
+  }
+  ctx.gearInFlight = true
+  void (async () => {
+    let errored = false
+    try {
+      const draw = async (name, want) => {
+        if (!(want > 0)) return
+        await stockpileMod.withdrawFromChest(bot, ctx, name, want)
+      }
+      if (next.tier === 'iron') {
+        await draw('iron_ingot', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot')))
+        await draw('raw_iron', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot') - have(bot, 'raw_iron')))
+      } else {
+        await draw('diamond', Math.max(0, (next.needMat || 0) - have(bot, 'diamond')))
+      }
+    } catch (_) { errored = true }
+    ctx.gearInFlight = false
+    try {
+      // Latch on the end state, not the request sum (revmux 02): a rung
+      // covered by the draw leaves the pantry fresh, so the next
+      // mat-short rung draws from the same batch instead of digging past
+      // it. Summing per-draw wants double-counts the iron path (ingot
+      // shortfall plus ore remainder) and latches a satisfied rung. A
+      // covered pack re-plans to smelt/craft, a short one latches to
+      // want/deep — no withdraw loop either way.
+      const need = next.needMat || 0
+      const stock = next.tier === 'iron'
+        ? have(bot, 'iron_ingot') + have(bot, 'raw_iron')
+        : have(bot, 'diamond')
+      if (errored || stock < need) g.pantrySeen = ctx.gearPantryBanked || 0
+    } catch (_) { /* latch best-effort */ }
+  })()
+}
+
 // Latched announce + yield: fetchers run (want) or slices land (wait). The
 // yield is done, never failed — failing would hold the step while another
 // step can fix the shortfall. The latch doubles as the MENU.feasible gate:
@@ -698,6 +1150,32 @@ function gear(bot, ctx, target, state) {
     fail(ctx, `deep-${reason}`)
     return
   }
+  if (plan.action === 'withdraw') {
+    const cpos = ctx.home && ctx.home.chest
+    if (!cpos || typeof cpos.x !== 'number') {
+      ctx.stepStatus = 'done' // raced the adoption: re-plan next tick
+      return
+    }
+    if (dist3(bp, cpos) > craftMod.TABLE_REACH) {
+      // Latch on the give-up tick (revmux 01 body-3): walkTo fails below
+      // without recording, and an unlatched plan re-offers the same
+      // unreachable walk every pick instead of degrading to want/deep.
+      if ((runCtx(ctx).walkTicks || 0) >= WALK_GIVE_UP) {
+        try {
+          gearCtx(ctx).pantrySeen = ctx.gearPantryBanked || 0
+        } catch (_) { /* latch best-effort */ }
+      }
+      walkTo(bot, ctx, `gear-chest:${cpos.x},${cpos.y},${cpos.z}`, cpos, 'chest-far')
+      return
+    }
+    runCtx(ctx).walkTicks = 0
+    runWithdraw(bot, ctx, next)
+    return
+  }
+  if (plan.action === 'fill') {
+    fillTick(bot, ctx, next)
+    return
+  }
   if (plan.action === 'craft') {
     const st = tableBlock(bot, ctx)
     if (!st) {
@@ -709,12 +1187,19 @@ function gear(bot, ctx, target, state) {
       return
     }
     runCtx(ctx).walkTicks = 0
-    const op = opTool(bot, next.name, st.block)
+    const op = opTool(bot, next.craft || next.name, st.block)
     if (op.fail) {
       fail(ctx, op.fail)
       return
     }
-    runOp(bot, ctx, op, () => forged(bot, ctx, next))
+    // Buckets forge silently (jsf.5): the ledger (made/haul/finished) lands
+    // at fill completion, so deliver never tosses the bot's own water for
+    // an owner claim that holds no water yet. Self armour goes on the body
+    // at the forge (ipn.6); owner armour rides the haul untouched.
+    runOp(bot, ctx, op, () => {
+      if (!next.fill) forged(bot, ctx, next)
+      if (!next.owner && next.kind && ARMOR_DEST[next.kind]) wearSelf(bot, ctx, next.name, next.kind)
+    })
     return
   }
   ctx.stepStatus = 'done' // unknown action: safe yield, never a hold
