@@ -110,9 +110,16 @@ function isInside(bot, home) {
     const bp = botPos(bot)
     const box = home && home.interior
     if (!bp || !box || !box.min || !box.max) return false
-    return bp.x >= box.min.x && bp.x <= box.max.x &&
-      bp.y >= box.min.y && bp.y <= box.max.y &&
-      bp.z >= box.min.z && bp.z <= box.max.z
+    // The box holds inclusive BLOCK coords; the entity carries a float.
+    // Comparing raw puts the back row and east column outside (live jr2.3:
+    // a bedroom order at z=4.5 read as outside and walked A* at the shut
+    // door). Floor to the standing block first.
+    const fx = Math.floor(bp.x)
+    const fy = Math.floor(bp.y)
+    const fz = Math.floor(bp.z)
+    return fx >= box.min.x && fx <= box.max.x &&
+      fy >= box.min.y && fy <= box.max.y &&
+      fz >= box.min.z && fz <= box.max.z
   } catch (_) {
     return false
   }
@@ -567,9 +574,11 @@ function meetPos(home) {
 }
 
 // Fresh meet record (jr2.3): inside settles straight into the hold (say hi,
-// leave the door to whoever is using it), outside walks in.
-function startMeet(by, inside) {
-  return { ...freshGo(), by: by || null, exiting: false, phase: inside ? 'close' : 'walk', settle: !!inside }
+// leave the door to whoever is using it), outside walks in. The order pins
+// its house at creation: 'build here' may swap ctx.home mid-order, and the
+// walk/legs must keep running against the pinned geometry (revmux 01 core-1).
+function startMeet(by, inside, home) {
+  return { ...freshGo(), by: by || null, exiting: false, phase: inside ? 'close' : 'walk', settle: !!inside, home: home || null }
 }
 
 // Release (jr2.3): a move command while the meet stands. Outside the order
@@ -581,14 +590,22 @@ function startMeet(by, inside) {
 // paths (setBring + startBlockOrder) cannot reset running legs.
 function releaseMeet(bot, ctx) {
   const order = ctx && ctx.comehome
-  if (!order || order.exiting) return
+  if (!order) return
+  // An armed exit persists across double-release paths (setBring +
+  // startBlockOrder) with its shelter intact: fight must not preempt the
+  // doorway. setHome's unshelter lands between two releases, so keeping
+  // refreshes it (revmux 01 core-1).
+  if (order.exiting) {
+    ctx.inShelter = true
+    return
+  }
   let inside = false
   try { inside = isInside(bot, ctx.home) } catch (_) { inside = false }
   if (!inside) {
     ctx.comehome = null
     return
   }
-  ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0 }
+  ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0, home: order.home || ctx.home }
   ctx.lastGoalKey = ''
   ctx.inShelter = true
 }
@@ -602,9 +619,40 @@ function failMeet(bot, ctx, status) {
   ctx.comehome = null
   setWalkDig(bot, true)
   try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
+  if (status === 'failed:cannot-seat') {
+    try { bot.chat('cannot reach the common room') } catch (_) { /* chat best-effort */ }
+    console.log(`comehome ${status}`)
+    return
+  }
   const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : ''
   try { bot.chat(`cannot reach home${why}`) } catch (_) { /* chat best-effort */ }
   console.log(`comehome ${status}`)
+}
+
+// Arrival shared by the door close and the seating walk: hold the room,
+// sheltered, one line out loud. Restores the walk's borrowed canDig.
+function arriveMeet(bot, ctx, order) {
+  order.phase = 'hold'
+  ctx.stepStatus = 'done'
+  ctx.inShelter = true
+  setWalkDig(bot, true)
+  try { bot.chat('home') } catch (_) { /* chat best-effort */ }
+}
+
+// Exit completion: normally the body releases to the flipped mode, but a
+// re-ordered meet (jr2.3 reseek) walks to the current home instead.
+function finishExit(bot, ctx, order) {
+  const by = order && order.by
+  if (order && order.reseek && ctx.home && ctx.home.site) {
+    ctx.comehome = startMeet(by, false, ctx.home)
+    ctx.inShelter = false
+    ctx.stepStatus = 'running'
+    ctx.lastGoalKey = ''
+    return
+  }
+  ctx.comehome = null
+  ctx.inShelter = false
+  ctx.stepStatus = 'running'
 }
 
 // Release walk (jr2.3): the exit legs mirrored from stay, with release
@@ -617,6 +665,9 @@ function failMeet(bot, ctx, status) {
 // from across the yard. Death/respawn and teleports jump past it and release
 // at once instead of sneak-marching the legs back from spawn.
 const EXIT_SHUT_BLOCKS = 2.5
+// Settle seats when farther than this (2D, meet centre): a walk-in arrival
+// ends within ~1.4, a bedroom or the partition row beyond 2.
+const SEAT_FAR = 1.5
 function exitMeet(bot, ctx, home, order) {
   if (!isInside(bot, home)) {
     let shut = false
@@ -628,9 +679,7 @@ function exitMeet(bot, ctx, home, order) {
       } catch (_) { shut = false }
     }
     if (!shut) {
-      ctx.comehome = null
-      ctx.inShelter = false
-      ctx.stepStatus = 'running'
+      finishExit(bot, ctx, order)
       return
     }
   }
@@ -651,7 +700,7 @@ function exitMeet(bot, ctx, home, order) {
     const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7)
     if (order.phase === 'failed') {
       const keepBy = order.by
-      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open' }
+      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false }
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = ''
       return
@@ -662,9 +711,7 @@ function exitMeet(bot, ctx, home, order) {
   if (order.phase === 'close') {
     const door = doorBlock(bot, home)
     if (!door || !doorOpen(door)) {
-      ctx.comehome = null // gap walked or door shut: released
-      ctx.inShelter = false
-      ctx.stepStatus = 'running'
+      finishExit(bot, ctx, order) // gap walked or door shut: released
       return
     }
     tryToggle(bot, order, door)
@@ -682,7 +729,7 @@ function exitMeet(bot, ctx, home, order) {
 function comehome(bot, ctx, target, state) {
   const order = ctx && ctx.comehome
   if (!order) return
-  const home = ctx.home
+  const home = order.home
   if (!home || !home.site) {
     failMeet(bot, ctx, 'failed:no-home')
     return
@@ -703,6 +750,18 @@ function comehome(bot, ctx, target, state) {
       ctx.lastGoalKey = ''
       ctx.stepStatus = 'running'
       return
+    }
+    // Stay's rw4.8 rule, night half: the shelter is only a shelter with a
+    // shut door. By day the door belongs to whoever is using it (no
+    // re-close into the owner's face); at night the hold secures it, and
+    // with no door at all the hold drops the shelter flag so fight pursuit
+    // stays legal through the gap (revmux 01 body-3).
+    const held = doorBlock(bot, home)
+    if (!held) ctx.inShelter = false
+    else {
+      let nightish = false
+      try { nightish = goalFacts(bot, ctx).time !== 'day' } catch (_) { nightish = false }
+      if (nightish && doorOpen(held)) tryToggle(bot, order, held)
     }
     holdStill(bot, ctx)
     return
@@ -776,20 +835,70 @@ function comehome(bot, ctx, target, state) {
     if (through) order.phase = 'close'
     else return
   }
+  if (order.phase === 'seat') {
+    // Ordered while inside but away from the meet cell (a v2 bedroom or the
+    // partition row): walk the room to the common room — never hold a
+    // bedroom (revmux 01 core-2). A* around the furniture; the door stays
+    // whoever's it is.
+    if (!isInside(bot, home)) {
+      order.phase = 'walk'
+      order.stalls = 0
+      order.fails = 0
+      order.lastPos = null
+      order.via = undefined
+      order.viaDone = false
+      ctx.lastGoalKey = ''
+      ctx.stepStatus = 'running'
+      return
+    }
+    setWalkDig(bot, false)
+    const arrived = walkTo(bot, ctx, order, 'comehome-seat', new goals.GoalNear(meet.x, meet.y, meet.z, 1), (bp) => {
+      try {
+        const dx = bp.x - (meet.x + 0.5)
+        const dz = bp.z - (meet.z + 0.5)
+        return Math.hypot(dx, dz) <= 1.2
+      } catch (_) { return false }
+    })
+    if (order.phase === 'failed') {
+      setWalkDig(bot, true)
+      failMeet(bot, ctx, 'failed:cannot-seat')
+      return
+    }
+    if (arrived) arriveMeet(bot, ctx, order)
+    else setShelterSprint(bot, ctx, meet)
+    return
+  }
   if (order.phase === 'close') {
     // A settle (ordered while already inside) holds as-is: the bot is home,
     // and the door belongs to whoever is using it — no toggle at air from
-    // across the room, no panel shut in the owner's face.
+    // across the room, no panel shut in the owner's face. Far from the meet
+    // cell it seats first (see above): v1 maxes at 1.41, so only v2
+    // bedrooms and the partition row ever seat.
     const door = doorBlock(bot, home)
     if (!door && !order.settle) {
       failMeet(bot, ctx, 'failed:no-door')
       return
     }
-    if (order.settle || !doorOpen(door)) {
-      order.phase = 'hold'
-      ctx.stepStatus = 'done'
-      ctx.inShelter = true
-      try { bot.chat('home') } catch (_) { /* chat best-effort */ }
+    if (order.settle) {
+      let far = false
+      try {
+        const bp = botPos(bot)
+        far = !!bp && Math.hypot(bp.x - (meet.x + 0.5), bp.z - (meet.z + 0.5)) > SEAT_FAR
+      } catch (_) { far = false }
+      if (far) {
+        order.phase = 'seat'
+        order.stalls = 0
+        order.fails = 0
+        order.lastPos = null
+        ctx.lastGoalKey = ''
+        ctx.stepStatus = 'running'
+        return
+      }
+      arriveMeet(bot, ctx, order)
+      return
+    }
+    if (!doorOpen(door)) {
+      arriveMeet(bot, ctx, order)
       return
     }
     tryToggle(bot, order, door)

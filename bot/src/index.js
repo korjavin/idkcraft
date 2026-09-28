@@ -668,7 +668,11 @@ function fleeReflex(bot, ctx) {
     // canDig belongs to the gohome walk alone: any tick it does not own the
     // body gets the shared default back, so a mid-walk preemption (orders,
     // homing, death) cannot leak no-dig into other behaviours (revmux 8kc).
-    if (!(ctx.work && ctx.step === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk')) {
+    // The come-home walk and seating borrow it the same way (jr2.3): without
+    // the exemption the tick-start restore reopens the dig window for the
+    // whole brain await (revmux 01 body-4).
+    const meetDig = ctx.comehome && !ctx.comehome.exiting && (ctx.comehome.phase === 'walk' || ctx.comehome.phase === 'seat')
+    if (!(ctx.work && ctx.step === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk') && !meetDig) {
       try {
         const mov = ctx.movements
         if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
@@ -1213,7 +1217,13 @@ function fleeReflex(bot, ctx) {
     // site. Build progress resets with it — old skips/fail counts belong
     // to the old origin. The facts text (home none->site) re-decides.
     home: () => ctx.home || null,
-    setHome: (home) => { ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ } },
+    setHome: (home) => {
+      // A standing meet releases against the OLD house first: the exit legs
+      // run against the pinned order.home, and the shelter refresh lands in
+      // startWork's release right after (revmux 01 core-1). No meet: no-op.
+      homeMod.releaseMeet(bot, ctx)
+      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
     loadMemory: () => { try { return memory.restore(bot, ctx) } catch (_) { return null } },
@@ -1495,7 +1505,20 @@ function fleeReflex(bot, ctx) {
       ctx.stepStatus = 'running'
       let inside = false
       try { inside = homeMod.isInside(bot, ctx.home) } catch (_) { inside = false }
-      ctx.comehome = homeMod.startMeet(by, inside)
+      const prior = ctx.comehome
+      ctx.comehome = homeMod.startMeet(by, inside, home)
+      // Re-ordered mid-exit after 'build here' swapped the house: the fresh
+      // order keeps exiting the pinned old house, then reseeks the current
+      // home instead of releasing — a fresh walk from inside the old walls
+      // would plan through them (revmux 01 core-1).
+      if (prior && prior.exiting && prior.home && !inside) {
+        ctx.comehome.exiting = true
+        ctx.comehome.phase = 'open'
+        ctx.comehome.home = prior.home
+        ctx.comehome.reseek = true
+        ctx.comehome.settle = false
+        ctx.inShelter = true
+      }
       return 'coming home'
     },
     status: () => {
