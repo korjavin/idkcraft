@@ -352,6 +352,56 @@ describe('swim prune (idkcraft-e8t)', () => {
     }
   })
 
+  it('prunes dives from seagrass feet (the executor holds jump there too)', () => {
+    // revmux core-1/body-2: seagrass reads safe-but-not-liquid while
+    // physics waterLike (isInWater) counts it as water, so the
+    // executor holds jump and cannot sink — a dive from a seagrass
+    // cell treadmills exactly like one from water.
+    const grassy = (x, y, z) => (x === 5 && y === 62 && z === 0) ? 'seagrass'
+      : (x === 6 && y === 62 && z === 1) ? 'air' : cliffNameAt(x, y, z)
+    const before = swimOnly(grassy).getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(before.some((m) => m.x === 6 && m.y === 61 && m.z === 1), 'the lib offers the dive from seagrass')
+    const after = swimPress(grassy).getNeighbors(new Move(5, 62, 0, 0, 0))
+    assert.ok(!after.some((m) => m.x === 6 && m.y === 61 && m.z === 1), 'the dive from seagrass is pruned')
+    assert.ok(after.some((m) => m.x === 6 && m.y === 62 && m.z === 0), 'the level cruise survives')
+  })
+
+  it('prunes floor-rises into kelp, keeps level kelp bridges', () => {
+    // revmux core-1: a kelp cell above a shelf is the E7 contact
+    // shape with a non-liquid target — the rise storms the same way.
+    // Level entry into kelp only exists as a place-bridge (the lib
+    // reads kelp as air-over-a-gap, not swimmable water) and stays:
+    // the toPlace rule fires on rises only, never on level builds.
+    const shelf = (x, y, z) => (x === 7 && y <= 61) ? 'dirt' : cliffNameAt(x, y, z)
+    const kelpy = (x, y, z) => (x === 7 && y === 62 && z === 0) ? 'kelp' : shelf(x, y, z)
+    const before = swimOnly(kelpy).getNeighbors(new Move(6, 61, 0, 0, 0))
+    assert.ok(before.some((m) => m.x === 7 && m.y === 62), 'the rise into kelp exists without the prune')
+    const up = swimPress(kelpy).getNeighbors(new Move(6, 61, 0, 0, 0))
+    assert.ok(!up.some((m) => m.x === 7 && m.y === 62), 'no rise into kelp above the shelf floor')
+    const cruise = (x, y, z) => (x === 6 && y === 62 && z === 0) ? 'kelp' : cliffNameAt(x, y, z)
+    const bridged = swimPress(cruise).getNeighbors(new Move(5, 62, 0, 5, 0))
+    assert.ok(bridged.some((m) => m.x === 6 && m.y === 62 && m.z === 0 && m.toPlace && m.toPlace.length > 0),
+      'level place-bridge into kelp survives')
+  })
+
+  it('prunes underwater place-then-jumpUp rises, keeps dry-land building', () => {
+    // revmux body-1: with scaffolding aboard the lib offers jumpUp
+    // moves that place their own floor (C water at plan time, dirt
+    // at runtime) — the same contact shape once the block lands.
+    // Dry-land construction (dry source or dry target) is untouched.
+    const node = new Move(8, 60, 0, 5, 0)
+    const before = swimOnly(cliffNameAt).getNeighbors(node)
+    const placed = before.filter((m) => m.toPlace && m.toPlace.length > 0)
+    assert.ok(placed.some((m) => m.x === 9 && m.y === 61), 'the lib offers the placing rise without the prune')
+    const after = swimPress(cliffNameAt).getNeighbors(new Move(8, 60, 0, 5, 0))
+    assert.ok(!after.some((m) => m.x === 9 && m.y === 61 && m.toPlace && m.toPlace.length > 0), 'the placing rise is pruned')
+    assert.ok(after.some((m) => m.x === 7 && m.y === 60), 'the level bottom cruise survives')
+    const hash = (ns) => ns.map((m) => m.hash).sort().join(' ')
+    const dryA = hash(swimOnly(cliffNameAt).getNeighbors(new Move(0, 63, 0, 5, 0)))
+    const dryB = hash(swimPress(cliffNameAt).getNeighbors(new Move(0, 63, 0, 5, 0)))
+    assert.equal(dryB, dryA, 'dry-land building untouched with blocks aboard')
+  })
+
   it('the planner rounds the cliff to a +1 notch instead of pinning', () => {
     // One flush notch in the cliff at z=6: the only way up. The plan
     // must cruise the river, round along the face, and mount there.
