@@ -22,6 +22,7 @@ function brainTimeoutMs(env) {
   return Number.isFinite(raw) ? raw : 1000
 }
 const bringMod = require('./behaviours/bring')
+const woolMod = require('./behaviours/wool')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const goal = require('./goal')
@@ -1343,6 +1344,22 @@ function fleeReflex(bot, ctx) {
         }
         ctx.paused = false
         return `checking the home chest for ${resolved.family}`
+      }
+      // Mob rung (did.3): wool the pack and chest could not fill comes
+      // from sheep — after the chest rung, before the block path (wool
+      // blocks are never diggable, so the block rung cannot serve wool).
+      if (resolved && woolMod.isWoolFamily(resolved)) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.bring = bringMod.toWoolHunt(bot, {
+          kind: 'item', name: resolved.family, names: resolved.names,
+          want: need, by, drop: null, have: 0,
+        })
+        ctx.paused = false
+        const c = ctx.bring.color
+        return c ? `looking for ${c} sheep` : 'looking for sheep'
       }
       const res = findNearest(bot, name)
       if (res === 'unknown') {

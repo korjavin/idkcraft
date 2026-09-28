@@ -20,6 +20,13 @@ function isWoolName(name) {
   return typeof name === 'string' && (name === 'wool' || name.endsWith('_wool'))
 }
 
+// A resolved item family (or order carrying names) is pure wool when every
+// name is a *_wool item — the mob rung of the bring ladder serves it.
+function isWoolFamily(resolved) {
+  return !!resolved && Array.isArray(resolved.names) && resolved.names.length > 0 &&
+    resolved.names.every((n) => typeof n === 'string' && n.endsWith('_wool'))
+}
+
 // 'white_wool' -> 'white'; anything else -> null.
 function dropColor(drop) {
   if (typeof drop !== 'string') return null
@@ -98,6 +105,7 @@ function findWoolInPack(bot, color) {
 module.exports.WANT_WOOL = WANT_WOOL
 module.exports.WOOL_COLORS = WOOL_COLORS
 module.exports.isWoolName = isWoolName
+module.exports.isWoolFamily = isWoolFamily
 module.exports.dropColor = dropColor
 module.exports.parseWoolRequest = parseWoolRequest
 module.exports.sheepWool = sheepWool
