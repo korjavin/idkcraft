@@ -64,7 +64,8 @@ const DIG_TICKS = 300 // restock budget before resuming with what is on hand
 const DIG_STALLS = 10
 const DIG_STREAK = 3
 const PLACE_RANGE = 4 // GoalPlaceBlock range, like build.js
-const REACH_DIST = 5 // past this the approach goal is stale (build.js guard)
+const EYE_HEIGHT = 1.62 // survival eye height above the feet
+const EYE_REACH = 4.4 // server survival block reach (4.5) minus pose/float margin
 const MOVE_TOLERANCE = 0.5
 const DIRT_FIND_RADIUS = 48
 const DIRT_FIND_COUNT = 64
@@ -442,10 +443,71 @@ const REF_DIRS = [
   [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0],
 ]
 
+// Verified stand (cm0): the approach goal was validated for the goal's own
+// faces from a hypothetical node, but the body places from wherever the
+// pathfinder actually stalled — possibly a partial-end with the clicked
+// face out of eye reach or behind a wall. Re-check the ACTUAL click from
+// the LIVE body position before every attempt: eyes within server reach of
+// the clicked face point, and the same ray the server traces (eyes along
+// the face-center aim) must hit the reference block. A missing raycast
+// (unit mocks) falls back to the reach gate only, so old harnesses keep
+// today's behavior.
+function facePoint(refPos, face) {
+  return new Vec3(refPos.x + 0.5 + face.x * 0.5, refPos.y + 0.5 + face.y * 0.5, refPos.z + 0.5 + face.z * 0.5)
+}
+
+function standVerified(bot, bp, ref, face) {
+  const eyes = new Vec3(bp.x, bp.y + EYE_HEIGHT, bp.z)
+  const to = facePoint(ref.position, face)
+  const dx = to.x - eyes.x
+  const dy = to.y - eyes.y
+  const dz = to.z - eyes.z
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (!(dist <= EYE_REACH)) return false
+  return rayHitsRef(bot, eyes, to, dist, ref)
+}
+
+// The click ray (cm0): the same ray the server traces (eyes along the
+// face-center aim) must hit the reference block. Shared by the stand
+// check and the visibility-ordered reference scan below.
+function rayHitsRef(bot, eyes, to, dist, ref) {
+  let hit = null
+  try {
+    if (!bot.world || typeof bot.world.raycast !== 'function') return true
+    const dx = to.x - eyes.x
+    const dy = to.y - eyes.y
+    const dz = to.z - eyes.z
+    const len = dist || 1
+    hit = bot.world.raycast(eyes, new Vec3(dx / len, dy / len, dz / len), EYE_REACH)
+  } catch (_) {
+    return true // unverifiable: reach gate only (lenient mocks)
+  }
+  if (!hit) return false // ref vanished (dug?) or ray unreadable: don't burn
+  try {
+    const hp = hit.position
+    const rp = ref.position
+    return !!hp && !!rp && hp.x === rp.x && hp.y === rp.y && hp.z === rp.z
+  } catch (_) {
+    return true
+  }
+}
+
 // The reference is a real Block, not a position: bot.placeBlock derefs
 // referenceBlock.position on the first line, so a bare Vec3 rejects every
 // placement (build.js live bug).
-function findRef(bot, p) {
+function findRef(bot, p, bp) {
+  // Visibility-ordered (cm0 revmux-01): below-first returns the pit floor,
+  // whose top face a far stand cannot see (the click ray clips the near
+  // wall) — and the stand check then def-loops to unreachable instead of
+  // using the visible pit-wall face GoalPlaceBlock stopped for. Prefer the
+  // first face the live eyes can actually click; fall back to the first
+  // solid-backed face when no body position is given (unit mocks) or
+  // nothing is visible (the stand check then defers honestly).
+  let fallback = null
+  let eyes = null
+  try {
+    if (bp && typeof bp.x === 'number') eyes = new Vec3(bp.x, bp.y + EYE_HEIGHT, bp.z)
+  } catch (_) { eyes = null }
   for (const [ox, oy, oz] of REF_DIRS) {
     const q = new Vec3(p.x + ox, p.y + oy, p.z + oz)
     let block = null
@@ -453,10 +515,16 @@ function findRef(bot, p) {
       block = bot.blockAt(q)
     } catch (_) { /* treat as open */ }
     if (block && isSolidCell(block)) {
-      return { ref: block, face: new Vec3(-ox, -oy, -oz) }
+      const cand = { ref: block, face: new Vec3(-ox, -oy, -oz) }
+      if (!fallback) fallback = cand
+      if (eyes) {
+        const to = facePoint(block.position, cand.face)
+        const dist = Math.sqrt((to.x - eyes.x) ** 2 + (to.y - eyes.y) ** 2 + (to.z - eyes.z) ** 2)
+        if (dist <= EYE_REACH && rayHitsRef(bot, eyes, to, dist, block)) return cand
+      }
     }
   }
-  return null
+  return fallback
 }
 
 // Surface guard (body-4): while flat owns the body the pathfinder must not
@@ -694,12 +762,16 @@ function scanTick(bot, ctx, f) {
 // Step aside from a cell the bot itself blocks: fixed direction per column
 // and a stable goal key, so a multi-tick sidestep never reverses mid-walk
 // (round-1 core-2/body-3). The caller counts attempts and skips when wedged.
-function sidestep(bot, ctx, h, bp, x, y, z, tag) {
+function sidestep(bot, ctx, h, bp, x, y, z, tag, gy) {
   const step = SIDESTEPS[Math.abs(h.x * 7 + h.z * 13) % SIDESTEPS.length]
   const key = `${tag}:${x},${y},${z}`
   if (key !== ctx.lastGoalKey) {
+    // Aim at gy when given (revmux-03): a step-out from a pit floor must
+    // target the surface, or walking out can never satisfy the goal (the
+    // pathfinder tunnels sideways or partials instead).
+    const ty = gy == null ? bp.y : gy
     try {
-      bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
+      bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], ty, bp.z + step[1], 1), false)
     } catch (_) { return }
     ctx.lastGoalKey = key
   }
@@ -1051,6 +1123,28 @@ function fillTick(bot, ctx, f, bp) {
     rotate(f)
     return
   }
+  if (Math.floor(bp.x) === cx && Math.floor(bp.z) === cz && Math.floor(bp.y) < cy) {
+    // Standing below our own cap cell (a 3+-deep hole we dropped into; the
+    // 1-deep feet-in-cap and 2-deep head-in-cap cases sidestep above):
+    // capping from down here would entomb the body under its own fill —
+    // the support lands in the head cell and never places (cm0). Step out
+    // once (a body that can move must not sit still spinning the stuck
+    // detector), then rotate: a truly trapped body shows no displacement
+    // and the ticker backstop hands it to recover, while a free body
+    // walks out and approaches normally.
+    if (!h.f2step) {
+      h.f2step = true
+      sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-f2', cy + 1)
+      return
+    }
+    h.occ++
+    if (h.occ > OCC_DEFERS) {
+      shiftSkip(f, 'occupied')
+      return
+    }
+    rotate(f)
+    return
+  }
   const key = `flat:${cx},${cy},${cz}`
   if (key !== ctx.lastGoalKey) {
     let g = null
@@ -1099,19 +1193,22 @@ function fillTick(bot, ctx, f, bp) {
     }
     return
   }
-  // Arrived (or the walk never started): place — but only in reach. A
-  // preemption that carried the body away leaves a stale goal: attempting
-  // from out there burns refusals, so force a fresh approach instead
-  // (build.js guard), counted so a permanently far hole still terminates.
-  if (Math.hypot(bp.x - cx, bp.y - cy, bp.z - cz) > REACH_DIST) {
-    try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-    h.def++
-    if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
-    return
-  }
+  // Arrived (or the walk never started): place — but only from a
+  // verified stand (cm0). A preemption that carried the body away leaves a
+  // stale goal, and a partial-end the pathfinder settled for may face a
+  // wall: attempting from either burns refusals, so force a fresh approach
+  // instead (the old build.js feet-distance guard, now eye-based with a
+  // line-of-sight check on the actual click), counted so a permanently far
+  // hole still terminates.
   const p = new Vec3(cx, cy, cz)
-  const ref = findRef(bot, p)
+  const ref = findRef(bot, p, bp)
   if (ref) {
+    if (!standVerified(bot, bp, ref.ref, ref.face)) {
+      try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
+      h.def++
+      if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
+      return
+    }
     const item = findFillItem(bot)
     if (!item) {
       startDig(bot, ctx, f)
@@ -1147,11 +1244,17 @@ function fillTick(bot, ctx, f, bp) {
     else rotate(f)
     return
   }
-  const sref = findRef(bot, new Vec3(cx, cy - 1, cz))
+  const sref = findRef(bot, new Vec3(cx, cy - 1, cz), bp)
   if (!sref) {
     h.def++
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
     else rotate(f)
+    return
+  }
+  if (!standVerified(bot, bp, sref.ref, sref.face)) {
+    try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
+    h.def++
+    if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
     return
   }
   const item = findFillItem(bot)
@@ -1437,6 +1540,8 @@ function flat(bot, ctx, target, state) {
 }
 
 module.exports = flat
+module.exports.EYE_HEIGHT = EYE_HEIGHT
+module.exports.EYE_REACH = EYE_REACH
 module.exports.FLAT_DEFAULT_RADIUS = FLAT_DEFAULT_RADIUS
 module.exports.FLAT_MIN_RADIUS = FLAT_MIN_RADIUS
 module.exports.FLAT_MAX_RADIUS = FLAT_MAX_RADIUS
