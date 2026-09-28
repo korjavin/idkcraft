@@ -541,3 +541,67 @@ describe('recover digs equip the pickaxe (idkcraft-17b revmux 01 body-1)', () =>
     assert.deepEqual(digs, [[0, 62, 0]])
   })
 })
+
+describe('pillar_up descending floor anchor (idkcraft-cm0.2)', () => {
+  it('mid-flight arm seeds high, the grounded landing re-seeds and the next rise issues', async () => {
+    // Rig 3/3: the first tick samples the inherited flight at y=62.0 and
+    // seeds startFloor=62; the +0.6 trigger (62.6) clears the 62.25 apex,
+    // so the baseline jumps to no-apex. The anchor follows the grounded
+    // body down to 61 and the next rise issues into the true feet cell.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.0, 0.5) // inherited flight, still high
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    bot.entity.onGround = false
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62, 'first tick seeds the airborne sample')
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(0.5, 61, 0.5) // the flight lands
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 61, 'grounded landing re-seeds down')
+    bot.entity.position = pos(0.5, 61.7, 0.5) // the held jump rises again
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    bot.entity.onGround = false
+    await sleep(250) // the +150 ms timer fires on the corrected floor
+    await flush()
+    assert.equal(bot._places, 1, 'the next rise issues')
+    assert.equal(ctx.recovery.st.phase, 'place')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'the feet cell verifies solid')
+  })
+
+  it('a single mid-air dip below the seeded floor does not re-seed (blip guard)', () => {
+    // A declining client/correction sample is not a landing (Codex q6/7):
+    // one airborne dip keeps the anchor, but two in a row re-seed (1 Hz
+    // ticks can miss the grounded window between bunny-hops entirely).
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    bot.entity.onGround = false
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62)
+    bot.entity.position = pos(0.5, 61.5, 0.5) // dips below, still airborne
+    bot.entity.onGround = false
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62, 'one airborne dip keeps the seeded floor')
+    recover.run(bot, ctx) // second consecutive dip, still airborne
+    assert.equal(ctx.recovery.st.startFloor, 61, 'two airborne dips re-seed down')
+  })
+
+  it('a rise above the seeded floor never re-seeds up (normal case untouched)', () => {
+    // Grounded arm: the jump's own rise must not chase the anchor up —
+    // the timer times that rise against the seeded floor.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 61)
+    bot.entity.position = pos(0.5, 61.9, 0.5) // the jump rises through 61.x
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    bot.entity.onGround = false
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 61, 'rises never move the anchor up')
+  })
+})
