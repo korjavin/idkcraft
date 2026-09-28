@@ -132,14 +132,21 @@ async function rules(bot) {
   console.log(`pad air: ${await rcon(`fill ${sx - 10} ${padY} ${sz - 10} ${sx + 10} ${padY + 4} ${sz + 10} air`)}`)
   // Chunks first: /fill refuses unloaded positions ("That position is not
   // loaded") and the corridor runs past the loaded area — high-hop down +X
-  // (columns load full-height; quick hops never land, so no fall damage).
+  // (columns load full-height; intermediate hops are re-teleported before
+  // they can land, and the pad return below catches the last hop).
   for (const dx of [8, 32, 56, 80, 104]) {
     await rcon(`tp ${NAME} ${sx + dx} 220 ${mz}`)
     await sleep(2000)
     await waitLoaded(bot, 15000)
   }
+  await rcon(`tp ${NAME} ${sx} ${padY + 1} ${sz}`) // park on the pad (revmux 01 minor: the last hop would otherwise fall 150 and die mid-fills)
   for (const [y1, y2] of [[-48, -20], [-19, 10], [11, 40], [41, 69]]) {
-    console.log(`corridor fill y ${y1}..${y2}: ${await rcon(`fill ${sx - 1} ${y1} ${mz - 2} ${sx + 117} ${y2} ${mz + 2} stone`)}`)
+    const res = await rcon(`fill ${sx - 1} ${y1} ${mz - 2} ${sx + 117} ${y2} ${mz + 2} stone`)
+    console.log(`corridor fill y ${y1}..${y2}: ${res}`)
+    if (res.includes('not loaded')) {
+      console.log(`FAIL: rules corridor fill refused (chunks unloaded): y ${y1}..${y2}: ${res}`)
+      return false
+    }
   }
   await sleep(1500)
   const mouth = { x: sx, z: sz - 3, topY: padY }
@@ -234,7 +241,7 @@ async function rules(bot) {
   // descend-time guard (lava fails at step 1 via the down-dig neighbour).
   const step1 = { x: sx + 3, y: padY - 2, z: fz }
   await scenario('lava', async () => {}, 'failed:lava', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} lava`) }, [[fx, padY - 1, fz, 'stone']])
-  await scenario('drop', async () => { await rcon(`fill ${fx} ${padY - 8} ${fz} ${fx} ${padY + 1} ${fz} air`) }, 'failed:drop', null, [[fx, padY - 1, fz, 'air']])
+  await scenario('drop', async () => { await rcon(`fill ${fx} ${padY - 8} ${fz} ${fx} ${padY + 1} ${fz} air`) }, 'failed:drop', null, [[fx, padY - 1, fz, 'air'], [fx, padY - 3, fz, 'air']]) // padY-3 (revmux 01 minor): lava digs padY-1, so only padY-3 (stone until this setup) tells stale from fresh
   await scenario('bedrock', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} bedrock`) }, 'failed:bedrock', null, [[step1.x, step1.y, step1.z, 'bedrock'], [fx, padY - 1, fz, 'stone']])
 
   // Tier gate: live bot at depth, stone pick, diamond remembered.
