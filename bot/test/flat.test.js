@@ -1005,6 +1005,7 @@ describe('flat behaviour', () => {
       dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
     })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    const origCanBreak = util.canBreak
     util.canBreak = (b, block) => block.position.x !== 20
     try {
       flat(bot, ctx, null, null); await settle() // scan
@@ -1014,7 +1015,7 @@ describe('flat behaviour', () => {
       flat(bot, ctx, null, null); await settle() // dig: find + issue
       assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'guard-denied dirt skipped')
       assert.ok(!cap.lines.some((l) => l.includes('flat protected:')), 'quiet while a candidate remains')
-    } finally { delete util.canBreak }
+    } finally { if (origCanBreak === undefined) delete util.canBreak; else util.canBreak = origCanBreak }
   })
 
   it('restock logs one protected line when the guard denies everything', async () => {
@@ -1026,6 +1027,7 @@ describe('flat behaviour', () => {
       dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
     })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    const origCanBreak = util.canBreak
     util.canBreak = () => false
     try {
       flat(bot, ctx, null, null); await settle() // scan
@@ -1038,7 +1040,31 @@ describe('flat behaviour', () => {
       const prot = cap.lines.filter((l) => l.includes('flat protected:'))
       assert.equal(prot.length, 1, cap.lines.join('\n'))
       assert.ok(prot[0].includes('flat protected: dirt at 20 63 0'), prot[0])
-    } finally { delete util.canBreak }
+    } finally { if (origCanBreak === undefined) delete util.canBreak; else util.canBreak = origCanBreak }
+  })
+
+  it('restock fail-closes on truthy and throwing guards', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const bot = mockBot(world, {
+      items: [],
+      registry: DIRT_REGISTRY,
+      dirtSpots: [{ x: 20, y: 63, z: 0 }, { x: 22, y: 63, z: 0 }],
+    })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    const origCanBreak = util.canBreak
+    util.canBreak = (b, block) => { if (block.position.x === 20) return 1; throw new Error('boom') }
+    try {
+      flat(bot, ctx, null, null); await settle() // scan
+      flat(bot, ctx, null, null); await settle() // fill: issue
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle() // arrived -> dig
+      flat(bot, ctx, null, null); await settle() // dig: find -> empty -> endDig
+      assert.equal(ctx.flat, null)
+      const prot = cap.lines.filter((l) => l.includes('flat protected:'))
+      assert.equal(prot.length, 1, cap.lines.join('\n'))
+      assert.ok(prot[0].includes('flat protected: dirt at 20 63 0'), prot[0])
+    } finally { if (origCanBreak === undefined) delete util.canBreak; else util.canBreak = origCanBreak }
   })
 
   it('skips a hole whose support cell unloaded as floating', async () => {
