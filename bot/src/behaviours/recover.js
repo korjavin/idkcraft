@@ -40,7 +40,8 @@ const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
-const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
+const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
+const PILLAR_FAST_DY = 0.9 // fast-path issue height (round-3: see below)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
@@ -244,6 +245,27 @@ function scaffoldCount(bot) {
   return countItems(bot, isScaffoldName)
 }
 
+// Scaffold already in hand: the apply path skips the equip wait (and the
+// look wait when aiming down the same column, i.e. every block after the
+// first), so L drops to send + tick-align and a +100 ms issue would apply
+// before the feet exit the cell (round-2 minor: rig +100 2/3, the refusal
+// applied at +102). Best-effort: a false negative just keeps +0.6.
+function heldScaffold(bot) {
+  try {
+    const h = bot && bot.heldItem
+    return !!h && typeof h.name === 'string' && isScaffoldName(h.name)
+  } catch (_) { return false }
+}
+
+// Latency-adaptive trigger height (round-3): slow path (equip + look
+// waits, L ~100-300) fires from +0.6 so the apply lands before the feet
+// return (~+410); fast path (in hand, L ~ send + align) fires from +0.9
+// so the apply lands after the feet exit (+154). Same-tick fall-through
+// forces the re-jump guard below to use this same height.
+function pillarTriggerDy(bot) {
+  return heldScaffold(bot) ? PILLAR_FAST_DY : PILLAR_ISSUE_DY
+}
+
 function findScaffoldItem(bot) {
   let items = []
   try {
@@ -253,20 +275,31 @@ function findScaffoldItem(bot) {
   return items.find((i) => i && typeof i.name === 'string' && isScaffoldName(i.name) && (typeof i.count !== 'number' || i.count > 0)) || null
 }
 
-// Issue window: rising, plus the first ~2 game ticks past the peak
-// (vy > -0.1, feet still >= +1.18). A pure vy > 0 guard shrinks the window
-// to ~150 ms, which 1 Hz sampling of the ~600 ms jump cycle can miss for a
-// whole episode (revmux 01 core-1: failed:no-apex); the ~250 ms window
-// always catches a 200 ms-spaced phase, and the server still applies the
-// placement while the feet are above the cell. Falling faster means the
-// feet are back in the cell at apply time (self-intersection refusal), so
-// those samples wait for the next apex. A missing velocity (mocks) reads
-// as inside the window.
-function apexWindow(bot) {
+// Ascent issue window (2bh): fire placeBlock while RISING (vy > 0 past
+// +0.6), not at the apex. Measured jump: +0.42/+0.75/+1.00/+1.17 at
+// +50/+100/+150/+200 ms, apex +1.25 at +250 (vy +0.003), feet re-enter the
+// cell falling at ~+410. The async issue lands the server apply L later
+// (prod L ~100-300: equip + look + tick align — the old +1.0 window's 0/79
+// proves L is large, not localhost-small): +100 ms issues apply +200..+400
+// with the feet clear, while apex (+250) issues apply up to +550, feet
+// back in the cell (self-intersection refusal).
+// Deliberately NO vy floor above 0 (round-2): 1 Hz ticks against the exact
+// 600 ms jump cycle phase-lock onto 3 fixed phases per episode (rig:
+// 15 ticks, zero drift), so any window under ~200 ms can miss the whole
+// episode — a vy > 0.1 floor timed out 0/3 on the rig. Residual: apex
+// samples (vy ~+0.003) still issue and refuse at high L; the principled
+// fix is a physics-timed issue (fire at +150 ms after jump-start instead
+// of on tick phase) — idkcraft-lzw, not this bead.
+// (Fast-apply race: +100 ms issues refuse when L < 50 applies before the
+// feet exit at +154 — happens whenever scaffold is already in hand, prod
+// included (every block after the first). pillarTriggerDy answers it: the
+// fast path fires from +0.9 instead.)
+// A missing velocity (mocks) reads as inside the window.
+function risingWindow(bot) {
   try {
     const v = bot && bot.entity && bot.entity.velocity
     if (!v || typeof v.y !== 'number') return true
-    return v.y > -0.1
+    return v.y > 0
   } catch (_) { return true }
 }
 
@@ -502,7 +535,7 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
-    if (bp.y >= st.startFloor + PILLAR_APEX && apexWindow(bot)) {
+    if (bp.y >= st.startFloor + pillarTriggerDy(bot) && risingWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
     } else {
@@ -518,11 +551,14 @@ function pillarUpRun(bot, ctx) {
   }
   if (st.placeError) return 'failed:place-error'
   if (st.placeInFlight) return 'running'
-  // Fell below the apex while the ack was in flight (slow server,
-  // knockback): jump again, never place from below into the occupied feet
-  // cell. Already solid (a twin call, an earlier cycle): verify instead of
-  // stacking a second placement into the cell (the yvi loop).
-  if (bp.y < st.startFloor + PILLAR_APEX - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
+  // Fell below the issue height with a stale place phase and nothing in
+  // flight (slow server, knockback): jump again. Same-tick fall-through
+  // from the trigger above forces this guard to match pillarTriggerDy —
+  // a higher guard would bounce the early-rise trigger it just set.
+  // No-self-intersection comes from apply timing (see risingWindow), not
+  // from this line. Already solid (a twin call, an earlier cycle): verify
+  // instead of stacking a second placement into the cell (the yvi loop).
+  if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
   if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return 'running' }
   // Reference: a solid neighbour of the feet cell, ground below first.
   const fx = Math.floor(bp.x)
@@ -544,9 +580,12 @@ function pillarUpRun(bot, ctx) {
   if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-reference'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
-  // pillar_ups, 0 placed). The count gate above already vetoed an empty
-  // stock; this covers an inventory that changed mid-jump.
-  const item = findScaffoldItem(bot)
+  // pillar_ups, 0 placed). Prefer the held stack: the fast trigger above
+  // assumed its instant apply, while findScaffoldItem returns main
+  // inventory first and would pay a window move (round-3 core-1/body-2).
+  // The count gate above already vetoed an empty stock; this covers an
+  // inventory that changed mid-jump.
+  const item = heldScaffold(bot) ? bot.heldItem : findScaffoldItem(bot)
   if (!item) { setJump(bot, false); return 'failed:no-scaffold' }
   st.placeInFlight = true
   void (async () => {
@@ -1441,4 +1480,5 @@ module.exports = {
   decide,
   release,
   run,
+  pillarUpRun,
 }

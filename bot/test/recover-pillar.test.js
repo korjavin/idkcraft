@@ -192,17 +192,94 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(bot.getControlState('jump'), true)
   })
 
-  it('near-apex fall (vy=-0.05): issues the placement', async () => {
-    // Revmux 01 core-1: a pure vy > 0 guard shrinks the window to ~150 ms,
-    // which 1 Hz sampling can miss for a whole episode; the first ~2 game
-    // ticks past the peak (feet still >= +1.18) stay inside the window.
+  it('near-apex fall (vy=-0.05): no placement, waits for the next rise', () => {
+    // 2bh: the old apex window issued here, but the async apply then lands
+    // on the fall (feet back in the cell) and the server refuses it as
+    // self-intersection (rig: +450 ms refused 3/3). Falling samples wait;
+    // the wider ascent window below keeps 1 Hz sampling covered.
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
     bot.entity.position = pos(0.5, 62.2, 0.5)
     bot.entity.velocity = { x: 0, y: -0.05, z: 0 }
     const ctx = pillarCtx({ phase: 'jump' })
     recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+  })
+
+  it('rising sample mid-ascent (+0.7): issues the placement early', async () => {
+    // 2bh core: fire on the way up so the server apply lands at the apex
+    // (rig: +250/+350 ms PLACED 2/2). The old apex trigger waited here.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.7, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
     await flush()
     assert.equal(bot._places, 1)
+  })
+
+  it('fast path (dirt in hand): t2 sample waits for t3+', () => {
+    // Round-3: in-hand scaffold means a fast apply (no equip/look waits),
+    // so a +100 ms issue would apply before the feet exit (rig +100 2/3).
+    // The trigger moves to +0.9 for the fast path.
+    const dirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [dirt], { held: dirt })
+    bot.entity.position = pos(0.5, 61.75, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+  })
+
+  it('fast path equips the held stack, not main inventory', async () => {
+    // Round-3 core-1/body-2: with scaffold held AND a stack in main
+    // inventory, the apply must use the held one (instant) — a window
+    // move would make it the slow path the +0.9 trigger did not budget.
+    const heldDirt = { name: 'dirt', count: 5 }
+    const mainDirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [mainDirt], { held: heldDirt })
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(bot._places, 1)
+    assert.strictEqual(bot.heldItem, heldDirt)
+  })
+
+  it('fast path at t3 (+1.0): issues the placement', async () => {
+    const dirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [dirt], { held: dirt })
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(bot._places, 1)
+  })
+
+  it('stale place phase below the trigger: back to jump, never places', () => {
+    // Round-2 body-1: fell back (knockback, slow server) with nothing in
+    // flight — re-jump instead of placing from below.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    const ctx = pillarCtx({ phase: 'place', startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+  })
+
+  it('low rise (+0.3): keeps jumping, below the issue height', () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.3, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.4, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+    assert.equal(bot.getControlState('jump'), true)
   })
 
   it('rising sample at apex: issues the placement', async () => {
