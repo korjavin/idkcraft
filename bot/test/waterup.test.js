@@ -572,8 +572,9 @@ describe('waterup run', () => {
     const ctx = { recovery: {} }
     const out = await runTicks(bot, ctx, 80, () => {
       // Transient refusal: the B activate fizzles, the strip still scoops.
-      const ph = ctx.recovery.st && ctx.recovery.st.phase
-      bot.opts.refuseUse = ph === 'pourB'
+      // Keyed on the pour (2nd water_bucket use), not the phase: the plateau
+      // fast path activates B from swim, before pourB starts.
+      bot.opts.refuseUse = bot.uses >= 1 && !!bot.heldItem && bot.heldItem.name === 'water_bucket'
     })
     assert.equal(out, 'failed:rim-pour')
     assert.equal(bot._waters.size, 0)
@@ -1038,5 +1039,49 @@ describe('waterup run', () => {
     const bot2 = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
     delete bot2.activateItem
     assert.equal(waterup.waterUpRun(bot2, { recovery: {} }), 'failed:no-use')
+  })
+
+  it('pourB hover cap: jump below plateau+0.2, released above', () => {
+    // Rig DUGPIT: holding jump straight through rises out of the B window in
+    // one tick, exits at the surface, and flies ballistically out of reach
+    // (plateau 60.98 -> 61.68 -> airborne west to 57.56, reach 4.58). The cap
+    // bobs inside the window instead (mutation: always-hold rises out).
+    const mk = (y) => {
+      const bot = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
+      bot.entity.position = pos(0.5, y, 0.5)
+      const st = {
+        phase: 'pourB',
+        combo: {
+          A: { dest: { x: 0, y: 66, z: 0 } },
+          B: { dest: { x: 1, y: 67, z: 0 }, ref: { position: { x: 2, y: 67, z: 0 } }, face: [-1, 0, 0] },
+          plateauY: 65.4,
+        },
+        sources: [{ x: 0, y: 66, z: 0 }],
+        used: false,
+        waited: 0,
+      }
+      waterup.waterUpRun(bot, { recovery: { st } })
+      return !!bot.controls.jump
+    }
+    assert.equal(mk(65.4), true, 'below cap (65.6) holds')
+    assert.equal(mk(65.8), false, 'above cap releases')
+  })
+
+  it('plateau fast path: B activates same-tick when pre-equipped', async () => {
+    // Rig DUGPIT: the plateau eye sits at the TOP of the B window and one
+    // more rising tick exits it, so the swim pre-equips the 2nd bucket and
+    // activates B on the plateau tick itself (used=true on the first pourB
+    // tick). Slow path (equip in pourB) shows used=false there instead.
+    const items = [{ name: 'water_bucket', count: 2 }]
+    const bot = worldBot(shaftWorld(), items)
+    bot.opts.sites = [{ x: 0, y: 66, z: 0 }, { x: 1, y: 67, z: 0 }]
+    const ctx = { recovery: {} }
+    let firstPourBUsed
+    const out = await runTicks(bot, ctx, 80, () => {
+      const st = ctx.recovery.st
+      if (st && st.phase === 'pourB' && firstPourBUsed === undefined) firstPourBUsed = st.used
+    })
+    assert.equal(out, 'done')
+    assert.equal(firstPourBUsed, true, 'B activated on the plateau tick')
   })
 })

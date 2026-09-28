@@ -33,6 +33,7 @@ const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { botPos, clearGoal } = require('./util')
 
+
 // Reach for the server use-raycast (survival 4.5). Scans budget 4.0: the
 // hover heaves ±1 between the scan and the activate, and a marginal site
 // (4.39 in, 4.41 out across 0.3 of sub-cell) flickers offers that die
@@ -71,6 +72,7 @@ const STRIP_STATION_DIST = 0.3 // past this off the stand middle: station tap (d
 const STRIP_SCOOP_XZ = 0.25 // B-scoop ring around the stand middle: the support water goes back only from over the stand (off-stand scoops drop past the edge: replay no-gain)
 const STRIP_STANCE_TICKS = 6 // off-stand stance budget before the B scoop fires best-effort anyway (buckets-first, never hangs)
 const SCOOP_WAIT_TICKS = 2 // scoop apply + client update
+const HOVER_CAP_ABOVE_PLATEAU = 0.2 // pourB hover ceiling above the swim plateau (rig DUGPIT)
 const SCOOP_TRIES = 2 // scoop attempts per source on the happy path
 const STRIP_FAIL_TRIES = 1 // ... and on failure paths (bounded, best-effort)
 const SETTLE_TICKS = 3 // landing window before the F2 done check
@@ -548,9 +550,20 @@ function waterUpRun(bot, ctx) {
     const isA = st.phase === 'pourA'
     const site = isA ? st.combo.A : st.combo.B
     const failReason = isA ? 'failed:pour' : 'failed:rim-pour'
-    // pourB hovers (jump held — releasing sinks 2 blocks during equip+aim,
-    // rig); pourA stands on the floor (jump off).
-    setJump(bot, !isA)
+    // pourB hovers with a ceiling (bang-bang around plateau+0.2): holding
+    // jump straight through rises out of the B visibility window in one tick,
+    // exits the water at the surface, and flies ballistically out of reach
+    // (rig DUGPIT: plateau 60.98 -> 61.68 -> airborne west to 57.56,
+    // reach 4.58). The cap bobs inside the window; releasing fully sinks 2
+    // blocks during equip+aim (rig), so below-cap still holds. pourA stands
+    // on the floor (jump off).
+    if (isA) setJump(bot, false)
+    else {
+      const capY = st.combo && st.combo.A && st.combo.A.dest
+        ? st.combo.A.dest.y - PLATEAU_BELOW_SRC + HOVER_CAP_ABOVE_PLATEAU
+        : Infinity
+      setJump(bot, bp.y < capY)
+    }
     setForward(bot, false)
     if (!site) return toStripFail(st, failReason)
     if (!st.used) {
@@ -598,6 +611,7 @@ function waterUpRun(bot, ctx) {
       st.phase = 'swim'
       st.lastY = bp.y
       st.lastGainTick = 0
+      resetEquip(st) // fresh for the swim pre-equip below (also restarts the swim timeout)
     } else {
       st.phase = 'traverse'
       st.travStall = 0
@@ -621,6 +635,15 @@ function waterUpRun(bot, ctx) {
     setForward(bot, false)
     setJump(bot, true)
     tapToward(bot, bp, st.combo.A.dest.x + 0.5, st.combo.A.dest.z + 0.5, SWIM_CENTER_DIST)
+    // Pre-equip the 2nd bucket while ascending (traverse pre-equip shape):
+    // the plateau eye sits at the TOP of the B visibility window and one
+    // more rising tick exits it (rig DUGPIT), so pourB must activate on its
+    // first tick, not its third. Save/restore keeps the swim timeout exact.
+    if (!st.equipDone) {
+      const wSave = st.waited
+      equipStep(bot, st, 'water_bucket', 999)
+      st.waited = wSave
+    }
     if (bp.y >= targetY) {
       // Jump stays held into pourB (hover — releasing sinks, rig).
       setJump(bot, true)
@@ -629,8 +652,23 @@ function waterUpRun(bot, ctx) {
       if (!liveB) return toStripFail(st, 'failed:no-ledge')
       st.combo.B = liveB
       if (countBuckets(bot) < 1) return toStripFail(st, 'failed:need-2nd-bucket')
+      // Same-tick fast path: pre-equipped and the plateau eye is already in
+      // the window — activate NOW, before the next rising tick exits it.
+      // Falls through to pourB when the hand is not ready or the eye heaved
+      // out (heave oscillates; pourB waits it out under the hover cap).
+      const eye = eyeOf(bot)
+      if (st.equipDone && eye && dist(eye, cellCenter(liveB.dest)) <= USE_REACH &&
+          faceVisible(bot, eye, liveB.ref.position, liveB.face) && isAirish(readCell(bot, liveB.dest))) {
+        try {
+          bot.lookAt(aimFace(liveB.ref.position, liveB.face))
+          bot.activateItem()
+        } catch (_) { return toStripFail(st, 'failed:rim-pour') }
+        st.phase = 'pourB'
+        st.used = true
+        st.waited = 0
+        return 'running'
+      }
       st.phase = 'pourB'
-      resetEquip(st)
       st.waited = 0
       return 'running'
     }
@@ -861,6 +899,7 @@ module.exports = {
   TRAVERSE_TIMEOUT_TICKS,
   TRAVERSE_STALL_TICKS,
   STRIP_STANCE_TICKS,
+  HOVER_CAP_ABOVE_PLATEAU,
   SCOOP_WAIT_TICKS,
   SCOOP_TRIES,
   STRIP_FAIL_TRIES,
