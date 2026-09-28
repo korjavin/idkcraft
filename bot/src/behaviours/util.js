@@ -191,6 +191,23 @@ function gravityAbove(bot, pos) {
   } catch (_) { return null }
 }
 
+// atl.20: is the cell directly below pos a PROVEN solid landing (a known
+// solid block — air, water/lava and unknown cells are not)? The landing
+// is never dug, only stood on, so protection does not apply to it. Used
+// by bring's below-feet exemption: digging the ore under your feet onto
+// solid stone is what a player does (a safe 1-block drop), not a trap.
+// The guard itself stays conservative for every other behaviour (equip's
+// no-deepen rule, forage/flat skips), which never loop on this denial.
+function solidBelow(bot, pos) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !pos) return false
+    const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z)))
+    if (!b) return false
+    if (b.boundingBox === 'empty') return false
+    return isWall(b.name)
+  } catch (_) { return false }
+}
+
 // denyReason is the guard's single decision point. Returns null when the
 // dig is allowed, else a self-trap reason ('below-feet': the target is
 // below the feet plane while the bot already stands in a depression, so
@@ -292,4 +309,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, solidBelow }
