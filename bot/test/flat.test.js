@@ -1348,6 +1348,39 @@ describe('flat verified stands (idkcraft-cm0)', () => {
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 occupied')), bot.chats.join('\n'))
   })
 
+  it('mob in the cap cell waits out instead of attempting into it', async () => {
+    // Cm0.1: a mob in the cap cell rejects the placement (rig: 0/6 into a
+    // sheep) — the hole waits like for a player, then places once free.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entities = { 9: { id: 9, name: 'sheep', type: 'mob', position: pos(1.5, 63, 0.5) } }
+    for (let i = 0; i < 3 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(bot.calls.places.length, 0, 'no attempt into the sheep')
+    assert.ok(ctx.flat && ctx.flat.holes.length === 1, 'hole waits, not skips')
+    delete bot.entities[9] // the mob wanders off
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'places once free')
+    assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
+  })
+
+  it('stray drop in the cap cell does not block placement', async () => {
+    // Cm0.1: drops and projectiles never collide (rig: 5/5 placed) — only
+    // mobs wait out.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entities = {
+      9: { id: 9, name: 'item', type: 'other', position: pos(1.5, 63, 0.5) },
+      10: { id: 10, name: 'arrow', type: 'projectile', position: pos(1.5, 63, 0.5) },
+    }
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'places into a cell holding only drops')
+    assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
+  })
+
   it('throwing raycast still attempts (lenient fallback)', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')

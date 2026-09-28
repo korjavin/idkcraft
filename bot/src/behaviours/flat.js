@@ -401,6 +401,27 @@ function cellOccupiedByPlayer(bot, x, y, z) {
   return false
 }
 
+// A mob standing in the cap cell makes the server reject the placement
+// (cm0.1: verified on the rig — 0/6 placed into a sheep, 6/6 into the
+// empty cell). Attempting into it burns all three attempts and skips a
+// fillable hole as refused, so a mob waits out like a player instead.
+// Only colliding entities count: drops, orbs and projectiles never block
+// a placement (5/5 placed into a cell holding only a drop), so a hole
+// holding a stray drop still places. Boats count: they do collide.
+const NONBLOCKERS = new Set(['item', 'item_stack', 'experience_orb'])
+function cellOccupiedByMob(bot, x, y, z) {
+  try {
+    for (const e of Object.values((bot && bot.entities) || {})) {
+      if (!e || !e.position) continue
+      if (e.type === 'player' || e.type === 'projectile') continue
+      if (bot.entity && e === bot.entity) continue
+      if (NONBLOCKERS.has((e.name || '').toLowerCase())) continue
+      if (covers(e, x, y, z)) return true
+    }
+  } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
+  return false
+}
+
 function cellOccupied(bot, x, y, z) {
   return cellOccupiedSelf(bot, x, y, z) || cellOccupiedByPlayer(bot, x, y, z)
 }
@@ -1102,7 +1123,8 @@ function fillTick(bot, ctx, f, bp) {
   }
   const selfIn = cellOccupiedSelf(bot, cx, cy, cz)
   const playerIn = cellOccupiedByPlayer(bot, cx, cy, cz)
-  if (selfIn && !playerIn) {
+  const mobIn = cellOccupiedByMob(bot, cx, cy, cz)
+  if (selfIn && !playerIn && !mobIn) {
     // Standing in our own cap cell (a 1-deep trench floor is a normal place
     // goal parking spot): step aside so the cap can land; a bot that cannot
     // move skips the hole instead of orbiting it.
@@ -1114,7 +1136,7 @@ function fillTick(bot, ctx, f, bp) {
     sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-side')
     return
   }
-  if (playerIn) {
+  if (playerIn || mobIn) {
     h.occ++
     if (h.occ > OCC_DEFERS) {
       shiftSkip(f, 'occupied')
