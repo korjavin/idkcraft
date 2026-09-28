@@ -520,5 +520,8 @@ module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
-// Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain.
+// Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain,
+// plus the table probe — the gate and the behaviour must agree on the
+// station, or an unloaded claim diverts into an instant-done loop.
 module.exports.stoneUpgradeDue = stoneUpgradeDue
+module.exports.tableReady = tableReady

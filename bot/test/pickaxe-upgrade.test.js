@@ -198,17 +198,30 @@ describe('x15 goal gate diverts to equip while the upgrade is due', () => {
   const F = (facts, bot, ctx) => MENU.equip.feasible(facts, bot, ctx)
   const W = (facts, bot, ctx) => stepWhy('equip', facts, bot, ctx, 'text')
   const geared = { sword: 1, pickaxe: 1, scaffold: 32, sticks: 2, planks: 0, logs: 0, cobble: 3 }
-  const chainBot = () => invBot([
+  const CHAIN = [
     { name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 },
-  ])
-  it('geared + wooden + chain + placed table: equip feasible', () => {
-    assert.equal(F({ ...geared, table: 0, tablePlaced: true }, chainBot(), {}), true)
+  ]
+  const chainBot = (blockAt) => ({ inventory: { items: () => CHAIN }, blockAt: blockAt || (() => null) })
+  const claimCtx = () => ({ home: { table: { x: 1, y: 64, z: 0 } } })
+  it('geared + wooden + chain + verified table: equip feasible', () => {
+    assert.equal(F({ ...geared, table: 0, tablePlaced: true }, chainBot(() => TABLE), claimCtx()), true)
   })
   it('geared + wooden + chain + table item: equip feasible', () => {
-    assert.equal(F({ ...geared, table: 1, tablePlaced: false }, chainBot(), {}), true)
+    const bot = { inventory: { items: () => [...CHAIN, { name: 'crafting_table', count: 1 }] } }
+    assert.equal(F({ ...geared, table: 1, tablePlaced: false }, bot, {}), true)
   })
   it('geared + wooden + chain, no table: kit complete (digs later, never fails)', () => {
     assert.equal(F({ ...geared, table: 0, tablePlaced: false }, chainBot(), {}), false)
+  })
+  it('revmux 01: unloaded claim does not divert — kit complete, no done loop', () => {
+    // stationStanding reads the null blockAt as a standing table
+    // (facts.tablePlaced true), but the shared probe refuses the claim,
+    // so the gate must agree with the behaviour: no diversion.
+    assert.equal(F({ ...geared, table: 0, tablePlaced: true }, chainBot(() => null), claimCtx()), false)
+    assert.equal(W({ ...geared, table: 0, tablePlaced: true }, chainBot(() => null), claimCtx()), 'equip: kit complete')
+  })
+  it('revmux 01: unloaded claim + low scaffold still digs via the scaffold branch', () => {
+    assert.equal(F({ ...geared, scaffold: 0, table: 0, tablePlaced: true }, chainBot(() => null), claimCtx()), true)
   })
   it('geared + stone pickaxe: kit complete', () => {
     const bot = invBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }])
@@ -219,10 +232,10 @@ describe('x15 goal gate diverts to equip while the upgrade is due', () => {
     assert.equal(F({ ...geared, cobble: 0, table: 0, tablePlaced: true }, bot, {}), false)
   })
   it('stepWhy: a due upgrade is not "kit complete"', () => {
-    assert.equal(W({ ...geared, table: 0, tablePlaced: true }, chainBot(), {}, 'text'), null)
+    assert.equal(W({ ...geared, table: 0, tablePlaced: true }, chainBot(() => TABLE), claimCtx()), null)
   })
   it('stepWhy: a stone kit is still "kit complete"', () => {
     const bot = invBot([{ name: 'stone_pickaxe', count: 1 }])
-    assert.equal(W({ ...geared, table: 0, tablePlaced: true }, bot, {}, 'text'), 'equip: kit complete')
+    assert.equal(W({ ...geared, table: 0, tablePlaced: true }, bot, {}), 'equip: kit complete')
   })
 })
