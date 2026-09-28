@@ -8,7 +8,7 @@ const danger = require('../danger')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
-const { say, clearGoal } = require('./util')
+const { say, clearGoal, denyReason, logDeny } = require('./util')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
 // function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
@@ -83,7 +83,7 @@ function failFinal(bot, ctx, g, logs, final) {
 
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
-  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
+  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
   const g = ctx.gather
   // A finished attempt stays finished until the world changes (log count):
   // decide() re-picks the step with status 'running', so re-assert here
@@ -117,7 +117,7 @@ function gather(bot, ctx, target, state) {
     if (g.phase === 'searchfar') {
       // Skipped trunks and the sync-48 shell must neither stop the search
       // nor win it: the point of going far is trees the sync scan rejected.
-      const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS || banned(q)
+      const exclude = (q) => g.skip.has(keyOf(q)) || (g.gskip && g.gskip.has(keyOf(q))) || dist(q, bp) <= FIND_RADIUS || banned(q)
       const r = stepFarSearch(bot, g.search, { exclude })
       if (!r.done) return
       g.search = null
@@ -134,7 +134,7 @@ function gather(bot, ctx, target, state) {
     try {
       found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
     } catch (_) { found = [] }
-    const open = found.filter((p) => !g.skip.has(keyOf(p)) && !banned(p))
+    const open = found.filter((p) => !g.skip.has(keyOf(p)) && !(g.gskip && g.gskip.has(keyOf(p))) && !banned(p))
     if (open.length > 0) {
       let best = open[0]
       for (const p of open) {
@@ -155,7 +155,7 @@ function gather(bot, ctx, target, state) {
       // rest (the bead's unreachable case: trunk at 40 skipped, log at 200
       // remembered).
       const mem = names.length > 0
-        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it))
+        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || (g.gskip && g.gskip.has(keyOf(it))) || banned(it))
         : null
       if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
@@ -266,6 +266,21 @@ function gather(bot, ctx, target, state) {
     if (ctx.digInFlight) return
     if (typeof bot.dig !== 'function') {
       g.skip.add(keyOf(g.pos))
+      g.pos = null
+      return
+    }
+    const gDeny = denyReason(bot, g.block, ctx) // idkcraft-drq: placed logs are not trees
+    if (gDeny) {
+      logDeny(g.block, gDeny)
+      g.skip.add(keyOf(g.pos))
+      // 'protected' is a property of the block, not of the trip: it
+      // survives the drop-landed clear below, or the bot re-walks to the
+      // same owner log after every chopped log. Trap denials
+      // (below-feet/gravity) depend on the stance and stay in g.skip.
+      if (gDeny === 'protected') {
+        if (!g.gskip) g.gskip = new Set()
+        g.gskip.add(keyOf(g.pos))
+      }
       g.pos = null
       return
     }

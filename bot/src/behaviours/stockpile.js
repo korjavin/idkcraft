@@ -16,9 +16,13 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 
-// Candidate chest cells, site-relative (table is BLUEPRINT[0] at (4,0,1),
-// so (5,0,1) is table+1 east). All sit beside the east wall, clear of the
-// door walk cell (1,0,-1) and the interior.
+// Candidate chest cells, site-relative. v1 (frozen): table is BLUEPRINT[0]
+// at (4,0,1), so (5,0,1) is table+1 east; all sit beside the east wall,
+// clear of the door walk cell (1,0,-1) and the interior. v2 (jr2.1): inside
+// the common room — (5,0,2) first, then fallbacks clear of the door path
+// (3,1)-(3,2) and the bedroom approaches (2,2),(4,2). The day steps use the
+// indoor chest from outside through the wall (live-verified on the rig:
+// open, deposit and withdraw all work within reach).
 const CHEST_SPOTS = [
   { dx: 5, dy: 0, dz: 1 },
   { dx: 4, dy: 0, dz: 0 },
@@ -27,6 +31,21 @@ const CHEST_SPOTS = [
   { dx: 5, dy: 0, dz: 2 },
   { dx: 6, dy: 0, dz: 1 },
 ]
+
+const CHEST_SPOTS_V2 = [
+  { dx: 5, dy: 0, dz: 2 },
+  { dx: 1, dy: 0, dz: 2 },
+  { dx: 2, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 1 },
+  { dx: 4, dy: 0, dz: 1 },
+]
+
+// Candidate cells by home version: v2 homes bank inside the common room,
+// anything else (v1, or a home that predates the version mark) beside the
+// east wall as before.
+function spotsFor(home) {
+  return home && home.v === 2 ? CHEST_SPOTS_V2 : CHEST_SPOTS
+}
 
 // Never banked: worn/carried kit (same shape as bring share keeps), the
 // light fuel rw4.13 counts from the inventory (torch, coal, charcoal and
@@ -49,12 +68,7 @@ const REPROBE_RADIUS = 32
 // floats) stamps a park so far legs don't each cost a walk home to
 // rediscover it; a freed spot retries within the hour (revmux 03-review).
 const NO_SPOT_RETRY_MS = 60 * 60 * 1000
-const CLEAR_FLORA = new Set([
-  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush',
-  'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
-  'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
-  'white_tulip', 'pink_tulip',
-])
+const { canBreak, CLEAR_FLORA } = require('./util')
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -184,6 +198,7 @@ function blockNameAt(bot, x, y, z) {
 function chestSpotFor(bot, ctx) {
   const site = ctx && ctx.home && ctx.home.site
   if (!site || typeof site.x !== 'number') return null
+  const spots = spotsFor(ctx.home)
   let sawUnknown = false
   const cell = (s) => {
     const x = site.x + s.dx
@@ -193,11 +208,11 @@ function chestSpotFor(bot, ctx) {
     if (at === null) { sawUnknown = true; return null }
     return { x, y, z, at }
   }
-  for (const s of CHEST_SPOTS) {
+  for (const s of spots) {
     const c = cell(s)
     if (c && c.at === 'chest') return { x: c.x, y: c.y, z: c.z, adopt: true }
   }
-  for (const s of CHEST_SPOTS) {
+  for (const s of spots) {
     const c = cell(s)
     if (!c) continue
     if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
@@ -219,7 +234,7 @@ function chestTodo(bot, ctx, maxPlanks) {
   try {
     const site = ctx && ctx.home && ctx.home.site
     if (site && typeof site.x === 'number') {
-      for (const s of CHEST_SPOTS) {
+      for (const s of spotsFor(ctx.home)) {
         if (blockNameAt(bot, site.x + s.dx, site.y + s.dy, site.z + s.dz) === 'chest') return 'adopt'
       }
     }
@@ -259,7 +274,7 @@ function farStalled(ctx, key) {
 // placed-station contract as the table: a ghost claim would walk bring to
 // an empty cell).
 function adopted(ctx, spot) {
-  ctx.home.chest = { x: spot.x, y: spot.y, z: spot.z }
+  ctx.home.chest = new Vec3(spot.x, spot.y, spot.z) // Vec3, not plain (h9z): withChest blockAt()s it
   ctx.chestFull = false
   ctx.chestFullAt = null
   ctx.chestErrorAt = null
@@ -319,6 +334,37 @@ async function withdrawFromChest(bot, ctx, name, count) {
     return { got: res && res.status === 'ok' ? res.value : 0 }
   } catch (_) {
     return { got: 0 }
+  }
+}
+
+// Withdraw up to count across several names in one window (did.1: a whole
+// item family without one open per name). { got, name } — name is the first
+// withdrawn concrete name, null when nothing came out.
+async function withdrawAnyFromChest(bot, ctx, names, count) {
+  const want = new Set(Array.isArray(names) ? names : [])
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+      let need = count
+      let got = 0
+      let first = null
+      if (Array.isArray(stacks)) {
+        for (const s of stacks) {
+          if (need <= 0) break
+          if (!s || typeof s.name !== 'string' || !want.has(s.name)) continue
+          const take = Math.min(typeof s.count === 'number' ? s.count : 1, need)
+          if (take <= 0) continue
+          await window.withdraw(s.type, s.metadata, take)
+          if (first === null) first = s.name
+          need -= take
+          got += take
+        }
+      }
+      return { got, name: first }
+    })
+    return res && res.status === 'ok' ? res.value : { got: 0, name: null }
+  } catch (_) {
+    return { got: 0, name: null }
   }
 }
 
@@ -558,13 +604,18 @@ function placeChest(bot, ctx, spot, bp) {
     // a top-level require here would hand craft a half-loaded goal.
     let craftMod = null
     try { craftMod = require('./craft') } catch (_) { craftMod = null }
-    const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
     let tableBlock = null
-    if (tablePos && craftMod) {
-      try {
-        const b = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-        if (b && b.name === 'crafting_table') tableBlock = b
-      } catch (_) { tableBlock = null }
+    let tablePos = null
+    if (craftMod) {
+      // First verified-standing (h9z): a ghost home claim must not shadow
+      // the standing roadside table (craft.js pattern).
+      for (const cand of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+        if (!cand || typeof cand.x !== 'number') continue
+        try {
+          const b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z))
+          if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
+        } catch (_) { /* unreadable: try the next claim */ }
+      }
     }
     if (!tableBlock) {
       fail(ctx, 'no-chest')
@@ -642,7 +693,8 @@ function placeChest(bot, ctx, spot, bp) {
       try {
         const cell = bot.blockAt(new Vec3(spot.x, spot.y, spot.z))
         if (cell && cell.name && cell.name !== 'air' && cell.name !== 'chest' &&
-          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function') {
+          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function' &&
+          canBreak(bot, cell, ctx)) {
           await bot.dig(cell)
         }
       } catch (_) {
@@ -680,8 +732,11 @@ module.exports.depositPlan = depositPlan
 module.exports.surplusCount = surplusCount
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
+module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
+module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
+module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
 module.exports.CHEST_FULL_RETRY_MS = CHEST_FULL_RETRY_MS

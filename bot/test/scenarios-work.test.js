@@ -343,9 +343,9 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
   // for a placed table, the table was placed only by build — build feasible
   // in 0 of 37 goal steps. Fixed: only the NEXT cell's item gates, and the
   // table lays first. E2E: the table->door chain through work-mode ticks.
-  const BLUEPRINT = require('../src/behaviours/build').BLUEPRINT
-  const goal = require('../src/goal')
   const build = require('../src/behaviours/build')
+  const BLUEPRINT_V2 = build.BLUEPRINT_V2
+  const goal = require('../src/goal')
 
   function makeWorld() {
     const cells = new Map()
@@ -374,7 +374,7 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
       players: { Steve: { username: 'Steve' } }, // roster online, target unseen
       entities: {},
       spawnPoint: pos(0, 64, 0),
-      entity: { position: pos(10, 64, 2) }, // next to the table cell
+      entity: { position: pos(11, 64, 2) }, // next to the table cell
       world: { getBlock: () => null },
       held: null,
       inventory: { items: () => items },
@@ -402,7 +402,7 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
   }
 
   function paintHouse(world, home) {
-    for (const cell of BLUEPRINT) {
+    for (const cell of build.blueprintFor(home)) {
       const name = cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks'
       world.set(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz, name)
     }
@@ -447,11 +447,11 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
       let t = 0
       for (; t < 20 && !ctx.home.table; t++) await step()
       assert.ok(ctx.home.table, 'table placed and claimed')
-      assert.equal(world.get(s.x + 4, s.y, s.z + 1), 'crafting_table')
+      assert.equal(world.get(s.x + 5, s.y, s.z + 1), 'crafting_table')
 
       // 2. Ring done elsewhere, door cell next, no door: craft makes it.
       paintHouse(world, ctx.home)
-      world.set(s.x + 1, s.y, s.z, 'air') // only the door cell is open
+      world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
       t = 0
       for (; t < 20 && !items.some((i) => i.name === 'oak_door'); t++) await step()
       assert.ok(actions.includes('craft'), `craft picked for the door: ${actions.join(',')}`)
@@ -461,8 +461,8 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
 
       // 3. Door in hand: build lays it, the chain completes.
       t = 0
-      for (; t < 20 && world.get(s.x + 1, s.y, s.z) !== 'oak_door'; t++) await step()
-      assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door', 'door laid')
+      for (; t < 20 && world.get(s.x + 3, s.y, s.z) !== 'oak_door'; t++) await step()
+      assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'door laid')
       assert.ok(!actions.includes('rest'), `never deadlocked to rest: ${actions.join(',')}`)
     } finally {
       cap.release()
@@ -476,7 +476,7 @@ describe('cww: roof approach leaves its own wall standing', () => {
   // GoalPlaceBlock + canDig, and the rebuild took priority every other tick
   // (23/40<->24/40 for 10+ min). Fixed: guardOwnWalls vetoes breaking the
   // house. E2E: the roof drive with a digging executor through work ticks.
-  const BLUEPRINT = require('../src/behaviours/build').BLUEPRINT
+  const BLUEPRINT_V2 = require('../src/behaviours/build').BLUEPRINT_V2
   const goal = require('../src/goal')
 
   const REG = { oak_planks: { id: 5 }, oak_log: { id: 17 }, dirt: { id: 3 }, oak_door: { id: 64 }, crafting_table: { id: 998 } }
@@ -594,19 +594,19 @@ describe('cww: roof approach leaves its own wall standing', () => {
     ctx.work = true
     ctx.home = goal.siteFor(bot, pos(0, 64, 0))
     const s = ctx.home.site
-    for (const cell of BLUEPRINT) {
+    for (const cell of BLUEPRINT_V2) {
       if (cell.dy === 2) continue // roof not started
       world.set(s.x + cell.dx, s.y + cell.dy, s.z + cell.dz,
         cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks')
     }
-    bot.entity.position = pos(s.x + 4, s.y, s.z + 1) // outside, after the wall ring
+    bot.entity.position = pos(s.x + 3, s.y, s.z + 2) // inside: the static body must reach the whole roof
     const transit = { n: 0 }
     bot.pathfinder.setGoal = diggingSetGoal(bot, world, transit)
     const cap = capture()
     const actions = []
     try {
       let t = 0
-      for (; t < 250 && !ctx.home.built; t++) {
+      for (; t < 400 && !ctx.home.built; t++) {
         if (transit.n > 0 && --transit.n === 0) bot._moving = false
         const r = await ticker.tick()
         actions.push(r.decision && r.decision.action)
@@ -615,8 +615,8 @@ describe('cww: roof approach leaves its own wall standing', () => {
       assert.ok(ctx.home.built, `roof completes in ${t} ticks`)
       assert.equal(ctx.stepStatus, 'done')
       assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_planks')), [], 'no wall plank dug')
-      for (let dz = 0; dz < 4; dz++) {
-        for (let dx = 0; dx < 4; dx++) {
+      for (let dz = 0; dz <= 5; dz++) {
+        for (let dx = 0; dx <= 6; dx++) {
           assert.equal(world.get(s.x + dx, s.y + 2, s.z + dz), 'oak_planks', `roof ${dx},${dz} laid`)
         }
       }
@@ -636,7 +636,7 @@ describe('8si: the house drive keeps the door and the doorway', () => {
   // targets there. E2E: the full hostile-executor drive through work ticks,
   // with one interior planks cell injected into the plan so the invariant
   // half is reachable (stock BLUEPRINT has no interior targets).
-  const BLUEPRINT = require('../src/behaviours/build').BLUEPRINT
+  const BLUEPRINT_V2 = require('../src/behaviours/build').BLUEPRINT_V2
   const goal = require('../src/goal')
 
   const REG = { oak_planks: { id: 5 }, oak_log: { id: 17 }, dirt: { id: 3 }, oak_door: { id: 64 }, crafting_table: { id: 998 } }
@@ -756,16 +756,16 @@ describe('8si: the house drive keeps the door and the doorway', () => {
     ctx.work = true
     ctx.home = goal.siteFor(bot, pos(0, 64, 0))
     const s = ctx.home.site
-    bot.entity.position = pos(s.x + 4, s.y, s.z + 1)
+    bot.entity.position = pos(s.x + 5, s.y, s.z + 1)
     const transit = { n: 0 }
     bot.pathfinder.setGoal = hostileSetGoal(bot, world, transit)
     const cap = capture()
     const actions = []
-    const injected = { dx: 1, dy: 0, dz: 1, kind: 'planks' } // interior target
-    BLUEPRINT.splice(1, 0, injected)
+    const injected = { dx: 2, dy: 0, dz: 1, kind: 'planks' } // common-room target
+    BLUEPRINT_V2.splice(1, 0, injected)
     try {
       let t = 0
-      for (; t < 450 && !ctx.home.built; t++) {
+      for (; t < 1200 && !ctx.home.built; t++) {
         if (transit.n > 0 && --transit.n === 0) bot._moving = false
         const r = await ticker.tick()
         actions.push(r.decision && r.decision.action)
@@ -774,18 +774,18 @@ describe('8si: the house drive keeps the door and the doorway', () => {
       assert.ok(ctx.home.built, `house completes in ${t} ticks`)
       assert.ok(ctx.buildSkip.includes(1), 'interior cell skipped by the invariant')
       // Drive over: restore the plan before adopt (it scans every cell).
-      BLUEPRINT.splice(BLUEPRINT.indexOf(injected), 1)
+      BLUEPRINT_V2.splice(BLUEPRINT_V2.indexOf(injected), 1)
       assert.deepEqual(bot.calls.digs.filter((n) => n.endsWith('_door') || n === 'crafting_table'),
         [], 'door and workbench never dug')
-      assert.equal(world.get(s.x + 1, s.y, s.z), 'oak_door', 'doorway holds the door')
-      for (const [dx, dz] of [[1, 1], [1, 2], [2, 1], [2, 2]]) {
+      assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'doorway holds the door')
+      for (const [dx, dz] of [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2], [2, 3], [4, 3], [1, 4], [2, 4], [4, 4], [5, 4]]) {
         assert.ok(world.get(s.x + dx, s.y, s.z + dz) !== 'oak_planks', `interior ${dx},${dz} plank-free`)
         assert.ok(world.get(s.x + dx, s.y + 1, s.z + dz) !== 'oak_planks', `interior ${dx},${dz}+1 plank-free`)
       }
       bot.spawnPoint = pos(s.x, s.y, s.z)
       bot.findBlocks = () => {
         const out = []
-        for (const [x, y, z] of [[s.x + 1, s.y, s.z], [s.x + 1, s.y + 1, s.z]]) {
+        for (const [x, y, z] of [[s.x + 3, s.y, s.z], [s.x + 3, s.y + 1, s.z]]) {
           if (String(world.get(x, y, z) || '').endsWith('_door')) out.push(pos(x, y, z))
         }
         return out
@@ -795,8 +795,8 @@ describe('8si: the house drive keeps the door and the doorway', () => {
       assert.equal(adopted.built, true, 'adopt sees it complete')
       assert.ok(actions.every((a) => a === 'build'), `build owns every tick: ${[...new Set(actions)].join(',')}`)
     } finally {
-      const ix = BLUEPRINT.indexOf(injected) // idempotent: already restored above unless an assert threw
-      if (ix >= 0) BLUEPRINT.splice(ix, 1)
+      const ix = BLUEPRINT_V2.indexOf(injected) // idempotent: already restored above unless an assert threw
+      if (ix >= 0) BLUEPRINT_V2.splice(ix, 1)
       cap.release()
       ticker.destroy()
     }

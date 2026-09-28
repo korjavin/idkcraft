@@ -163,7 +163,8 @@ describe('furnace place + claim', () => {
     await tick(bot, ctx)
     assert.deepEqual(bot.calls.equips, ['furnace'])
     assert.equal(bot.calls.places.length, 1)
-    assert.deepEqual(ctx.home.furnace, { x: 1, y: 64, z: 0 })
+    assert.deepEqual({ x: ctx.home.furnace.x, y: ctx.home.furnace.y, z: ctx.home.furnace.z }, { x: 1, y: 64, z: 0 })
+    assert.equal(typeof ctx.home.furnace.floored, 'function', 'Vec3 claim (h9z): readers blockAt() it')
   })
 
   it('unverified placement claims nothing and fails', async () => {
@@ -188,7 +189,7 @@ describe('furnace place + claim', () => {
     const ctx = { home: { furnace: { x: 50, y: 64, z: 50 } } } // mined away: verified air
     await tick(bot, ctx)
     assert.equal(bot.calls.places.length, 1, 're-places')
-    assert.deepEqual(ctx.home.furnace, { x: 1, y: 64, z: 0 }, 'fresh claim replaces the ghost')
+    assert.deepEqual({ x: ctx.home.furnace.x, y: ctx.home.furnace.y, z: ctx.home.furnace.z }, { x: 1, y: 64, z: 0 }, 'fresh claim replaces the ghost')
   })
 
   it('unloaded claim waits instead of retracting', async () => {

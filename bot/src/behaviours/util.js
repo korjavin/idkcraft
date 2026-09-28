@@ -3,7 +3,9 @@
 // Shared behaviour helpers (idkcraft-08i): byte-identical say/clearGoal
 // lived in six behaviour files, botPos in three (plus a home.js variant
 // without the try). One copy, so a latch fix lands everywhere at once.
-// Pure leaf: requires nothing, so no import cycles.
+// Requires only the external vec3 leaf (real bot.blockAt calls pos.floored,
+// so plain {x,y,z} would throw) — still no repo import cycles.
+const { Vec3 } = require('vec3')
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
@@ -29,3 +31,259 @@ function botPos(bot) {
 }
 
 module.exports = { say, clearGoal, botPos }
+
+// Owner-build protection (idkcraft-drq): the single break guard every
+// direct dig site calls. Breakable = natural terrain or blocks the bot
+// placed itself this session (ctx.placedByBot, populated by trackPlaced).
+// Everything else is protected, including owner-plausible naturals
+// (cobblestone, ice, obsidian) and bare/stripped logs. Default deny:
+// unknown names, nulls and errors all refuse. Quiet by design — callers
+// log the protected: line when a denial changes a decision, so scans
+// that evaluate dozens of cells do not flood the log.
+const NATURAL_SOLID = new Set([
+  'dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
+  'mud', 'muddy_mangrove_roots',
+  'sand', 'red_sand', 'gravel', 'clay', 'soul_sand', 'soul_soil',
+  'stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite',
+  'dripstone_block', 'sandstone', 'red_sandstone', 'infested_stone',
+  'snow', 'snow_block', 'ice', 'packed_ice', 'ancient_debris',
+  'netherrack', 'basalt', 'blackstone', 'soul_sand', 'soul_soil',
+  'magma_block', 'end_stone',
+  'nether_wart_block', 'warped_wart_block',
+])
+// NOTE: matches flat.js DIG_ALLOWLIST (ice, nether/end terrain) except
+// blue_ice, which is crafted-only and always a build. flat.js keeps its own
+// allowlist + structureNear proximity gate; canBreak is the cross-behaviour
+// floor both defer to at the dig moment.
+
+// Clearable flora (moved from stockpile.js so the guard shares it): grows
+// back, never part of a build. Torches are NOT here — foreign torches stay
+// protected (build.js REPLACEABLE is wider on purpose: it only clears its
+// own blueprint cells).
+const CLEAR_FLORA = new Set([
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush',
+  'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
+  'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
+  'white_tulip', 'pink_tulip', 'vine', 'glow_lichen',
+])
+
+function isWoody(name) {
+  return typeof name === 'string' && /(_log|_stem|_hyphae|_wood)$/.test(name)
+}
+
+function cellName(bot, x, y, z) {
+  try {
+    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(new Vec3(x, y, z)) : null
+    return (b && typeof b.name === 'string') ? b.name : null
+  } catch (_) { return null }
+}
+
+function crownNear(bot, x, y, z) {
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if (dx === 0 && dy === 0 && dz === 0) continue
+        const n = cellName(bot, x + dx, y + dy, z + dz)
+        if (!n) continue
+        if (n.endsWith('_leaves') || n === 'nether_wart_block' || n === 'warped_wart_block') return true
+      }
+    }
+  }
+  return false
+}
+
+// A log/stem is a tree only with a woody column above or below AND a leaf
+// crown (or nether wart) around the column TOP: walk the woody cells up
+// from the target (bounded) and look for leaves there. Judging at the
+// target instead accepts cabin pillars under a canopy (leaves beside the
+// middle of the pillar) and refuses the low logs of tall trunks (no
+// leaves within 2 of the bottom). A solid cap directly above the top
+// (planks, slabs: a roof, not sky) vetoes. Fails closed without a world
+// view. Residual: a placed pillar deliberately crowned with leaves reads
+// as a tree — indistinguishable, accepted.
+function isTreeLog(bot, block) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !block || !block.position) return false
+    const p = block.position
+    if (typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+    const x = Math.floor(p.x)
+    const y = Math.floor(p.y)
+    const z = Math.floor(p.z)
+    const above = cellName(bot, x, y + 1, z)
+    const below = cellName(bot, x, y - 1, z)
+    if (!isWoody(above) && !isWoody(below)) {
+      // Trunk remnant: the lower logs are already chopped (air below) and
+      // the crown sits directly above. Without this the last log of every
+      // trunk reads 'protected'. Below MUST be air: a lone log on dirt or
+      // planks with leaves above is decor, not a remnant.
+      const airBelow = below === 'air' || below === 'cave_air' || below === 'void_air'
+      if (airBelow && above && (above.endsWith('_leaves') || above === 'nether_wart_block' || above === 'warped_wart_block') &&
+          crownNear(bot, x, y, z)) return true
+      return false
+    }
+    let top = y
+    for (let i = 1; i <= 32; i++) {
+      if (!isWoody(cellName(bot, x, y + i, z))) break
+      top = y + i
+    }
+    const cap = cellName(bot, x, top + 1, z)
+    if (cap && isWall(cap) && !cap.endsWith('_leaves') &&
+        cap !== 'nether_wart_block' && cap !== 'warped_wart_block') return false
+    return crownNear(bot, x, top, z)
+  } catch (_) { return false }
+}
+
+// Walk-through blocks for the wall check below: real mineflayer reports
+// these via boundingBox 'empty', fakes carry the name only.
+const NOT_WALL = new Set(['water', 'lava', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass'])
+
+function isWall(name) {
+  return typeof name === 'string' && name !== 'air' && name !== 'cave_air' &&
+    name !== 'void_air' && !CLEAR_FLORA.has(name) && !NOT_WALL.has(name)
+}
+
+// Solid horizontal neighbours at the feet plane (0-4). Only proven walls
+// count: unknown cells never do. (Asymmetry is deliberate: protection
+// fails closed because a destroyed build is unrecoverable, while the trap
+// rule needs proof because over-denying bricks legitimate digging such as
+// flat restock on open ground.)
+function walledSides(bot, feet) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function') return 0
+    const fx = Math.floor(feet.x)
+    const fy = Math.floor(feet.y)
+    const fz = Math.floor(feet.z)
+    const offs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    let n = 0
+    for (const [dx, dz] of offs) {
+      let b = null
+      try { b = bot.blockAt(new Vec3(fx + dx, fy, fz + dz)) } catch (_) { b = null }
+      if (!b) continue
+      if (b.boundingBox === 'empty') continue
+      if (isWall(b.name)) n++
+    }
+    return n
+  } catch (_) { return 0 }
+}
+
+// A below-feet dig is a trap only in a real depression: one wall (a trunk,
+// a bump, the rim of the hole flat is filling) still leaves a 1-deep dig
+// jumpable, and so does a corner; three walls mean the deepened cell has
+// no same-level way out.
+const TRAP_WALLS = 3
+
+// Blocks that fall when their support is dug (sand, gravel, concrete
+// powder): digging one of these directly is safe (it breaks into item
+// form), but digging its SUPPORT drops the stack onto whatever is below.
+function isGravityBlock(name) {
+  return name === 'sand' || name === 'red_sand' || name === 'gravel' ||
+    (typeof name === 'string' && name.endsWith('_concrete_powder'))
+}
+
+// Name of the gravity block directly above pos, or null. Unknown cells
+// return null: trap rules need proof (see walledSides above).
+function gravityAbove(bot, pos) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !pos) return null
+    const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) + 1, Math.floor(pos.z)))
+    const n = b && b.name
+    return isGravityBlock(n) ? n : null
+  } catch (_) { return null }
+}
+
+// denyReason is the guard's single decision point. Returns null when the
+// dig is allowed, else a self-trap reason ('below-feet': the target is
+// below the feet plane while the bot already stands in a depression, so
+// the dig would deepen the hole; 'gravity': the dig would drop a sand /
+// gravel stack onto the bot's own head — owner session 2026-09-28:
+// recover dig_up opened a sand ceiling at -11 56 124 and the bot
+// suffocated 2s after the dig finished) or 'protected' (owner-build
+// protection). A below-feet dig on open ground stays allowed: it makes a
+// 1-deep hole the bot jumps out of. Both trap rules need a known position
+// and proven cells; without either they cannot prove a trap and stay out,
+// while the protection rules below them still fail closed.
+function denyReason(bot, block, ctx) {
+  try {
+    if (!block || typeof block.name !== 'string') return 'protected'
+    const name = block.name
+    if (name === 'air' || name === 'cave_air' || name === 'void_air') return null
+    const feet = botPos(bot)
+    const pos = block.position
+    if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) < Math.floor(feet.y)) {
+      const near = Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 &&
+        Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1
+      if (near && walledSides(bot, feet) >= TRAP_WALLS) return 'below-feet'
+    }
+    // Never dig a support out from under a gravity block in the bot's own
+    // column: the stack falls onto the bot. The exemption is only the body
+    // cells (feet, head): digging the sand out of the cell you already
+    // occupy is the escape when buried. A gravity block HIGHER up with
+    // more gravity above it is itself a support — digging it drops the
+    // stack through your air cells onto your head. Below-feet targets stay
+    // with the rule above (a gravity block directly above the floor is the
+    // feet cell itself, i.e. already buried).
+    if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) >= Math.floor(feet.y)) {
+      const ty = Math.floor(pos.y)
+      if (Math.floor(feet.x) === Math.floor(pos.x) && Math.floor(feet.z) === Math.floor(pos.z) &&
+          gravityAbove(bot, pos) && !(isGravityBlock(name) && ty <= Math.floor(feet.y) + 1)) {
+        return 'gravity'
+      }
+    }
+    if (pos && ctx && ctx.placedByBot instanceof Set) {
+      try {
+        if (ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)) return null
+      } catch (_) { /* fall through to type rules */ }
+    }
+    if (CLEAR_FLORA.has(name) || NATURAL_SOLID.has(name)) return null
+    if (name.endsWith('_ore') || name.endsWith('_leaves')) return null
+    const woody = (name.endsWith('_log') && !name.startsWith('stripped_')) ||
+      name.endsWith('_stem') || name.endsWith('_hyphae')
+    if (woody) return isTreeLog(bot, block) ? null : 'protected'
+    return 'protected'
+  } catch (_) { return 'protected' }
+}
+
+function canBreak(bot, block, ctx) {
+  return denyReason(bot, block, ctx) === null
+}
+
+function logDeny(block, reason) {
+  try {
+    const n = (block && block.name) || '?'
+    const p = block && block.position
+    const at = (p && typeof p.x === 'number')
+      ? `${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`
+      : '? ? ?'
+    if (reason === 'below-feet' || reason === 'gravity') {
+      console.log(`selftrap: refused dig ${n} at ${at} (${reason})`)
+    } else {
+      console.log(`protected: ${n} at ${at}`)
+    }
+  } catch (_) { /* logging never breaks a dig */ }
+}
+
+// Record every successful placement in ctx.placedByBot ("x,y,z", capped).
+// Installed once per bot in createTicker; covers all place sites plus the
+// pathfinder executor's own placements, so future code is tracked too.
+function trackPlaced(bot, ctx) {
+  if (!bot || typeof bot.placeBlock !== 'function' || bot._placedTrackInstalled) return
+  bot._placedTrackInstalled = true
+  const orig = bot.placeBlock.bind(bot)
+  bot.placeBlock = async (ref, face, opts) => {
+    const out = await orig(ref, face, opts)
+    try {
+      const rp = ref && ref.position
+      if (rp && face && typeof face.x === 'number' && ctx) {
+        if (!(ctx.placedByBot instanceof Set)) ctx.placedByBot = new Set()
+        if (ctx.placedByBot.size >= 5000) {
+          const oldest = ctx.placedByBot.values().next().value
+          ctx.placedByBot.delete(oldest)
+        }
+        ctx.placedByBot.add(`${Math.floor(rp.x + face.x)},${Math.floor(rp.y + face.y)},${Math.floor(rp.z + face.z)}`)
+      }
+    } catch (_) { /* tracking never breaks a place */ }
+    return out
+  }
+}
+
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA }

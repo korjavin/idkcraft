@@ -899,6 +899,24 @@ describe('flat behaviour', () => {
     assert.ok(pt && (Math.abs(pt.x) > 4 || Math.abs(pt.z) > 4), `search origin outside the square: ${pt && `${pt.x},${pt.z}`}`)
   })
 
+  it('restock skips a below-feet dirt in a pit instead of deepening it (drq selftrap)', async () => {
+    const world = makeWorld({})
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.set(x, 64, z, 'dirt')
+    const bot = mockBot(world, { items: [], feet: pos(0, 64, 0) })
+    const ctx = { lastGoalKey: 'flat-dig:0,63,0', flat: startEpisode(0, 0, 4, 74, 'P') }
+    const f = ctx.flat
+    f.phase = 'dig'
+    f.ticks = 0
+    // A stale selection from before the bot slid into the pit: the
+    // dig-site check re-verifies at the dig moment (findDirt filtered
+    // it, the bot moved since).
+    f.dig = { pos: pos(0, 63, 0), phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: { x: 0, y: 64, z: 0 } }
+    flat(bot, ctx, null, null); await settle()
+    assert.deepEqual(bot.calls.digs, [], 'pit floor never dug')
+    assert.equal(ctx.flat.dig.pos, null, 'target dropped')
+    assert.equal(ctx.flat.dig.skip.size, 1, 'target skipped, restock searches on')
+  })
+
   it('restock digs at least RESTOCK_MIN_EDGE_GAP past the edge', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')

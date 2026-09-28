@@ -794,6 +794,12 @@ describe('work mode (epic rw4)', () => {
       assert.equal(r2.decision.action, 'idle', 'tick 2 still waits')
       assert.equal(ctx.home, undefined, 'nothing adopted yet')
       cells.set('9,64,8', 'oak_door') // the door streams in
+      // Loaded air around it (the mock reads missing cells as unknown, but
+      // the real blockAt returns air): the v2 corner probe must read air,
+      // not unknown, to settle on v1 instead of waiting for chunks.
+      for (const k of ['6,64,8', '6,65,8', '12,64,8', '12,65,8', '6,64,13', '6,65,13', '12,64,13', '12,65,13']) {
+        cells.set(k, 'air')
+      }
       const r3 = await ticker.tick()
       assert.ok(ctx.home, 'adopted on the retry')
       assert.deepEqual([ctx.home.site.x, ctx.home.site.y, ctx.home.site.z], [8, 64, 8])

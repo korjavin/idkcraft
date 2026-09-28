@@ -15,9 +15,10 @@ const { botPos } = require('./util')
 // A* can never route through it — the body sneaks the open doorway by
 // direct control instead.
 //
-// The door is the lower door cell at site+(1,0,0) (rw4.4 blueprint); the
-// outside approach cell is site+(1,y,-1), the first interior cell behind
-// the door site+(1,y,+1) (the interior-box corner, see makeHome).
+// The door is the lower door cell at site+(1,0,0) on a v1 hut, site+(3,0,0)
+// on a v2 house (jr2.1 blueprint); the outside approach cell is one north
+// of it, the first interior cell one south (the v2 one lands in the common
+// room, see makeHome).
 
 // Stall by displacement, not isMoving (gather lesson: a wedged executor
 // keeps reporting moving while the body stands still).
@@ -87,16 +88,20 @@ function nightLine(bot, ctx, home) {
   return `night: survived, ${dText}, ${bText}, ${pText}; back to work`
 }
 
+function doorDx(home) {
+  return home && home.v === 2 ? 3 : 1
+}
+
 function doorPos(home) {
-  return new Vec3(home.site.x + 1, home.site.y, home.site.z)
+  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z)
 }
 
 function outsidePos(home) {
-  return new Vec3(home.site.x + 1, home.site.y, home.site.z - 1)
+  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z - 1)
 }
 
 function insidePos(home) {
-  return new Vec3(home.site.x + 1, home.site.y, home.site.z + 1)
+  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z + 1)
 }
 
 

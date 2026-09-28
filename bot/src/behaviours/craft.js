@@ -1,6 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const Vec3 = require('vec3')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 
@@ -168,9 +169,168 @@ async function paceWindowOp(bot) {
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
 }
 
+// ph7: the phantom table craft. mineflayer picks the FIRST inventory stack
+// of each ingredient whatever its size; when it is smaller than the op's
+// placement count the cursor runs dry mid-op, a placement goes out on an
+// empty server cursor (or the mid-op re-pickup races the pipelined
+// placements), the grid never completes, the result grab takes nothing — and
+// the op still resolves, because the updateSlot:0 waits are satisfied by
+// echo/resync traffic, never by the click's own effect. Assayed live on
+// Paper 26.1.2: 28/28 single-pickup door ops landed, 2/2 partial-first-stack
+// ops phantomed (server grid missing one plank, mats unspent, no product),
+// and the retry lands on a fresh full stack. ensureStacks consolidates each
+// ingredient into its first-picked stack before delegating: with the whole
+// need in one stack the cursor cannot run dry and the first op lands.
+// Fail-open by design: anything unexpected skips consolidation and bot.craft
+// behaves exactly as before.
+const CONSOLIDATE_ROUNDS = 2
+// ponytail: _syncWindow answers in ~1 RTT (the mismatch resync is the
+// server's immediate reply); 3 s is the give-up for a dead link, after which
+// the op runs unverified exactly as before.
+const CONSOLIDATE_SYNC_MS = 3000
+// ponytail: fallback when bot._syncWindow is missing (old mineflayer): read
+// the model after trailing resyncs had time to land (~RTT; 250 ms covers
+// LAN + spikes — raise if phantoms recur on high-RTT links).
+const CONSOLIDATE_SETTLE_MS = 250
+
+// Placements per distinct ingredient, mirroring mineflayer's clickShape +
+// nextIngredientsClick exactly: shaped cells with id !== -1 plus every
+// shapeless entry (a recipe may carry both — clickShape falls through),
+// times the op count (iterations re-pick the same first stack).
+function placementsFor(recipe, count) {
+  const needs = new Map()
+  const add = (id, metadata) => {
+    if (typeof id !== 'number' || id === -1) return
+    const key = `${id}\0${metadata == null ? '' : metadata}`
+    const cur = needs.get(key)
+    if (cur) cur.need += 1
+    else needs.set(key, { id, metadata: metadata == null ? null : metadata, need: 1 })
+  }
+  try {
+    if (recipe && Array.isArray(recipe.inShape)) {
+      for (const row of recipe.inShape) {
+        if (!Array.isArray(row)) continue
+        for (const cell of row) {
+          if (cell && typeof cell === 'object') add(cell.id, cell.metadata)
+        }
+      }
+    }
+    if (recipe && Array.isArray(recipe.ingredients)) {
+      for (const ing of recipe.ingredients) {
+        if (ing && typeof ing === 'object') add(ing.id, ing.metadata)
+      }
+    }
+  } catch (_) { return new Map() }
+  let n = 1
+  try { n = parseInt(count ?? 1, 10) } catch (_) { n = 1 }
+  if (!Number.isFinite(n) || n < 0) n = 1
+  if (n !== 1) {
+    for (const v of needs.values()) v.need *= n
+  }
+  return needs
+}
+
+function firstStack(win, id, metadata) {
+  try {
+    return win.findInventoryItem(id, metadata) || null
+  } catch (_) { return null }
+}
+
+// Model truth after our clicks: the _syncWindow resync is queued behind them
+// (TCP order) and overwrites any stale trailing packet, so the re-read below
+// sees post-click state. Event-driven, no wall clock; the timeout only
+// bounds a dead link. Falls back to a settle wait without _syncWindow.
+async function syncInventory(bot) {
+  const win = bot.inventory
+  if (win && typeof bot._syncWindow === 'function') {
+    let timer = null
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('consolidate-sync-timeout')), CONSOLIDATE_SYNC_MS)
+      if (timer && typeof timer.unref === 'function') timer.unref()
+    })
+    try {
+      await Promise.race([bot._syncWindow(win), timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, CONSOLIDATE_SETTLE_MS))
+}
+
+// Merge later same-item stacks into the first-picked slot until it covers
+// need. Vanilla left-click merges CURSOR->SLOT, so each donor cycle picks up
+// a later stack, dumps it into the first slot, and puts any leftover back
+// where the donor was (empty now) — the cursor ends every cycle empty, so no
+// click can go out on an empty server cursor here (the failure mode this
+// fixes). Slot clicks on the bare inventory carry no mineflayer waits, so the
+// whole sequence runs atomically w.r.t. server packets and the slot list
+// stays valid throughout; the post-round sync re-reads truth. Caps at one
+// full stack (callers craft count=1, need <= 9); anything more stays short
+// and crafts unverified, as before.
+async function consolidateOne(bot, win, id, metadata, need) {
+  if (win.selectedItem) return // foreign cursor: bail, the verify decides
+  const start = typeof win.inventoryStart === 'number' ? win.inventoryStart : 9
+  const end = typeof win.inventoryEnd === 'number' ? win.inventoryEnd : 45
+  let stacks = []
+  try {
+    stacks = win.findItemsRange(start, end, id, metadata) || []
+  } catch (_) { return }
+  if (stacks.length === 0) return
+  const slot = stacks[0].slot
+  const at = () => {
+    const o = win.slots[slot]
+    return o && typeof o.count === 'number' ? o.count : 0
+  }
+  const first = win.slots[slot]
+  const cap = first && typeof first.stackSize === 'number' ? first.stackSize : 64
+  for (let i = 1; i < stacks.length; i++) {
+    const have = at()
+    if (have >= need || have >= cap) break
+    await bot.clickWindow(stacks[i].slot, 0, 0) // pick up donor
+    if (!win.selectedItem) break // didn't take: stop, the verify decides
+    await bot.clickWindow(slot, 0, 0) // dump into first
+    if (win.selectedItem) await bot.clickWindow(stacks[i].slot, 0, 0) // leftover back
+  }
+}
+
+async function ensureStacks(bot, recipe, count) {
+  const win = bot && bot.inventory
+  if (!win || !Array.isArray(win.slots)) return
+  if (bot.currentWindow) return // clicks would land in the open window, not the inventory
+  if (typeof bot.clickWindow !== 'function') return
+  if (typeof win.findInventoryItem !== 'function' || typeof win.findItemsRange !== 'function') return
+  if (win.selectedItem) return // foreign cursor: don't touch
+  let needs = null
+  try {
+    needs = placementsFor(recipe, count)
+  } catch (_) { return }
+  if (!needs || needs.size === 0) return
+  const covered = () => {
+    for (const v of needs.values()) {
+      const f = firstStack(win, v.id, v.metadata)
+      const n = f && typeof f.count === 'number' ? f.count : 0
+      if (n < v.need) return false
+    }
+    return true
+  }
+  if (covered()) return // fast path: zero clicks, zero waits
+  for (let round = 0; round < CONSOLIDATE_ROUNDS; round++) {
+    for (const v of needs.values()) {
+      try {
+        await consolidateOne(bot, win, v.id, v.metadata, v.need)
+      } catch (_) { /* this ingredient stays fragmented */ }
+    }
+    try { await syncInventory(bot) } catch (_) { /* unverified: the re-read below decides */ }
+    if (covered()) return
+  }
+  try { console.error('craft consolidate short: first stack below need, crafting anyway') } catch (_) { /* logging best-effort */ }
+}
+
 async function safeCraft(bot, recipe, count, table) {
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
+  await ensureStacks(bot, recipe, count)
   try {
     await bot.craft(recipe, count, table)
   } catch (err) {
@@ -202,11 +362,18 @@ function craft(bot, ctx, target, state) {
   // the table branch below rebuilds one from planks every cycle. Verified
   // once: a ghost claim (mined table) reads as no station, so the table
   // branch rebuilds instead of the door branch walking to nothing forever.
-  const tablePos = (ctx.home && ctx.home.table) || (ctx && ctx.claimedTable)
+  // First verified-standing of home.table / claimedTable (h9z): reads are
+  // Vec3-normalised (a plain claim throws inside prismarine-world, prod:
+  // 20 extra tables in 12 h) and a ghost home claim (mined table) must not
+  // shadow the equip step's standing roadside table (rig: the door branch
+  // below never fired while the table branch rebuilt).
   let tableBlock = null
-  if (tablePos) {
-    try { tableBlock = bot.blockAt && bot.blockAt(tablePos) } catch (_) { tableBlock = null }
-    if (!tableBlock || tableBlock.name !== 'crafting_table') tableBlock = null
+  let tablePos = null
+  for (const cand of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+    if (!cand || typeof cand.x !== 'number') continue
+    let b = null
+    try { b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z)) } catch (_) { b = null }
+    if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
   }
   let op = null
   for (const [wood, n] of sortedWoods(logs)) {

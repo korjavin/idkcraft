@@ -714,6 +714,29 @@ describe('light place residuals (idkcraft-qxa batch P)', () => {
     assert.deepEqual(ctx.lightSkip || [], [], 'one refusal never skips')
   })
 
+  it('drq a below-feet flora clear in a pit is refused, never dug', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 65, -2), failPlace: true })
+    world.set(1, 64, -2, 'short_grass') // spot 0 occupier: replaceable flora
+    for (const [x, z] of [[2, -2], [0, -2], [1, -1], [1, -3]]) world.set(x, 65, z, 'dirt') // pit walls
+    light(bot, ctx) // goal issued
+    light(bot, ctx) // place refused -> clear refused (selftrap)
+    await flush()
+    await flush()
+    assert.deepEqual(bot.calls.digs, [], 'below-feet flora in a pit never dug')
+    assert.equal(world.blockAt(pos(1, 64, -2)).name, 'short_grass', 'flora stands')
+    assert.equal(ctx.lightFails, 1, 'refusal counted')
+  })
+
+  it('drq a flora clear on open ground still proceeds (guard passes through)', async () => {
+    const { world, bot, ctx } = torchBot({ at: pos(1, 65, -2), failPlace: true })
+    world.set(1, 64, -2, 'short_grass')
+    light(bot, ctx)
+    light(bot, ctx)
+    await flush()
+    await flush()
+    assert.deepEqual(bot.calls.digs, ['short_grass'], 'open-ground flora cleared')
+  })
+
   it('P-noref a spot with no solid neighbour skips after 3 refusals', () => {
     const { world, bot, ctx } = torchBot({ at: pos(1, 64, -2) })
     world.set(1, 63, -2, 'air') // door-front spot floats: findRef finds nothing
