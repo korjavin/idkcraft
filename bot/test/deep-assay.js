@@ -23,7 +23,12 @@ const MC_HOST = process.env.MC_HOST || 'localhost'
 const MC_PORT = parseInt(process.env.MC_PORT || '25568', 10)
 const MC_CONTAINER = process.env.MC_CONTAINER || 'idk-mc-deep'
 const NAME = `DeepAssay${Math.floor(Math.random() * 10000)}`
-const TICK_MS = 250
+// Prod-rate ticks (muse-7 ipn.2): the brain runs at BRAIN_TICK_MS (1000ms
+// in prod), and a 250ms assay is a DIFFERENT control problem — back-off
+// glides never decay between ticks, arcs never complete, and every branch
+// races its own timers. The assay mirrors prod (override explicitly for
+// speed, knowing races return).
+const TICK_MS = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
 
 async function rcon(cmd) {
   await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', cmd])
@@ -186,8 +191,13 @@ async function preflight(bot, sx, sz) {
 async function leg(bot) {
   // Shortened live leg: RCON-carved starter air down to y=-28, then 17
   // REAL staircase steps to the band + scan + tunnel + dig + return.
-  const bx = Math.round(bot.entity.position.x) + 40
-  const sz = Math.round(bot.entity.position.z)
+  // Fixed scan (muse-7 ipn.2): world spawn wanders by radius, so a
+  // spawn-seeded scan samples a different shaft/ore/pockets every run and
+  // the leg is not reproducible. The world snapshot is fixed, so fixed
+  // candidates are deterministic: 33 first (the proven pass terrain), then
+  // spares. sz likewise fixed (mouth/preflight z derive from it).
+  const bx = 33
+  const sz = -199
   let sx = -1
   for (let a = 0; a < 6 && sx < 0; a++) {
     const cand = bx + a * 20
@@ -210,7 +220,7 @@ async function leg(bot) {
   await rcon(`tp ${NAME} ${sx} -28 ${sz - 3}`)
   await sleep(1500)
   const ctx = freshCtx({ x: sx, z: sz })
-  const st = await drive(bot, ctx, 12 * 60 * 1000, 'leg')
+  const st = await drive(bot, ctx, 15 * 60 * 1000, 'leg')
   const p = bot.entity.position
   const ok = st === 'done' && (ctx.haul && ctx.haul.diamond >= 1) && Math.abs(p.y - -28) < 4
   console.log(`${ok ? 'PASS' : 'FAIL'}: leg status=${st} haul=${JSON.stringify(ctx.haul)} y=${p.y.toFixed(1)}`)

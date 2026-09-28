@@ -56,8 +56,6 @@ const MOVE_TOLERANCE = 0.5
 const DIG_REACH = 4 // settle radius for tunnel/dig targets
 const DROP_MAX = 1 // deepest landing the bot walks into (a 1-drop climbs back; 2 is one-way and strands the return)
 const PICKUP_CRUMB_GAP = 1.3 // pickup chain spacing: above the 1.2 pop radius (no cascade), tight enough to reverse link by link
-const FLAT_TAKEOVER_TICKS = 5 // flat no-progress ticks before the manual takeover (a healthy leg displaces every tick or two)
-const FLAT_TAKEOVER_DIST = 4 // takeover leash: our own fresh crumbs only, straight-line, straightClear-verified
 const UNFREEZE_TICKS = 8 // manual static ticks before one dig-start unfreeze per crumb (mid-budget: 7 ticks left to prove it)
 const STEP_STALL = 20 // descend/tunnel no-progress budget: legs walk for real now, with room for one executor dig-recovery
 const RET_AIR_VY = 0.08 // airborne-still band (HOP_STALL_VY): a leap apex crosses it for one sample at most
@@ -777,13 +775,21 @@ function deep(bot, ctx, target, state) {
     // the climb (live assay: skipped steps strand the return under an
     // unclimbable 2-up). The gate proves the climb happened. Arrival rest
     // distance is ~0.7, so 1.2 keeps margin on level crumbs.
-    // Pop proves the mount two ways: inside the crumb cell (floors match —
-    // flying through counts, since undermined/void stands cannot be stood
-    // upon, only passed), or radius + height gate + touchdown (an apex
-    // above the cell must not skip the step — the pop waits for landing).
+    // Pop proves the mount two ways: inside the crumb cell (grounded, or
+    // flying through an UNDERMINED cell — no floor means standing is
+    // impossible and passing is the only option; but a standable cell
+    // overflown mid-arc must NOT pop (the next step assumes standing, and
+    // the pop-lie strands the climb 2-below — ipn.2 shaft 33), or radius +
+    // height gate + touchdown (an apex above the cell must not skip the
+    // step — the pop waits for landing). Null floor reads as standable
+    // (strict: touchdown first).
     const popGrounded = !bot.entity || bot.entity.onGround !== false
-    if (inCell(bp, next) || (dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5 && popGrounded)) {
+    const popFloor = fname(bot, next.x, next.y - 1, next.z)
+    const popStandable = popFloor !== null && isSolidName(popFloor)
+    if ((inCell(bp, next) && (popGrounded || !popStandable)) ||
+        (dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5 && popGrounded)) {
       crumbs.pop()
+      if (d.retMode === 'up') manualBrake(bot)
       return
     }
     // Hybrid drive: the pathfinder sprints into 1-up stair risers and the
@@ -798,7 +804,7 @@ function deep(bot, ctx, target, state) {
     // and could flap forever instead of failing honestly.
     const crumbKey = `${next.x},${next.y},${next.z}`
     const latched = d.retMode === 'up' && d.retUpKey === crumbKey
-    if (latched || (next.y > Math.floor(bp.y) && Math.hypot(next.x - bp.x, next.z - bp.z) <= 1.5)) {
+    if (latched || (next.y > Math.floor(bp.y) && Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z) <= 1.5)) {
       driveStepUp(bot, ctx, d, bp, next, crumbKey)
       return
     }
@@ -809,15 +815,26 @@ function deep(bot, ctx, target, state) {
     }
     d.stallBudget = RETURN_STALL
     const key = `deep-back:${crumbs.length}`
-    const r = walkTo(bot, ctx, d, key, new goals.GoalNear(next.x, next.y, next.z, 1), () => false)
+    // GoalBlock (exact): the planner tests arrival on the FLOORED position,
+    // so a GoalNear(1) arrives up to 1.7 true-out while deep's pop needs
+    // true ≤1.2 — the executor idles arrived and deep waits forever
+    // (ipn.2 shaft 33: idle 1.39 out). Exact arrival lands inside the cell
+    // and the pop agrees.
+    const goal = new goals.GoalBlock(next.x, next.y, next.z)
+    const r = walkTo(bot, ctx, d, key, goal, () => false)
     d.stallBudget = null
-    if (r === 'walking' && d.stalls >= FLAT_TAKEOVER_TICKS && dist3(bp, next) <= FLAT_TAKEOVER_DIST && straightClear(bot, bp, next)) {
-      // Executor wedge (moving-but-static on a mid-path 1-up) or planner
-      // pessimism near our own fresh crumb on verified-clear ground: take
-      // over manually. One-way per crumb (the climb latches), so the
-      // budget stays bounded; blocked ground keeps the pathfinder.
-      driveStepUp(bot, ctx, d, bp, next, crumbKey)
-      return
+    if (r === 'walking' && d.stalls === UNFREEZE_TICKS) {
+      // Executor static on open ground: poke to resync a ghost-pin, and
+      // force the planner to replan — a goal issued mid-air computes
+      // no-path once and then idles forever under the same key (ipn.2
+      // shaft 33: idle 1.3 out on open ground). Wedges on real risers
+      // shrug both off and the walkTo budget fails honestly (recover owns
+      // wedge escapes). No manual takeover: a level manual walk is a
+      // bang-bang servo, unstable at 1Hz (4-block strides hunt ±2 around
+      // the crumb and never arrive).
+      unfreeze(bot, pokeCells(bp, next))
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* replan best-effort */ }
+      try { bot.pathfinder.setGoal(goal, false) } catch (_) { /* replan best-effort */ }
     }
     if (r === 'stalled') {
       try { recover.setStuck(ctx, 'deep', next, key) } catch (_) { /* stuck best-effort */ }
@@ -834,17 +851,38 @@ function deep(bot, ctx, target, state) {
 // tick re-measures the TRUE gap (center-dist minus half-cell 0.5 minus
 // half-width 0.3 — a corner-dist formula overestimates on diagonals and
 // fires from contact: ipn.2 assay leapt at formula 0.51 / true 0.1 and
-// pinned at +0.4 twice) and either backs 50ms to prime (kill momentum!),
-// leaps primed from the zone, or walks in from afar. Level crumbs walk
-// (+ pit-leap); voids stop dead. Stalls count horizontal displacement
+// pinned at +0.4 twice) and either sneak-backs 400ms to prime (0.36m:
+// lag-proof, zone-capped, edge-safe),
+// leaps primed from the zone, or walks in from afar. Above-only: level
+// crumbs stay on the executor (a level manual servo hunts ±2 at 1Hz).
+// Stalls count horizontal displacement
 // only; the per-crumb mount budget bounds hang cycles that displace.
 // Airborne ticks coast (an in-flight arc completes); hung arcs back off
 // mid-air.
 const RET_GAP_MIN = 0.25 // leap zone, TRUE face gap (wqt standstill: 0.25/0.5/0.7 mount, 0 rejects)
 const RET_GAP_MAX = 0.7
-const RET_GAP_BACK_MS = 50 // ground prime hold: kills momentum without overshooting the zone
+const RET_GAP_BACK_MS = 400 // sneak-back hold: 0.36 m (in-zone in one tick from contact, never skips the 0.45 zone); 400 ms outlives lag gaps that swallow 50 ms holds (shaft 33), and sneak cannot walk off a 1-deep step
 const RET_AIR_BACK_MS = 250 // air unwedge hold: air control is weak (HOP_UNWEDGE_MS shape)
+const RET_LEAP_JUMP_MS = 200 // leap jump hold: takeoff lands <100ms, touchdown ~600ms — release between so physics can't auto re-jump (revmux 01)
+const RET_POP_SNEAK_MS = 600 // manual-pop edge guard: sneak through the momentum slide (friction stops ~500ms), self-releasing
+const RET_SETTLE_VEL = 0.05 // leap settle: horizontal momentum below this reads as standstill (standing noise floor ~0.03)
+// Manual arrival brake: all drive keys off + edge-guard sneak (the
+// leap/coast momentum + held forward would carry off the 1-wide step
+// before the next tick — ipn.2 shaft 33 slide-and-fall). Flat pops skip
+// this (the executor owns its keys). Timed (self-cleaning across modes).
+function manualBrake(bot) {
+  try {
+    bot.setControlState && bot.setControlState('forward', false)
+    bot.setControlState && bot.setControlState('back', false)
+    bot.setControlState && bot.setControlState('jump', false)
+    bot.setControlState && bot.setControlState('sprint', false)
+    bot.setControlState && bot.setControlState('sneak', true)
+    setTimeout(() => { try { bot.setControlState && bot.setControlState('sneak', false) } catch (_) { /* timer best-effort */ } }, RET_POP_SNEAK_MS)
+  } catch (_) { /* brake best-effort */ }
+}
 function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
+  const setC = (k, v) => { try { bot.setControlState && bot.setControlState(k, v) } catch (_) { /* optional */ } }
+  const dbg = (msg) => { try { if (process.env.DEEP_DEBUG) console.log(`deepdbg up ${msg} bp=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} crumb=${next.x},${next.y},${next.z} stalls=${d.stalls} waited=${d.retWaited}`) } catch (_) { /* log best-effort */ } }
   if (d.retMode !== 'up' || d.retUpKey !== crumbKey) {
     d.retMode = 'up'
     d.retUpKey = crumbKey
@@ -853,6 +891,9 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
     d.stalls = 0
     d.primed = false
     d.retAirStall = 0
+    d.inchStall = 0
+    d.lastInchGap = undefined
+    d.wedgedTicks = 0
     d.retWaited = 0
     d.retProgBest = Infinity
     d.retProgTicks = 0
@@ -875,53 +916,183 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
     const r = bot.lookAt(new Vec3(next.x + 0.5, bp.y + 1.6, next.z + 0.5))
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch (_) { /* look best-effort */ }
-  const setC = (k, v) => { try { bot.setControlState && bot.setControlState(k, v) } catch (_) { /* optional */ } }
-  const dbg = (msg) => { try { if (process.env.DEEP_DEBUG) console.log(`deepdbg up ${msg} bp=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} crumb=${next.x},${next.y},${next.z} stalls=${d.stalls} waited=${d.retWaited}`) } catch (_) { /* log best-effort */ } }
-  const grounded = !bot.entity || bot.entity.onGround !== false
+  // Still-band votes first (two in-band samples is a server pin, never a
+  // ballistic arc — falling resets the count within 150ms).
+  const vy = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.y === 'number'
+    ? bot.entity.velocity.y : null
+  if (vy !== null && Math.abs(vy) < RET_AIR_VY) d.retAirStall = (d.retAirStall || 0) + 1
+  else d.retAirStall = 0
+  // Ghost contact: airborne + pinned + floor below + face at the nose. The
+  // server stands the body (it accepts jumps) while the client hovers, so
+  // drive the zone as if grounded (inch/rim/leap) instead of unwedging
+  // away from a contact the climb must attack (ipn.2 shaft 33 face-dither).
+  const ghostContact = (!bot.entity || bot.entity.onGround === false) &&
+    (d.retAirStall || 0) >= RET_AIR_TICKS &&
+    dropBelow(bot, Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z)) === 0 &&
+    riserAhead(bot, bp, next)
+  const grounded = (!bot.entity || bot.entity.onGround !== false) || ghostContact
   if (!grounded) {
     // Airborne hang (ak4): pressed to the face with vel.y=0 and no ground,
     // the held jump never fires. Back off — facing stays on the crumb, so
     // back walks off the face — until a sample reads ground. A leap apex
     // crosses the still band for one sample at most.
-    const vy = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.y === 'number'
-      ? bot.entity.velocity.y : null
-    if (vy !== null && Math.abs(vy) < RET_AIR_VY) d.retAirStall = (d.retAirStall || 0) + 1
-    else d.retAirStall = 0
-    if ((d.retAirStall || 0) >= RET_AIR_TICKS) {
-      dbg(`unwedge vy=${vy}`)
+    //
+    // Hang filter: only pits/voids back off (face pins arrive here as
+    // ghost contact above; floor-below + open ahead is a ghost or an apex
+    // and backing off feeds a pin-loop — ipn.2 shaft 33 east-west dither).
+    // Ghosts coast on (resync + walk out).
+    const hangFire = (d.retAirStall || 0) >= RET_AIR_TICKS &&
+      dropBelow(bot, Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z)) >= 1
+    if (hangFire) {
+      // Wall check first: in a chimney corner the back-off slams the rear
+      // wall, Paper pins it, and the pin sustains the hang it was meant to
+      // fix (self-feeding loop — ipn.2 shaft 33). Blocked falls back to
+      // the takeoff floor instead; open backs off the face as before.
+      const blocked = backBlocked(bot, bp, next) || !backFloor(bot, bp, next)
+      dbg(blocked ? `unwedge-still vy=${vy}` : `unwedge vy=${vy}`)
       setC('forward', false); setC('jump', false); setC('sprint', false)
-      setC('back', true)
-      try { setTimeout(() => setC('back', false), RET_AIR_BACK_MS) } catch (_) { /* timer best-effort */ }
+      if (blocked) {
+        setC('back', false)
+      } else {
+        setC('back', true)
+        try { setTimeout(() => setC('back', false), RET_AIR_BACK_MS) } catch (_) { /* timer best-effort */ }
+      }
       retStall(bot, ctx, d, bp, next)
       return
     }
     dbg(`coast vy=${vy}`)
-    setC('forward', true); setC('back', false); setC('jump', true); setC('sprint', false)
+    // Hover arrival: a still-band hover INSIDE the crumb over a standable
+    // floor is a landed touch the touchdown gate cannot see (popGrounded
+    // false + popStandable true) — pop it here or the held forward walks
+    // the step off before the next tick (ipn.2 shaft 33 coast walkoff:
+    // landed 48.3, drifted +1.4 and fell). Arc midpoints carry vy and
+    // never match (no pop-lie); undermined cells pop pre-drive already.
+    if (inCell(bp, next) && (d.retAirStall || 0) >= RET_AIR_TICKS) {
+      // Standable is proven: the pre-drive gate pops every undermined
+      // hover (inCell + !popStandable), so a hover that reaches the coast
+      // stands over a solid floor. Arc midpoints carry vy (no pop-lie).
+      dbg('coast-pop')
+      d.steps.pop()
+      manualBrake(bot)
+      return
+    }
+    if (inCell(bp, next) && vy !== null && Math.abs(vy) < RET_AIR_VY) {
+      // Over-crumb hover: brake. The held forward walks the step off
+      // within one tick (ipn.2 shaft 33 walkoff: landed 48.3, +1.4 and
+      // fell before the x2 still-band could pop) — braking holds the
+      // hover still so the pop lands next tick. Arcs (vy) fly through.
+      dbg('coast-brake')
+      setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    // Forward only: the leap impulse fired at takeoff, and a jump held
+    // through the arc auto-fires on touchdown (physics cooldown) into an
+    // unprimed run-up re-leap — the wqt-forbidden geometry (revmux 01).
+    setC('forward', true); setC('back', false); setC('jump', false); setC('sprint', false)
     retStall(bot, ctx, d, bp, next)
     return
   }
   d.retAirStall = 0
   const distXZ = Math.hypot(next.x - bp.x, next.z - bp.z)
   if (next.y > Math.floor(bp.y)) {
-    // Above: gap-zoned standstill leap. Unprimed ticks (walk momentum!)
-    // always back off first — a run-up leap dies grounded (wqt: 107
-    // rejects). Primed ticks leap from the zone, inch out of contact,
-    // or walk in from afar.
+    // Above: gap-zoned standstill leap. Far ticks walk in WITHOUT priming
+    // (an unconditional prime backs between every two walks and the
+    // back-glide outruns the walk advance at 250ms — net-away spiral).
+    // Close unprimed ticks prime: settled primes in place (no back-off to
+    // fall off a 1-deep step!), moving backs off only onto back-floor
+    // (momentum would leap off-lane — wqt: 107 rejects), moving over air
+    // waits the glide out (friction settles within a tick; backing off
+    // would exit the step — ipn.2 shaft 33 double-back fall). Close primed
+    // ticks settle, then rim/inch/leap.
     const fgap = Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z) - 0.8 // TRUE face gap: center-dist minus half-cell minus half-width
-    if (!d.primed) {
+    // Missing velocity reads as settled (kinematic mocks set positions
+    // directly and carry no momentum).
+    const hv = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.x === 'number' && typeof bot.entity.velocity.z === 'number'
+      ? Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) : 0
+    if (fgap > RET_GAP_MAX) {
+      dbg(`walk distXZ=${distXZ.toFixed(2)}`)
+      d.primed = false
+      setC('forward', true); setC('back', false); setC('sprint', false); setC('jump', false)
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    if (!d.primed && hv > RET_SETTLE_VEL) {
+      if (!backFloor(bot, bp, next) || backBlocked(bot, bp, next)) {
+        dbg(`prime-wait fgap=${fgap.toFixed(2)} hvel=${hv.toFixed(2)}`)
+        setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
+        retStall(bot, ctx, d, bp, next)
+        return
+      }
       dbg(`prime fgap=${fgap.toFixed(2)}`)
       d.primed = true
       setC('forward', false); setC('jump', false); setC('sprint', false)
-      setC('back', true)
-      try { setTimeout(() => setC('back', false), RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
+      setC('back', true); setC('sneak', true)
+      try { setTimeout(() => { setC('back', false); setC('sneak', false) }, RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    d.primed = true
+    if (hv > RET_SETTLE_VEL) {
+      dbg(`settle hvel=${hv.toFixed(2)}`)
+      setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
       retStall(bot, ctx, d, bp, next)
       return
     }
     if (fgap < RET_GAP_MIN) {
+      if (!riserAhead(bot, bp, next)) {
+        // Dug-pocket rim: no feet-level face to hit low, so the zone
+        // minimum does not apply — leap from contact (primed). Inching
+        // here backs into whatever stands behind (often a wall: Paper
+        // pins the back-off and the climb spins — ipn.2 assay pocket).
+        dbg(`rim fgap=${fgap.toFixed(2)}`)
+        d.primed = false
+        setC('forward', true); setC('back', false); setC('sprint', false)
+        setC('jump', true)
+        try { setTimeout(() => setC('jump', false), RET_LEAP_JUMP_MS) } catch (_) { /* timer best-effort */ }
+        retStall(bot, ctx, d, bp, next)
+        return
+      }
+      if (!backFloor(bot, bp, next) || backBlocked(bot, bp, next)) {
+        // Wedged: contact + solid face + no back-room (1-deep step edge or
+        // rear wall). Backing exits/pins, leaping faceplants — release
+        // everything and let the stall budget fail honestly (recover owns
+        // the escape). Client-air behind that still rejects is a
+        // server-side ghost-wall (dug-area gravel the client missed):
+        // blind-dig it after 3 (real seen walls never dig).
+        dbg(`wedged fgap=${fgap.toFixed(2)}`)
+        d.wedgedTicks = (d.wedgedTicks || 0) + 1
+        if (d.wedgedTicks === WEDGED_DIG_TICKS) {
+          const bb = backCell(bot, bp, next)
+          const bn = bb && fname(bot, bb.x, bb.y, bb.z)
+          if (bn === null || isAirName(bn)) ghostDig(bot, bb)
+        }
+        setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
+        retStall(bot, ctx, d, bp, next)
+        return
+      }
       dbg(`inch fgap=${fgap.toFixed(2)}`)
+      if (typeof d.lastInchGap === 'number' && Math.abs(fgap - d.lastInchGap) < 0.03) d.inchStall = (d.inchStall || 0) + 1
+      else d.inchStall = 0
+      d.lastInchGap = fgap
+      // Backs rejected into client air (static gap) are a server-side
+      // ghost-wall: blind-dig it (the inch gate already proved client air).
+      if (d.inchStall === WEDGED_DIG_TICKS) {
+        const bb = backCell(bot, bp, next)
+        if (bb) ghostDig(bot, bb)
+      }
+      // The blind dig broke nothing and the press persists: escalate to a
+      // real break of every client-air suspect (leap-landing notch plus
+      // behind column) — rolled-back landings are fall-in the poke cannot
+      // move (ipn.2 shaft 33: notch air on descend, solid on return).
+      if (d.inchStall === GHOSTBREAK_TICKS) {
+        const bb = backCell(bot, bp, next)
+        const ah = aheadHead(bot, bp, next)
+        ghostBreak(bot, [ah, bb, bb && { x: bb.x, y: bb.y + 1, z: bb.z }])
+      }
       setC('forward', false); setC('jump', false); setC('sprint', false)
-      setC('back', true)
-      try { setTimeout(() => setC('back', false), RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
+      setC('back', true); setC('sneak', true)
+      try { setTimeout(() => { setC('back', false); setC('sneak', false) }, RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
       retStall(bot, ctx, d, bp, next)
       return
     }
@@ -930,33 +1101,25 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
       d.primed = false
       setC('forward', true); setC('back', false); setC('sprint', false)
       setC('jump', true)
+      // Timed release: takeoff lands within ~100ms (same-host server), the
+      // arc lands ~600ms out — a jump held the whole 1s window auto-fires
+      // on touchdown into an unprimed re-leap (revmux 01). A lag-cancelled
+      // takeoff just primes again next tick (safe direction).
+      try { setTimeout(() => setC('jump', false), RET_LEAP_JUMP_MS) } catch (_) { /* timer best-effort */ }
       retStall(bot, ctx, d, bp, next)
       return
     }
-    // Far: walk in (momentum OK — the zone primes before leaping).
+    // Unreachable (fgap is either > MAX, < MIN, or <= MAX) — walk on.
     dbg(`walk distXZ=${distXZ.toFixed(2)}`)
     d.primed = false
     setC('forward', true); setC('back', false); setC('sprint', false); setC('jump', false)
     retStall(bot, ctx, d, bp, next)
     return
   }
-  // Level: walk in; leap 1-deep pits (lips dance forever), stop for voids.
-  const gap = gapAhead(bot, bp, next)
-  if (gap >= 2) {
-    dbg(`void distXZ=${distXZ.toFixed(2)}`)
-    setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
-    retStall(bot, ctx, d, bp, next)
-    return
-  }
-  setC('forward', true); setC('back', false); setC('sprint', false)
-  if (gap === 1) {
-    dbg(`leap distXZ=${distXZ.toFixed(2)} gap=${gap}`)
-    setC('jump', true)
-  } else {
-    dbg(`walk distXZ=${distXZ.toFixed(2)}`)
-    setC('jump', false)
-  }
-  d.primed = false
+  // Level crumbs never reach manual drive (flat owns them; the old manual
+  // takeover is deleted — a level servo hunts ±2 at 1Hz). Hold still
+  // defensively so the stall budget fails honestly if ever reached.
+  setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
   retStall(bot, ctx, d, bp, next)
 }
 
@@ -982,53 +1145,141 @@ function walkOpen(bot, bp, t) {
   return true
 }
 
-// Manual-takeover guard: the straight walk bp -> next is hand-drivable
-// when every half-block sample is a walkable tube (feet + head air),
-// reversible (floor within DROP_MAX — 1-deep dug pits pass, voids fail),
-// and descend-grade fluid/loose guards hold at both ends + midpoint.
-// Blocked (walls mid-path, fluids, deep voids) keeps the pathfinder:
-// manual has no cornering and must never steer blind. Unreadable path
-// cells fail closed here (opposite of the lavaNear precedent: steering
-// blind is worse than not taking over).
-function straightClear(bot, bp, next) {
-  const dist = dist3(bp, next)
-  if (!(dist > 0) || dist > FLAT_TAKEOVER_DIST + 1) return false
-  const y = Math.floor(Math.max(bp.y, next.y))
-  const pts = [{ x: bp.x, z: bp.z }, { x: (bp.x + next.x) / 2, z: (bp.z + next.z) / 2 }, { x: next.x, z: next.z }]
-  for (const p of pts) {
-    const qx = Math.floor(p.x)
-    const qz = Math.floor(p.z)
-    if (lavaNear(bot, qx, y, qz) || waterNear(bot, qx, y, qz) || fallingAbove(bot, qx, y, qz)) return false
-  }
-  const n = Math.max(1, Math.ceil(dist / 0.5))
-  for (let i = 0; i <= n; i++) {
-    const sx = Math.floor(bp.x + ((next.x - bp.x) * i) / n)
-    const sz = Math.floor(bp.z + ((next.z - bp.z) * i) / n)
-    const feet = fname(bot, sx, y, sz)
-    const head = fname(bot, sx, y + 1, sz)
-    if (feet === null || head === null) return false
-    if (!isAirName(feet) || !isAirName(head)) return false
-    if (dropBelow(bot, sx, y, sz) > DROP_MAX) return false
-  }
-  return true
+// Solid feet-level cell on the leap line to the crumb (liquids are
+// walkable-through, not risers). Inch-gate only: below-zone leaps are
+// safe with open face (nothing to hit low), suicidal into a riser. The
+// sample reaches 0.75 along the CENTER ray (the aim/leap direction): a
+// 0.4 sample lands in the body's own cell whenever the fraction exceeds
+// 0.4, reads air, and fires a rim-leap into the face (ipn.2 assay: +0.4
+// pins on plain stairs). 0.75 clears bbox 0.3 + zone 0.25 with margin
+// yet never exits a 1-wide face cell.
+// Floor within 1 down behind the body (a back-off landing: 0 = same level,
+// 1 = step down and back up). Guards prime/inch/unwedge back-offs on 1-deep
+// steps (backing off exits the step and the climb falls 2-below — ipn.2
+// shaft 33). Feet-null reads as missing (strict: settle instead). Sampled
+// a full block back (a 50ms hold + 250ms glide travels 0.5-0.9).
+// Back samples read at the motion horizon (0.5), not a full block: backs
+// move 0.36 (sneak-400), so a 1.0 sample reads the wall 0.7 past the zone
+// and wedges pockets the climb could back out of (ipn.2 tunnel pocket
+// 55,-51: zone at 0.4 back, wall at 1.0 — 1.0-vision pinned it).
+const BACK_SAMPLE_DIST = 0.5
+function backFloor(bot, bp, next) {
+  const dx = bp.x - (next.x + 0.5)
+  const dz = bp.z - (next.z + 0.5)
+  const len = Math.hypot(dx, dz)
+  if (len < 0.05) return false
+  const bx = Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST)
+  const bz = Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST)
+  const y = Math.floor(bp.y)
+  if (fname(bot, bx, y, bz) === null) return false
+  return dropBelow(bot, bx, y, bz) <= 1
 }
 
-// Floor gap 1 block ahead toward the crumb: 0 = solid (walk) or riser
-// (the pressed branch owns faces), 1 = 1-deep dip (leap it — walking lips
-// dance on the edge forever: forward grinds, hover, back-off, repeat),
-// 2+ = void (never walk in; stall out and fail honestly).
-function gapAhead(bot, bp, next) {
-  const dx = next.x - bp.x
-  const dz = next.z - bp.z
+// Feet cell behind the body at the motion horizon (the back-off landing / dig).
+function backCell(bot, bp, next) {
+  const dx = bp.x - (next.x + 0.5)
+  const dz = bp.z - (next.z + 0.5)
   const len = Math.hypot(dx, dz)
-  if (len < 0.05) return 0
-  const ax = Math.floor(bp.x + (dx / len) * 1.0)
-  const az = Math.floor(bp.z + (dz / len) * 1.0)
-  const y = Math.floor(bp.y)
-  const feet = fname(bot, ax, y, az)
-  if (feet === null) return 0
-  if (!isAirName(feet)) return 0
-  return dropBelow(bot, ax, y, az)
+  if (len < 0.05) return null
+  return { x: Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST), y: Math.floor(bp.y), z: Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST) }
+}
+
+// Head cell a full block ahead of the body (the leap-landing notch).
+function aheadHead(bot, bp, next) {
+  const dx = next.x + 0.5 - bp.x
+  const dz = next.z + 0.5 - bp.z
+  const len = Math.hypot(dx, dz)
+  if (len < 0.05) return null
+  return { x: Math.floor(bp.x + (dx / len) * 1.0), y: Math.floor(bp.y) + 1, z: Math.floor(bp.z + (dz / len) * 1.0) }
+}
+
+// Ghost-break escalation: the 800 ms blind dig broke nothing and the press
+// persists, so break (not poke) every client-air suspect at once — the
+// leap-landing notch ahead-head plus the behind column feet+head. Bare
+// hand, one hold: gravel/sand/dirt fall-in breaks (~0.6 s), stone/real
+// walls only crack (safe), server-air no-ops. Each cell air-gated here
+// (never eat a client-solid wall); motion afterwards is the confirm (the
+// client already sees air, so no break is ever visible locally).
+function ghostBreak(bot, cells) {
+  try {
+    if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
+    if (typeof bot._client.write !== 'function') return false
+    if (bot.targetDigBlock) return false
+    if (!Array.isArray(cells) || cells.length === 0) return false
+    const dug = []
+    for (const cell of cells) {
+      if (!cell || typeof cell.x !== 'number') continue
+      const n = fname(bot, cell.x, cell.y, cell.z)
+      if (!(n === null || isAirName(n))) continue
+      bot._client.write('block_dig', { status: 0, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
+      dug.push(cell)
+    }
+    if (dug.length === 0) return false
+    try {
+      setTimeout(() => {
+        try {
+          if (bot.targetDigBlock) return
+          for (const cell of dug) bot._client.write('block_dig', { status: 1, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
+        } catch (_) { /* abort best-effort */ }
+      }, GHOSTBREAK_HOLD_MS)
+    } catch (_) { /* timer best-effort */ }
+    console.log(`deep ghostbreak at ${dug.map((c) => `${c.x},${c.y},${c.z}`).join(' ')}`)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+// Blind ghost-dig: START a real dig on a client-air cell the server keeps
+// rejecting moves into (dug-area gravel-fall the client missed). No air
+// check (that IS the condition); the guarded CANCEL still stands down for
+// live digs, and unbreakable just cracks (safe).
+function ghostDig(bot, cell) {
+  try {
+    if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
+    if (typeof bot._client.write !== 'function') return false
+    if (bot.targetDigBlock) return false
+    if (!cell || typeof cell.x !== 'number') return false
+    bot._client.write('block_dig', { status: 0, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
+    try {
+      setTimeout(() => {
+        try {
+          if (bot.targetDigBlock) return
+          bot._client.write('block_dig', { status: 1, location: new Vec3(cell.x, cell.y, cell.z), face: 1 })
+        } catch (_) { /* abort best-effort */ }
+      }, GHOSTDIG_ABORT_MS)
+    } catch (_) { /* timer best-effort */ }
+    console.log(`deep ghostdig at ${cell.x},${cell.y},${cell.z}`)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+// Solid feet-or-head cell on the back-off line (away from the crumb along
+// the aim ray), a full block back. Null reads as clear (the tubeClean
+// precedent); liquids are open (backing into water is fine).
+function backBlocked(bot, bp, next) {
+  const dx = bp.x - (next.x + 0.5)
+  const dz = bp.z - (next.z + 0.5)
+  const len = Math.hypot(dx, dz)
+  if (len < 0.05) return false
+  for (const dy of [0, 1]) {
+    const n = fname(bot, Math.floor(bp.x + (dx / len) * BACK_SAMPLE_DIST), Math.floor(bp.y) + dy, Math.floor(bp.z + (dz / len) * BACK_SAMPLE_DIST))
+    if (n === null || isAirName(n) || n === 'water' || n === 'lava') continue
+    return true
+  }
+  return false
+}
+
+function riserAhead(bot, bp, next) {
+  const dx = next.x + 0.5 - bp.x
+  const dz = next.z + 0.5 - bp.z
+  const len = Math.hypot(dx, dz)
+  if (len < 0.05) return false
+  const n = fname(bot, Math.floor(bp.x + (dx / len) * 0.75), Math.floor(bp.y), Math.floor(bp.z + (dz / len) * 0.75))
+  if (n === null || isAirName(n)) return false
+  return n !== 'water' && n !== 'lava'
 }
 
 // Paper open-air freeze / ghost-block wedge (muse-5 prod-world rig 2/2):
@@ -1042,6 +1293,10 @@ function gapAhead(bot, bp, next) {
 // dig runs (targetDigBlock), never over air; the delayed CANCEL stands
 // down if a real dig started meanwhile (don't steal its abort).
 const UNFREEZE_ABORT_MS = 150
+const WEDGED_DIG_TICKS = 3 // wedged/inch-pinned ticks before a blind ghost-dig behind (server-solid the client shows as air)
+const GHOSTDIG_ABORT_MS = 800 // ghost-dig START lives long enough to break falls (gravel/dirt); guarded CANCEL still stands down for live digs
+const GHOSTBREAK_TICKS = 6 // inch-press ticks before the ghost-break escalation (3 past the blind dig: it broke nothing)
+const GHOSTBREAK_HOLD_MS = 1200 // ghost-break START hold: gravel/sand/dirt (~0.6 s) breaks, stone+ only cracks
 function unfreeze(bot, extra) {
   try {
     if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
@@ -1117,11 +1372,18 @@ function retStall(bot, ctx, d, bp, next) {
     fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
     return
   }
-  if ((d.stalls === UNFREEZE_TICKS || d.retProgTicks === UNFREEZE_TICKS) && d.retUpKey !== d.unfrozeKey) {
+  if (d.retPokeCool > 0) d.retPokeCool--
+  const pokeDue =
+    (d.stalls >= UNFREEZE_TICKS && d.stalls % UNFREEZE_TICKS === 0) ||
+    (d.retProgTicks >= UNFREEZE_TICKS && d.retProgTicks % UNFREEZE_TICKS === 0)
+  if (!(d.retPokeCool > 0) && pokeDue) {
     // Mid-budget static (or circling) in manual drive: frozen or
-    // ghost-wedged, not merely slow — one unfreeze per crumb (body column
-    // + ahead, ghost-included), then the budget decides.
-    d.unfrozeKey = d.retUpKey
+    // ghost-wedged, not merely slow — re-poke every 8 static ticks
+    // (ghosts recur; packets are cheap, blocks unbroken (guarded
+    // CANCEL)), then the budget decides. The cooldown (not a latch)
+    // stops the off-by-one double-fire: prog trails stalls by one, so
+    // both counters hit 8 on adjacent ticks.
+    d.retPokeCool = UNFREEZE_TICKS
     unfreeze(bot, pokeCells(bp, next))
   }
 }
@@ -1178,5 +1440,5 @@ module.exports.pickSite = pickSite
 module.exports.pickDir = pickDir
 module.exports.stairCells = stairCells
 module.exports.tunnelNext = tunnelNext
-module.exports.straightClear = straightClear
 module.exports.unfreeze = unfreeze
+module.exports.ghostDig = ghostDig

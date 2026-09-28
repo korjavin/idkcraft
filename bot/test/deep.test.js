@@ -605,26 +605,6 @@ describe('deep pickup chain + flat takeover', () => {
     assert.equal(ctx.deep.steps.length, 2)
   })
 
-  it('straightClear passes a dug tube and 1-deep pits, fails walls/voids/lava/far', () => {
-    const bot = mockBot()
-    for (let x = 0; x <= 3; x++) { bot.blocks[`${x},-45,0`] = 'air'; bot.blocks[`${x},-44,0`] = 'air' }
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 3, y: -45, z: 0 }), true)
-    bot.blocks['1,-46,0'] = 'air' // 1-deep dug pit under the line: reversible
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 3, y: -45, z: 0 }), true)
-    bot.blocks['1,-47,0'] = 'air' // 2-deep: one-way, strands the return
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 3, y: -45, z: 0 }), false)
-    bot.blocks['1,-46,0'] = 'stone'
-    bot.blocks['1,-47,0'] = 'stone'
-    bot.blocks['2,-45,0'] = 'stone' // wall mid-path: manual has no cornering
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 3, y: -45, z: 0 }), false)
-    bot.blocks['2,-45,0'] = 'air'
-    bot.blocks['2,-45,1'] = 'lava' // fluid within the radius-2 margin
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 3, y: -45, z: 0 }), false)
-    delete bot.blocks['2,-45,1']
-    assert.equal(deep.straightClear(bot, pos(0.2, -45, 0), { x: 9, y: -45, z: 0 }), false) // beyond the leash
-    assert.equal(deep.straightClear(bot, pos(0, -45, 0), { x: 0, y: -45, z: 0 }), false) // nowhere to walk
-  })
-
   function flatCtx(bx) {
     const bot = mockBot()
     for (let x = 9; x <= 16; x++) { bot.blocks[`${x},-45,0`] = 'air'; bot.blocks[`${x},-44,0`] = 'air' }
@@ -640,22 +620,23 @@ describe('deep pickup chain + flat takeover', () => {
     return { bot, ctx }
   }
 
-  it('flat takeover engages manual on a stalled wedge near a clear crumb', () => {
+  it('flat static pokes to resync at 8, keeps the executor (no manual takeover)', () => {
     const { bot, ctx } = flatCtx(12)
-    deep(bot, ctx, null, {}) // 5th still tick, 3 out, tube clear: take over
-    assert.equal(ctx.lastGoalKey, 'deep-return-up')
-    assert.equal(bot.controls.forward, true)
-    deep(bot, ctx, null, {}) // latched: still manual
-    assert.equal(ctx.lastGoalKey, 'deep-return-up')
-  })
-
-  it('flat takeover refuses far crumbs', () => {
-    const { bot, ctx } = flatCtx(16)
-    deep(bot, ctx, null, {}) // 5th still tick but 7 out: stays flat
+    const writes = []
+    bot._client = { write: (name, data) => writes.push([name, data]) }
+    ctx.deep.stalls = 7
+    deep(bot, ctx, null, {}) // 8th still tick: unfreeze poke + forced replan, stays flat
+    assert.ok(writes.length > 0)
+    assert.equal(writes[0][0], 'block_dig')
+    assert.equal(writes[0][1].status, 0)
+    assert.equal(bot.calls.setGoal, 2) // null + goal: the planner replans (a mid-air issue idles)
+    assert.ok(bot.calls.goals.includes('GoalBlock')) // exact arrival (a Near-1 arrives 1.7-out, deep disagrees)
     assert.equal(ctx.lastGoalKey, 'deep-back:2')
+    assert.equal(ctx.deep.retMode, 'flat')
+    assert.deepEqual(bot.controls, {})
   })
 
-  it('flat takeover refuses blocked ground and fails honestly on budget', () => {
+  it('flat fails honestly on budget over blocked ground', () => {
     const { bot, ctx } = flatCtx(12)
     for (let x = 9; x <= 12; x++) delete bot.blocks[`${x},-45,0`] // solid again: wall mid-path
     const keys = new Set()
@@ -700,6 +681,23 @@ describe('deep unfreeze', () => {
     assert.equal(bot.writes.length, 1) // START only: never steal a live dig's abort
   })
 
+  it('ghostDig STARTs now, CANCELs after 800ms (breaks falls, stands down for live digs)', async () => {
+    const bot = clientBot()
+    assert.equal(deep.ghostDig(bot, { x: 5, y: -46, z: 0 }), true)
+    assert.equal(bot.writes.length, 1)
+    assert.equal(bot.writes[0][0], 'block_dig')
+    assert.equal(bot.writes[0][1].status, 0)
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(bot.writes.length, 1) // no early abort: gravel needs ~500ms of START
+    await new Promise((r) => setTimeout(r, 600))
+    assert.equal(bot.writes.length, 2)
+    assert.equal(bot.writes[1][0], 'block_dig')
+    assert.equal(bot.writes[1][1].status, 1)
+    assert.equal(deep.ghostDig(bot, null), false)
+    bot.targetDigBlock = {}
+    assert.equal(deep.ghostDig(bot, { x: 5, y: -46, z: 0 }), false) // never steal a live dig
+  })
+
   it('unfreeze refuses air, live digs, and clientless bots', () => {
     const bot = clientBot()
     bot.blocks['5,-46,0'] = 'air'
@@ -713,7 +711,7 @@ describe('deep unfreeze', () => {
     assert.equal(deep.unfreeze(null), false)
   })
 
-  it('manual fires one unfreeze per crumb mid-budget', async () => {
+  it('manual fires one unfreeze per crumb mid-budget (cooldown, no off-by-one double-fire)', async () => {
     const bot = mockBot()
     const writes = []
     bot._client = { write: (n, d) => writes.push([n, d]) }
@@ -757,6 +755,26 @@ describe('deep unfreeze', () => {
       deep(bot, ctx, null, {})
     }
     assert.equal(writes.length, 5) // progress drought fired it; displacement alone never would
+  })
+
+  it('jiggle-pin re-pokes every 8 progress ticks (cooldown, not a latch)', () => {
+    const bot = mockBot()
+    const writes = []
+    bot._client = { write: (n) => writes.push(n) }
+    bot.entity.position = pos(10.2, -45, 0)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.2, y: -45, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    for (let i = 0; i < 20; i++) {
+      bot.entity.position = pos(i % 2 === 0 ? 10.2 : 10.3, -45, 0) // displaces every tick, never closes
+      deep(bot, ctx, null, {})
+    }
+    assert.equal(writes.length, 10) // prog 8 + prog 16; stalls reset every tick, budget never trips
+    assert.equal(ctx.stepStatus, 'running')
   })
 
   it('unfreeze re-arms on a new crumb', () => {
@@ -960,6 +978,7 @@ describe('deep no-dig round', () => {
 
   it('inCell pops mid-air (unstandable stands cannot wait for touchdown)', () => {
     const bot = mockBot()
+    bot.blocks['9,-45,0'] = 'air' // undermined: no floor (the honest setup for a fly-through)
     bot.entity.position = pos(9.3, -43.8, 0) // inside the crumb cell, airborne
     bot.entity.onGround = false
     const ctx = memCtx([])
@@ -972,18 +991,55 @@ describe('deep no-dig round', () => {
     deep(bot, ctx, null, {})
     assert.equal(ctx.deep.steps.length, 0) // flew through: counts, never spins
   })
+
+  it('inCell over a standable cell waits for touchdown (no pop-lie)', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(9.3, -43.8, 0) // inside the crumb cell, airborne — floor solid below
+    bot.entity.onGround = false
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 9.3, y: -43.8, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.steps.length, 1) // overflown standable: NO pop (the next step assumes standing)
+    bot.entity.onGround = true // landed in the cell: pop
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.steps.length, 0)
+  })
+
+  it('manual pops brake and sneak (arrival momentum must not exit the step)', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(9.3, -44, 0) // inside the crumb cell, grounded, mid-slide
+    bot.entity.velocity = { x: 0.3, y: 0, z: 0 }
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 9.3, y: -44, z: 0 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
+      cameFrom: null, retMode: 'up', retUpKey: '9,-44,0',
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.steps.length, 0)
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(bot.controls.sneak, true)
+  })
 })
 
 describe('deep climb air + touchdown', () => {
   function climbCtx() {
     const bot = mockBot()
-    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0']) bot.blocks[k] = 'air'
-    bot.entity.position = pos(10.2, -45, 0)
+    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0', '11,-44,0', '10,-46,0']) bot.blocks[k] = 'air'
+    bot.entity.position = pos(10.2, -45, 0.5)
     const ctx = memCtx([])
     ctx.deep = {
       phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
       steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
-      lastPos: { x: 10.2, y: -45, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      lastPos: { x: 10.2, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
       cameFrom: null,
     }
     return { bot, ctx }
@@ -995,22 +1051,23 @@ describe('deep climb air + touchdown', () => {
     bot.entity.velocity = { x: 0, y: 0, z: 0 } // hung: no ground, no rise
     deep(bot, ctx, null, {}) // 1st hung sample: coast (an apex looks like this once)
     assert.equal(bot.controls.forward, true)
-    assert.equal(bot.controls.jump, true)
+    assert.equal(bot.controls.jump, false) // forward only — a held jump auto-fires on touchdown
     deep(bot, ctx, null, {}) // 2nd: hung — back off the face
     assert.equal(bot.controls.back, true)
     assert.equal(bot.controls.forward, false)
-    bot.entity.onGround = true // landed: grounded logic resumes (prime), hang count reset
+    bot.entity.onGround = true // landed: prime in place (settled), open face — rim-leap; hang count reset
     deep(bot, ctx, null, {})
-    assert.equal(bot.controls.back, true)
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.jump, true)
     bot.entity.onGround = false
     bot.entity.velocity = { x: 0, y: 0, z: 0 } // hung again: ONE sample coasts (the count was reset)
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
-    assert.equal(bot.controls.jump, true)
+    assert.equal(bot.controls.jump, false)
     bot.entity.velocity = { x: 0, y: -2, z: 0 } // falling fast: coast, never back off mid-arc
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
-    assert.equal(bot.controls.jump, true)
+    assert.equal(bot.controls.jump, false)
   })
 
   it('climb fails on the mount budget despite displacement', () => {
@@ -1045,28 +1102,54 @@ describe('deep climb air + touchdown', () => {
     assert.equal(ctx.deep.steps.length, 0)
   })
 
-  it('takeover walks level crumbs in, leaps 1-deep pits, stops for voids', () => {
+  it('coast hover over a standable crumb pops (no walkoff)', () => {
     const bot = mockBot()
-    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0', '11,-44,0', '12,-45,0', '12,-44,0']) bot.blocks[k] = 'air'
-    bot.blocks['11,-46,0'] = 'air' // dug-out ore cell under the line: 1-deep pit
-    bot.entity.position = pos(12.5, -45, 0)
+    bot.blocks['9,-44,0'] = 'air' // crumb cell open; floor below stays stone
+    bot.entity.position = pos(9.3, -44, 0.2) // latched mid-climb (level crumb, leap in flight) // inside the crumb, hovering at step level
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
     const ctx = memCtx([])
     ctx.deep = {
       phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
-      steps: [{ x: 11, y: -45, z: 0 }], target: null, dug: 0, stalls: 0,
-      lastPos: { x: 12.5, y: -45, z: 0 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
-      cameFrom: null, retMode: 'up', retUpKey: '11,-45,0', // latched by the flat takeover
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 9.3, y: -44, z: 0.2 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
+      retMode: 'up', retUpKey: '9,-44,0',
+      cameFrom: null,
     }
-    ctx.lastGoalKey = 'deep-return-up'
-    deep(bot, ctx, null, {}) // level crumb, pit ahead: leap
-    assert.equal(bot.controls.forward, true)
-    assert.equal(bot.controls.jump, true)
-    bot.blocks['11,-47,0'] = 'air' // 2-deep: void — stop dead, never walk in
-    deep(bot, ctx, null, {})
+    deep(bot, ctx, null, {}) // 1st still sample: brake over the crumb (an apex looks like this once)
+    assert.equal(ctx.deep.steps.length, 1)
     assert.equal(bot.controls.forward, false)
     assert.equal(bot.controls.back, false)
     assert.equal(bot.controls.jump, false)
+    deep(bot, ctx, null, {}) // 2nd: hover arrival — pop + brake, never drift off
+    assert.equal(ctx.deep.steps.length, 0)
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(bot.controls.sprint, false)
+    assert.equal(bot.controls.sneak, true)
   })
+
+  it('coast arc over a standable crumb never pops (no pop-lie)', () => {
+    const bot = mockBot()
+    bot.blocks['9,-44,0'] = 'air'
+    bot.entity.position = pos(9.3, -44, 0.2) // latched mid-climb (level crumb, leap in flight)
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: -2, z: 0 } // falling through, not hovering
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 9.3, y: -44, z: 0.2 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
+      retMode: 'up', retUpKey: '9,-44,0',
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {})
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.steps.length, 1)
+    assert.equal(bot.controls.forward, true)
+  })
+
 })
 
 describe('deep behaviour legs', () => {
@@ -1086,20 +1169,22 @@ describe('deep behaviour legs', () => {
     bot.entity.position = pos(9.2, -45, 0) // walked in: pop
     deep(bot, ctx, null, {})
     assert.equal(ctx.deep.steps.length, 1)
+    assert.ok(!bot.controls.sneak) // flat pop: the executor owns its keys
   })
 
-  it('return mounts 1-up steps: prime first, leap primed from the zone with thrust', () => {
+  it('return mounts 1-up steps: prime, settle, leap from the zone with thrust', () => {
     const bot = mockBot()
-    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0']) bot.blocks[k] = 'air' // carved shaft tube
-    bot.entity.position = pos(10.2, -45, 0)
+    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0', '11,-44,0']) bot.blocks[k] = 'air' // carved shaft tube
+    bot.entity.position = pos(10.2, -45, 0.5)
+    bot.entity.velocity = { x: 0.2, y: 0, z: 0 } // walk momentum still carrying
     const ctx = memCtx([])
     ctx.deep = {
       phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
       steps: [{ x: 0, y: 64, z: 0 }, { x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
-      lastPos: { x: 10.2, y: -45, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      lastPos: { x: 10.2, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
       tunnelDigs: 0, cameFrom: null,
     }
-    deep(bot, ctx, null, {}) // first touch: prime (kill walk momentum), never a run-up leap
+    deep(bot, ctx, null, {}) // first touch gliding: prime-back (kill momentum), never a run-up leap
     assert.equal(ctx.lastGoalKey, 'deep-return-up')
     assert.equal(bot.controls.back, true)
     assert.equal(bot.controls.jump, false)
@@ -1107,14 +1192,20 @@ describe('deep behaviour legs', () => {
     const look = bot.calls.looks[0].split(',')
     assert.equal(look[0], '9.5') // cell center, not the wall-face corner
     assert.equal(look[2], '0.5')
-    bot.entity.position = pos(10.5, -45, 0) // primed in the zone: leap WITH thrust
+    bot.entity.position = pos(10.8, -45, 0.5) // zone gap 0.5, still gliding: settle, never leap
+    deep(bot, ctx, null, {})
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, true)
+    bot.entity.velocity = { x: 0.01, y: 0, z: 0 } // settled: leap WITH thrust
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
     assert.equal(bot.controls.jump, true)
-    bot.entity.onGround = false // airborne: coast, never back off mid-air
+    bot.entity.onGround = false // airborne: coast on forward only, jump released
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
-    assert.equal(bot.controls.jump, true)
+    assert.equal(bot.controls.jump, false)
     bot.entity.onGround = true
     bot.entity.position = pos(9.3, -44, 0) // mounted: pop
     deep(bot, ctx, null, {})
@@ -1124,36 +1215,38 @@ describe('deep behaviour legs', () => {
   it('primed climbs walk in from afar, inch out of contact, leap from the zone', () => {
     const bot = mockBot()
     for (const k of ['10,-45,0', '10,-44,0', '11,-45,0', '11,-44,0', '12,-45,0']) bot.blocks[k] = 'air'
-    bot.entity.position = pos(10.5, -45, 0) // 1.5 out: first touch primes, never leaps
+    bot.entity.position = pos(10.5, -45, 0.5) // 1.0 out, gliding: prime-back first, never leap
+    bot.entity.velocity = { x: 0.2, y: 0, z: 0 }
     const ctx = memCtx([])
     ctx.deep = {
       phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
       steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
-      lastPos: { x: 10.5, y: -45, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      lastPos: { x: 10.5, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
       cameFrom: null,
     }
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.back, true)
     assert.equal(bot.controls.jump, false)
-    bot.entity.position = pos(11.0, -45, 0) // drifted past the zone (latched): walk, never leap
+    bot.entity.position = pos(11.2, -45, 0.5) // drifted past the zone (latched): walk, never leap
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
     assert.equal(bot.controls.jump, false)
-    bot.entity.position = pos(10.0, -45, 0) // contact: prime again (the walk spent it)
+    bot.entity.position = pos(10.0, -45, 0.5) // contact: prime again (the walk spent it)
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.back, true)
+    bot.entity.velocity = { x: 0.01, y: 0, z: 0 } // glide decayed
     deep(bot, ctx, null, {}) // primed at the face: inch out, never leap from contact
     assert.equal(bot.controls.back, true)
     assert.equal(bot.controls.jump, false)
     assert.equal(ctx.deep.primed, true)
-    bot.entity.position = pos(10.5, -45, 0) // back in the zone, primed: leap
+    bot.entity.position = pos(10.8, -45, 0.5) // back in the zone, primed: leap
     deep(bot, ctx, null, {})
     assert.equal(bot.controls.forward, true)
     assert.equal(bot.controls.jump, true)
-    bot.entity.position = pos(10.3, -45, 0) // off-lane: corner-dist says zone, TRUE gap is contact
-    deep(bot, ctx, null, {}) // the leap spent primed: prime again
+    bot.entity.position = pos(10.3, -45, 0.5) // TRUE gap 0.0 is contact (corner-dist 0.39 says zone)
+    deep(bot, ctx, null, {}) // the leap spent primed but settled: prime in place, inch right away
     assert.equal(bot.controls.back, true)
-    deep(bot, ctx, null, {}) // primed: inch out — a corner-formula leap would fire from contact
+    deep(bot, ctx, null, {}) // still contact: inch again
     assert.equal(bot.controls.back, true)
     assert.equal(bot.controls.jump, false)
     assert.equal(ctx.deep.primed, true)
@@ -1180,6 +1273,361 @@ describe('deep behaviour legs', () => {
     bot.entity.position = pos(9.3, -44, 0) // mounted: pop
     deep(bot, ctx, null, {})
     assert.equal(ctx.deep.steps.length, 0)
+  })
+
+  it('manual climb gates on the cell center, not the corner', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(10.5, -45, 0.5) // lane center: corner-dist 1.58, center-dist 1.0
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.5, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // -x side from the lane center: manual, never the pathfinder
+    assert.equal(ctx.lastGoalKey, 'deep-return-up')
+  })
+
+  it('below-zone leaps the rim when no feet-level riser stands ahead', () => {
+    const bot = mockBot()
+    bot.blocks['9,-45,0'] = 'air' // dug pocket: tread above, no face at feet level
+    bot.entity.position = pos(10.0, -45, 0) // settled in contact: prime in place, rim-leap at once
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.0, y: -45, z: 0 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // open face: leap from contact — inching would back into the wall
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.jump, true)
+    assert.equal(ctx.deep.primed, false)
+  })
+
+  it('below-zone inches into a riser even from high fractions (0.75 face sample)', () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air' // own cell open; the riser at 9,-45,0 stays stone
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air' // back-room open (1.0 back-sample), floor below (default stone)
+    bot.blocks['11,-44,0'] = 'air'
+    bot.entity.position = pos(10.45, -45, 0.3) // fgap 0.17: a 0.4 sample reads the own cell
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // first touch: prime
+    assert.equal(bot.controls.back, true)
+    deep(bot, ctx, null, {}) // primed, solid face ahead: inch — never a rim-leap into the riser
+    assert.equal(bot.controls.back, true)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, true)
+  })
+
+  it('pocket with wall at 1.0 but room at 0.5 inches (0.5-vision, not wedged)', () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air' // 0.5-behind open (the zone sits here); 1.0-behind stays
+    bot.blocks['10,-44,0'] = 'air' // default stone (the pocket wall the old 1.0 sample wedged on)
+    bot.entity.position = pos(10.45, -45, 0.3) // fgap 0.17: contact, riser solid ahead
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // settled: inch out — a 1.0 sample would wedge on the pocket wall
+    assert.equal(bot.controls.back, true)
+    assert.equal(bot.controls.sneak, true)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, true)
+  })
+
+  it('prime sneak-backs 400ms (lag-proof, zone-capped, edge-safe)', async () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air'
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air'
+    bot.blocks['11,-44,0'] = 'air'
+    bot.entity.position = pos(10.45, -45, 0.3)
+    bot.entity.velocity = { x: 0.5, y: 0, z: 0 } // moving: first touch primes with a back-off (settled would inch)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // prime: sneak-back on ...
+    assert.equal(bot.controls.back, true)
+    assert.equal(bot.controls.sneak, true)
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(bot.controls.back, true) // ... still held at 200ms (a 50ms hold would be gone)
+    assert.equal(bot.controls.sneak, true)
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(bot.controls.back, false) // ... released at 400ms (a cross-tick hold would leak)
+    assert.equal(bot.controls.sneak, false)
+  })
+
+  it('inch sneak-backs 400ms (lag-proof, zone-capped, edge-safe)', async () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air'
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air'
+    bot.blocks['11,-44,0'] = 'air'
+    bot.entity.position = pos(10.45, -45, 0.3)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // prime
+    deep(bot, ctx, null, {}) // inch: sneak-back on ...
+    assert.equal(bot.controls.back, true)
+    assert.equal(bot.controls.sneak, true)
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(bot.controls.back, true) // ... still held at 200ms
+    assert.equal(bot.controls.sneak, true)
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(bot.controls.back, false) // ... released at 400ms
+    assert.equal(bot.controls.sneak, false)
+  })
+
+  it('inch pinned 3 ticks blind-digs behind (server ghost-wall)', () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air'
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air' // back-room open, floor below (default stone)
+    bot.blocks['11,-44,0'] = 'air'
+    const writes = []
+    bot._client = { write: (name, data) => writes.push([name, data]) }
+    bot.entity.position = pos(10.45, -45, 0.3) // fgap 0.17: contact, riser solid, backs rejected
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    for (let i = 0; i < 3; i++) deep(bot, ctx, null, {}) // inch x3, static gap: no dig yet
+    assert.equal(writes.length, 0)
+    deep(bot, ctx, null, {}) // 4th static inch: blind-dig the behind cell
+    assert.ok(writes.length > 0)
+    assert.equal(writes[0][0], 'block_dig')
+    assert.equal(writes[0][1].status, 0)
+    assert.deepEqual(
+      [writes[0][1].location.x, writes[0][1].location.y, writes[0][1].location.z],
+      [10, -45, 0]
+    )
+  })
+
+  it('inch pinned 6 ticks ghost-breaks notch + behind column (client-air only)', async () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air'
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air' // back-room open, floor below (default stone)
+    bot.blocks['11,-44,0'] = 'air'
+    bot.blocks['9,-44,0'] = 'air' // leap-landing notch reads air (server ghost)
+    const writes = []
+    bot._client = { write: (name, data) => writes.push([name, data]) }
+    bot.entity.position = pos(10.45, -45, 0.3) // fgap 0.17: contact, riser solid, backs rejected
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    for (let i = 0; i < 6; i++) deep(bot, ctx, null, {})
+    assert.equal(writes.length, 1) // 4th inch: blind-dig behind only, no break yet
+    deep(bot, ctx, null, {}) // 7th static inch: ghost-break all three suspects
+    assert.equal(writes.length, 4)
+    assert.ok(writes.slice(1).every((w) => w[0] === 'block_dig' && w[1].status === 0))
+    assert.deepEqual(
+      writes.slice(1).map((w) => [w[1].location.x, w[1].location.y, w[1].location.z]),
+      [[9, -44, 0], [10, -45, 0], [10, -44, 0]] // notch, behind feet, behind head
+    )
+    await new Promise((r) => setTimeout(r, 1350))
+    assert.equal(writes.length, 8) // blind-dig CANCEL at 800 ms + 3 break CANCELs at 1200 ms
+    assert.ok(writes.slice(4).every((w) => w[0] === 'block_dig' && w[1].status === 1))
+  })
+
+  it('ghostbreak skips client-solid cells (never eats shaft walls)', () => {
+    const bot = mockBot()
+    bot.blocks['10,-45,0'] = 'air'
+    bot.blocks['10,-44,0'] = 'air'
+    bot.blocks['11,-45,0'] = 'air'
+    bot.blocks['11,-44,0'] = 'air' // notch (9,-44,0) stays default stone: a real wall
+    const writes = []
+    bot._client = { write: (name, data) => writes.push([name, data]) }
+    bot.entity.position = pos(10.45, -45, 0.3)
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    for (let i = 0; i < 7; i++) deep(bot, ctx, null, {})
+    assert.equal(writes.length, 3) // blind-dig + 2 behind breaks; the stone notch untouched
+    assert.deepEqual(
+      writes.slice(1).map((w) => [w[1].location.x, w[1].location.y, w[1].location.z]),
+      [[10, -45, 0], [10, -44, 0]]
+    )
+  })
+
+  it('primed leaps wait for momentum to settle, then fire', () => {
+    const bot = mockBot()
+    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '11,-45,0']) bot.blocks[k] = 'air'
+    bot.entity.position = pos(10.5, -45, 0) // zone gap 0.32
+    bot.entity.velocity = { x: 0.2, y: 0, z: 0 } // prime back-glide still carrying
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.5, y: -45, z: 0 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
+      cameFrom: null, retMode: 'up', retUpKey: '9,-44,0', primed: true,
+    }
+    ctx.lastGoalKey = 'deep-return-up'
+    deep(bot, ctx, null, {}) // gliding: settle (all released), stay primed, never leap
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, true)
+    bot.entity.velocity = { x: 0.01, y: 0, z: 0 } // settled: fire
+    deep(bot, ctx, null, {})
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.jump, true)
+  })
+
+  it('unwedge holds still when a wall stands behind, backs when open', () => {
+    const bot = mockBot() // default stone everywhere: wall behind at 11,-45,0
+    bot.blocks['10,-46,0'] = 'air' // pit below feet (a hang, not a ghost)
+    bot.entity.position = pos(10.2, -45, 0.5) // lane center: the behind-ray stays in-lane
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0, z: 0 } // hung: no ground, no rise
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.2, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // 1st hung sample: coast
+    assert.equal(bot.controls.forward, true)
+    deep(bot, ctx, null, {}) // 2nd: wall behind — still, never back into it
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.jump, false)
+    bot.blocks['10,-45,0'] = 'air' // behind open now (feet+head at the 0.5 sample): back off the face
+    bot.blocks['10,-44,0'] = 'air'
+    deep(bot, ctx, null, {})
+    assert.equal(bot.controls.back, true)
+  })
+
+  it('hang over a pit backs off, hang over floor holds the arc (ghost/apex)', () => {
+    const bot = mockBot()
+    for (const k of ['9,-45,0', '9,-44,0', '10,-45,0', '10,-44,0', '10,-46,0', '11,-45,0', '11,-44,0']) bot.blocks[k] = 'air' // tube + pit below + open behind
+    bot.entity.position = pos(10.2, -45, 0.5)
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0, z: 0 } // hung: no ground, no rise
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.2, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // 1st hung sample: coast (an apex looks like this once)
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.jump, false)
+    deep(bot, ctx, null, {}) // 2nd over the pit: unwedge-back off the face
+    assert.equal(bot.controls.back, true)
+    bot.blocks['10,-46,0'] = 'stone' // floor below now: ghost/apex, not a hang
+    deep(bot, ctx, null, {}) // 3rd: coast on (never back off a ghost)
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.back, false)
+  })
+
+  it('hover pressed to a face backs off even over floor (pin, not ghost)', () => {
+    const bot = mockBot()
+    for (const k of ['10,-45,0', '10,-44,0', '11,-45,0', '11,-44,0']) bot.blocks[k] = 'air' // tube + open behind; face at 9,-45 and floor below default stone
+    bot.entity.position = pos(10.2, -45, 0.5)
+    bot.entity.onGround = false
+    bot.entity.velocity = { x: 0, y: 0, z: 0 } // pinned: no ground, no rise, face at the nose
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.2, y: -45, z: 0.5 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // 1st: coast
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.jump, false)
+    deep(bot, ctx, null, {}) // 2nd: face-press (riser solid) over floor — ghost contact, inch via the zone
+    assert.equal(bot.controls.back, true)
+    assert.equal(ctx.deep.primed, true) // in-place prime (an unwedge would leave this false)
+  })
+
+  it('far above-crumbs walk in without priming (no prime-back spiral)', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(11.5, -45, 0.5) // fgap 1.2, gliding: walk anyway, never prime-back
+    bot.entity.velocity = { x: 0.2, y: 0, z: 0 }
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 11.5, y: -45, z: 0.5 }, issuedKey: 'deep-return-up', startDrops: { diamond: 0 },
+      cameFrom: null, retMode: 'up', retUpKey: '9,-44,0',
+    }
+    ctx.lastGoalKey = 'deep-return-up'
+    deep(bot, ctx, null, {}) // far: walk (momentum irrelevant — the zone primes later)
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, false)
+    deep(bot, ctx, null, {}) // still far, still unprimed: walk again (no interleave)
+    assert.equal(bot.controls.forward, true)
+    assert.equal(bot.controls.back, false)
+  })
+
+  it('no back-room waits the glide out, wedges honestly at contact', () => {
+    const bot = mockBot()
+    for (const k of ['10,-45,0', '10,-44,0', '10,-46,0', '10,-47,0']) bot.blocks[k] = 'air' // void behind at the 0.5 sample (drop 2)
+    const writes = []
+    bot._client = { write: (name, data) => writes.push([name, data]) }
+    bot.entity.position = pos(10.45, -45, 0.3) // fgap 0.17 (contact), riser solid ahead
+    bot.entity.velocity = { x: 0.2, y: 0, z: 0 } // gliding
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'return', shaft: { x: 0, z: 0, topY: 64, dx: 1, dz: 0 }, n: 109,
+      steps: [{ x: 9, y: -44, z: 0 }], target: null, dug: 0, stalls: 0,
+      lastPos: { x: 10.45, y: -45, z: 0.3 }, issuedKey: 'x', startDrops: { diamond: 0 },
+      cameFrom: null,
+    }
+    deep(bot, ctx, null, {}) // gliding over air: wait (all released), stay unprimed
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.ok(!ctx.deep.primed)
+    bot.entity.velocity = { x: 0.01, y: 0, z: 0 } // settled
+    deep(bot, ctx, null, {}) // contact + riser + void behind: wedged (all released, budget decides)
+    assert.equal(bot.controls.forward, false)
+    assert.equal(bot.controls.back, false)
+    assert.equal(bot.controls.jump, false)
+    assert.equal(ctx.deep.primed, true)
+    deep(bot, ctx, null, {})
+    deep(bot, ctx, null, {}) // 3rd wedged tick: blind-dig the client-air behind cell
+    assert.ok(writes.length > 0)
+    assert.equal(writes[0][0], 'block_dig')
+    assert.equal(writes[0][1].status, 0)
   })
 
   it('return never pops a step from the floor below', () => {
