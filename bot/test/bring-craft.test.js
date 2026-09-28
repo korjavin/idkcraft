@@ -27,6 +27,7 @@ const ITEMS = {
   white_wool: 106, torch: 111, dirt: 112, cobblestone: 113, bucket: 114,
   stick: 115, coal: 116, iron_ingot: 117, oak_log: 118, oak_planks: 119,
   crafting_table: 120, cobbled_deepslate: 121, blackstone: 122,
+  birch_planks: 123, birch_log: 124,
 }
 
 // Fake recipe with the real shape: delta negatives consumed, result count,
@@ -496,6 +497,39 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
     assert.deepEqual(bot.lines, ["can't make stone_axe: need 2 stick (have 0)"])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
     assert.deepEqual(bot.calls.craft, [], 'no stray table burned')
+  })
+
+  it('mixed woods: the table burns the spare wood, not the recipe wood', async () => {
+    // Registry order lists birch before oak for both; the plan picks the
+    // birch axe with an oak table, and execution must agree (revmux 02).
+    const recipes = {
+      ...RECIPES(),
+      wooden_axe: [
+        R('wooden_axe', [['birch_planks', 3], ['stick', 2]], 1, true),
+        R('wooden_axe', [['oak_planks', 3], ['stick', 2]], 1, true),
+      ],
+      crafting_table: [
+        R('crafting_table', [['birch_planks', 4]], 1, false),
+        R('crafting_table', [['oak_planks', 4]], 1, false),
+      ],
+    }
+    const bot = mockBot({
+      items: [
+        { name: 'oak_planks', count: 5 }, { name: 'birch_planks', count: 4 },
+        { name: 'stick', count: 2 },
+      ],
+      playerPos: pos(30, 64, 0),
+      cells: { '1,63,0': 'dirt' },
+      recipes,
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ['making you a wooden_axe'])
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.wooden_axe, null, 1]])
+    const left = (n) => (bot._items.find((i) => i.name === n) || {}).count || 0
+    assert.equal(left('oak_planks'), 1, 'the table ate 4 oak')
+    assert.equal(left('birch_planks'), 1, 'the axe ate 3 birch')
   })
 })
 
