@@ -234,6 +234,31 @@ function scanSides(bot) {
   return { walls, free }
 }
 
+function inWater(bot) {
+  return isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true)
+}
+
+// Sidestep direction. Dry: random free side (along-wall can round the
+// obstacle). Wet against one wall (1wj): the shore current pushes every
+// tick's prediction back into face-touch, and Paper 26.x rejects the whole
+// move on any touch — a random side swims along the face and re-touches
+// forever (10-20/s same-pos storm, zero displacement; rig: even accepted
+// 1 cm packet nudges re-touch next tick, a 30 cm jump is dragged back in
+// 0.5 s). Away from the solid side is the only escape: predictions clear
+// the face, the storm stops, the body is free in ~2 s (rig: fm 0,
+// executor GOAL-REACHED). Corners and open water keep the random pick.
+function pickSidestepDir(bot, sides) {
+  const free = sides.free
+  if (free.length > 0 && inWater(bot)) {
+    const blocked = SIDES.filter(([dx, dz]) => !free.some(([fx, fz]) => fx === dx && fz === dz))
+    if (blocked.length === 1) {
+      const away = free.find(([fx, fz]) => fx === -blocked[0][0] && fz === -blocked[0][1])
+      if (away) return away
+    }
+  }
+  return free[Math.floor(Math.random() * free.length)]
+}
+
 // Pit fact (jsf.3, shared with jsf.2 water_up): at least TWO sides rise two
 // solid blocks (dy 0 AND 1) — hemmed in, not merely next to one trunk,
 // house wall or cliff face (revmux 01: a lone 2-high side on open ground
@@ -490,7 +515,7 @@ function recoverFacts(bot, ctx, state, target) {
     goalDist,
     scaffold: scaffoldCount(bot),
     pickaxe: hasPickaxe(bot),
-    water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
+    water: inWater(bot),
     headBlocked: headBlockedAt(bot),
     ownHeadBlocked: ownHeadBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
@@ -1103,7 +1128,7 @@ function sidestepRun(bot, ctx) {
     st.goalDist0 = st.goal0 ? Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) : null
     const sides = scanSides(bot)
     if (sides.free.length === 0) return 'failed:boxed'
-    st.dir = sides.free[Math.floor(Math.random() * sides.free.length)]
+    st.dir = pickSidestepDir(bot, sides)
   }
   // Done only when the situation really changed (fja). The strict rule
   // applies to goal-less backstop episodes (the session pit: nothing to
