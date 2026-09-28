@@ -442,7 +442,8 @@ describe('equip step', () => {
     await flush()
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(ctx.home.table, undefined) // the blueprint cell stays build's
-    assert.deepEqual(ctx.claimedTable, placed) // menu-visible claim, homeless or not
+    assert.deepEqual({ x: ctx.claimedTable.x, y: ctx.claimedTable.y, z: ctx.claimedTable.z }, placed) // menu-visible claim, homeless or not
+    assert.equal(typeof ctx.claimedTable.floored, 'function', 'Vec3 claim (h9z): readers blockAt() it')
     bot.restoreError()
   })
 
@@ -824,7 +825,8 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     let stationReads = 0
     let placed = null
     bot.blockAt = (p) => {
-      if (p === station) {
+      // Coord match, not identity (h9z): tableFor normalises claims to Vec3.
+      if (p.x === station.x && p.y === station.y && p.z === station.z) {
         stationReads++
         return null // ghosted: falls through to the inventory branch
       }
@@ -862,7 +864,7 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     const station = { x: 5, y: 64, z: 0 }
     let placed = null
     bot.blockAt = (p) => {
-      if (p === station) throw new Error('chunk gone')
+      if (p.x === station.x && p.y === station.y && p.z === station.z) throw new Error('chunk gone') // coord match (h9z): reads are Vec3-normalised
       if (placed && p.x === placed.x && p.y === placed.y && p.z === placed.z) {
         return { name: 'crafting_table', position: { ...placed } }
       }
@@ -1790,11 +1792,14 @@ describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
   })
 
   it('S-retract a ghost claim is retracted so craft rebuilds', async () => {
+    // h9z: the ghost must be VERIFIED (air block) — a null read is an
+    // unloaded chunk, unknown, and the claim is kept (see the kept-claim
+    // test in table-ghost.test.js).
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
       ids: IDS,
       recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
-      blockAtImpl: () => null,
+      blockAtImpl: () => ({ name: 'air' }),
     })
     const ctx = freshCtx()
     ctx.claimedTable = { x: 9, y: 63, z: 9 }
