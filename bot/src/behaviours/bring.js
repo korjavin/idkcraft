@@ -352,7 +352,10 @@ async function enterSearch(bot, ctx, o, legacy) {
     refuse(bot, ctx, legacy)
     return
   }
-  if (s.legs >= searchLegs() || Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) {
+  // A time-expired search is exhausted even with legs left (revmux
+  // 01-review): self wool hunts must fail, never reopen 3 more searches.
+  if (Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) s.timedOut = true
+  if (s.legs >= searchLegs() || s.timedOut) {
     refuseExhausted(bot, ctx, o)
     return
   }
@@ -596,6 +599,17 @@ function openPhase(ctx) {
   return 'find'
 }
 
+// Day gate for self orders (goalFacts mirror): day is timeOfDay < 12000,
+// unknown reads as day (never cancel on an unreadable clock).
+function isDaytime(bot) {
+  try {
+    const t = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
+    return !(t >= 0) ? true : t < 12000
+  } catch (_) {
+    return true
+  }
+}
+
 function chestFetch(bot, ctx, o, bp) {
   const c = ctx && ctx.home && ctx.home.chest
   const food = (o.kind || 'block') === 'food'
@@ -708,6 +722,17 @@ function chestFetch(bot, ctx, o, bp) {
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
+  // Self orders (jr2.2 bed wool) end at dusk: the night belongs to gohome/
+  // stay, and the dispatch runs bring over every goal step but fight, so an
+  // uncancelled hunt would own the body past dark. Silent — gohome announces
+  // — and the owning step reopens in the morning (a short cancelled hunt
+  // reads as reopen, not failure, there).
+  if (o.self && !isDaytime(bot)) {
+    metrics.bring.inc({ outcome: 'cancelled', kind: (o.kind || 'block') })
+    ctx.bring = null
+    clearSearchLeg(ctx)
+    return
+  }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const grounded = !bot.entity || bot.entity.onGround !== false
@@ -964,6 +989,9 @@ async function bring(bot, ctx, target, state) {
       itemMod.resumeSub(bot, ctx, o)
       return
     }
+    // Self orders keep the goods: no walk, no toss (jr2.2 wool stays packed
+    // for the beds). The owning step reads the pack, not the order.
+    if (o.self) { done(bot, ctx); return }
     const p = bot.players && bot.players[o.by] && bot.players[o.by].entity
     if (!p || !p.position) {
       // 3a7 honesty: no coordinates for an out-of-range player — say where

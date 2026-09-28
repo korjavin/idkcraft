@@ -497,6 +497,90 @@ function holdStill(bot, ctx) {
   }
 }
 
+// Sleep (jr2.2): at night the bot sleeps in its OWN bed (bedroom A) instead
+// of standing — the first sleep sets the home respawn. The owner's bed
+// (bedroom B) is never touched: sleep fails closed to the old hold when the
+// own bed is missing, and a sleeping body touches nothing (activateBlock
+// while asleep would leave the bed). Returns true when it owns the tick.
+// A failed attempt must not own the tick (revmux 01-review): only a
+// sleeping body skips the rw4.8 door check — an awake one re-closes the
+// door and re-evaluates shelter between tries. Transient failures (dusk,
+// monsters near) back off; server-side refusals (occupied, obstructed,
+// timeout) give up tonight and retry tomorrow. A dawn that finds the body
+// still asleep wakes it (missed wake event).
+const SLEEP_REACH = 2 // from the head: inside mineflayer's click box on every facing
+const SLEEP_STALL_TICKS = 30
+const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
+function sleepTick(bot, ctx, home, st) {
+  try {
+    if (!home || home.v !== 2 || !home.site) return false
+    if (typeof bot.sleep !== 'function') return false
+    if (bot.isSleeping) return true
+    if (ctx.sleepInFlight) return true
+    if (st.sleepGiveUp) return false
+    if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return false } // awake and waiting: the door check runs
+    let cells = null
+    try {
+      cells = require('./beds').cellsOf(home) // deferred: home loads inside the behaviour chain
+    } catch (_) { cells = null }
+    if (!cells) return false
+    let bed = null
+    try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
+    if (!bed) {
+      try { if (home.bedA) { delete home.bedA; delete home.sleptA } } catch (_) { /* retract best-effort */ }
+      return false // no whole bed in A: hold as before, never take B
+    }
+    try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
+    const bp = botPos(bot)
+    if (!bp) return false
+    const head = cells.a.head
+    if (Math.hypot(bp.x - head.x, bp.y - head.y, bp.z - head.z) > SLEEP_REACH) {
+      const open = new Vec3(home.site.x + 2, home.site.y, home.site.z + 3)
+      setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(open.x, open.y, open.z, 1))
+      const last = st.sleepAnchor
+      if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) {
+        st.sleepStalls = 0
+        st.sleepAnchor = { x: bp.x, z: bp.z }
+      } else if (++st.sleepStalls >= SLEEP_STALL_TICKS) {
+        st.sleepGiveUp = true // unreachable tonight: hold, retry tomorrow
+        return false
+      }
+      return true
+    }
+    ctx.sleepInFlight = true
+    void (async () => {
+      try {
+        await bot.sleep(bed)
+        try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
+        if (ctx.stay !== st) {
+          // An order took the body mid-flight (revmux 02-review): the spawn
+          // is set, but the body must not sleep under the order — wake at
+          // once, skip the chat.
+          try { if (typeof bot.wake === 'function') await bot.wake() } catch (_) { /* the order wakes */ }
+          return
+        }
+        if (!st.sleepSaid) {
+          st.sleepSaid = true
+          try { bot.chat('sleeping in my bed') } catch (_) { /* chat best-effort */ }
+        }
+      } catch (err) {
+        const msg = err && err.message ? String(err.message) : ''
+        if (/monsters nearby|not night/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
+        else st.sleepGiveUp = true // occupied/obstructed/timeout: hold tonight, retry tomorrow
+        if (!st.sleepErrSaid) {
+          st.sleepErrSaid = true
+          try { console.log(`sleep failed: ${msg || err}`) } catch (_) { /* logging best-effort */ }
+        }
+      } finally {
+        ctx.sleepInFlight = false
+      }
+    })()
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 function stay(bot, ctx, target, state) {
   const home = ctx && ctx.home
   if (!home || !home.site) {
@@ -525,6 +609,9 @@ function stay(bot, ctx, target, state) {
   } catch (_) { /* hold on unknown time */ }
   if (time !== 'day') {
     st.phase = 'hold'
+    // jr2.2: sleep owns the tick before the door check — a sleeping body
+    // must not toggle the door (activateBlock would leave the bed).
+    if (sleepTick(bot, ctx, home, st)) return
     // rw4.8: the shelter is only a shelter with a shut door — an opened
     // door gets re-closed; a missing one logs once per episode (st is
     // fresh per stay) and keeps holding unsheltered so fight is not
@@ -542,6 +629,17 @@ function stay(bot, ctx, target, state) {
   }
   const out = outsidePos(home)
   const inn = insidePos(home)
+  // jr2.2: dawn usually auto-wakes (vanilla), but a missed wake event must
+  // not walk the exit legs asleep — wake first, then open.
+  if (bot.isSleeping) {
+    if (typeof bot.wake === 'function' && !ctx.sleepInFlight) {
+      ctx.sleepInFlight = true
+      void (async () => {
+        try { await bot.wake() } catch (_) { /* already awake: the event won */ } finally { ctx.sleepInFlight = false }
+      })()
+    }
+    return
+  }
   if (st.phase === 'hold') st.phase = 'open'
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
