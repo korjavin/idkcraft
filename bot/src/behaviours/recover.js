@@ -1570,7 +1570,12 @@ function release(bot, ctx, how) {
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   if (by === 'follow') ctx.followStalls = 0
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'no-displacement') {
+  // The ticker latch anchors on gave-up only (rra round 2): a 'done' episode
+  // may be a partial climb (REPEATS cap, single-shot climbers) that leaves
+  // the body in the pit — latching that would end all further escape
+  // attempts with no page. Progress clears the old anchor instead, so the
+  // next trap gets a fresh episode.
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || (by === 'no-displacement' && how === 'gave-up')) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
@@ -1583,6 +1588,8 @@ function release(bot, ctx, how) {
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
+  } else if (by === 'no-displacement' && ctx.recoverLatch && ctx.recoverLatch.by === 'no-displacement') {
+    ctx.recoverLatch = null
   }
   if (how === 'gave-up') {
     // Repeat page (rw4.9): gave up where a live mark already sits and

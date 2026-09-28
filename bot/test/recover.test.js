@@ -1299,6 +1299,36 @@ describe('ticker backstops (minor)', () => {
     assert.equal(recover.tickerLatched(ctx, bot), false, 'relocation clears')
     assert.equal(ctx.recoverLatch, null)
   })
+  it('release on done clears the ticker latch (idkcraft-rra round 2)', () => {
+    // A done episode may be a partial climb that leaves the body in the
+    // pit — latching that would end all further escape attempts with no
+    // page. Progress re-arms: the next trap gets a fresh episode.
+    const bot = standBot()
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 10, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'sidestep', source: 'fsm' },
+      brain: null,
+      recoverLatch: { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } },
+    }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.recoverLatch, null, 'no anchor on done')
+  })
+  it('relocation clears the latch on any tick, not just idle ones (idkcraft-rra round 2)', async () => {
+    // A walk away and back must re-arm: the consult runs every tick, so a
+    // moving tick past the radius clears the anchor even though the moving
+    // branch itself never counts against it.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => true
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.recoverLatch = { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } }
+    await ticker.tick() // anchor tick inside the radius
+    assert.ok(bot._tickerCtx.recoverLatch, 'latch holds inside the radius')
+    bot.entity.position = pos(6, 61, 0.5)
+    await ticker.tick() // moving tick past the radius
+    assert.equal(bot._tickerCtx.recoverLatch, null, 'moving relocation clears')
+    ticker.destroy()
+  })
   it('displacement resets the idle count (idkcraft-rra)', async () => {
     // 20 still ticks, one real step (still far from the goal), then the
     // count restarts: quiet at 20 more, fired 11 after that.

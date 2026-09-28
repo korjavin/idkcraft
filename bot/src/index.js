@@ -564,6 +564,12 @@ function fleeReflex(bot, ctx) {
 
   function noteDisplacement() {
     if (ctx.paused) return
+    // Relocation re-arms the ticker latch on EVERY tick (rra round 2): the
+    // idle-branch consult below short-circuits while moving/at-goal, so a
+    // walk away and back would otherwise return to a stale anchor. Evaluated
+    // once here for both its clearing side effect and the idle condition.
+    let latched = false
+    try { latched = recover.tickerLatched(ctx, bot) } catch (_) { /* latch best-effort */ }
     let bp = null
     try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
     let moving = false
@@ -586,7 +592,7 @@ function fleeReflex(bot, ctx) {
       // until the body relocates (revmux 01 major).
       const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
       if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
-        if (terminal && idleFarFromGoal(bp) && !recover.tickerLatched(ctx, bot)) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+        if (terminal && idleFarFromGoal(bp) && !latched) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
         else ctx.stuckTicks = 0
       } else {
         ctx.stuckTicks = 0
