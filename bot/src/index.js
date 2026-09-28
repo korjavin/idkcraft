@@ -1304,8 +1304,53 @@ function fleeReflex(bot, ctx) {
         ctx.paused = false
         return 'looking for animals'
       }
+      // Item ladder (did.1): the pack first — the bot may already hold what
+      // the player wants, even when the world holds no such block. A short
+      // pack still falls through for diggable names: the block path tops up
+      // from the chest and mines the rest, as before.
+      const resolved = bringMod.resolveItem(bot, name)
+      const need = want || bringMod.WANT_ORE
+      const plan = resolved ? bringMod.planItemGive(bot, resolved, need) : null
+      const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
+      const openPackOrder = () => {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.bring = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: plan.items, drop: plan.items[0].name, have: plan.have,
+          phase: 'return', saidWaiting: false, announced: true,
+        }
+        ctx.paused = false
+        const desc = plan.items.map((i) => `${i.count} ${i.name}`).join(', ')
+        return plan.have >= need ? `coming with ${desc}` : `only ${desc}, coming`
+      }
+      if (plan && plan.have > 0 && (plan.have >= need || !worldFallback)) return openPackOrder()
+      // Orders carry the canonical family name, so 'beds' reads as 'bed'
+      // everywhere. The chest rung runs for every name with no diggable world
+      // form — including exact block names like white_wool, dirt or torch.
+      const keptName = plan && plan.keptOnly ? resolved.family : null
+      if (resolved && !worldFallback && ctx.home && ctx.home.chest) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.bring = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+          phase: 'chestfetch', announced: true, keptName,
+        }
+        ctx.paused = false
+        return `checking the home chest for ${resolved.family}`
+      }
       const res = findNearest(bot, name)
-      if (res === 'unknown') return `unknown block: ${name}`
+      if (res === 'unknown') {
+        if (!resolved) return `unknown item: ${name}`
+        // No diggable block, the pack came up short, and no adopted chest:
+        // the honest stub (did.2-4 replace its branches).
+        return bringMod.itemRefusal(bot, resolved.family, resolved, keptName)
+      }
       if (!res) {
         // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb).
         // A null cursor (unreadable world) answers from sync alone — unless
@@ -1313,7 +1358,11 @@ function fleeReflex(bot, ctx) {
         const search = startFarSearch(bot, name)
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
-          if (!bringMod.canSearch(bot, ctx)) return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          if (!bringMod.canSearch(bot, ctx)) {
+            // No legs to walk: a short pack still gives instead of refusing.
+            if (plan && plan.have > 0) return openPackOrder()
+            return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
+          }
           if (!bringMod.canBringName(bot, name)) return `can't bring ${name} — ores and logs only`
           if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
@@ -1330,7 +1379,10 @@ function fleeReflex(bot, ctx) {
         return `nothing within 48, widening the search for ${name}…`
       }
       clearStuck()
-      return startBlockOrder(bot, ctx, { name, want, by }, res)
+      const answer = startBlockOrder(bot, ctx, { name, want, by }, res)
+      // A refused block order (pickaxe tier) still gives a short pack.
+      if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
+      return answer
     },
     setFlat: ({ radius, by, explicit }) => {
       clearPendingSearch(ctx)
@@ -1619,7 +1671,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     const tier = bringMod.requiredTier(res.name)
-    return `need ${tier === 'iron' ? 'an' : 'a'} ${tier} pickaxe for ${res.name}`
+    return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
   }
   if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
   // A fresh explicit order restarts homing math (a tripped counter would
@@ -1859,15 +1911,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         else bot.chat(ticker.setAutonomous(m[1] === 'on'))
       }
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
-      const m = msg.match(/^bring me\s+(something to eat|\S+)(?:\s+(\d+))?$/)
+      const m = msg.match(/^bring me\s+(.+?)(?:\s+(\d+))?$/)
       if (!m) {
         bot.chat('try: bring me coal')
       } else if (ticker && typeof ticker.setBring === 'function') {
-        const food = bringMod.isFoodRequest(m[1])
+        const name = bringMod.normalizeBringName(m[1])
+        const food = bringMod.isFoodRequest(name)
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
-          : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(m[1]) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
-        bot.chat(ticker.setBring({ name: m[1], want, by: playerName }))
+          : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
+        bot.chat(ticker.setBring({ name, want, by: playerName }))
       }
     }
   }

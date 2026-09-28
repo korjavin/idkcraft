@@ -144,10 +144,53 @@ describe('bring me order', () => {
     assert.match(capBot.lines[0], /^going for 16 coal_ore, \d+ blocks away$/)
   })
 
-  it('unknown block and nothing in range refuse', () => {
+  it('a short coal pack falls through to the block order (tops up and mines)', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'coal', count: 2 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.match(bot.lines[0], /^going for 5 coal_ore, \d+ blocks away$/)
+    assert.equal(bot._tickerCtx.bring.kind, 'block')
+  })
+
+  it('a pack covering the full want gives at once without mining', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'coal', count: 5 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['coming with 5 coal'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
+  it('a short pack still gives when the block order refuses (pickaxe tier)', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0)],
+      names: { '2,64,0': 'coal_ore' },
+      items: [{ name: 'coal', count: 2 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['only 2 coal, coming'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
+  it('a short pack still gives when there is nothing to mine and no anchor', () => {
+    const bot = mockBot({ items: [{ name: 'coal', count: 2 }] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['only 2 coal, coming'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+  })
+
+  it('unknown item and nothing in range refuse', () => {
     const weird = mockBot({})
     handleChat(weird, tickerFor(weird), 'P', 'bring me unobtanium')
-    assert.deepEqual(weird.lines, ['unknown block: unobtanium'])
+    assert.deepEqual(weird.lines, ['unknown item: unobtanium'])
     assert.ok(!weird._tickerCtx.bring, 'no order created')
     const empty = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
     handleChat(empty, tickerFor(empty), 'P', 'bring me coal')
@@ -444,7 +487,7 @@ describe('bring me order', () => {
     const cmd = lookupCommand('bring me')
     assert.ok(cmd, 'bring me resolves')
     assert.ok(COMMANDS.some((c) => c.names.includes('bring me')))
-    assert.match(cmd.usage, /bring me <block> \[count\]/)
+    assert.match(cmd.usage, /bring me <item> \[count\]/)
   })
 })
 
