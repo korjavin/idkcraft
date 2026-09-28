@@ -356,7 +356,15 @@ describe('unpin verify + bounds', () => {
     const { ctx, sent } = armedCtx()
     feedStorm(ctx, 10000, 10)
     assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
-    bot.entity.position = pos(-37.3, 64.6, -212.0) // 0.67 from the anchor
+    bot.entity.position = pos(-37.3, 64.6, -212.0) // 0.85 from the anchor
+    // Face + floor at the escape cell (revmux-02): without the moved-drop,
+    // the retry re-gate would pass and the tried-set would stand down —
+    // the drop must win first, so this stays 'idle' with 1 send.
+    bot.blockAt = (p) => {
+      if (p.x === -37 && p.y === 64 && p.z === -212) return { name: 'stone', boundingBox: 'block' }
+      if (p.x === -38 && p.y === 62 && p.z === -212) return { name: 'stone', boundingBox: 'block' }
+      return { name: 'air', boundingBox: 'empty' }
+    }
     feedStorm(ctx, 12200, 5)
     assert.equal(unpin.unpinTick(bot, ctx, 13000), 'idle')
     assert.equal(sent.length, 1)
@@ -471,15 +479,18 @@ describe('unpin packet clone', () => {
     assert.deepEqual(w.params.flags, { onGround: false })
   })
 
-  it('teleport targets resolve absolute (relative packets ignored)', () => {
+  it('teleport targets resolve absolute (relative packets ignored)', async () => {
     const handlers = {}
+    const applied = pos(-37.3, 65.2, -212.6) // physics applied the packet before the sample
     const bot = {
       _client: { on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn) }, write() {} },
-      entity: { position: pos(-37.3, 65.2, -212.6), onGround: false },
+      entity: { position: applied, onGround: false },
     }
     const ctx = {}
     unpin.installUnpinTap(bot, ctx)
     for (const fn of handlers.position) fn({ x: 0.01, y: -0.08, z: 0, flags: { x: true, y: true, z: true } })
+    assert.equal(ctx.unpin.teleports.length, 0) // post-dispatch sample, not sync
+    await new Promise((r) => setImmediate(r))
     assert.equal(ctx.unpin.teleports.length, 1)
     assert.deepEqual(ctx.unpin.teleports[0].pos, { x: -37.3, y: 65.2, z: -212.6 })
   })

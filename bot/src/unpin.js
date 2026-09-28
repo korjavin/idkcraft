@@ -44,7 +44,7 @@ function state(ctx) {
   return ctx.unpin
 }
 
-// pos is the server's teleport target (post-apply entity position, always
+// pos is the server's teleport target (post-dispatch entity sample, always
 // absolute — see installUnpinTap): its spread is the displacement evidence.
 function noteTeleport(ctx, t, pos = null) {
   const st = state(ctx)
@@ -308,11 +308,12 @@ function unpinTick(bot, ctx, now = Date.now()) {
   return 'watching'
 }
 
-// Real-bot wiring (runOnce only). Idempotent. Teleport targets come from the
-// post-apply entity position — always absolute, even for relative teleports
-// (mineflayer's handler runs first: plugins load before this tap). The write
-// tap clones mineflayer's own last move packet for shape; coordinates always
-// come from the live entity position, so the nudge delta is pure-horizontal.
+// Real-bot wiring (runOnce only). Idempotent. Teleport targets come from a
+// post-dispatch entity-position sample — always absolute, even for relative
+// teleports (physics applies synchronously during emit; the immediate runs
+// after). The write tap clones mineflayer's own last move packet for shape;
+// coordinates always come from the live entity position, so the nudge delta
+// is pure-horizontal.
 //
 // Non-interference (no pause/yield needed): the nudge is one absolute packet
 // on a disjoint control surface (no controls/goals touched); the server
@@ -325,10 +326,17 @@ function installUnpinTap(bot, ctx) {
   const client = bot._client
   if (client && typeof client.on === 'function') {
     client.on('position', () => {
-      try {
-        const p = bot.entity && bot.entity.position
-        noteTeleport(ctx, Date.now(), p)
-      } catch (_) { /* counter best-effort */ }
+      // Post-dispatch sample (revmux-02): this tap registers before
+      // mineflayer's physics handler (plugins inject on next tick), so a
+      // sync read would catch the pre-apply client pos. The immediate runs
+      // after every sync 'position' handler — physics has applied the
+      // packet by then. Bursts in one tick share the latest sample.
+      setImmediate(() => {
+        try {
+          const p = bot.entity && bot.entity.position
+          noteTeleport(ctx, Date.now(), p)
+        } catch (_) { /* counter best-effort */ }
+      })
     })
   }
   if (client && typeof client.write === 'function') {
