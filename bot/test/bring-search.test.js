@@ -311,10 +311,12 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
       have: 0, announced: false,
       searchLegs: { legs: 0, startedAt: Date.now() - 6 * 60 * 1000, announced: false, last: 'empty' },
     }
+    const order = bot._tickerCtx.bring
     await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null)
     assert.equal(asks, 0)
     assert.ok(bot.lines.some((l) => l === 'searched 0 areas, no animals'), `lines: ${bot.lines}`)
+    assert.equal(order.searchLegs.timedOut, true, 'time-expiry marks the order exhausted')
   })
 
   it('setBring with an anchor opens legs when far has no shell; stone is refused', async () => {
@@ -355,6 +357,43 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no coal'), `lines: ${bot.lines}`)
+  })
+
+  it('far handover wakes a sleeping body (find lead and bring legs)', async () => {
+    const { loadedSearchRadius } = require('../src/behaviours/scout')
+    const sleeper = () => {
+      const b = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }], playerPos: pos(30, 64, 0) })
+      b.isSleeping = true
+      b.wakeCount = 0
+      b.wake = async () => { b.wakeCount++; b.isSleeping = false }
+      return b
+    }
+    const completing = (b, kind, extra) => {
+      const edge = loadedSearchRadius(b)
+      b._tickerCtx.pendingSearch = {
+        cursor: { blockName: 'coal_ore', ids: [16], queue: [], at: 0, hits: new Map(extra.hits || []), stageMs: {}, stageScans: {}, edge, origin: b.entity.position },
+        kind, name: 'coal', refY: 64, by: 'P', want: 5,
+      }
+      b._tickerCtx.stay = { phase: 'hold' } // sheltering while the search ran
+    }
+    // FIND: the per-tick setLead stub hands over awake.
+    const bot = sleeper()
+    const ticker = tickerFor(bot)
+    anchor(bot._tickerCtx)
+    completing(bot, 'find', { hits: [['10,60,0', pos(10, 60, 0)]] })
+    await ticker.tick()
+    assert.ok(bot._tickerCtx.lead, 'lead handed over')
+    assert.equal(bot._tickerCtx.stay, null, 'stale stay cleared')
+    assert.equal(bot.wakeCount, 1, 'handover wakes the sleeper')
+    // BRING no-result: legs open awake.
+    const bot2 = sleeper()
+    const ticker2 = tickerFor(bot2)
+    anchor(bot2._tickerCtx)
+    completing(bot2, 'bring', { hits: [] })
+    await ticker2.tick()
+    assert.ok(bot2._tickerCtx.bring, 'legs opened')
+    assert.equal(bot2._tickerCtx.stay, null, 'stale stay cleared')
+    assert.equal(bot2.wakeCount, 1, 'handover wakes the sleeper')
   })
 
   it('stop mid-ask touches nothing: no chat, no refuse', async () => {

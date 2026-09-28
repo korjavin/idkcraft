@@ -41,13 +41,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(needPlanks({ site: pos(1, 2, 3), v: 2 }), 107)
   })
 
-  it('menu has all thirteen steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gear', 'gohome', 'light', 'rest', 'stay', 'stockpile'])
+  it('menu has all fourteen steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['beds', 'build', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gear', 'gohome', 'light', 'rest', 'stay', 'stockpile'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest'])
   })
 })
 
@@ -97,8 +97,9 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 107, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done', beds: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done beds=none')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 107, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready', beds: 'one' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready beds=one')
+    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }).endsWith('beds=both'), true, 'missing beds reads both (quiet)')
     assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
     // Version-aware plank bucket (revmux body-2): a v1-sized kit reads
     // 'enough' on a v1 home (so laya still matches build there) and 'few'
@@ -284,12 +285,21 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     assert.equal(facts.surplus, 'yes')
     assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'stockpile')
   })
+  it('surplus fact sees the bed reserve (no stockpile re-pick loop)', () => {
+    const items = [{ name: 'white_wool', count: 11 }, { name: 'oak_planks', count: 6 }]
+    const v2 = { home: { v: 2, site: pos(10, 64, 20) } }
+    assert.equal(goalFacts(goalBot({ items }), v2).surplus, 'no', 'reserved-only pack: nothing to deposit')
+    assert.equal(goalFacts(goalBot({ items }), {}).surplus, 'yes', 'no bedroom: the same pack is surplus')
+  })
   it('criteria name one fact each', () => {
     assert.ok(STEP_CRITERIA.forage.includes('known is near'))
     assert.ok(STEP_CRITERIA.deliver.includes('haul is waiting'))
     assert.ok(STEP_CRITERIA.explore.includes('known is none'))
     assert.ok(STEP_CRITERIA.stockpile.includes('handover is waiting'))
     assert.ok(STEP_CRITERIA.gear.includes('forge'))
+    assert.ok(STEP_CRITERIA.gather.includes('beds is none or one'), 'bed top-up mirrors the feasible clause')
+    assert.ok(!STEP_CRITERIA.gather.includes('owed'), 'criterion words match the state buckets exactly')
+    assert.ok(!STEP_CRITERIA.gather.includes('single-wood'))
   })
   it('decide picks forage when a find is known', async () => {
     const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
