@@ -40,6 +40,7 @@ elif [ -n "$FILES" ] && ! echo "$FILES" | rg -qv "$INFRA"; then LENSFLAG="--lens
 mkdir -p "$TASKS"
 revmux new --task "$BEAD" --run "$RUN" --tasks-dir "$TASKS" --workdir "$PWD" >/dev/null 2>&1 || true
 IN="$TASKS/$BEAD/$RUN/input"; mkdir -p "$IN"
+OUT="$TASKS/$BEAD/$RUN/findings.json"
 mkdir -p "$IN/context"
 if [ -n "$PREV" ]; then
   # default REVIEWED_SHA: the sha the previous round recorded
@@ -47,8 +48,13 @@ if [ -n "$PREV" ]; then
   FROM="${REVIEWED_SHA:?set REVIEWED_SHA=<sha reviewed by the previous round>}"
   DIFFCMD="git diff $FROM..HEAD"
   STAT="$(git diff --shortstat "$FROM..HEAD")"; FILES="$(git diff --name-only "$FROM..HEAD")"
-  cp "$PREV" "$IN/context/findings-r1.json"
-  EXTRA="- Round 2+: review only the fix delta above; previous findings in context/findings-r1.json — do not re-raise settled ones, do flag a gating one that repeats unchanged."
+  # every earlier round's findings, named after its run dir (round 3 sees r1 and r2)
+  for f in "$TASKS/$BEAD"/*/findings.json; do
+    [ "$f" = "$OUT" ] && continue
+    [ -s "$f" ] && cp "$f" "$IN/context/findings-$(basename "$(dirname "$f")").json"
+  done
+  [ -s "$IN/context/findings-$(basename "$(dirname "$PREV")").json" ] || cp "$PREV" "$IN/context/findings-$(basename "$(dirname "$PREV")").json"
+  EXTRA="- Round 2+: review only the fix delta above; earlier rounds' findings are context/findings-*.json — do not re-raise settled ones, do flag a gating one that repeats unchanged."
 else
   DIFFCMD="git diff $BASE...HEAD"; STAT="$(git diff --shortstat "$BASE...HEAD")"; EXTRA=""
 fi
@@ -69,7 +75,6 @@ bd show "$BEAD" > "$IN/context/bead.md" 2>/dev/null || true
   if [ -n "$STUCKRUN" ]; then echo "- Movement/stuck change: stuck-run.sh before/after numbers are in context/stuck-run.txt — a spot that got worse is a major."
   elif [ "$PROFILE" = idkcraft-risky ]; then echo "- Movement/stuck change with NO stuck-run.sh numbers supplied (STUCKRUN unset): report it as a major (tests lens) unless the diff cannot change movement."; fi
 } > "$IN/goal.md"
-OUT="$TASKS/$BEAD/$RUN/findings.json"
 revmux --task "$BEAD" --run "$RUN" --tasks-dir "$TASKS" --workdir "$PWD" --profile "$PROFILE" --no-tui $SYNTH $LENSFLAG > "$OUT.stdout" 2> "$TASKS/$BEAD/$RUN/revmux.log" || true
 [ -s "$OUT" ] || cp "$OUT.stdout" "$OUT"
 jq -e '.findings' "$OUT" >/dev/null 2>&1 || { echo "revmux produced no findings.json — crashed, see $TASKS/$BEAD/$RUN/revmux.log"; exit 2; }
