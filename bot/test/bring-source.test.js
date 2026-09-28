@@ -441,6 +441,31 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.equal(scans, 1, 'only the sync 48 scan ran')
   })
 
+  it('buried-48 path serves the cached exposed half when the buried half is dug (revmux 03 body-1)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '60,59,0': 'air', // the cached buried half, dug out (loaded chunk reads air)
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
+    // An earlier far scan cached both halves; this order has since dug the
+    // buried half. The exposed half is live.
+    ctx.bring.farCache = {
+      x: 0, y: 64, z: 0, edge: 160, hit: { name: 'iron_ore', pos: pos(60, 64, 0) },
+      buriedHit: { name: 'iron_ore', pos: pos(60, 59, 0) },
+    }
+    let scans = 0
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => { scans++; return inner(o) }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'dug buried half does not rescan the buried path')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(scans, 1, 'only the sync 48 scan ran')
+  })
+
   it('a finished search leg drops the far cache: the next find rescans (revmux 02)', async () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0) })
     delete bot.pathfinder.setGoal // broken executor fails the leg, like the pun test
@@ -479,8 +504,11 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.equal(ctx.bring.far, true, 'unreadable target rides far')
     ctx.lastGoalKey = 'bring:60,64,0'
     await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'no walk/find flip without far (tick 1)')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
     await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'walk', 'no walk/find flip without far')
+    assert.equal(ctx.bring.phase, 'walk', 'no walk/find flip without far (tick 2)')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
   })
 
   it('refused completion grafts nothing onto a surviving order (revmux 02 core-1)', async () => {

@@ -518,7 +518,10 @@ async function chooseBringSource(brain, text, exposed, buried, o) {
 // and re-costed from the live position. Returns { far, buried } (either
 // may be null), or undefined when there is no usable cache — a half that
 // was cached but no longer verifies rescans instead of silently dropping
-// (revmux 02). Search legs drop the cache on completion: legs relocate
+// (revmux 02) — except on the buried-48 path, which never consumes the
+// buried half (it verdicts against its fresh stash): a dug buried half
+// must not rescan the exposed half it still needs (revmux 03 body-1).
+// Search legs drop the cache on completion: legs relocate
 // for fresh coverage, so they always rescan.
 function takeFarCache(bot, o, bp) {
   try {
@@ -560,7 +563,7 @@ function takeFarCache(bot, o, bp) {
         })
       }
     }
-    if ((c.hit && !far) || (c.buriedHit && !buried)) return undefined
+    if ((c.hit && !far) || (c.buriedHit && !buried && !(o && o.buried))) return undefined
     return { far, buried }
   } catch (_) { return undefined }
 }
