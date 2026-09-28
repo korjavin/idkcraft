@@ -511,12 +511,17 @@ function waterId(bot) {
 
 // Nearest-first water cells from the body, tried ones excluded. Fill
 // wherever water is; the home anchor below only gates the dry latch.
+// The scan widens by the tried count (revmux jsf.5-01 core-2/body-2):
+// findBlocks slices to count BEFORE we filter, so a fixed count hides
+// farther cells behind tried ones and latches a wet home dry. Nearest
+// 8+tried minus tried reads empty only when no untried water is left.
 function findWater(bot, tried) {
   try {
     if (!bot || typeof bot.findBlocks !== 'function') return []
     const id = waterId(bot)
     if (id === null) return []
-    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_FIND_COUNT }) || []
+    const skip = tried ? Object.keys(tried).length : 0
+    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_FIND_COUNT + skip }) || []
     const out = []
     for (const p of found) {
       if (!p || typeof p.x !== 'number') continue
@@ -622,10 +627,16 @@ function fillTick(bot, ctx, next) {
   if (r.fillEmpties !== empties) {
     r.fillEmpties = empties
     r.fillTried = {}
+    r.fillTarget = null
     r.fillWalkKey = null
     r.fillWalkTicks = 0
   }
   if (!r.fillTried || typeof r.fillTried !== 'object') r.fillTried = {}
+  // Locked target (revmux jsf.5-01 body-3): re-picking the nearest cell
+  // every tick resets the walk give-up whenever the body moves past a
+  // nearer cell, so an unreachable cell is never marked tried. The lock
+  // holds until the cell fills, fails, or times out.
+  if (!r.fillTarget || r.fillTried[r.fillTarget.key]) r.fillTarget = null
   const cands = findWater(bot, r.fillTried)
   if (cands.length === 0) {
     if (nearHomeSite(bot, ctx, FILL_NEAR_HOME)) {
@@ -647,7 +658,8 @@ function fillTick(bot, ctx, next) {
     walkTo(bot, ctx, `gear-home:${s.x},${s.y},${s.z}`, s, 'home-far')
     return
   }
-  const t = cands[0]
+  if (!r.fillTarget) r.fillTarget = cands[0]
+  const t = r.fillTarget
   const bp = bot.entity.position
   const aim = new Vec3(t.x + 0.5, t.y + 0.5, t.z + 0.5)
   if (dist3(bp, aim) > FILL_REACH) {
@@ -667,6 +679,7 @@ function fillTick(bot, ctx, next) {
       // Unreachable cell: try the next one, never fail the ladder — water
       // behind a wall reads as no water (skip, don't stall).
       r.fillTried[t.key] = true
+      r.fillTarget = null
       r.fillWalkKey = null
       r.fillWalkTicks = 0
     }

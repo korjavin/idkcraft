@@ -995,6 +995,50 @@ describe('gear jsf.5: bucket craft and fill', () => {
     assert.equal(count(bot, 'water_bucket'), 1)
     assert.equal(bot.calls.activate, 1)
   })
+  it('tried cells never hide farther water: the scan widens (revmux jsf.5-01 core-2/body-2)', () => {
+    // findBlocks slices to count BEFORE the tried filter (mineflayer
+    // nearest-first), so the mock honours count like the server does.
+    const near = []
+    for (let i = 1; i <= 8; i++) near.push([i, 64, 0])
+    const bot = waterBot({
+      items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'bucket', count: 1 }],
+      water: [...near, [22, 64, 0]],
+    })
+    bot.findBlocks = ({ count }) => [...near, [22, 64, 0]]
+      .map(([x, y, z]) => ({ x, y, z, d: Math.hypot(x - bot.entity.position.x, z - bot.entity.position.z) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, count)
+    const tried = {}
+    for (const [x, y, z] of near) tried[`${x},${y},${z}`] = true
+    const ctx = { home: home(), stepStatus: 'running', gearRun: { fillEmpties: 1, fillTried: tried } }
+    ctx.lastGoalKey = ''
+    gear(bot, ctx)
+    assert.equal(ctx.gear.noWater || false, false, 'the lake past 8 tried cells must not latch dry')
+    assert.equal(bot.calls.goals.length, 1, 'walks to the farther water')
+    assert.ok(!bot.lines.some((l) => l.includes('need water')), 'silent while water remains')
+  })
+  it('the walk target locks: a nearer cell mid-walk resets nothing (revmux jsf.5-01 body-3)', () => {
+    const cells = [[30, 64, 0], [20, 64, 5]]
+    const bot = waterBot({
+      items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'bucket', count: 1 }],
+      water: cells,
+    })
+    bot.entity.position = pos(25, 64, 0) // A nearest: locks [30,64,0]
+    bot.findBlocks = () => cells
+      .map(([x, y, z]) => ({ x, y, z, d: Math.hypot(x - bot.entity.position.x, z - bot.entity.position.z) }))
+      .sort((a, b) => a.d - b.d)
+    const ctx = { home: home(), stepStatus: 'running' }
+    ctx.lastGoalKey = ''
+    gear(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1)
+    bot.entity.position = pos(25, 64, 4) // B nearest now, the lock must hold A
+    for (let i = 0; i < 5; i++) {
+      ctx.stepStatus = 'running'
+      gear(bot, ctx)
+    }
+    assert.equal(bot.calls.goals.length, 1, 'no goal churn while the lock holds')
+    assert.equal(ctx.gearRun.fillWalkTicks, 6, 'the give-up keeps counting, not resetting')
+  })
   it('a dry scoop (flowing cell) moves on to the next candidate', async () => {
     const bot = waterBot({
       items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'bucket', count: 1 }],
