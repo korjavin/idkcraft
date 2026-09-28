@@ -861,6 +861,7 @@ describe('shave pickup: drop following (cm0)', () => {
     const { bot, ctx } = await dugPickup(world)
     const items = bot.inventory.items()
     items.find((i) => i.name === 'dirt').count -= 1 // missed vacuum: delta 0
+    bot.entities = { 7: { id: 7, name: 'item', position: pos(4.2, 64, 2.3), isValid: true } } // drop at stake
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // pickup: issue walk
     bot._moving = true // wedged: the walk never progresses
@@ -871,6 +872,24 @@ describe('shave pickup: drop following (cm0)', () => {
     assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
   })
 
+  it('stalled walk to a ghost dig cell still protects (no drop, no litter)', async () => {
+    // Revmux-01 finding 5.1: litter needs a drop at stake. A ghost dig
+    // leaves no drop; a wedged walk to the empty dig cell must not
+    // launder the column into done.
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    const items = bot.inventory.items()
+    items.find((i) => i.name === 'dirt').count -= 1 // ghost: nothing dropped
+    world.set(1, 64, 0, 'air') // client already shows ghost-air
+    bot.entity.position = pos(3, 64, 0)
+    flat(bot, ctx, null, null); await settle() // pickup: issue walk
+    bot._moving = true // wedged: the walk never progresses
+    for (let i = 0; i < 14 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(!cap.lines.some((l) => l.includes('flat litter')), cap.lines.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
+  })
+
   it('vacuumed-but-spent column completes (gross beats net)', async () => {
     // Bridge scaffolds spend dirt while shaving: a column whose drops were
     // vacuumed (gross > 0) but spent (net delta 0) is done, not protected.
@@ -878,14 +897,34 @@ describe('shave pickup: drop following (cm0)', () => {
     const { bot, ctx } = await dugPickup(world)
     const items = bot.inventory.items()
     items.find((i) => i.name === 'dirt').count -= 1 // spent on a bridge: delta 0
+    bot.entities = { 7: { id: 7, name: 'item', position: pos(1.8, 64, 0.4), isValid: true } } // seen, then vacuumed
     bot._cm0got = (ctx.flat.bumps[0].gotBefore || 0) + 1 // ...but vacuumed first
     for (let i = 0; i < 10 && ctx.flat; i++) {
       bot.entity.position = pos(3, 64, 0)
+      if (i === 1) delete bot.entities[7] // vacuumed on the walk
       flat(bot, ctx, null, null); await settle()
     }
     assert.equal(ctx.flat, null, 'episode ends')
     assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
     assert.ok(!bot.chats.some((c) => c.includes('protected')), bot.chats.join('\n'))
+  })
+
+  it('unseen stray vacuum does not launder a ghost column', async () => {
+    // Revmux-01 finding 5.2: gross counts only when a drop was seen near
+    // this column. A ghost dig (no drop) plus an out-of-sight vacuum
+    // stays protected.
+    const world = makeWorld({})
+    const { bot, ctx } = await dugPickup(world)
+    const items = bot.inventory.items()
+    items.find((i) => i.name === 'dirt').count -= 1 // ghost: nothing dropped
+    world.set(1, 64, 0, 'air') // client already shows ghost-air
+    bot._cm0got = (ctx.flat.bumps[0].gotBefore || 0) + 1 // a stray, vacuumed elsewhere
+    for (let i = 0; i < 10 && ctx.flat; i++) {
+      bot.entity.position = pos(3, 64, 0)
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 protected')), bot.chats.join('\n'))
   })
 
   it('collect hook counts only our own pickups', async () => {

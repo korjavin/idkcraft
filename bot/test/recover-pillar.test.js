@@ -68,6 +68,7 @@ function strictBot(solids, items, opts) {
     },
     async placeBlock(ref, face) {
       bot._places++
+      bot._targets.push([ref.position.x + face.x, ref.position.y + face.y, ref.position.z + face.z])
       const h = bot.heldItem
       if (!h) throw new Error('must be holding an item to place')
       if (h.name !== 'dirt' && h.name !== 'cobblestone') {
@@ -91,6 +92,7 @@ function strictBot(solids, items, opts) {
     chats: [],
     chat(m) { this.chats.push(String(m)) },
     _places: 0,
+    _targets: [],
     _equips: [],
   }
   return bot
@@ -642,27 +644,33 @@ describe('pillar_up timeout hardening (idkcraft-cm0)', () => {
     assert.ok(ctx.recovery.st.retries == null, 'no retry counted')
   })
 
-  it('mid-air arm rising never issues into the inherited flight (liftoff gate)', async () => {
-    // The arm inherited flat's approach jump still flying: pre-fix the
-    // +150 ms fire issues into it and the apply lands after touchdown
-    // (self-intersection refusal). Post-fix the body lands first.
+  it('mid-air arm lands first, then issues into the landing feet cell', async () => {
+    // The arm inherited flat's approach jump still flying (startFloor
+    // seeds mid-air, like the real stuck handoff): pre-fix the +150 ms
+    // fire issues into the inherited flight and the apply lands after
+    // touchdown (self-intersection refusal). Post-fix the body lands,
+    // the floor anchor descends with the landing (revmux-01), and the
+    // next rise issues exactly once into the landing feet cell.
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
     bot.entity.position = pos(0.5, 62.05, 0.5)
     bot.entity.velocity = { x: 0, y: 0.3, z: 0 }
-    const ctx = pillarCtx({ phase: 'jump' })
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
     recover.run(bot, ctx)
-    await sleep(450) // past the +300 ceiling: chain dies, nothing issued
+    await sleep(100)
     await flush()
     assert.equal(bot._places, 0, 'no issue into the inherited flight')
-    assert.equal(ctx.recovery.st.timerArmed, false, 'dead chain yields')
-    bot.entity.position = pos(0.5, 61, 0.5) // landed
+    bot.entity.position = pos(0.5, 61, 0.5) // landed (real falls take ~0.3 s)
     bot.entity.velocity = { x: 0, y: 0, z: 0 }
-    recover.run(bot, ctx)
+    await sleep(150) // the chain samples the landing, anchor descends
+    await flush()
+    assert.equal(bot._places, 0, 'no issue while down')
+    assert.equal(ctx.recovery.st.startFloor, 61, 'floor anchor follows the landing')
     bot.entity.position = pos(0.5, 61.9, 0.5) // the next rise (jump held)
     bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
     await sleep(250)
     await flush()
     assert.equal(bot._places, 1, 'a fresh rise after touchdown issues')
+    assert.deepEqual(bot._targets, [[0, 61, 0]], 'targets the landing feet cell, not the mid-air arm cell')
   })
 
   it('ground arm issues from +0.6 rise (boundary pin)', async () => {

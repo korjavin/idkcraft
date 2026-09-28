@@ -708,7 +708,7 @@ function pillarUpRun(bot, ctx) {
   // matches pillarTriggerDy, and no-self-intersection comes from apply
   // timing (see risingWindow), not from this line.
   if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) {
-    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null; st.lowY = bp.y
+    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null; st.lowY = bp.y; st.startFloor = Math.floor(bp.y)
     return 'running'
   }
   const reason = issuePillarPlace(bot, st)
@@ -742,8 +742,14 @@ function firePillarTimer(bot, ctx, st) {
     // Rise-since-arm (cm0): an arm inherited mid-air (flat's approach jump
     // still flying when stuck fired) must not issue into the stale flight —
     // the body lands first (low tracks down), then the next rise issues.
-    // Ground arms read identical to the old startFloor height.
-    if (typeof st.lowY !== 'number' || bp.y < st.lowY) st.lowY = bp.y
+    // Ground arms read identical to the old startFloor height. The floor
+    // anchor descends with the landing (revmux-01): issuePillarPlace
+    // targets fy=startFloor, so a mid-air-seeded anchor would place one
+    // cell too high, into the cell the rising body occupies.
+    if (typeof st.lowY !== 'number' || bp.y < st.lowY) {
+      st.lowY = bp.y
+      st.startFloor = Math.floor(bp.y)
+    }
     if (bp.y - st.lowY >= pillarTriggerDy(bot) && risingWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)

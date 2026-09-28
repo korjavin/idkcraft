@@ -450,6 +450,21 @@ function cellOccupiedByPlayer(bot, x, y, z) {
   return false
 }
 
+// A mob in the cap cell reads as a revert with the same message as spawn
+// protection (revmux-01): wait it out like a player instead of attempting
+// into it and mislabelling the hole protected after one try.
+function cellOccupiedByMob(bot, x, y, z) {
+  try {
+    for (const e of Object.values((bot && bot.entities) || {})) {
+      if (!e || !e.position) continue
+      if (e.type === 'player') continue
+      if (bot.entity && e === bot.entity) continue
+      if (covers(e, x, y, z)) return true
+    }
+  } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
+  return false
+}
+
 function cellOccupied(bot, x, y, z) {
   return cellOccupiedSelf(bot, x, y, z) || cellOccupiedByPlayer(bot, x, y, z)
 }
@@ -513,9 +528,19 @@ function standVerified(bot, bp, ref, face) {
   const dz = to.z - eyes.z
   const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
   if (!(dist <= EYE_REACH)) return false
+  return rayHitsRef(bot, eyes, to, dist, ref)
+}
+
+// The click ray (cm0): the same ray the server traces (eyes along the
+// face-center aim) must hit the reference block. Shared by the stand
+// check and the visibility-ordered reference scan below.
+function rayHitsRef(bot, eyes, to, dist, ref) {
   let hit = null
   try {
     if (!bot.world || typeof bot.world.raycast !== 'function') return true
+    const dx = to.x - eyes.x
+    const dy = to.y - eyes.y
+    const dz = to.z - eyes.z
     const len = dist || 1
     hit = bot.world.raycast(eyes, new Vec3(dx / len, dy / len, dz / len), EYE_REACH)
   } catch (_) {
@@ -548,7 +573,19 @@ function isRevertErr(e) {
 // The reference is a real Block, not a position: bot.placeBlock derefs
 // referenceBlock.position on the first line, so a bare Vec3 rejects every
 // placement (build.js live bug).
-function findRef(bot, p) {
+function findRef(bot, p, bp) {
+  // Visibility-ordered (cm0 revmux-01): below-first returns the pit floor,
+  // whose top face a far stand cannot see (the click ray clips the near
+  // wall) — and the stand check then def-loops to unreachable instead of
+  // using the visible pit-wall face GoalPlaceBlock stopped for. Prefer the
+  // first face the live eyes can actually click; fall back to the first
+  // solid-backed face when no body position is given (unit mocks) or
+  // nothing is visible (the stand check then defers honestly).
+  let fallback = null
+  let eyes = null
+  try {
+    if (bp && typeof bp.x === 'number') eyes = new Vec3(bp.x, bp.y + EYE_HEIGHT, bp.z)
+  } catch (_) { eyes = null }
   for (const [ox, oy, oz] of REF_DIRS) {
     const q = new Vec3(p.x + ox, p.y + oy, p.z + oz)
     let block = null
@@ -556,10 +593,16 @@ function findRef(bot, p) {
       block = bot.blockAt(q)
     } catch (_) { /* treat as open */ }
     if (block && isSolidCell(block)) {
-      return { ref: block, face: new Vec3(-ox, -oy, -oz) }
+      const cand = { ref: block, face: new Vec3(-ox, -oy, -oz) }
+      if (!fallback) fallback = cand
+      if (eyes) {
+        const to = facePoint(block.position, cand.face)
+        const dist = Math.sqrt((to.x - eyes.x) ** 2 + (to.y - eyes.y) ** 2 + (to.z - eyes.z) ** 2)
+        if (dist <= EYE_REACH && rayHitsRef(bot, eyes, to, dist, block)) return cand
+      }
     }
   }
-  return null
+  return fallback
 }
 
 // Surface guard (body-4): while flat owns the body the pathfinder must not
@@ -716,9 +759,13 @@ function bumpDoneOrPhantom(bot, f, h) {
     try { denseNow = countItems(bot, () => true) } catch (_) { /* unreadable: done */ }
     let gotN = 0
     try { gotN = gotCount(bot) - (h.gotBefore || 0) } catch (_) { gotN = 0 }
-    if (gotN > 0) {
-      // Gross vacuumed drops: real digs happened (ghosts drop nothing), so
-      // a flat NET delta is bridge spending, not protection (cm0).
+    // Gross vacuumed drops prove real digs (ghosts drop nothing), so a
+    // flat NET delta is bridge spending, not protection (cm0) — but only
+    // when a drop was actually seen near this column (revmux-01): a stray
+    // vacuumed out of sight must not launder a ghost column into done.
+    // (A visible stray vacuumed during a ghost column still masks; rare,
+    // bounded to one column, and the only signal left is the delta.)
+    if (gotN > 0 && h.sawDrop) {
       shiftBumpDone(f)
       return
     }
@@ -851,9 +898,14 @@ function shortErr(e) {
   return m.split('\n')[0].trim().replace(/\s+/g, '_').slice(0, 80) || 'unknown'
 }
 
-function skipProtected(bot, f, p) {
+function skipProtected(bot, f, p, push = true) {
   f.protN = (f.protN || 0) + 1
-  try { (f.protCells = f.protCells || []).push({ x: p.x, y: p.y, z: p.z }) } catch (_) { /* cells best-effort */ }
+  // Verified evidence only feeds protCells (revmux-01): the shave gate's
+  // inferred skips count and log but must not join the evidence list,
+  // or the gate feeds itself ring by ring across the whole field.
+  if (push) {
+    try { (f.protCells = f.protCells || []).push({ x: p.x, y: p.y, z: p.z }) } catch (_) { /* cells best-effort */ }
+  }
   let from = '?'
   try {
     const bp = bot.entity && bot.entity.position
@@ -1143,7 +1195,23 @@ function digTick(bot, ctx, f, bp) {
         bot.pathfinder.setGoal(new goals.GoalBlock(d.pos.x, d.pos.y, d.pos.z), false)
       } catch (_) { /* retry next tick */ return }
       ctx.lastGoalKey = key
+      d.stalls = 0
+      d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
+    }
+    // Count only on arrival or give-up (revmux-01): the walk plus the item
+    // pickup delay take longer than one tick, so counting on the issue tick
+    // reads real digs as phantoms and ends restock after three slow walks.
+    let moving = false
+    try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+    if (moving) {
+      const grounded = !bot.entity || bot.entity.onGround !== false
+      if (progressed(bp, d.lastPos, grounded)) {
+        d.stalls = 0
+        d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+        return // still walking: wait for arrival, don't count yet
+      }
+      if (++d.stalls < DIG_STALLS) return
     }
     // Reached or gave up getting there: the drop is picked up by proximity
     // and the inventory count is the truth — move to the next dirt. A dig
@@ -1229,7 +1297,8 @@ function fillTick(bot, ctx, f, bp) {
   }
   const selfIn = cellOccupiedSelf(bot, cx, cy, cz)
   const playerIn = cellOccupiedByPlayer(bot, cx, cy, cz)
-  if (selfIn && !playerIn) {
+  const mobIn = cellOccupiedByMob(bot, cx, cy, cz)
+  if (selfIn && !playerIn && !mobIn) {
     // Standing in our own cap cell (a 1-deep trench floor is a normal place
     // goal parking spot): step aside so the cap can land; a bot that cannot
     // move skips the hole instead of orbiting it.
@@ -1241,7 +1310,7 @@ function fillTick(bot, ctx, f, bp) {
     sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-side')
     return
   }
-  if (playerIn) {
+  if (playerIn || mobIn) {
     h.occ++
     if (h.occ > OCC_DEFERS) {
       shiftSkip(f, 'occupied')
@@ -1327,7 +1396,7 @@ function fillTick(bot, ctx, f, bp) {
   // line-of-sight check on the actual click), counted so a permanently far
   // hole still terminates.
   const p = new Vec3(cx, cy, cz)
-  const ref = findRef(bot, p)
+  const ref = findRef(bot, p, bp)
   if (ref) {
     if (!standVerified(bot, bp, ref.ref, ref.face)) {
       try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
@@ -1370,7 +1439,7 @@ function fillTick(bot, ctx, f, bp) {
     else rotate(f)
     return
   }
-  const sref = findRef(bot, new Vec3(cx, cy - 1, cz))
+  const sref = findRef(bot, new Vec3(cx, cy - 1, cz), bp)
   if (!sref) {
     h.def++
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
@@ -1474,7 +1543,7 @@ function shaveTick(bot, ctx, f, bp) {
     let tgt = h.pickup
     let dropId = null
     const drop = nearestDrop(bot, h.pickup.x, h.pickup.y, h.pickup.z, DROP_SCAN_R)
-    if (drop) { tgt = drop.position; dropId = drop.id }
+    if (drop) { tgt = drop.position; dropId = drop.id; h.sawDrop = true }
     // A drop 2+ above the feet needs a tower to reach — more scaffold than
     // the drop is worth. Skip the walk: the drop rides the column down as
     // the dig descends and gets vacuumed at the bottom (core-3).
@@ -1525,7 +1594,10 @@ function shaveTick(bot, ctx, f, bp) {
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++h.stalls >= PICKUP_STALLS) {
-      h.littered = true // the drop stays as litter; the column still advances
+      // Litter needs a drop at stake (revmux-01): a stalled walk to a
+      // ghost dig cell (no drop ever seen) is not litter — the phantom
+      // check below still gets its say.
+      if (dropId !== null) h.littered = true // the drop stays as litter; the column still advances
       h.pickup = null
       h.retarget = null
       h.stalls = 0
@@ -1595,7 +1667,7 @@ function shaveTick(bot, ctx, f, bp) {
   // mislabelled column must not cascade across the field.
   const protNear = (f.protCells || []).filter((c) => Math.abs(c.x - h.x) <= PROT_GATE_R && Math.abs(c.z - h.z) <= PROT_GATE_R).length
   if (protNear >= PROT_GATE_N) {
-    skipProtected(bot, f, { x: h.x, y, z: h.z })
+    skipProtected(bot, f, { x: h.x, y, z: h.z }, false) // inferred: count, don't feed (revmux-01)
     shiftBumpSkip(f, 'protected')
     return
   }
