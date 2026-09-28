@@ -106,8 +106,54 @@ function isWater(b) {
   return !!b && typeof b.name === 'string' && b.name.includes('water')
 }
 
-function headBlockedAt(bot) {
+// Own-column headroom: the two cells the 1.8 body rises through. dig_up's
+// gate (9sq F1): it digs exactly these cells, so free own headroom means
+// nothing to dig even when a neighbour lip vetoes the pillar (oz8).
+function ownHeadBlockedAt(bot) {
   return solid(cellAt(bot, 0, 1, 0)) || solid(cellAt(bot, 0, 2, 0))
+}
+
+// Headroom for a jump (oz8): the own column plus a neighbouring lip the
+// drifting 0.6-wide body can reach. Rig 2026-09-28 (CLUSTER pocket, stance
+// frac-x 0.30): own column free, west lip at dy+2 with air below — the jump
+// wedged and failed no-apex over 20 ticks while the scan read free. A
+// neighbour threatens only when the body can drift into it (dy+0 AND dy+1
+// free — a dy+1-solid neighbour can never hold the 1.8 body, it is a wall
+// to slide along, so chimney climbs and feet-level notches read free)
+// with rock two above, and only inside the body's XZ reach (half-width 0.3
+// + margin). Diagonals need both orthogonal neighbours enterable too (a
+// wall in either seals the corner). The margin covers float noise at
+// exact-boundary stances plus sub-tick drift; it must stay well under 0.2,
+// past which centered stances (frac 0.5) would catch the side columns and
+// veto working chimney jumps.
+const HEAD_DRIFT_MARGIN = 0.05
+function headBlockedAt(bot) {
+  if (ownHeadBlockedAt(bot)) return true
+  let bp = null
+  try { bp = botPos(bot) } catch (_) { bp = null }
+  if (!bp) return false
+  const reach = 0.3 + HEAD_DRIFT_MARGIN
+  const fx = Math.floor(bp.x)
+  const fz = Math.floor(bp.z)
+  for (let cx = Math.floor(bp.x - reach); cx <= Math.floor(bp.x + reach); cx++) {
+    for (let cz = Math.floor(bp.z - reach); cz <= Math.floor(bp.z + reach); cz++) {
+      const dx = cx - fx
+      const dz = cz - fz
+      if (dx === 0 && dz === 0) continue
+      // A diagonal lip is reachable only past both orthogonal neighbours:
+      // a wall in either seals the corner (revmux 01).
+      if (dx !== 0 && dz !== 0) {
+        if (solid(cellAt(bot, dx, 0, 0)) || solid(cellAt(bot, dx, 1, 0))) continue
+        if (solid(cellAt(bot, 0, 0, dz)) || solid(cellAt(bot, 0, 1, dz))) continue
+      }
+      // A lip needs TWO free cells below the rock (revmux 01): with dy+1
+      // solid the 1.8 body can never be inside the column at any jump
+      // phase, so that neighbour is a wall to slide along, never a bonk.
+      if (!solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz)) &&
+        solid(cellAt(bot, dx, 2, dz))) return true
+    }
+  }
+  return false
 }
 
 // Goalward 1x2 solidity for the dig_through menu fact (9sq F1): stuck.goal
@@ -446,6 +492,7 @@ function recoverFacts(bot, ctx, state, target) {
     pickaxe: hasPickaxe(bot),
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
+    ownHeadBlocked: ownHeadBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
@@ -1200,9 +1247,11 @@ const RECOVER_MENU = {
     // 9sq F1: headroom already free means nothing to dig — never offer, and
     // never chain onto free headroom either (the chain is an offer with no ask).
     // jsf.3: like pillar_up, a pit with no goal climbs (head still blocked).
-    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
+    // oz8: the own-column gate — a neighbour lip vetoes the pillar above but
+    // leaves nothing to dig; the fallback keeps stand/tests literals working.
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && (facts.ownHeadBlocked ?? facts.headBlocked),
     run: digUpRun,
-    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && facts.headBlocked,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && (facts.ownHeadBlocked ?? facts.headBlocked),
     verb: 'digging up',
   },
   dig_step: {
