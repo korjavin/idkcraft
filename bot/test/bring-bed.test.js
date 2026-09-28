@@ -28,7 +28,7 @@ const ITEMS = {
   white_bed: 109, black_bed: 110, gray_bed: 111,
   oak_log: 118, oak_planks: 119, crafting_table: 120, stick: 115,
   cobblestone: 113, stone_axe: 101, dirt: 112, birch_planks: 125,
-  white_dye: 126, red_wool: 127, red_bed: 128,
+  white_dye: 126, red_wool: 127, red_bed: 128, cherry_planks: 131,
 }
 const BLOCKS = { oak_log: 12, oak_leaves: 13, crafting_table: 120, chest: 130 }
 
@@ -761,6 +761,34 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
   })
 
+  it('executor table fallback picks an affordable variant (core-2/body-1)', async () => {
+    const recipes = {
+      ...RECIPES(),
+      crafting_table: [
+        R('crafting_table', [['cherry_planks', 4]], 1, false),
+        R('crafting_table', [['oak_planks', 4]], 1, false),
+      ],
+    }
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 8 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '1,63,0': 'dirt', '20,64,0': 'crafting_table' },
+      recipes,
+    })
+    const ticker = tickerFor(bot)
+    bot._tickerCtx.home = { site: { x: 0, y: 64, z: 0 }, built: true, table: { x: 20, y: 64, z: 0 } }
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['making you a white_bed'])
+    await bring(bot, bot._tickerCtx, null, {}) // run opens: table far, walk leg, no latch
+    assert.ok(bot._tickerCtx.craftany && bot._tickerCtx.craftany.plan, 'run open')
+    delete bot.cells['20,64,0'] // the table vanishes mid-walk
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    const oak = bot._items.find((i) => i.name === 'oak_planks')
+    assert.equal(oak && oak.count, 1) // 8 - 4 (oak table) - 3 (bed)
+  })
+
   it("'bring me white_bed' locks white even with gray in the pack", async () => {
     const bot = mockBot({
       items: [{ name: 'gray_wool', count: 3 }, { name: 'oak_planks', count: 4 }],
@@ -853,6 +881,36 @@ describe('stranded lock release (idkcraft-did.4 rig)', () => {
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
     assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.chest, [{ name: 'oak_planks', count: 13 }]) // drew 3 + 4
+  })
+
+  it('provisional lock with no sheep in range keeps the lock, never releases', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 2 }, { name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['making you a white_bed: need 3 wool, going for sheep'])
+    await drive(bot, bot._tickerCtx, null)
+    assert.equal(bot._tickerCtx.bring, null)
+    assert.ok(bot.lines.includes('could not get 3 wool for the white_bed in time'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('trying another colour')), `lines: ${bot.lines}`)
+  })
+
+  it('entering legs clears dead colours so new ground re-hunts them', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 2 }, { name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me bed')
+    const o = bot._tickerCtx.bring
+    o.deadColors = new Set(['white']) // as if a stray released it earlier
+    o.color = 'brown'
+    o.drop = 'brown_wool'
+    await bring(bot, bot._tickerCtx, null, {}) // find: nothing in range, no anchor
+    assert.equal(o.deadColors, null)
+    assert.equal(bot._tickerCtx.bring, null) // anchorless legs-entry refuses
   })
 
   it('explicit colour subs never release the lock', async () => {

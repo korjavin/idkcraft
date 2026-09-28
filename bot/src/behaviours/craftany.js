@@ -467,7 +467,10 @@ function craftItem(bot, ctx, name, count) {
             )
             return 'running'
           }
-          const trec = plan.tableRecipe || tableRecipes(bot)[0]
+          // Affordable first (revmux 03 core-2/body-1): the registry-first
+          // variant (cherry) is usually unfunded — the table vanished
+          // mid-run, so re-pick like the planner instead of crafting blind.
+          const trec = plan.tableRecipe || pickTableRecipe(bot, buildIdToName(bot), plan.needs || [], pack)
           // Logs fund the table through a planks op for the table's own
           // wood first (did.4 core-1): the generic biggest-first op could
           // burn a whole other stack while this wood stays short. One op

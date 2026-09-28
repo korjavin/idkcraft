@@ -415,19 +415,26 @@ async function findFood(bot, ctx, o) {
     : findAnimal(bot, o.drop || null)
   if (!res && wool && o.lockColor && o.color) {
     // The provisional lock stranded (did.4 rig: one light_gray in a brown
-    // flock): no more of this colour in range. Release it and hunt any
-    // live colour instead — the stranded wool stays in the pack as
-    // surplus, the count restarts, the next pickup re-locks. Explicit
-    // colours (lockColor false) never release: the order is the promise.
-    if (!o.deadColors) o.deadColors = new Set()
-    o.deadColors.add(o.color)
-    say(bot, `no more ${o.color} sheep, trying another colour`)
-    o.color = null
-    o.drop = null
-    o.have = 0
-    res = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: o.shearedIds, skipColors: o.deadColors })
+    // flock) — but only release onto sheep actually present (revmux 03
+    // core-1): with none in range at all the flock stands a leg away, so
+    // the lock stays and the legs relocate. Releasing there would burn
+    // the pack colour for the whole order.
+    const any = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: o.shearedIds, skipColors: o.deadColors })
+    if (any) {
+      if (!o.deadColors) o.deadColors = new Set()
+      o.deadColors.add(o.color)
+      say(bot, `no more ${o.color} sheep, trying another colour`)
+      o.color = null
+      o.drop = null
+      o.have = 0
+      res = any
+    }
   }
   if (!res) {
+    // Legs move areas (revmux 03 core-1): dead colours are a per-area
+    // hint — the new ground may hold the stranded colour, so it hunts
+    // again there instead of dooming the legs that walk past it.
+    if (wool && o.lockColor) o.deadColors = null
     const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
     await enterSearch(bot, ctx, o, wool ? woolLegacy : (o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks'))
     return
