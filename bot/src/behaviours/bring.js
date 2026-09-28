@@ -159,6 +159,10 @@ function bringKind(ctx) {
   return (ctx.bring && ctx.bring.kind) || 'block'
 }
 
+function skipKey(p) {
+  return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+}
+
 function refuse(bot, ctx, line) {
   say(bot, line)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
@@ -621,7 +625,7 @@ async function bring(bot, ctx, target, state) {
       await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
       return
     }
-    const res = findNearest(bot, o.name)
+    const res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
     if (res === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
@@ -671,7 +675,7 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'searchfar') {
     if (food) { await findFood(bot, ctx, o); return }
-    const r = stepFarSearch(bot, o.search)
+    const r = stepFarSearch(bot, o.search, o.skip ? { exclude: (q) => o.skip.has(skipKey(q)) } : undefined)
     if (!r.done) return
     o.search = null
     if (r.result === 'unknown') {
@@ -753,12 +757,19 @@ async function bring(bot, ctx, target, state) {
     if (bDeny) {
       logDeny(block, bDeny)
       if (bDeny === 'protected') {
-        refuse(bot, ctx, `${o.block} there is part of a build`)
+        // Skip it and take the next candidate: a nearer build must not
+        // end an order while terrain blocks exist further away. Refusal
+        // happens when find comes up empty (the have>0 path delivers).
+        if (!o.skip) o.skip = new Set()
+        o.skip.add(skipKey(o.pos))
+        o.pos = null
+        o.phase = 'find'
         return
       }
       // Trap denial (below-feet/gravity): the stance may change, so look
       // again — but a capped number of times, or find re-picks the same
-      // nearest block forever (walk flips straight back to dig).
+      // nearest block forever (walk flips straight back to dig). Never
+      // skipped: a trap is a property of the stance, not the block.
       o.denyStrikes = (o.denyStrikes || 0) + 1
       if (o.denyStrikes > 3) {
         refuse(bot, ctx, `could not reach ${o.block} safely`)

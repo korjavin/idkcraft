@@ -85,6 +85,13 @@ describe('canBreak guard (idkcraft-drq)', () => {
     assert.equal(canBreak(worldBot(bare), blk('oak_log', 9, 65, 9), {}), false, 'leafless pillar refused')
   })
 
+  it('tree remnant: the last log under its own crown stays breakable', () => {
+    const remnant = new Map([['0,64,0', 'oak_log'], ['0,65,0', 'oak_leaves'], ['1,65,0', 'oak_leaves']])
+    assert.equal(canBreak(worldBot(remnant), blk('oak_log', 0, 64, 0), {}), true, 'chopped trunk remnant')
+    const firewood = new Map([['3,64,3', 'oak_log'], ['3,63,3', 'dirt'], ['4,64,3', 'oak_leaves']])
+    assert.equal(canBreak(worldBot(firewood), blk('oak_log', 3, 64, 3), {}), false, 'lone log on dirt refused')
+  })
+
   it('allows bot-placed blocks via ctx.placedByBot', () => {
     const bot = worldBot(new Map())
     const ctx = { placedByBot: new Set(['7,64,0']) }
@@ -218,25 +225,40 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     } finally { console.log = orig }
   })
 
-  it('bring refuses loudly when its dig target is protected (no re-find loop)', async () => {
+  it('bring skips a protected target and takes the next candidate (no re-find loop)', async () => {
     const bring = require('../src/behaviours/bring')
     let digs = 0
-    const lines = []
+    const spots = [new Vec3(2, 64, 0), new Vec3(20, 64, 0)]
+    const names = {
+      '2,64,0': 'oak_log', // bare cabin log: protected
+      '20,64,0': 'oak_log', '20,65,0': 'oak_log', '21,65,0': 'oak_leaves', // a tree
+    }
     const bot = {
       entity: { position: new Vec3(0, 64, 0), onGround: true },
-      blockAt: () => ({ name: 'oak_planks', position: new Vec3(2, 64, 0) }),
+      registry: { blocksByName: { oak_log: { id: 17 } } },
+      findBlocks: (opts) => {
+        const want = new Set(Array.isArray(opts.matching) ? opts.matching : [opts.matching])
+        return spots.filter((q) => want.has(17) && names[`${q.x},${q.y},${q.z}`] === 'oak_log')
+      },
+      blockAt: (p) => {
+        const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+        return n ? { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
+      },
       dig: async () => { digs++ },
-      chat: (l) => lines.push(String(l)),
+      chat: () => {},
       pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
     }
     const ctx = {
       lastGoalKey: '',
-      bring: { phase: 'dig', kind: 'block', pos: { x: 2, y: 64, z: 0 }, block: 'oak_planks' },
+      bring: { phase: 'dig', kind: 'block', name: 'oak_log', want: 2, have: 0, pos: { x: 2, y: 64, z: 0 }, block: 'oak_log' },
     }
-    await bring(bot, ctx, null, {})
-    assert.equal(digs, 0, 'planks never dug')
-    assert.equal(ctx.bring, null, 'order ends instead of re-picking the same block')
-    assert.ok(lines.some((l) => l.includes('part of a build')), lines.join('\n'))
+    await bring(bot, ctx, null, {}) // dig: denied, skipped
+    assert.equal(digs, 0, 'cabin log never dug')
+    assert.ok(ctx.bring.skip.has('2,64,0'), 'denied target skipped')
+    assert.equal(ctx.bring.phase, 'find', 'search continues')
+    await bring(bot, ctx, null, {}) // find: the skipped cabin log loses, the tree wins
+    assert.ok(ctx.bring, 'order alive')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.z], [20, 0], 'next candidate picked')
   })
 
   it('bring re-searches a trap denial 3 times, then refuses', async () => {

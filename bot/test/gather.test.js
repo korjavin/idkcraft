@@ -75,6 +75,25 @@ describe('gather step', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
+  it('drq a trap denial stays in skip, not the sticky set (stance may change)', () => {
+    const bot = mockBot({
+      spots: [pos(1, 63, 0)],
+      names: { '1,63,0': 'oak_log', '1,64,0': 'dirt', '-1,64,0': 'dirt', '0,64,1': 'dirt' },
+    })
+    const ctx = freshCtx()
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(String(l))
+    try {
+      for (let i = 0; i < 6 && !(ctx.gather && ctx.gather.skip && ctx.gather.skip.size > 0); i++) {
+        gather(bot, ctx, null, {})
+      }
+    } finally { console.log = orig }
+    assert.ok(lines.some((l) => l.startsWith('selftrap:')), 'denied by the trap rule')
+    assert.ok(ctx.gather.skip.has('1,63,0'), 'trap target skipped')
+    assert.ok(!ctx.gather.gskip || !ctx.gather.gskip.has('1,63,0'), 'stance denial not sticky')
+  })
+
   it('drq a denied owner log is not re-walked after the next chopped log', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0), pos(8, 64, 0)],

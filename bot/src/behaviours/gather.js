@@ -273,11 +273,14 @@ function gather(bot, ctx, target, state) {
     if (gDeny) {
       logDeny(g.block, gDeny)
       g.skip.add(keyOf(g.pos))
-      // Guard denials survive the drop-landed clear below: a refusal is a
-      // property of the block, not of the trip, or the bot re-walks to the
-      // same owner log after every chopped log.
-      if (!g.gskip) g.gskip = new Set()
-      g.gskip.add(keyOf(g.pos))
+      // 'protected' is a property of the block, not of the trip: it
+      // survives the drop-landed clear below, or the bot re-walks to the
+      // same owner log after every chopped log. Trap denials
+      // (below-feet/gravity) depend on the stance and stay in g.skip.
+      if (gDeny === 'protected') {
+        if (!g.gskip) g.gskip = new Set()
+        g.gskip.add(keyOf(g.pos))
+      }
       g.pos = null
       return
     }
