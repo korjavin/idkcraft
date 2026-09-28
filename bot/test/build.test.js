@@ -1069,4 +1069,45 @@ describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
     assert.equal(bot.calls.places.length, 3, 'two refused attempts + the landing')
     assert.deepEqual(ctx.buildSkip, [])
   })
+
+  // Revmux 02 minor: reach proven clears the far streak — repeated
+  // preemptions with returns in between never accumulate into a skip.
+  it('repeated preemptions with returns do not accumulate far strikes', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }], failPlace: true })
+    let moving = false
+    bot.pathfinder.isMoving = () => moving
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    bot.entity.position = pos(-8.5, 64, 1.5)
+    build(bot, ctx, null, null) // approach
+    for (let e = 0; e < 3; e++) {
+      moving = false
+      bot.entity.position = pos(-8.5, 64, 1.5)
+      build(bot, ctx, null, null) // far-idle: fresh streak 1, never 2 or 3
+      assert.equal(ctx.buildFarFails, 1, `episode ${e}`)
+      assert.deepEqual(ctx.buildSkip, [])
+      bot.entity.position = pos(9, 64, 1.5)
+      moving = true
+      build(bot, ctx, null, null) // walking back: setGoal leg, no eval
+      build(bot, ctx, null, null) // still walking: no eval
+      moving = false
+      build(bot, ctx, null, null) // idle in reach: refusal, streak cleared
+      await settle()
+      assert.equal(ctx.buildFarFails, 0, `cleared episode ${e}`)
+    }
+    // Three genuine refusals still skip — but as refused, not unreachable.
+    assert.equal(ctx.buildSkip.length, 1)
+    assert.ok(lines.some((l) => l.startsWith('build skip') && l.includes('after 3 refusals')))
+    assert.ok(!lines.some((l) => l.includes('unreachable')))
+  })
+
+  // Revmux 02 minor: a fresh home starts the far streak fresh.
+  it('founding a home resets the far streak index', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const ctx = { buildFarIdx: 0, buildFarFails: 2, buildFarDist: 8 } // stale, home gone
+    build(bot, ctx, null, null)
+    assert.ok(ctx.home && ctx.home.site, 'home founded from spawn')
+    assert.equal(ctx.buildFarIdx, -1)
+  })
 })

@@ -315,6 +315,7 @@ function build(bot, ctx, target, state) {
     ctx.buildSkip = []
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
+    ctx.buildFarIdx = -1
   }
   if (ctx.placeInFlight) return
   if (!ctx.home) return
@@ -403,6 +404,11 @@ function build(bot, ctx, target, state) {
       else ctx.buildGoalIdx = -1
       return
     }
+    // Reach proven: a later far episode starts its streak fresh, so
+    // repeated preemptions with returns in between never accumulate
+    // into a skip (revmux 02 minor). A static far stand never reaches
+    // this line, so it still skips after 3.
+    ctx.buildFarFails = 0
   } catch (_) { /* unverifiable: attempt anyway */ }
   if (cellDone(bot, ctx.home, cell)) return // lagged double-place guard
   let ref

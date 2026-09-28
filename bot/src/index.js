@@ -1095,7 +1095,7 @@ function fleeReflex(bot, ctx) {
           if (foundEarly) {
             ctx.adoptDone = true
             // Same resets as setHome below (no ticker handle in this scope).
-            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1
+            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
             try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
           } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
             // Give up to build: a mock that never streams, patience out
@@ -1255,7 +1255,7 @@ function fleeReflex(bot, ctx) {
       // run against the pinned order.home, and the shelter refresh lands in
       // startWork's release right after (revmux 01 core-1). No meet: no-op.
       homeMod.releaseMeet(bot, ctx)
-      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
@@ -1592,7 +1592,7 @@ function fleeReflex(bot, ctx) {
       clearStuck()
       resetNightStep()
       if (home !== ctx.home) {
-        ctx.home = home; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1
+        ctx.home = home; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
