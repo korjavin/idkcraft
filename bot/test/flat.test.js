@@ -1372,6 +1372,42 @@ describe('flat verified stands (idkcraft-cm0)', () => {
     assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
   })
 
+  it('wide mob overhanging the cap from a neighbour cell waits out', async () => {
+    // Hzw: covers() only tests the floored centre, but a horse (1.4 wide)
+    // centred at x=2.2 overhangs cap (1,63,0) and the server refuses the
+    // placement (rig: cow/spider overhang 0/6 each) — the hole must wait
+    // like for a player, then place once the mob leaves.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entities = {
+      9: { id: 9, name: 'horse', type: 'mob', position: pos(2.2, 63, 0.5), width: 1.4 },
+    }
+    for (let i = 0; i < 3 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(bot.calls.places.length, 0, 'no attempt into the overhanging horse')
+    assert.ok(ctx.flat && ctx.flat.holes.length === 1, 'hole waits, not skips')
+    delete bot.entities[9] // the horse wanders off
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'places once free')
+    assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
+  })
+
+  it('wide mob in a neighbour cell without overhang does not block', async () => {
+    // Hzw negative control: the same horse fully clear of the cap
+    // (|2.9-1.5| >= 0.5+0.7) must not hold the hole up.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entities = {
+      9: { id: 9, name: 'horse', type: 'mob', position: pos(2.9, 63, 0.5), width: 1.4 },
+    }
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'places next to a clear horse')
+    assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
+  })
+
   it('stray drop in the cap cell does not block placement', async () => {
     // Cm0.1: drops and projectiles never collide (rig: 5/5 placed) — only
     // mobs wait out.

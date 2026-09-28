@@ -409,6 +409,22 @@ function cellOccupiedByPlayer(bot, x, y, z) {
 // a placement (5/5 placed into a cell holding only a drop), so a hole
 // holding a stray drop still places. Boats count: they do collide.
 const NONBLOCKERS = new Set(['item', 'item_stack', 'experience_orb'])
+// Wide-mob overhang (hzw): covers() only tests the floored centre, but a
+// cow (0.9) or spider (1.4) centred in the neighbour cell overhangs the
+// cap with its hitbox and the server still refuses the placement (rig:
+// overhanging cow/spider 0/6 each, same 'still air' text). For mobs test
+// box overlap instead; players/self keep covers(). A missing width
+// (unknown entity, old mocks) falls back to covers(), i.e. cm0.1 behavior.
+function mobOverlaps(ent, x, y, z) {
+  const p = ent && ent.position
+  if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+  const w = ent.width
+  if (typeof w !== 'number' || !Number.isFinite(w) || w <= 0) return covers(ent, x, y, z)
+  if (Math.abs(p.x - (x + 0.5)) >= 0.5 + w / 2) return false
+  if (Math.abs(p.z - (z + 0.5)) >= 0.5 + w / 2) return false
+  const fy = Math.floor(p.y)
+  return fy === y || fy + 1 === y
+}
 function cellOccupiedByMob(bot, x, y, z) {
   try {
     for (const e of Object.values((bot && bot.entities) || {})) {
@@ -416,7 +432,7 @@ function cellOccupiedByMob(bot, x, y, z) {
       if (e.type === 'player' || e.type === 'projectile') continue
       if (bot.entity && e === bot.entity) continue
       if (NONBLOCKERS.has((e.name || '').toLowerCase())) continue
-      if (covers(e, x, y, z)) return true
+      if (mobOverlaps(e, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
   return false
