@@ -137,6 +137,38 @@ function depositPlan(bot, ctx) {
   const edible = edibles()
   let keepFood = FOOD_KEEP
   let keepScaffold = SCAFFOLD_KEEP
+  // Bed reserve (jr2.2): while bedroom beds are owed, the work-in-progress
+  // stays packed — banking it starves the beds craft/place between picks
+  // (rig-proven bank/craft cycle: the finished bed itself got banked).
+  // Deferred require (bring<->stockpile cycle). Once both beds are in, the
+  // leftovers bank normally.
+  let bedOwed = false
+  try {
+    const fact = require('./beds').bedsFact(bot, ctx && ctx.home)
+    bedOwed = fact === 'none' || fact === 'one'
+  } catch (_) { bedOwed = false }
+  // + ground patches under unplaced beds (floorless-house terrain dips eat
+  // a plank each — banking them strands the place between picks).
+  let keepBedPlanks = 6
+  try { keepBedPlanks += require('./beds').fillNeed(bot, ctx && ctx.home) || 0 } catch (_) { /* no patches */ }
+  // The keep fills the top single wood first (gather-gate mirror, revmux
+  // 01-review): the bed top-up measures maxPlanks of ONE wood, so keeping
+  // 6 mixed in inventory order would farm logs forever while beds are held
+  // (2 birch kept + 50 oak banked still reads maxPlanks=2).
+  const woodKeep = {}
+  if (bedOwed) {
+    const totals = {}
+    for (const j of list) {
+      if (!j || typeof j.name !== 'string' || !j.name.endsWith('_planks')) continue
+      totals[j.name] = (totals[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+    let left = keepBedPlanks
+    for (const w of Object.keys(totals).sort((a, b) => totals[b] - totals[a])) {
+      const k = Math.min(left, totals[w])
+      woodKeep[w] = k
+      left -= k
+    }
+  }
   let finished = null
   try {
     finished = (ctx && ctx.gearFinished) || null
@@ -165,6 +197,13 @@ function depositPlan(bot, ctx) {
     }
     let n = typeof i.count === 'number' ? i.count : 1
     if (n <= 0) continue
+    if (bedOwed && (i.name.endsWith('_wool') || i.name.endsWith('_bed'))) continue
+    if (bedOwed && i.name.endsWith('_planks')) {
+      const k = Math.min(woodKeep[i.name] || 0, n)
+      woodKeep[i.name] = (woodKeep[i.name] || 0) - k
+      n -= k
+      if (n <= 0) continue
+    }
     if (edible.has(i.name)) {
       const k = Math.min(keepFood, n)
       keepFood -= k
@@ -221,6 +260,13 @@ function chestSpotFor(bot, ctx) {
     const c = cell(s)
     if (!c) continue
     if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
+    // Bedroom cells never take a new chest (idkcraft-4nx, the equip roadside
+    // precedent): the bed step fails loud on blocked cells by design, so the
+    // placer avoids them. The adopt scan above still claims a standing chest
+    // wherever it is. Deferred require (beds->stockpile cycle).
+    try {
+      if (require('./beds').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
+    } catch (_) { /* untestable home: place as before */ }
     const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }
     if (below === 'air') continue

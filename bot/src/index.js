@@ -7,11 +7,12 @@ const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT,
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
 const { makeScout, findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { createGreeter } = require('./greet')
-const { addSwimExits } = require('./swim')
+const { addSwimExits, addSwimPrune } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced } = require('./behaviours/util')
+const unpin = require('./unpin')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -25,6 +26,7 @@ function brainTimeoutMs(env) {
 const bringMod = require('./behaviours/bring')
 const woolMod = require('./behaviours/wool')
 const bedMod = require('./behaviours/bed')
+const bedsMod = require('./behaviours/beds')
 const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
@@ -53,6 +55,7 @@ const BEHAVIOURS = {
   stay: homeMod.stay,
   comehome: homeMod.comehome,
   build: require('./behaviours/build'),
+  beds: require('./behaviours/beds'),
   light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
   forage: require('./behaviours/forage'),
@@ -375,6 +378,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.gohome = null
     ctx.stay = null
     ctx.inShelter = false
+    wakeBody(bot) // jr2.2: an order takes the body even at night
     // The gohome walk borrows canDig=false on this shared object; an order,
     // stop or fresh work that ends the walk mid-phase must give it back, or
     // every other behaviour loses digging until rejoin (revmux 8kc).
@@ -669,6 +673,11 @@ function fleeReflex(bot, ctx) {
         bot.health < ctx.lastTickHp - 0.5) ctx.lastHurtAt = Date.now()
       if (typeof bot.health === 'number') ctx.lastTickHp = bot.health
     } catch (_) { /* hurt tracking best-effort */ }
+    // Hover-arrest watchdog (idkcraft-1cj): first in the tick — a pinned
+    // body needs its decontact nudge in seconds, not after the brain. Sends
+    // at most one cloned packet per second, only on the airborne + storm +
+    // zero-disp signature; see unpin.js for the ceiling. Best-effort.
+    try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
     // canDig belongs to the gohome walk alone: any tick it does not own the
     // body gets the shared default back, so a mid-walk preemption (orders,
     // homing, death) cannot leak no-dig into other behaviours (revmux 8kc).
@@ -694,7 +703,7 @@ function fleeReflex(bot, ctx) {
       if (smov && typeof smov.allowParkour === 'boolean') smov.allowParkour = true
     } catch (_) { /* default best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } ctx.step = null; ctx.stepStatus = null; ctx.gohome = null; ctx.stay = null; ctx.inShelter = false; try { const mov = ctx.movements; if (mov && typeof mov.canDig === 'boolean') mov.canDig = true } catch (_) { /* reset best-effort */ } homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -716,7 +725,7 @@ function fleeReflex(bot, ctx) {
         if (target) {
           const state = buildState(bot, target, lastTargetPos)
           lastTargetPos = state._lastTargetPos
-          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
           if (ctx.scout) ctx.scout.tick()
           meleeReflex(bot, ctx, state)
           eatReflex(bot, ctx, state)
@@ -893,7 +902,7 @@ function fleeReflex(bot, ctx) {
         ctx.fightUnreachableTicks = 0
       }
       // every-tick hooks (no body cost) go here
-      if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+      if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
       if (ctx.scout) ctx.scout.tick()
       meleeReflex(bot, ctx, state)
       eatReflex(bot, ctx, state)
@@ -1221,7 +1230,7 @@ function fleeReflex(bot, ctx) {
     // the decision line stays the brain's opinion only. Upgrade path: sprint
     // only on flat segments: follow.js toggles it per tick on far level
     // pursuit (5vv), and runTick restores the default on every other tick.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
     destroy,
     rearm,
     setFollow: (name) => {
@@ -1255,6 +1264,10 @@ function fleeReflex(bot, ctx) {
       // run against the pinned order.home, and the shelter refresh lands in
       // startWork's release right after (revmux 01 core-1). No meet: no-op.
       homeMod.releaseMeet(bot, ctx)
+      // Same-site bed claims ride across the swap (idkcraft-ybt): a fresh
+      // adopt object at the same site would otherwise drop sleptA until the
+      // next sleep. A new site keeps its dropped claims (new bedrooms).
+      try { if (home) bedsMod.migrateClaims(ctx.home, home) } catch (_) { /* claims best-effort */ }
       ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
@@ -1813,10 +1826,14 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // mineflayer bot ever reaches this code.
     bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+    // Hover-arrest taps (idkcraft-1cj): teleport counter + move-packet clone
+    // for the watchdog. Same spot as the pathfinder taps: real bot only.
+    try { unpin.installUnpinTap(bot, bot._tickerCtx || {}) } catch (_) { /* unpin tap best-effort */ }
 
     const life = createLifecycle(ticker)
     bot.on('death', () => life.onDeath(bot))
     bot.on('respawn', () => life.onRespawn(bot))
+    bot.on('spawnReset', () => life.onSpawnReset(bot))
     bot.on('playerLeft', (player) => handlePlayerLeft(bot, ticker, player))
 
     // Our own quit() resolves back into the join loop; anything else is fatal
@@ -1949,6 +1966,19 @@ function advancePendingSearch(bot, ticker, ctx) {
         kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
         have: 0, announced: false, searchSkipFar: true,
       }
+      // The handover takes the body (revmux 02-review): same inline reset as
+      // the found branch — a stale stay must not survive, and a body asleep
+      // from the pending wait must wake.
+      ctx.step = null
+      ctx.stepStatus = null
+      ctx.gohome = null
+      ctx.stay = null
+      ctx.inShelter = false
+      wakeBody(bot)
+      try {
+        const mov = ctx.movements
+        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+      } catch (_) { /* reset best-effort */ }
       ctx.paused = false
       return
     }
@@ -1961,6 +1991,7 @@ function advancePendingSearch(bot, ticker, ctx) {
     ctx.gohome = null
     ctx.stay = null
     ctx.inShelter = false
+    wakeBody(bot) // jr2.2: an order takes the body even at night
     try {
       const mov = ctx.movements
       if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
@@ -2181,12 +2212,22 @@ function deathLine(bot) {
 function respawnLine(bot) {
   // At the 'respawn' packet bot.entity.position still holds the death
   // coords (mineflayer only moves it on the later position sync), so read
-  // bot.spawnPoint instead: this bot sets no bed/anchor, meaning respawn
-  // always lands on world spawn. Entity position is the fallback.
-  const dest = (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
+  // bot.spawnPoint instead. jr2.2: the bot sleeps in its bedroom bed, and
+  // respawn then lands at the claimed bed — bot.spawnPoint never learns it
+  // (mineflayer updates spawnPoint on the spawn_position packet alone), so
+  // the stay step's claim wins. Entity position is the fallback.
+  let bed = null
+  try {
+    const ctx = bot && bot._tickerCtx
+    // The claim alone never set the spawn: only a slept bed wins (revmux
+    // 01-review — a day-1 /kill before first sleep lands on world spawn).
+    bed = ctx && ctx.home && ctx.home.sleptA && (ctx.home.bedA || null)
+  } catch (_) { bed = null }
+  const dest = (bed && typeof bed.x === 'number' && { x: bed.x, y: bed.y, z: bed.z }) ||
+    (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
     (bot.entity && bot.entity.position)
   const at = dest ? `${Math.floor(dest.x)} ${Math.floor(dest.y)} ${Math.floor(dest.z)}` : 'unknown'
-  return `respawn at ${at}`
+  return bed && at !== 'unknown' ? `respawn at ${at} (bed)` : `respawn at ${at}`
 }
 
 function handleDeath(bot, ticker) {
@@ -2198,6 +2239,16 @@ function handleDeath(bot, ticker) {
 function handleRespawn(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+}
+
+// jr2.2: an order takes the body even at night — the server ignores
+// movement from a sleeping player until the client sends leave-bed, which
+// only bot.wake() sends (revmux 01-review). Awake bots pass through.
+function wakeBody(bot) {
+  try {
+    if (!bot || !bot.isSleeping || typeof bot.wake !== 'function') return
+  } catch (_) { return }
+  void (async () => { try { await bot.wake() } catch (_) { /* already awake: the event won */ } })()
 }
 
 function handlePlayerLeft(bot, ticker, player) {
@@ -2217,6 +2268,12 @@ function createLifecycle(ticker) {
       died = false
       metrics.events.inc({ event: 'respawn' })
       handleRespawn(bot, t)
+    },
+    onSpawnReset(bot) {
+      try {
+        const ctx = bot && bot._tickerCtx
+        if (ctx && ctx.home) delete ctx.home.sleptA // obstructed/mined: the spawn is world spawn again
+      } catch (_) { /* claim best-effort */ }
     },
   }
 }
@@ -2248,4 +2305,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }

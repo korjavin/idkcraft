@@ -3,7 +3,9 @@
 // Scout: pure perception + chat, no brain, no body cost. The bot already
 // walks with the player, so every few seconds it looks at the loaded chunks
 // around itself (mineflayer keeps them in memory — this sees through walls,
-// including ore underground) and reports new veins in chat.
+// including ore underground) and reports new veins in chat. Every visible
+// vein also refreshes finds memory (atl.16, needs opts.ctx) with its
+// exposure flag, so bring/forage know where ore lies open.
 //
 // Runs at the every-tick seam in index.js regardless of the brain decision,
 // so it keeps working while the bot is following, fighting, or idle.
@@ -430,7 +432,7 @@ function findNearest(bot, blockName, refY = null, exclude = null) {
   return wrapResult(bot, blockName, p)
 }
 
-function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000 } = {}) {
+function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000, ctx = null } = {}) {
   const oreIds = resolveIds(bot, ORE_NAMES)
   const seen = new Set()
   let lastScan = 0
@@ -446,21 +448,45 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
       return
     }
     const fresh = new Map() // base ore name -> new positions
+    // atl.16: everything visible this tick refreshes finds memory (a
+    // re-note updates exposed/at), not just the chat-fresh veins.
+    const spots = []
     for (const p of found) {
       const key = keyOf(p)
-      if (seen.has(key)) continue
-      seen.add(key)
+      const isNew = !seen.has(key)
+      if (isNew) seen.add(key)
+      // Chat needs names for new veins only; memory needs every visible one.
       let name = null
-      try {
-        const block = bot.blockAt(p)
-        name = block && block.name
-      } catch {
-        name = null
+      if (ctx || isNew) {
+        try {
+          const block = bot.blockAt(p)
+          name = block && block.name
+        } catch {
+          name = null
+        }
       }
-      if (!name) continue
+      if (ctx && name) {
+        let exposed = false
+        try {
+          exposed = isExposed(bot, p)
+        } catch {
+          exposed = false
+        }
+        spots.push({ x: p.x, y: p.y, z: p.z, name, exposed })
+      }
+      if (!isNew || !name) continue
       const base = baseName(name)
       if (!fresh.has(base)) fresh.set(base, [])
       fresh.get(base).push(p)
+    }
+    if (ctx && spots.length > 0) {
+      // Lazy require: resources.js already requires this file at the top,
+      // so a top-level require back would catch its half-built exports.
+      try {
+        require('../resources').noteSpots(ctx, spots, t)
+      } catch {
+        // memory never breaks scout
+      }
     }
     // ponytail: bounded memory, LRU if it ever matters.
     if (seen.size > maxSeen) seen.clear()

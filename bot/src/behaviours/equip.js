@@ -167,6 +167,12 @@ function tableFor(bot, ctx) {
     } catch (_) { below = null; cell = null }
     if (!below || !below.position || !below.name || below.name === 'air') continue
     if (cell && cell.name && cell.name !== 'air') continue
+    // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
+    // B-foot blocked the bed, which fails loud by design). Deferred require
+    // (beds->craftany->equip cycle); unreadable reads as placeable.
+    try {
+      if (require('./beds').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
+    } catch (_) { /* untestable home: place as before */ }
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
