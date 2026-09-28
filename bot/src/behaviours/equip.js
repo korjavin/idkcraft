@@ -33,6 +33,12 @@ const SCAFFOLD_FULL = 32
 const CRAFT_STALL_STRIKES = 3
 // Dig attempts before giving up (drops lost, no dirt near): fail, hold, rest.
 const DIG_STALL_STRIKES = 64
+// Consecutive digs without the kit growing (drops lost, ghost blocks):
+// fail dig-stall so the goal menu moves on (dj3: the prod lakebed grind).
+const DIG_NOGAIN_STRIKES = 5
+// One dig that never settles (hung driver): fail dig-stall on the
+// deadline instead of wedging the step (craft-timeout precedent).
+const DIG_TIMEOUT_MS = 10000
 
 function scaffoldCount(bot) {
   return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
@@ -124,11 +130,23 @@ function resetRunCounters(ctx) {
       delete st.walkWaits
       delete st.approachWaits
       delete st.made
+      delete st.noGain
+      delete st.lastScaffold
     }
   } catch (_) { /* reset best-effort */ }
 }
 
 function fail(ctx, item, err) {
+  // Stale async settlement (revmux dj3 round-1): equipDigInFlight is not in
+  // decide's preemption guard, so a facts-changed re-decide can switch
+  // steps mid-dig — a late fail must not mark the NEW step failed (the
+  // hold would poison it). Drop the report, but still spend the run
+  // counters so a later re-pick starts fresh. An unset step (unit tests,
+  // direct dispatch) fails loudly as before.
+  if (ctx.step && ctx.step !== 'equip') {
+    resetRunCounters(ctx)
+    return
+  }
   ctx.stepStatus = `failed:equip-${item}`
   resetRunCounters(ctx)
   try {
@@ -317,6 +335,49 @@ function digTargets(bot) {
   return names
 }
 
+// Cells that make a dig wet (swim.js executor-water minus lava): mining
+// through them is ~5x slower without aqua affinity, the bot must stand in
+// water, and the drop floats off — the prod 22:04 stall (dj3: lakebed
+// dirt, minutes of silent digging).
+const WET = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass'])
+// True when digging (x, y, z) means digging wet: water in the cell above
+// (a submerged target) or around it at target/head level (the hole
+// floods, or the bot stands in water to reach it). Null reads are dry
+// (unloaded chunk, unknown — the deep.js precedent: only confirmed
+// blocks decide).
+function wetDig(bot, x, y, z) {
+  if (!bot || typeof bot.blockAt !== 'function') return false
+  const ring = [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]
+  const fx = Math.floor(x)
+  const fy = Math.floor(y)
+  const fz = Math.floor(z)
+  for (const [dx, dy, dz] of ring) {
+    let n = null
+    try {
+      const b = bot.blockAt(new Vec3(fx + dx, fy + dy, fz + dz))
+      n = b && b.name
+    } catch (_) { n = null }
+    if (typeof n === 'string' && WET.has(n)) return true
+  }
+  return false
+}
+
+// A submerged body digs ~5x slower and every drop floats off, so no
+// candidate near it is worth starting (dj3 rig: a sunk body dug buried
+// lakebed stone the ring reads as dry, and only the deadline saved it).
+// Feet AND head both water: wading (feet only) still digs a dry bank
+// fine. Nulls read dry (unloaded chunk — the wetDig precedent).
+function bodyUnderwater(bot, bp) {
+  if (!bot || typeof bot.blockAt !== 'function' || !bp) return false
+  try {
+    const feet = bot.blockAt(new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z)))
+    const head = bot.blockAt(new Vec3(Math.floor(bp.x), Math.floor(bp.y) + 1, Math.floor(bp.z)))
+    const fn = feet && feet.name
+    const hn = head && head.name
+    return (typeof fn === 'string' && WET.has(fn)) && (typeof hn === 'string' && WET.has(hn))
+  } catch (_) { return false }
+}
+
 function equip(bot, ctx) {
   if (ctx.equipInFlight) return // exactly one op at a time
   const bp = bot.entity && bot.entity.position
@@ -433,7 +494,7 @@ function digTick(bot, ctx, st, bp) {
     found = bot.findBlocks && bot.findBlocks({
       matching: (b) => !!b && typeof b.name === 'string' && names.includes(b.name),
       maxDistance: 12,
-      count: 8,
+      count: 16, // the wet filter below shrinks the pool: scan wider
     })
   } catch (_) { found = null }
   if (!found || !found.length) {
@@ -448,6 +509,8 @@ function digTick(bot, ctx, st, bp) {
   const feetY = Math.floor(bp.y) - 1
   const feetZ = Math.floor(bp.z)
   const cands = []
+  let wetSkipped = 0
+  const sunk = bodyUnderwater(bot, bp)
   for (const v of found) {
     if (!v || typeof v.x !== 'number') continue
     if (Math.floor(v.x) === feetX && Math.floor(v.y) === feetY && Math.floor(v.z) === feetZ) continue
@@ -458,6 +521,7 @@ function digTick(bot, ctx, st, bp) {
       if (blk && typeof blk.name === 'string') name = blk.name
     }
     if (!name || !names.includes(name)) continue
+    if (sunk || wetDig(bot, v.x, v.y, v.z)) { wetSkipped++; continue } // dj3: never dig wet
     const hard = name === 'stone' || name === 'cobblestone'
     cands.push({ v, blk, name, hard, d: Math.hypot(v.x - bp.x, v.y - bp.y, v.z - bp.z) })
   }
@@ -466,6 +530,9 @@ function digTick(bot, ctx, st, bp) {
   const pick = cands.find((c) => canBreak(bot, blockOf(c), ctx))
   if (!pick) {
     if (cands[0]) { const d0 = denyReason(bot, blockOf(cands[0]), ctx); logDeny(blockOf(cands[0]), d0) } // idkcraft-drq: scaffold, not the hut
+    if (wetSkipped > 0) {
+      try { console.log(sunk ? `equip: body underwater, skipped ${wetSkipped} dig target(s)` : `equip: skipped ${wetSkipped} wet dig target(s)`) } catch (_) { /* logging best-effort */ }
+    }
     fail(ctx, 'blocks', new Error('no-dirt'))
     return
   }
@@ -494,8 +561,37 @@ function digTick(bot, ctx, st, bp) {
   }
   st.approachWaits = 0
   if (ctx.equipDigInFlight || typeof bot.dig !== 'function') return
+  // No-gain limit (dj3): consecutive digs that never grow the kit (drops
+  // lost, ghost digs) fail dig-stall so the menu moves on. The snapshot
+  // is taken at dig start and compared at the NEXT dig start, so pickups
+  // have a full dig cycle to land before a strike counts.
+  const kit = scaffoldCount(bot)
+  if (st.lastScaffold != null && kit <= st.lastScaffold) {
+    st.noGain = (st.noGain || 0) + 1
+    if (st.noGain >= DIG_NOGAIN_STRIKES) {
+      fail(ctx, 'blocks', new Error('dig-stall'))
+      return
+    }
+  } else {
+    st.noGain = 0
+  }
+  st.lastScaffold = kit
   ctx.equipDigInFlight = true
   st.digs++
+  try {
+    console.log(`equip digging ${pick.name} at ${Math.floor(block.x)} ${Math.floor(block.y)} ${Math.floor(block.z)} scaffold=${kit}`)
+  } catch (_) { /* logging best-effort */ }
+  // Exactly-once settlement (craftOne shape): a hung driver (ghost block,
+  // unloaded chunk) fails dig-stall on the deadline instead of wedging
+  // the step with the flag stuck — the menu moves on, the next pick
+  // retries with a fresh budget.
+  let settled = false
+  const finish = (fn) => {
+    if (settled) return
+    settled = true
+    ctx.equipDigInFlight = false
+    if (typeof fn === 'function') fn()
+  }
   const run = async () => {
     try {
       const target = pick.blk || block
@@ -506,13 +602,18 @@ function digTick(bot, ctx, st, bp) {
       }
       await bot.dig(target)
     } catch (err) {
-      ctx.equipDigInFlight = false
-      fail(ctx, 'blocks', err)
+      finish(() => fail(ctx, 'blocks', err))
       return
     }
-    ctx.equipDigInFlight = false
+    finish()
   }
-  void run()
+  const timeout = new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new Error('dig-stall')), DIG_TIMEOUT_MS)
+    if (t && typeof t.unref === 'function') t.unref()
+  })
+  void Promise.race([run(), timeout]).catch((err) => {
+    finish(() => fail(ctx, 'blocks', err))
+  })
 }
 
 module.exports = equip
