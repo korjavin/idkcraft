@@ -1,6 +1,7 @@
 'use strict'
 
 const mineflayer = require('mineflayer')
+const Vec3 = require('vec3')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, findCreeper, snapHostiles } = require('./perception')
@@ -1142,6 +1143,35 @@ function fleeReflex(bot, ctx) {
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
         applyDecision(decision, target, state)
+        // Stale-built revalidation (idkcraft-hlf): an adopt that ran while
+        // one plan cell read missing (mid-build, mid-repair, dark chunk)
+        // froze built=false, and the build menu goes infeasible on an empty
+        // remainder — so the build step that would flip it never runs and
+        // the work flow sits on the site stage forever. Re-check the
+        // remainder (minus given-up cells) after every work dispatch; a
+        // complete house flips here with the same effects as the build
+        // step's own done branch (table claim, save, announce). Post-apply
+        // on purpose: normal completions still flow through the build
+        // behaviour (which flips first), so only genuinely stuck flags —
+        // where build was never dispatched — ever reach this branch.
+        if (ctx.home && ctx.home.site && !ctx.home.built) {
+          let complete = false
+          try {
+            complete = buildMod.nextCellIdx(bot, ctx.home, ctx.buildSkip) === -1
+          } catch (_) { complete = false }
+          if (complete) {
+            try {
+              if (!ctx.home.table && buildMod.cellDone(bot, ctx.home, buildMod.blueprintFor(ctx.home)[0])) {
+                const t = buildMod.blueprintFor(ctx.home)[0]
+                ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
+              }
+            } catch (_) { /* claim best-effort */ }
+            ctx.home.built = true
+            try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+            const s = ctx.home.site
+            try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
+          }
+        }
         // The chain owns ctx.retreat only across its own dispatches: any other
         // step taking the tick ends the episode, so the next veto re-chains
         // instead of holding a stale pick (live 1tj: an unfinished flee

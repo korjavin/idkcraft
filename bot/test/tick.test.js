@@ -800,6 +800,12 @@ describe('work mode (epic rw4)', () => {
       for (const k of ['6,64,8', '6,65,8', '12,64,8', '12,65,8', '6,64,13', '6,65,13', '12,64,13', '12,65,13']) {
         cells.set(k, 'air')
       }
+      // The streamed house carries its ground ring (6bl: a lone door is
+      // foreign and no longer adopts): table + v1 ring0 around the door.
+      cells.set('12,64,9', 'crafting_table')
+      for (const k of ['8,64,8', '10,64,8', '11,64,8', '8,64,11', '9,64,11', '10,64,11', '11,64,11', '8,64,9', '11,64,9', '8,64,10', '11,64,10']) {
+        cells.set(k, 'oak_planks')
+      }
       const r3 = await ticker.tick()
       assert.ok(ctx.home, 'adopted on the retry')
       assert.deepEqual([ctx.home.site.x, ctx.home.site.y, ctx.home.site.z], [8, 64, 8])
@@ -856,6 +862,105 @@ describe('work mode (epic rw4)', () => {
       assert.equal(ctx.adoptDone, true, 'give-up on patience-out')
       assert.notEqual(r61.decision.source, 'local-idle', 'work proceeds right after the cap')
     } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(a5) work + complete house with a stale built=false: revalidation flips it (hlf)', async () => {
+    // Adopt ran while one cell read missing, then the house completed
+    // without build ever running (empty remainder = build infeasible, so
+    // the build done-branch is unreachable). The post-dispatch recheck
+    // flips the flag with the build done-branch effects: table claim,
+    // save, announce. buildRan stays 0: nothing else could have flipped it.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] // geared: rest is the only feasible step
+    const cells = new Map()
+    const paint = (x, y, z, name) => cells.set(`${x},${y},${z}`, name)
+    paint(12, 64, 9, 'crafting_table') // v1 table at site+(4,0,1)
+    for (const [x, z] of [[8, 8], [10, 8], [11, 8], [8, 11], [9, 11], [10, 11], [11, 11], [8, 9], [11, 9], [8, 10], [11, 10]]) {
+      paint(x, 64, z, 'oak_planks') // ring0
+      paint(x, 65, z, 'oak_planks') // ring1
+    }
+    paint(9, 64, 8, 'oak_door')
+    for (let dx = 0; dx < 4; dx++) {
+      for (let dz = 0; dz < 4; dz++) paint(8 + dx, 66, 8 + dz, 'oak_planks') // roof
+    }
+    bot.blockAt = (pt) => {
+      const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
+      return n ? { name: n } : null
+    }
+    bot.findBlocks = () => []
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.adoptDone = true
+    ctx.buildSkip = []
+    ctx.home = { site: { x: 8, y: 64, z: 8 }, v: 1, built: false, table: null }
+    const origRest = BEHAVIOURS.rest
+    const origBuild = BEHAVIOURS.build
+    let restRan = 0
+    let buildRan = 0
+    BEHAVIOURS.rest = () => { restRan++ }
+    BEHAVIOURS.build = () => { buildRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'rest', 'build infeasible on the empty remainder')
+      assert.equal(restRan, 1)
+      assert.equal(buildRan, 0, 'build never runs, yet the flag flips')
+      assert.equal(ctx.home.built, true, 'stale flag flips on the recheck')
+      assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, { x: 12, y: 64, z: 9 }, 'standing table claimed')
+      assert.ok(bot.chats.some((m) => m === 'home done at 8 64 8'), 'completion announced')
+    } finally {
+      BEHAVIOURS.rest = origRest
+      BEHAVIOURS.build = origBuild
+      ticker.destroy()
+    }
+  })
+
+  it('(a6) work + one cell still missing: no flip, no announce (hlf)', async () => {
+    // The recheck is exact: a genuinely unfinished house keeps its flag.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }]
+    const cells = new Map()
+    const paint = (x, y, z, name) => cells.set(`${x},${y},${z}`, name)
+    paint(12, 64, 9, 'crafting_table')
+    for (const [x, z] of [[8, 8], [10, 8], [11, 8], [8, 11], [9, 11], [10, 11], [11, 11], [8, 9], [11, 9], [8, 10], [11, 10]]) {
+      paint(x, 64, z, 'oak_planks')
+      paint(x, 65, z, 'oak_planks')
+    }
+    paint(9, 64, 8, 'oak_door')
+    for (let dx = 0; dx < 4; dx++) {
+      for (let dz = 0; dz < 4; dz++) {
+        if (dx === 0 && dz === 0) continue // one roof cell genuinely missing
+        paint(8 + dx, 66, 8 + dz, 'oak_planks')
+      }
+    }
+    bot.blockAt = (pt) => {
+      const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
+      return n ? { name: n } : null
+    }
+    bot.findBlocks = () => []
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.adoptDone = true
+    ctx.buildSkip = []
+    ctx.home = { site: { x: 8, y: 64, z: 8 }, v: 1, built: false, table: null }
+    const origRest = BEHAVIOURS.rest
+    const origBuild = BEHAVIOURS.build
+    let buildRan = 0
+    BEHAVIOURS.rest = () => {}
+    BEHAVIOURS.build = () => { buildRan++ }
+    try {
+      await ticker.tick()
+      assert.equal(ctx.home.built, false, 'unfinished house keeps its flag')
+      assert.ok(!bot.chats.some((m) => m === 'home done at 8 64 8'), 'no premature announce')
+      assert.equal(buildRan, 1, 'the missing cell goes through build, not the recheck')
+    } finally {
+      BEHAVIOURS.rest = origRest
+      BEHAVIOURS.build = origBuild
       ticker.destroy()
     }
   })
