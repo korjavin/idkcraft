@@ -117,10 +117,12 @@ function ownHeadBlockedAt(bot) {
 // drifting 0.6-wide body can reach. Rig 2026-09-28 (CLUSTER pocket, stance
 // frac-x 0.30): own column free, west lip at dy+2 with air below — the jump
 // wedged and failed no-apex over 20 ticks while the scan read free. A
-// neighbour threatens only when the body can drift into it (feet cell
-// enterable — a full-height wall never lets the body in, so chimney climbs
-// read free) with rock at head height above, and only inside the body's XZ
-// reach (half-width 0.3 + margin). The margin covers float noise at
+// neighbour threatens only when the body can drift into it (dy+0 AND dy+1
+// free — a dy+1-solid neighbour can never hold the 1.8 body, it is a wall
+// to slide along, so chimney climbs and feet-level notches read free)
+// with rock two above, and only inside the body's XZ reach (half-width 0.3
+// + margin). Diagonals need both orthogonal neighbours enterable too (a
+// wall in either seals the corner). The margin covers float noise at
 // exact-boundary stances plus sub-tick drift; it must stay well under 0.2,
 // past which centered stances (frac 0.5) would catch the side columns and
 // veto working chimney jumps.
@@ -138,8 +140,17 @@ function headBlockedAt(bot) {
       const dx = cx - fx
       const dz = cz - fz
       if (dx === 0 && dz === 0) continue
-      if (!solid(cellAt(bot, dx, 0, dz)) &&
-        (solid(cellAt(bot, dx, 1, dz)) || solid(cellAt(bot, dx, 2, dz)))) return true
+      // A diagonal lip is reachable only past both orthogonal neighbours:
+      // a wall in either seals the corner (revmux 01).
+      if (dx !== 0 && dz !== 0) {
+        if (solid(cellAt(bot, dx, 0, 0)) || solid(cellAt(bot, dx, 1, 0))) continue
+        if (solid(cellAt(bot, 0, 0, dz)) || solid(cellAt(bot, 0, 1, dz))) continue
+      }
+      // A lip needs TWO free cells below the rock (revmux 01): with dy+1
+      // solid the 1.8 body can never be inside the column at any jump
+      // phase, so that neighbour is a wall to slide along, never a bonk.
+      if (!solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz)) &&
+        solid(cellAt(bot, dx, 2, dz))) return true
     }
   }
   return false

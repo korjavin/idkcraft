@@ -159,3 +159,38 @@ describe('overhang head scan (oz8)', () => {
     assert.equal(recover.RECOVER_MENU.dig_up.feasible({ ...f, headBlocked: false }), false)
   })
 })
+
+describe('lip shape guards (oz8 revmux 01)', () => {
+  it('pressed stance at a feet-level notch (dy+1 solid): wall, not lip — pillar offered', () => {
+    // Revmux 01 core-1/body-1: a dy+1-solid neighbour can never hold the
+    // 1.8 body at any jump phase, so the pressed stance (frac 0.30, edge on
+    // the notch boundary) slides and climbs; vetoing it wedges a 1x1 shaft
+    // with no replacement (dig_up needs own blockage, walls=4 drops
+    // sidestep). Guard: must read free.
+    const solids = new Set([key(0, 60, 0), key(-1, 62, 0), key(-1, 63, 0)])
+    const bot = worldBot(solids, KIT.slice(), [0.3, 61, 0.5])
+    const ctx = { stuck: { by: 'no-displacement', goal: ABOVE, key: 'pit' }, brain: null }
+    const f = recover.recoverFacts(bot, ctx, null, null)
+    assert.equal(f.headBlocked, false, 'the notch is a wall to slide along')
+    assert.equal(f.ownHeadBlocked, false)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), true, 'the climb stays offered')
+  })
+
+  it('diagonal lip behind a sealed corner reads free; open corner still vetoes', () => {
+    // The body reaches a diagonal column only past both orthogonal
+    // neighbours: a wall in either seals the corner.
+    const sealed = new Set([key(0, 60, 0), key(-1, 63, -1), key(-1, 61, 0)])
+    const botSealed = worldBot(sealed, KIT.slice(), [0.3, 61, 0.3])
+    const ctx = { stuck: { by: 'no-displacement', goal: ABOVE, key: 'pit' }, brain: null }
+    const fs = recover.recoverFacts(botSealed, ctx, null, null)
+    assert.equal(fs.headBlocked, false, 'west wall seals the diagonal corner')
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(fs), true)
+    // Same diagonal lip with both orthogonals enterable: reachable, vetoed.
+    const open = new Set([key(0, 60, 0), key(-1, 63, -1)])
+    const botOpen = worldBot(open, KIT.slice(), [0.3, 61, 0.3])
+    const fo = recover.recoverFacts(botOpen, ctx, null, null)
+    assert.equal(fo.headBlocked, true, 'open corner leaves the diagonal lip reachable')
+    assert.equal(fo.ownHeadBlocked, false)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(fo), false)
+  })
+})
