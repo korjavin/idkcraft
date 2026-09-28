@@ -152,7 +152,12 @@ const MENU = {
     // the hunt owns the body and must not run past dark (bring dusk-cancels
     // self orders, but the step never opens one at night in the first place).
     // Non-v2 homes read beds='both' (nothing owed), so no version check here.
-    feasible: (facts) => facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'),
+    // 9kd: two sheepless hunts in one MC day latch beds off until tomorrow
+    // (death-respawns release the stepFail hold, so it cannot hold this).
+    feasible: (facts, bot, ctx) => {
+      if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
+      try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
+    },
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
   },
@@ -1089,6 +1094,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      try { if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'beds: no sheep today' } catch (_) { /* wording best-effort */ }
       return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'

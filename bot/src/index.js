@@ -14,6 +14,7 @@ const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
+const dangerMod = require('./danger')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -2452,6 +2453,9 @@ function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
+  // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
+  // search rings never walk the same monument cell twice in a day.
+  try { dangerMod.markWaterDeath(bot, bot && bot._tickerCtx) } catch (_) { /* memory best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {
