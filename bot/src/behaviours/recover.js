@@ -684,7 +684,10 @@ function pillarUpRun(bot, ctx) {
     // not a landing).
     if (st.startFloor !== null && Math.floor(bp.y) < st.startFloor) {
       st.belowFloor = (st.belowFloor || 0) + 1
-      if ((bot.entity && bot.entity.onGround) || st.belowFloor >= 2) st.startFloor = Math.floor(bp.y)
+      if ((bot.entity && bot.entity.onGround) || st.belowFloor >= 2) {
+        st.startFloor = Math.floor(bp.y)
+        st.belowFloor = 0 // every re-seed needs its own confirmation
+      }
     } else {
       st.belowFloor = 0
     }

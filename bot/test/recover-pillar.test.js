@@ -591,6 +591,48 @@ describe('pillar_up descending floor anchor (idkcraft-cm0.2)', () => {
     assert.equal(ctx.recovery.st.startFloor, 61, 'two airborne dips re-seed down')
   })
 
+  it('non-consecutive dips do not re-seed (counter resets at seed)', () => {
+    // Dip, back at the seed, dip again: the middle sample clears the
+    // counter, so the second dip is a fresh first strike, not a re-seed.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    bot.entity.onGround = false
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62)
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62)
+    bot.entity.position = pos(0.5, 62.1, 0.5) // back at the seed: reset
+    recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62, 'split dips never confirm each other')
+  })
+
+  it('every airborne re-seed needs its own confirmation (counter restarts)', () => {
+    // After one two-dip re-seed, a lone dip below the new seed must not
+    // re-seed again at once — otherwise a single correction blip after a
+    // real descent walks the anchor into the floor and fakes a done.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 63.0, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    bot.entity.onGround = false
+    const ctx = pillarCtx({ phase: 'jump', startFloor: null })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 63)
+    bot.entity.position = pos(0.5, 62.5, 0.5)
+    recover.run(bot, ctx)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62, 'two dips re-seed')
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 62, 'one dip after a re-seed is not enough')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.startFloor, 61, 'two dips confirm the next re-seed')
+  })
+
   it('a rise above the seeded floor never re-seeds up (normal case untouched)', () => {
     // Grounded arm: the jump's own rise must not chase the anchor up —
     // the timer times that rise against the seeded floor.
