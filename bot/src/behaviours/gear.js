@@ -837,11 +837,14 @@ function fillTick(bot, ctx, next) {
     r.fillWalkTicks = (r.fillWalkTicks || 0) + 1
     if (r.fillWalkTicks > FILL_WALK_TICKS) {
       // Unreachable cell: try the next one, never fail the ladder — water
-      // behind a wall reads as no water (skip, don't stall).
+      // behind a wall reads as no water (skip, don't stall). The walk
+      // goal stops too (revmux z80-01 core-1): leaving it live steers
+      // the head through the patience hold and the next retarget.
       r.fillTried[t.key] = true
       r.fillTarget = null
       r.fillWalkKey = null
       r.fillWalkTicks = 0
+      stopSteering(bot, ctx)
     }
     return
   }

@@ -86,6 +86,24 @@ describe('z80: stale steering stops before look-dependent ops', () => {
     assert.equal(bot._items.filter((i) => i && i.name === 'bucket').length, 1, 'the craft itself still fires')
   })
 
+  it('the fill walk give-up stops its own goal (revmux z80-01 core-1)', () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'bucket', count: 1 }],
+      water: [[30, 64, 0]],
+      levels: { '30,64,0': '0' },
+    })
+    bot.pathfinder.goal = { x: 30, y: 64, z: 0 } // the walk goal, still live
+    const ctx = { home: home(), stepStatus: 'running', lastGoalKey: '' }
+    for (let i = 0; i < 21; i++) {
+      ctx.stepStatus = 'running'
+      gear(bot, ctx)
+      bot.pathfinder.goal = { x: 30, y: 64, z: 0 } // the body never arrives
+    }
+    assert.deepEqual(bot.calls.goals[bot.calls.goals.length - 1], null, 'give-up clears the walk goal')
+    assert.equal(ctx.lastGoalKey, '', 'key reset for the retarget')
+    assert.equal(ctx.stepStatus, 'running', 'still never fails the ladder')
+  })
+
   it('no live goal leaves the pathfinder untouched (key still resets)', async () => {
     const bot = mockBot({
       items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_ingot', count: 3 }],
