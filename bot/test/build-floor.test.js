@@ -23,6 +23,10 @@ function pos(x, y, z) {
 function makeWorld() {
   const cells = new Map()
   const key = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
+  // Collision mirror (revmux 01 core-1): the real client reports an empty
+  // bounding box for air-likes and collisionless flora/decor, whatever
+  // the name rule lists.
+  const NO_COLLISION = new Set(['air', 'cave_air', 'void_air', 'brown_mushroom', 'red_mushroom', 'lily_of_the_valley', 'white_carpet'])
   return {
     set(x, y, z, name) { cells.set(key(x, y, z), name) },
     get(x, y, z) { return cells.get(key(x, y, z)) },
@@ -32,7 +36,7 @@ function makeWorld() {
       const fz = Math.floor(p.z)
       const k = key(fx, fy, fz)
       const name = cells.has(k) ? cells.get(k) : (fy <= 63 ? 'dirt' : 'air')
-      return { name, boundingBox: name === 'air' ? 'empty' : 'block', position: { x: fx, y: fy, z: fz } }
+      return { name, boundingBox: NO_COLLISION.has(name) ? 'empty' : 'block', position: { x: fx, y: fy, z: fz } }
     },
   }
 }
@@ -114,6 +118,13 @@ describe('1c4 fill done rule: solid ground counts, dips do not', () => {
       assert.equal(check(n), false, n)
     }
   })
+  it('unlisted flora without collision reads missing too (revmux 01)', () => {
+    // Mushrooms, lilies and carpets are not in REPLACEABLE: the
+    // collision half of the rule catches them.
+    for (const n of ['brown_mushroom', 'red_mushroom', 'lily_of_the_valley', 'white_carpet']) {
+      assert.equal(check(n), false, n)
+    }
+  })
   it('an unreadable cell reads missing, never done', () => {
     const bot = mockBot(makeWorld())
     bot.blockAt = () => null
@@ -159,6 +170,37 @@ describe('1c4 build lays the floor before the walls', () => {
     const ring0 = BLUEPRINT_V2.findIndex((c) => c.kind === 'planks' && c.dy === 0)
     assert.equal(build.nextCellIdx(bot, home, []), ring0, 'the patched dip was the only open floor cell')
     assert.deepEqual(ctx.buildSkip, [], 'bedroom floor never trips the doorway-interior guard')
+  })
+
+  it('a lily in the dip is dug once, then the patch lands (revmux 01)', async () => {
+    // Unlisted flora refuses the patch like a wall occupier; the fill
+    // branch clears anything collisionless and retries in one flight.
+    const world = makeWorld()
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_planks', count: 40 }, { name: 'crafting_table', count: 1 }],
+      at: pos(7, 64, 4),
+    })
+    let attempts = 0
+    bot.placeBlock = async (ref, face) => {
+      bot.calls.places.push([ref, face])
+      attempts++
+      if (attempts === 1) throw new Error('refused')
+      const rp = (ref && ref.position) || ref
+      world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+    }
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    world.set(s.x + 5, s.y, s.z + 1, 'crafting_table') // table stands
+    world.set(s.x + 1, s.y - 1, s.z + 4, 'lily_of_the_valley')
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    assert.equal(build.nextCellIdx(bot, home, []), 1)
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // refuse -> dig -> retry lands
+    await settle()
+    assert.deepEqual(bot.calls.digs, ['lily_of_the_valley'])
+    assert.equal(world.get(s.x + 1, s.y - 1, s.z + 4), 'oak_planks')
+    assert.equal(ctx.buildFails, 0)
+    assert.deepEqual(ctx.buildSkip, [])
   })
 
   it('all five dips patch and the house completes with no skips', async () => {
@@ -234,5 +276,22 @@ describe('1c4 adopt sees the floor', () => {
     assert.equal(build.nextCellIdx(bot, dipped, []), 1, 'repair starts at the floor')
     world.set(site.x + 1, site.y - 1, site.z + 4, 'oak_planks') // patched
     assert.equal(goal.adoptHome(bot).built, true)
+  })
+
+  it('dirt floor adds no quorum: a foreign door with a table and two columns rejects (revmux 01)', () => {
+    // Door + table + 4 corner planks = 6 kind matches; the always-done
+    // dirt floor must not spend 5 more quorum points on mere terrain.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    world.set(13, 64, 10, 'oak_door')
+    world.set(13, 65, 10, 'oak_door')
+    world.set(site.x + 5, site.y, site.z + 1, 'crafting_table')
+    for (const [cx, cz] of [[0, 0], [6, 5]]) {
+      world.set(site.x + cx, site.y, site.z + cz, 'oak_planks')
+      world.set(site.x + cx, site.y + 1, site.z + cz, 'oak_planks')
+    }
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
   })
 })

@@ -136,6 +136,31 @@ function isSolidGround(name) {
   return !isReplaceable(name)
 }
 
+// Collision half of the floor rule (revmux 01 core-1/body-1): the name
+// rule cannot enumerate every flora (mushrooms, lilies, carpets...), but
+// everything without collision shares the empty bounding box — the same
+// solidity signal findRef uses. Unreadable reads missing, never done.
+function hasCollision(bot, p) {
+  try {
+    const b = bot.blockAt(p)
+    return !!b && b.boundingBox !== 'empty'
+  } catch (_) { return false }
+}
+
+// A fill dip can hold unlisted flora the name rule never heard of: any
+// NAMED block without collision clears like flora so the patch lands
+// (air-likes and water are placeable as-is and never need a dig). Walls
+// keep the strict REPLACEABLE allowlist.
+function clearableFillGround(bot, p, cell) {
+  if (!cell || cell.kind !== 'fill') return false
+  try {
+    const b = bot.blockAt(p)
+    if (!b || typeof b.name !== 'string') return false
+    if (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air' || b.name === 'water') return false
+    return b.boundingBox === 'empty'
+  } catch (_) { return false }
+}
+
 function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
@@ -176,7 +201,7 @@ function cellDone(bot, home, cell) {
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
-  if (cell.kind === 'fill') return isSolidGround(name)
+  if (cell.kind === 'fill') return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
   return name.endsWith('_planks')
 }
 
@@ -473,7 +498,7 @@ function build(bot, ctx, target, state) {
       const occupier = blockNameAt(bot, p)
       if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
-      } else if (occupier != null && occupier !== 'air' && isReplaceable(occupier)) {
+      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)

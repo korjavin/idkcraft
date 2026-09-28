@@ -503,7 +503,10 @@ function tryAdoptDoor(bot, at) {
   let kindred = 0
   for (const cell of plan) {
     try {
-      if (buildMod.cellDone(bot, home, cell)) kindred++
+      // Fill cells carry no authorship evidence (revmux 01 body-2): dirt
+      // under a foreign door reads done, so counting them spends 5 of the
+      // 10 quorum points on mere terrain.
+      if (cell.kind !== 'fill' && buildMod.cellDone(bot, home, cell)) kindred++
     } catch (_) { /* unscannable reads as mismatch */ }
   }
   if (kindred < ADOPT_QUORUM) return null // foreign door: keep looking
