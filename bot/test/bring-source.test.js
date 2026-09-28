@@ -106,6 +106,8 @@ function seedMemory(ctx, x, y, z, name, opts = {}) {
 
 const PICK = [{ name: 'stone_pickaxe', count: 1 }]
 
+const tick2 = () => new Promise((r) => setImmediate(() => setImmediate(r)))
+
 describe('bring source choice (idkcraft-atl.15)', () => {
   it('(1) remembered exposed ore at 40 beats buried ore 5 down, no model ask', async () => {
     const names = { '0,59,0': 'iron_ore', '40,64,0': 'iron_ore', '41,64,0': 'air' }
@@ -267,6 +269,133 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     await ticker.tick()
     assert.equal(seen.length, 1)
     assert.ok(bot.lines.includes('going for 3 iron_ore, 3 blocks down (digging)'), `lines: ${bot.lines}`)
+  })
+
+  it('far exposed with empty 48: only option, bare line, no ask (revmux 01 core-1)', async () => {
+    const names = {
+      '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('dig_buried') // must never be consulted
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for iron…'])
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    assert.equal(seen.length, 0, 'a single option never asks')
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('(exposed)') || l.includes('(digging)')), `lines: ${bot.lines}`)
+    assert.equal(bot._tickerCtx.bring.exposed, true)
+  })
+
+  it('buried 48-best without pickaxe tier: short pack still hands over (revmux 01 core-3)', () => {
+    const names = {
+      '0,59,0': 'coal_ore',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0)], names, items: [{ name: 'coal', count: 2 }], playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me coal 5')
+    assert.deepEqual(bot.lines, ['only 2 coal, coming'])
+    assert.equal(bot._tickerCtx.bring.kind, 'item')
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'no deferred search without a harvest tool')
+  })
+
+  it('stop mid-source-ask touches nothing: no chat, no commit (revmux 01 core-2)', async () => {
+    let resolveAsk = null
+    const brain = {
+      decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
+      source: 'test',
+      ask: () => new Promise((res) => { resolveAsk = res }),
+    }
+    const names = { '0,61,0': 'iron_ore', '30,64,0': 'iron_ore', '31,64,0': 'air' }
+    const bot = mockBot({ spots: [pos(0, 61, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot, brain)
+    const ctx = bot._tickerCtx
+    seedMemory(ctx, 30, 64, 0, 'iron_ore')
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    const p = bring(bot, ctx, null, {})
+    await tick2()
+    assert.ok(resolveAsk, 'ask in flight')
+    ticker.stop()
+    resolveAsk('dig_buried')
+    await p
+    assert.equal(ctx.bring, null)
+    assert.deepEqual(bot.lines, [])
+  })
+
+  it('pending verdict retired mid-ask commits nothing (revmux 01 core-2)', async () => {
+    let resolveAsk = null
+    const brain = {
+      decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }),
+      source: 'test',
+      ask: () => new Promise((res) => { resolveAsk = res }),
+    }
+    const names = {
+      '0,60,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 60, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    const t = ticker.tick()
+    await tick2()
+    assert.ok(resolveAsk, 'verdict ask in flight')
+    handleChat(bot, ticker, 'P', 'stop')
+    resolveAsk('walk_exposed')
+    await t
+    assert.ok(!bot._tickerCtx.bring, 'retired verdict commits nothing')
+    assert.equal(bot._tickerCtx.pendingSearch, null)
+    assert.ok(!bot.lines.some((l) => l.startsWith('going for')), `lines: ${bot.lines}`)
+  })
+
+  it('re-find reuses the far verdict until moved or edge-changed (revmux 01 body-3)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar')
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.ok(ctx.bring.farCache, 'verdict cached')
+    // Next unit from the same spot: no rescan, same-tick commit.
+    let scans = 0
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => { scans++; return inner(o) }
+    ctx.bring.pos = null
+    ctx.bring.phase = 'find'
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'cached verdict commits same tick')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(scans, 1, 'only the sync 48 scan ran')
+    // Walked off: the cache drops and the shells run again.
+    names['248,64,0'] = 'stone'
+    names['296,64,0'] = 'stone'
+    names['328,64,0'] = 'stone'
+    names['360,64,0'] = 'stone'
+    bot.entity.position = pos(200, 64, 0)
+    ctx.bring.pos = null
+    ctx.bring.phase = 'find'
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar', 'moved-off cache rescans')
+    // Back home but the edge shrank: the cache drops, buried verdict, no ask.
+    delete names['48,64,0']
+    delete names['96,64,0']
+    delete names['128,64,0']
+    delete names['160,64,0']
+    bot.entity.position = pos(0, 64, 0)
+    ctx.bring.pos = null
+    ctx.bring.phase = 'find'
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [0, 59, 0])
   })
 
   it('walk to a memory target tolerates the unloaded chunk, re-finds on a loaded mismatch', async () => {

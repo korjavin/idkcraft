@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, isExposed, ORE_NAMES } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES } = require('./scout')
 const { countItems } = require('../perception')
 const resources = require('../resources')
 const fightMod = require('./fight')
@@ -323,7 +323,11 @@ const SOURCE_COST = {
   deepDigDepth: 4,
   shaftPenaltySec: 25,
   memoryFactor: 1.5,
-  budget: 160, // == scout SEARCH_MAX, the loaded-world edge
+  budget: 160, // == scout SEARCH_MAX, the loaded-world edge. Known gap
+  // (revmux 01 body-2, follow-up bead): farShellDone and the within96
+  // pool stop the shells at 96 whenever nearer ore exists, so live
+  // exposed past 96 is found only when the inner shells are empty —
+  // exposed-aware shells need a scout change shared with gather/find-me.
   clearRatio: 0.5, // cheaper than half the rival: a clear winner, no model
 }
 
@@ -387,10 +391,11 @@ function memoryNames(bot, requestName) {
 }
 
 // Best exposed remembered find (candidate (b)): nearest exposed===true
-// memory item for the request, validated live when its chunk is loaded
-// (name still there, still exposed, not protected), trusted on the flag
-// when unloaded (the atl.16 read rule). Without atl.16 every item lacks
-// the flag and the candidate stays absent — the beads are independent.
+// memory item for the request, read through the shared resources.exposedOf
+// (atl.16): a loaded chunk re-verifies live (name still there, still
+// exposed), an unloaded chunk trusts the flag, a mined-out loaded cell
+// reads undefined and drops the candidate. The protected pre-check stays
+// bring-side, the same rule as the live loop.
 function memoryExposed(bot, ctx, bp, requestName, skip) {
   try {
     const names = memoryNames(bot, requestName)
@@ -398,17 +403,15 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     const hasSkip = skip && typeof skip.has === 'function'
     const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || (hasSkip && skip.has(skipKey(it))))
     if (!item || typeof item.x !== 'number') return null
-    let loaded = null
-    try { loaded = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) }) } catch (_) { loaded = null }
-    if (loaded) {
-      if (!loaded.name || loaded.name !== item.name) return null // mined out: stale record
-      let still = false
-      try { still = isExposed(bot, loaded.position || item) } catch (_) { still = false }
-      if (!still) return null // closed up since noted: no longer exposed
-      let pre = null
-      try { pre = denyReason(bot, loaded, ctx) } catch (_) { pre = null }
-      if (pre === 'protected') return null // owner build: same rule as the live loop
-    }
+    let now = false
+    try { now = resources.exposedOf(bot, item) } catch (_) { now = false }
+    if (now !== true) return null // closed up or mined out since noted
+    let pre = null
+    try {
+      const blk = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) })
+      pre = blk && denyReason(bot, blk, ctx)
+    } catch (_) { pre = null }
+    if (pre === 'protected') return null // owner build: same rule as the live loop
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
     return {
@@ -506,6 +509,33 @@ async function chooseBringSource(brain, text, exposed, buried, o) {
       : 'error'
     return fail(reason)
   }
+}
+
+// Cached far verdict (revmux 01 body-3): without it every dug unit re-runs
+// the full sliced shells while the bot stands still. Valid while the bot
+// is still near the cache origin with the same loaded edge (the same
+// invalidation stepFarSearch itself uses), the hit re-verified live and
+// re-costed from the live position. Returns the hit, null for a cached
+// empty verdict, or undefined when there is no usable cache.
+function takeFarCache(bot, o, bp) {
+  try {
+    const c = o && o.farCache
+    if (!c || typeof c.x !== 'number') return undefined
+    if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > 48) return undefined
+    if (loadedSearchRadius(bot) !== c.edge) return undefined
+    if (!c.hit) return null
+    if (o.skip && typeof o.skip.has === 'function' && o.skip.has(skipKey(c.hit.pos))) return undefined
+    let now = false
+    try {
+      now = resources.exposedOf(bot, {
+        x: c.hit.pos.x, y: c.hit.pos.y, z: c.hit.pos.z, name: c.hit.name, exposed: true,
+      })
+    } catch (_) { now = false }
+    if (now !== true) return undefined // mined out or closed up: rescan
+    const distH = Math.hypot(c.hit.pos.x - bp.x, c.hit.pos.z - bp.z)
+    const dist = Math.hypot(c.hit.pos.x - bp.x, c.hit.pos.y - bp.y, c.hit.pos.z - bp.z)
+    return { ...c.hit, distH, dist, cost: walkCost(distH) }
+  } catch (_) { return undefined }
 }
 
 // Full verdict for the find and searchfar phases: sync-commit when
@@ -1128,8 +1158,19 @@ async function bring(bot, ctx, target, state) {
         await enterSearch(bot, ctx, o, `only got ${o.have} ${o.drop}`)
         return
       }
-      // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb),
-      // one order holds one cursor, no new scan starts while it runs.
+      // A cached far verdict skips the rescan (body-3); without one the
+      // 96/160 shells run sliced across ticks (amb), one order holding
+      // one cursor, no new scan starting while it runs.
+      const cachedEmpty = takeFarCache(bot, o, bp)
+      if (cachedEmpty !== undefined) {
+        const exposedEmpty = bestExposed(cachedEmpty, o.memKnown || null)
+        if (!exposedEmpty) {
+          await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+          return
+        }
+        await verdictSource(bot, ctx, o, exposedEmpty, null)
+        return
+      }
       o.search = startFarSearch(bot, o.name)
       if (o.search === 'unknown') {
         refuse(bot, ctx, `unknown block: ${o.name}`)
@@ -1163,6 +1204,13 @@ async function bring(bot, ctx, target, state) {
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
       o.memKnown = memoryInBudget(mem, o.buried)
     }
+    // A cached far verdict skips the rescan (body-3): the buried stash
+    // and memory above are always re-derived fresh and cheap.
+    const cachedBuried = takeFarCache(bot, o, bp)
+    if (cachedBuried !== undefined) {
+      await verdictSource(bot, ctx, o, bestExposed(cachedBuried, o.memKnown || null), o.buried)
+      return
+    }
     o.search = startFarSearch(bot, o.name)
     if (o.search === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
@@ -1192,10 +1240,13 @@ async function bring(bot, ctx, target, state) {
     // loses to the nearer stashed 48 hit — or stands alone when 48 was
     // empty. The verdict weighs it against the stashed memory (b).
     const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result) : null
-    const buried = o.buried || (r.result ? buriedCand(bp, r.result) : null)
+    const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null)
     const exposed = bestExposed(far, o.memKnown || null)
+    const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
+    try {
+      o.farCache = { x: bp.x, y: bp.y, z: bp.z, edge, hit: far }
+    } catch (_) { /* cache best-effort */ }
     if (!exposed && !buried) {
-      const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
       await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
       return
     }

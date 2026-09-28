@@ -1526,6 +1526,16 @@ function fleeReflex(bot, ctx) {
       }
       const bp0 = bot.entity && bot.entity.position
       if (res.exposed === false && bp0) {
+        // No pickaxe tier, no dig and no walk either (harvest needs the
+        // tier for both): refuse synchronously so a short pack still hands
+        // over — the deferred verdicts below have no plan in scope
+        // (revmux 01 core-3). Order mirrors startBlockOrder + fallback.
+        if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+          clearStuck()
+          if (plan && plan.have > 0) return openPackOrder()
+          const tier = bringMod.requiredTier(res.name)
+          return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+        }
         // Buried 48-best (atl.15): the far shells may see exposed ore and
         // memory may know some — the buried hit is stashed as the dig
         // candidate instead of committing to the shaft at once.
@@ -1984,7 +1994,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // (the tick awaits this); the cache rides onto the new order.
       const stash = p.buried && p.buried.position ? p.buried : null
       const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result) : null
-      const buried = stash ? bringMod.buriedCand(bp0, stash) : (r.result ? bringMod.buriedCand(bp0, r.result) : null)
+      const buried = stash ? bringMod.buriedCand(bp0, stash) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
@@ -2000,6 +2010,21 @@ async function advancePendingSearch(bot, ticker, ctx) {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
         }
+        try {
+          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: null }
+        } catch (_) { /* cache best-effort */ }
+        // The handover takes the body (jr2.2): a stale stay must not
+        // survive, and a body asleep from the pending wait must wake.
+        ctx.step = null
+        ctx.stepStatus = null
+        ctx.gohome = null
+        ctx.stay = null
+        ctx.inShelter = false
+        wakeBody(bot)
+        try {
+          const mov = ctx.movements
+          if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+        } catch (_) { /* reset best-effort */ }
         ctx.paused = false
         return
       }
@@ -2035,11 +2060,17 @@ async function advancePendingSearch(bot, ticker, ctx) {
         const mov = ctx.movements
         if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
       } catch (_) { /* reset best-effort */ }
+      wakeBody(bot) // jr2.2: an order takes the body even at night
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
       const win = pick === 'buried' ? buried : exposed
       const rival = pick === 'buried' ? exposed : buried
       bot.chat(startBlockOrder(bot, ctx, p, bringMod.choiceRes(win, rival, bp0)))
-      if (cache.sourceAsked && ctx.bring) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
+      if (ctx.bring) {
+        if (cache.sourceAsked) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
+        try {
+          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far }
+        } catch (_) { /* cache best-effort */ }
+      }
       return
     }
     if (!r.result) {
