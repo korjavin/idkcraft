@@ -85,19 +85,25 @@ function hasShears(bot) {
   return !!shearsInPack(bot)
 }
 
-// First wool stack in the pack (findEdible shape): the exact color when
-// set, else any *_wool. Null when the pack holds none.
-function findWoolInPack(bot, color) {
+// Best wool color in the pack (findEdible shape): the *_wool name with
+// the highest count, first-max wins ties. Null when the pack holds no
+// wool. Bare-family orders toss this color; the hunt itself never
+// narrows (any sheep will do), so no first-color lock can strand them.
+function topWoolColor(bot) {
   try {
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    const counts = new Map()
     if (Array.isArray(items)) {
       for (const i of items) {
-        if (!i || typeof i.name !== 'string') continue
-        if (color ? i.name === `${color}_wool` : i.name.endsWith('_wool')) {
-          return { name: i.name, count: typeof i.count === 'number' ? i.count : 1 }
-        }
+        if (!i || typeof i.name !== 'string' || !i.name.endsWith('_wool')) continue
+        counts.set(i.name, (counts.get(i.name) || 0) + (typeof i.count === 'number' ? i.count : 1))
       }
     }
+    let best = null
+    for (const [name, count] of counts) {
+      if (!best || count > best.count) best = { name, count }
+    }
+    return best
   } catch (_) { /* no inventory: hunt */ }
   return null
 }
@@ -111,4 +117,4 @@ module.exports.parseWoolRequest = parseWoolRequest
 module.exports.sheepWool = sheepWool
 module.exports.shearsInPack = shearsInPack
 module.exports.hasShears = hasShears
-module.exports.findWoolInPack = findWoolInPack
+module.exports.topWoolColor = topWoolColor

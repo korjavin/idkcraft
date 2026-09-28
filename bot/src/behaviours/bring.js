@@ -365,10 +365,10 @@ function animalDist(bp, epos) {
 // Nearest passive animal within 48; when drop is set (second+ kill of one
 // order) only animals dropping it, so one order tosses one food kind.
 // opts (did.3 wool) narrows the hunt: { prey, skipSheared, color,
-// colorStrict, skipIds }. Without opts the food shape is byte-identical
-// (forage.js relies on it). A known wrong color never matches; an
-// unreadable one matches unless colorStrict (an explicitly ordered color
-// is a promise, a converged one must never strand the order).
+// skipIds }. Without opts the food shape is byte-identical (forage.js
+// relies on it). A color filter is strict — it only ever carries an
+// explicitly ordered color, which is a promise (bare families pass none
+// and hunt any sheep).
 function findAnimal(bot, drop, opts) {
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return null
@@ -386,7 +386,7 @@ function findAnimal(bot, drop, opts) {
       if (o.skipSheared || o.color) {
         const w = woolMod.sheepWool(bot, e)
         if (o.skipSheared && w.sheared) continue
-        if (o.color && w.color !== o.color && (w.color || o.colorStrict)) continue
+        if (o.color && w.color !== o.color) continue
       }
     }
     const d = animalDist(bp, e.position)
@@ -589,13 +589,13 @@ function walkSearch(bot, ctx, o) {
 }
 
 // Shared n7k prey find (food + did.3 wool): wool narrows to unsheared
-// sheep of one color (requested, or the first color gathered). The wool
-// drop converges at pickup, never here.
+// sheep — to the requested color when one was ordered, else any sheep
+// (bare families never narrow: the toss color is picked at pickup).
 async function findFood(bot, ctx, o) {
   const wool = (o.kind || 'block') === 'wool'
-  const color = wool ? (o.color || woolMod.dropColor(o.drop)) : null
+  const color = wool ? (o.color || null) : null
   const res = wool
-    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, colorStrict: !!o.color, skipIds: o.shearedIds })
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds })
     : findAnimal(bot, o.drop || null)
   if (!res) {
     const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
@@ -710,11 +710,11 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     return
   }
   // Walked over the drops: the inventory count is the truth. Wool with
-  // no color yet converges on the first color gathered, so the toss and
-  // the count name one concrete drop from here on.
-  if ((o.kind || 'block') === 'wool' && !o.drop) {
-    const f = woolMod.findWoolInPack(bot, o.color || null)
-    if (f) o.drop = f.name
+  // no ordered color tosses the best color in the pack (re-derived each
+  // pickup, so a gray first sheep never locks out white ones later).
+  if ((o.kind || 'block') === 'wool' && !o.color) {
+    const t = woolMod.topWoolColor(bot)
+    if (t) o.drop = t.name
   }
   o.have = countDrop(bot, o.drop)
   if (o.have >= o.want) {
@@ -743,15 +743,21 @@ async function gatherWool(bot, ctx, o, bp, grounded) {
 // Mob rung (did.3): wool the pack and chest could not fill comes from
 // sheep. Morphs an item order into a wool hunt in place — the shared prey
 // phases + search legs take it from here. A single-name family locks the
-// color; a bare family converges on the first color gathered at pickup.
-// Partial pack/chest stock counts toward the want (recounted against the
-// concrete drop, the toss truth).
+// color; a bare family tosses the best color in the pack (re-derived each
+// pickup). Partial pack/chest stock counts toward the want (recounted
+// against the concrete drop, the toss truth).
 function toWoolHunt(bot, o) {
   const names = o.names || []
   const color = names.length === 1 ? woolMod.dropColor(names[0]) : null
   o.kind = 'wool'
   if (!o.color) o.color = color
-  if (!o.drop && o.color) o.drop = `${o.color}_wool`
+  if (!o.drop) {
+    if (o.color) o.drop = `${o.color}_wool`
+    else {
+      const t = woolMod.topWoolColor(bot)
+      if (t) o.drop = t.name
+    }
+  }
   o.have = o.drop ? countDrop(bot, o.drop) : 0
   o.phase = 'find'
   o.announced = false

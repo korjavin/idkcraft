@@ -179,6 +179,15 @@ function killOnce(bot, o) {
   }
 }
 
+function killOwnColor(bot, o) {
+  const ent = bot.entities[o.animal.id]
+  if (ent && ent.isValid !== false) {
+    ent.isValid = false
+    const w = wool.sheepWool(bot, ent)
+    bot._items.push({ name: `${w.color || 'white'}_wool`, count: 1 })
+  }
+}
+
 describe('wool helpers (idkcraft-did.3)', () => {
   it('parses wool requests, registry and spaced forms', () => {
     assert.deepEqual(wool.parseWoolRequest('wool'), { color: null, name: 'wool', drop: null })
@@ -208,30 +217,34 @@ describe('wool helpers (idkcraft-did.3)', () => {
     assert.deepEqual(wool.sheepWool({}, { metadata: [0x00] }), { sheared: null, color: null })
   })
 
-  it('scans the pack for shears and wool', () => {
-    const bot = { inventory: { items: () => [{ name: 'shears', count: 1 }, { name: 'gray_wool', count: 2 }] } }
+  it('scans the pack for shears and the best wool color', () => {
+    const bot = { inventory: { items: () => [{ name: 'shears', count: 1 }, { name: 'gray_wool', count: 2 }, { name: 'white_wool', count: 3 }] } }
     assert.equal(wool.hasShears(bot), true)
     assert.equal(wool.shearsInPack(bot).name, 'shears')
-    assert.deepEqual(wool.findWoolInPack(bot, null), { name: 'gray_wool', count: 2 })
-    assert.deepEqual(wool.findWoolInPack(bot, 'gray'), { name: 'gray_wool', count: 2 })
-    assert.equal(wool.findWoolInPack(bot, 'white'), null)
+    assert.deepEqual(wool.topWoolColor(bot), { name: 'white_wool', count: 3 })
+    const tie = { inventory: { items: () => [{ name: 'gray_wool', count: 1 }, { name: 'white_wool', count: 1 }] } }
+    assert.deepEqual(wool.topWoolColor(tie), { name: 'gray_wool', count: 1 }) // first-max wins
     const bare = { inventory: { items: () => [{ name: 'dirt', count: 3 }] } }
     assert.equal(wool.hasShears(bare), false)
-    assert.equal(wool.findWoolInPack(bare, null), null)
+    assert.equal(wool.topWoolColor(bare), null)
   })
 
-  it('toWoolHunt locks single-color families and recounts partial stock', () => {
+  it('toWoolHunt locks single-color families and seeds bare ones from the pack', () => {
     const bot = { inventory: { items: () => [{ name: 'white_wool', count: 1 }, { name: 'gray_wool', count: 4 }] } }
     const single = bring.toWoolHunt(bot, { kind: 'item', name: 'white_wool', names: ['white_wool'], want: 3, drop: null, have: 0 })
     assert.equal(single.kind, 'wool')
     assert.equal(single.color, 'white')
     assert.equal(single.drop, 'white_wool')
     assert.equal(single.phase, 'find')
-    const family = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['gray_wool', 'white_wool'], want: 3, drop: null, have: 0 })
+    const family = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['gray_wool', 'white_wool'], want: 6, drop: null, have: 0 })
     assert.equal(family.color, null)
-    assert.equal(family.drop, null)
-    assert.equal(family.have, 0)
-    const partial = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['gray_wool', 'white_wool'], want: 3, drop: 'white_wool', have: 5 })
+    assert.equal(family.drop, 'gray_wool') // pack argmax, re-derived each pickup
+    assert.equal(family.have, 4)
+    const empty = { inventory: { items: () => [] } }
+    const fresh = bring.toWoolHunt(empty, { kind: 'item', name: 'wool', names: ['gray_wool', 'white_wool'], want: 3, drop: null, have: 0 })
+    assert.equal(fresh.drop, null)
+    assert.equal(fresh.have, 0)
+    const partial = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['gray_wool', 'white_wool'], want: 6, drop: 'white_wool', have: 5 })
     assert.equal(partial.have, 1) // the white stack only: the toss truth, not the family sum
   })
 })
@@ -309,6 +322,33 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot.attackCalls.length, 0)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 2]])
+  })
+
+  it('a gray first sheep does not lock out white ones later', async () => {
+    const bot = mockBot({
+      playerPos: pos(30, 64, 0),
+      animals: [sheep(11, 8, 0x07), sheep(12, 10, 0x00), sheep(13, 12, 0x00)],
+    })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 2')
+    await drive(bot, bot._tickerCtx, killOwnColor)
+    assert.ok(bot.entities[12].isValid === false || bot.entities[13].isValid === false, 'a white sheep was hunted')
+    assert.ok(bot.lines.some((l) => l === 'here are 2 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 2]])
+  })
+
+  it('a short pack hunts the rest instead of giving partial', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 1 }],
+      playerPos: pos(30, 64, 0),
+      animals: [sheep(11, 10), sheep(12, 14)],
+    })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 3')
+    assert.deepEqual(bot.lines, ['looking for sheep'])
+    await drive(bot, bot._tickerCtx, killOnce)
+    assert.ok(bot.lines.some((l) => l === 'here are 3 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 3]])
   })
 
   it('an empty home chest falls through to the hunt', async () => {
