@@ -1,8 +1,9 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES } = require('./scout')
 const { countItems } = require('../perception')
+const resources = require('../resources')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
 const recover = require('./recover')
@@ -307,6 +308,347 @@ async function chooseBringSearch(brain, text, legsLeft) {
   }
 }
 
+// Source choice (idkcraft-atl.15): a block order fetches from one of two
+// sources — walk to exposed ore (seen live or remembered) or dig a buried
+// hit. Costs are rough seconds: walk at ~4 blocks/s, digging ~2 s/block
+// plus a fixed shaft penalty once the hole is deeper than a quick dig (a
+// >4-deep shaft is where prod self-traps: 9 buried-refusals in 14 days),
+// remembered spots ×1.5 for staleness. No A*: if relief lies about
+// distance, bot.pathfinder.getPathTo(movements, goal, timeout) is the
+// upgrade path. Plain constants — the values never change at runtime;
+// tests stub them through the module export below.
+const SOURCE_COST = {
+  walkBlocksPerSec: 4,
+  digSecPerBlock: 2,
+  deepDigDepth: 4,
+  shaftPenaltySec: 25,
+  memoryFactor: 1.5,
+  budget: 160, // == scout SEARCH_MAX, the loaded-world edge. Known gap
+  // (revmux 01 body-2, follow-up bead): farShellDone and the within96
+  // pool stop the shells at 96 whenever nearer ore exists, so live
+  // exposed past 96 is found only when the inner shells are empty —
+  // exposed-aware shells need a scout change shared with gather/find-me.
+  clearRatio: 0.5, // cheaper than half the rival: a clear winner, no model
+}
+
+function walkCost(distH) {
+  return Math.max(0, distH) / SOURCE_COST.walkBlocksPerSec
+}
+
+function digCost(depthBelow) {
+  const d = Math.max(0, depthBelow)
+  return d * SOURCE_COST.digSecPerBlock + (d > SOURCE_COST.deepDigDepth ? SOURCE_COST.shaftPenaltySec : 0)
+}
+
+// Scout results normalised to costed candidates. Exposed (live or memory)
+// always means walk; buried means walk-to plus the dig below the feet.
+function liveExposed(bp, res) {
+  if (!res || !res.position || res.exposed === false) return null
+  const p = res.position
+  const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
+  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, cost: walkCost(distH), ageMs: null }
+}
+
+function buriedCand(bp, res) {
+  if (!res || !res.position) return null
+  const p = res.position
+  const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
+  const depthBelow = Math.max(0, Math.floor(bp.y) - Math.floor(p.y))
+  return { kind: 'buried', name: res.name, pos: p, distH, dist: res.distance, depthBelow, cost: walkCost(distH) + digCost(depthBelow), ageMs: null }
+}
+
+// Cheaper walk wins between the two exposed candidates — same action
+// (walk_exposed), so no model is needed to split them.
+function bestExposed(a, b) {
+  if (a && b) return a.cost <= b.cost ? a : b
+  return a || b || null
+}
+
+// Canonical memory type names for a bring request: memory stores exact
+// block names, so 'iron' must match the deepslate variant too — the same
+// expansion resolveFindIds does for ids, plus its singular fallback.
+function memoryNames(bot, requestName) {
+  try {
+    if (requestName === 'ore' || requestName === 'ores') return [...ORE_NAMES]
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    if (requestName === 'log' || requestName === 'logs' || (typeof requestName === 'string' && requestName.endsWith('_log'))) {
+      return Object.keys(byName).filter((n) => n.endsWith('_log'))
+    }
+    const namesFor = (req) => {
+      const out = []
+      if (byName[req]) out.push(req)
+      const base = req.endsWith('_ore') ? req.slice(0, -'_ore'.length) : req
+      const pattern = `${base}_ore`
+      for (const n of Object.keys(byName)) {
+        if (n !== req && n.includes(pattern)) out.push(n)
+      }
+      return out
+    }
+    let out = namesFor(requestName)
+    if (out.length === 0 && requestName.length > 1 && requestName.endsWith('s')) out = namesFor(requestName.slice(0, -1))
+    return out
+  } catch (_) { return [] }
+}
+
+// Best exposed remembered find (candidate (b)): nearest exposed===true
+// memory item for the request, read through the shared resources.exposedOf
+// (atl.16): a loaded chunk re-verifies live (name still there, still
+// exposed), an unloaded chunk trusts the flag, a mined-out loaded cell
+// reads undefined and drops the candidate. The protected pre-check stays
+// bring-side, the same rule as the live loop.
+function memoryExposed(bot, ctx, bp, requestName, skip) {
+  try {
+    const names = memoryNames(bot, requestName)
+    if (names.length === 0) return null
+    const hasSkip = skip && typeof skip.has === 'function'
+    const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || (hasSkip && skip.has(skipKey(it))))
+    if (!item || typeof item.x !== 'number') return null
+    let now = false
+    try { now = resources.exposedOf(bot, item) } catch (_) { now = false }
+    if (now !== true) return null // closed up or mined out since noted
+    let pre = null
+    try {
+      const blk = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) })
+      pre = blk && denyReason(bot, blk, ctx)
+    } catch (_) { pre = null }
+    if (pre === 'protected') return null // owner build: same rule as the live loop
+    const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
+    const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
+    return {
+      kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
+      distH, dist, cost: walkCost(distH) * SOURCE_COST.memoryFactor,
+      ageMs: typeof item.at === 'number' ? Date.now() - item.at : null,
+    }
+  } catch (_) { return null }
+}
+
+// A memory hike past the loaded-world budget stays feasible only against
+// a deep shaft (orch default); a shallow dig next to the feet always
+// beats hiking past the edge. Without any buried alternative the memory
+// is the only option and stays.
+function memoryInBudget(mem, buried) {
+  if (!mem) return null
+  if (mem.dist <= SOURCE_COST.budget) return mem
+  if (!buried) return mem
+  return buried.depthBelow > SOURCE_COST.deepDigDepth ? mem : null
+}
+
+function ageText(ageMs) {
+  if (typeof ageMs !== 'number' || ageMs < 0) return 'unknown'
+  const mins = Math.floor(ageMs / 60000)
+  if (mins < 1) return 'just-noted'
+  if (mins < 60) return `${mins}m`
+  return `${Math.floor(mins / 60)}h${mins % 60 ? `${mins % 60}m` : ''}`
+}
+
+function sourceText(o, exposed, buried) {
+  const e = exposed
+    ? `walk:${exposed.cost.toFixed(1)}s(dist=${Math.round(exposed.distH)},${exposed.kind === 'memory' ? `age=${ageText(exposed.ageMs)}` : 'live'})`
+    : 'walk:none'
+  const b = buried
+    ? `dig:${buried.cost.toFixed(1)}s(dist=${Math.round(buried.distH)},depth=${Math.round(buried.depthBelow)})`
+    : 'dig:none'
+  return `source=${(o && o.name) || 'block'} ${e} ${b}`
+}
+
+// Sync half of the source decision: { pick, why } or { contested: true }.
+// A beyond-budget memory hike never wins deterministically (orch default:
+// the model judges the long walk); it can still lose one.
+function decideBringSource(exposed, buried) {
+  if (exposed && !buried) return { pick: 'exposed', why: 'only-option' }
+  if (buried && !exposed) return { pick: 'buried', why: 'only-option' }
+  if (!exposed && !buried) return { pick: null, why: 'none' }
+  const memoryFar = exposed.kind === 'memory' && exposed.dist > SOURCE_COST.budget
+  if (!memoryFar && exposed.cost < buried.cost * SOURCE_COST.clearRatio) return { pick: 'exposed', why: 'clear' }
+  if (buried.cost < exposed.cost * SOURCE_COST.clearRatio) return { pick: 'buried', why: 'clear' }
+  return { contested: true }
+}
+
+// Model source choice with the FSM as fallback and disagreement reference,
+// the chooseBringSearch shape: { action, source, fsm, model }. Exactly two
+// labels (laya answers reliably only with <=2 options); the FSM reserve
+// walks to exposed ore. At most one ask per order: the pick is cached on
+// o and a later contested re-find replays it instead of flip-flopping
+// between the shaft and the hike per drop.
+const SOURCE_INSTRUCTIONS = 'Choose whether the bring order walks to exposed ore or digs a buried block'
+const SOURCE_CRITERIA = {
+  walk_exposed: 'exposed ore is worth the walk: reliable, no shaft to dig',
+  dig_buried: 'digging the buried block is faster than the long walk',
+}
+
+async function chooseBringSource(brain, text, exposed, buried, o) {
+  const fsm = 'walk_exposed'
+  const d = decideBringSource(exposed, buried)
+  if (!d.contested) {
+    const action = d.pick === 'buried' ? 'dig_buried' : 'walk_exposed'
+    return { action, source: d.why === 'only-option' ? 'only-option' : 'clear-winner', fsm, model: null }
+  }
+  if (o && o.sourceAsked && (o.sourcePick === 'walk_exposed' || o.sourcePick === 'dig_buried')) {
+    return { action: o.sourcePick, source: 'cached', fsm, model: null }
+  }
+  if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
+  const model = brain.source || brain.name || 'model'
+  const criteria = { walk_exposed: SOURCE_CRITERIA.walk_exposed, dig_buried: SOURCE_CRITERIA.dig_buried }
+  const fail = (reason) => {
+    metrics.escalation.inc({ from: model, to: 'fsm', reason })
+    if (o) { o.sourceAsked = true; o.sourcePick = fsm }
+    return { action: fsm, source: 'fsm-fallback', fsm, model }
+  }
+  try {
+    const label = await brain.ask({ state: text, instructions: SOURCE_INSTRUCTIONS, criteria, situation: text })
+    if (label !== fsm) {
+      console.error(`brain disagree source=${model} model=${label} fsm=${fsm} reason=bring-source facts=${text}`)
+    }
+    if (label !== 'walk_exposed' && label !== 'dig_buried') return fail('invalid')
+    if (o) { o.sourceAsked = true; o.sourcePick = label }
+    return { action: label, source: model, fsm, model }
+  } catch (err) {
+    const msg = String((err && err.message) || err)
+    const reason = (err && err.name === 'TimeoutError') ? 'timeout'
+      : msg.startsWith('jev missing') ? 'invalid'
+      : 'error'
+    return fail(reason)
+  }
+}
+
+// Cached far verdict (revmux 01 body-3): without it every dug unit re-runs
+// the full sliced shells while the bot stands still. Valid while the bot
+// is still near the cache origin with the same loaded edge (the same
+// invalidation stepFarSearch itself uses); each half is re-verified live
+// and re-costed from the live position. Returns { far, buried } (either
+// may be null), or undefined when there is no usable cache — a half that
+// was cached but no longer verifies rescans instead of silently dropping
+// (revmux 02) — except on the buried-48 path, which never consumes the
+// buried half (it verdicts against its fresh stash): a dug buried half
+// must not rescan the exposed half it still needs (revmux 03 body-1).
+// Search legs drop the cache on completion: legs relocate
+// for fresh coverage, so they always rescan.
+function takeFarCache(bot, o, bp) {
+  try {
+    const c = o && o.farCache
+    if (!c || typeof c.x !== 'number') return undefined
+    if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > 48) return undefined
+    if (loadedSearchRadius(bot) !== c.edge) return undefined
+    const skipped = (pos) => o.skip && typeof o.skip.has === 'function' && o.skip.has(skipKey(pos))
+    let far = null
+    if (c.hit && !skipped(c.hit.pos)) {
+      let now = false
+      try {
+        now = resources.exposedOf(bot, {
+          x: c.hit.pos.x, y: c.hit.pos.y, z: c.hit.pos.z, name: c.hit.name, exposed: true,
+        })
+      } catch (_) { now = false }
+      if (now === true) {
+        const p = c.hit.pos
+        far = liveExposed(bp, {
+          name: c.hit.name, position: p,
+          distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: true,
+        })
+      }
+    }
+    let buried = null
+    if (c.buriedHit && !skipped(c.buriedHit.pos)) {
+      let there = false
+      try {
+        const blk = bot.blockAt && bot.blockAt({
+          x: Math.floor(c.buriedHit.pos.x), y: Math.floor(c.buriedHit.pos.y), z: Math.floor(c.buriedHit.pos.z),
+        })
+        there = !blk || (!!blk.name && blk.name === c.buriedHit.name)
+      } catch (_) { there = false }
+      if (there) {
+        const p = c.buriedHit.pos
+        buried = buriedCand(bp, {
+          name: c.buriedHit.name, position: p,
+          distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: false,
+        })
+      }
+    }
+    if ((c.hit && !far) || (c.buriedHit && !buried && !(o && o.buried))) return undefined
+    return { far, buried }
+  } catch (_) { return undefined }
+}
+
+// Full verdict for the find and searchfar phases: sync-commit when
+// uncontested (no suspension, so a sync driver re-entering the tick sees
+// the commit), one model ask when contested. Callers guarantee at least
+// one candidate. Returns false when a mid-ask retire cleared the order.
+async function verdictSource(bot, ctx, o, exposed, buried) {
+  const d = decideBringSource(exposed, buried)
+  if (!d.contested) {
+    commitSource(bot, ctx, o, exposed, buried, d.pick)
+    return true
+  }
+  const c = await chooseBringSource(ctx && ctx.brain, sourceText(o, exposed, buried), exposed, buried, o)
+  if (!ctx || ctx.bring !== o) return false // stop or a new order landed mid-ask: touch nothing
+  commitSource(bot, ctx, o, exposed, buried, c.action === 'dig_buried' ? 'buried' : 'exposed')
+  return true
+}
+
+// The choice, announced (orch default): a bare legacy line when the pick
+// was uncontested, a suffix naming the source when a rival was feasible.
+function goingForLine(want, res) {
+  if (res.choice === 'digging' && typeof res.downBlocks === 'number' && res.downBlocks > 0) {
+    return `going for ${want} ${res.name}, ${res.downBlocks} blocks down (digging)`
+  }
+  const base = `going for ${want} ${res.name}, ${res.distance} blocks away`
+  if (res.choice === 'exposed') return `${base} (exposed)`
+  if (res.choice === 'digging') return `${base} (digging)`
+  return base
+}
+
+// Announcement shape shared by the find verdict and order creation:
+// the winning candidate as a scout-like result, plus the choice suffix
+// (iff a rival was feasible) and the far flag for memory targets.
+function choiceRes(win, rival, bp) {
+  const res = { name: win.name, position: win.pos, distance: Math.round(win.dist), exposed: win.kind !== 'buried' }
+  if (rival) {
+    if (win.kind === 'buried') {
+      res.choice = 'digging'
+      const down = bp ? Math.round(Math.floor(bp.y) - Math.floor(win.pos.y)) : 0
+      const horiz = bp ? Math.hypot(win.pos.x - bp.x, win.pos.z - bp.z) : Infinity
+      if (down > 0 && horiz < 3) res.downBlocks = down
+    } else {
+      res.choice = 'exposed'
+    }
+  }
+  if (win.kind === 'memory') res.far = true
+  return res
+}
+
+// Shared commit for the find and searchfar verdicts (and order creation,
+// via the same res shape): plants the target, checks the pickaxe tier,
+// announces once. A memory target rides o.far — unloaded is not gone
+// (gather's far rule). Returns false when the tier refuses.
+function commitSource(bot, ctx, o, exposed, buried, pick) {
+  const win = pick === 'buried' ? buried : exposed
+  const rival = pick === 'buried' ? exposed : buried
+  const bp = bot.entity && bot.entity.position
+  const res = choiceRes(win, rival, bp)
+  o.pos = res.position
+  o.block = res.name
+  o.exposed = res.exposed !== false
+  // Unloaded is not gone (gather's far rule): memory targets always ride
+  // it, and so does a cached live hit whose chunk unloaded since the scan
+  // — otherwise walk re-finds every tick with no stall exit (revmux 02).
+  let readable = true
+  try { readable = !!(bot.blockAt && bot.blockAt(win.pos)) } catch (_) { readable = false }
+  o.far = win.kind === 'memory' || !readable
+  o.drop = dropFor(res.name)
+  if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
+    const tier = requiredTier(res.name)
+    refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${res.name}`)
+    return false
+  }
+  if (!o.announced) {
+    o.announced = true
+    say(bot, goingForLine(o.want, res))
+  }
+  o.phase = 'walk'
+  o.stalls = 0
+  o.lastPos = null
+  return true
+}
+
 // Honest end of a spent search: the legs walked, then what was found.
 function refuseExhausted(bot, ctx, o) {
   const n = o.searchLegs ? o.searchLegs.legs : 0
@@ -433,6 +775,7 @@ function walkSearch(bot, ctx, o) {
       o.searchLegs.legs += 1
       o.searchLegs.last = st === 'done' ? 'empty' : 'failed'
     }
+    o.farCache = null // a leg relocates for fresh coverage: the next find rescans (revmux 02)
     o.phase = 'find'
   }
 }
@@ -836,6 +1179,13 @@ async function bring(bot, ctx, target, state) {
       return
     }
     if (!res) {
+      // Sync 48 is empty: memory may still know exposed ore (b) and the
+      // far shells may see some live (a). Stash both for the verdict —
+      // the buried candidate (c) is empty on this path.
+      o.buried = null
+      let mem = null
+      try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
+      o.memKnown = mem
       if (!food && !o.chestTried && o.have < o.want && ctx && ctx.home && ctx.home.chest) {
         o.phase = 'chestfetch'
         return
@@ -844,42 +1194,77 @@ async function bring(bot, ctx, target, state) {
         await enterSearch(bot, ctx, o, `only got ${o.have} ${o.drop}`)
         return
       }
-      // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb),
-      // one order holds one cursor, no new scan starts while it runs.
+      // A cached far verdict skips the rescan (body-3); without one the
+      // 96/160 shells run sliced across ticks (amb), one order holding
+      // one cursor, no new scan starting while it runs.
+      const cachedEmpty = takeFarCache(bot, o, bp)
+      if (cachedEmpty !== undefined) {
+        const exposedEmpty = bestExposed(cachedEmpty.far, o.memKnown || null)
+        if (!exposedEmpty && !cachedEmpty.buried) {
+          await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+          return
+        }
+        await verdictSource(bot, ctx, o, exposedEmpty, cachedEmpty.buried)
+        return
+      }
       o.search = startFarSearch(bot, o.name)
       if (o.search === 'unknown') {
         refuse(bot, ctx, `unknown block: ${o.name}`)
         return
       }
       if (!o.search) {
-        // No wider shell to scan (edge 48): legs still walk new ground.
+        // No wider shell to scan (edge 48): a remembered spot still beats
+        // walking legs, otherwise legs walk new ground as before.
+        if (o.memKnown) {
+          commitSource(bot, ctx, o, o.memKnown, null, 'exposed')
+          return
+        }
         await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
         return
       }
       o.phase = 'searchfar'
       return
     }
-    o.pos = res.position
-    o.block = res.name
-    o.exposed = res.exposed !== false
-    o.drop = dropFor(res.name)
-    if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
-      const tier = requiredTier(res.name)
-      refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${res.name}`)
+    if (res.exposed !== false) {
+      // Exposed and nearest: commit exactly as before (no rival consulted,
+      // the legacy line byte-identical).
+      commitSource(bot, ctx, o, liveExposed(bp, res), null, 'exposed')
       return
     }
-    if (!o.announced) {
-      o.announced = true
-      say(bot, `going for ${o.want} ${res.name}, ${res.distance} blocks away`)
+    // 48-best buried: stash it as the dig candidate (c), read the memory
+    // candidate (b), and run the far shells for live exposed ore (a) —
+    // buried-only-48 counts as empty for the exposed search (atl.15).
+    o.buried = buriedCand(bp, res)
+    {
+      let mem = null
+      try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
+      o.memKnown = memoryInBudget(mem, o.buried)
     }
-    o.phase = 'walk'
-    o.stalls = 0
-    o.lastPos = null
+    // A cached far verdict skips the rescan (body-3): the buried stash
+    // and memory above are always re-derived fresh and cheap.
+    const cachedBuried = takeFarCache(bot, o, bp)
+    if (cachedBuried !== undefined) {
+      await verdictSource(bot, ctx, o, bestExposed(cachedBuried.far, o.memKnown || null), o.buried)
+      return
+    }
+    o.search = startFarSearch(bot, o.name)
+    if (o.search === 'unknown') {
+      refuse(bot, ctx, `unknown block: ${o.name}`)
+      return
+    }
+    if (!o.search) {
+      // Edge 48, no shells: decide between memory and buried now, asking
+      // the model once when contested (the tick awaits bring).
+      await verdictSource(bot, ctx, o, o.memKnown, o.buried)
+      return
+    }
+    o.phase = 'searchfar'
     return
   }
 
   if (o.phase === 'searchfar') {
     if (food) { await findFood(bot, ctx, o); return }
+    if (!o.search) return // verdict already committed or asking: wait for it
     const r = stepFarSearch(bot, o.search, o.skip ? { exclude: (q) => o.skip.has(skipKey(q)) } : undefined)
     if (!r.done) return
     o.search = null
@@ -887,27 +1272,24 @@ async function bring(bot, ctx, target, state) {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
     }
-    if (!r.result) {
-      const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
+    // Shells done: (a) live exposed wins the far result, a buried far hit
+    // loses to the nearer stashed 48 hit — or stands alone when 48 was
+    // empty. The verdict weighs it against the stashed memory (b).
+    const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result) : null
+    const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null)
+    const exposed = bestExposed(far, o.memKnown || null)
+    const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
+    try {
+      o.farCache = {
+        x: bp.x, y: bp.y, z: bp.z, edge, hit: far,
+        buriedHit: r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null,
+      }
+    } catch (_) { /* cache best-effort */ }
+    if (!exposed && !buried) {
       await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
       return
     }
-    o.pos = r.result.position
-    o.block = r.result.name
-    o.exposed = r.result.exposed !== false
-    o.drop = dropFor(r.result.name)
-    if (needsPickaxe(r.result.name) && !hasPickaxe(bot, r.result.name)) {
-      const tier = requiredTier(r.result.name)
-      refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${r.result.name}`)
-      return
-    }
-    if (!o.announced) {
-      o.announced = true
-      say(bot, `going for ${o.want} ${r.result.name}, ${r.result.distance} blocks away`)
-    }
-    o.phase = 'walk'
-    o.stalls = 0
-    o.lastPos = null
+    await verdictSource(bot, ctx, o, exposed, buried)
     return
   }
 
@@ -923,7 +1305,11 @@ async function bring(bot, ctx, target, state) {
     }
     let block = null
     try { block = bot.blockAt && bot.blockAt(o.pos) } catch (_) { block = null }
-    if (!block || !block.name || block.name !== o.block) {
+    // Unloaded is not gone for a memory target (gather's far rule): its
+    // chunk streams in as the bot closes in, with stall counting below as
+    // the backstop. Only a loaded mismatch re-finds.
+    const unloadedFar = !block && o.far && o.pos
+    if (!unloadedFar && (!block || !block.name || block.name !== o.block)) {
       o.pos = null // mined by someone else: search again
       o.phase = 'find'
       return
@@ -1132,6 +1518,20 @@ module.exports.entityById = entityById
 module.exports.PREY_NAMES = PREY_NAMES
 module.exports.PREY_DROPS = PREY_DROPS
 module.exports.chooseBringSearch = chooseBringSearch
+module.exports.SOURCE_COST = SOURCE_COST
+module.exports.SOURCE_INSTRUCTIONS = SOURCE_INSTRUCTIONS
+module.exports.SOURCE_CRITERIA = SOURCE_CRITERIA
+module.exports.decideBringSource = decideBringSource
+module.exports.chooseBringSource = chooseBringSource
+module.exports.memoryNames = memoryNames
+module.exports.memoryExposed = memoryExposed
+module.exports.memoryInBudget = memoryInBudget
+module.exports.liveExposed = liveExposed
+module.exports.buriedCand = buriedCand
+module.exports.bestExposed = bestExposed
+module.exports.goingForLine = goingForLine
+module.exports.sourceText = sourceText
+module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
