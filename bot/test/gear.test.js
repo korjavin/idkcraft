@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const gear = require('../src/behaviours/gear')
 const stockpile = require('../src/behaviours/stockpile')
+const resources = require('../src/resources')
 
 const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms || 30))
 
@@ -623,8 +624,9 @@ describe('gear round-2: collision, async legs, latch', () => {
     assert.equal(gear.deriveNext(bot, ctx).name, 'iron_sword', 'reforge the lost sword')
   })
   it('rung transition clears the latch: repeats announce again', () => {
-    const bot = mockBot({ items: [{ name: 'stick', count: 2 }] })
+    const bot = mockBot({ items: [{ name: 'stick', count: 2 }, { name: 'stone_pickaxe', count: 1 }] })
     const ctx = { home: home(), stepStatus: 'running' }
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'iron_ore' }], 1000) // ipn.9: diggable iron keeps the promise line
     gear(bot, ctx) // rung 1: want-ore, announced
     assert.equal(ctx.gear.saidNeed, 'want-ore')
     bot._items.push({ name: 'iron_pickaxe', count: 1 }) // self pick forged
@@ -1210,5 +1212,60 @@ describe('gear jsf.5: reserve and the two-unit handover', () => {
     assert.equal(ctx.gearGiven.water_bucket, 2)
     const done = gear.deriveNext(mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }] }), ctx)
     assert.ok(done && done.name === 'iron_helmet' && done.owner === false, 'tools complete, ladder on self armour')
+  })
+})
+
+describe('honest want lines (idkcraft-ipn.9)', () => {
+  const bp = () => pos(0, 64, 0)
+  const oreKit = (pick) => [{ name: 'stick', count: 2 }, { name: pick, count: 1 }]
+
+  it('want-ore with known diggable iron keeps the going-to-dig promise', () => {
+    const bot = mockBot({ items: oreKit('stone_pickaxe') })
+    const ctx = { home: home(), stepStatus: 'running' }
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'iron_ore' }], 1000)
+    gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.gear.saidNeed, 'want-ore')
+    assert.deepEqual(bot.lines, ['next gear: iron_pickaxe for me', 'need 3 more raw iron, going to dig'])
+  })
+
+  it('want-ore with nothing known says need raw iron, none known', () => {
+    const bot = mockBot({ items: oreKit('stone_pickaxe') })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.gear.saidNeed, 'want-ore')
+    assert.deepEqual(bot.lines, ['next gear: iron_pickaxe for me', 'need raw iron, none known'])
+  })
+
+  it('want-ore with known but ungated iron says none known', () => {
+    const bot = mockBot({ items: oreKit('wooden_pickaxe') })
+    const ctx = { home: home(), stepStatus: 'running' }
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'iron_ore' }], 1000)
+    gear(bot, ctx)
+    assert.deepEqual(bot.lines, ['next gear: iron_pickaxe for me', 'need raw iron, none known'])
+  })
+
+  it('a later find sends forage out with no re-announce', () => {
+    const bot = mockBot({ items: oreKit('stone_pickaxe') })
+    const ctx = { home: home(), stepStatus: 'running' }
+    gear(bot, ctx)
+    assert.equal(bot.lines.length, 2)
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'iron_ore' }], 2000)
+    ctx.stepStatus = 'running'
+    gear(bot, ctx) // same latched need: silent, forage owns the dig now
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.lines.length, 2)
+  })
+
+  it('honestLine: coal follows the same rule, cobble/logs/other keys pass through', () => {
+    const bot = mockBot({ items: oreKit('stone_pickaxe') })
+    const ctx = { home: home(), stepStatus: 'running' }
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-coal', 'need coal above the reserve, going to dig'), 'need coal above the reserve, going to dig')
+    assert.equal(gear.honestLine(bot, { home: home() }, bp(), 'want-coal', 'need coal above the reserve to smelt 2 ore, going to dig'), 'need coal above the reserve, none known')
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-cobble', 'need 8 cobble for the furnace, going to dig'), 'need 8 cobble for the furnace, going to dig')
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-logs', 'need logs for sticks, going to chop'), 'need logs for sticks, going to chop')
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-water', 'need water for the bucket'), 'need water for the bucket')
   })
 })

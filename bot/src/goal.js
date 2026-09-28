@@ -1238,7 +1238,14 @@ async function decide(bot, ctx) {
         const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
         if (reason === 'no-cobble' || reason === 'no-fuel') {
           const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-          const line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          // ipn.9: same honest rule as gear's sync announce (the coal
+          // promise needs a diggable remembered cell); cobble keeps its
+          // line — stone is not a memory resource.
+          try {
+            const gearMod = require('./behaviours/gear')
+            line = gearMod.honestLine(bot, ctx, bot && bot.entity && bot.entity.position, key, line)
+          } catch (_) { /* announce best-effort: keep the line */ }
           try {
             if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
             if (ctx.gear.saidNeed !== key) {

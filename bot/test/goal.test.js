@@ -1123,3 +1123,34 @@ describe('f3s step chat throttle', () => {
     assert.equal(chatStep(null, null, 'x'), true)
   })
 })
+
+describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
+  const gearHome = () => ({ site: pos(10, 64, 10), built: true, chest: { x: 5, y: 64, z: 1 } })
+  const settled = (result) => ({ step: 'gear', stepStatus: 'done', brain: {}, home: gearHome(), furnace: { settled: true, result } })
+
+  it('no-fuel with no known coal says none known', async () => {
+    const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = settled('failed:no-fuel')
+    await decide(bot, ctx)
+    assert.equal(ctx.gear.saidNeed, 'want-coal')
+    assert.ok(bot.chats.includes('need coal above the reserve, none known'), `chats: ${JSON.stringify(bot.chats)}`)
+    assert.equal(ctx.furnace.result, null)
+  })
+
+  it('no-fuel with known diggable coal keeps the going-to-dig promise', async () => {
+    const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = settled('failed:no-fuel')
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
+    await decide(bot, ctx)
+    assert.equal(ctx.gear.saidNeed, 'want-coal')
+    assert.ok(bot.chats.includes('need coal above the reserve, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
+  })
+
+  it('no-cobble keeps its line: stone is not a memory resource', async () => {
+    const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = settled('failed:no-cobble')
+    await decide(bot, ctx)
+    assert.equal(ctx.gear.saidNeed, 'want-cobble')
+    assert.ok(bot.chats.includes('need 8 cobble for the furnace, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
+  })
+})
