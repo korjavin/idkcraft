@@ -1619,8 +1619,7 @@ function fleeReflex(bot, ctx) {
         if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
           clearStuck()
           if (plan && plan.have > 0) return openPackOrder()
-          const tier = bringMod.requiredTier(res.name)
-          return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+          return bringMod.tierRefusal(bot, res.name)
         }
         // Buried 48-best (atl.15): the far shells may see exposed ore and
         // memory may know some — the buried hit is stashed as the dig
@@ -2028,8 +2027,7 @@ const DEEP_WARN_DROP = 8
 function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
-    const tier = bringMod.requiredTier(res.name)
-    return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+    return bringMod.tierRefusal(bot, res.name)
   }
   homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the fetch walk (jr2.3)
   if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }

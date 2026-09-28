@@ -70,9 +70,15 @@ const MENU = {
     // sticks-or-planks-or-logs plus a table, inventory or placed), scaffold
     // blocks only once geared (they dig by hand). Blocks alone never preempt
     // early gather: a fresh bot chops first, digs later.
+    // x15: a wooden/golden pickaxe is an unfinished kit while the stone
+    // chain is on hand and the behaviour's own table probe passes — the
+    // gate and the behaviour share that probe, so a ghost or unloaded
+    // claim only digs scaffold (or reads kit-complete) instead of
+    // diverting into an instant-done re-pick loop (revmux 01).
     feasible: (facts, bot, ctx) => {
-      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
-        if (!equipWant(facts)) return false
+      const upgrade = equipUpgradeDue(bot, ctx)
+      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
+        if (!upgrade && !equipWant(facts)) return false
         if ((facts.table || 0) <= 0 && !facts.tablePlaced) return false
         // The house table first (h9z): while build can lay the site table,
         // the table item belongs to build — placing roadside instead would
@@ -308,6 +314,22 @@ function equipWant(facts) {
     return (cobble >= 2 || equiv >= 3) && stick1 ? 'sword' : null
   }
   return null
+}
+
+// Pickaxe-upgrade diversion (x15): wooden/golden in hand, the stone chain
+// affordable, and the behaviour's own table probe passing — the SAME probe
+// equip() runs before crafting, so the gate can never divert where the
+// behaviour would dig or finish done (an optimistic claim here wedged the
+// menu into an instant-done re-pick loop, revmux 01). Single source for
+// MENU.equip.feasible and the stepWhy wording; deferred require (same
+// equip->craft->goal cycle as the SCAFFOLD_LOW read in feasible).
+function equipUpgradeDue(bot, ctx) {
+  try {
+    const equipMod = require('./behaviours/equip')
+    return !!equipMod.stoneUpgradeDue(bot) && !!equipMod.tableReady(bot, ctx)
+  } catch (_) {
+    return false
+  }
 }
 
 // A claimed table station the world still shows (h9z): the claim plus a
@@ -1034,8 +1056,10 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'equip': {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
       // scaffold blocks only once geared, the house-table yield last (h9z).
-      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
-      if (!equipWant(facts)) return 'equip: no materials'
+      // x15: a due stone upgrade is an unfinished kit, not 'kit complete'.
+      const upgrade = equipUpgradeDue(bot, ctx)
+      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0 && !upgrade) return 'equip: kit complete'
+      if (!upgrade && !equipWant(facts)) return 'equip: no materials'
       if ((facts.table || 0) <= 0 && !facts.tablePlaced) return 'equip: no table'
       try {
         if ((facts.table || 0) > 0 && tableYieldToBuild(facts, bot, ctx)) return 'equip: waiting for the house table'

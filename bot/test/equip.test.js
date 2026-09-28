@@ -770,14 +770,17 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     let calls = 0
     bot.inventory.items = () => {
       calls++
-      if (calls >= 5) return {} // kind + scaffold + digTargets ok; the held search sees garbage
+      // x15: the upgrade pre-read (rank) runs before kind, so the garbage
+      // starts one call later — kind + scaffold + digTargets still ok, and
+      // the held search still sees the garbage.
+      if (calls >= 6) return {}
       return bot._items
     }
     const ctx = freshCtx()
     equip(bot, ctx, null, {})
     await flush()
     await flush()
-    assert.ok(calls >= 5, `held search hit the garbage, calls=${calls}`)
+    assert.ok(calls >= 6, `held search hit the garbage, calls=${calls}`)
     assert.equal(bot.calls.dig.length, 1, 'no held pickaxe found, still digs')
     assert.deepEqual(bot.calls.equipped, [], 'garbled inventory holds nothing')
     assert.equal(ctx.stepStatus, 'running')
