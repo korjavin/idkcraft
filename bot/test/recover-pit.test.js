@@ -116,7 +116,7 @@ function facts(over) {
 }
 
 describe('pit fact (jsf.3)', () => {
-  it('two-high wall on one side reads pit; open floor and +1 steps do not', () => {
+  it('two-high walls on 2+ sides read pit; open floor, +1 steps and lone walls do not', () => {
     const shaft = worldBot(pitWorld(), [])
     const f = recover.recoverFacts(shaft, { stuck: { by: 'no-displacement', goal: null } }, null, null)
     assert.equal(f.pit, true, '1x1 shaft is a pit')
@@ -131,6 +131,47 @@ describe('pit fact (jsf.3)', () => {
     const fs = recover.recoverFacts(step, { stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 } } }, null, null)
     assert.equal(fs.pit, false, 'a +1 step (dy0 only) is not a pit')
     assert.equal(fs.walls, 1, 'sanity: the step still counts as a wall')
+
+    // Revmux 01 major: one trunk / house wall / cliff face on open ground
+    // is not a pit — the bot must sidestep around it, not pillar dirt
+    // against it.
+    const trunk = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)]), [])
+    const ft = recover.recoverFacts(trunk, { stuck: { by: 'no-displacement', goal: null } }, null, null)
+    assert.equal(ft.pit, false, 'a lone 2-high wall is not a pit')
+    assert.equal(ft.walls, 1, 'sanity: the wall still counts once')
+
+    const slot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0), key(-1, 61, 0), key(-1, 62, 0)]), [])
+    const fl = recover.recoverFacts(slot, { stuck: { by: 'no-displacement', goal: null } }, null, null)
+    assert.equal(fl.pit, true, 'a 1-wide slot (2 opposing 2-high walls) is a pit')
+  })
+
+  it('lone 2-high wall + no goal + scaffold: FSM sidesteps, never pillars', async () => {
+    // Stone wall (never hand-diggable): no dig_step either, so the menu is
+    // exactly the pre-fix open-ground answer — sidestep, then wait.
+    function trunkBot() {
+      const bot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)]), [{ name: 'dirt', count: 5 }])
+      const raw = bot.blockAt.bind(bot)
+      bot.blockAt = (p) => {
+        const b = raw(p)
+        const k = key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (b && (k === key(1, 61, 0) || k === key(1, 62, 0))) return { ...b, name: 'stone' }
+        return b
+      }
+      return bot
+    }
+    const bot = trunkBot()
+    const seen = []
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: null, key: 'ticker' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(seen.length, 1, 'asked once')
+    assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
+    assert.ok(!seen[0].includes('dig_up'), `menu: ${seen[0]}`)
+    assert.equal(r.action, 'sidestep', `open ground shuffles past the wall, got ${r.action}`)
+    const r2 = await recover.decide(trunkBot(), { stuck: { by: 'no-displacement', goal: null, key: 'ticker' }, brain: null }, null, null)
+    assert.equal(r2.action, 'sidestep', `fsm got ${r2.action}`)
   })
 })
 
@@ -185,20 +226,21 @@ describe('recoverText carries pit=yes|no (jsf.3)', () => {
 })
 
 describe('goal-less pit escape e2e (jsf.3)', () => {
-  it('FSM pillars out of a 1x1 shaft with no goal', async () => {
+  it('one goal-less episode chains REPEATS pillar blocks, then releases', async () => {
     // The 2026-09-25 gave-up replayed with the fix: scaffold on hand, no
-    // goal, 2-high walls. First choice must be pillar_up (not a shuffle),
-    // and re-fired episodes must reach the mouth (one episode chains two
-    // blocks: the closer check stops the chain once goalDy stops falling).
-    const bot = worldBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    // goal, 2-high walls. First choice must be pillar_up (not a shuffle).
+    // setStuck fires ONCE: the episode itself must chain the full REPEATS
+    // budget on non-falling height alone — the goalDy closer arm would
+    // stop it after one repeat (revmux 01 minors: 2 dones, 1 block).
+    // Deeper pits need one more re-wedge in prod; the bound, not the
+    // stall, paces the escape.
+    const kit = [{ name: 'dirt', count: 10 }]
+    const bot = worldBot(pitWorld(), kit)
     const ctx = { stuck: { by: 'no-displacement', goal: null, key: 'pit' }, brain: null }
     const step = harness(bot)
     const first = []
     let ticks = 0
-    for (; ticks < 200 && Math.floor(bot.entity.position.y) < 66; ticks++) {
-      if (!ctx.stuck && !ctx.recovery) {
-        recover.setStuck(ctx, 'no-displacement', null, 'pit') // still inside: the walk re-wedges
-      }
+    for (; ticks < 200 && (ctx.stuck || ctx.recovery); ticks++) {
       if (!ctx.recovery || ctx.recovery.status !== 'running') {
         await recover.decide(bot, ctx, null, null)
         if (ctx.recovery && ctx.recovery.action && first.length === 0) first.push(ctx.recovery.action)
@@ -209,7 +251,11 @@ describe('goal-less pit escape e2e (jsf.3)', () => {
       await flush()
     }
     assert.equal(first[0], 'pillar_up', `first choice, got ${first}`)
-    assert.ok(Math.floor(bot.entity.position.y) >= 66, `pillared to the mouth, y=${bot.entity.position.y} in ${ticks} ticks`)
+    assert.ok(ticks < 200, 'episode ends')
+    assert.equal(kit[0].count, 6, `one episode places exactly REPEATS new blocks, dirt left ${kit[0].count}`)
+    assert.ok(Math.floor(bot.entity.position.y) >= 64, `chained to the top blocks, y=${bot.entity.position.y}`)
+    assert.equal(ctx.stuck, null, 'episode released')
+    assert.equal(ctx.recovery, null, 'episode released')
   })
 
   it('buried head + pickaxe, no goal: FSM digs up', async () => {

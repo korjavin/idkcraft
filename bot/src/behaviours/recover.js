@@ -167,15 +167,18 @@ function scanSides(bot) {
   return { walls, free }
 }
 
-// Pit fact (jsf.3, shared with jsf.2 water_up): at least one side rises two
-// solid blocks (dy 0 AND 1) — a wall the body cannot walk or hop out of.
-// Nulls read as open (never claim a pit blind). Lava and water never count
-// (solid() reads them passable).
+// Pit fact (jsf.3, shared with jsf.2 water_up): at least TWO sides rise two
+// solid blocks (dy 0 AND 1) — hemmed in, not merely next to one trunk,
+// house wall or cliff face (revmux 01: a lone 2-high side on open ground
+// must keep sidestepping, not pillar dirt against the owner's base).
+// Nulls read as open (never claim a pit blind). Lava and water never
+// count (solid() reads them passable).
 function pitAt(bot) {
+  let high = 0
   for (const [dx, dz] of SIDES) {
-    if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) return true
+    if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) high++
   }
-  return false
+  return high >= 2
 }
 
 // Climb arm for goal-less backstop episodes (jsf.3): the ticker backstop
@@ -1356,7 +1359,7 @@ async function decide(bot, ctx, state, target) {
     return { action: rec.action, sprint: false, source: rec.source }
   }
   if (!rec) {
-    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, placeError: (ctx.placeErrors || 0) > 0 }
+    rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, lastY: null, flats: 0, placeError: (ctx.placeErrors || 0) > 0 }
     metrics.routes.inc({ route: 'hard', reason: 'stuck' })
     // Drop the stale goal first: a live GoalFollow/GoalNear keeps driving
     // the executor (jump/forward overrides at 20 Hz) and fights every
@@ -1397,13 +1400,42 @@ async function decide(bot, ctx, state, target) {
       if (rec.endEpisode || !(RECOVER_MENU[prev] && RECOVER_MENU[prev].repeatable)) {
         return release(bot, ctx, rec.endEpisode ? 'gave-up' : 'done')
       }
-      rec.repeats = (rec.repeats || 0) + 1
       const fresh = recoverFacts(bot, ctx, state, target)
-      // Chain without re-asking only while the goal keeps getting closer: a
-      // no-gain done (fell back, verified an old block) ends the episode
-      // instead of burning the budget. repeatable() bounds the climb, so a
-      // rising goal cannot chain forever either.
-      const closer = rec.lastDy === null || fresh.goalDy < rec.lastDy
+      // Chain without re-asking only while making progress: toward the goal
+      // (goalDy falling) with a goal, upward without one — goalDy stays 0
+      // on the goal-less path, so the goal arm would stop a pit chain after
+      // one repeat (revmux 01: every goal-less episode climbed at most 2
+      // blocks). A done fires the tick the ack lands, often mid-air, so the
+      // next cycle starts at the old floor and re-verifies it once before
+      // the climb resumes (prod and mock alike): one flat twin chains free,
+      // a second flat or a fell-back done ends the episode. REPEATS counts
+      // risen dones, so a flat twin never eats the climb budget either way.
+      let closer
+      if (fresh.goalDist === null) {
+        // Verified height, not live height: the verified block (the
+        // cycle's startFloor) tracks the climb while live y samples the
+        // mid-air arc. Primitives without a startFloor (dig_up) fall back
+        // to the live floor.
+        const st = rec.st
+        const verifiedY = (st && typeof st.startFloor === 'number') ? st.startFloor : null
+        const bp = botPos(bot)
+        const feetY = verifiedY !== null ? verifiedY : (bp ? Math.floor(bp.y) : null)
+        // == null: null on entry, undefined on hand-built ctx — both first.
+        if (feetY !== null && (rec.lastY == null || feetY > rec.lastY)) {
+          rec.lastY = feetY
+          rec.flats = 0
+          rec.repeats = (rec.repeats || 0) + 1
+          closer = true
+        } else if (feetY !== null && feetY === rec.lastY && (rec.flats || 0) < 1) {
+          rec.flats = (rec.flats || 0) + 1
+          closer = true
+        } else {
+          closer = false
+        }
+      } else {
+        rec.repeats = (rec.repeats || 0) + 1
+        closer = rec.lastDy === null || fresh.goalDy < rec.lastDy
+      }
       if (closer && rec.repeats < REPEATS && RECOVER_MENU[prev].repeatable(fresh)) {
         rec.lastDy = fresh.goalDy
         rec.status = 'running'
