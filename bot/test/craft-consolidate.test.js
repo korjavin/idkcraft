@@ -142,6 +142,8 @@ function fakeBot(win, { clicks = null, syncs = null } = {}) {
   return bot
 }
 
+const flush = () => new Promise((resolve) => setImmediate(resolve))
+
 describe('ph7 consolidate-before-craft', () => {
   it('partial first stack: the first op lands (no phantom)', async () => {
     const win = fakeWindow()
@@ -229,5 +231,107 @@ describe('ph7 consolidate-before-craft', () => {
     assert.equal(bot.craftCalls, 1)
     assert.ok(covered >= 3, `first stack ${covered} covers 3 placements`)
     assert.ok(clicks.length > 0)
+  })
+
+  it('sync timeout still crafts (no hang)', async () => {
+    // Dead link: _syncWindow never answers. The 3 s give-up must fire and
+    // the op must run unverified, not hang before the craft starts.
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const win = fakeWindow()
+      const a = item('oak_planks', PLANKS, 4)
+      a.slot = 9
+      win.slots[9] = a
+      const b = item('oak_planks', PLANKS, 64)
+      b.slot = 10
+      win.slots[10] = b
+      const bot = fakeBot(win)
+      bot._syncWindow = () => new Promise(() => {}) // dead link
+      const p = craft.safeCraft(bot, doorRecipe(), 1, { name: 'crafting_table' })
+      await flush() // let safeCraft reach the pending sync
+      mock.timers.tick(3001)
+      await flush()
+      await p
+      assert.equal(bot.craftCalls, 1)
+      assert.equal(countIn(win, 'oak_door'), 3) // consolidation applied, craft ran
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('settle fallback without _syncWindow still crafts', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const win = fakeWindow()
+      const a = item('oak_planks', PLANKS, 4)
+      a.slot = 9
+      win.slots[9] = a
+      const b = item('oak_planks', PLANKS, 64)
+      b.slot = 10
+      win.slots[10] = b
+      const bot = fakeBot(win)
+      delete bot._syncWindow // old mineflayer: settle wait instead of sync
+      const pr = craft.safeCraft(bot, doorRecipe(), 1, { name: 'crafting_table' })
+      await flush()
+      mock.timers.tick(251)
+      await flush()
+      await pr
+      assert.equal(bot.craftCalls, 1)
+      assert.equal(countIn(win, 'oak_door'), 3)
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('foreign cursor bails with zero clicks', async () => {
+    const win = fakeWindow()
+    const a = item('oak_planks', PLANKS, 4)
+    a.slot = 9
+    win.slots[9] = a
+    const b = item('oak_planks', PLANKS, 64)
+    b.slot = 10
+    win.slots[10] = b
+    win.selectedItem = item('oak_planks', PLANKS, 5) // someone else holds the cursor
+    const clicks = []
+    const bot = fakeBot(win, { clicks })
+    await craft.safeCraft(bot, doorRecipe(), 1, { name: 'crafting_table' })
+    assert.equal(bot.craftCalls, 1)
+    assert.deepEqual(clicks, [])
+  })
+
+  it('throw mid-cycle bails the next ingredient (fail-open)', async () => {
+    // Two ingredients; the first donor cycle throws after picking up, so the
+    // cursor is stuck full. The second ingredient must bail, not click from
+    // a wrong cursor — and the craft must still run.
+    const win = fakeWindow()
+    const a = item('oak_planks', PLANKS, 4)
+    a.slot = 9
+    win.slots[9] = a
+    const b = item('oak_planks', PLANKS, 64)
+    b.slot = 10
+    win.slots[10] = b
+    const c = item('iron_ingot', 99, 2)
+    c.slot = 11
+    win.slots[11] = c
+    const d = item('iron_ingot', 99, 64)
+    d.slot = 12
+    win.slots[12] = d
+    const clicks = []
+    const bot = fakeBot(win, { clicks })
+    const realClick = bot.clickWindow
+    let n = 0
+    bot.clickWindow = async (...args) => {
+      n++
+      if (n === 2) throw new Error('dump broke') // pickup applied, dump throws
+      return realClick(...args)
+    }
+    bot.craft = async () => { bot.craftCalls++ }
+    const p = { id: PLANKS }
+    const recipe = { inShape: [[p, p, p, p, p, { id: 99 }]] } // 5 planks (short) + 1 ingot
+    await craft.safeCraft(bot, recipe, 1, { name: 'crafting_table' })
+    assert.equal(bot.craftCalls, 1)
+    assert.deepEqual(clicks.map((x) => x[0]), [10]) // only the first pickup went out
   })
 })
