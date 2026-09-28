@@ -375,6 +375,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     await drive(bot, bot._tickerCtx, killOnce)
     assert.ok(bot.lines.some((l) => l === 'here are 3 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 3]])
+    assert.equal(bot.calls.opens, 1, 'one chest window: no mat draws on the wool path (body-6)')
   })
 
   it('no sheep with an anchor walks the legs, then refuses honestly', async () => {

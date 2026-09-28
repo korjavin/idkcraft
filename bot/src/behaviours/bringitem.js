@@ -35,6 +35,14 @@ function craftany() {
   return craftanyMod
 }
 
+// Deferred for the same cycle (gear->craft->goal loops back through
+// forage/deliver->bring): call-time only, for the table check below.
+let gearMod = null
+function gear() {
+  if (!gearMod) gearMod = require('./gear')
+  return gearMod
+}
+
 function refuse(bot, ctx, line) {
   return bring().refuse(bot, ctx, line)
 }
@@ -362,6 +370,18 @@ function bedGap(bot, o) {
   return { gap: { name: `${wood}_planks`, need: bedMod.BED_PLANKS, have: Math.max(0, avail - 4) }, target, color }
 }
 
+// A table the craft can actually reach: the verified standing claim or a
+// pack table. Wood sub-orders size against this (core-1): without one the
+// same logs must also fund the 4-plank made table.
+function tableReachable(bot, ctx) {
+  try {
+    if (gear().tableBlock(bot, ctx)) return true
+  } catch (_) { /* fall through to the pack */ }
+  try {
+    return (packCounts(bot).crafting_table || 0) > 0
+  } catch (_) { return false }
+}
+
 // Best-stocked plank wood in the pack (planks plus four per log): the
 // fresh bed recipe burns one wood, so the gap and the chest draw both aim
 // at this one. Oak when the pack holds no wood at all.
@@ -389,13 +409,19 @@ function topPlankWood(pack) {
 // place — the wool hunt or the log dig — saving the parent rung in o.parent
 // for resumeSub. A wool gap hunts its exact colour (or any sheep for the
 // bare gap, locking the first pickup); a planks gap digs the same wood's
-// logs (one log covers four planks); a stick gap digs oak, the overworld
-// default. The search legs and their budget stay on the same object, so the
-// whole order shares one SEARCH_BUDGET. Depth ≤ 2 by construction: gather
-// kinds never reach the craft rung, and a nested open returns null instead
-// of looping. Returns the one announce line; the caller chats it (setBring
-// returns it, the tick says it).
-function openSubOrder(bot, o, gap, target, color) {
+// logs (one log covers four planks); a stick gap digs the pack wood, or
+// any log when the pack holds no wood at all (the find re-points the drop
+// at the concrete species, the 'bring me logs' shape). Without a reachable
+// table the same logs must also fund the 4-plank made table, so the want
+// inflates once and one trip covers both (core-1). The chest rung re-arms
+// (body-5): a fetchItem-originated sub would otherwise skip the chest the
+// parent just stood at, while its logs sit inside. The search legs and
+// their budget stay on the same object, so the whole order shares one
+// SEARCH_BUDGET. Depth ≤ 2 by construction: gather kinds never reach the
+// craft rung, and a nested open returns null instead of looping. Returns
+// the one announce line; the caller chats it (setBring returns it, the
+// tick says it).
+function openSubOrder(bot, ctx, o, gap, target, color) {
   if (!o || !gap || typeof gap.name !== 'string' || o.subFor) return null
   const pack = packCounts(bot)
   const word = subWordFor(gap.name)
@@ -418,22 +444,31 @@ function openSubOrder(bot, o, gap, target, color) {
     o.announced = false
     o.animal = null
     o.shearedIds = null
+    o.chestTried = false
     o.subFor = target
     o.subWant = gap.need
     o.subWord = word
   } else if (name.endsWith('_planks') || name.endsWith('_log') || name === 'stick') {
+    const woodless = !Object.keys(pack).some((n) => typeof n === 'string' && (n.endsWith('_planks') || n.endsWith('_log')))
+    const infl = tableReachable(bot, ctx) ? 0 : 4 // planks-worth for the made table
     let fetch = name
     let want = 1
     if (name.endsWith('_planks')) {
-      fetch = `${name.slice(0, -'_planks'.length)}_log`
-      const avail = (pack[name] || 0) + 4 * (pack[fetch] || 0)
-      want = Math.max(1, Math.ceil((gap.need - avail) / 4))
+      const wood = name.slice(0, -'_planks'.length)
+      fetch = woodless ? 'logs' : `${wood}_log`
+      // Total-based want against the pack planks (logs already held count
+      // toward it at pickup): the floor of 1 may over-dig a covered gap by
+      // one log, but the pack grows every cycle while the need is fixed,
+      // so the legs either cover or refuse — never loop.
+      want = Math.max(1, Math.ceil((gap.need + infl - (pack[name] || 0)) / 4))
     } else if (name.endsWith('_log')) {
-      want = Math.max(1, gap.need - (pack[name] || 0))
+      want = Math.max(1, gap.need - (pack[name] || 0) + (infl > 0 ? 1 : 0))
     } else {
-      fetch = 'oak_log' // any wood burns into sticks; oak is the default
+      // Any wood burns into sticks: the pack wood when there is one, else
+      // a generic log hunt (core-3: no oak-only digging in a birch forest).
+      fetch = woodless ? 'logs' : `${topPlankWood(pack)}_log`
       const short = Math.max(1, gap.need - (pack.stick || 0))
-      want = Math.max(1, Math.ceil(short / 4)) // one log yields eight sticks
+      want = Math.max(1, Math.ceil((2 * Math.ceil(short / 4) + infl) / 4))
     }
     o.parent = { kind: o.kind, name: o.name, names: o.names, want: o.want }
     o.kind = 'block'
@@ -441,14 +476,15 @@ function openSubOrder(bot, o, gap, target, color) {
     o.block = null
     o.pos = null
     o.exposed = null
-    o.drop = fetch
-    o.have = countDrop(bot, fetch)
+    o.drop = fetch === 'logs' ? null : fetch // the find re-points generic hunts
+    o.have = o.drop ? countDrop(bot, o.drop) : 0
     o.want = want
     o.phase = 'find'
     o.announced = false
     o.skip = null
     o.search = null
     o.searchSkipFar = false
+    o.chestTried = false
     o.subFor = target
     o.subWant = gap.need
     o.subWord = word
@@ -560,31 +596,36 @@ function enterCraftOrRefuse(bot, ctx, o) {
   }
   if (plan.fail === 'missing') {
     const miss = Array.isArray(plan.missing) ? plan.missing : []
+    // Smelting first (body-4): a furnace-gated gap refuses up front, before
+    // any ladder gap sends the bot gathering for a craft that cannot land.
+    const smelt = smeltingGap(miss)
+    if (smelt) {
+      refuse(bot, ctx, `need ${smelt} (smelting not part of bring)`)
+      return
+    }
     if (!o.subFor) {
       if (bedMod.isBedFamily(o)) {
+        // Beds are immune to the mixed-gap trap below: the fresh recipe is
+        // wool plus planks only, and the gap comes from it directly.
         const b = bedGap(bot, o)
         if (b) {
-          const line = openSubOrder(bot, o, b.gap, b.target, b.color)
+          const line = openSubOrder(bot, ctx, o, b.gap, b.target, b.color)
           if (line) {
             say(bot, line)
             return
           }
         }
-      } else {
+      } else if (miss.every((e) => e && pickSubGap([e]))) {
+        // Every gap rides the ladder, or the gather is wasted (body-4).
         const gap = pickSubGap(miss)
         if (gap) {
-          const line = openSubOrder(bot, o, gap, plan.target, woolMod.dropColor(gap.name))
+          const line = openSubOrder(bot, ctx, o, gap, plan.target, woolMod.dropColor(gap.name))
           if (line) {
             say(bot, line)
             return
           }
         }
       }
-    }
-    const smelt = smeltingGap(miss)
-    if (smelt) {
-      refuse(bot, ctx, `need ${smelt} (smelting not part of bring)`)
-      return
     }
     refuse(bot, ctx, plan.line)
     return
@@ -633,7 +674,13 @@ async function withdrawCraftMats(bot, ctx, o) {
   if (bedMod.isBedFamily(o)) {
     // Beds draw from the fresh recipe directly: the planner's winning
     // refusal may be a dyeing recipe (bed + dye), which names neither the
-    // wool nor the planks the chest should release.
+    // wool nor the planks the chest should release. Both draws argmax over
+    // pack plus chest (core-2/body-2): slot order would split colours and
+    // hunt sheep the chest could have funded.
+    let chest = {}
+    try {
+      chest = await stockpileMod.chestCounts(bot, ctx) || {}
+    } catch (_) { chest = {} }
     const single = (o.names || []).length === 1 ? bedMod.bedColor(o.names[0]) : null
     if (single) {
       const wname = `${single}_wool`
@@ -645,25 +692,60 @@ async function withdrawCraftMats(bot, ctx, o) {
         } catch (_) { /* planks draw below still runs */ }
       }
     } else {
-      let woolHave = 0
-      for (const [name, count] of Object.entries(pack)) {
-        if (typeof name === 'string' && name.endsWith('_wool') && typeof count === 'number') woolHave += count
+      let color = bedMod.BED_COLORS[0]
+      let best = -1
+      for (const c of bedMod.BED_COLORS) {
+        const n = (pack[`${c}_wool`] || 0) + (chest[`${c}_wool`] || 0)
+        if (n > best) {
+          best = n
+          color = c
+        }
       }
-      const short = Math.max(0, bedMod.BED_WOOL - woolHave)
+      const wname = `${color}_wool`
+      const short = Math.max(0, bedMod.BED_WOOL - (pack[wname] || 0))
       if (short > 0) {
         try {
-          const wools = bedMod.BED_COLORS.map((c) => `${c}_wool`)
-          await stockpileMod.withdrawAnyFromChest(bot, ctx, wools, short)
+          const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [wname], short)
+          if (res && res.got > 0) pack[wname] = (pack[wname] || 0) + res.got
         } catch (_) { /* planks draw below still runs */ }
       }
     }
-    const wood = topPlankWood(pack)
+    const woods = new Set()
+    for (const src of [pack, chest]) {
+      for (const name of Object.keys(src)) {
+        if (typeof name !== 'string') continue
+        if (name.endsWith('_planks')) woods.add(name.slice(0, -'_planks'.length))
+        else if (name.endsWith('_log')) woods.add(name.slice(0, -'_log'.length))
+      }
+    }
+    let wood = 'oak'
+    let woodBest = -1
+    for (const w of woods) {
+      const avail = (pack[`${w}_planks`] || 0) + 4 * (pack[`${w}_log`] || 0) +
+        (chest[`${w}_planks`] || 0) + 4 * (chest[`${w}_log`] || 0)
+      if (avail > woodBest) {
+        woodBest = avail
+        wood = w
+      }
+    }
     const pname = `${wood}_planks`
-    const avail = (pack[pname] || 0) + 4 * (pack[`${wood}_log`] || 0)
-    const pshort = Math.max(0, bedMod.BED_PLANKS - avail)
+    const lname = `${wood}_log`
+    const have = (pack[pname] || 0) + 4 * (pack[lname] || 0)
+    const pshort = Math.max(0, bedMod.BED_PLANKS - have)
     if (pshort > 0) {
       try {
-        await stockpileMod.withdrawAnyFromChest(bot, ctx, [pname], pshort)
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [pname], pshort)
+        if (res && res.got > 0) pack[pname] = (pack[pname] || 0) + res.got
+      } catch (_) { /* log draw below still runs */ }
+    }
+    // Logs cover the remaining planks-worth (body-5): without this a chest
+    // holding only logs sends the bot chopping while the stock sits inside.
+    const have2 = (pack[pname] || 0) + 4 * (pack[lname] || 0)
+    const lshort = Math.max(0, bedMod.BED_PLANKS - have2)
+    if (lshort > 0) {
+      try {
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [lname], Math.ceil(lshort / 4))
+        if (res && res.got > 0) pack[lname] = (pack[lname] || 0) + res.got
       } catch (_) { /* hunt/craft legs run on the pack as-is */ }
     }
     return
@@ -691,7 +773,6 @@ async function fetchItem(bot, ctx, o) {
     const need = Math.max(o.want - o.have, 0)
     if (need > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, o.names || [], need)
     if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-fetch: touch nothing
-    o.chestInFlight = false
     o.chestTried = true
     ctx.chestFull = false // a fetch may have made room: re-arm the step
     const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase) // inventory count is the truth
@@ -699,19 +780,25 @@ async function fetchItem(bot, ctx, o) {
     o.have = plan.have
     o.drop = plan.items.length > 0 ? plan.items[0].name : null
     if (plan.have >= o.want) {
+      o.chestInFlight = false
       o.phase = 'return'
       o.saidWaiting = false
     } else if (woolMod.isWoolFamily(o)) {
-      await withdrawCraftMats(bot, ctx, o)
-      if (!ctx || ctx.bring !== o) return
+      o.chestInFlight = false
       toWoolHunt(bot, o) // short or empty chest: the mob rung hunts the rest
     } else if (plan.have > 0) {
+      o.chestInFlight = false
       say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
       o.phase = 'return'
       o.saidWaiting = false
     } else {
+      // chestInFlight stays up across the mat draws (body-1): clearing it
+      // here would let the next tick open a second concurrent fetch on the
+      // same order. Wool families never run the draws (body-6): a dyeing
+      // plan could pull a colour the hunt does not count.
       await withdrawCraftMats(bot, ctx, o)
       if (!ctx || ctx.bring !== o) return
+      o.chestInFlight = false
       enterCraftOrRefuse(bot, ctx, o)
     }
   } catch (_) {

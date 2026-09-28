@@ -27,7 +27,7 @@ const ITEMS = {
   white_bed: 109, black_bed: 110, gray_bed: 111,
   oak_log: 118, oak_planks: 119, crafting_table: 120, stick: 115,
   cobblestone: 113, stone_axe: 101, dirt: 112, birch_planks: 125,
-  white_dye: 126,
+  white_dye: 126, red_wool: 127, red_bed: 128,
 }
 const BLOCKS = { oak_log: 12, oak_leaves: 13, crafting_table: 120, chest: 130 }
 
@@ -48,6 +48,7 @@ function RECIPES() {
     ],
     black_bed: [R('black_bed', [['black_wool', 3], ['oak_planks', 3]], 1, true)],
     gray_bed: [R('gray_bed', [['gray_wool', 3], ['oak_planks', 3]], 1, true)],
+    red_bed: [R('red_bed', [['red_wool', 3], ['oak_planks', 3]], 1, true)],
     oak_planks: [R('oak_planks', [['oak_log', 1]], 4, false)],
     stick: [R('stick', [['oak_planks', 2]], 4, false)],
     crafting_table: [R('crafting_table', [['oak_planks', 4]], 1, false)],
@@ -312,29 +313,51 @@ describe('bed math (idkcraft-did.4, shared with jr2.2)', () => {
 
 describe('sub-order open (idkcraft-did.4)', () => {
   it('a planks gap digs the same wood, one log per four planks', () => {
-    const bot = mockBot({ items: [{ name: 'white_wool', count: 3 }] })
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }, { name: 'oak_log', count: 1 }, { name: 'crafting_table', count: 1 }],
+    })
     const o = { kind: 'item', name: 'bed', names: ['black_bed', 'white_bed'], want: 3 }
-    const line = bring.openSubOrder(bot, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
+    const line = bring.openSubOrder(bot, null, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
     assert.equal(line, 'making you a white_bed: need 3 planks, going for logs')
     assert.equal(o.kind, 'block')
     assert.equal(o.name, 'oak_log')
     assert.equal(o.want, 1)
     assert.equal(o.subFor, 'white_bed')
+    assert.equal(o.chestTried, false)
     assert.deepEqual(o.parent, { kind: 'item', name: 'bed', names: ['black_bed', 'white_bed'], want: 3 })
   })
 
   it('a second sub drops the making-you-a prefix', () => {
     const bot = mockBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'oak_log', count: 1 }] })
     const o = { kind: 'item', name: 'bed', names: ['white_bed'], want: 3, subCount: 1 }
-    const line = bring.openSubOrder(bot, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
+    const line = bring.openSubOrder(bot, null, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
     assert.equal(line, 'need 3 planks, going for logs')
+  })
+
+  it('with no table the want inflates past the 4 the table takes (core-1)', () => {
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 3 }] })
+    const o = { kind: 'item', name: 'bed', names: ['white_bed'], want: 3 }
+    bring.openSubOrder(bot, null, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
+    assert.equal(o.want, 2) // ceil((3 + 4) / 4): recipe plus table, one trip
+  })
+
+  it('with no wood in the pack the sub hunts any log, not oak only (core-3)', () => {
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 3 }] })
+    const o = { kind: 'item', name: 'bed', names: ['white_bed'], want: 3 }
+    bring.openSubOrder(bot, null, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white')
+    assert.equal(o.name, 'logs')
+    assert.equal(o.drop, null)
+    const stickBot = mockBot({ items: [{ name: 'cobblestone', count: 3 }] })
+    const so = { kind: 'item', name: 'axe', names: ['stone_axe'], want: 3 }
+    bring.openSubOrder(stickBot, null, so, { name: 'stick', need: 2, have: 0 }, 'stone_axe', null)
+    assert.equal(so.name, 'logs')
   })
 
   it('a nested open refuses instead of looping', () => {
     const bot = mockBot({})
     const o = { kind: 'wool', name: 'white_wool', want: 3, subFor: 'white_bed' }
-    assert.equal(bring.openSubOrder(bot, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white'), null)
-    assert.equal(bring.openSubOrder(bot, { kind: 'item' }, { name: 'cobblestone', need: 3, have: 0 }, 'x', null), null)
+    assert.equal(bring.openSubOrder(bot, null, o, { name: 'oak_planks', need: 3, have: 0 }, 'white_bed', 'white'), null)
+    assert.equal(bring.openSubOrder(bot, null, { kind: 'item' }, { name: 'cobblestone', need: 3, have: 0 }, 'x', null), null)
   })
 
   it('gap precedence is wool, planks, logs, sticks; smelting names the ingot', () => {
@@ -579,6 +602,124 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     assert.ok(bot.lines.includes('could not get 3 planks for the white_bed in time'), `lines: ${bot.lines}`)
   })
 
+  it('a mixed chest argmaxes colour: red 3 beats white 2 in front (core-2)', async () => {
+    const bot = mockBot({
+      items: [],
+      chest: [{ name: 'white_wool', count: 2 }, { name: 'red_wool', count: 3 }, { name: 'oak_planks', count: 3 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table', '5,64,1': 'chest' },
+    })
+    const ticker = tickerFor(bot)
+    chestTableHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['checking the home chest for bed'])
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.red_bed, null, 1]])
+    assert.deepEqual(bot.attackCalls, [], 'no sheep hunted: the chest funded red')
+  })
+
+  it('pack 2 white + chest 10 white tops up instead of hunting (body-2)', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'white_wool', count: 2 }, { name: 'red_wool', count: 1 },
+        { name: 'oak_planks', count: 4 },
+      ],
+      chest: [{ name: 'white_wool', count: 10 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table', '5,64,1': 'chest' },
+    })
+    const ticker = tickerFor(bot)
+    chestTableHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.deepEqual(bot.attackCalls, [], 'no sheep hunted: the chest topped up white')
+  })
+
+  it('chest logs fund the bed without a single dig (body-5)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }],
+      chest: [{ name: 'oak_log', count: 2 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table', '5,64,1': 'chest' },
+    })
+    const ticker = tickerFor(bot)
+    chestTableHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.equal(bot.calls.dig, 0, 'no digging: the chest logs funded the planks')
+    assert.deepEqual(bot.chest, [{ name: 'oak_log', count: 1 }])
+  })
+
+  it('no table anywhere: wool plus trees still lands a bed (core-1)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '1,63,0': 'dirt', ...treeCells(20, 64, 0) },
+    })
+    const ticker = tickerFor(bot)
+    bot._tickerCtx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['making you a white_bed: need 3 planks, going for logs'])
+    assert.equal(bot._tickerCtx.bring.want, 2) // recipe plus the made table, one trip
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.calls.craft, ['oak_planks', 'crafting_table', 'oak_planks', 'white_bed'])
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
+  })
+
+  it('mat draws hold the chest window: no concurrent second fetch (body-1)', async () => {
+    const stockpile = require('../src/behaviours/stockpile')
+    const bot = mockBot({
+      items: [],
+      chest: [{ name: 'white_wool', count: 2 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table', '5,64,1': 'chest' },
+    })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    chestTableHome(ctx)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.equal(ctx.bring.phase, 'chestfetch')
+    await bring(bot, ctx, null, {}) // goal set; no window yet
+    bot.entity.position = pos(5, 64, 1)
+    // Park the mat windows behind a gate: tick 2 lands mid-draw.
+    let release = null
+    const gate = new Promise((r) => { release = r })
+    let calls = 0
+    const orig = stockpile.withdrawAnyFromChest
+    stockpile.withdrawAnyFromChest = async (...a) => {
+      calls += 1
+      if (calls >= 2) await gate
+      return orig(...a)
+    }
+    try {
+      const p1 = bring(bot, ctx, null, {})
+      for (let i = 0; i < 5; i++) await flush()
+      assert.equal(calls, 2, 'tick 1 parked at the wool draw')
+      const p2 = bring(bot, ctx, null, {}) // must not start a second fetch
+      for (let i = 0; i < 5; i++) await flush()
+      assert.equal(calls, 2, 'tick 2 opened no window')
+      release()
+      await p1
+      await p2
+      for (let i = 0; i < 10; i++) await flush() // fetchItem floats: let it land
+    } finally {
+      stockpile.withdrawAnyFromChest = orig
+    }
+    const o = ctx.bring
+    assert.ok(o && o.subFor === 'white_bed', 'one sub-order open')
+    assert.deepEqual(bot.lines.filter((l) => l.startsWith('making you a white_bed')), [
+      'making you a white_bed: need 3 wool, going for sheep',
+    ])
+    assert.ok(!bot.lines.some((l) => l.startsWith('could not get')), `lines: ${bot.lines}`)
+  })
+
   it('a dyeing refusal never hides the fresh gap: wool covered, logs fetched', async () => {
     const bot = mockBot({
       items: [{ name: 'white_wool', count: 3 }],
@@ -587,7 +728,7 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     handleChat(bot, tickerFor(bot), 'P', 'bring me bed')
     assert.deepEqual(bot.lines, ['making you a white_bed: need 3 planks, going for logs'])
     assert.equal(bot._tickerCtx.bring.kind, 'block')
-    assert.equal(bot._tickerCtx.bring.name, 'oak_log')
+    assert.equal(bot._tickerCtx.bring.name, 'logs') // woodless pack: any log (core-3)
   })
 
   it('eight oak and no table: make a table, place it, craft the bed', async () => {

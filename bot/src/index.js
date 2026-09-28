@@ -1389,10 +1389,16 @@ function fleeReflex(bot, ctx) {
         }
         if (cPlan.fail === 'missing') {
           const miss = Array.isArray(cPlan.missing) ? cPlan.missing : []
+          // Smelting first (body-4): a furnace-gated gap refuses up front,
+          // before any ladder gap sends the bot gathering for a craft that
+          // cannot land.
+          const smelt = bringMod.smeltingGap(miss)
+          if (smelt) return `need ${smelt} (smelting not part of bring)`
           let sub = null
           if (bedMod.isBedFamily(resolved)) {
             sub = bringMod.bedGap(bot, { names: resolved.names })
-          } else {
+          } else if (miss.every((e) => e && bringMod.pickSubGap([e]))) {
+            // Every gap rides the ladder, or the gather is wasted (body-4).
             const gap = bringMod.pickSubGap(miss)
             if (gap) sub = { gap, target: cPlan.target, color: woolMod.dropColor(gap.name) }
           }
@@ -1407,15 +1413,13 @@ function fleeReflex(bot, ctx) {
               items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
               phase: 'craft', announced: true, keptName,
             }
-            const line = bringMod.openSubOrder(bot, ctx.bring, sub.gap, sub.target, sub.color)
+            const line = bringMod.openSubOrder(bot, ctx, ctx.bring, sub.gap, sub.target, sub.color)
             if (line) {
               ctx.paused = false
               return line
             }
             ctx.bring = null // a refused open never leaves a half order behind
           }
-          const smelt = bringMod.smeltingGap(miss)
-          if (smelt) return `need ${smelt} (smelting not part of bring)`
           return cPlan.line
         }
         if (cPlan.fail === 'no-table') return cPlan.line

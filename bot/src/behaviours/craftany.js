@@ -168,15 +168,29 @@ function missingLine(target, missing) {
 }
 
 // Table path for a table recipe: the verified standing claim, the pack, or
-// 4 planks to make one (any wood — the recipe lookup filters by held).
-// Null reads as the honest no-table refusal, never a craft attempt.
+// 4 planks-worth to make one (any wood, logs count quadruple — the recipe
+// lookup filters by held). Null reads as the honest no-table refusal,
+// never a craft attempt.
 function tablePathOf(bot, ctx, pack) {
   try {
     if (gearMod.tableBlock(bot, ctx)) return 'placed'
   } catch (_) { /* unreadable claim: fall through */ }
   if ((pack.crafting_table || 0) > 0) return 'pack'
-  if (totalPlanks(pack) >= 4) return 'make'
+  // Logs fund the table through a planks op first (did.4 core-1): the
+  // executor converts, the planner only checks the worth here.
+  if (totalPlanks(pack) + 4 * totalLogs(pack) >= 4) return 'make'
   return null
+}
+
+// Registry id -> item name (planCraft builds its own inline; the executor
+// needs the same map to read the table wood out of its recipe).
+function buildIdToName(bot) {
+  const byName = (bot.registry && bot.registry.itemsByName) || {}
+  const map = {}
+  for (const [n, e] of Object.entries(byName)) {
+    if (e && typeof e.id === 'number') map[e.id] = n
+  }
+  return map
 }
 
 // The wood a table recipe burns (its _planks delta), or null.
@@ -189,8 +203,9 @@ function tableWoodOf(recipe, idToName) {
   return null
 }
 
-// The table variant to make: the first affordable (4+ of its wood in the
-// pack) one that burns no wood the final needs directly — otherwise the
+// The table variant to make: the first affordable (4+ planks-worth of its
+// wood in the pack, logs counting quadruple) one that burns no wood the
+// final needs directly — otherwise the
 // make-op eats the recipe's own stack on mixed-wood packs (revmux 02: 5
 // oak + 4 birch promised a birch axe, burned the birch into the table,
 // then refused). Falls back to the first affordable variant when every
@@ -205,7 +220,10 @@ function pickTableRecipe(bot, idToName, needs, pack) {
   if (!Array.isArray(found) || found.length === 0) return null
   const affordable = found.filter((r) => {
     const w = tableWoodOf(r, idToName)
-    return w && ((pack && pack[w]) || 0) >= 4
+    if (!w) return false
+    const base = w.slice(0, -'_planks'.length)
+    const have = ((pack && pack[w]) || 0) + 4 * ((pack && pack[`${base}_log`]) || 0)
+    return have >= 4
   })
   if (affordable.length === 0) return null
   const direct = new Set()
@@ -219,14 +237,23 @@ function pickTableRecipe(bot, idToName, needs, pack) {
   }) || affordable[0]
 }
 
-// Pack minus the 4 planks the made table eats from its own variant's wood:
-// the 'make' plan checks coverage against this, so the same planks never
-// fund both the table and the recipe (revmux 01: 3 cobble + 4 planks
+// Pack minus the 4 planks-worth the made table eats from its own variant's
+// wood: the 'make' plan checks coverage against this, so the same planks
+// never fund both the table and the recipe (revmux 01: 3 cobble + 4 planks
 // promised an axe, burned the planks into a stray table, then refused).
+// Planks first, then logs, conservatively (did.4 core-1): a log burned for
+// 1-3 missing planks leaves no change in the fund, so the plan may fetch
+// one log too many, never one too few.
 function packMinusTable(pack, wood) {
   if (!isPlanks(wood)) return { ...pack }
   const sub = { ...pack }
-  sub[wood] = Math.max(0, (sub[wood] || 0) - 4)
+  const base = wood.slice(0, -'_planks'.length)
+  const lname = `${base}_log`
+  let need = 4
+  const ptake = Math.min(sub[wood] || 0, need)
+  sub[wood] = (sub[wood] || 0) - ptake
+  need -= ptake
+  if (need > 0) sub[lname] = Math.max(0, (sub[lname] || 0) - Math.ceil(need / 4))
   return sub
 }
 
@@ -408,7 +435,7 @@ function craftItem(bot, ctx, name, count) {
     } else {
       if (!st.tableP) {
         const pack = packCounts(bot)
-        if ((pack.crafting_table || 0) > 0 || totalPlanks(pack) >= 4) {
+        if ((pack.crafting_table || 0) > 0 || totalPlanks(pack) >= 4 || totalLogs(pack) >= 1) {
           if (st.tableTries >= TABLE_TRIES) {
             clearRun(ctx)
             return { done: false, line: 'need a crafting table' }
@@ -428,6 +455,21 @@ function craftItem(bot, ctx, name, count) {
             return 'running'
           }
           const trec = plan.tableRecipe || craftMod.recipes(bot, 'crafting_table', null)[0]
+          // Logs fund the table through a planks op for the table's own
+          // wood first (did.4 core-1): the generic biggest-first op could
+          // burn a whole other stack while this wood stays short. One op
+          // lands 4 planks, so the next tick makes the table.
+          const tweed = trec && tableWoodOf(trec, buildIdToName(bot))
+          const tlog = tweed && `${tweed.slice(0, -'_planks'.length)}_log`
+          if (trec && tweed && (pack[tweed] || 0) < 4 && (tlog && (pack[tlog] || 0) > 0)) {
+            const pf = craftMod.recipes(bot, tweed, null)[0]
+            if (!pf) {
+              clearRun(ctx)
+              return { done: false, line: 'need a crafting table' }
+            }
+            gearMod.runOp(bot, ctx, { item: tweed, recipe: pf, count: 1, table: null })
+            return 'running'
+          }
           if (trec) {
             gearMod.runOp(bot, ctx, { item: 'crafting_table', recipe: trec, count: 1, table: null })
             return 'running'
