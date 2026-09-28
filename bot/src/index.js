@@ -716,7 +716,7 @@ function fleeReflex(bot, ctx) {
         if (target) {
           const state = buildState(bot, target, lastTargetPos)
           lastTargetPos = state._lastTargetPos
-          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
           if (ctx.scout) ctx.scout.tick()
           meleeReflex(bot, ctx, state)
           eatReflex(bot, ctx, state)
@@ -893,7 +893,7 @@ function fleeReflex(bot, ctx) {
         ctx.fightUnreachableTicks = 0
       }
       // every-tick hooks (no body cost) go here
-      if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot)
+      if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
       if (ctx.scout) ctx.scout.tick()
       meleeReflex(bot, ctx, state)
       eatReflex(bot, ctx, state)

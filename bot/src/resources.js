@@ -5,7 +5,13 @@
 // exported resolvers — scout.js itself is untouched for amb); forage
 // (atl.2) reads it. Dumb by design: position, type, time; forage
 // re-validates on arrival. Bounded (oldest out), never throws.
+//
+// atl.16: each cell also carries exposed (isExposed at note time —
+// bring/forage read live when the chunk is loaded, else trust the flag).
+// Tri-state: true/false for noted cells, undefined for pre-flag records
+// (old disk files, hand notes without the field) — never defaulted.
 
+const Vec3 = require('vec3')
 const scout = require('./behaviours/scout')
 
 const MAX_ITEMS = 256
@@ -20,8 +26,11 @@ function store(ctx) {
   return ctx.resources
 }
 
-// Spots: [{ x, y, z, name }], now ms. Returns the count newly added
-// (re-notes refresh the timestamp, oldest-out past the cap).
+// Spots: [{ x, y, z, name, at?, exposed? }], now ms. Returns the count
+// newly added (re-notes refresh the timestamp AND the exposed flag — ore
+// opens up or gets buried — oldest-out past the cap). A per-spot at
+// (memory restore) wins over now; exposed survives only as a boolean,
+// anything else reads as undefined (pre-flag record).
 function noteSpots(ctx, spots, now) {
   const mem = store(ctx)
   if (!mem || !Array.isArray(spots)) return 0
@@ -32,7 +41,9 @@ function noteSpots(ctx, spots, now) {
     const k = scout.keyOf(s)
     if (mem.items.has(k)) mem.items.delete(k)
     else added++
-    mem.items.set(k, { x: s.x, y: s.y, z: s.z, name: s.name, at: t })
+    const at = typeof s.at === 'number' && Number.isFinite(s.at) ? s.at : t
+    const exposed = typeof s.exposed === 'boolean' ? s.exposed : undefined
+    mem.items.set(k, { x: s.x, y: s.y, z: s.z, name: s.name, at, exposed })
   }
   while (mem.items.size > MAX_ITEMS) {
     mem.items.delete(mem.items.keys().next().value)
@@ -110,10 +121,36 @@ function scan(bot, ctx, opts) {
       name = null
     }
     if (!name) continue
-    spots.push({ x: p.x, y: p.y, z: p.z, name })
+    // atl.16: exposure at note time — after a chunk unloads blockAt reads
+    // null and the flag is the only record left.
+    let exposed = false
+    try {
+      exposed = scout.isExposed(bot, p)
+    } catch (_) {
+      exposed = false
+    }
+    spots.push({ x: p.x, y: p.y, z: p.z, name, exposed })
   }
   const added = noteSpots(ctx, spots, now)
   return { added, total: count(ctx) }
 }
 
-module.exports = { noteSpots, nearest, count, clear, forget, scan, MAX_ITEMS, SCAN_RADIUS }
+// Read rule for bring/forage (atl.16): when the cell's chunk is loaded,
+// exposure is recomputed from the live world (the vein may have opened
+// up or been buried since the note); otherwise the remembered flag is
+// trusted — which is undefined for pre-flag records. Never throws.
+function exposedOf(bot, item) {
+  const remembered = item && typeof item.exposed === 'boolean' ? item.exposed : undefined
+  try {
+    if (!bot || !bot.blockAt || !item || typeof item.x !== 'number' ||
+      typeof item.y !== 'number' || typeof item.z !== 'number') return remembered
+    // Real blockAt wants a Vec3 (b50); memory cells are plain objects.
+    const v = new Vec3(Math.floor(item.x), Math.floor(item.y), Math.floor(item.z))
+    if (!bot.blockAt(v)) return remembered
+    return scout.isExposed(bot, v)
+  } catch (_) {
+    return remembered
+  }
+}
+
+module.exports = { noteSpots, nearest, count, clear, forget, scan, exposedOf, MAX_ITEMS, SCAN_RADIUS }

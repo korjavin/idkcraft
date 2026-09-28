@@ -115,7 +115,14 @@ function snapshot(bot, ctx, now) {
         if (!r || typeof r.name !== 'string') continue
         const p = pt(r)
         if (!p) continue
-        items.push({ x: p.x, y: p.y, z: p.z, name: r.name })
+        // atl.16: at + exposed survive the restart (bring prices memory
+        // by age, and unloaded chunks cannot recompute exposure). Only
+        // booleans persist — a pre-flag cell writes no key at all.
+        const rec = { x: p.x, y: p.y, z: p.z, name: r.name }
+        const at = num(r.at)
+        if (at !== null) rec.at = at
+        if (typeof r.exposed === 'boolean') rec.exposed = r.exposed
+        items.push(rec)
       }
       items = items.slice(-resources.MAX_ITEMS)
     }
@@ -308,7 +315,13 @@ function restore(bot, ctx, file, now) {
         if (!r || typeof r.name !== 'string') continue
         const p = pt(r)
         if (!p) continue
-        spots.push({ x: p.x, y: p.y, z: p.z, name: r.name })
+        // atl.16: at restores per-cell (noteSpots honors s.at); a missing
+        // exposed key stays undefined — a pre-flag record, not buried.
+        const rec = { x: p.x, y: p.y, z: p.z, name: r.name }
+        const at = num(r.at)
+        if (at !== null) rec.at = at
+        if (typeof r.exposed === 'boolean') rec.exposed = r.exposed
+        spots.push(rec)
       }
       if (spots.length) {
         resources.noteSpots(ctx, spots, t)
