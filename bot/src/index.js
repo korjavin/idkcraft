@@ -12,6 +12,7 @@ const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced } = require('./behaviours/util')
+const unpin = require('./unpin')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -669,6 +670,11 @@ function fleeReflex(bot, ctx) {
         bot.health < ctx.lastTickHp - 0.5) ctx.lastHurtAt = Date.now()
       if (typeof bot.health === 'number') ctx.lastTickHp = bot.health
     } catch (_) { /* hurt tracking best-effort */ }
+    // Hover-arrest watchdog (idkcraft-1cj): first in the tick — a pinned
+    // body needs its decontact nudge in seconds, not after the brain. Sends
+    // at most one cloned packet per second, only on the airborne + storm +
+    // zero-disp signature; see unpin.js for the ceiling. Best-effort.
+    try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
     // canDig belongs to the gohome walk alone: any tick it does not own the
     // body gets the shared default back, so a mid-walk preemption (orders,
     // homing, death) cannot leak no-dig into other behaviours (revmux 8kc).
@@ -1810,6 +1816,9 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // mineflayer bot ever reaches this code.
     bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+    // Hover-arrest taps (idkcraft-1cj): teleport counter + move-packet clone
+    // for the watchdog. Same spot as the pathfinder taps: real bot only.
+    try { unpin.installUnpinTap(bot, bot._tickerCtx || {}) } catch (_) { /* unpin tap best-effort */ }
 
     const life = createLifecycle(ticker)
     bot.on('death', () => life.onDeath(bot))
