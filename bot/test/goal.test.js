@@ -308,15 +308,17 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     if (Array.isArray(extra)) items.push(...extra)
     return goalBot({ items, at: at || pos(0, 64, 0) })
   }
-  it('failed gather is infeasible while the log count stands, decide rests', async () => {
-    // Bead-literal: no house yet, so explore is gated too — rest, not gather.
+  it('failed gather is infeasible while the log count stands, alone day explores', async () => {
+    // gyw: gather still holds (atl.4), but the stranded hard state opens
+    // pre-build explore on an alone day — the menu moves instead of idling.
+    // Night and company still rest (see gather-relocate.test.js).
     const bot = logsBot(9)
     const ctx = { home: { site: pos(10, 64, 10) }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {} }
     const facts = goalFacts(bot, ctx)
     assert.equal(facts.logs, 9)
     assert.equal(MENU.gather.feasible(facts, bot, ctx), false)
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'explore')
   })
   it('failed gather routes to explore once the house stands', async () => {
     // atl.2 menu: the atLogs final outlives the home transition, so the
