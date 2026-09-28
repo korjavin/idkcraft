@@ -28,8 +28,13 @@ const TOSS_RANGE = DELIVER_RANGE + 0.5
 const NO_PATH_TICKS = 20
 const MOVE_TOLERANCE = 0.5
 
-
-
+// Gear self reserve, mirror of gear.js SELF_RESERVE like stockpile's
+// GEAR_SELF_RESERVE (no shared import: deliver must not require gear —
+// craft/goal cycle). Shared-name twins (self + owner under one item name)
+// toss only the pack ABOVE the reserve: a stale haul (death before the
+// handover, persisted across the rejoin) must never spend the bot's own
+// pick or its escape-bucket pair (revmux jsf.5-01 core-1/body-1).
+const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 }
 
 function dist(a, b) {
   try {
@@ -59,7 +64,7 @@ function haulLive(bot, ctx) {
     for (const n of Object.keys(haul)) {
       let have = 0
       try { have = countItems(bot, (m) => m === n) } catch (_) { have = 0 }
-      const c = Math.min(haul[n] || 0, have)
+      const c = Math.max(0, Math.min(haul[n] || 0, have - (GEAR_SELF_RESERVE[n] || 0)))
       if (c > 0) { items[n] = c; total += c }
     }
   } catch (_) { /* empty haul */ }

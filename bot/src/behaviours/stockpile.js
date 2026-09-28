@@ -54,6 +54,11 @@ const TOOL_KEEP = /_(pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boo
 const EXACT_KEEP = new Set([
   'shears', 'flint_and_steel', 'bow', 'crossbow', 'trident', 'arrow', 'shield',
   'torch', 'coal', 'charcoal', 'stick',
+  // Escape kit (jsf.5): the filled bucket stays for the pit climb, the
+  // empty stays for the gear fill sub-step (a banked empty would reforge
+  // instead of refill). Owner spares bank through the finished-goods
+  // allowance below, like the forged swords and picks.
+  'bucket', 'water_bucket',
 ])
 const FOOD_KEEP = 10
 const SCAFFOLD_KEEP = 32
@@ -123,7 +128,7 @@ function invItems(bot) {
 // Self reserve, mirror of gear.js SELF_RESERVE (round-2): owner pickaxes
 // share the self pick's item name, so the allowance counts the pack minus
 // the hands — a toss plus a bank can never spend the bot's own pick.
-const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1 }
+const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 }
 // Finished-goods exception (ipn.3): forged owner tools bank up to the gear
 // ledger count (ctx.gearFinished); the rest of the kit stays. Without ctx
 // the behaviour is exactly the old one.
@@ -132,6 +137,38 @@ function depositPlan(bot, ctx) {
   const edible = edibles()
   let keepFood = FOOD_KEEP
   let keepScaffold = SCAFFOLD_KEEP
+  // Bed reserve (jr2.2): while bedroom beds are owed, the work-in-progress
+  // stays packed — banking it starves the beds craft/place between picks
+  // (rig-proven bank/craft cycle: the finished bed itself got banked).
+  // Deferred require (bring<->stockpile cycle). Once both beds are in, the
+  // leftovers bank normally.
+  let bedOwed = false
+  try {
+    const fact = require('./beds').bedsFact(bot, ctx && ctx.home)
+    bedOwed = fact === 'none' || fact === 'one'
+  } catch (_) { bedOwed = false }
+  // + ground patches under unplaced beds (floorless-house terrain dips eat
+  // a plank each — banking them strands the place between picks).
+  let keepBedPlanks = 6
+  try { keepBedPlanks += require('./beds').fillNeed(bot, ctx && ctx.home) || 0 } catch (_) { /* no patches */ }
+  // The keep fills the top single wood first (gather-gate mirror, revmux
+  // 01-review): the bed top-up measures maxPlanks of ONE wood, so keeping
+  // 6 mixed in inventory order would farm logs forever while beds are held
+  // (2 birch kept + 50 oak banked still reads maxPlanks=2).
+  const woodKeep = {}
+  if (bedOwed) {
+    const totals = {}
+    for (const j of list) {
+      if (!j || typeof j.name !== 'string' || !j.name.endsWith('_planks')) continue
+      totals[j.name] = (totals[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+    let left = keepBedPlanks
+    for (const w of Object.keys(totals).sort((a, b) => totals[b] - totals[a])) {
+      const k = Math.min(left, totals[w])
+      woodKeep[w] = k
+      left -= k
+    }
+  }
   let finished = null
   try {
     finished = (ctx && ctx.gearFinished) || null
@@ -160,6 +197,13 @@ function depositPlan(bot, ctx) {
     }
     let n = typeof i.count === 'number' ? i.count : 1
     if (n <= 0) continue
+    if (bedOwed && (i.name.endsWith('_wool') || i.name.endsWith('_bed'))) continue
+    if (bedOwed && i.name.endsWith('_planks')) {
+      const k = Math.min(woodKeep[i.name] || 0, n)
+      woodKeep[i.name] = (woodKeep[i.name] || 0) - k
+      n -= k
+      if (n <= 0) continue
+    }
     if (edible.has(i.name)) {
       const k = Math.min(keepFood, n)
       keepFood -= k
@@ -216,6 +260,13 @@ function chestSpotFor(bot, ctx) {
     const c = cell(s)
     if (!c) continue
     if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
+    // Bedroom cells never take a new chest (idkcraft-4nx, the equip roadside
+    // precedent): the bed step fails loud on blocked cells by design, so the
+    // placer avoids them. The adopt scan above still claims a standing chest
+    // wherever it is. Deferred require (beds->stockpile cycle).
+    try {
+      if (require('./beds').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
+    } catch (_) { /* untestable home: place as before */ }
     const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }
     if (below === 'air') continue
@@ -365,6 +416,31 @@ async function withdrawAnyFromChest(bot, ctx, names, count) {
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
     return { got: 0, name: null }
+  }
+}
+
+// Count stacks in the adopted chest without withdrawing (did.4: the bed
+// colour/wood argmax needs chest counts before it draws). One window;
+// {name: count} over names (all stacks when names is null). A vanished
+// chest reads empty — the caller falls back to the pack.
+async function chestCounts(bot, ctx, names) {
+  const want = Array.isArray(names) ? new Set(names) : null
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+      const out = {}
+      if (Array.isArray(stacks)) {
+        for (const s of stacks) {
+          if (!s || typeof s.name !== 'string') continue
+          if (want && !want.has(s.name)) continue
+          out[s.name] = (out[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
+        }
+      }
+      return out
+    })
+    return res && res.status === 'ok' ? res.value : {}
+  } catch (_) {
+    return {}
   }
 }
 
@@ -567,6 +643,14 @@ function stockpile(bot, ctx, target, state) {
             }
           }
         } catch (_) { /* ledger best-effort */ }
+        // Pantry signal (ipn.6): ladder mats banked mid-rung re-arm gear's
+        // chest withdraw. Names mirror gear's RUNGS mats + smeltable ore
+        // (no shared import: this module must not require gear — cycle).
+        try {
+          if ((bankedByName.raw_iron || 0) > 0 || (bankedByName.iron_ingot || 0) > 0 || (bankedByName.diamond || 0) > 0) {
+            ctx.gearPantryBanked = (ctx.gearPantryBanked || 0) + 1
+          }
+        } catch (_) { /* signal best-effort */ }
         ctx.chestFull = false
         ctx.chestFullAt = null
         ctx.chestErrorAt = null
@@ -733,6 +817,7 @@ module.exports.surplusCount = surplusCount
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
+module.exports.chestCounts = chestCounts
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2

@@ -6,7 +6,7 @@ const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
-const { NEED_LOGS } = require('../goal')
+const { NEED_LOGS, gatherFailedHolds } = require('../goal')
 const { countItems } = require('../perception')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
 
@@ -73,9 +73,18 @@ function commitTarget(g, bp, p, name, far) {
 }
 
 
+function bodyPos(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (p && typeof p.x === 'number' && typeof p.z === 'number') return { x: p.x, y: p.y, z: p.z }
+  } catch (_) { /* unknown body: no point */ }
+  return null
+}
+
 function failFinal(bot, ctx, g, logs, final) {
   g.final = final
   g.atLogs = logs
+  g.failPos = bodyPos(bot)
   ctx.stepStatus = g.final
   say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
   clearGoal(bot, ctx)
@@ -90,13 +99,32 @@ function gather(bot, ctx, target, state) {
   // instead of rescanning and re-chatting every tick.
   if (g.final) {
     if (g.atLogs !== logs && ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
+    let keepSkip = false
+    if (g.atLogs === logs && typeof g.final === 'string' && g.final.startsWith('failed:') && !gatherFailedHolds(g, logs, bot)) {
+      // Relocated past the failure point (idkcraft-gyw): the menu hold
+      // already releases there, and new ground may hold nearer trees or
+      // other wood — drop the latch for a fresh try instead of replaying
+      // the far failure until a log count that only gather can change.
+      // atLogs=-1 rides the world-changed reset below (final, streak);
+      // the searchfar phase resets so the fresh sync-48 scan runs before
+      // any new far search. Struck skips SURVIVE the release (revmux
+      // core-2): the retry scans for untried trees, never re-walks the
+      // same unreachable crown — drops-landed still clears once anything
+      // is chopped.
+      g.atLogs = -1
+      g.failPos = null
+      g.phase = 'walk'
+      g.search = null
+      keepSkip = true
+      if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
+    }
     if (g.atLogs === logs) {
       ctx.stepStatus = g.final
       clearGoal(bot, ctx) // no-op once null (acceptance: no setGoal past final)
       return
     }
     g.final = null
-    g.skip.clear()
+    if (!keepSkip) g.skip.clear()
     g.streak = 0
   }
   if (logs >= NEED_LOGS) {
@@ -249,6 +277,7 @@ function gather(bot, ctx, target, state) {
         if (g.streak >= UNREACHABLE_FAILS) {
           g.final = 'failed:unreachable'
           g.atLogs = logs
+          g.failPos = bodyPos(bot)
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)

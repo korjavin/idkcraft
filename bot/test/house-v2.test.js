@@ -87,19 +87,22 @@ function mockBot(world, { items = [], doors = [], spawn = pos(0, 64, 0) } = {}) 
 const settle = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
 
 describe('jr2.1 phases lay in order: table, shell, roof, partition', () => {
-  it('plan indexes rise table < ring0 < door < ring1 < roof < partition', () => {
+  it('plan indexes rise table < floor < ring0 < door < ring1 < roof < partition', () => {
     const door = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
-    assert.equal(door, 22)
-    const ring0 = BLUEPRINT_V2.slice(1, 22)
+    assert.equal(door, 27)
+    const floor = BLUEPRINT_V2.slice(1, 6)
+    assert.equal(floor.length, 5)
+    assert.ok(floor.every((c) => c.kind === 'fill' && c.dy === -1))
+    const ring0 = BLUEPRINT_V2.slice(6, 27)
     assert.equal(ring0.length, 21)
     assert.ok(ring0.every((c) => c.kind === 'planks' && c.dy === 0))
-    const ring1 = BLUEPRINT_V2.slice(23, 44)
+    const ring1 = BLUEPRINT_V2.slice(28, 49)
     assert.equal(ring1.length, 21)
     assert.ok(ring1.every((c) => c.kind === 'planks' && c.dy === 1))
-    const roof = BLUEPRINT_V2.slice(44, 86)
+    const roof = BLUEPRINT_V2.slice(49, 91)
     assert.equal(roof.length, 42)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
-    const part = BLUEPRINT_V2.slice(86)
+    const part = BLUEPRINT_V2.slice(91)
     assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]), [
       [1, 0, 3], [3, 0, 3], [5, 0, 3], [3, 0, 4],
       [1, 1, 3], [3, 1, 3], [5, 1, 3], [3, 1, 4],
@@ -214,7 +217,12 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
     assert.equal(home.v, 2)
   })
 
-  it('both front columns empty reads v1 (accepted catastrophic residual)', () => {
+  it('both front columns empty rejects (catastrophic damage, 6bl)', () => {
+    // Used to mis-adopt as v1 at the wrong origin (the "accepted
+    // catastrophic residual"): the v1 repair plan then ran shifted and the
+    // door phases walked into walls. The table gate now rejects — a v2
+    // shell holds no workbench at the v1 table offset — and the bot founds
+    // a new site instead of griefing its own ruin.
     const world = makeWorld()
     const site = { x: 10, y: 64, z: 10 }
     paintPlan(world, site, BLUEPRINT_V2)
@@ -223,9 +231,8 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
       world.set(site.x + cx, site.y + 1, site.z, 'air')
     }
     const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
-    const home = goal.adoptHome(bot)
-    assert.ok(home)
-    assert.equal(home.v, 1)
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
   })
 
   it('dark probe cells abort the adopt instead of misreading the version', () => {
@@ -242,6 +249,148 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
       return seen(p)
     }
     assert.equal(goal.adoptHome(bot), null)
+  })
+
+  it('a lone foreign door does not adopt (6bl)', () => {
+    // The 6bl jungle door: no ring, no table — a door alone is not a house.
+    const world = makeWorld()
+    world.set(11, 64, 10, 'jungle_door')
+    const bot = mockBot(world, { doors: [{ x: 11, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('a probe-fooling foreign structure does not adopt (6bl)', () => {
+    // Live 6bl: planks at two v2 corners fooled isV2House and every plan
+    // cell read non-air (terrain), so the lax presence called it built. The
+    // quorum counts kind matches only: door + 4 planks < 10 → rejected.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    for (const cell of BLUEPRINT_V2) {
+      world.set(site.x + cell.dx, site.y + cell.dy, site.z + cell.dz, 'dirt')
+    }
+    world.set(13, 64, 10, 'jungle_door')
+    world.set(13, 65, 10, 'jungle_door')
+    world.set(10, 64, 10, 'jungle_planks')
+    world.set(10, 65, 10, 'jungle_planks')
+    world.set(16, 64, 15, 'jungle_planks')
+    world.set(16, 65, 15, 'jungle_planks')
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('a plank building without the workbench does not adopt (6bl)', () => {
+    // Live 6bl, second half: the foreign structure scores 26+ plank
+    // matches (walls plus a roof sheet) — above an own mid-build house —
+    // so a count alone cannot separate. No vanilla structure generates a
+    // crafting table, and our build lays it before the door: roof plus
+    // corner columns (51 kind matches, quorum long passed) with no table
+    // still rejects.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    world.set(13, 64, 10, 'jungle_door')
+    for (let dx = 0; dx <= 6; dx++) {
+      for (let dz = 0; dz <= 5; dz++) world.set(site.x + dx, site.y + 2, site.z + dz, 'jungle_planks')
+    }
+    for (const [cx, cz] of [[0, 0], [6, 0], [0, 5], [6, 5]]) {
+      world.set(site.x + cx, site.y, site.z + cz, 'jungle_planks')
+      world.set(site.x + cx, site.y + 1, site.z + cz, 'jungle_planks')
+    }
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('an own house without its table does not adopt (accepted 6bl tail)', () => {
+    // Table mined (or skipped) plus wiped memory: the strict gate rejects
+    // and the bot founds a new site instead of repairing — the safe
+    // direction. Memory (hlk) restores the site in the common case, so
+    // this tail needs both a missing table AND a gone memory file.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    world.set(site.x + 5, site.y, site.z + 1, 'air') // table cell mined
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('adopt quorum boundary: 9 kind matches reject, 10 adopt (6bl)', () => {
+    // v1 door house: door + table + 7 ring0 cells = 9 → foreign; one more
+    // ring0 cell = 10 → ours (unbuilt: ring1 and the roof still missing).
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    world.set(11, 64, 10, 'oak_door')
+    world.set(14, 64, 11, 'crafting_table')
+    const ring = ['10,64,10', '12,64,10', '13,64,10', '10,64,13', '11,64,13', '10,64,11', '13,64,11']
+    for (const k of ring) {
+      const [x, y, z] = k.split(',').map(Number)
+      world.set(x, y, z, 'oak_planks')
+    }
+    const bot = mockBot(world, { doors: [{ x: 11, y: 64, z: 10 }] })
+    assert.equal(goal.adoptHome(bot), null, '9 kind matches reject')
+    world.set(12, 64, 13, 'oak_planks') // 10th kind match
+    const home = goal.adoptHome(bot)
+    assert.ok(home, '10 kind matches adopt')
+    assert.equal(home.v, 1)
+    assert.deepEqual(home.site, site)
+    assert.equal(home.built, false)
+  })
+
+  it('a foreign nearer door does not veto the own house behind it (6bl)', () => {
+    // First-passing-wins: the lone jungle door rejects, the scan moves on
+    // to the own v2 house instead of giving up to a fresh site.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    world.set(30, 64, 30, 'jungle_door')
+    const bot = mockBot(world, { doors: [{ x: 30, y: 64, z: 30 }, { x: 13, y: 64, z: 10 }] })
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+    assert.deepEqual(home.site, site)
+    assert.equal(home.built, true)
+    assert.deepEqual(bot.chats, ['my home is at 10 64 10'])
+  })
+
+  it('both halves of 3 nearer foreign doors still reach the own house (revmux 01)', () => {
+    // findBlocks returns both halves of every door: 3 nearer foreign doors
+    // are 6 raw hits, which filled the 5-candidate budget before the dedupe
+    // (same door scored twice, own house never tried). The scan now reads
+    // twice the budget and dedupes to lower halves — the mock honours
+    // count like the real one, so this pins both halves of the fix.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    const doors = []
+    for (const fx of [30, 32, 34]) {
+      world.set(fx, 64, 30, 'jungle_door')
+      world.set(fx, 65, 30, 'jungle_door')
+      doors.push({ x: fx, y: 64, z: 30 }, { x: fx, y: 65, z: 30 })
+    }
+    doors.push({ x: 13, y: 64, z: 10 }, { x: 13, y: 65, z: 10 })
+    const bot = mockBot(world, { doors })
+    bot.findBlocks = (opts) => doors.slice(0, (opts && opts.count) || doors.length)
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+    assert.deepEqual(home.site, site)
+    assert.equal(home.built, true)
+  })
+
+  it('terrain-filled cells read unbuilt: exact, not lax (hlf)', () => {
+    // The old any-non-air presence called a dirt-filled wall cell done; the
+    // exact verdict (nextCellIdx) reads it missing and build repairs it.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    world.set(site.x + 6, site.y, site.z, 'dirt')
+    const bot = mockBot(world, { doors: [{ x: 13, y: 64, z: 10 }] })
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+    assert.equal(home.built, false)
   })
 })
 

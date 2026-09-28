@@ -12,7 +12,7 @@
 // Model choice (bead .6) asks at the same decision points with the FSM as
 // fallback and disagreement reference, exactly like hybridBrain.
 
-const { countItems } = require('./perception')
+const { countItems, wornItems } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
 const forageMod = require('./behaviours/forage')
@@ -22,13 +22,14 @@ const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 
 // House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
-// loose-plank target for a NEW (v2) house — 92 walls+roof+partition, plus
-// the table (4) and door (6) the gather formula adds on top, like the v1
-// budget did (38 + 4 + 6 = 48). Loads stay 14 logs (the v1-proven batch):
-// a v2 house takes ~2 full loads. Adopted v1 houses keep their old budget
-// via needPlanks(home), so a small repair never triggers a v2-sized gather.
+// loose-plank target for a NEW (v2) house — 92 walls+roof+partition plus 5
+// bedroom floor (1c4), plus the table (4) and door (6) the gather formula
+// adds on top, like the v1 budget did (38 + 4 + 6 = 48). Loads stay 14 logs
+// (the v1-proven batch): a v2 house takes ~2 full loads. Adopted v1 houses
+// keep their old budget via needPlanks(home), so a small repair never
+// triggers a v2-sized gather.
 const NEED_LOGS = 14
-const NEED_PLANKS = 102
+const NEED_PLANKS = 107
 const NEED_PLANKS_V1 = 48
 function needPlanks(home) {
   if (home && home.site && home.v !== 2) return NEED_PLANKS_V1
@@ -109,7 +110,8 @@ const MENU = {
         for (let i = 0; i < plan.length; i++) {
           if (skip.has(i)) continue
           if (!buildMod.cellDone(bot, home, plan[i])) {
-            if (plan[i].kind === 'planks') planks++
+            // A floor patch (1c4) spends a loose plank like a wall cell.
+            if (plan[i].kind === 'planks' || plan[i].kind === 'fill') planks++
             else other++
           }
         }
@@ -137,6 +139,16 @@ const MENU = {
     },
     chat: () => 'on my own: building the house',
     verb: 'building the house',
+  },
+  beds: {
+    // The two bedroom beds (jr2.2): wool hunt, craft at the table, place in
+    // the bedrooms — the bot's first (sleep sets the home respawn). Day only:
+    // the hunt owns the body and must not run past dark (bring dusk-cancels
+    // self orders, but the step never opens one at night in the first place).
+    // Non-v2 homes read beds='both' (nothing owed), so no version check here.
+    feasible: (facts) => facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'),
+    chat: () => 'on my own: making the beds',
+    verb: 'making beds',
   },
   light: {
     // Day shift only: walking the yard at night is the danger being fixed.
@@ -168,13 +180,25 @@ const MENU = {
     // batch craft gate can never take — rest forever with work remaining.
     // atl.4: a still-holding gather failure is not feasible — the behaviour
     // replays the same final while the log count stands (decide's stepFail
-    // is the menu-wide twin of this gate).
+    // is the menu-wide twin of this gate). gyw: relocation past the
+    // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
       try {
-        const g = ctx && ctx.gather
-        if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) return false
+        if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
-      if (facts.home === 'built') return false
+      if (facts.home === 'built') {
+        // Post-build top-up for the beds only (jr2.2): the house budget
+        // usually leaves 6+ planks, but a tight exact-wood remainder must not
+        // strand the beds with nobody left to chop. Single-wood count — bed
+        // variants bind one wood, so a mixed 2+2+2 is still short. A partial
+        // log load never reads as covered (craft only converts full 14-log
+        // batches — 3 leftover logs would otherwise strand between this gate
+        // and the batch gate with nothing converting them). Bounded by the
+        // bed need: once both beds are in (or the planks cover them), the bot
+        // never farms again.
+        if (facts.beds !== 'none' && facts.beds !== 'one') return false
+        return (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS
+      }
       const total = facts.planks + facts.logs * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS)
@@ -237,9 +261,22 @@ const MENU = {
     verb: 'foraging',
   },
   explore: {
-    // Blind search only once the house stands: pre-house gaps rest (rw4
-    // owns the body until built), night pre-house never wanders.
-    feasible: (facts) => facts.home === 'built',
+    // Blind search once the house stands; pre-house gaps rest (rw4 owns the
+    // body until built) — except the stranded hard state (gyw): a
+    // failed-holding gather on an alone day opens the home-anchored bounded
+    // spiral, so the menu moves the bot to new ground instead of idling
+    // where gather died. Night pre-house never wanders, and neither does a
+    // bot with anyone online (p4s: stay with the player, the owner sees).
+    feasible: (facts, bot, ctx) => {
+      if (facts.home === 'built') return true
+      if (facts.time !== 'day') return false
+      if (facts.player !== 'none') return false
+      try {
+        return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
+      } catch (_) {
+        return false
+      }
+    },
     chat: () => 'on my own: exploring outward',
     verb: 'exploring',
   },
@@ -325,7 +362,7 @@ function tableYieldToBuild(facts, bot, ctx) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -414,12 +451,35 @@ function siteFor(bot, around) {
 // below is also a door. Since jr2.1 the door fits two origins —
 // door − (3,0,0) for a v2 house, door − (1,0,0) for a v1 hut — told apart
 // by the corner columns (see isV2House). A lone v1 hut reads air there. An
-// unreadable probe (dark neighbour chunk) aborts the adopt — the callers
+// unreadable probe (dark neighbour chunk) skips the candidate — the callers
 // wait for chunks and retry — instead of misreading the version: a v2
 // house read as v1 would run the v1 repair plan at the wrong origin (the
 // door itself is shared, but the walls, table cell and spots all shift).
-// built is lax on purpose — presence (non-air) counts; exact repair is
-// the build step's job.
+// A door alone is not a house (idkcraft-6bl): the candidate origin must
+// hold the workbench at its plan cell plus ADOPT_QUORUM plan cells with
+// the RIGHT block (cellDone kind match — planks/table/door at exact
+// offsets, never mere non-air), else the door is foreign and the scan
+// moves to the next door. The table is the discriminator: no vanilla
+// structure generates a crafting table, while our build lays it FIRST,
+// before the door (plan[0] on both blueprints) — so any door-carrying
+// own house attempted it, and a count alone cannot separate: the live
+// 6bl structure scores 26+ plank matches, above an own mid-build house
+// (v1: 13, v2: 23). Accepted tail: an own house whose table was mined
+// (or skipped) meets a wiped memory with a reject and founds a new site
+// instead of repairing — the safe direction. Dark cells read as
+// mismatches: a dark own house misses and the callers retry once chunks
+// stream in.
+// built is exact, not lax (idkcraft-hlf): done means the repair plan is
+// empty — the same nextCellIdx===-1 definition the build step and the
+// work-tick revalidation use. The old any-non-air presence called
+// terrain-filled cells done and froze half-verdicts with no retry.
+const ADOPT_QUORUM = 10
+// Distinct doors tried per adopt scan: with rejection now possible the
+// nearest door may be foreign while ours stands behind it — first passing
+// wins. findBlocks returns both halves of every door, so the scan reads
+// twice the budget and dedupes to lower halves below (revmux 01 minors:
+// 5 raw hits cover ~2.5 doors, and 3 nearer foreign doors would fill it).
+const ADOPT_DOORS = 5
 function adoptHome(bot) {
   try {
     const spawn = bot && bot.spawnPoint
@@ -427,46 +487,75 @@ function adoptHome(bot) {
     const found = bot.findBlocks({
       matching: (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_door'),
       maxDistance: 32,
-      count: 1,
+      count: ADOPT_DOORS * 2,
     })
     if (!found || !found.length) return null
-    let dx = Math.floor(found[0].x)
-    let dy = Math.floor(found[0].y)
-    let dz = Math.floor(found[0].z)
-    try {
-      const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
-      if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
-    } catch (_) { /* keep as found */ }
-    const v2 = isV2House(bot, dx, dy, dz)
-    if (v2 == null) return null // probe dark: wait for chunks, retry later
-    const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)
-    const plan = buildMod.blueprintFor(home)
-    // Claim the table coords only when the workbench block is really there
-    // (same placed-station contract as a fresh site).
-    try {
-      const t = plan[0]
-      const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
-      if (tb && tb.name === 'crafting_table') {
-        home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
+    const tried = new Set()
+    for (const door of found) {
+      if (tried.size >= ADOPT_DOORS) break
+      const lo = doorLower(bot, door)
+      const key = `${lo.x},${lo.y},${lo.z}`
+      if (tried.has(key)) continue
+      tried.add(key)
+      const home = tryAdoptDoor(bot, door)
+      if (home) {
+        try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
+        return home
       }
-    } catch (_) { /* unverifiable: leave unclaimed */ }
-    let allPresent = true
-    for (const cell of plan) {
-      let name = null
-      try {
-        const b = bot.blockAt(new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz))
-        name = b && b.name
-      } catch (_) {
-        name = null
-      }
-      if (!name || name === 'air') { allPresent = false; break }
     }
-    home.built = allPresent
-    try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
-    return home
+    return null
   } catch (_) {
     return null
   }
+}
+
+// Lower-half normalize: findBlocks may return the UPPER half, so step down
+// when the block below is also a door. Shared by the scan dedupe above and
+// the per-door verify below.
+function doorLower(bot, at) {
+  let dx = Math.floor(at.x)
+  let dy = Math.floor(at.y)
+  let dz = Math.floor(at.z)
+  try {
+    const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
+    if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
+  } catch (_) { /* keep as found */ }
+  return { x: dx, y: dy, z: dz }
+}
+
+function tryAdoptDoor(bot, at) {
+  const lo = doorLower(bot, at)
+  const dx = lo.x
+  const dy = lo.y
+  const dz = lo.z
+  const v2 = isV2House(bot, dx, dy, dz)
+  if (v2 == null) return null // probe dark: next door, callers retry later
+  const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)
+  const plan = buildMod.blueprintFor(home)
+  // The workbench first: our build lays it before the door, no vanilla
+  // structure has one — a missing table is a foreign door, full stop.
+  if (!buildMod.cellDone(bot, home, plan[0])) return null
+  let kindred = 0
+  for (const cell of plan) {
+    try {
+      // Fill cells carry no authorship evidence (revmux 01 body-2): dirt
+      // under a foreign door reads done, so counting them spends 5 of the
+      // 10 quorum points on mere terrain.
+      if (cell.kind !== 'fill' && buildMod.cellDone(bot, home, cell)) kindred++
+    } catch (_) { /* unscannable reads as mismatch */ }
+  }
+  if (kindred < ADOPT_QUORUM) return null // foreign door: keep looking
+  // Claim the table coords only when the workbench block is really there
+  // (same placed-station contract as a fresh site).
+  try {
+    const t = plan[0]
+    const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
+    if (tb && tb.name === 'crafting_table') {
+      home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
+    }
+  } catch (_) { /* unverifiable: leave unclaimed */ }
+  home.built = buildMod.nextCellIdx(bot, home, []) === -1
+  return home
 }
 
 // True when planks stand at the v2 corner columns around the door at
@@ -533,6 +622,30 @@ function goalFacts(bot, ctx) {
   const ironSword = countItems(bot, (n) => n === 'iron_sword')
   const diamondPick = countItems(bot, (n) => n === 'diamond_pickaxe')
   const diamondSword = countItems(bot, (n) => n === 'diamond_sword')
+  const bucket = countItems(bot, (n) => n === 'bucket')
+  const waterBucket = countItems(bot, (n) => n === 'water_bucket')
+  // Armour (ipn.6): pack counts under the piece name (tools convention),
+  // worn counts beside them — the menu must read done once the set is on
+  // the body (else gear stays feasible forever and starves the steps
+  // below it), while owner math stays pack-only (revmux 01 core-1/body-1:
+  // a worn self piece must never hold a tossed spare in 'hand').
+  const armor = (name) => countItems(bot, (n) => n === name)
+  const ironHelmet = armor('iron_helmet')
+  const ironChestplate = armor('iron_chestplate')
+  const ironLeggings = armor('iron_leggings')
+  const ironBoots = armor('iron_boots')
+  const diamondHelmet = armor('diamond_helmet')
+  const diamondChestplate = armor('diamond_chestplate')
+  const diamondLeggings = armor('diamond_leggings')
+  const diamondBoots = armor('diamond_boots')
+  const wornIronHelmet = wornItems(bot, 'iron_helmet')
+  const wornIronChestplate = wornItems(bot, 'iron_chestplate')
+  const wornIronLeggings = wornItems(bot, 'iron_leggings')
+  const wornIronBoots = wornItems(bot, 'iron_boots')
+  const wornDiamondHelmet = wornItems(bot, 'diamond_helmet')
+  const wornDiamondChestplate = wornItems(bot, 'diamond_chestplate')
+  const wornDiamondLeggings = wornItems(bot, 'diamond_leggings')
+  const wornDiamondBoots = wornItems(bot, 'diamond_boots')
   const furnaceItem = countItems(bot, (n) => n === 'furnace')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
@@ -562,10 +675,14 @@ function goalFacts(bot, ctx) {
   try {
     const bp = bot && bot.entity && bot.entity.position
     const interior = ctx && ctx.home && ctx.home.interior
+    // Floored like home.isInside (revmux jr2.3-02): the box holds
+    // inclusive block coords, and a raw float reads the back row outside
+    // while the helper reads it inside — gohome then finishes 'done' and
+    // is re-picked every tick all night.
     if (bp && interior && interior.min && interior.max &&
-      bp.x >= interior.min.x && bp.x <= interior.max.x &&
-      bp.y >= interior.min.y && bp.y <= interior.max.y &&
-      bp.z >= interior.min.z && bp.z <= interior.max.z) inside = 'yes'
+      Math.floor(bp.x) >= interior.min.x && Math.floor(bp.x) <= interior.max.x &&
+      Math.floor(bp.y) >= interior.min.y && Math.floor(bp.y) <= interior.max.y &&
+      Math.floor(bp.z) >= interior.min.z && Math.floor(bp.z) <= interior.max.z) inside = 'yes'
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.
@@ -585,7 +702,7 @@ function goalFacts(bot, ctx) {
   let surplus = 'no'
   try {
     const batch = (stockpileMod && stockpileMod.SURPLUS_BATCH) || 16
-    if (stockpileMod.surplusCount(bot) >= batch) surplus = 'yes'
+    if (stockpileMod.surplusCount(bot, ctx) >= batch) surplus = 'yes'
   } catch (_) { /* no surplus */ }
   // Furnace claim (ipn.1 station, chest/table contract): set when the block
   // stands. Handover (ipn.3): forged owner goods still on hand flip the
@@ -635,12 +752,19 @@ function goalFacts(bot, ctx) {
   try {
     player = deliverMod.playerStatus(bot).level
   } catch (_) { /* nobody online */ }
+  // Bedroom beds (jr2.2): none/one/both placed. Deferred require (the light
+  // precedent — goal.js loads inside the behaviour chain). Unreadable reads
+  // both: beds yields, nothing churns.
+  let beds = 'both'
+  try {
+    beds = require('./behaviours/beds').bedsFact(bot, ctx && ctx.home) || 'both'
+  } catch (_) { /* unreadable beds */ }
   // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
   // Unreadable reads done (light precedent): gear yields, nothing churns.
   let gear = 'done'
   try {
     const gm = require('./behaviours/gear')
-    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
+    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
   } catch (_) { /* unreadable ladder */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
@@ -653,7 +777,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, furnaceItem, furnace, gearHandover, gear }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -689,10 +813,11 @@ function goalText(facts, home) {
   // menu never offers stay/gohome) goes steady.
   const inside = facts.time === 'day' ? 'no' : facts.inside
   const unlit = unlitBucket(facts.unlit)
+  const beds = facts.beds === 'none' || facts.beds === 'one' ? facts.beds : 'both'
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
-    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear}`
+    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}`
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -731,6 +856,26 @@ function failHolds(ctx, name, text, bot) {
     return false
   }
 }
+// Shared gather-failure hold (idkcraft-gyw): the behaviour latch and the
+// menu gate above read one rule. A failed gather holds while the log count
+// stands AND the body stays within REFAIL_DIST of the failure point;
+// relocation past it releases for a fresh try at new ground (nearer trees,
+// other wood). Same distance rule as failHolds, one place. An unknown
+// failure point (legacy ctx, missing body) holds: the atl.4 livelock guard
+// stays for everything that never recorded where it failed.
+function gatherFailedHolds(g, logs, bot) {
+  try {
+    if (!g || typeof g.final !== 'string' || !g.final.startsWith('failed:')) return false
+    if (g.atLogs !== logs) return false
+    const fp = g.failPos
+    if (!fp || typeof fp.x !== 'number') return true
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return true
+    return Math.hypot(bp.x - fp.x, bp.z - fp.z) <= REFAIL_DIST
+  } catch (_) {
+    return false
+  }
+}
 
 function goalFsm(facts, feasibleNames) {
   const ok = new Set(Array.isArray(feasibleNames) ? feasibleNames : [])
@@ -750,9 +895,10 @@ function goalFsm(facts, feasibleNames) {
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
-  gather: 'logs is none or few and home is not built: chop trees',
+  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few: chop trees',
   craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
+  beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -856,10 +1002,10 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
   } catch (_) { /* wording best-effort */ }
   if (name === 'gather') {
-    // atl.4 inline hold (not via failHolds): same final, same log count.
+    // Shared hold (gyw twin of the feasible gate): same final, same log
+    // count, body still at the failure point.
     try {
-      const g = ctx && ctx.gather
-      if (g && typeof g.final === 'string' && g.final.startsWith('failed:') && g.atLogs === facts.logs) {
+      if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) {
         return 'gather holds after failure'
       }
     } catch (_) { /* fall through to facts */ }
@@ -915,6 +1061,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`
       return 'build: nothing left to build'
     }
+    case 'beds':
+      if (facts.time !== 'day') return 'beds: daytime job'
+      if (facts.home !== 'built') return 'beds: house not built yet'
+      if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
       const home = ctx && ctx.home
@@ -1187,4 +1338,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds }
