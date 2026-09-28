@@ -1332,13 +1332,16 @@ describe('flat verified stands (idkcraft-cm0)', () => {
   it('own column below the cap: steps out once, never attempts, skips occupied', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
-    world.set(1, 62, 0, 'air') // 2-deep: feet at 61 stand below the cap
+    world.set(1, 62, 0, 'air')
+    world.set(1, 61, 0, 'air') // 3-deep: feet at 61 stand below the cap, in air
     const { bot, ctx } = started(world)
     bot.entity.position = pos(1.5, 61, 0.5)
     for (let i = 0; i < 5 && ctx.flat && ctx.flat.phase === 'scan'; i++) { flat(bot, ctx, null, null); await settle() }
     flat(bot, ctx, null, null)
     await settle()
     assert.ok(ctx.lastGoalKey.startsWith('flat-f2:'), `one step out first, got ${ctx.lastGoalKey}`)
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g.y, 64, 'step-out aims at the surface, not the pit floor (revmux-03)')
     for (let i = 0; i < 14 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
     assert.equal(ctx.flat, null)
     assert.equal(bot.calls.places.length, 0, 'never caps from inside the pit')

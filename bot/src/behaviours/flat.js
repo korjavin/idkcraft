@@ -762,12 +762,16 @@ function scanTick(bot, ctx, f) {
 // Step aside from a cell the bot itself blocks: fixed direction per column
 // and a stable goal key, so a multi-tick sidestep never reverses mid-walk
 // (round-1 core-2/body-3). The caller counts attempts and skips when wedged.
-function sidestep(bot, ctx, h, bp, x, y, z, tag) {
+function sidestep(bot, ctx, h, bp, x, y, z, tag, gy) {
   const step = SIDESTEPS[Math.abs(h.x * 7 + h.z * 13) % SIDESTEPS.length]
   const key = `${tag}:${x},${y},${z}`
   if (key !== ctx.lastGoalKey) {
+    // Aim at gy when given (revmux-03): a step-out from a pit floor must
+    // target the surface, or walking out can never satisfy the goal (the
+    // pathfinder tunnels sideways or partials instead).
+    const ty = gy == null ? bp.y : gy
     try {
-      bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], bp.y, bp.z + step[1], 1), false)
+      bot.pathfinder.setGoal(new goals.GoalNear(bp.x + step[0], ty, bp.z + step[1], 1), false)
     } catch (_) { return }
     ctx.lastGoalKey = key
   }
@@ -1120,16 +1124,17 @@ function fillTick(bot, ctx, f, bp) {
     return
   }
   if (Math.floor(bp.x) === cx && Math.floor(bp.z) === cz && Math.floor(bp.y) < cy) {
-    // Standing below our own cap cell (a 2+-deep hole we dropped into; the
-    // 1-deep head-in-cap case sidesteps above): capping from down here would
-    // entomb the body under its own fill — the support lands in the head
-    // cell and never places (cm0). Step out once (a body that can move must
-    // not sit still spinning the stuck detector), then rotate: a truly
-    // trapped body shows no displacement and the ticker backstop hands it
-    // to recover, while a free body walks out and approaches normally.
+    // Standing below our own cap cell (a 3+-deep hole we dropped into; the
+    // 1-deep feet-in-cap and 2-deep head-in-cap cases sidestep above):
+    // capping from down here would entomb the body under its own fill —
+    // the support lands in the head cell and never places (cm0). Step out
+    // once (a body that can move must not sit still spinning the stuck
+    // detector), then rotate: a truly trapped body shows no displacement
+    // and the ticker backstop hands it to recover, while a free body
+    // walks out and approaches normally.
     if (!h.f2step) {
       h.f2step = true
-      sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-f2')
+      sidestep(bot, ctx, h, bp, cx, cy, cz, 'flat-f2', cy + 1)
       return
     }
     h.occ++
