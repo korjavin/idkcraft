@@ -5,6 +5,7 @@ const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveF
 const { countItems } = require('../perception')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
+const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
@@ -24,11 +25,14 @@ const woolMod = require('./wool')
 //
 // Owner direction: no branching rescue logic. Failure points refuse with a
 // message (the ef3/rw4.6 stuck menu owns the choices); the FSM reserve is a
-// plain refusal. Bring explicitly raises NO stuck facts: a stall refuses and
-// ends the order instead of starting an episode (unlike follow/roam/lead,
-// whose detectors feed the menu, and gather, which reports at its final).
-// The ticker place_error/no-displacement backstops still catch a bring that
-// loops without refusing, and release() resumes ctx.bring untouched.
+// plain refusal. Bring raises exactly one stuck fact: a below-feet trap
+// denial in the dig phase (atl.17 — the stance is a property of the place,
+// re-finding the same nearest block never changes it, so the menu owns the
+// sidestep). Every other stall refuses and ends the order instead of
+// starting an episode (unlike follow/roam/lead, whose detectors feed the
+// menu, and gather, which reports at its final). The ticker
+// place_error/no-displacement backstops still catch a bring that loops
+// without refusing, and release() resumes ctx.bring untouched.
 const FIND_RADIUS = 48
 const WANT_ORE = 3
 const WANT_LOGS = 4
@@ -952,6 +956,17 @@ async function bring(bot, ctx, target, state) {
           ? `only got ${o.have} ${o.drop} \u2014 could not reach ${o.block} safely`
           : `could not reach ${o.block} safely`)
         return
+      }
+      if (bDeny === 'below-feet') {
+        // atl.17: below-feet is a property of the PLACE — find re-picks the
+        // same nearest block and the stance never changes, so the dig
+        // refuses 3 times with the bot standing still (prod 2026-09-28).
+        // Raise the stuck fact and let the recover menu change the stance
+        // (sidestep); release() resumes ctx.bring untouched, find re-picks
+        // the same block from the new stance, and the dig passes. One
+        // episode per strike at most (setStuck latches while one runs);
+        // denyStrikes stays the ceiling.
+        try { recover.setStuck(ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }
       o.pos = null
       o.phase = 'find'
