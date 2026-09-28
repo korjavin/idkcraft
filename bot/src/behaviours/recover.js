@@ -21,6 +21,7 @@ const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
 const { botPos, denyReason, logDeny } = require('./util')
+const { waterUpRun, countBuckets, openAbove, findCombo } = require('./waterup')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -49,7 +50,7 @@ const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yie
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
 // Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
 // the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
@@ -444,6 +445,7 @@ function recoverFacts(bot, ctx, state, target) {
     goalDist,
     scaffold: scaffoldCount(bot),
     pickaxe: hasPickaxe(bot),
+    bucket: countBuckets(bot),
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
@@ -451,6 +453,11 @@ function recoverFacts(bot, ctx, state, target) {
     hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
     pit: pitAt(bot),
+    // water_up (jsf.2): a climbable pour combo (high shaft pour + a dry ledge
+    // pour above its spread) and open sky to swim through. Scanned like
+    // digStep/hopStep: decide-time only, never per tick.
+    combo: !!findCombo(bot),
+    openAbove: openAbove(bot),
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
     playerOnline,
@@ -476,7 +483,7 @@ function recoverText(facts) {
   const dist = facts.goalDist === null ? 'none' : String(facts.goalDist)
   const player = !facts.playerOnline ? 'none' : facts.playerDist === null ? 'far' : facts.playerDist <= NEAR_PLAYER ? 'near' : 'far'
   return `stuck=${stuckBucket(facts.stuckTicks)} goal=${dy} dist=${dist} ` +
-    `scaffold=${facts.scaffold} pickaxe=${facts.pickaxe ? 'yes' : 'no'} water=${facts.water ? 'yes' : 'no'} ` +
+    `scaffold=${facts.scaffold} pickaxe=${facts.pickaxe ? 'yes' : 'no'} bucket=${(facts.bucket || 0) >= 2 ? 'yes' : 'no'} water=${facts.water ? 'yes' : 'no'} ` +
     `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} pit=${facts.pit ? 'yes' : 'no'} player=${player} ` +
     `resets=${facts.resetsStuck}/${facts.resetsPlaceError} last=${facts.last}`
 }
@@ -490,18 +497,23 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|water_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_up')) return 'dig_up'
+  // jsf.2: a bare pit with buckets climbs water after the scaffold/pickaxe
+  // climbers (a pillar is cheaper and cannot lose the kit). Bare pit on
+  // purpose: with a level goal inside the pit the model still sees the menu,
+  // the FSM just reserves the same answer for the backstop (no goalDy gate).
+  if ((facts.goalDy >= 2 || facts.pit) && pick('water_up')) return 'water_up'
   if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
   // the open (walls < 3) sidestep keeps its turn: walking goalward can still
   // gain and free the wedge, which the fja rule counts as done.
   if (facts.goalDy >= 2 && facts.playerOnline && facts.walls >= 3 && pick('call_player') &&
-    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('dig_step')) return 'call_player'
+    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('water_up') && !ok.has('dig_step')) return 'call_player'
   // Level goal with a mountable +1 next to the body: hopping it beats a
   // sideways shuffle (cjq: the executor wedges on straight +1 steps with
   // path=success, and sidestep displacement just re-queues the same wedge).
@@ -523,6 +535,7 @@ const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
+  water_up: 'climb: water bucket on hand, wall too high — pour water on the wall, swim up the fall, scoop it back',
   dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
@@ -545,7 +558,7 @@ async function chooseRecovery(brain, facts, feasible) {
   // Kept when it is the only option; the FSM fallback below still sees it.
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
-  const failedM = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|water_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
   // already out, so shaping never hides the dig it escalates to. Before
@@ -1204,6 +1217,17 @@ const RECOVER_MENU = {
     run: digUpRun,
     repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && facts.headBlocked,
     verb: 'digging up',
+  },
+  water_up: {
+    // jsf.2: the bare-pit climber (no scaffold, no pickaxe). Two buckets, not
+    // one: a single pour cannot ratchet (a scoop takes the top source, i.e.
+    // cancels the newest pour — rig), so the combo always spends a pair.
+    // No goalDy gate: backstop episodes climb goalless pits too (the strip
+    // returns both buckets, the chain re-scans the combo at each stand).
+    feasible: (facts) => (facts.bucket || 0) >= 2 && facts.pit && facts.combo && facts.openAbove && !facts.water && !facts.lavaNear && !facts.headBlocked,
+    run: waterUpRun,
+    repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.pit && facts.combo && facts.openAbove && !facts.water && !facts.lavaNear && !facts.headBlocked,
+    verb: 'pouring water to swim up',
   },
   dig_step: {
     feasible: (facts) => facts.digStep != null && !facts.lavaNear,

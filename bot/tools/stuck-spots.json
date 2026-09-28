@@ -2,6 +2,7 @@
   {"name": "EP1", "spawn": [-61.3, 66, -210.5], "goal": [-72, 65, -218], "scaffold": 0, "pickaxe": true},
   {"name": "CLUSTER", "spawn": [-59.6, 54, -211.3], "goal": [-59, 58, -205], "scaffold": 64, "pickaxe": true},
   {"name": "CLUSTER-PICK", "spawn": [-59.6, 54, -211.3], "goal": [-59, 58, -205], "scaffold": 0, "pickaxe": true},
+  {"name": "CLUSTER-BARE", "spawn": [-59.6, 54, -211.3], "goal": [-59, 58, -205], "secs": 90, "scaffold": 0, "pickaxe": false, "bucket": true},
   {"name": "EP2", "spawn": [-37.5, 61, -219.3], "goal": [-37, 65, -212], "scaffold": 64, "pickaxe": true},
   {"name": "EP0", "spawn": [-56.4, 63, -194.5], "goal": [-60, 64, -200], "scaffold": 51, "pickaxe": true},
   {"name": "S3", "spawn": [-47.5, 57, -207.5], "goal": [-48, 62, -208], "scaffold": 56, "pickaxe": true},
