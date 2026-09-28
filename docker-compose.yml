@@ -35,6 +35,9 @@ services:
       MAX_MEMORY: ${MC_MAX_MEMORY:-2G}
       ONLINE_MODE: "false"
       ENFORCE_WHITELIST: "TRUE"
+      # Owner 2026-09-28: off — the bot is not op, and protection around world
+      # spawn silently refused every dig/place there (stuck loops near spawn).
+      SPAWN_PROTECTION: "0"
       # Offline UUID of IdkBot (server runs ONLINE_MODE=false, so Paper matches
       # the whitelist by UUID; a name would resolve to an online UUID and the
       # bot would be rejected). If BOT_USERNAME changes, recompute:

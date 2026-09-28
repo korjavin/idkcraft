@@ -13,6 +13,7 @@ const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced } = require('./behaviours/util')
 const unpin = require('./unpin')
+const decontact = require('./decontact')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -1830,6 +1831,11 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // Hover-arrest taps (idkcraft-1cj): teleport counter + move-packet clone
     // for the watchdog. Same spot as the pathfinder taps: real bot only.
     try { unpin.installUnpinTap(bot, bot._tickerCtx || {}) } catch (_) { /* unpin tap best-effort */ }
+    // Face epsilon (idkcraft-ik7): outgoing move packets shift a hair off
+    // contacted side faces (the wall-contact freeze cure at the source).
+    // Same spot: real bot only. Wraps outside the unpin tap; unpin's nudge
+    // shape is unaffected (it re-bases coordinates onto the correction).
+    try { decontact.installFaceEpsilon(bot) } catch (_) { /* face epsilon best-effort */ }
 
     const life = createLifecycle(ticker)
     bot.on('death', () => life.onDeath(bot))
