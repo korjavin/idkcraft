@@ -580,9 +580,12 @@ function pillarUpRun(bot, ctx) {
   if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-reference'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
-  // pillar_ups, 0 placed). The count gate above already vetoed an empty
-  // stock; this covers an inventory that changed mid-jump.
-  const item = findScaffoldItem(bot)
+  // pillar_ups, 0 placed). Prefer the held stack: the fast trigger above
+  // assumed its instant apply, while findScaffoldItem returns main
+  // inventory first and would pay a window move (round-3 core-1/body-2).
+  // The count gate above already vetoed an empty stock; this covers an
+  // inventory that changed mid-jump.
+  const item = heldScaffold(bot) ? bot.heldItem : findScaffoldItem(bot)
   if (!item) { setJump(bot, false); return 'failed:no-scaffold' }
   st.placeInFlight = true
   void (async () => {

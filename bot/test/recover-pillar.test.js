@@ -232,6 +232,22 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(ctx.recovery.st.phase, 'jump')
   })
 
+  it('fast path equips the held stack, not main inventory', async () => {
+    // Round-3 core-1/body-2: with scaffold held AND a stack in main
+    // inventory, the apply must use the held one (instant) — a window
+    // move would make it the slow path the +0.9 trigger did not budget.
+    const heldDirt = { name: 'dirt', count: 5 }
+    const mainDirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [mainDirt], { held: heldDirt })
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(bot._places, 1)
+    assert.strictEqual(bot.heldItem, heldDirt)
+  })
+
   it('fast path at t3 (+1.0): issues the placement', async () => {
     const dirt = { name: 'dirt', count: 10 }
     const bot = strictBot(pitWorld(), [dirt], { held: dirt })
