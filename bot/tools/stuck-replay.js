@@ -207,9 +207,12 @@ async function main() {
   console.log('spot      reached  stuck  eps  call?  secs   maxDisp  note')
   const rows = []
   let guideDied = false
+  let prevBucket = false
   guide.on('death', () => { guideDied = true })
   for (const s of spots) {
     guideDied = false
+    const wipeFlood = prevBucket
+    prevBucket = !!s.bucket
     if (tickCtx()) tickCtx().paused = true
     // Hard-stop BEFORE the guide tp: paused takes effect on the next tick
     // (<=1 s), but the guide tp re-plans the live GoalFollow instantly from
@@ -231,6 +234,15 @@ async function main() {
     let gy = Math.max(s.spawn[1], s.goal[1]) + 1
     await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
+    // A bucket spot's flood (failed strip, trial-budget cut mid-climb)
+    // persists in the shared world and griefs the next trial's scans: wipe
+    // water around the spawn when the previous spot poured (both bots are
+    // here now, so the chunks are loaded). Dig holes stay (harness-standard:
+    // terrain progress persists across spots).
+    if (wipeFlood) {
+      const [sx, sy, sz] = s.spawn.map(Math.floor)
+      await rcon(`fill ${sx - 12} ${sy - 6} ${sz - 12} ${sx + 12} ${sy + 12} ${sz + 12} air replace water`)
+    }
     // Fresh kit per spot (repeatability: drops picked up mid-run reset).
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)

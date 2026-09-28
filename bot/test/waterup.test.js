@@ -225,16 +225,26 @@ describe('waterup scans', () => {
   })
 
   it('a lip above the climb still combos (lane-precise, not dy2..5)', () => {
-    // Own-column rock at 66 (dy+5): a dy2..5 gate would close, but A pours
-    // at 65 under it with a clear lane and B sits at 67 — the slope-wedge
-    // shape (the pour pair fits under the lip).
+    // Own-column rock at 69, above the whole pair: A pours at 66 with a
+    // clear lane and B sits at 67.
     const solids = shaftWorld()
-    solids.add(key(0, 66, 0))
+    solids.add(key(0, 69, 0))
     const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
     const combo = waterup.findCombo(bot)
     assert.ok(combo)
-    assert.equal(combo.A.dest.y, 65)
+    assert.equal(combo.A.dest.y, 66)
     assert.deepEqual(combo.B.dest, { x: 1, y: 67, z: 0 })
+  })
+
+  it('a B above the mount budget is not an offer (the slope case)', () => {
+    // Own-column rock at 66 forces A down to 65 (plateau 64.4) while the
+    // only B sits at 67 — 2.6 above the plateau, past the traverse mount
+    // (~1.2 of jump-out). The replay slope offered exactly this and died
+    // mid-climb; the floor scan now rejects it outright.
+    const solids = shaftWorld()
+    solids.add(key(0, 66, 0))
+    const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
+    assert.equal(waterup.findCombo(bot), null)
   })
 
   it('a blocked swim lane kills the combo', () => {
@@ -331,6 +341,31 @@ describe('waterup run', () => {
     assert.ok(Math.hypot(aim.x - 0.5, aim.z - 0.5) < 0.1, 'faces the lane middle')
     await new Promise((r) => setTimeout(r, 250))
     assert.equal(bot.controls.forward, false, 'the tap releases between ticks')
+  })
+
+  it('pour past reach fails clean with the bucket kept (no quirk eat)', async () => {
+    // The hover heaves between the scan and the activate: recheck reach at
+    // activate time against server truth, and never activate past 4.5.
+    const items = [{ name: 'water_bucket', count: 2 }]
+    const bot = worldBot(shaftWorld(), items)
+    bot.opts.sites = [{ x: 0, y: 66, z: 0 }, { x: 1, y: 67, z: 0 }]
+    // Aimed at A, then heaved 5 blocks down (eye 5+ from the dest).
+    bot.entity.position = pos(0.5, 59, 0.5)
+    const st = {
+      phase: 'pourA', waited: 0, startFloor: 61, start: { x: 0.5, y: 61, z: 0.5 },
+      combo: { A: { dest: { x: 0, y: 66, z: 0 }, ref: { position: new Vec3(1, 66, 0) }, face: [-1, 0, 0] } },
+      sources: [], aimed: true, used: false,
+      equipDone: true, equipInFlight: false,
+    }
+    bot.heldItem = items[0]
+    const out = waterup.waterUpRun(bot, { recovery: { st } })
+    assert.equal(out, 'running') // routes to stripFail, which finds nothing…
+    let end = out
+    for (let i = 0; i < 10 && end === 'running'; i++) { end = waterup.waterUpRun(bot, { recovery: { st } }); await flush() }
+    assert.equal(end, 'failed:pour')
+    assert.equal(bot.uses, 0, 'never activated')
+    assert.equal(bot._waters.size, 0)
+    assert.equal(countOf(items, 'water_bucket'), 2)
   })
 
   it('one bucket is not a climb: failed:no-bucket, nothing poured', async () => {

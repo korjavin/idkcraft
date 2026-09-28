@@ -28,8 +28,17 @@ const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { botPos } = require('./util')
 
-// Reach for the server use-raycast (survival 4.5, 0.1 margin for hover heave).
+// Reach for the server use-raycast (survival 4.5). Scans budget 4.0: the
+// hover heaves ±1 between the scan and the activate, and a marginal site
+// (4.39 in, 4.41 out across 0.3 of sub-cell) flickers offers that die
+// mid-climb (replay slope). The pour-time recheck below uses server truth.
 const USE_REACH = 4.4
+const SCAN_REACH = 4.0
+// Floor-predicted mount budget: B must sit within this above the predicted
+// plateau (heave-corrected). Shaft +1.6 offers, slope +2.6 does not (the
+// traverse mounts ~1.2 of jump-out; the live re-scan re-checks from the
+// true hover, which heaves ±0.5 either way).
+const COMBO_MOUNT_BUDGET = 1.7
 // Standing eye height (lift stops when the eye exits the surface).
 const EYE_HEIGHT = 1.62
 // Plateau below the source surface where the swim ends (eye-out).
@@ -138,7 +147,7 @@ function highPourAt(bot, dy) {
       dest = bot.blockAt(new Vec3(fx, fy + dy, fz))
     } catch (_) { continue } // eslint-disable-line no-continue
     if (!solid(ref) || !isAirish(dest) || !dest || !dest.position) continue // eslint-disable-line no-continue
-    if (dist(eye, cellCenter(dest.position)) > USE_REACH) continue // eslint-disable-line no-continue
+    if (dist(eye, cellCenter(dest.position)) > SCAN_REACH) continue // eslint-disable-line no-continue
     return { dest: { x: dest.position.x, y: dest.position.y, z: dest.position.z }, ref, face: [-dx, 0, -dz] }
   }
   return null
@@ -178,7 +187,7 @@ function ledgePourAt(bot, cx, cy, cz, eyeY, srcAY) {
       if (!isAirish(head) && !isWater(head)) continue // eslint-disable-line no-continue
       if (dc.y <= srcAY) continue // eslint-disable-line no-continue
       if (dc.y > eye.y + 1) continue // eslint-disable-line no-continue
-      if (dist(eye, cellCenter(dc)) > USE_REACH) continue // eslint-disable-line no-continue
+      if (dist(eye, cellCenter(dc)) > SCAN_REACH) continue // eslint-disable-line no-continue
       for (const [rx, rz] of SIDES) {
         let ref = null
         try { ref = bot.blockAt(new Vec3(dc.x + rx, dc.y, dc.z + rz)) } catch (_) { ref = null }
@@ -229,6 +238,9 @@ function findCombo(bot) {
     const plateauY = A.dest.y - PLATEAU_BELOW_SRC
     const B = ledgePourAt(bot, cx, Math.floor(plateauY), cz, plateauY + EYE_HEIGHT, A.dest.y)
     if (!B) continue // eslint-disable-line no-continue
+    // Mount budget on the PREDICTION (the live re-scan re-checks from the
+    // true hover): a B the traverse cannot mount is not an offer.
+    if (B.dest.y > plateauY + COMBO_MOUNT_BUDGET) continue // eslint-disable-line no-continue
     return { A, B, plateauY }
   }
   return null
@@ -358,6 +370,16 @@ function waterUpRun(bot, ctx) {
       return 'running'
     }
     if (!st.used) {
+      // Pour-time reach recheck against server truth: the hover heaves
+      // between the scan and the activate, and activating past 4.5 risks
+      // the Paper quirk (bucket eaten into an occupied cell). Never
+      // activated means never lost — fail clean with the bucket kept.
+      const eye = eyeOf(bot)
+      if (!eye || dist(eye, cellCenter(site.dest)) > USE_REACH) {
+        st.aimed = false
+        st.used = false
+        return toStripFail(st, failReason)
+      }
       try { bot.activateItem() } catch (_) { return toStripFail(st, failReason) }
       st.used = true
       st.waited = 0
@@ -570,6 +592,8 @@ function waterUpRun(bot, ctx) {
 
 module.exports = {
   USE_REACH,
+  SCAN_REACH,
+  COMBO_MOUNT_BUDGET,
   EYE_HEIGHT,
   PLATEAU_BELOW_SRC,
   BUCKETS_NEEDED,
