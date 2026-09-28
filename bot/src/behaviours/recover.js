@@ -688,6 +688,25 @@ function pillarUpRun(bot, ctx) {
   if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
+    // Descending floor anchor (cm0.2): the cycle may arm mid-flight — an
+    // approach jump still airborne when stuck fires (prod 09:36:48 armed at
+    // +0.8 with feet=air; the 5 s place silence followed). A first tick
+    // that samples the body a block too high parks the trigger above the
+    // apex and the cycle jumps to no-apex (rig 3/3). Follow the body down;
+    // never up (a rise is the jump the timer is timing). A grounded sample
+    // below re-seeds at once; airborne samples need two in a row (1 Hz
+    // ticks phase-lock against the 600 ms hop and can miss the ~50 ms
+    // grounded window between bunny-hops, but a single correction blip is
+    // not a landing).
+    if (st.startFloor !== null && Math.floor(bp.y) < st.startFloor) {
+      st.belowFloor = (st.belowFloor || 0) + 1
+      if ((bot.entity && bot.entity.onGround) || st.belowFloor >= 2) {
+        st.startFloor = Math.floor(bp.y)
+        st.belowFloor = 0 // every re-seed needs its own confirmation
+      }
+    } else {
+      st.belowFloor = 0
+    }
     // The timer owns issuance; jump-phase ticks only hold jump and the
     // no-apex budget. Armed once per cycle (the re-jump guard below resets
     // the flags so a fresh cycle arms a fresh timer).
@@ -1418,6 +1437,26 @@ function clearStaleRoamLatch(ctx, bot) {
   } catch (_) { /* latch best-effort */ }
 }
 
+const TICKER_LATCH_CLEAR = 4 // same radius as the home/roam release latches
+// Ticker latch (rra round 1): the ticker backstop sets ctx.stuck directly,
+// bypassing setStuck, so a noPath trap would re-fire an episode (model ask
+// + call_player) every ~45 s forever. release() anchors the release point;
+// the idle branch holds while the body stays within the radius. Relocation
+// re-arms, orders clear via clearStuck. Clears stale anchors like the roam
+// helper above, so one call both consults and re-arms.
+function tickerLatched(ctx, bot) {
+  try {
+    const L = ctx && ctx.recoverLatch
+    if (!L || L.by !== 'no-displacement' || !L.at || typeof L.at.x !== 'number') return false
+    const bp = botPos(bot)
+    if (bp && Math.hypot(bp.x - L.at.x, bp.z - L.at.z) > TICKER_LATCH_CLEAR) {
+      ctx.recoverLatch = null
+      return false
+    }
+    return true
+  } catch (_) { return false }
+}
+
 function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
   const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
@@ -1561,18 +1600,26 @@ function release(bot, ctx, how) {
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   if (by === 'follow') ctx.followStalls = 0
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home') {
+  // The ticker latch anchors on gave-up only (rra round 2): a 'done' episode
+  // may be a partial climb (REPEATS cap, single-shot climbers) that leaves
+  // the body in the pit — latching that would end all further escape
+  // attempts with no page. Progress clears the old anchor instead, so the
+  // next trap gets a fresh episode.
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || (by === 'no-displacement' && how === 'gave-up')) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
-    if (by === 'home' || by === 'roam') {
+    if (by === 'home' || by === 'roam' || by === 'no-displacement') {
       // Static goals never move, so goal-closeness cannot tell one wedge
       // from the next: anchor the release point instead. walkHomeTick
       // (home) and the roam-back branch (roam) re-arm only once the body
-      // relocated past the latch radius.
+      // relocated past the latch radius; the ticker idle branch consults
+      // its anchor through tickerLatched (rra round 1).
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
+  } else if (by === 'no-displacement' && ctx.recoverLatch && ctx.recoverLatch.by === 'no-displacement') {
+    ctx.recoverLatch = null
   }
   if (how === 'gave-up') {
     // Repeat page (rw4.9): gave up where a live mark already sits and
@@ -1795,6 +1842,7 @@ module.exports = {
   restGaveUpHolds,
   clearRelocatedRestMark,
   clearStaleRoamLatch,
+  tickerLatched,
   decide,
   release,
   run,

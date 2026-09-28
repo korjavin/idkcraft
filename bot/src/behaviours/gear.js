@@ -564,6 +564,25 @@ function walkTo(bot, ctx, key, p, reason) {
   if (r.walkTicks > WALK_GIVE_UP) fail(ctx, reason)
 }
 
+// Stop a stale walk before a look-dependent op (z80): a walk goal left
+// live (the fill walk scoops from reach 4 while its GoalNear range is 2,
+// so it never reaches and never clears) keeps steering the head every
+// physics tick. The steer wins the race against the op's lookAt, the
+// server's recorded look misses the station, and the use is silently
+// ignored — 20 s windowOpen timeouts on table crafts. Clearing only when
+// a goal is actually live keeps arrived walks (already auto-cleared) and
+// goal-less mocks untouched; the key clears unconditionally so the next
+// walk re-issues even for the same station.
+function stopSteering(bot, ctx) {
+  try {
+    const live = bot && bot.pathfinder && bot.pathfinder.goal
+    if (live && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+  } catch (_) { /* best-effort */ }
+  try {
+    if (ctx) ctx.lastGoalKey = ''
+  } catch (_) { /* best-effort */ }
+}
+
 // Verified crafting table (craft pattern): the claim plus a live block read,
 // else null. Never trust the claim alone (mined table).
 function tableBlock(bot, ctx) {
@@ -590,6 +609,8 @@ function tableBlock(bot, ctx) {
 // patience (WALK_GIVE_UP shape); verify window (phantom-settle shape).
 const FILL_SEARCH = 32
 const FILL_FIND_COUNT = 8
+const FILL_SCAN_COUNT = 512
+const DRY_LATCH_TICKS = 20
 const FILL_REACH = 4
 const FILL_NEAR_HOME = 16
 const FILL_WALK_TICKS = 20
@@ -604,29 +625,63 @@ function waterId(bot) {
   return null
 }
 
-// Nearest-first water cells from the body, tried ones excluded. Fill
-// wherever water is; the home anchor below only gates the dry latch.
-// The scan widens by the tried count (revmux jsf.5-01 core-2/body-2):
-// findBlocks slices to count BEFORE we filter, so a fixed count hides
-// farther cells behind tried ones and latches a wet home dry. Nearest
-// 8+tried minus tried reads empty only when no untried water is left.
+// Nearest-first SOURCE water cells from the body, tried ones excluded.
+// Fill wherever water is; the home anchor below only gates the dry
+// latch. The scan is deep (z80): findBlocks slices to count BEFORE we
+// filter, so a shallow count hides farther sources behind nearer flow —
+// re-flow plumes outrank 40+ deep on prod terrain — and latches a wet
+// home dry. 512 needs 512 nearer flow cells to mask a source, which a
+// still-water source never has; the depth costs nothing extra
+// (findBlocks scans the sphere either way and only sorts/slices more).
+// The tried widening (revmux jsf.5-01 core-2/body-2) rides along.
+// Returns { out, flow }: the flow count tells the latch whether water
+// is present-but-flowing (settle patience) or absent (instant latch).
 function findWater(bot, tried) {
   try {
-    if (!bot || typeof bot.findBlocks !== 'function') return []
+    if (!bot || typeof bot.findBlocks !== 'function') return { out: [], flow: 0 }
     const id = waterId(bot)
-    if (id === null) return []
+    if (id === null) return { out: [], flow: 0 }
     const skip = tried ? Object.keys(tried).length : 0
-    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_FIND_COUNT + skip }) || []
+    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_SCAN_COUNT + skip }) || []
     const out = []
+    let flow = 0
     for (const p of found) {
       if (!p || typeof p.x !== 'number') continue
       const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
       if (tried && tried[key]) continue
+      if (isFlowWater(bot, p)) {
+        flow++
+        continue
+      }
       out.push({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), key })
     }
-    return out
+    return { out, flow }
   } catch (_) {
-    return []
+    return { out: [], flow: 0 }
+  }
+}
+
+// Confirmed-flow check (z80): nearest-first over flow cells chases
+// re-flow and 2x2 spread away from the source — each miss re-targets, so
+// the bot spirals outward and never fills in cap. Only level-0 water
+// scoops. Lenient by design: unreadable cells (mocks, chunk edges) stay
+// candidates — excluding only PROVEN flow never strands a rung the old
+// scan would have filled.
+function isFlowWater(bot, p) {
+  try {
+    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(p) : null
+    if (!b) return false
+    let level = null
+    if (typeof b.getProperties === 'function') {
+      const props = b.getProperties()
+      if (props && props.level != null) level = props.level
+    }
+    if (level == null && typeof b.metadata === 'number') level = b.metadata
+    if (level == null) return false
+    const n = typeof level === 'number' ? level : parseInt(level, 10)
+    return Number.isFinite(n) && n !== 0
+  } catch (_) {
+    return false
   }
 }
 
@@ -732,9 +787,18 @@ function fillTick(bot, ctx, next) {
   // nearer cell, so an unreachable cell is never marked tried. The lock
   // holds until the cell fills, fails, or times out.
   if (!r.fillTarget || r.fillTried[r.fillTarget.key]) r.fillTarget = null
-  const cands = findWater(bot, r.fillTried)
+  const scan = findWater(bot, r.fillTried)
+  const cands = scan.out
   if (cands.length === 0) {
     if (nearHomeSite(bot, ctx, FILL_NEAR_HOME)) {
+      if (scan.flow > 0) {
+        // Present-but-flowing (z80): a settling 2x2 or passing re-flow
+        // reads sourceless for a few ticks — hold, don't latch; sources
+        // usually appear within a couple of seconds, and a truly
+        // flow-only home still latches after the patience runs out.
+        r.dryTicks = (r.dryTicks || 0) + 1
+        if (r.dryTicks < DRY_LATCH_TICKS) return
+      }
       // Dry home: say once, skip the rung, the ladder walks on. The latch
       // is session-scoped — water near home is static, and a re-scan every
       // gear visit would cost a scan per rung forever.
@@ -753,6 +817,7 @@ function fillTick(bot, ctx, next) {
     walkTo(bot, ctx, `gear-home:${s.x},${s.y},${s.z}`, s, 'home-far')
     return
   }
+  r.dryTicks = 0
   if (!r.fillTarget) r.fillTarget = cands[0]
   const t = r.fillTarget
   const bp = bot.entity.position
@@ -772,11 +837,14 @@ function fillTick(bot, ctx, next) {
     r.fillWalkTicks = (r.fillWalkTicks || 0) + 1
     if (r.fillWalkTicks > FILL_WALK_TICKS) {
       // Unreachable cell: try the next one, never fail the ladder — water
-      // behind a wall reads as no water (skip, don't stall).
+      // behind a wall reads as no water (skip, don't stall). The walk
+      // goal stops too (revmux z80-01 core-1): leaving it live steers
+      // the head through the patience hold and the next retarget.
       r.fillTried[t.key] = true
       r.fillTarget = null
       r.fillWalkKey = null
       r.fillWalkTicks = 0
+      stopSteering(bot, ctx)
     }
     return
   }
@@ -1169,6 +1237,7 @@ function gear(bot, ctx, target, state) {
       return
     }
     runCtx(ctx).walkTicks = 0
+    stopSteering(bot, ctx) // z80: the chest open is look-dependent too
     runWithdraw(bot, ctx, next)
     return
   }
@@ -1196,6 +1265,7 @@ function gear(bot, ctx, target, state) {
     // at fill completion, so deliver never tosses the bot's own water for
     // an owner claim that holds no water yet. Self armour goes on the body
     // at the forge (ipn.6); owner armour rides the haul untouched.
+    stopSteering(bot, ctx) // z80: no stale steer during the table use
     runOp(bot, ctx, op, () => {
       if (!next.fill) forged(bot, ctx, next)
       if (!next.owner && next.kind && ARMOR_DEST[next.kind]) wearSelf(bot, ctx, next.name, next.kind)

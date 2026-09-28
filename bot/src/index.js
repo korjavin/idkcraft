@@ -523,8 +523,54 @@ function fleeReflex(bot, ctx) {
     return null
   }
 
+  // Idle-while-far probe (idkcraft-rra): a noPath verdict empties the
+  // executor, so moving reads false and the moving-only watch never counts —
+  // the trap stays silent forever. A live but unsatisfied goal with an idle
+  // executor counts the same stillness instead. Only the goal itself knows
+  // its radius, so satisfaction is asked of it; a goal without coordinates
+  // reads as no goal (conservative: no stuck).
+  function idleFarFromGoal(bp) {
+    let g = null
+    try { g = bot.pathfinder && bot.pathfinder.goal } catch (_) { return false }
+    if (!g) return false
+    // Entity goals (GoalFollow) snapshot the target: hasChanged re-anchors
+    // only past rangeSq, so the snapshot lags a walking player by up to the
+    // range — while follow.js rests on the LIVE position. Measure live like
+    // follow does, or a player who walked into range reads stuck against a
+    // stale snapshot plus a stale noPath (revmux 01 major).
+    try {
+      const ep = g.entity && g.entity.position
+      if (ep && typeof g.rangeSq === 'number' && bp &&
+        typeof ep.x === 'number' && typeof ep.y === 'number' && typeof ep.z === 'number') {
+        const dx = Math.floor(ep.x) - Math.floor(bp.x)
+        const dy = Math.floor(ep.y) - Math.floor(bp.y)
+        const dz = Math.floor(ep.z) - Math.floor(bp.z)
+        return (dx * dx + dy * dy + dz * dz) > g.rangeSq
+      }
+    } catch (_) { /* fall through to isEnd */ }
+    try {
+      if (typeof g.isEnd === 'function') {
+        const node = bp && typeof bp.floored === 'function'
+          ? bp.floored()
+          : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+        return !g.isEnd(node)
+      }
+    } catch (_) { /* fall through to the distance check */ }
+    const gp = backstopGoal()
+    if (!gp || !bp) return false
+    let d = null
+    try { d = Math.hypot(bp.x - gp.x, bp.y - gp.y, bp.z - gp.z) } catch (_) { return false }
+    return typeof d === 'number' && d > 3
+  }
+
   function noteDisplacement() {
     if (ctx.paused) return
+    // Relocation re-arms the ticker latch on EVERY tick (rra round 2): the
+    // idle-branch consult below short-circuits while moving/at-goal, so a
+    // walk away and back would otherwise return to a stale anchor. Evaluated
+    // once here for both its clearing side effect and the idle condition.
+    let latched = false
+    try { latched = recover.tickerLatched(ctx, bot) } catch (_) { /* latch best-effort */ }
     let bp = null
     try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
     let moving = false
@@ -534,6 +580,22 @@ function fleeReflex(bot, ctx) {
     if (bp && ctx.lastPos && moving) {
       if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       else {
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuck = null
+      }
+    } else if (!moving && bp && ctx.lastPos) {
+      // Idle executor (idkcraft-rra): stillness counts only against a live
+      // unsatisfied goal after a terminal planner verdict (noPath/timeout).
+      // Normal idle at goal, without a goal, or mid-plan (none/success)
+      // resets — a placing build holds unsatisfiable approach goals with an
+      // idle executor for minutes, and must never trip this. A latched
+      // release point holds too: one episode + one page per trap, then quiet
+      // until the body relocates (revmux 01 major).
+      const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
+      if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
+        if (terminal && idleFarFromGoal(bp) && !latched) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+        else ctx.stuckTicks = 0
+      } else {
         ctx.stuckTicks = 0
         if (!ctx.recovery) ctx.stuck = null
       }
@@ -705,7 +767,7 @@ function fleeReflex(bot, ctx) {
       if (smov && typeof smov.allowParkour === 'boolean') smov.allowParkour = true
     } catch (_) { /* default best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -1537,6 +1599,51 @@ function fleeReflex(bot, ctx) {
         ctx.pendingSearch = { cursor: search, kind: 'bring', name, want, by }
         return `nothing within 48, widening the search for ${name}…`
       }
+      const bp0 = bot.entity && bot.entity.position
+      if (res.exposed === false && bp0) {
+        // No pickaxe tier, no dig and no walk either (harvest needs the
+        // tier for both): refuse synchronously so a short pack still hands
+        // over — the deferred verdicts below have no plan in scope
+        // (revmux 01 core-3). Order mirrors startBlockOrder + fallback.
+        if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+          clearStuck()
+          if (plan && plan.have > 0) return openPackOrder()
+          const tier = bringMod.requiredTier(res.name)
+          return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+        }
+        // Buried 48-best (atl.15): the far shells may see exposed ore and
+        // memory may know some — the buried hit is stashed as the dig
+        // candidate instead of committing to the shaft at once.
+        const buried = bringMod.buriedCand(bp0, res)
+        let mem = null
+        try { mem = bringMod.memoryExposed(bot, ctx, bp0, name, null) } catch (_) { mem = null }
+        mem = bringMod.memoryInBudget(mem, buried)
+        const search = startFarSearch(bot, name)
+        if (search === 'unknown') return `unknown block: ${name}`
+        if (!search) {
+          // Edge 48, no shells: decide now; a contested pair opens the
+          // order in find so the first (awaited) tick asks the model once.
+          const d = bringMod.decideBringSource(mem, buried)
+          if (!d.contested) {
+            clearStuck()
+            const win = d.pick === 'buried' ? buried : mem
+            const rival = d.pick === 'buried' ? mem : buried
+            const answer = startBlockOrder(bot, ctx, { name, want, by }, bringMod.choiceRes(win, rival, bp0))
+            if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
+            return answer
+          }
+          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+          ctx.unseenTicks = 0
+          ctx.resumeWork = false
+          clearStuck()
+          homeMod.releaseMeet(bot, ctx)
+          ctx.bring = { kind: 'block', name, want, by, phase: 'find', have: 0, announced: false }
+          ctx.paused = false
+          return `comparing open and buried ${name}…`
+        }
+        ctx.pendingSearch = { cursor: search, kind: 'bring', name, want, by, buried: res }
+        return `only buried ${name} within 48, checking further for open ore…`
+      }
       clearStuck()
       const answer = startBlockOrder(bot, ctx, { name, want, by }, res)
       // A refused block order (pickaxe tier) still gives a short pack.
@@ -1925,8 +2032,9 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
     have: 0, announced: true, exposed: res.exposed !== false,
   }
+  if (res.far === true) ctx.bring.far = true // memory target: unloaded is not gone
   ctx.paused = false
-  return `going for ${want} ${res.name}, ${res.distance} blocks away`
+  return bringMod.goingForLine(want, res)
 }
 
 // Shared found-answer (amb): sync find-me and far-search completion lead to
@@ -1948,9 +2056,9 @@ function answerFound(bot, ticker, playerName, refY, res) {
 // pause while hostiles are near (last tick's snapshot): search must not
 // stall the fight reflexes. A negative names the cursor's own edge — the
 // radius actually scanned, not a re-probe that may have drifted.
-function advancePendingSearch(bot, ticker, ctx) {
+async function advancePendingSearch(bot, ticker, ctx) {
   const p = ctx && ctx.pendingSearch
-  if (!p) return
+  if (!p || p.deciding) return
   if (ctx.lastHostileSnap && ctx.lastHostileSnap.count > 0) return
   const r = stepFarSearch(bot, p.cursor)
   if (!r.done) return
@@ -1961,6 +2069,100 @@ function advancePendingSearch(bot, ticker, ctx) {
   }
   const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
   if (p.kind === 'bring') {
+    const bp0 = bot.entity && bot.entity.position
+    if (bp0) {
+      // Shells done (atl.15): the verdict weighs live exposed (a) against
+      // memory (b) and the dig (c) — the stashed 48 hit when creation saw
+      // buried ore, else the far hit itself. Contested asks the model once
+      // (the tick awaits this); the cache rides onto the new order.
+      const stash = p.buried && p.buried.position ? p.buried : null
+      const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result) : null
+      const buried = stash ? bringMod.buriedCand(bp0, stash) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null)
+      let mem = null
+      try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
+      const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
+      if (!exposed && !buried) {
+        // atl.8: open the order instead of refusing — the first tick walks
+        // search legs (the far shells just came up empty, skip the re-scan).
+        if (!bringMod.canBringName(bot, p.name)) {
+          bot.chat(`can't bring ${p.name} — ores and logs only`)
+          return
+        }
+        homeMod.releaseMeet(bot, ctx)
+        ctx.bring = {
+          kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
+          have: 0, announced: false, searchSkipFar: true,
+        }
+        try {
+          ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: null, buriedHit: null }
+        } catch (_) { /* cache best-effort */ }
+        // The handover takes the body (jr2.2): a stale stay must not
+        // survive, and a body asleep from the pending wait must wake.
+        ctx.step = null
+        ctx.stepStatus = null
+        ctx.gohome = null
+        ctx.stay = null
+        ctx.inShelter = false
+        wakeBody(bot)
+        try {
+          const mov = ctx.movements
+          if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+        } catch (_) { /* reset best-effort */ }
+        ctx.paused = false
+        return
+      }
+      // The ask suspends: re-arm the pending token across the await so a
+      // mid-ask retire (stop/death/newer order) aborts the commit below.
+      // Non-contested verdicts never suspend (no brain call to await).
+      const d0 = bringMod.decideBringSource(exposed, buried)
+      let c
+      const cache = {}
+      if (!d0.contested) {
+        c = { action: d0.pick === 'buried' ? 'dig_buried' : 'walk_exposed' }
+      } else {
+        ctx.pendingSearch = p
+        p.deciding = true
+        try {
+          c = await bringMod.chooseBringSource(ctx && ctx.brain, bringMod.sourceText(p, exposed, buried), exposed, buried, cache)
+        } finally {
+          p.deciding = false
+        }
+        if (!ctx || ctx.pendingSearch !== p) return // retired mid-ask: touch nothing
+        ctx.pendingSearch = null
+      }
+      if (ticker && typeof ticker.clearStuck === 'function') ticker.clearStuck()
+      // Bring owns the body now: end any night step at once (module scope has
+      // no resetNightStep, so inline it). Otherwise the walk's borrowed
+      // canDig=false leaks onto the shared Movements for the whole bring.
+      ctx.step = null
+      ctx.stepStatus = null
+      ctx.gohome = null
+      ctx.stay = null
+      ctx.inShelter = false
+      try {
+        const mov = ctx.movements
+        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
+      } catch (_) { /* reset best-effort */ }
+      wakeBody(bot) // jr2.2: an order takes the body even at night
+      const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
+      const win = pick === 'buried' ? buried : exposed
+      const rival = pick === 'buried' ? exposed : buried
+      // A refusal (tier/unbringable) leaves a surviving older order in
+      // place: attach the verdict only to an order this commit created
+      // (revmux 02 core-1), never graft it onto the old one.
+      const prev = ctx.bring
+      bot.chat(startBlockOrder(bot, ctx, p, bringMod.choiceRes(win, rival, bp0)))
+      if (ctx.bring && ctx.bring !== prev) {
+        if (cache.sourceAsked) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
+        try {
+          ctx.bring.farCache = {
+            x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far,
+            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null,
+          }
+        } catch (_) { /* cache best-effort */ }
+      }
+      return
+    }
     if (!r.result) {
       // atl.8: open the order instead of refusing — the first tick walks
       // search legs (the far shells just came up empty, skip the re-scan).
