@@ -1305,8 +1305,13 @@ async function decide(bot, ctx) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
-    // re-pick forever.
-    if (prev && ctx.askedKey === askKey && !chainOwns && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    // re-pick forever. A gear yield never rides it either (ipn.7): gear
+    // ends done to hand off to the fetchers (latched announce), and the
+    // same text plus the same 'done' status re-issues it every tick —
+    // prod stood 8-10 min with 'going to dig' until the facts moved. The
+    // fresh menu pick below keeps gear out via the said-latch until a new
+    // need arrives; no hold is recorded (gear yields are never holds).
+    if (prev && ctx.askedKey === askKey && !chainOwns && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
