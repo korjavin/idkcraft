@@ -11,7 +11,16 @@
 // Leg 4 (owner pick): + 3 ingots + 2 sticks -> forged, banked with the self
 // twin surviving, haul cleared, chest NBT holds both.
 // Leg 5 (owner buckets, jsf.5): 2x (3 ingots -> craft, fill, bank) -> given
-// water_bucket 2, the reserve pair surviving, ladder on diamond.
+// water_bucket 2, the reserve pair surviving, ladder on self armour.
+// Leg 6 (pantry, ipn.6): 20 ingots banked via the real stockpile step,
+// then the self helmet rung draws 5 back from the chest, crafts, and WEARS
+// it (armour slot 5) — mats in chest -> withdrawn -> crafted -> worn.
+// Leg 7 (self set, ipn.6): 19 more ingots -> chestplate+leggings+boots
+// forged and worn (slots 6-8), no sticks, no haul.
+// Leg 8 (owner armour, ipn.6): 4x (5/8/7/4 ingots -> forge, bank) -> given
+// all four, spares in the chest NBT, worn set untouched, ladder on diamond.
+// Leg 9 (diamond crossing, ipn.6): self diamond pick from seed diamonds,
+// owner sword+pick forged+banked, self diamond helmet worn.
 // Exit 0/1; prints GEAR E2E PASS/FAIL.
 const mineflayer = require('mineflayer')
 const { pathfinder } = require('mineflayer-pathfinder')
@@ -45,6 +54,21 @@ function count(bot, name) {
   return n
 }
 
+// Worn check (ipn.6): armour slots 5-8 hold the live set; items() skips them.
+function worn(bot, name) {
+  try {
+    const slots = bot && bot.inventory && bot.inventory.slots
+    if (!Array.isArray(slots)) return 0
+    let n = 0
+    for (const s of [5, 6, 7, 8]) {
+      if (slots[s] && slots[s].name === name) n += 1
+    }
+    return n
+  } catch (_) {
+    return 0
+  }
+}
+
 async function main() {
   // Op BEFORE login (water-assay pattern): the fill scoop is a block change
   // and spawn protection refuses un-opped scoops; a mid-session op does not
@@ -75,10 +99,24 @@ async function main() {
   const cz = Math.round(feet.z)
   const tx = cx + 1
   const hx = cx - 1
+  // Flatten the pad (ipn.6 re-proof): prod-world spawn geometry is a
+  // lottery — the bot spawns in 1-wide holes, water lands behind cliffs —
+  // and fill legs time out walking it. A cleared box plus a cobble floor
+  // disc makes the assay deterministic on any spawn. Disposable rig only.
+  await rcon(`fill ${cx - 7} ${surf} ${cz - 7} ${cx + 7} ${surf + 5} ${cz + 7} air`)
+  await rcon(`fill ${cx - 7} ${surf - 1} ${cz - 7} ${cx + 7} ${surf - 1} ${cz + 7} cobblestone`)
   await rcon(`setblock ${tx} ${surf} ${cz} crafting_table`)
   await rcon(`setblock ${hx} ${surf} ${cz} chest`)
   await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`)
   await sleep(1500)
+  // Start clear (ipn.6): earlier runs cluster near spawn, and their spread
+  // sits inside the 32-block fill scan — stale flowing cells cost 20 ticks
+  // each and time the fill legs out. One fill wipes water around the pad
+  // (23k blocks, under the 32768 /fill limit); per-leg removeWater keeps
+  // the run itself clean. Disposable rig copy only.
+  try {
+    await rcon(`fill ${cx - 24} ${surf - 6} ${cz - 24} ${cx + 24} ${surf + 3} ${cz + 24} air replace water`)
+  } catch (_) { /* best-effort: the legs clear after themselves */ }
   // jsf.5: the fill source is an infinite 2x2 in bot-verified open air a
   // few blocks out — a blind offset lands inside terrain on hilly ground
   // (unreachable), a single source is drunk dry by the first scoop, and
@@ -112,11 +150,14 @@ async function main() {
   }
   async function removeWater(cell) {
     if (!cell) return
-    for (const [ox, oz] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-      try {
-        await rcon(`setblock ${cell[0] + ox} ${cell[1]} ${cell[2] + oz} air`)
-      } catch (_) { /* best-effort: spread drains, next leg re-places */ }
-    }
+    // Box clear (ipn.6): on prod-world slopes the 2x2 spreads past its
+    // cells, and leftover water poisons later legs (flowing cells never
+    // fill) and later runs (no air cell for the source). One fill clears
+    // source and spread; the chunks are loaded (the bot stands in them).
+    try {
+      const [x, y, z] = cell
+      await rcon(`fill ${x - 6} ${y - 3} ${z - 6} ${x + 7} ${y + 2} ${z + 7} air replace water`)
+    } catch (_) { /* best-effort: spread drains, next leg re-places */ }
   }
   const ctx = {
     home: { site: { x: cx, y: surf, z: cz }, built: true, table: { x: tx, y: surf, z: cz }, chest: { x: hx, y: surf, z: cz } },
@@ -165,9 +206,10 @@ async function main() {
   }
 
   async function chestIds() {
-    // Per-slot queries: a whole-Items dump truncates over RCON.
+    // Per-slot queries: a whole-Items dump truncates over RCON. Slots 0-9
+    // hold the tools, buckets, and owner armour by the final leg.
     const ids = []
-    for (let slot = 0; slot < 4; slot++) {
+    for (let slot = 0; slot < 10; slot++) {
       const out = await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', `data get block ${hx} ${surf} ${cz} Items[${slot}].id`])
       ids.push(String((out && out.stdout) || ''))
     }
@@ -182,10 +224,14 @@ async function main() {
 
   // Leg 2 (jsf.5): bucket stock x2 -> empties crafted silently, then filled
   // at the RCON water -> the reserve pair in pack, no haul (self forge).
+  // Generous cap (ipn.6): on prod-world terrain the bot walks real hills to
+  // the water, not a flat pad — the flat-tuned 150 risks a timeout fail.
   const w2 = await placeWater()
   await seedStock([['iron_ingot', 6]])
-  const leg2 = await tickUntil('leg 2', 0, () => count(bot, 'water_bucket') >= 2)
+  const leg2 = await tickUntil('leg 2', 500, () => count(bot, 'water_bucket') >= 2)
   await removeWater(w2)
+  await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`) // fill legs end at the water;
+  await sleep(500) // the craft/bank legs below test gear, not the hike back
   if (count(bot, 'bucket') !== 0) throw new Error('leg 2: empties must be filled, not left behind')
   if (ctx.haul && ctx.haul.water_bucket) throw new Error('leg 2: self forge must not haul')
   console.log(`leg 2 PASS: reserve pair in ${leg2} ticks (silent self forge)`)
@@ -220,8 +266,10 @@ async function main() {
   for (let unit = 1; unit <= 2; unit++) {
     const w5 = await placeWater()
     await seedStock([['iron_ingot', 3]])
-    const leg = await tickUntil(`leg 5.${unit}`, 0, () => (ctx.haul && ctx.haul.water_bucket) === 1 && (ctx.gearFinished && ctx.gearFinished.water_bucket) === 1)
+    const leg = await tickUntil(`leg 5.${unit}`, 400, () => (ctx.haul && ctx.haul.water_bucket) === 1 && (ctx.gearFinished && ctx.gearFinished.water_bucket) === 1)
     await removeWater(w5)
+    await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`) // back to the pad for the bank
+    await sleep(500)
     if (count(bot, 'water_bucket') !== 3) throw new Error(`leg 5.${unit}: pair+spare expected, have ${count(bot, 'water_bucket')}`)
     console.log(`leg 5.${unit} PASS: owner water_bucket hauled+recorded in ${leg} ticks (pack holds 3)`)
     const bank = await bankUntilDone(`leg 5.${unit} bank`)
@@ -231,11 +279,76 @@ async function main() {
     if ((ctx.haul && ctx.haul.water_bucket) !== 0) throw new Error(`leg 5.${unit} bank: haul claim not cleared`)
     console.log(`leg 5.${unit} bank PASS in ${bank} ticks: spare in chest, given ${unit}, haul cleared`)
   }
-  if (gear.deriveNext(bot, ctx).name !== 'diamond_pickaxe') throw new Error('leg 5 bank: ladder did not advance to diamond')
+  if (gear.deriveNext(bot, ctx).name !== 'iron_helmet') throw new Error('leg 5 bank: ladder did not advance to self armour')
   const nbt = await chestIds()
   if (!nbt.includes('iron_pickaxe') || !nbt.includes('iron_sword') || !nbt.includes('water_bucket')) throw new Error(`leg 5 bank: chest NBT missing pieces: ${nbt.slice(0, 200)}`)
-  console.log(`leg 5 bank PASS: pair survives, ledger settled, haul cleared, chest holds sword+pick+buckets, ladder on diamond`)
-  console.log(`GEAR E2E PASS: self pick ${leg1}t, self pair ${leg2}t, sword ${leg3}t+bank, owner pick ${leg4}t+bank, owner buckets 2x+bank`)
+  console.log(`leg 5 bank PASS: pair survives, ledger settled, haul cleared, chest holds sword+pick+buckets, ladder on self armour`)
+
+  // Leg 6 (ipn.6 pantry): bank 20 ingots through the real stockpile step
+  // (the run's first iron bank — the pantry signal fires), then the self
+  // helmet rung withdraws 5, crafts, and wears the helmet.
+  await seedStock([['iron_ingot', 20]])
+  const bank6 = await bankUntilDone('leg 6 bank')
+  await sleep(1000)
+  if (count(bot, 'iron_ingot') !== 0) throw new Error('leg 6 bank: ingots must leave the pack')
+  if ((ctx.gearPantryBanked || 0) < 1) throw new Error('leg 6 bank: pantry signal never fired')
+  const leg6 = await tickUntil('leg 6', 0, () => worn(bot, 'iron_helmet') >= 1)
+  if (ctx.haul && ctx.haul.iron_helmet) throw new Error('leg 6: self forge must not haul')
+  if (worn(bot, 'iron_helmet') !== 1 || count(bot, 'iron_helmet') !== 0) throw new Error('leg 6: helmet must be worn, not packed')
+  console.log(`leg 6 PASS: 20 banked in ${bank6}t, 5 withdrawn, helmet worn in ${leg6}t (silent self forge)`)
+
+  // Leg 7 (ipn.6 self set): the rest of the set forges and goes on the body.
+  await seedStock([['iron_ingot', 19]])
+  const leg7 = await tickUntil('leg 7', 0, () => worn(bot, 'iron_chestplate') >= 1 && worn(bot, 'iron_leggings') >= 1 && worn(bot, 'iron_boots') >= 1)
+  if (count(bot, 'iron_chestplate') + count(bot, 'iron_leggings') + count(bot, 'iron_boots') !== 0) throw new Error('leg 7: set must be worn, not packed')
+  console.log(`leg 7 PASS: chestplate+leggings+boots worn in ${leg7}t`)
+
+  // Leg 8 (ipn.6 owner armour): each spare forges, banks, and reads given;
+  // the worn set is untouched throughout.
+  for (const [piece, mats] of [['iron_helmet', 5], ['iron_chestplate', 8], ['iron_leggings', 7], ['iron_boots', 4]]) {
+    await seedStock([['iron_ingot', mats]])
+    const leg = await tickUntil(`leg 8 ${piece}`, 0, () => (ctx.haul && ctx.haul[piece]) === 1 && (ctx.gearFinished && ctx.gearFinished[piece]) === 1)
+    if (count(bot, piece) !== 1) throw new Error(`leg 8 ${piece}: spare must sit in the pack, have ${count(bot, piece)}`)
+    console.log(`leg 8 ${piece} PASS: hauled+recorded in ${leg}t`)
+    const bank = await bankUntilDone(`leg 8 ${piece} bank`)
+    await sleep(1000)
+    if (count(bot, piece) !== 0) throw new Error(`leg 8 ${piece} bank: spare must leave the pack`)
+    if ((ctx.gearGiven && ctx.gearGiven[piece]) !== 1) throw new Error(`leg 8 ${piece} bank: never marked given`)
+    if ((ctx.haul && ctx.haul[piece]) !== 0) throw new Error(`leg 8 ${piece} bank: haul claim not cleared`)
+    console.log(`leg 8 ${piece} bank PASS in ${bank}t: spare in chest, given, haul cleared`)
+  }
+  for (const piece of ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']) {
+    if (worn(bot, piece) !== 1) throw new Error(`leg 8 bank: worn ${piece} disturbed by the handover`)
+  }
+  if (gear.deriveNext(bot, ctx).name !== 'diamond_pickaxe') throw new Error('leg 8 bank: ladder did not advance to diamond')
+  const nbt8 = await chestIds()
+  for (const piece of ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']) {
+    if (!nbt8.includes(piece)) throw new Error(`leg 8 bank: chest NBT missing ${piece}: ${nbt8.slice(0, 300)}`)
+  }
+  console.log('leg 8 bank PASS: worn set untouched, spares in chest, ladder on diamond')
+
+  // Leg 9 (ipn.6 diamond crossing): self pick, owner sword+pick, self helmet.
+  await seedStock([['diamond', 3], ['stick', 2]])
+  const leg9a = await tickUntil('leg 9 self pick', 0, () => count(bot, 'diamond_pickaxe') >= 1)
+  console.log(`leg 9a PASS: diamond_pickaxe in ${leg9a}t`)
+  await seedStock([['diamond', 2], ['stick', 1]])
+  const leg9b = await tickUntil('leg 9 sword', 0, () => (ctx.haul && ctx.haul.diamond_sword) === 1)
+  const bank9b = await bankUntilDone('leg 9 sword bank')
+  await sleep(1000)
+  if ((ctx.gearGiven && ctx.gearGiven.diamond_sword) !== 1) throw new Error('leg 9 sword bank: never marked given')
+  console.log(`leg 9b PASS: diamond_sword forged in ${leg9b}t, banked in ${bank9b}t`)
+  await seedStock([['diamond', 3], ['stick', 2]])
+  const leg9c = await tickUntil('leg 9 owner pick', 0, () => (ctx.haul && ctx.haul.diamond_pickaxe) === 1)
+  const bank9c = await bankUntilDone('leg 9 owner pick bank')
+  await sleep(1000)
+  if ((ctx.gearGiven && ctx.gearGiven.diamond_pickaxe) !== 1) throw new Error('leg 9 owner pick bank: never marked given')
+  if (count(bot, 'diamond_pickaxe') !== 1) throw new Error('leg 9 owner pick bank: self pick must survive')
+  console.log(`leg 9c PASS: owner diamond_pickaxe forged in ${leg9c}t, banked in ${bank9c}t, twin survives`)
+  await seedStock([['diamond', 5]])
+  const leg9d = await tickUntil('leg 9 diamond helm', 0, () => worn(bot, 'diamond_helmet') >= 1)
+  if (worn(bot, 'iron_helmet') !== 0 || count(bot, 'iron_helmet') < 1) throw new Error('leg 9 helm: old iron must swap to the pack')
+  console.log(`leg 9d PASS: diamond_helmet worn in ${leg9d}t, iron swapped down`)
+  console.log(`GEAR E2E PASS: self pick ${leg1}t, self pair ${leg2}t, sword ${leg3}t+bank, owner pick ${leg4}t+bank, owner buckets 2x+bank, pantry+helm ${leg6}t, set ${leg7}t, owner armour 4x+bank, diamond crossing`)
   bot.quit()
   process.exit(0)
 }

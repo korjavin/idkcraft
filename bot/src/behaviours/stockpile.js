@@ -597,6 +597,14 @@ function stockpile(bot, ctx, target, state) {
             }
           }
         } catch (_) { /* ledger best-effort */ }
+        // Pantry signal (ipn.6): ladder mats banked mid-rung re-arm gear's
+        // chest withdraw. Names mirror gear's RUNGS mats + smeltable ore
+        // (no shared import: this module must not require gear — cycle).
+        try {
+          if ((bankedByName.raw_iron || 0) > 0 || (bankedByName.iron_ingot || 0) > 0 || (bankedByName.diamond || 0) > 0) {
+            ctx.gearPantryBanked = (ctx.gearPantryBanked || 0) + 1
+          }
+        } catch (_) { /* signal best-effort */ }
         ctx.chestFull = false
         ctx.chestFullAt = null
         ctx.chestErrorAt = null

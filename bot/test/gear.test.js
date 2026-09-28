@@ -19,7 +19,7 @@ function pos(x, y, z) {
   }
 }
 
-function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, cells = {} } = {}) {
+function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, cells = {}, slots = null } = {}) {
   const lines = []
   const calls = { craft: [], goals: [] }
   const itemsByName = {}
@@ -29,7 +29,7 @@ function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, cells =
     _items: items,
     entity: { position: pos(0, 64, 0), onGround: true },
     registry: { itemsByName },
-    inventory: { items: () => bot._items },
+    inventory: { items: () => bot._items, slots },
     recipesFor: (id) => {
       const name = Object.keys(ids).find((n) => ids[n] === id)
       if (!(name in recipes)) throw new Error(`unexpected recipesFor(${name})`)
@@ -89,11 +89,23 @@ describe('gear ladder derivation', () => {
     assert.equal(next.name, 'iron_pickaxe')
     assert.equal(next.owner, true)
   })
-  it('complete iron rung advances to the diamond self pickaxe', () => {
-    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }] })
-    const next = gear.deriveNext(bot, { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1 } })
-    assert.equal(next.name, 'diamond_pickaxe')
+  it('complete iron tools advance to self armour, then diamond (ipn.6)', () => {
+    const tools = [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }]
+    const toolsGiven = { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1 }
+    const next = gear.deriveNext(mockBot({ items: tools }), { gearGiven: toolsGiven })
+    assert.equal(next.name, 'iron_helmet')
     assert.equal(next.owner, false)
+    // Self set worn, owner spares handed: the ladder crosses to diamond.
+    const slots = new Array(46).fill(null)
+    slots[5] = { name: 'iron_helmet' }
+    slots[6] = { name: 'iron_chestplate' }
+    slots[7] = { name: 'iron_leggings' }
+    slots[8] = { name: 'iron_boots' }
+    const geared = mockBot({ items: tools, slots })
+    const full = { ...toolsGiven, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 }
+    const dia = gear.deriveNext(geared, { gearGiven: full })
+    assert.equal(dia.name, 'diamond_pickaxe')
+    assert.equal(dia.owner, false)
   })
   it('a lost self pick regresses the ladder to iron', () => {
     // Diamond rung "complete" on paper, but the iron hands are gone: the
@@ -104,8 +116,28 @@ describe('gear ladder derivation', () => {
     assert.equal(next.owner, false)
   })
   it('full ladder plus carried picks reads complete', () => {
-    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }] })
-    const ctx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 } }
+    // End of ladder: the diamond set is worn, the swapped-down iron set
+    // rides the pack (TOOL_KEEP), both picks and the pair carried.
+    const slots = new Array(46).fill(null)
+    slots[5] = { name: 'diamond_helmet' }
+    slots[6] = { name: 'diamond_chestplate' }
+    slots[7] = { name: 'diamond_leggings' }
+    slots[8] = { name: 'diamond_boots' }
+    const bot = mockBot({
+      items: [
+        { name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 },
+        { name: 'iron_helmet', count: 1 }, { name: 'iron_chestplate', count: 1 },
+        { name: 'iron_leggings', count: 1 }, { name: 'iron_boots', count: 1 },
+      ],
+      slots,
+    })
+    const ctx = {
+      gearGiven: {
+        water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
+        iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+        diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+      },
+    }
     assert.equal(gear.deriveNext(bot, ctx), null)
   })
 })
@@ -154,8 +186,8 @@ describe('gear planFor', () => {
     assert.ok(p.line.includes('3 more raw iron'))
   })
   it('diamonds short drive the deep leg, else wait on the slice', () => {
-    const ctx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1 } }
-    const counts = C({ sticks: 2, diamonds: 1, iron_pickaxe: 1, water_bucket: 2 })
+    const ctx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 } }
+    const counts = C({ sticks: 2, diamonds: 1, iron_pickaxe: 1, water_bucket: 2, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 })
     assert.equal(gear.planFor(counts, ctx, { deep: true }).action, 'deep')
     const p = gear.planFor(counts, ctx, {})
     assert.deepEqual([p.state, p.key], ['wait', 'wait-deep'])
@@ -165,8 +197,18 @@ describe('gear planFor', () => {
     assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
   })
   it('complete ledger reads done', () => {
-    const ctx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 } }
-    const counts = C({ iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 })
+    const ctx = {
+      gearGiven: {
+        water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
+        iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+        diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+      },
+    }
+    const counts = C({
+      iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2,
+      iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+      diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+    })
     assert.equal(gear.planFor(counts, ctx, {}).state, 'done')
   })
 })
@@ -343,10 +385,17 @@ describe('gear tick', () => {
   })
   it('deep leg relays done and failures', () => {
     const mk = (status) => {
-      const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }, { name: 'stick', count: 2 }, { name: 'diamond', count: 1 }] })
+      const bot = mockBot({
+        items: [
+          { name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 },
+          { name: 'stick', count: 2 }, { name: 'diamond', count: 1 },
+          { name: 'iron_helmet', count: 1 }, { name: 'iron_chestplate', count: 1 },
+          { name: 'iron_leggings', count: 1 }, { name: 'iron_boots', count: 1 },
+        ],
+      })
       const ctx = {
         home: home(), stepStatus: 'running',
-        gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1 },
+        gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 },
         gearLegs: { deep: (b, c) => { c.stepStatus = status } },
       }
       return { bot, ctx }
@@ -371,8 +420,19 @@ describe('gear menu and goal glue', () => {
   it('MENU.gear.feasible gates built/done/latch', () => {
     const F = goal.MENU.gear.feasible
     assert.equal(F({ home: 'site' }, mockBot(), {}), false)
-    const doneCtx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 } }
-    assert.equal(F({ home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2 }, mockBot(), doneCtx), false)
+    const doneCtx = {
+      gearGiven: {
+        water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
+        iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+        diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+      },
+    }
+    const doneFacts = {
+      home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2,
+      ironHelmet: 1, ironChestplate: 1, ironLeggings: 1, ironBoots: 1,
+      diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
+    }
+    assert.equal(F(doneFacts, mockBot(), doneCtx), false)
     assert.equal(F({ home: 'built', ingots: 3, sticks: 2, tablePlaced: true }, mockBot(), {}), true)
     assert.equal(F({ home: 'built' }, mockBot(), {}), true, 'unlatched want announces')
     assert.equal(F({ home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }), false, 'latched want yields')
@@ -380,8 +440,19 @@ describe('gear menu and goal glue', () => {
   it('criteria and stepWhy mirror the plan', () => {
     assert.ok(goal.STEP_CRITERIA.gear.includes('forge'))
     assert.equal(goal.stepWhy('gear', { home: 'site' }, mockBot(), {}, ''), 'gear: house not built yet')
-    const doneCtx = { gearGiven: { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 } }
-    assert.equal(goal.stepWhy('gear', { home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2 }, mockBot(), doneCtx, ''), 'gear: ladder complete')
+    const doneCtx = {
+      gearGiven: {
+        water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
+        iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+        diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+      },
+    }
+    const doneFacts = {
+      home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2,
+      ironHelmet: 1, ironChestplate: 1, ironLeggings: 1, ironBoots: 1,
+      diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
+    }
+    assert.equal(goal.stepWhy('gear', doneFacts, mockBot(), doneCtx, ''), 'gear: ladder complete')
     assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }, ''), 'gear: need logs for sticks, going to chop')
   })
   it('decide holds the step behind gear and furnace window ops', async () => {
@@ -541,7 +612,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     assert.equal(ctx.gearGiven.iron_pickaxe, 1, 'toss detected via the empty haul')
     assert.equal(gear.handoverWaiting(bot, ctx), false)
     assert.deepEqual(stockpile.depositPlan(bot, ctx), [], 'reserve holds the self pick')
-    assert.equal(gear.deriveNext(bot, ctx).name, 'diamond_pickaxe', 'ladder advances, no reforge')
+    assert.equal(gear.deriveNext(bot, ctx).name, 'iron_helmet', 'ladder advances to armour, no reforge')
   })
   it('death with a stale haul reforges instead of forgiving', () => {
     const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }] }) // self hands kept
@@ -1138,6 +1209,6 @@ describe('gear jsf.5: reserve and the two-unit handover', () => {
     gear.reconcile(ctx, bot)
     assert.equal(ctx.gearGiven.water_bucket, 2)
     const done = gear.deriveNext(mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }] }), ctx)
-    assert.ok(done && done.name === 'diamond_pickaxe', 'iron complete, ladder on diamond')
+    assert.ok(done && done.name === 'iron_helmet' && done.owner === false, 'tools complete, ladder on self armour')
   })
 })
