@@ -31,7 +31,8 @@ const NAME = `DeepAssay${Math.floor(Math.random() * 10000)}`
 const TICK_MS = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
 
 async function rcon(cmd) {
-  await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', cmd])
+  const { stdout } = await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', cmd])
+  return (stdout || '').trim()
 }
 
 async function waitLoaded(bot, timeoutMs = 20000) {
@@ -97,22 +98,86 @@ function freshCtx(site) {
   return { lastGoalKey: '', stepStatus: 'running', home: site ? { site } : undefined }
 }
 
+// Tick deep() until the site phase commits to a shaft (phase descend, shaft
+// fixed) or the leg ends. True only when a shaft is committed.
+async function untilDescend(bot, ctx, timeoutMs) {
+  const end = Date.now() + timeoutMs
+  for (;;) {
+    try { deep(bot, ctx, null, {}) } catch (e) { console.error(`untilDescend THREW ${e.message}`); return false }
+    if (ctx.deep && ctx.deep.phase === 'descend' && ctx.deep.shaft) return true
+    if (ctx.stepStatus.startsWith('done') || ctx.stepStatus.startsWith('failed:')) return false
+    if (Date.now() > end) return false
+    await sleep(TICK_MS)
+  }
+}
+
 async function rules(bot) {
   let pass = true
-  // Prepare a flat stone pad at a fixed site so the mouth is deterministic:
-  // anchor (sx,sz) -> mouth r=3/a=0 -> (sx, sz-3), topY = pad top.
+  // Pad site (fsg): pickDir scans the whole 115-deep tube, and on the
+  // prod-world copy raw terrain refuses EVERY direction near spawn (6/6
+  // stride-20 columns pickDir=null in all 4 dirs — a clean-column search
+  // cannot work). The rules assay proves the step 0-2 GUARDS, not
+  // tube-finding in the wild (the leg assay covers that on natural terrain),
+  // so RCON-clean the +X corridor to stone: pickDir(+X) then passes by
+  // construction, deterministically. Anchor (sx,sz) -> mouth r=3/a=0 ->
+  // (sx, sz-3), topY = pad top.
   const sx = Math.round(bot.entity.position.x)
   const sz = Math.round(bot.entity.position.z)
   const padY = 70
-  await rcon(`fill ${sx - 10} ${padY - 6} ${sz - 10} ${sx + 10} ${padY - 1} ${sz + 10} stone`)
-  await rcon(`fill ${sx - 10} ${padY} ${sz - 10} ${sx + 10} ${padY + 4} ${sz + 10} air`)
+  const mz = sz - 3
+  // Corridor = tubeClean's exact read set for the +X shaft: steps 0..114,
+  // digs+stand+below, lava/water radius 2 -> x sx-1..sx+117, y -48..69
+  // (y 70+ is pad air, clean), z mz+-2. 4 fills under the 32768 limit.
+  console.log(`pad stone: ${await rcon(`fill ${sx - 10} ${padY - 6} ${sz - 10} ${sx + 10} ${padY - 1} ${sz + 10} stone`)}`)
+  console.log(`pad air: ${await rcon(`fill ${sx - 10} ${padY} ${sz - 10} ${sx + 10} ${padY + 4} ${sz + 10} air`)}`)
+  // Chunks first: /fill refuses unloaded positions ("That position is not
+  // loaded") and the corridor runs past the loaded area — high-hop down +X
+  // (columns load full-height; quick hops never land, so no fall damage).
+  for (const dx of [8, 32, 56, 80, 104]) {
+    await rcon(`tp ${NAME} ${sx + dx} 220 ${mz}`)
+    await sleep(2000)
+    await waitLoaded(bot, 15000)
+  }
+  for (const [y1, y2] of [[-48, -20], [-19, 10], [11, 40], [41, 69]]) {
+    console.log(`corridor fill y ${y1}..${y2}: ${await rcon(`fill ${sx - 1} ${y1} ${mz - 2} ${sx + 117} ${y2} ${mz + 2} stone`)}`)
+  }
   await sleep(1500)
   const mouth = { x: sx, z: sz - 3, topY: padY }
+  // Settle (fsg): the client must hold post-fill chunks before pickDir runs —
+  // stale pre-fill reads refuse with the same no-dir as real dirt. Poll the
+  // REAL pickDir until +X commits; on timeout dump sample reads as ground
+  // truth (stone = fills applied, null = unloaded/stale, raw = failed).
+  await rcon(`tp ${NAME} ${mouth.x} ${mouth.topY} ${mouth.z}`)
+  await waitLoaded(bot, 15000)
+  let committed = null
+  for (let t = 0; t < 15000; t += 1000) {
+    await sleep(1000)
+    committed = deep.pickDir(bot, mouth)
+    if (committed && committed.dx === 1 && committed.dz === 0) break
+    committed = null
+  }
+  if (!committed) {
+    try {
+      const Vec3 = require('vec3').Vec3
+      const samples = [[sx, 69, mz, 'mouth-ground'], [sx, 70, mz, 'mouth-feet'],
+        [sx + 1, 69, mz, 'step0-down'], [sx + 1, 70, mz, 'step0-feet'],
+        [sx + 50, 0, mz, 'mid-corridor'], [sx + 115, -45, mz, 'deep-corridor'],
+        [sx + 3, 68, mz, 'step2-feet']]
+      const reads = samples.map(([x, y, z, tag]) => {
+        let b = null
+        try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
+        return `${tag}=${b ? b.name : 'null'}`
+      })
+      const site = deep.pickSite(bot, freshCtx({ x: sx, z: sz }), { x: sx, z: sz })
+      console.log(`FAIL: rules +X never committed; site=${site ? `${site.x},${site.topY},${site.z}` : 'null'} ${reads.join(' ')}`)
+    } catch (e) { console.log(`FAIL: rules +X never committed (diagnose threw: ${e.message})`) }
+    return false
+  }
   // Step-0 cells for a +X shaft: feet/head/down at (sx+1, padY..padY+1, sz-3).
   const fx = sx + 1
   const fz = sz - 3
 
-  async function scenario(name, setup, want) {
+  async function scenario(name, setup, want, inject, settle) {
     await rcon(`fill ${fx - 2} ${padY - 8} ${fz - 2} ${fx + 2} ${padY + 2} ${fz + 2} stone`)
     await rcon(`fill ${sx - 2} ${padY} ${sz - 5} ${sx + 2} ${padY + 2} ${sz - 1} air`)
     await setup()
@@ -120,6 +185,43 @@ async function rules(bot) {
     const ctx = freshCtx({ x: sx, z: sz })
     await rcon(`tp ${NAME} ${mouth.x} ${mouth.topY} ${mouth.z}`)
     await sleep(1000)
+    // Settle on the post-setup reads (fsg): a stale pre-reset cell desyncs
+    // the drive (stale air skips the dig, the body walks into server stone,
+    // rubber-band shaft-stuck). Fail fast with the actual reads.
+    if (settle) {
+      const Vec3 = require('vec3').Vec3
+      const readAll = () => settle.map(([x, y, z, wantName]) => {
+        let b = null
+        try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
+        return { ok: !!b && b.name === wantName, line: `${x},${y},${z}=${b ? b.name : 'null'}(want ${wantName})` }
+      })
+      let missing = null
+      for (let t = 0; t < 10000; t += 500) {
+        const reads = readAll()
+        if (reads.every((r) => r.ok)) { missing = null; break }
+        missing = reads.filter((r) => !r.ok).map((r) => r.line)
+        await sleep(500)
+      }
+      if (missing) {
+        console.log(`FAIL: ${name} setup never landed: ${missing.join(' ')}`)
+        pass = false
+        return
+      }
+    }
+    if (inject) {
+      // Mid-drive injection (fsg): the shaft commits to +X at the site tick;
+      // planting the hazard only AFTER that keeps pickDir honest. Pre-planted
+      // step-2 lava trips tubeClean(+X), so pickDir could never pick the
+      // scenario direction (self-defeat); bedrock/air are tubeClean-invisible
+      // and stay pre-planted.
+      if (!(await untilDescend(bot, ctx, 30000))) {
+        console.log(`FAIL: ${name} never reached descend (status=${ctx.stepStatus})`)
+        pass = false
+        return
+      }
+      await inject()
+      await sleep(1000)
+    }
     const st = await drive(bot, ctx, 90000, name)
     const marked = danger.near(ctx, { x: fx, z: fz }, 8)
     const ok = st === want && (want === 'done' ? true : marked)
@@ -131,9 +233,9 @@ async function rules(bot) {
   // design, and lava adjacency would trip step-1 early — step-2 proves the
   // descend-time guard (lava fails at step 1 via the down-dig neighbour).
   const step1 = { x: sx + 3, y: padY - 2, z: fz }
-  await scenario('lava', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} lava`) }, 'failed:lava')
-  await scenario('drop', async () => { await rcon(`fill ${fx} ${padY - 8} ${fz} ${fx} ${padY + 1} ${fz} air`) }, 'failed:drop')
-  await scenario('bedrock', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} bedrock`) }, 'failed:bedrock')
+  await scenario('lava', async () => {}, 'failed:lava', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} lava`) }, [[fx, padY - 1, fz, 'stone']])
+  await scenario('drop', async () => { await rcon(`fill ${fx} ${padY - 8} ${fz} ${fx} ${padY + 1} ${fz} air`) }, 'failed:drop', null, [[fx, padY - 1, fz, 'air']])
+  await scenario('bedrock', async () => { await rcon(`fill ${step1.x} ${step1.y} ${step1.z} ${step1.x} ${step1.y} ${step1.z} bedrock`) }, 'failed:bedrock', null, [[step1.x, step1.y, step1.z, 'bedrock'], [fx, padY - 1, fz, 'stone']])
 
   // Tier gate: live bot at depth, stone pick, diamond remembered.
   {
@@ -285,6 +387,11 @@ async function main() {
   bot.on('forcedMove', () => { if (bot.entity) { const q = bot.entity.position; console.log(`${new Date().toISOString().slice(11, 19)} net forcedMove to=${q.x.toFixed(2)},${q.y.toFixed(2)},${q.z.toFixed(2)}`) } })
   bot.on('path_stop', () => console.log(`${new Date().toISOString().slice(11, 19)} path path_stop`))
   console.log(`assay ${mode} as ${NAME} on ${MC_HOST}:${MC_PORT}`)
+  // OP the assay bot (fsg): the rules pad sits inside spawn-protection=16
+  // and a non-op's digs are denied+restored server-side while the client
+  // believes them (ghost) — the body walks into server stone, the server
+  // pins it back 10x/s, walk stalls, shaft-stuck. Ops dig normally.
+  console.log(`op: ${await rcon(`op ${NAME}`)}`)
   let ok = true
   if (mode === 'rules' || mode === 'all') ok = (await rules(bot)) && ok
   if (mode === 'leg' || mode === 'all') ok = (await leg(bot)) && ok
