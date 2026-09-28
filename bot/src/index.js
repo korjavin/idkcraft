@@ -532,6 +532,21 @@ function fleeReflex(bot, ctx) {
     let g = null
     try { g = bot.pathfinder && bot.pathfinder.goal } catch (_) { return false }
     if (!g) return false
+    // Entity goals (GoalFollow) snapshot the target: hasChanged re-anchors
+    // only past rangeSq, so the snapshot lags a walking player by up to the
+    // range — while follow.js rests on the LIVE position. Measure live like
+    // follow does, or a player who walked into range reads stuck against a
+    // stale snapshot plus a stale noPath (revmux 01 major).
+    try {
+      const ep = g.entity && g.entity.position
+      if (ep && typeof g.rangeSq === 'number' && bp &&
+        typeof ep.x === 'number' && typeof ep.y === 'number' && typeof ep.z === 'number') {
+        const dx = Math.floor(ep.x) - Math.floor(bp.x)
+        const dy = Math.floor(ep.y) - Math.floor(bp.y)
+        const dz = Math.floor(ep.z) - Math.floor(bp.z)
+        return (dx * dx + dy * dy + dz * dz) > g.rangeSq
+      }
+    } catch (_) { /* fall through to isEnd */ }
     try {
       if (typeof g.isEnd === 'function') {
         const node = bp && typeof bp.floored === 'function'
@@ -566,10 +581,12 @@ function fleeReflex(bot, ctx) {
       // unsatisfied goal after a terminal planner verdict (noPath/timeout).
       // Normal idle at goal, without a goal, or mid-plan (none/success)
       // resets — a placing build holds unsatisfiable approach goals with an
-      // idle executor for minutes, and must never trip this.
+      // idle executor for minutes, and must never trip this. A latched
+      // release point holds too: one episode + one page per trap, then quiet
+      // until the body relocates (revmux 01 major).
       const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
       if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
-        if (terminal && idleFarFromGoal(bp)) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+        if (terminal && idleFarFromGoal(bp) && !recover.tickerLatched(ctx, bot)) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
         else ctx.stuckTicks = 0
       } else {
         ctx.stuckTicks = 0

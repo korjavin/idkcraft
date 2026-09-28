@@ -46,7 +46,12 @@ function follow(bot, ctx, target, state) {
   if (key !== ctx.lastGoalKey) {
     ctx.lastPathNodes = null
     bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
-    if (!ctx.recoverLatch || ctx.recoverLatch.key !== key) ctx.recoverLatch = null
+    // The ticker latch (rra round 1) survives a follow re-issue: release()
+    // anchored it at the wedge point precisely so the post-episode re-take
+    // (lastGoalKey='') does not re-arm the same trap. Other latches clear
+    // on a new pursuit exactly as before.
+    const tickerOwns = ctx.recoverLatch && ctx.recoverLatch.by === 'no-displacement'
+    if (!tickerOwns && (!ctx.recoverLatch || ctx.recoverLatch.key !== key)) ctx.recoverLatch = null
     const prevKey = ctx.lastGoalKey
     ctx.lastGoalKey = key
     ctx.followIssuedAt = now

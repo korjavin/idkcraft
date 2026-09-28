@@ -1233,6 +1233,72 @@ describe('ticker backstops (minor)', () => {
     assert.deepEqual(bot._tickerCtx.stuck.goal, { x: 10, y: 61, z: 0 })
     ticker.destroy()
   })
+  it('a timeout verdict fires like noPath (idkcraft-rra round 1)', async () => {
+    // Removing the timeout half of the terminal check fails this.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('timeout')
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
+    ticker.destroy()
+  })
+  it('a player who walked into range reads satisfied, not stuck (idkcraft-rra round 1)', async () => {
+    // GoalFollow snapshots the target: 20 ticks count against the far
+    // snapshot, then the player walks within range. follow.js rests on the
+    // live position (no re-issue, snapshot stays stale); the probe must
+    // measure live too — isEnd-on-snapshot would fire here.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    for (let t = 0; t < 20; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'no fact yet at 20 ticks')
+    bot.players.Steve.entity.position = pos(2, 61, 0)
+    // Per-tick: without the live measure the fact fires 11 ticks after the
+    // move, then the episode releases and latches back to null — an
+    // end-state assert alone would miss it.
+    for (let t = 0; t < 35; t++) {
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.stuck, null, `live range beats the stale snapshot + stale noPath (tick ${t})`)
+    }
+    ticker.destroy()
+  })
+  it('a latched release point holds the idle count until relocation (idkcraft-rra round 1)', async () => {
+    // One episode + one page per trap: release() anchors the latch (next
+    // test pins the anchor); the idle branch holds while the body stays
+    // within the radius and re-arms past it.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    bot._tickerCtx.recoverLatch = { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } }
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'latched trap stays quiet')
+    bot.entity.position = pos(6, 61, 0.5) // 5.5 past the anchor, still far from the player
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.recoverLatch, null, 'relocation clears the latch')
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement', 're-armed trap fires again')
+    ticker.destroy()
+  })
+  it('release anchors the ticker latch at the release point (idkcraft-rra round 1)', () => {
+    const bot = standBot()
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 10, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'call_player', source: 'fsm' },
+      brain: null,
+    }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(ctx.recoverLatch && ctx.recoverLatch.by, 'no-displacement')
+    assert.deepEqual(ctx.recoverLatch.at, { x: 0.5, y: 61, z: 0.5 })
+    assert.equal(recover.tickerLatched(ctx, bot), true)
+    bot.entity.position = pos(6, 61, 0.5)
+    assert.equal(recover.tickerLatched(ctx, bot), false, 'relocation clears')
+    assert.equal(ctx.recoverLatch, null)
+  })
   it('displacement resets the idle count (idkcraft-rra)', async () => {
     // 20 still ticks, one real step (still far from the goal), then the
     // count restarts: quiet at 20 more, fired 11 after that.

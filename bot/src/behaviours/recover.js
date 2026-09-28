@@ -1407,6 +1407,26 @@ function clearStaleRoamLatch(ctx, bot) {
   } catch (_) { /* latch best-effort */ }
 }
 
+const TICKER_LATCH_CLEAR = 4 // same radius as the home/roam release latches
+// Ticker latch (rra round 1): the ticker backstop sets ctx.stuck directly,
+// bypassing setStuck, so a noPath trap would re-fire an episode (model ask
+// + call_player) every ~45 s forever. release() anchors the release point;
+// the idle branch holds while the body stays within the radius. Relocation
+// re-arms, orders clear via clearStuck. Clears stale anchors like the roam
+// helper above, so one call both consults and re-arms.
+function tickerLatched(ctx, bot) {
+  try {
+    const L = ctx && ctx.recoverLatch
+    if (!L || L.by !== 'no-displacement' || !L.at || typeof L.at.x !== 'number') return false
+    const bp = botPos(bot)
+    if (bp && Math.hypot(bp.x - L.at.x, bp.z - L.at.z) > TICKER_LATCH_CLEAR) {
+      ctx.recoverLatch = null
+      return false
+    }
+    return true
+  } catch (_) { return false }
+}
+
 function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
   const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
@@ -1550,15 +1570,16 @@ function release(bot, ctx, how) {
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   if (by === 'follow') ctx.followStalls = 0
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home') {
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'no-displacement') {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
-    if (by === 'home' || by === 'roam') {
+    if (by === 'home' || by === 'roam' || by === 'no-displacement') {
       // Static goals never move, so goal-closeness cannot tell one wedge
       // from the next: anchor the release point instead. walkHomeTick
       // (home) and the roam-back branch (roam) re-arm only once the body
-      // relocated past the latch radius.
+      // relocated past the latch radius; the ticker idle branch consults
+      // its anchor through tickerLatched (rra round 1).
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
     }
@@ -1784,6 +1805,7 @@ module.exports = {
   restGaveUpHolds,
   clearRelocatedRestMark,
   clearStaleRoamLatch,
+  tickerLatched,
   decide,
   release,
   run,
