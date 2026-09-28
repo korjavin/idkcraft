@@ -54,11 +54,21 @@ for _ in $(seq 1 36); do
 done
 docker exec idk-replay rcon-cli "list" >/dev/null 2>&1 || { echo " rig never came up (see $LOG)"; exit 2; }
 # Anti-noise (repeatability, not prod combat): hostile interference (fights,
-# knockback, deaths) would make stuck/recover numbers unrepeatable.
-docker exec idk-replay rcon-cli "difficulty peaceful" >/dev/null
-docker exec idk-replay rcon-cli "gamerule fallDamage false" >/dev/null
-docker exec idk-replay rcon-cli "gamerule doWeatherCycle false" >/dev/null
-docker exec idk-replay rcon-cli "weather clear" >/dev/null
+# knockback, deaths) would make stuck/recover numbers unrepeatable. Every
+# command asserts and echoes: Paper 26.1 renamed gamerules to snake_case and
+# the old camelCase fails with "Incorrect argument" (3ro) — a silent
+# >/dev/null hid the dead rules and every run measured a noisier game.
+rcon_assert() { # $1 = command; fails the run unless rcon accepts it
+  _out=$(docker exec idk-replay rcon-cli "$1" 2>&1) || { echo "ANTI-NOISE FAILED [$1]: $_out"; exit 2; }
+  case "$_out" in
+    *Incorrect*|*Unknown*|*incomplete*|*No\ entity*) echo "ANTI-NOISE REJECTED [$1]: $(printf '%s' "$_out" | head -n 1)"; exit 2 ;;
+  esac
+  echo "anti-noise [$1]: $(printf '%s' "$_out" | head -n 1)"
+}
+rcon_assert "difficulty peaceful"
+rcon_assert "gamerule fall_damage false"
+rcon_assert "gamerule advance_weather false"
+rcon_assert "weather clear"
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then
   case "$SPOTS" in

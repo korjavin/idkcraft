@@ -50,6 +50,45 @@ function cellsOf(home) {
   }
 }
 
+// Bedroom footprint test (idkcraft-4nx): the four bed cells of a v2 home.
+// Furniture stations (equip's roadside table, stockpile's chest) must never
+// land here — beds.js fails loud on blocked cells (blocked by X) by design,
+// so the placer avoids them instead of the bed step digging furniture out.
+// v1 homes have no bedrooms: always false.
+function isBedroomCell(home, x, y, z) {
+  try {
+    if (!home || !home.site || home.v !== 2) return false
+    const s = home.site
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return false
+    if (y !== s.y || z !== s.z + 4) return false
+    return x === s.x + 1 || x === s.x + 2 || x === s.x + 4 || x === s.x + 5
+  } catch (_) {
+    return false
+  }
+}
+
+// Claim migration across a home replacement (idkcraft-ybt): a re-adopt swaps
+// ctx.home for a fresh object at the SAME site, and the fresh object carries
+// no bed claims — the respawn log then under-claims (plain instead of (bed))
+// until the next sleep re-derives sleptA. Same-site only: a new site ('build
+// here') means new bedrooms, and the old claims stay dropped. Never clobbers
+// claims the new home already carries; adoptBeds still retracts verified
+// ghosts the next tick.
+function migrateClaims(oldHome, newHome) {
+  try {
+    if (!oldHome || !newHome) return newHome
+    const a = oldHome.site
+    const b = newHome.site
+    if (!a || !b || a.x !== b.x || a.y !== b.y || a.z !== b.z) return newHome
+    for (const k of ['bedA', 'bedB']) {
+      const c = oldHome[k]
+      if (c && typeof c.x === 'number' && !newHome[k]) newHome[k] = c
+    }
+    if (oldHome.sleptA === true && newHome.sleptA !== true) newHome.sleptA = true
+  } catch (_) { /* claims best-effort */ }
+  return newHome
+}
+
 function blockNameAt(bot, p) {
   try {
     const b = bot.blockAt && bot.blockAt(p)
@@ -590,6 +629,8 @@ function beds(bot, ctx, target, state) {
 
 module.exports = beds
 module.exports.cellsOf = cellsOf
+module.exports.isBedroomCell = isBedroomCell
+module.exports.migrateClaims = migrateClaims
 module.exports.bedAt = bedAt
 module.exports.bedroomBed = bedroomBed
 module.exports.adoptBeds = adoptBeds
