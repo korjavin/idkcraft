@@ -86,6 +86,11 @@ function blockName(b) {
   return b && typeof b.name === 'string' ? b.name : ''
 }
 
+// Any lava content vetoes (a lava cauldron burns like lava); only true
+// water saves (a water cauldron breaks no falls) — the two fluids err in
+// opposite directions, so they match differently.
+function isLava(n) { return n === 'lava' || n === 'lava_cauldron' }
+
 function solid(b) {
   if (!b) return false
   if (typeof b.boundingBox === 'string') return b.boundingBox !== 'empty' && b.name !== 'water' && b.name !== 'lava'
@@ -196,7 +201,9 @@ function dist3(a, b) {
 function liquidAt(bot, pos, kind) {
   if (bot && bot.entity && ((kind === 'water' && bot.entity.isInWater === true) || (kind === 'lava' && bot.entity.isInLava === true))) return true
   const feet = pos && bot ? cellAt(bot, Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)) : null
-  return !!feet && blockName(feet) === kind // exact: water_cauldron is neither swimmable nor a landing
+  if (!feet) return false
+  const n = blockName(feet)
+  return kind === 'lava' ? isLava(n) : n === 'water'
 }
 
 function climbableAt(bot, pos) {
@@ -254,7 +261,7 @@ function belowVeto(bot, pos) {
       const b = cellAt(bot, cx, y, cz)
       if (!b) return 'unknown-below'
       const n = blockName(b)
-      if (n === 'lava') return 'lava-below'
+      if (isLava(n)) return 'lava-below'
       if (n === 'water') { water = true; continue } // decided with the level, never alone
       if (CLIMBABLES.has(n)) continue
       const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
