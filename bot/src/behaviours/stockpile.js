@@ -260,6 +260,13 @@ function chestSpotFor(bot, ctx) {
     const c = cell(s)
     if (!c) continue
     if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
+    // Bedroom cells never take a new chest (idkcraft-4nx, the equip roadside
+    // precedent): the bed step fails loud on blocked cells by design, so the
+    // placer avoids them. The adopt scan above still claims a standing chest
+    // wherever it is. Deferred require (beds->stockpile cycle).
+    try {
+      if (require('./beds').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
+    } catch (_) { /* untestable home: place as before */ }
     const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }
     if (below === 'air') continue

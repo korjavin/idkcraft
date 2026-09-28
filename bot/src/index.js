@@ -25,6 +25,7 @@ function brainTimeoutMs(env) {
 const bringMod = require('./behaviours/bring')
 const woolMod = require('./behaviours/wool')
 const bedMod = require('./behaviours/bed')
+const bedsMod = require('./behaviours/beds')
 const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
@@ -1257,6 +1258,10 @@ function fleeReflex(bot, ctx) {
       // run against the pinned order.home, and the shelter refresh lands in
       // startWork's release right after (revmux 01 core-1). No meet: no-op.
       homeMod.releaseMeet(bot, ctx)
+      // Same-site bed claims ride across the swap (idkcraft-ybt): a fresh
+      // adopt object at the same site would otherwise drop sleptA until the
+      // next sleep. A new site keeps its dropped claims (new bedrooms).
+      try { if (home) bedsMod.migrateClaims(ctx.home, home) } catch (_) { /* claims best-effort */ }
       ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and

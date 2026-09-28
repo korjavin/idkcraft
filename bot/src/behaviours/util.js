@@ -229,6 +229,12 @@ function denyReason(bot, block, ctx) {
         return 'gravity'
       }
     }
+    // Beds are never dug, even our own (idkcraft-jrp): placedByBot is
+    // positional, so a stale entry (a roadside table on B-foot, hand-cleared,
+    // then the bed placed into the same cell) would license a recover dig to
+    // pop the bedroom. No behaviour digs beds (bring-bed crafts fresh, the
+    // bed step fails loud on halves).
+    if (name.endsWith('_bed')) return 'protected'
     if (pos && ctx && ctx.placedByBot instanceof Set) {
       try {
         if (ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)) return null
