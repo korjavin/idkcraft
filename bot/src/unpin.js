@@ -265,7 +265,9 @@ function belowVeto(bot, pos) {
       if (n === 'water') { water = true; continue } // decided with the level, never alone
       if (CLIMBABLES.has(n)) continue
       const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
-      for (const s of rel) {
+      for (const s of rel) { // only shapes the footprint actually overlaps can land it
+        if (!overlap1(s[0] + cx, s[3] + cx, bb.x0, bb.x1)) continue
+        if (!overlap1(s[2] + cz, s[5] + cz, bb.z0, bb.z1)) continue
         if (s[4] + y > top) top = s[4] + y
       }
     }
@@ -413,7 +415,9 @@ function unpinTick(bot, ctx, now = Date.now()) {
   if (veto !== null) return drop(ctx, veto, pos)
   const order = orderNudgeDirs(bot, base)
   const tried = new Set(st.tries.map((tr) => `${tr.dx},${tr.dz}`))
-  const dir = order.find(([x, z]) => !tried.has(`${x},${z}`))
+  // Landing per candidate destination: the body falls from where the nudge
+  // puts it, which can cross a column the base footprint never touched.
+  const dir = order.find(([x, z]) => !tried.has(`${x},${z}`) && !belowVeto(bot, { x: base.x + x, y: base.y, z: base.z + z }))
   if (!dir) {
     const a = st.anchor ? { x: st.anchor.x, y: st.anchor.y, z: st.anchor.z } : { ...pos }
     st.stoodDown = { ...a, kind: 'failed' }

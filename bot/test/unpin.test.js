@@ -639,6 +639,39 @@ describe('unpin round-2 probes (F3/F4/F5)', () => {
     assert.equal(sent.length, 0)
   })
 
+  it('below (R6 major): landing needs horizontal overlap (trapdoor over void)', () => {
+    const bot = {
+      entity: { position: pos(0.4875, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 70 && p.z === 0) return { name: 'oak_door', boundingBox: 'block', shapes: [[0, 0, 0, 0.1875, 1, 1]] } // west contact
+        if (p.x === 0 && p.y === 64 && p.z === 0) return { name: 'oak_trapdoor', boundingBox: 'block', shapes: [[0, 0, 0, 0.1875, 1, 1]] } // top 65, x clear of the body
+        return { name: 'air', boundingBox: 'empty' } // void below the trapdoor
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.4875, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
+  it('below (R6 major): landing checked at the destination (column crossing)', () => {
+    const bot = { // base footprint col 0 (safe stone); the +x step crosses into col 1 (lava)
+      entity: { position: pos(0.7, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 0.4, 1, 1]] } // west contact -> +x
+        if (p.x === 0 && p.y === 65 && p.z === 0) return { name: 'stone', boundingBox: 'block' } // base landing: fall 4, ok
+        if (p.x === 1 && p.y === 65 && p.z === 0) return { name: 'lava', boundingBox: 'empty' } // dest column: veto
+        return { name: 'air', boundingBox: 'empty' }
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.7, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'stood-down') // geometry passes, no survivable step
+    assert.equal(sent.length, 0)
+  })
+
   it('footprint below (F3): slab top sets the fall, not the cell top', () => {
     const bot = {
       entity: { position: pos(0.5, 66.6, 0.5), onGround: false },
