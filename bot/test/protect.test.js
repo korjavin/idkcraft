@@ -113,8 +113,10 @@ describe('canBreak guard (idkcraft-drq)', () => {
     console.log = (l) => lines.push(String(l))
     try {
       logDeny(blk('dirt', -10, 56, 124), 'below-feet')
+      logDeny(blk('stone', -11, 58, 124), 'gravity')
     } finally { console.log = orig }
     assert.ok(lines.some((l) => l === 'selftrap: refused dig dirt at -10 56 124 (below-feet)'), lines.join('\n'))
+    assert.ok(lines.some((l) => l === 'selftrap: refused dig stone at -11 58 124 (gravity)'), lines.join('\n'))
   })
 
   it('CLEAR_FLORA is exported for stockpile', () => {
@@ -262,6 +264,25 @@ describe('recover dig guards (idkcraft-drq)', () => {
     assert.deepEqual(bot.digs, [], 'ceiling never touched')
   })
 
+  it('dig_up refuses a stone ceiling under sand with failed:gravity', () => {
+    // Owner session 2026-09-28: head1 already open, head2 stone with a
+    // sand stack above — the old code dug it and suffocated 2s later.
+    const bot = recBot(new Map([['0,66,0', 'stone'], ['0,67,0', 'sand']]))
+    const ctx = recCtx('dig_up')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:gravity')
+    assert.deepEqual(bot.digs, [], 'support never dug')
+  })
+
+  it('dig_up still clears a sand ceiling directly (self-rescue allowed)', async () => {
+    const bot = recBot(new Map([['0,65,0', 'sand'], ['0,66,0', 'sand']]))
+    const ctx = recCtx('dig_up')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dig starts')
+    await new Promise((r) => setImmediate(r))
+    assert.deepEqual(bot.digs, ['sand'], 'sand itself is dug')
+  })
+
   it('dig_step refuses protected above and cap cells', () => {
     const st = () => ({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 64 })
     const botA = recBot(new Map([['1,65,0', 'suspicious_sand']]))
@@ -390,5 +411,30 @@ describe('self-trap rule (idkcraft-drq)', () => {
     }
     forage(bot, ctx, null, {})
     assert.equal(digs, 0, 'below-feet ore in a pit never dug')
+  })
+
+  it('denyReason: digging a support under sand/gravel in own column denies gravity', () => {
+    // The fatal dig: feet y=64, head2 stone at y=66, sand at y=67.
+    const under = (top) => feetBot(new Map([['0,66,0', 'stone'], ['0,67,0', top]]))
+    assert.equal(denyReason(under('sand'), blk('stone', 0, 66, 0), {}), 'gravity', 'sand above')
+    assert.equal(denyReason(under('red_sand'), blk('stone', 0, 66, 0), {}), 'gravity', 'red sand above')
+    assert.equal(denyReason(under('gravel'), blk('stone', 0, 66, 0), {}), 'gravity', 'gravel above')
+    assert.equal(denyReason(under('white_concrete_powder'), blk('stone', 0, 66, 0), {}), 'gravity', 'powder above')
+    assert.equal(denyReason(under('sandstone'), blk('stone', 0, 66, 0), {}), null, 'solid cap: no fall')
+    assert.equal(denyReason(under('air'), blk('stone', 0, 66, 0), {}), null, 'open sky: no fall')
+    // Digging the gravity block itself is self-clearing, never a trap.
+    assert.equal(denyReason(under('sand'), blk('sand', 0, 66, 0), {}), null, 'sand itself allowed')
+    assert.equal(denyReason(under('gravel'), blk('gravel', 0, 66, 0), {}), null, 'gravel itself allowed')
+    // Adjacent column: the stack falls beside the bot, not onto it.
+    const side = feetBot(new Map([['1,66,0', 'stone'], ['1,67,0', 'sand']]))
+    assert.equal(denyReason(side, blk('stone', 1, 66, 0), {}), null, 'neighbour column allowed')
+    // Below-feet targets stay with the below-feet rule (open: allowed).
+    assert.equal(denyReason(side, blk('stone', 0, 63, 0), {}), null, 'floor dig on open ground allowed')
+    // No position, or an unknown block above: unproven, stays out.
+    assert.equal(denyReason(worldBot(new Map()), blk('stone', 0, 66, 0), {}), null, 'no position: allowed')
+    const blind = feetBot(new Map())
+    blind.blockAt = () => null
+    assert.equal(denyReason(blind, blk('stone', 0, 66, 0), {}), null, 'blind bot: unproven, allowed')
+    assert.equal(canBreak(under('sand'), blk('stone', 0, 66, 0), {}), false, 'canBreak mirrors gravity')
   })
 })

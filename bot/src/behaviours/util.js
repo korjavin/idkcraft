@@ -139,15 +139,36 @@ function feetWalled(bot, feet) {
   } catch (_) { return false }
 }
 
+// Blocks that fall when their support is dug (sand, gravel, concrete
+// powder): digging one of these directly is safe (it breaks into item
+// form), but digging its SUPPORT drops the stack onto whatever is below.
+function isGravityBlock(name) {
+  return name === 'sand' || name === 'red_sand' || name === 'gravel' ||
+    (typeof name === 'string' && name.endsWith('_concrete_powder'))
+}
+
+// Name of the gravity block directly above pos, or null. Unknown cells
+// return null: trap rules need proof (see feetWalled above).
+function gravityAbove(bot, pos) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !pos) return null
+    const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) + 1, Math.floor(pos.z)))
+    const n = b && b.name
+    return isGravityBlock(n) ? n : null
+  } catch (_) { return null }
+}
+
 // denyReason is the guard's single decision point. Returns null when the
-// dig is allowed, else 'below-feet' (self-trap rule: the target is below
-// the feet plane while the bot already stands in a depression, so the dig
-// would deepen the hole — owner session 2026-09-28: equip dug its own
-// floor in a loop and the bot suffocated) or 'protected' (owner-build
+// dig is allowed, else a self-trap reason ('below-feet': the target is
+// below the feet plane while the bot already stands in a depression, so
+// the dig would deepen the hole; 'gravity': the dig would drop a sand /
+// gravel stack onto the bot's own head — owner session 2026-09-28:
+// recover dig_up opened a sand ceiling at -11 56 124 and the bot
+// suffocated 2s after the dig finished) or 'protected' (owner-build
 // protection). A below-feet dig on open ground stays allowed: it makes a
-// 1-deep hole the bot jumps out of. The feet rule needs a known position
-// and proven walls; without either it cannot prove a trap and stays out,
-// while the protection rules below it still fail closed.
+// 1-deep hole the bot jumps out of. Both trap rules need a known position
+// and proven cells; without either they cannot prove a trap and stay out,
+// while the protection rules below them still fail closed.
 function denyReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
@@ -157,6 +178,18 @@ function denyReason(bot, block, ctx) {
     const pos = block.position
     if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) < Math.floor(feet.y)) {
       if (feetWalled(bot, feet)) return 'below-feet'
+    }
+    // Never dig a support out from under a gravity block in the bot's own
+    // column: the stack falls onto the bot. Digging the gravity block
+    // itself stays allowed — clearing sand by hand is safe, and digging
+    // out is the escape when already buried. Below-feet targets stay with
+    // the rule above (a gravity block directly above the floor is the feet
+    // cell itself, i.e. already buried).
+    if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) >= Math.floor(feet.y)) {
+      if (Math.floor(feet.x) === Math.floor(pos.x) && Math.floor(feet.z) === Math.floor(pos.z) &&
+          !isGravityBlock(name) && gravityAbove(bot, pos)) {
+        return 'gravity'
+      }
     }
     if (pos && ctx && ctx.placedByBot instanceof Set) {
       try {
@@ -183,7 +216,7 @@ function logDeny(block, reason) {
     const at = (p && typeof p.x === 'number')
       ? `${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`
       : '? ? ?'
-    if (reason === 'below-feet') {
+    if (reason === 'below-feet' || reason === 'gravity') {
       console.log(`selftrap: refused dig ${n} at ${at} (${reason})`)
     } else {
       console.log(`protected: ${n} at ${at}`)
