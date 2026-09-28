@@ -179,6 +179,23 @@ function tablePathOf(bot, ctx, pack) {
   return null
 }
 
+// Pack minus the 4 planks a made table eats (largest stack first): the
+// 'make' plan re-checks coverage against this, so the same planks never
+// fund both the table and the recipe (revmux 01: 3 cobble + 4 planks
+// promised an axe, burned the planks into a stray table, then refused).
+function packMinusTable(pack) {
+  const sub = { ...pack }
+  let n = 4
+  const woods = Object.keys(sub).filter(isPlanks).sort((a, b) => (sub[b] || 0) - (sub[a] || 0))
+  for (const w of woods) {
+    if (n <= 0) break
+    const take = Math.min(sub[w] || 0, n)
+    sub[w] -= take
+    n -= take
+  }
+  return sub
+}
+
 // Pure sync plan over the pack: candidates in try order (bring sorts tool
 // families best-tier-first), recipe variants in registry order (the covered
 // stone wins over deepslate/blackstone). Third recipesAll arg is truthy on
@@ -193,6 +210,13 @@ function planCraft(bot, ctx, names, count) {
     if (e && typeof e.id === 'number' && !(e.id in idToName)) idToName[e.id] = n
   }
   const pack = packCounts(bot)
+  // A made table eats 4 planks before the recipe runs: table recipes plan
+  // against the pack minus those (largest stack first), so the same planks
+  // never fund both the table and the recipe (revmux 01: 3 cobble + 4
+  // planks promised an axe, burned the planks into a stray table, then
+  // refused). Uniform across candidates, or variants compete on packs.
+  const reach = tablePathOf(bot, ctx, pack)
+  const fund = reach === 'make' ? packMinusTable(pack) : pack
   let refusal = null
   for (const target of cands) {
     const e = byName[target]
@@ -206,10 +230,10 @@ function planCraft(bot, ctx, names, count) {
       const needs = needsOf(r, idToName)
       if (!needs) continue
       const times = Math.max(1, Math.ceil((count || 1) / resultCount(r)))
-      const missing = gapOf(needs, pack, times)
+      const requiresTable = !!r.requiresTable
+      const missing = gapOf(needs, requiresTable ? fund : pack, times)
       if (missing.length === 0) {
-        const requiresTable = !!r.requiresTable
-        if (requiresTable && !tablePathOf(bot, ctx, pack)) {
+        if (requiresTable && !reach) {
           return { ok: false, fail: 'no-table', target, line: 'need a crafting table' }
         }
         return { ok: true, target, recipe: r, needs, times, requiresTable }
@@ -271,7 +295,7 @@ function craftItem(bot, ctx, name, count) {
   if (!st || st.key !== key) {
     const plan = planCraft(bot, ctx, names, count || 1)
     if (!plan.ok) return { done: false, line: plan.line || `can't make ${names[0] || 'item'}: no recipe` }
-    st = { key, plan, have0: have(bot, plan.target), finalNeed: plan.times * resultCount(plan.recipe), table: null, tableMade: false, tableTries: 0, tableP: false, walkTicks: 0 }
+    st = { key, plan, have0: have(bot, plan.target), finalNeed: plan.times * resultCount(plan.recipe), table: null, tableTries: 0, tableP: false, walkTicks: 0, lastDist: null }
     try {
       if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:gear-')) ctx.stepStatus = null
       ctx.craftany = st
@@ -308,7 +332,12 @@ function craftItem(bot, ctx, name, count) {
           } catch (_) { /* retry next tick */ }
           ctx.lastGoalKey = tkey
         }
-        st.walkTicks += 1
+        // Progress-based stall (bring walk-leg shape): a far table stays
+        // walkable while the bot closes in; only standing still gives up.
+        const d = dist3(bp, tb.pos)
+        if (st.lastDist != null && d < st.lastDist - 1) st.walkTicks = 0
+        else st.walkTicks += 1
+        st.lastDist = d
         if (st.walkTicks > WALK_GIVE_UP) {
           clearRun(ctx)
           return { done: false, line: "can't reach the crafting table" }
@@ -316,6 +345,7 @@ function craftItem(bot, ctx, name, count) {
         return 'running'
       }
       st.walkTicks = 0
+      st.lastDist = null
       st.table = tb.block
     } else {
       if (!st.tableP) {
@@ -326,7 +356,10 @@ function craftItem(bot, ctx, name, count) {
             return { done: false, line: 'need a crafting table' }
           }
           // A pack table places via the h9z tableFor contract; with planks
-          // but no table the make-op below lands one first, then we retry.
+          // but no table the make-op lands one first, then we retry. The
+          // make-op re-issues while the pack lacks the table (a phantom
+          // first craft retries like any op — no latch); runOp fails loud
+          // past its own retry budget and the tick top ends the run.
           if ((pack.crafting_table || 0) > 0) {
             st.tableP = true
             st.tableTries += 1
@@ -336,13 +369,10 @@ function craftItem(bot, ctx, name, count) {
             )
             return 'running'
           }
-          if (!st.tableMade) {
-            const found = craftMod.recipes(bot, 'crafting_table', null)
-            if (found.length > 0) {
-              st.tableMade = true
-              gearMod.runOp(bot, ctx, { item: 'crafting_table', recipe: found[0], count: 1, table: null })
-              return 'running'
-            }
+          const found = craftMod.recipes(bot, 'crafting_table', null)
+          if (found.length > 0) {
+            gearMod.runOp(bot, ctx, { item: 'crafting_table', recipe: found[0], count: 1, table: null })
+            return 'running'
           }
         }
         clearRun(ctx)

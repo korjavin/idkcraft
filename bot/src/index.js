@@ -1376,6 +1376,7 @@ function fleeReflex(bot, ctx) {
           ctx.unseenTicks = 0
           ctx.resumeWork = false
           clearStuck()
+          ctx.craftany = null // a cancelled run must not resume under the new one
           ctx.bring = {
             kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
             items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),

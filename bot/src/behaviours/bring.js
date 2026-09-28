@@ -311,7 +311,12 @@ function planItemGive(bot, resolved, want, base) {
   }
   let keepName = null
   if (baseTools > 0) {
-    const held = names.filter((n) => isShareKeep(n) && (live[n] || 0) > 0)
+    // The keep pins the base's best piece (the bot's own gear), not the
+    // live best: fetched or freshly crafted stock gives while the original
+    // tool stays — otherwise a forged iron axe would strand on the keep
+    // while the bot hands over its old stone one (revmux 01). Pack orders
+    // pass no base (bc is live), so their rule is unchanged.
+    const held = names.filter((n) => isShareKeep(n) && (bc[n] || 0) > 0 && (live[n] || 0) > 0)
     if (held.length > 0) keepName = held.slice().sort((a, b) => tierOf(b) - tierOf(a))[0]
   }
   const giveable = (n, c) => {
@@ -820,6 +825,9 @@ function enterCraftOrRefuse(bot, ctx, o) {
   if (plan.ok) {
     o.phase = 'craft'
     o.craftTarget = plan.target
+    try {
+      ctx.craftany = null // a cancelled run must not resume under the new one
+    } catch (_) { /* state best-effort */ }
     say(bot, `making you a ${plan.target}`)
     return
   }

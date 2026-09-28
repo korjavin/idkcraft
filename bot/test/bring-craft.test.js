@@ -457,4 +457,151 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
     assert.equal(bot.calls.place, 1, 'the made table is placed beside the body')
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
   })
+
+  it('a phantom table-make retries instead of refusing no-table', async () => {
+    let n = 0
+    const real = []
+    const bot = mockBot({
+      items: [
+        { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 },
+        { name: 'oak_planks', count: 8 },
+      ],
+      playerPos: pos(30, 64, 0),
+      cells: { '1,63,0': 'dirt' },
+    })
+    const impl = bot.craft
+    bot.craft = async (recipe, count, table) => {
+      n += 1
+      if (n === 1) return // the table op phantoms: nothing lands, nothing spent
+      real.push(recipe.product)
+      return impl(recipe, count, table)
+    }
+    handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.equal(n, 3, 'phantom table plus two landing ops')
+    assert.deepEqual(real, ['crafting_table', 'stone_axe'])
+    assert.equal(bot.calls.place, 1)
+    const planks = bot._items.find((i) => i.name === 'oak_planks')
+    assert.equal(planks && planks.count, 4, 'the table ate 4 planks exactly once')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
+  })
+
+  it('four planks fund the table or the sticks, never both', () => {
+    const bot = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ["can't make stone_axe: need 2 stick (have 0)"])
+    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.calls.craft, [], 'no stray table burned')
+  })
+})
+
+describe('bring craft handover and give-ups (idkcraft-did.2 revmux 01)', () => {
+  it('a kept stone axe plus iron mats hands over the forged iron', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'stone_axe', count: 1 }, { name: 'iron_ingot', count: 3 },
+        { name: 'stick', count: 2 },
+      ],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ticker = tickerFor(bot)
+    tableHome(bot._tickerCtx, 0, 64, 0)
+    handleChat(bot, ticker, 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ['making you a iron_axe'])
+    await drive(bot, bot._tickerCtx)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.iron_axe, null, 1]], 'the announced tier goes out')
+    const kept = bot._items.find((i) => i.name === 'stone_axe')
+    assert.equal(kept && kept.count, 1, 'the original tool stays home')
+  })
+
+  it('a cancelled run never resumes under the next order', async () => {
+    const bot = mockBot({
+      items: [{ name: 'cobblestone', count: 6 }, { name: 'stick', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    tableHome(ctx, 0, 64, 0)
+    handleChat(bot, ticker, 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ['making you a stone_axe'])
+    await bring(bot, ctx, null, {}) // one craft tick: the stone run opens
+    assert.ok(ctx.craftany, 'run state exists mid-order')
+    ticker.stop() // cancel mid-run
+    assert.equal(ctx.bring, null)
+    await sleep(650) // the issued op lands in the background: stone in pack
+    bot._items.push({ name: 'iron_ingot', count: 3 })
+    handleChat(bot, ticker, 'P', 'bring me axe')
+    assert.deepEqual(bot.lines.slice(-1), ['making you a iron_axe'])
+    await drive(bot, ctx)
+    assert.ok(!ctx.bring, 'order completed')
+    assert.deepEqual(bot.tossCalls, [[ITEMS.iron_axe, null, 1]], 'fresh plan, fresh tier')
+  })
+
+  it('a far frozen table gives up after 21 ticks; progress keeps walking', () => {
+    const frozen = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '100,64,0': 'crafting_table' },
+    })
+    const fctx = { home: { table: { x: 100, y: 64, z: 0 } } }
+    let res = 'running'
+    let at = -1
+    for (let i = 0; i < 25 && res === 'running'; i++) {
+      res = craftany(frozen, fctx, ['stone_axe'], 1)
+      at = i
+    }
+    assert.equal(at, 20, 'gives up on the 21st frozen tick')
+    assert.deepEqual(res, { done: false, line: "can't reach the crafting table" })
+    assert.equal(fctx.craftany, null)
+
+    const moving = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '100,64,0': 'crafting_table' },
+    })
+    const mctx = { home: { table: { x: 100, y: 64, z: 0 } } }
+    for (let i = 0; i < 25; i++) {
+      res = craftany(moving, mctx, ['stone_axe'], 1)
+      assert.equal(res, 'running', `tick ${i} still walking while closing in`)
+      if (i % 3 === 2) moving.entity.position = pos(moving.entity.position.x + 5, 64, 0)
+    }
+  })
+
+  it('three failed placements end with need-a-table', async () => {
+    const bot = mockBot({
+      items: [
+        { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 },
+        { name: 'crafting_table', count: 1 },
+      ],
+      cells: { '1,63,0': 'dirt' },
+    })
+    bot.placeBlock = async () => { bot.calls.place++; throw new Error('no room') }
+    const ctx = {}
+    let res = 'running'
+    for (let i = 0; i < 60 && res === 'running'; i++) {
+      res = craftany(bot, ctx, ['stone_axe'], 1)
+      await flush()
+    }
+    assert.deepEqual(res, { done: false, line: 'need a crafting table' })
+    assert.equal(bot.calls.place, 3, 'exactly three place attempts')
+    assert.equal(ctx.craftany, null)
+  })
+
+  it('a stale gear failure does not fail the fresh run', async () => {
+    const bot = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    const ctx = { home: { table: { x: 0, y: 64, z: 0 } }, stepStatus: 'failed:gear-iron_pickaxe' }
+    const res = craftany(bot, ctx, ['stone_axe'], 1)
+    assert.equal(res, 'running')
+    assert.equal(ctx.stepStatus, null)
+    assert.equal(ctx.gearInFlight, true)
+    await sleep(650) // let the issued op settle so no timer leaks past the test
+  })
 })
