@@ -277,6 +277,83 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(bot._places, 0)
   })
 
+  it('chain died by the ceiling: the next jump tick re-arms and a later rise issues', async () => {
+    // Revmux body-1: a mid-air arm catches apex/fall only, so the chain
+    // dies — but the cycle must not jump to no-apex. The dead chain yields
+    // (timerArmed=false) and the next jump-phase tick arms fresh.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 62.05, 0.5) // airborne falling
+    bot.entity.velocity = { x: 0, y: -0.3, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(450) // past the +300 ceiling: chain dead, nothing issued
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.timerArmed, false, 'dead chain yields')
+    bot.entity.position = pos(0.5, 61.8, 0.5) // the next rise (jump held)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.timerArmed, true, 'next jump tick re-arms')
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1, 'a later rise still issues')
+  })
+
+  it('stall past absolute patience yields the chain (quit bounds it)', async () => {
+    // Revmux core-3: the liftoff slide must not poll forever — past 5 s
+    // per arm the chain yields; with no ticks (quit) nothing re-arms.
+    // (armedAt faked: waiting out 5 s of wall clock is not a unit test.)
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    ctx.recovery.st.armedAt = Date.now() - 6000
+    await sleep(250)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.timerArmed, false, 'exhausted chain yields')
+  })
+
+  it('timer-path sync failure surfaces as failed:no-reference on the next tick', async () => {
+    // Revmux core-1: air everywhere means no reference block; the timer
+    // records syncFail and the next tick fails honestly instead of
+    // re-jumping into a 20 s no-apex stall (the body lands first, so the
+    // guard would take a syncFail-less chain back to jump).
+    const bot = strictBot(new Set(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.8, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await sleep(250)
+    assert.equal(bot._places, 0)
+    bot.entity.position = pos(0.5, 61, 0.5) // landed before the next tick
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-reference')
+  })
+
+  it('stale timer after release or chain never issues (identity guard)', async () => {
+    // Revmux core-2: the fire between arm and +150 ms must die when the
+    // episode moved on — released (stop/follow me) or chained (fresh st).
+    const bot1 = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot1.entity.position = pos(0.5, 61.8, 0.5)
+    bot1.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx1 = pillarCtx({ phase: 'jump' })
+    recover.run(bot1, ctx1)
+    ctx1.recovery = null
+    await sleep(250)
+    await flush()
+    assert.equal(bot1._places, 0, 'released episode never issues')
+    assert.deepEqual(bot1._equips, [], 'released episode never equips')
+    const bot2 = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot2.entity.position = pos(0.5, 61.8, 0.5)
+    bot2.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx2 = pillarCtx({ phase: 'jump' })
+    recover.run(bot2, ctx2)
+    ctx2.recovery.st = { phase: 'jump', waited: 0, placeInFlight: false, placed: false, placeError: false, startFloor: 61 }
+    await sleep(250)
+    await flush()
+    assert.equal(bot2._places, 0, 'chained episode never issues from the stale fire')
+  })
+
   it('falling at fire time and past the ceiling: never issues', async () => {
     // A falling body at every fire (static mock) re-arms until the +300 ms
     // ceiling, then gives up the cycle: no placement, still jumping.

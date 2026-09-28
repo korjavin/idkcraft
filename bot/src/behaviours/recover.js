@@ -46,6 +46,7 @@ const PILLAR_ISSUE_MS = 150 // jump-start → place issue delay (lzw: physics, n
 const PILLAR_REARM_MS = 50 // fire-time window miss (jump not registered yet): retry step
 const PILLAR_ISSUE_LAST_MS = 300 // ceiling: re-arms stop here (see firePillarTimer)
 const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: the ceiling slides)
+const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
 
@@ -544,6 +545,7 @@ function pillarUpRun(bot, ctx) {
     if (!st.timerArmed) {
       st.timerArmed = true
       st.jumpAt = Date.now()
+      st.armedAt = st.jumpAt
       try {
         const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_ISSUE_MS)
         if (t && typeof t.unref === 'function') t.unref()
@@ -567,7 +569,7 @@ function pillarUpRun(bot, ctx) {
   // matches pillarTriggerDy, and no-self-intersection comes from apply
   // timing (see risingWindow), not from this line.
   if (bp.y < st.startFloor + pillarTriggerDy(bot) - 0.01) {
-    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null
+    st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null
     return 'running'
   }
   const reason = issuePillarPlace(bot, st)
@@ -586,8 +588,11 @@ function pillarUpRun(bot, ctx) {
 // ceiling is liftoff-anchored: while the body is still at the start height
 // the 600 ms cycle hasn't begun (stall at cycle start — rig: a jump that
 // left 750 ms late), so the clock slides instead of burning and a held
-// jump issues into the next rise. Past the ceiling the cycle jumps on until
-// the no-apex budget expires, and the episode retries with a fresh jump.
+// jump issues into the next rise. Absolute patience per arm is 5 s (a stall
+// past that yields; with no ticks — quit — nothing re-arms and the chain
+// ends instead of polling a dead bot). A dead chain always yields: the
+// next jump-phase tick arms a fresh timer, so a later rise still issues
+// instead of jumping to no-apex (a mid-air arm catches apex/fall only).
 // Stale timers (the episode chained or released under us) only ever return.
 function firePillarTimer(bot, ctx, st) {
   try {
@@ -602,12 +607,15 @@ function firePillarTimer(bot, ctx, st) {
       if (reason) st.syncFail = reason
       return
     }
-    if (bp.y < st.startFloor + PILLAR_LIFTOFF_DY) st.jumpAt = Date.now()
-    if (Date.now() - (st.jumpAt || 0) < PILLAR_ISSUE_LAST_MS) {
+    const now = Date.now()
+    if (bp.y < st.startFloor + PILLAR_LIFTOFF_DY) st.jumpAt = now
+    if (now - (st.jumpAt || 0) < PILLAR_ISSUE_LAST_MS && now - (st.armedAt || st.jumpAt || 0) < PILLAR_STALL_MS) {
       try {
         const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_REARM_MS)
         if (t && typeof t.unref === 'function') t.unref()
       } catch (_) { /* timer best-effort */ }
+    } else {
+      st.timerArmed = false
     }
   } catch (_) { /* timer best-effort */ }
 }
