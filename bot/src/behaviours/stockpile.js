@@ -368,6 +368,31 @@ async function withdrawAnyFromChest(bot, ctx, names, count) {
   }
 }
 
+// Count stacks in the adopted chest without withdrawing (did.4: the bed
+// colour/wood argmax needs chest counts before it draws). One window;
+// {name: count} over names (all stacks when names is null). A vanished
+// chest reads empty — the caller falls back to the pack.
+async function chestCounts(bot, ctx, names) {
+  const want = Array.isArray(names) ? new Set(names) : null
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+      const out = {}
+      if (Array.isArray(stacks)) {
+        for (const s of stacks) {
+          if (!s || typeof s.name !== 'string') continue
+          if (want && !want.has(s.name)) continue
+          out[s.name] = (out[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
+        }
+      }
+      return out
+    })
+    return res && res.status === 'ok' ? res.value : {}
+  } catch (_) {
+    return {}
+  }
+}
+
 // Withdraw up to count of the first edible in the adopted chest.
 // { got, name } — name null when nothing edible came out.
 async function withdrawEdible(bot, ctx, count) {
@@ -733,6 +758,7 @@ module.exports.surplusCount = surplusCount
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
+module.exports.chestCounts = chestCounts
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2

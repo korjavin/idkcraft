@@ -126,7 +126,7 @@ describe("'bring me food' (idkcraft-n7k)", () => {
     })
     assert.ok(bot.lines.some((l) => /^going hunting: cow \d+ blocks away$/.test(l)), `lines: ${bot.lines}`)
     assert.ok(bot.attackCalls.length >= 2, 'swung the sword/fists')
-    assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 beef'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.beef, null, 1]])
   })
 
@@ -279,7 +279,7 @@ describe("'bring me food' branch edges (idkcraft-pun)", () => {
       if (ent) ent.isValid = false
       if (!b._items.some((i) => i.name === 'beef')) b._items.push({ name: 'beef', count: 1 })
     })
-    assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 beef'), `lines: ${bot.lines}`)
   })
 
   it('vanished walk target re-finds, then refuses with no anchor', async () => {

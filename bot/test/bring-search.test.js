@@ -159,7 +159,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     assert.ok(bot.calls.goals.some((g) => g && g.constructor && g.constructor.name === 'GoalXZ'), 'walked explore legs')
     assert.ok(stats.legs >= 22, `reached ring-128: ${stats.legs} legs`)
     assert.ok(bot.lines.some((l) => /^going hunting: cow \d+ blocks away$/.test(l)), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 beef'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.beef, null, 1]])
   })
 
@@ -188,7 +188,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     await drive(bot, bot._tickerCtx, null)
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'no coal_ore nearby, searching…'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 coal'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 coal'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.coal, null, 1]])
   })
 
@@ -291,7 +291,7 @@ describe('bring-me search legs (idkcraft-atl.8)', () => {
     }, 600, stats)
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'no animals nearby, searching…'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'here are 1 beef'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 beef'), `lines: ${bot.lines}`)
     assert.ok(!bot.lines.some((l) => l.startsWith('searched')), `no exhaustion: ${bot.lines}`)
     assert.equal(stats.legs, 1)
   })

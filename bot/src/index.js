@@ -24,6 +24,7 @@ function brainTimeoutMs(env) {
 }
 const bringMod = require('./behaviours/bring')
 const woolMod = require('./behaviours/wool')
+const bedMod = require('./behaviours/bed')
 const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
@@ -1432,6 +1433,7 @@ function fleeReflex(bot, ctx) {
       // for names with no diggable form — torch resolves as a block but is
       // never bringable, so without this it dies 'ores and logs only'.
       // Uncraftable names fall through to the block path / honest stub.
+      // did.4: a ladder-bringable gap opens a sub-order instead of refusing.
       if (resolved && !worldFallback) {
         const cPlan = craftanyMod.planCraft(bot, ctx, bringMod.orderCraftNames(resolved.names), 1)
         if (cPlan.ok) {
@@ -1448,7 +1450,42 @@ function fleeReflex(bot, ctx) {
           ctx.paused = false
           return `making you a ${cPlan.target}`
         }
-        if (cPlan.fail === 'missing' || cPlan.fail === 'no-table') return cPlan.line
+        if (cPlan.fail === 'missing') {
+          const miss = Array.isArray(cPlan.missing) ? cPlan.missing : []
+          // Smelting first (body-4): a furnace-gated gap refuses up front,
+          // before any ladder gap sends the bot gathering for a craft that
+          // cannot land.
+          const smelt = bringMod.smeltingGap(miss)
+          if (smelt) return `need ${smelt} (smelting not part of bring)`
+          let sub = null
+          if (bedMod.isBedFamily(resolved)) {
+            sub = bringMod.bedGap(bot, { names: resolved.names })
+          } else if (miss.every((e) => e && bringMod.pickSubGap([e]))) {
+            // Every gap rides the ladder, or the gather is wasted (body-4).
+            const gap = bringMod.pickSubGap(miss)
+            if (gap) sub = { gap, target: cPlan.target, color: woolMod.dropColor(gap.name) }
+          }
+          if (sub) {
+            if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+            ctx.unseenTicks = 0
+            ctx.resumeWork = false
+            clearStuck()
+            ctx.craftany = null
+            ctx.bring = {
+              kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+              items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+              phase: 'craft', announced: true, keptName,
+            }
+            const line = bringMod.openSubOrder(bot, ctx, ctx.bring, sub.gap, sub.target, sub.color)
+            if (line) {
+              ctx.paused = false
+              return line
+            }
+            ctx.bring = null // a refused open never leaves a half order behind
+          }
+          return cPlan.line
+        }
+        if (cPlan.fail === 'no-table') return cPlan.line
       }
       const res = findNearest(bot, name)
       if (res === 'unknown') {

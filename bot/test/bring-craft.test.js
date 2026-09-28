@@ -233,7 +233,7 @@ describe('craftany planner (idkcraft-did.2)', () => {
     const p = craftany.planCraft(bot, {}, bring.orderCraftNames(['iron_axe', 'stone_axe', 'wooden_axe']), 1)
     assert.equal(p.ok, false)
     assert.equal(p.fail, 'missing')
-    assert.equal(p.line, "can't make stone_axe: need 3 cobblestone (have 0)")
+    assert.equal(p.line, "can't make stone_axe: need 3 cobblestone (have 0), 2 stick (have 0)")
   })
 
   it('sticks close through planks, planks through logs', () => {
@@ -277,7 +277,7 @@ describe('bring me axe crafted (idkcraft-did.2)', () => {
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'order completed')
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
-    assert.ok(bot.lines.includes('here are 1 stone_axe'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here is 1 stone_axe'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.calls.craft, ['stone_axe'])
   })
 
@@ -317,7 +317,7 @@ describe('bring me axe crafted (idkcraft-did.2)', () => {
   it('one log and nothing else is one honest line, nothing crafted', () => {
     const bot = mockBot({ items: [{ name: 'oak_log', count: 1 }], playerPos: pos(30, 64, 0) })
     handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
-    assert.deepEqual(bot.lines, ["can't make stone_axe: need 3 cobblestone (have 0)"])
+    assert.deepEqual(bot.lines, ["can't make stone_axe: need 3 cobblestone (have 0), 2 stick (have 0)"])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
     assert.deepEqual(bot.calls.craft, [])
   })
@@ -426,8 +426,23 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
 
     const poor = mockBot({ playerPos: pos(30, 64, 0) })
     handleChat(poor, tickerFor(poor), 'P', 'bring me bucket')
-    assert.deepEqual(poor.lines, ["can't make bucket: need 3 iron_ingot (have 0)"])
+    assert.deepEqual(poor.lines, ['need iron_ingot (smelting not part of bring)'])
     assert.ok(!poor._tickerCtx.bring, 'no order created')
+  })
+
+  it('a smelting gap refuses before any ladder gap gathers (body-4)', () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me iron axe')
+    assert.deepEqual(bot.lines, ['need iron_ingot (smelting not part of bring)'])
+    assert.ok(!bot._tickerCtx.bring, 'no stick sub opened for an unsmeltable axe')
+  })
+
+  it('an off-ladder gap refuses with the plan line, no wasted sub (body-4)', () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
+    assert.deepEqual(bot.lines, ["can't make stone_axe: need 3 cobblestone (have 0), 2 stick (have 0)"])
+    assert.ok(!bot._tickerCtx.bring, 'no stick sub opened without cobble')
+    assert.deepEqual(bot.calls.craft, [])
   })
 
   it('no table and fewer than 4 planks is one line, nothing crafted', () => {
@@ -488,15 +503,21 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
     assert.deepEqual(bot.tossCalls, [[ITEMS.stone_axe, null, 1]])
   })
 
-  it('four planks fund the table or the sticks, never both', () => {
+  it('four planks fund the table: the stick gap opens a log sub-order (idkcraft-did.4)', async () => {
     const bot = mockBot({
       items: [{ name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }],
       playerPos: pos(30, 64, 0),
     })
     handleChat(bot, tickerFor(bot), 'P', 'bring me axe')
-    assert.deepEqual(bot.lines, ["can't make stone_axe: need 2 stick (have 0)"])
-    assert.ok(!bot._tickerCtx.bring, 'no order created')
+    assert.deepEqual(bot.lines, ['making you a stone_axe: need 2 sticks, going for logs'])
+    const o = bot._tickerCtx.bring
+    assert.equal(o && o.kind, 'block')
+    assert.equal(o && o.name, 'oak_log')
+    assert.equal(o && o.subFor, 'stone_axe')
     assert.deepEqual(bot.calls.craft, [], 'no stray table burned')
+    await drive(bot, bot._tickerCtx) // the mock world holds no logs: one honest line
+    assert.ok(!bot._tickerCtx.bring, 'order refused')
+    assert.ok(bot.lines.includes('could not get 2 sticks for the stone_axe in time'), `lines: ${bot.lines}`)
   })
 
   it('mixed woods: the table burns the spare wood, not the recipe wood', async () => {
