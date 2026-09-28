@@ -366,6 +366,40 @@ describe('swim prune (idkcraft-e8t)', () => {
     assert.ok(after.some((m) => m.x === 6 && m.y === 62 && m.z === 0), 'the level cruise survives')
   })
 
+  it('prunes dives from a waterlogged coral fan (round 2)', () => {
+    // revmux round 2: getWaterInBB counts block.isWaterlogged as
+    // water, so the executor holds jump in a coral-fan cell while
+    // the planner reads it safe-but-not-liquid. A dive from it
+    // treadmills like any other — the prune must fire.
+    const fan = mcData.blocksByName.tube_coral_fan
+    let fanWet = null
+    for (let s = fan.minStateId; s <= fan.maxStateId; s++) {
+      if (Block.fromStateId(s, 0).isWaterlogged) { fanWet = s; break }
+    }
+    assert.ok(fanWet !== null, 'registry has a waterlogged fan state')
+    const nameFn = (x, y, z) => (x === 6 && y === 62 && z === 1) ? 'air' : cliffNameAt(x, y, z)
+    const bot = worldBot(nameFn)
+    const baseAt = bot.blockAt
+    bot.blockAt = (p) => {
+      if (Math.floor(p.x) === 5 && Math.floor(p.y) === 62 && Math.floor(p.z) === 0) {
+        const b = Block.fromStateId(fanWet, 0)
+        b.position = new Vec3(5, 62, 0)
+        return b
+      }
+      return baseAt(p)
+    }
+    const mk = (prune) => {
+      const movements = new Movements(bot)
+      addSwimExits(movements)
+      if (prune) addSwimPrune(movements)
+      return movements
+    }
+    assert.ok(mk(false).getNeighbors(new Move(5, 62, 0, 0, 0)).some((m) => m.x === 6 && m.y === 61 && m.z === 1),
+      'the lib offers the dive from the fan cell')
+    assert.ok(!mk(true).getNeighbors(new Move(5, 62, 0, 0, 0)).some((m) => m.x === 6 && m.y === 61 && m.z === 1),
+      'the dive from the fan cell is pruned')
+  })
+
   it('prunes floor-rises into kelp, keeps level kelp bridges', () => {
     // revmux core-1: a kelp cell above a shelf is the E7 contact
     // shape with a non-liquid target — the rise storms the same way.

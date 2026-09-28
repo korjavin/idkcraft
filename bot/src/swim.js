@@ -65,10 +65,12 @@ const SWIM_RISE_COST = 6 // rise swims ~0.4 blocks/s live vs ~2 cruise: price it
 // counts these flora (plus bubble columns) as water, so jump is held
 // in them exactly as in water — while pathfinder's .liquid stays
 // water/lava only. Names, not bboxes: dry empty-bbox flora (grass
-// tufts, sugar cane) must keep reading dry.
+// tufts, sugar cane) must keep reading dry. Plus any waterlogged
+// cell (coral fans, signs, rails): getWaterInBB counts
+// block.isWaterlogged as water too (revmux round 2).
 const WET_NAMES = new Set(['seagrass', 'tall_seagrass', 'kelp', 'kelp_plant', 'bubble_column'])
 function isWet(b) {
-  return !!b && (b.liquid === true || WET_NAMES.has(b.name))
+  return !!b && (b.liquid === true || b.isWaterlogged === true || WET_NAMES.has(b.name))
 }
 
 function addSwimExits(movements) {
