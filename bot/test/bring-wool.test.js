@@ -123,9 +123,9 @@ function sheep(id, x, woolByte = null, y = 64, z = 0) {
 }
 
 // Uncollected drops (8gc): kills and shears leave wool on the ground —
-// the pack holds it only after the body walks within COLLECT_RANGE,
-// like the live server. Perfect-collection mocks hid the pickup bug.
-const COLLECT_RANGE = 1.5
+// the pack holds it only after the body walks over, inside the server's
+// pickup box (revmux 01 core-1): ±1.5 across, no more than 0.5 below the
+// feet. Perfect-collection mocks hid the pickup bug.
 function dropLoot(bot, name, count, p) {
   if (!bot._drops) bot._drops = []
   bot._drops.push({ name, count, x: p.x, y: p.y, z: p.z })
@@ -134,7 +134,8 @@ function collectDrops(bot) {
   if (!bot._drops || bot._drops.length === 0) return
   const bp = bot.entity.position
   bot._drops = bot._drops.filter((d) => {
-    if (Math.hypot(bp.x - d.x, bp.y - d.y, bp.z - d.z) <= COLLECT_RANGE) {
+    const down = bp.y - d.y // feet above the drop
+    if (Math.hypot(bp.x - d.x, bp.z - d.z) <= 1.5 && down <= 0.5 && down >= -2) {
       const at = bot._items.find((i) => i.name === d.name)
       if (at) at.count += d.count
       else bot._items.push({ name: d.name, count: d.count })
@@ -488,6 +489,51 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
     assert.equal((bot._drops || []).length, 0, 'no wool left on the ground')
+    const pickupGoal = bot.calls.goals.find((g) => g && g.constructor && g.constructor.name === 'GoalBlock')
+    assert.ok(pickupGoal, 'pickup walks a GoalBlock onto the drops (revmux 01 core-2)')
+    assert.deepEqual([pickupGoal.x, pickupGoal.y, pickupGoal.z], [10, 64, 0])
+  })
+
+  it('a kill one down across holds the count until the body steps down (8gc core-1)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(11, 10)] })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    let killed = false
+    let pickupSeen = 0
+    for (let i = 0; i < 60 && ctx.bring; i++) {
+      collectDrops(bot)
+      await bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      const gk = ctx.lastGoalKey || ''
+      if (o.phase === 'kill' && !killed) {
+        bot.entity.position = pos(9, 65, 0) // on the rim: 1 out, 1 up
+        killOnce(bot, o)
+        killed = true
+      } else if (gk.startsWith('bring-hunt:') && o.pos) {
+        bot.entity.position = pos(9, 65, 0)
+        bot._moving = false
+      } else if (gk.startsWith('bring-food-pickup:') && o.dropPos) {
+        pickupSeen++
+        if (pickupSeen <= 3) {
+          // A sphere gate would count here (d=1.41): the cell gate holds.
+          assert.equal(o.phase, 'pickup', 'no count from the rim')
+          assert.equal(bot._items.filter((it) => it.name === 'white_wool').length, 0, 'nothing collected from the rim')
+        } else {
+          bot.entity.position = pos(o.dropPos.x, o.dropPos.y, o.dropPos.z)
+          bot._moving = false
+        }
+      } else if (gk.startsWith('bring-return:')) {
+        bot._moving = false
+        const pp = bot.players.P.entity.position
+        bot.entity.position = pos(pp.x, pp.y, pp.z)
+      }
+    }
+    assert.ok(killed, 'the sheep died in the ditch')
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.equal((bot._drops || []).length, 0, 'no wool left in the ditch')
   })
 
   it('a stalled chase re-finds the next sheep instead of refusing (8gc)', async () => {

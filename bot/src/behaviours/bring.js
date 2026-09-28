@@ -35,9 +35,6 @@ const WANT_LOGS = 4
 const WANT_FOOD = 3
 const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before skipping an unreachable target
-const PICKUP_ARRIVE = 1.5 // prey pickup counts only inside this 3D range of
-  // the death spot (8gc): GoalNear(1) stops at the node boundary, up to ~2
-  // away, so the old d<=2 gate counted packs the bot never walked onto.
 const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
   // far reading is often a recovering pathfinder, not an unreachable chest)
 const MOVE_TOLERANCE = 0.5
@@ -158,6 +155,19 @@ function animalDist(bp, epos) {
       ? bp.distanceTo(epos)
       : Math.hypot(bp.x - epos.x, bp.y - epos.y, bp.z - epos.z)
   } catch (_) { return null }
+}
+
+// Same-block test (8gc): the pickup counts only once the body stands in
+// the death-spot block — the GoalBlock arrival cell (the pathfinder
+// floors both sides). A 3D sphere would count drops a block below from
+// the rim (revmux 01 core-1): the server picks up ±1 across but only
+// ~0.5 down.
+function sameCell(bp, dp) {
+  try {
+    return Math.floor(bp.x) === Math.floor(dp.x) &&
+      Math.floor(bp.y) === Math.floor(dp.y) &&
+      Math.floor(bp.z) === Math.floor(dp.z)
+  } catch (_) { return false }
 }
 
 // Nearest passive animal within 48; when drop is set (second+ kill of one
@@ -572,8 +582,7 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
     return
   }
-  const d = animalDist(bp, dp)
-  if (d === null || d > PICKUP_ARRIVE) {
+  if (!sameCell(bp, dp)) {
     if (progressed(bp, o.lastBotPos, grounded)) {
       o.stalls = 0
       o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }

@@ -73,9 +73,9 @@ function sheep(id, x, woolByte = null, y = 64, z = 0) {
 }
 
 // Uncollected drops (8gc): kills leave wool on the ground — the pack
-// holds it only after the body walks within COLLECT_RANGE, like the
-// live server. Perfect-collection mocks hid the pickup bug.
-const COLLECT_RANGE = 1.5
+// holds it only after the body walks over, inside the server's pickup
+// box (revmux 01 core-1): ±1.5 across, no more than 0.5 below the feet.
+// Perfect-collection mocks hid the pickup bug.
 function dropLoot(bot, name, count, p) {
   if (!bot._drops) bot._drops = []
   bot._drops.push({ name, count, x: p.x, y: p.y, z: p.z })
@@ -84,7 +84,8 @@ function collectDrops(bot) {
   if (!bot._drops || bot._drops.length === 0) return
   const bp = bot.entity.position
   bot._drops = bot._drops.filter((d) => {
-    if (Math.hypot(bp.x - d.x, bp.y - d.y, bp.z - d.z) <= COLLECT_RANGE) {
+    const down = bp.y - d.y // feet above the drop
+    if (Math.hypot(bp.x - d.x, bp.z - d.z) <= 1.5 && down <= 0.5 && down >= -2) {
       const at = bot._items.find((i) => i.name === d.name)
       if (at) at.count += d.count
       else bot._items.push({ name: d.name, count: d.count })
