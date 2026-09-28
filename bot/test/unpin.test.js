@@ -595,6 +595,22 @@ describe('unpin round-2 probes (F3/F4/F5)', () => {
     assert.equal(sent.length, 0)
   })
 
+  it('below (R4 major): water cauldron is not a landing (exact water match)', () => {
+    const bot = {
+      entity: { position: pos(0.5, 70, 0.5), onGround: false },
+      health: 20,
+      blockAt: (p) => {
+        if (p.x === 0 && p.y === 70 && p.z === 0) return { name: 'stone', boundingBox: 'block', shapes: [[0.8, 0, 0, 1, 1, 1]] } // contact
+        if (p.x === 0 && p.y === 69 && p.z === 0) return { name: 'water_cauldron', boundingBox: 'block', shapes: [] } // no fall break
+        return { name: 'air', boundingBox: 'empty' } // void below the cauldron
+      },
+    }
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10, { x: 0.5, y: 70, z: 0.5 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
   it('footprint below (F3): slab top sets the fall, not the cell top', () => {
     const bot = {
       entity: { position: pos(0.5, 66.6, 0.5), onGround: false },

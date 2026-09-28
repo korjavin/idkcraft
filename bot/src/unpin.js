@@ -196,7 +196,7 @@ function dist3(a, b) {
 function liquidAt(bot, pos, kind) {
   if (bot && bot.entity && ((kind === 'water' && bot.entity.isInWater === true) || (kind === 'lava' && bot.entity.isInLava === true))) return true
   const feet = pos && bot ? cellAt(bot, Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)) : null
-  return !!feet && blockName(feet).includes(kind)
+  return !!feet && blockName(feet) === kind // exact: water_cauldron is neither swimmable nor a landing
 }
 
 function climbableAt(bot, pos) {
@@ -254,8 +254,8 @@ function belowVeto(bot, pos) {
       const b = cellAt(bot, cx, y, cz)
       if (!b) return 'unknown-below'
       const n = blockName(b)
-      if (n.includes('lava')) return 'lava-below'
-      if (n.includes('water')) { water = true; continue } // decided with the level, never alone
+      if (n === 'lava') return 'lava-below'
+      if (n === 'water') { water = true; continue } // decided with the level, never alone
       if (CLIMBABLES.has(n)) continue
       const rel = Array.isArray(b.shapes) ? b.shapes : (solid(b) ? [[0, 0, 0, 1, 1, 1]] : [])
       for (const s of rel) {
