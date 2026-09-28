@@ -144,10 +144,10 @@ describe('bring me order', () => {
     assert.match(capBot.lines[0], /^going for 16 coal_ore, \d+ blocks away$/)
   })
 
-  it('unknown block and nothing in range refuse', () => {
+  it('unknown item and nothing in range refuse', () => {
     const weird = mockBot({})
     handleChat(weird, tickerFor(weird), 'P', 'bring me unobtanium')
-    assert.deepEqual(weird.lines, ['unknown block: unobtanium'])
+    assert.deepEqual(weird.lines, ['unknown item: unobtanium'])
     assert.ok(!weird._tickerCtx.bring, 'no order created')
     const empty = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
     handleChat(empty, tickerFor(empty), 'P', 'bring me coal')
@@ -444,7 +444,7 @@ describe('bring me order', () => {
     const cmd = lookupCommand('bring me')
     assert.ok(cmd, 'bring me resolves')
     assert.ok(COMMANDS.some((c) => c.names.includes('bring me')))
-    assert.match(cmd.usage, /bring me <block> \[count\]/)
+    assert.match(cmd.usage, /bring me <item> \[count\]/)
   })
 })
 
