@@ -1,0 +1,726 @@
+'use strict'
+
+// Bead idkcraft-jr2.3: 'come home' meets the owner in the common room, not a
+// bedroom. Day or night the order walks the gohome door wire to the named
+// meet target, says 'home', and HOLDS until countermanded — ending inside
+// would hand the next step a through-wall A* plan (probed: unguarded eats
+// two wall planks, guarded tunnels under the house). A move command while
+// inside arms the exit legs first.
+
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const home = require('../src/behaviours/home')
+const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
+const { lookupCommand, detailLine } = require('../src/commands')
+
+const SITE = { x: 10, y: 64, z: 20 }
+// v2 door column, outside approach, common-room meet cell (door path).
+const DOOR2 = { x: 13, y: 64, z: 20 }
+const OUT2 = { x: 13, y: 64, z: 19 }
+const MEET2 = { x: 13, y: 64, z: 21 }
+// v1 door column and inside cell.
+const DOOR1 = { x: 11, y: 64, z: 20 }
+const OUT1 = { x: 11, y: 64, z: 19 }
+const MEET1 = { x: 11, y: 64, z: 21 }
+
+function doorBot({ at, door = DOOR2, timeOfDay = 6000, day = 5, doorOpen = false, moving = false, hasDoor = true } = {}) {
+  const chats = []
+  const calls = { goals: [], activates: 0, looks: [], controls: [], clears: 0 }
+  const state = { doorOpen }
+  const bot = {
+    chats,
+    calls,
+    entity: { position: { x: at.x, y: at.y, z: at.z } },
+    time: { timeOfDay, day },
+    pathfinder: {
+      goal: null,
+      movements: { canDig: true },
+      isMoving: () => moving,
+      setGoal: (g) => { calls.goals.push(g); bot.pathfinder.goal = g },
+      stop: () => {},
+    },
+    inventory: { items: () => [] },
+    blockAt: (p) => {
+      const fx = Math.floor(p.x)
+      const fy = Math.floor(p.y)
+      const fz = Math.floor(p.z)
+      if (hasDoor && fx === door.x && (fy === door.y || fy === door.y + 1) && fz === door.z) {
+        return { name: 'oak_door', position: { x: fx, y: fy, z: fz }, getProperties: () => ({ open: state.doorOpen }) }
+      }
+      return { name: 'air', boundingBox: 'empty', position: { x: fx, y: fy, z: fz } }
+    },
+    activateBlock: async () => { calls.activates++; state.doorOpen = !state.doorOpen },
+    chat: (m) => { chats.push(String(m)) },
+    lookAt: (p) => { calls.looks.push({ x: p.x, y: p.y, z: p.z }) },
+    setControlState: (name, val) => { calls.controls.push([name, val]) },
+    clearControlStates: () => { calls.clears++ },
+  }
+  return bot
+}
+
+function v2home() {
+  return {
+    site: { ...SITE },
+    built: true,
+    v: 2,
+    interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 15, y: 65, z: 24 } },
+  }
+}
+
+function v1home() {
+  return {
+    site: { ...SITE },
+    built: true,
+    v: 1,
+    interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } },
+  }
+}
+
+const settle = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
+
+describe('jr2.3 meet target: common room, never a bedroom', () => {
+  it('meetPos is the v2 common-room door-path cell (3,+1)', () => {
+    const m = home.meetPos({ site: { ...SITE }, v: 2 })
+    assert.deepEqual({ x: m.x, y: m.y, z: m.z }, MEET2)
+  })
+
+  it('meetPos is the v1 inside cell (1,+1)', () => {
+    const m = home.meetPos({ site: { ...SITE }, v: 1 })
+    assert.deepEqual({ x: m.x, y: m.y, z: m.z }, MEET1)
+  })
+
+  it('comehome is registered as a behaviour', () => {
+    assert.equal(typeof BEHAVIOURS.comehome, 'function')
+  })
+})
+
+describe('jr2.3 day order walks the door wire into the v2 common room', () => {
+  it('far outside walks to the cell before the door', () => {
+    const bot = doorBot({ at: { x: 20, y: 64, z: 14 } })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1)
+    const g = bot.calls.goals[0]
+    assert.equal(g.constructor.name, 'GoalNear')
+    assert.deepEqual({ x: g.x, y: g.y, z: g.z }, OUT2)
+    assert.equal(ctx.comehome.phase, 'walk')
+    assert.equal(bot.pathfinder.movements.canDig, false)
+  })
+
+  it('walk arrival opens, sneaks in by direct control, shuts, says home, holds', async () => {
+    const bot = doorBot({ at: { ...OUT2 } })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx) // walk arrived -> open, toggle fires
+    await settle()
+    assert.equal(ctx.comehome.phase, 'open')
+    assert.equal(bot.calls.activates, 1)
+    home.comehome(bot, ctx) // door open -> enter, doorway legs bypass A*
+    assert.equal(ctx.comehome.phase, 'enter')
+    assert.deepEqual(bot.calls.goals, [])
+    const look = bot.calls.looks[bot.calls.looks.length - 1]
+    assert.deepEqual([look.x, look.z], [OUT2.x + 0.5, OUT2.z + 0.5]) // staged via out-centre
+    bot.entity.position = { x: MEET2.x, y: MEET2.y, z: MEET2.z + 0.5 } // fully past the door plane
+    ctx.comehome.lastToggle = 0 // test ticks are instant; live walking covers the cooldown
+    home.comehome(bot, ctx) // inside -> close, toggle shuts the open door
+    await settle()
+    assert.equal(ctx.comehome.phase, 'close')
+    assert.equal(bot.calls.activates, 2)
+    home.comehome(bot, ctx) // door shut -> home + hold
+    assert.equal(ctx.comehome.phase, 'hold')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.inShelter, true)
+    assert.ok(bot.chats.includes('home'), bot.chats.join(' | '))
+    assert.ok(!bot.chats.includes('home for the night'), 'meet, not the night line')
+    // Hold: no more goals, no more toggles.
+    home.comehome(bot, ctx)
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'hold')
+    assert.deepEqual(bot.calls.goals, [])
+    assert.equal(bot.calls.activates, 2)
+  })
+
+  it('v1 order walks the old door into the hut', async () => {
+    const bot = doorBot({ at: { x: 16, y: 64, z: 14 }, door: DOOR1 })
+    const ctx = { home: v1home(), comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1)
+    assert.deepEqual({ x: bot.calls.goals[0].x, y: bot.calls.goals[0].y, z: bot.calls.goals[0].z }, OUT1)
+    bot.entity.position = { ...OUT1 }
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 1)
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'enter')
+    bot.entity.position = { x: MEET1.x, y: MEET1.y, z: MEET1.z + 0.5 }
+    ctx.comehome.lastToggle = 0
+    home.comehome(bot, ctx)
+    await settle()
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'hold')
+    assert.ok(bot.chats.includes('home'))
+  })
+})
+
+describe('jr2.3 night order runs the same wire to the common room', () => {
+  it('far+flat night walk sprints but stamps no shelter run (orders fight)', () => {
+    const bot = doorBot({ at: { x: 22, y: 64, z: 12 }, timeOfDay: 15000 })
+    const ctx = {
+      home: v2home(),
+      comehome: home.startMeet('Steve', false),
+      movements: { allowSprinting: false, allowParkour: true },
+    }
+    home.comehome(bot, ctx)
+    ctx.lastPathNodes = [{ x: 20, y: 64, z: 14 }, { x: 18, y: 64, z: 16 }]
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'walk')
+    assert.equal(ctx.movements.allowSprinting, true)
+    assert.equal(ctx.shelterRun, undefined, 'meet is an order: fight preempts, no shelter hold')
+  })
+
+  it('night arrival meets in the common room, never the bedroom', async () => {
+    const bot = doorBot({ at: { ...OUT2 }, timeOfDay: 15000 })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx)
+    await settle()
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'enter')
+    bot.entity.position = { x: MEET2.x, y: MEET2.y, z: MEET2.z + 0.5 }
+    ctx.comehome.lastToggle = 0
+    home.comehome(bot, ctx)
+    await settle()
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'hold')
+    assert.ok(bot.chats.includes('home'))
+    // Common room (z1..2 of site), not a bedroom (z4): the meet target.
+    assert.ok(bot.entity.position.z < SITE.z + 3, 'holds in the common room')
+  })
+})
+
+describe('jr2.3 meet failures end out loud', () => {
+  it('ordered while already inside settles: home, hold, door untouched', async () => {
+    for (const doorOpen of [false, true]) {
+      const bot = doorBot({ at: { ...MEET2 }, doorOpen })
+      const ctx = { home: v2home(), comehome: home.startMeet('Steve', true) }
+      home.comehome(bot, ctx)
+      await settle()
+      assert.equal(ctx.comehome.phase, 'hold')
+      assert.deepEqual(bot.chats, ['home'])
+      assert.equal(bot.calls.activates, 0, 'settle never works the door')
+      assert.equal(ctx.inShelter, true)
+    }
+  })
+
+  it('walked in to find the door gone: one line, order released, digging back', async () => {
+    const bot = doorBot({ at: { ...OUT2 }, hasDoor: false })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx) // arrived -> open, no door, straight to enter
+    assert.equal(ctx.comehome.phase, 'enter')
+    bot.entity.position = { x: MEET2.x, y: MEET2.y, z: MEET2.z + 0.5 }
+    home.comehome(bot, ctx) // inside -> close -> no-door fail in one tick
+    assert.deepEqual(bot.chats, ['cannot reach home: no door'])
+    assert.equal(ctx.comehome, null)
+    assert.equal(ctx.stepStatus, 'failed:no-door')
+    assert.equal(bot.pathfinder.movements.canDig, true)
+  })
+
+  it('a stalled walk fails loud and releases the body', () => {
+    const bot = doorBot({ at: { x: 20, y: 64, z: 14 }, moving: false })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false) }
+    for (let i = 0; i < 31; i++) {
+      if (!ctx.comehome) break
+      home.comehome(bot, ctx)
+    }
+    assert.equal(ctx.comehome, null)
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-home')
+    assert.deepEqual(bot.chats, ['cannot reach home'])
+  })
+
+  it('no home fails loud without touching the door', () => {
+    const bot = doorBot({ at: { ...OUT2 } })
+    const ctx = { comehome: home.startMeet('Steve', false) }
+    home.comehome(bot, ctx)
+    assert.deepEqual(bot.chats, ['cannot reach home: no home'])
+    assert.equal(ctx.comehome, null)
+    assert.equal(bot.calls.activates, 0)
+    assert.equal(bot.calls.goals.length, 0)
+  })
+
+  it('hold outside (death, teleport) silently walks back home', () => {
+    const bot = doorBot({ at: { x: 20, y: 64, z: 14 } })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' } }
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'walk')
+    assert.deepEqual(bot.chats, [], 're-arm is silent')
+    home.comehome(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1, 'walking again')
+  })
+})
+
+describe('jr2.3 release walks the doorway before the new mode', () => {
+  it('release outside simply ends the order', () => {
+    const bot = doorBot({ at: { x: 20, y: 64, z: 14 } })
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false), inShelter: false }
+    home.releaseMeet(bot, ctx)
+    assert.equal(ctx.comehome, null)
+    assert.equal(ctx.inShelter, false)
+  })
+
+  it('release inside arms the exit and shelters it', () => {
+    const bot = doorBot({ at: { ...MEET2 } })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' }, inShelter: true }
+    home.releaseMeet(bot, ctx)
+    assert.equal(ctx.comehome.exiting, true)
+    assert.equal(ctx.comehome.phase, 'open')
+    assert.equal(ctx.inShelter, true, 'fight cannot preempt the doorway')
+  })
+
+  it('double release never resets running legs', () => {
+    const bot = doorBot({ at: { ...MEET2 }, doorOpen: true })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' } }
+    home.releaseMeet(bot, ctx)
+    home.comehome(bot, ctx) // open door -> exit legs start
+    home.comehome(bot, ctx)
+    home.comehome(bot, ctx)
+    const ticks = ctx.comehome.legTicks
+    assert.ok(ticks > 0, 'legs running')
+    home.releaseMeet(bot, ctx) // second release path (setBring + startBlockOrder)
+    assert.equal(ctx.comehome.legTicks, ticks, 'legs untouched')
+    assert.equal(ctx.comehome.exiting, true)
+  })
+
+  it('exit opens, sneaks out by direct control, shuts, releases silent', async () => {
+    const bot = doorBot({ at: { ...MEET2 } })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' }, inShelter: true }
+    home.releaseMeet(bot, ctx)
+    home.comehome(bot, ctx) // open the shut door
+    await settle()
+    assert.equal(bot.calls.activates, 1)
+    home.comehome(bot, ctx) // door open -> exit legs, no A* (doors unroutable)
+    assert.equal(ctx.comehome.phase, 'exit')
+    assert.deepEqual(bot.calls.goals, [])
+    const look = bot.calls.looks[bot.calls.looks.length - 1]
+    assert.deepEqual([look.x, look.z], [MEET2.x + 0.5, MEET2.z + 0.5]) // staged via the meet cell
+    bot.entity.position = { ...OUT2 } // stepped out
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'close')
+    assert.equal(bot.calls.activates, 1)
+    ctx.comehome.lastToggle = 0
+    home.comehome(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.activates, 2)
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome, null, 'released to the new mode')
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, [], 'the new command already spoke')
+  })
+
+  it('exit with the door gone releases silent at the gap', async () => {
+    const bot = doorBot({ at: { ...MEET2 }, hasDoor: false })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' }, inShelter: true }
+    home.releaseMeet(bot, ctx)
+    home.comehome(bot, ctx) // no door -> straight to the exit legs
+    assert.equal(ctx.comehome.phase, 'exit')
+    bot.entity.position = { ...OUT2 }
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome, null, 'gap walked, nothing to shut')
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('a wedged exit leg re-arms silently instead of failing into wall pathing', () => {
+    const bot = doorBot({ at: { ...MEET2 }, doorOpen: true })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'hold' } }
+    home.releaseMeet(bot, ctx)
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome.phase, 'exit')
+    for (let i = 0; i < 60; i++) home.comehome(bot, ctx) // stationary: the leg cap trips
+    assert.ok(ctx.comehome, 'still releasing, never terminally failed')
+    assert.equal(ctx.comehome.exiting, true)
+    assert.equal(ctx.comehome.phase, 'open', 'fresh legs')
+    assert.deepEqual(bot.chats, [], 'silent like stay')
+  })
+
+  it('already outside (died mid-exit) releases at once', () => {
+    const bot = doorBot({ at: { x: 0, y: 64, z: 0 } })
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'open', exiting: true }, inShelter: true }
+    home.comehome(bot, ctx)
+    assert.equal(ctx.comehome, null)
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, [])
+  })
+
+  it('mid-legs past toggle reach releases; in the doorway it walks on', () => {
+    // Teleported 8 out mid-exit: out is out, nothing to shut.
+    const far = doorBot({ at: { x: 13, y: 64, z: 11 } })
+    const farCtx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'exit', exiting: true }, inShelter: true }
+    home.comehome(far, farCtx)
+    assert.equal(farCtx.comehome, null)
+    // Standing in the open doorway: the legs walk on, then shut.
+    const near = doorBot({ at: { x: 13, y: 64, z: 20.5 }, doorOpen: true })
+    const nearCtx = { home: v2home(), comehome: { ...home.startMeet('Steve', true), phase: 'exit', exiting: true }, inShelter: true }
+    home.comehome(near, nearCtx)
+    assert.equal(nearCtx.comehome.phase, 'exit', 'still walking')
+    assert.ok(nearCtx.comehome, 'not released')
+  })
+})
+
+// --- ticker/chat level: the order lifecycle through handleChat + ticks ---
+
+function pos(x, y, z) {
+  const p = {
+    x, y, z,
+    distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
+    clone() { return pos(p.x, p.y, p.z) },
+    floored() { return pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) },
+    offset(ox, oy, oz) { return pos(p.x + ox, p.y + oy, p.z + oz) },
+  }
+  return p
+}
+
+function capture() {
+  const lines = []
+  const origLog = console.log
+  const origErr = console.error
+  console.log = (m) => { lines.push(String(m)) }
+  console.error = (m) => { lines.push(String(m)) }
+  return { lines, release() { console.log = origLog; console.error = origErr } }
+}
+
+function tickBot({ at, doorOpen = false, hasDoor = true, players = {}, timeOfDay = 6000 } = {}) {
+  const state = { doorOpen }
+  const bot = {
+    username: 'IdkBot',
+    players,
+    entities: {},
+    health: 20,
+    food: 20,
+    spawnPoint: pos(0, 64, 0),
+    entity: { position: pos(at.x, at.y, at.z), onGround: true },
+    time: { timeOfDay, day: 5 },
+    _moving: false,
+    _goals: [],
+    _items: [],
+    chats: [],
+    controls: {},
+    pathfinder: {
+      goal: null,
+      movements: { canDig: true },
+      setGoal(g) { bot._goals.push(g); bot.pathfinder.goal = g || null },
+      stop() {},
+      isMoving: () => bot._moving,
+      setMovements(m) { bot._movements = m },
+    },
+    blockAt(p) {
+      const fx = Math.floor(p.x)
+      const fy = Math.floor(p.y)
+      const fz = Math.floor(p.z)
+      if (hasDoor && fx === DOOR2.x && (fy === DOOR2.y || fy === DOOR2.y + 1) && fz === DOOR2.z) {
+        return { name: 'oak_door', position: pos(fx, fy, fz), getProperties: () => ({ open: state.doorOpen }) }
+      }
+      if (fy < 64) return { name: 'dirt', boundingBox: 'block', position: pos(fx, fy, fz) }
+      return { name: 'air', boundingBox: 'empty', position: pos(fx, fy, fz) }
+    },
+    findBlocks: () => [],
+    inventory: { items: () => bot._items },
+    activateBlock: async () => { state.doorOpen = !state.doorOpen },
+    chat(m) { bot.chats.push(String(m)) },
+    lookAt() {},
+    equip: async () => {},
+    attack() {},
+    setControlState(c, v) { bot.controls[c] = !!v },
+    clearControlStates() { bot.controls = {} },
+  }
+  return bot
+}
+
+const idleBrain = { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } }
+const fightBrain = { async decide() { return { action: 'fight', sprint: false, source: 'stub' } } }
+
+function tickerWith(bot, brain = idleBrain, home = v2home()) {
+  const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+  bot._tickerCtx.home = home
+  return ticker
+}
+
+describe('jr2.3 chat takes and refuses the order', () => {
+  it("'come home' drops follow/work, chats coming home, arms the walk", () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    ctx.work = true
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.deepEqual(bot.chats, ['coming home'])
+    assert.ok(ctx.comehome, 'order armed')
+    assert.equal(ctx.comehome.phase, 'walk')
+    assert.equal(ctx.work, false, 'work dropped')
+    assert.equal(ticker.getFollowName(), '', 'no follow held')
+  })
+
+  it("'come home' revokes a held follow order", () => {
+    const bot = tickBot({
+      at: { x: 30, y: 64, z: 30 },
+      players: { Steve: { username: 'Steve', entity: { position: pos(28, 64, 28) } } },
+    })
+    const ticker = tickerWith(bot)
+    handleChat(bot, ticker, 'Steve', 'follow me')
+    assert.equal(ticker.getFollowName(), 'Steve')
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.equal(ticker.getFollowName(), '', 'follow dropped')
+    assert.ok(bot._tickerCtx.comehome, 'order armed')
+  })
+
+  it('no home refuses without arming; unbuilt refuses too', () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, idleBrain, null)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.deepEqual(bot.chats, ['no home yet — say build here'])
+    assert.equal(bot._tickerCtx.comehome, undefined)
+    bot._tickerCtx.home = { ...v2home(), built: false }
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.deepEqual(bot.chats, ['no home yet — say build here', 'home not built yet — say go work'])
+    assert.equal(bot._tickerCtx.comehome, undefined)
+  })
+
+  // A full v2 house around SITE: door, table, planks everywhere in the box.
+  function paintedHouseBot() {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    bot.findBlocks = () => [{ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z }]
+    bot.blockAt = (p) => {
+      const fx = Math.floor(p.x)
+      const fy = Math.floor(p.y)
+      const fz = Math.floor(p.z)
+      if (fx === DOOR2.x && (fy === DOOR2.y || fy === DOOR2.y + 1) && fz === DOOR2.z) {
+        return { name: 'oak_door', position: pos(fx, fy, fz), getProperties: () => ({ open: false }) }
+      }
+      if (fx >= 10 && fx <= 16 && fy >= 64 && fy <= 66 && fz >= 20 && fz <= 25) {
+        if (fx === 15 && fy === 64 && fz === 21) return { name: 'crafting_table', position: pos(fx, fy, fz) }
+        return { name: 'oak_planks', boundingBox: 'block', position: pos(fx, fy, fz) }
+      }
+      if (fy < 64) return { name: 'dirt', boundingBox: 'block', position: pos(fx, fy, fz) }
+      return { name: 'air', boundingBox: 'empty', position: pos(fx, fy, fz) }
+    }
+    return bot
+  }
+
+  it('a standing house is adopted, then the order arms', () => {
+    const bot = paintedHouseBot()
+    const ticker = tickerWith(bot, idleBrain, null)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.ok(bot.chats.includes('my home is at 10 64 20'), bot.chats.join(' | '))
+    assert.ok(bot.chats.includes('coming home'), bot.chats.join(' | '))
+    assert.equal(bot._tickerCtx.home.v, 2)
+    assert.equal(bot._tickerCtx.home.built, true)
+    assert.ok(bot._tickerCtx.comehome, 'order armed')
+  })
+
+  it('a stale unbuilt flag on a finished same-site house heals', () => {
+    // Live: adopted mid-repair (one roof cell out), then finished without
+    // the build step ever flipping the flag.
+    const bot = paintedHouseBot()
+    const ticker = tickerWith(bot, idleBrain, { ...v2home(), built: false })
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.ok(bot.chats.includes('coming home'), bot.chats.join(' | '))
+    assert.equal(bot._tickerCtx.home.built, true, 're-validated against the world')
+    assert.deepEqual(bot._tickerCtx.home.site, SITE)
+    assert.ok(bot._tickerCtx.comehome, 'order armed')
+  })
+
+  it('an unbuilt new site elsewhere never reroutes to the old house', () => {
+    const bot = paintedHouseBot()
+    const far = { site: { x: 100, y: 64, z: 100 }, built: false, v: 2, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 105, y: 65, z: 104 } } }
+    const ticker = tickerWith(bot, idleBrain, far)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.deepEqual(bot.chats, ['home not built yet — say go work'])
+    assert.deepEqual(bot._tickerCtx.home.site, far.site, 'current home respected')
+    assert.equal(bot._tickerCtx.comehome, undefined)
+  })
+})
+
+describe('jr2.3 ticks dispatch the meet like an explicit order', () => {
+  it('walks without a visible player while the roster is online', async () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(bot._goals.length, 1, 'walk goal issued with nobody visible')
+      assert.deepEqual({ x: bot._goals[0].x, y: bot._goals[0].y, z: bot._goals[0].z }, OUT2)
+      assert.ok(cap.lines.some((l) => l.includes('action=comehome')), cap.lines.join('\n'))
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('fight preempts the walk but keeps the order', async () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    const orig = BEHAVIOURS.fight
+    let ran = false
+    BEHAVIOURS.fight = () => { ran = true }
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(ran, true)
+      assert.ok(bot._tickerCtx.comehome, 'order survives the preemption')
+    } finally {
+      BEHAVIOURS.fight = orig
+      cap.release()
+    }
+  })
+
+  it('holding inside suppresses fight pursuit like shelter', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true), phase: 'hold' }
+    ctx.inShelter = true
+    const orig = BEHAVIOURS.fight
+    let ran = false
+    BEHAVIOURS.fight = () => { ran = true }
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'idle', 'pursuit suppressed, melee still swings')
+      assert.equal(ran, false, 'no through-wall pursuit')
+      assert.ok(ctx.comehome, 'order survives')
+      assert.ok(cap.lines.some((l) => l.includes('action=shelter')), cap.lines.join('\n'))
+    } finally {
+      BEHAVIOURS.fight = orig
+      cap.release()
+    }
+  })
+
+  it('status names the meet', () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    handleChat(bot, ticker, 'Steve', 'come home')
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.some((c) => c.startsWith('coming home step=')), bot.chats.join(' | '))
+  })
+})
+
+describe('jr2.3 move commands exit through the doorway, repeat and stop never hang', () => {
+  it("'go work' from the hold exits, shuts, then works", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.work, true)
+    assert.equal(ctx.comehome.exiting, true, 'exit armed, not cleared')
+    const cap = capture()
+    try {
+      let r = await ticker.tick() // open the shut door
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      r = await ticker.tick() // door open -> exit legs start
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        r = await ticker.tick() // arrival -> close -> shut -> released
+        await settle()
+        assert.equal(r.decision.action, 'comehome')
+      }
+      assert.equal(ctx.comehome, null, 'released to work')
+      assert.equal(ctx.inShelter, false)
+      assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("'follow me' from the hold exits, then follows", async () => {
+    const bot = tickBot({
+      at: { ...MEET2 },
+      players: { Steve: { username: 'Steve', entity: { position: pos(30, 64, 30) } } },
+    })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'follow me')
+    assert.equal(ticker.getFollowName(), 'Steve')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      await ticker.tick() // open
+      await settle()
+      await ticker.tick() // door open -> exit legs start
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z)
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        const r = await ticker.tick() // arrival -> close -> shut -> released
+        await settle()
+        assert.equal(r.decision.action, 'comehome')
+      }
+      assert.equal(ctx.comehome, null, 'exit done, follow owns the body')
+      assert.equal(ctx.inShelter, false)
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("repeat 'come home' and stop never hang the phase", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true), phase: 'hold' }
+    handleChat(bot, ticker, 'Steve', 'stop')
+    assert.equal(ctx.paused, true)
+    const cap = capture()
+    try {
+      await ticker.tick() // parked: the order frozen, not hung
+      handleChat(bot, ticker, 'Steve', 'come home')
+      assert.equal(ctx.paused, false)
+      assert.equal(ctx.comehome.phase, 'close', 'fresh record from the repeat')
+      assert.ok(!ctx.comehome.exiting)
+      await ticker.tick() // settle -> home + hold
+      assert.equal(ctx.comehome.phase, 'hold')
+      assert.ok(bot.chats.includes('home'), bot.chats.join(' | '))
+      await ticker.tick()
+      assert.equal(ctx.comehome.phase, 'hold', 'still holding, advancing every tick')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("stop mid-walk then 'come home' walks again", async () => {
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'Steve', 'come home')
+    handleChat(bot, ticker, 'Steve', 'stop')
+    const cap = capture()
+    try {
+      await ticker.tick()
+      assert.deepEqual(bot._goals, [], 'parked: no goals while stopped')
+      handleChat(bot, ticker, 'Steve', 'come home')
+      assert.equal(ctx.comehome.phase, 'walk', 'fresh walk, outside')
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(bot._goals.length, 1, 'walking again')
+    } finally {
+      cap.release()
+    }
+  })
+})
+
+describe('jr2.3 help covers the command', () => {
+  it("'help come home' explains it", () => {
+    const cmd = lookupCommand('come home')
+    assert.ok(cmd, 'resolves')
+    assert.ok(detailLine(cmd).includes('come home'), detailLine(cmd))
+    assert.ok(detailLine(cmd).length <= 256)
+    const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    handleChat(bot, null, 'Steve', 'help come home')
+    assert.equal(bot.chats.length, 1)
+    assert.ok(bot.chats[0].includes('common room'), bot.chats[0])
+  })
+})

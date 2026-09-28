@@ -558,4 +558,242 @@ function stay(bot, ctx, target, state) {
 
 }
 
-module.exports = { gohome, stay, SHELTER_RUN_FRESH_MS }
+// Meet target (jr2.3 'come home'): the common-room cell behind the door on a
+// v2 house, the inside cell on a v1 hut. Named separately from insidePos so
+// the jr2.2 bedroom/sleep targeting cannot hijack the meeting: the owner is
+// met in the common room, never in a bedroom.
+function meetPos(home) {
+  return insidePos(home)
+}
+
+// Fresh meet record (jr2.3): inside settles straight into the hold (say hi,
+// leave the door to whoever is using it), outside walks in.
+function startMeet(by, inside) {
+  return { ...freshGo(), by: by || null, exiting: false, phase: inside ? 'close' : 'walk', settle: !!inside }
+}
+
+// Release (jr2.3): a move command while the meet stands. Outside the order
+// simply ends; inside, the exit legs (exitMeet) run before the new mode's
+// first path — clearing here would hand A* a through-wall plan (probed: an
+// unguarded plan eats two wall planks, a guarded one tunnels under the
+// house). Arms inShelter with the exit so fight pursuit cannot preempt the
+// doorway either. Idempotent: an armed exit is left alone, so double-release
+// paths (setBring + startBlockOrder) cannot reset running legs.
+function releaseMeet(bot, ctx) {
+  const order = ctx && ctx.comehome
+  if (!order || order.exiting) return
+  let inside = false
+  try { inside = isInside(bot, ctx.home) } catch (_) { inside = false }
+  if (!inside) {
+    ctx.comehome = null
+    return
+  }
+  ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0 }
+  ctx.lastGoalKey = ''
+  ctx.inShelter = true
+}
+
+// The order ends out loud (lead precedent): one chat line, then the body is
+// released to the standing mode. The console keeps the machine reason.
+function failMeet(bot, ctx, status) {
+  const order = ctx && ctx.comehome
+  if (order) order.phase = 'failed'
+  ctx.stepStatus = status
+  ctx.comehome = null
+  setWalkDig(bot, true)
+  try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
+  const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : ''
+  try { bot.chat(`cannot reach home${why}`) } catch (_) { /* chat best-effort */ }
+  console.log(`comehome ${status}`)
+}
+
+// Release walk (jr2.3): the exit legs mirrored from stay, with release
+// semantics. Missing door on the way out is success (walk the gap, nothing
+// to shut); a wedged leg re-arms silently like stay (the doorway usually
+// clears), never failing into a wall-digging fallback. Already-out means
+// released — except mid-doorway with the exit legs running, where the close
+// phase still shuts the door. The gate is the toggle-reach bound: close must
+// only run within activateBlock reach of the door, never toggling at air
+// from across the yard. Death/respawn and teleports jump past it and release
+// at once instead of sneak-marching the legs back from spawn.
+const EXIT_SHUT_BLOCKS = 2.5
+function exitMeet(bot, ctx, home, order) {
+  if (!isInside(bot, home)) {
+    let shut = false
+    if (order.phase === 'exit' || order.phase === 'close') {
+      try {
+        const bp = botPos(bot)
+        const door = doorPos(home)
+        shut = !!bp && Math.hypot(bp.x - (door.x + 0.5), bp.z - (door.z + 0.5)) <= EXIT_SHUT_BLOCKS
+      } catch (_) { shut = false }
+    }
+    if (!shut) {
+      ctx.comehome = null
+      ctx.inShelter = false
+      ctx.stepStatus = 'running'
+      return
+    }
+  }
+  ctx.inShelter = true
+  const out = outsidePos(home)
+  const meet = meetPos(home)
+  if (order.phase === 'hold') order.phase = 'open'
+  if (order.phase === 'open') {
+    const door = doorBlock(bot, home)
+    if (!door || doorOpen(door)) order.phase = 'exit'
+    else {
+      tryToggle(bot, order, door)
+      return
+    }
+  }
+  if (order.phase === 'exit') {
+    const door = doorPos(home)
+    const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7)
+    if (order.phase === 'failed') {
+      const keepBy = order.by
+      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open' }
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    if (through) order.phase = 'close'
+    else return
+  }
+  if (order.phase === 'close') {
+    const door = doorBlock(bot, home)
+    if (!door || !doorOpen(door)) {
+      ctx.comehome = null // gap walked or door shut: released
+      ctx.inShelter = false
+      ctx.stepStatus = 'running'
+      return
+    }
+    tryToggle(bot, order, door)
+  }
+}
+
+// 'Come home' order (jr2.3): the walk→open→enter→close wire mirrors gohome
+// (same door primitives, same staging, same arrival predicates — only the
+// meet target is named), then the bot HOLDS the common room until
+// countermanded: day steps work the house through the walls and A* cannot
+// route the doorway (see header), so ending the order inside would strand
+// the next step digging through the wall. A move command while inside arms
+// the exit via releaseMeet; death/respawn outside silently re-arms the walk.
+// Fight preempts like every other explicit order.
+function comehome(bot, ctx, target, state) {
+  const order = ctx && ctx.comehome
+  if (!order) return
+  const home = ctx.home
+  if (!home || !home.site) {
+    failMeet(bot, ctx, 'failed:no-home')
+    return
+  }
+  if (order.exiting) {
+    exitMeet(bot, ctx, home, order)
+    return
+  }
+  if (order.phase === 'hold') {
+    if (!isInside(bot, home)) {
+      // Died or teleported out with the order standing: walk back home.
+      order.phase = 'walk'
+      order.stalls = 0
+      order.fails = 0
+      order.lastPos = null
+      order.via = undefined // re-route from the new position
+      order.viaDone = false
+      ctx.lastGoalKey = ''
+      ctx.stepStatus = 'running'
+      return
+    }
+    holdStill(bot, ctx)
+    return
+  }
+  const out = outsidePos(home)
+  const meet = meetPos(home)
+  if (order.phase === 'walk') {
+    setWalkDig(bot, false)
+    // rw4.12 detour mirror: a live mark diverts via a waypoint first; a dead
+    // detour leg falls back to direct once.
+    if (order.via === undefined) {
+      let v = null
+      try { v = detour.via(ctx, botPos(bot), out) } catch (_) { v = null }
+      order.via = v
+      order.viaDone = !v
+    }
+    const diverting = !order.viaDone && !!order.via
+    const aim = diverting ? order.via : out
+    const goal = diverting
+      ? new goals.GoalNearXZ(aim.x, aim.z, 1)
+      : new goals.GoalNear(aim.x, aim.y, aim.z, 1)
+    const arrived = walkTo(bot, ctx, order, diverting ? 'comehome-via' : 'comehome-walk', goal, nearOut(aim, 1))
+    if (order.phase === 'failed') {
+      if (order.via && !order.viaDone) {
+        order.phase = 'walk'
+        order.stalls = 0
+        order.fails = 0
+        order.lastPos = null
+        order.viaDone = true
+        ctx.stepStatus = 'running'
+        ctx.lastGoalKey = ''
+        return
+      }
+      setWalkDig(bot, true)
+      failMeet(bot, ctx, 'failed:cannot-reach-home')
+      return
+    }
+    if (arrived) {
+      if (order.via && !order.viaDone) {
+        order.viaDone = true
+        order.fails = 0
+        ctx.lastGoalKey = ''
+      } else order.phase = 'open'
+    } else {
+      // Same flat-run sprint as the night walk (rw4.10); no shelterRun stamp:
+      // the atl.12 gate only holds fight for work steps, and the meet is an
+      // order — fight preempts it like lead/bring/flat.
+      setShelterSprint(bot, ctx, out)
+      return
+    }
+  }
+  if (order.phase === 'open') {
+    setWalkDig(bot, true)
+    const door = doorBlock(bot, home)
+    if (!door || doorOpen(door)) order.phase = 'enter'
+    else {
+      tryToggle(bot, order, door)
+      return
+    }
+  }
+  if (order.phase === 'enter') {
+    // One-sided like gohome: the whole body past the door plane, so 'close'
+    // cannot shut the panel into the bot.
+    const door = doorPos(home)
+    const through = stepThrough(bot, ctx, order, [out, door, meet],
+      (bp) => isInside(bot, home) && bp.z >= meet.z + 0.3)
+    if (order.phase === 'failed') {
+      failMeet(bot, ctx, 'failed:cannot-reach-home')
+      return
+    }
+    if (through) order.phase = 'close'
+    else return
+  }
+  if (order.phase === 'close') {
+    // A settle (ordered while already inside) holds as-is: the bot is home,
+    // and the door belongs to whoever is using it — no toggle at air from
+    // across the room, no panel shut in the owner's face.
+    const door = doorBlock(bot, home)
+    if (!door && !order.settle) {
+      failMeet(bot, ctx, 'failed:no-door')
+      return
+    }
+    if (order.settle || !doorOpen(door)) {
+      order.phase = 'hold'
+      ctx.stepStatus = 'done'
+      ctx.inShelter = true
+      try { bot.chat('home') } catch (_) { /* chat best-effort */ }
+      return
+    }
+    tryToggle(bot, order, door)
+  }
+}
+
+module.exports = { gohome, stay, comehome, releaseMeet, startMeet, isInside, meetPos, SHELTER_RUN_FRESH_MS }
