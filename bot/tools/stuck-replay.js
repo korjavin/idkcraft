@@ -104,7 +104,27 @@ function waitFor(em, ev, ms, what) {
   })
 }
 
-(async () => {
+// Headroom verify-and-step (idkcraft-4rz round 4): check-then-step with
+// steps+1 checks for steps tps — the last tp's landing is re-checked
+// too, else a spot it cleared would be falsely GUIDE-BURIED. readHead()
+// returns the head block (null when unreadable, counts as solid); tpUp()
+// climbs one step; alive() lets a mid-loop guide death cut the climb
+// short (the caller then reports GUIDE-DIED, not GUIDE-BURIED).
+async function verifyHeadroom(readHead, tpUp, alive, steps = 6) {
+  let buried = false
+  let tps = 0
+  for (let i = 0; i <= steps && alive(); i++) {
+    const head = readHead()
+    // Passability, not block names: tall grass/kelp/vines are fine to
+    // stand in (boundingBox empty); only solid rock needs stepping over.
+    if (head && head.boundingBox === 'empty') { buried = false; break }
+    buried = true
+    if (i < steps) { await tpUp(); tps++ }
+  }
+  return { buried, tps }
+}
+
+async function main() {
   const spots = loadSpots()
   const index = require('../src/index')
   const { stubBrain } = require('../src/brain')
@@ -210,18 +230,15 @@ function waitFor(em, ev, ms, what) {
       await rcon(`effect give ${who} minecraft:fire_resistance 200`)
     }
     await sleep(2000) // chunks in, guide landed
-    let buried = false
-    for (let i = 0; i < 6 && !guideDied; i++) {
-      let head = null
-      try { head = guide.blockAt(guide.entity.position.offset(0, 1, 0)) } catch (_) { head = null }
-      // Passability, not block names: tall grass/kelp/vines are fine to
-      // stand in (boundingBox empty); only solid rock needs stepping over.
-      if (head && head.boundingBox === 'empty') { buried = false; break }
-      buried = true
-      gy += 2
-      await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
-      await sleep(800) // let it fall back before re-checking
-    }
+    const { buried } = await verifyHeadroom(
+      () => { try { return guide.blockAt(guide.entity.position.offset(0, 1, 0)) } catch (_) { return null } },
+      async () => {
+        gy += 2
+        await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
+        await sleep(800) // let it fall back before re-checking
+      },
+      () => !guideDied,
+    )
     if (buried && !guideDied) {
       rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-BURIED' })
       console.log(`${s.name.padEnd(9)} ${String(false).padEnd(7)} ${String(0).padEnd(6)} ` +
@@ -291,4 +308,10 @@ function waitFor(em, ev, ms, what) {
   try { guide.quit() } catch (_) {}
   await sleep(1000)
   process.exit(0)
-})().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
+}
+
+if (require.main === module) {
+  main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
+}
+
+module.exports = { verifyHeadroom }
