@@ -99,6 +99,12 @@ async function main() {
   const cz = Math.round(feet.z)
   const tx = cx + 1
   const hx = cx - 1
+  // Flatten the pad (ipn.6 re-proof): prod-world spawn geometry is a
+  // lottery — the bot spawns in 1-wide holes, water lands behind cliffs —
+  // and fill legs time out walking it. A cleared box plus a cobble floor
+  // disc makes the assay deterministic on any spawn. Disposable rig only.
+  await rcon(`fill ${cx - 7} ${surf} ${cz - 7} ${cx + 7} ${surf + 5} ${cz + 7} air`)
+  await rcon(`fill ${cx - 7} ${surf - 1} ${cz - 7} ${cx + 7} ${surf - 1} ${cz + 7} cobblestone`)
   await rcon(`setblock ${tx} ${surf} ${cz} crafting_table`)
   await rcon(`setblock ${hx} ${surf} ${cz} chest`)
   await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`)
@@ -224,6 +230,8 @@ async function main() {
   await seedStock([['iron_ingot', 6]])
   const leg2 = await tickUntil('leg 2', 500, () => count(bot, 'water_bucket') >= 2)
   await removeWater(w2)
+  await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`) // fill legs end at the water;
+  await sleep(500) // the craft/bank legs below test gear, not the hike back
   if (count(bot, 'bucket') !== 0) throw new Error('leg 2: empties must be filled, not left behind')
   if (ctx.haul && ctx.haul.water_bucket) throw new Error('leg 2: self forge must not haul')
   console.log(`leg 2 PASS: reserve pair in ${leg2} ticks (silent self forge)`)
@@ -260,6 +268,8 @@ async function main() {
     await seedStock([['iron_ingot', 3]])
     const leg = await tickUntil(`leg 5.${unit}`, 400, () => (ctx.haul && ctx.haul.water_bucket) === 1 && (ctx.gearFinished && ctx.gearFinished.water_bucket) === 1)
     await removeWater(w5)
+    await rcon(`tp ${NAME} ${cx} ${surf} ${cz}`) // back to the pad for the bank
+    await sleep(500)
     if (count(bot, 'water_bucket') !== 3) throw new Error(`leg 5.${unit}: pair+spare expected, have ${count(bot, 'water_bucket')}`)
     console.log(`leg 5.${unit} PASS: owner water_bucket hauled+recorded in ${leg} ticks (pack holds 3)`)
     const bank = await bankUntilDone(`leg 5.${unit} bank`)
