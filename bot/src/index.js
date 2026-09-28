@@ -1752,7 +1752,10 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
 
     bot.once('spawn', () => {
       ticker.setMovements(new Movements(bot))
-      console.log(`spawned as ${bot.username}`)
+      // idkcraft-der: log the negotiated version + registry data at spawn so
+      // rig/prod logs show which minecraft-data the bot actually runs on.
+      const verSuffix = bot.version ? ` mc=${bot.version} proto=${bot.protocolVersion} data=${bot.registry?.version?.minecraftVersion}` : ''
+      console.log(`spawned as ${bot.username}${verSuffix}`)
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
       // instead of standing through N more ticks.
