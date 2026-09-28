@@ -323,7 +323,7 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     // FSM takes explore instead of re-picking gather or idling on rest.
     // (9 held logs sit under the atl.14 surplus batch, so no banking.)
     const bot = logsBot(9, null, [{ name: 'stick', count: 2 }])
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {}, gear: { saidNeed: 'want-ore' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:unreachable', atLogs: 9 }, brain: {}, gear: { saidNeed: 'want-ore', pantrySeen: 0 }, gearPantryBanked: 0 }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'explore')
   })
