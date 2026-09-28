@@ -218,6 +218,31 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(bot._places, 1)
   })
 
+  it('fast path (dirt in hand): t2 sample waits for t3+', () => {
+    // Round-3: in-hand scaffold means a fast apply (no equip/look waits),
+    // so a +100 ms issue would apply before the feet exit (rig +100 2/3).
+    // The trigger moves to +0.9 for the fast path.
+    const dirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [dirt], { held: dirt })
+    bot.entity.position = pos(0.5, 61.75, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+  })
+
+  it('fast path at t3 (+1.0): issues the placement', async () => {
+    const dirt = { name: 'dirt', count: 10 }
+    const bot = strictBot(pitWorld(), [dirt], { held: dirt })
+    bot.entity.position = pos(0.5, 62.0, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.16, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump' })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(bot._places, 1)
+  })
+
   it('stale place phase below the trigger: back to jump, never places', () => {
     // Round-2 body-1: fell back (knockback, slow server) with nothing in
     // flight — re-jump instead of placing from below.
