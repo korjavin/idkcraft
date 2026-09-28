@@ -46,6 +46,59 @@ function hasPickaxe(bot) {
   return countItems(bot, (n) => n.endsWith('_pickaxe')) > 0
 }
 
+// Harvest ladder mirror (bring.js PICKAXE_RANK has the original; a require
+// would close the bring->bringitem->craftany->equip cycle): wooden and
+// golden mine no ore, so a rank-0 pickaxe upgrades itself to stone (x15)
+// instead of refusing every iron order while reading 'pickaxe=yes'.
+const PICKAXE_RANK = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 }
+function bestPickRank(bot) {
+  let best = -1
+  try {
+    for (const i of itemsOf(bot)) {
+      const m = i && typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+      if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
+    }
+  } catch (_) { return -1 }
+  return best
+}
+function pickRank(name) {
+  const m = typeof name === 'string' && name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+  return m ? PICKAXE_RANK[m[1]] : 0
+}
+// The stone chain behind toolOp's pickaxe branch: 3 cobble plus 2 sticks
+// on hand or one stick-op away (2 same planks or any log — toolOp's own
+// conditions, so a due upgrade always yields stone, never a second wooden).
+function stoneUpgradeDue(bot) {
+  try {
+    if (bestPickRank(bot) !== 0) return false
+    if (countItems(bot, (n) => n === 'cobblestone') < 3) return false
+    if (countItems(bot, (n) => n === 'stick') >= 2) return true
+    if (craftMod.tally(bot, '_log').size > 0) return true
+    const planks = craftMod.sortedWoods(craftMod.tally(bot, '_planks'))
+    return planks.length > 0 && planks[0][1] >= 2
+  } catch (_) { return false }
+}
+// A table the upgrade can craft on right now: the inventory item or a claim
+// the world still shows. Unreadable (unloaded chunk) reads as NO — the
+// upgrade is opportunistic, so an uncertain table digs scaffold exactly as
+// before instead of failing the step (unlike a fresh craft, which fails
+// loud through tableFor and holds).
+function tableReady(bot, ctx) {
+  try {
+    if (itemsOf(bot).some((i) => i && i.name === 'crafting_table')) return true
+    if (!bot || typeof bot.blockAt !== 'function') return false
+    const st = ctx && ctx.equip
+    const claims = [ctx && ctx.home && ctx.home.table, st && st.tablePos, ctx && ctx.claimedTable]
+    for (const t of claims) {
+      if (!t || typeof t.x !== 'number') continue
+      let block = null
+      try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
+      if (block && block.name === 'crafting_table') return true
+    }
+  } catch (_) { /* probe best-effort */ }
+  return false
+}
+
 function itemsOf(bot) {
   try {
     const items = bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()
@@ -269,7 +322,12 @@ function equip(bot, ctx) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
-  const kind = !hasPickaxe(bot) ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
+  // A wooden/golden pickaxe upgrades to stone while the chain can land
+  // (x15): rank-0 mines no ore, and the kit header promises stone. The
+  // table probe keeps it opportunistic — without a verified station the
+  // step digs scaffold exactly as before instead of failing no-table.
+  const upgradePick = stoneUpgradeDue(bot) && tableReady(bot, ctx)
+  const kind = !hasPickaxe(bot) || upgradePick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
       ctx.stepStatus = 'done'
@@ -335,7 +393,10 @@ function craftOne(bot, ctx, op) {
     const strikes = (st.made && st.made[op.item]) || 0
     const landed = op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
       : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
-      : op.item.endsWith('_pickaxe') ? hasPickaxe(bot) : hasSword(bot)
+      // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
+      // the old wooden as landed and burns the cobble retrying. Fresh
+      // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
+      : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
     if (!landed) {
       st.made = st.made || {}
       st.made[op.item] = strikes + 1
@@ -459,3 +520,5 @@ module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
+// Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain.
+module.exports.stoneUpgradeDue = stoneUpgradeDue

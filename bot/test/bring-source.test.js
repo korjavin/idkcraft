@@ -528,7 +528,7 @@ describe('bring source choice (idkcraft-atl.15)', () => {
       kind: 'bring', name: 'gold', want: 3, by: 'P',
     }
     await advancePendingSearch(bot, {}, ctx)
-    assert.ok(bot.lines.some((l) => l === 'need an iron pickaxe for gold_ore'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'need an iron pickaxe for gold_ore (my stone_pickaxe can\'t break it)'), `lines: ${bot.lines}`)
     assert.equal(ctx.bring, old, 'old order survives the refusal')
     assert.equal(old.farCache, undefined, 'no cache grafted')
     assert.equal(old.sourceAsked, undefined, 'no ask cache grafted')

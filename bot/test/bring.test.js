@@ -404,7 +404,7 @@ describe('bring me order', () => {
       playerPos: pos(30, 64, 0),
     })
     handleChat(bot, tickerFor(bot), 'P', 'bring me iron')
-    assert.deepEqual(bot.lines, ['need a stone pickaxe for iron_ore'])
+    assert.deepEqual(bot.lines, ['need a stone pickaxe for iron_ore (my wooden_pickaxe can\'t break it)'])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
   })
 
@@ -471,7 +471,7 @@ describe('bring me order', () => {
       playerPos: pos(30, 64, 0),
     })
     handleChat(bot, tickerFor(bot), 'P', 'bring me gold')
-    assert.deepEqual(bot.lines, ['need an iron pickaxe for gold_ore'])
+    assert.deepEqual(bot.lines, ['need an iron pickaxe for gold_ore (my stone_pickaxe can\'t break it)'])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
     const rich = mockBot({
       spots: [pos(2, 64, 0)],

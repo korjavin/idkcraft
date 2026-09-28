@@ -92,8 +92,7 @@ function requiredTier(blockName) {
   if (/(gold|diamond|redstone|emerald)$/.test(base)) return 'iron'
   return 'stone'
 }
-function hasPickaxe(bot, blockName) {
-  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+function bestPickRank(bot) {
   let best = -1
   try {
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -101,11 +100,35 @@ function hasPickaxe(bot, blockName) {
       const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
       if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
     }
-  } catch (_) { return false }
-  return best >= need
+  } catch (_) { return -1 }
+  return best
+}
+function hasPickaxe(bot, blockName) {
+  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+  return bestPickRank(bot) >= need
 }
 function tierArticle(tier) {
   return tier === 'iron' ? 'an' : 'a'
+}
+
+// Honest tier refusal (idkcraft-x15): the legacy line names the required
+// tier; when the bot HOLDS a weaker pickaxe it says so — prod refused 'need
+// a stone pickaxe' with kit pickaxe=yes and read as a contradiction (the
+// held one was wooden). No pickaxe at all keeps the bare line.
+function tierRefusal(bot, blockName) {
+  const tier = requiredTier(blockName)
+  const base = `need ${tierArticle(tier)} ${tier} pickaxe for ${blockName}`
+  let held = null
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    let rank = -1
+    for (const i of items) {
+      const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+      if (m && PICKAXE_RANK[m[1]] > rank) { rank = PICKAXE_RANK[m[1]]; held = i.name }
+    }
+  } catch (_) { held = null }
+  if (!held) return base
+  return `${base} (my ${held} can't break it)`
 }
 
 
@@ -646,8 +669,7 @@ function commitSource(bot, ctx, o, exposed, buried, pick) {
   o.far = win.kind === 'memory' || !readable
   o.drop = dropFor(res.name)
   if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
-    const tier = requiredTier(res.name)
-    refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${res.name}`)
+    refuse(bot, ctx, tierRefusal(bot, res.name))
     return false
   }
   if (!o.announced) {
@@ -1519,6 +1541,8 @@ module.exports.orderCraftNames = itemMod.orderCraftNames
 module.exports.packCounts = itemMod.packCounts
 module.exports.itemRefusal = itemMod.itemRefusal
 module.exports.tierArticle = tierArticle
+module.exports.tierRefusal = tierRefusal
+module.exports.bestPickRank = bestPickRank
 module.exports.findEdible = itemMod.findEdible
 module.exports.findAnimal = findAnimal
 module.exports.sharePlan = itemMod.sharePlan
