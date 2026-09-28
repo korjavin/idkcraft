@@ -8,6 +8,7 @@ const exploreMod = require('./explore')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny } = require('./util')
+const woolMod = require('./wool')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -216,15 +217,28 @@ function animalDist(bp, epos) {
 
 // Nearest passive animal within 48; when drop is set (second+ kill of one
 // order) only animals dropping it, so one order tosses one food kind.
-function findAnimal(bot, drop) {
+// opts (did.3 wool) narrows the hunt: { prey, skipSheared, color, skipIds }.
+// Without opts the food shape is byte-identical (forage.js relies on it).
+function findAnimal(bot, drop, opts) {
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return null
+  const o = opts && typeof opts === 'object' ? opts : null
+  const prey = o && o.prey ? new Set(o.prey) : PREY_NAMES
   let best = null
   let bestDist = Infinity
   for (const e of Object.values(bot.entities || {})) {
     if (!e || !e.position || e.isValid === false) continue
-    if (!PREY_NAMES.has(e.name)) continue
-    if (drop && PREY_DROPS[e.name] !== drop) continue
+    if (!prey.has(e.name)) continue
+    if (!o) {
+      if (drop && PREY_DROPS[e.name] !== drop) continue
+    } else if (e.name === 'sheep') {
+      if (o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
+      if (o.skipSheared || o.color) {
+        const w = woolMod.sheepWool(bot, e)
+        if (o.skipSheared && w.sheared) continue
+        if (o.color && w.color !== o.color) continue // strict: unknown color never fills a color order
+      }
+    }
     const d = animalDist(bp, e.position)
     if (typeof d !== 'number' || d > FIND_RADIUS) continue
     if (d < bestDist) { bestDist = d; best = e }
@@ -279,7 +293,8 @@ const SEARCH_CRITERIA = {
 }
 
 function searchText(o, s) {
-  const what = (o.kind || 'block') === 'food' ? 'food' : (o.name || 'block')
+  const kind = o.kind || 'block'
+  const what = kind === 'food' ? 'food' : kind === 'wool' ? 'wool' : (o.name || 'block')
   return `search=${what} legs=${s.legs}/${searchLegs()} last=${s.last || 'empty'}`
 }
 
@@ -316,8 +331,9 @@ async function chooseBringSearch(brain, text, legsLeft) {
 // Honest end of a spent search: the legs walked, then what was found.
 function refuseExhausted(bot, ctx, o) {
   const n = o.searchLegs ? o.searchLegs.legs : 0
-  const food = (o.kind || 'block') === 'food'
-  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (food ? 'no animals' : `no ${o.name}`)
+  const kind = o.kind || 'block'
+  const woolNone = o.color ? `no ${o.color} sheep` : 'no sheep'
+  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
   refuse(bot, ctx, `searched ${n} areas, ${base}`)
 }
 
@@ -383,7 +399,10 @@ async function enterSearch(bot, ctx, o, legacy) {
   }
   if (!s.announced) {
     s.announced = true
-    say(bot, (o.kind || 'block') === 'food' ? 'no animals nearby, searching…' : `no ${o.name} nearby, searching…`)
+    const kind = o.kind || 'block'
+    say(bot, kind === 'food' ? 'no animals nearby, searching…'
+      : kind === 'wool' ? (o.color ? `no ${o.color} sheep nearby, searching…` : 'no sheep nearby, searching…')
+      : `no ${o.name} nearby, searching…`)
   }
   o.phase = 'searchwalk'
   ctx.stepStatus = 'running'
@@ -419,20 +438,30 @@ function walkSearch(bot, ctx, o) {
   }
 }
 
+// Shared n7k prey find (food + did.3 wool): wool narrows to unsheared
+// sheep of one color (requested, or the first color gathered). The wool
+// drop converges at pickup, never here.
 async function findFood(bot, ctx, o) {
-  const res = findAnimal(bot, o.drop || null)
+  const wool = (o.kind || 'block') === 'wool'
+  const color = wool ? (o.color || woolMod.dropColor(o.drop)) : null
+  const res = wool
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: o.shearedIds })
+    : findAnimal(bot, o.drop || null)
   if (!res) {
-    await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks')
+    const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
+    await enterSearch(bot, ctx, o, wool ? woolLegacy : (o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks'))
     return
   }
   o.animal = { name: res.name, id: res.id }
   o.pos = res.position
-  o.drop = PREY_DROPS[res.name]
+  if (!wool) o.drop = PREY_DROPS[res.name]
   o.lastPos = { x: res.position.x, y: res.position.y, z: res.position.z }
   fenceFact(bot, res)
   if (!o.announced) {
     o.announced = true
-    say(bot, `going hunting: ${res.name} ${res.distance} blocks away`)
+    say(bot, wool
+      ? `going for wool: sheep ${res.distance} blocks away (${woolMod.hasShears(bot) ? 'shears' : 'no shears, hunting'})`
+      : `going hunting: ${res.name} ${res.distance} blocks away`)
   }
   o.phase = 'walk'
   o.stalls = 0
@@ -473,6 +502,35 @@ function killFood(bot, ctx, o, bp) {
   o.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
   const d = animalDist(bp, ent.position)
   if (d === null || d > fightMod.SWING_RANGE) { o.phase = 'walk'; return }
+  // Wool with shears in hand shears instead of killing (owner rule): one
+  // equip + useOn, then collect — the sheep lives and is skipped next
+  // time (o.shearedIds + the sheared metadata flag). No shears, or an
+  // unequippable mock bot, falls through to the swing below.
+  if ((o.kind || 'block') === 'wool') {
+    const sh = woolMod.shearsInPack(bot)
+    if (sh && typeof bot.equip === 'function' && typeof bot.useOn === 'function') {
+      if (o.shearInFlight) return // exactly one window op at a time (dig rule)
+      o.shearInFlight = true
+      void (async () => {
+        try {
+          await bot.equip(sh, 'hand')
+          if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-equip
+          const still = o.animal ? entityById(bot, o.animal.id) : null
+          if (still) {
+            try { bot.lookAt(still.position.offset(0, still.height * 0.8, 0), true) } catch (_) { /* aim best-effort */ }
+            try { bot.useOn(still) } catch (_) { /* server decides */ }
+            if (!o.shearedIds) o.shearedIds = new Set()
+            o.shearedIds.add(still.id)
+          }
+          o.dropPos = o.lastPos
+          o.phase = 'pickup'
+        } catch (_) { /* equip failed: retry next tick (or swing when the shears are gone) */ } finally {
+          o.shearInFlight = false
+        }
+      })()
+      return
+    }
+  }
   if (o.armedId !== ent.id) {
     o.armedId = ent.id
     try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
@@ -501,7 +559,13 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     }
     return
   }
-  // Walked over the drops: the inventory count is the truth.
+  // Walked over the drops: the inventory count is the truth. Wool with
+  // no color yet converges on the first color gathered, so the toss and
+  // the count name one concrete drop from here on.
+  if ((o.kind || 'block') === 'wool' && !o.drop) {
+    const f = woolMod.findWoolInPack(bot, o.color || null)
+    if (f) o.drop = f.name
+  }
   o.have = countDrop(bot, o.drop)
   if (o.have >= o.want) {
     o.phase = 'return'
@@ -510,6 +574,20 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     o.animal = null
     o.phase = 'find'
   }
+}
+
+// Wool orders (idkcraft-did.3) ride the shared n7k prey phases above —
+// find, walk, kill (shear when shears are held, else swing), pickup —
+// plus the same search legs. Only the return leg falls through to the
+// shared single-drop toss in bring(). No chest rung yet: step-2 wiring
+// (after did.1 merges) moves order creation into the item ladder; the
+// phases stay shared.
+async function gatherWool(bot, ctx, o, bp, grounded) {
+  if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
+  if (o.phase === 'find') { await findFood(bot, ctx, o); return }
+  if (o.phase === 'walk') { walkFood(bot, ctx, o, bp, grounded); return }
+  if (o.phase === 'kill') { killFood(bot, ctx, o, bp); return }
+  if (o.phase === 'pickup') { pickupFood(bot, ctx, o, bp, grounded); return }
 }
 
 // Fetch-first from the home chest (atl.14 phase 2): an order that opens
@@ -613,6 +691,13 @@ async function bring(bot, ctx, target, state) {
   if (!bp) return
   const grounded = !bot.entity || bot.entity.onGround !== false
   const food = (o.kind || 'block') === 'food'
+
+  // Wool hunts through the shared prey phases; 'return' falls through to
+  // the shared single-drop toss below (o.drop is concrete by then).
+  if ((o.kind || 'block') === 'wool' && o.phase !== 'return') {
+    await gatherWool(bot, ctx, o, bp, grounded)
+    return
+  }
 
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
 
