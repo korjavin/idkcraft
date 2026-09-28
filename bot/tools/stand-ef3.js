@@ -32,7 +32,7 @@ const VARIANTS = {
 function F(over) {
   return {
     by: 'stand', goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, water: false,
-    headBlocked: false, digStep: null, hopStep: null, walls: 0, freeSides: [[1, 0]], lavaNear: false,
+    headBlocked: false, digStep: null, hopStep: null, walls: 0, freeSides: [[1, 0]], lavaNear: false, throughBlocked: false,
     playerOnline: false, playerDist: null, playerName: null, stuckTicks: 12,
     resetsStuck: 2, resetsPlaceError: 0, last: 'none', ...over,
   }
@@ -44,7 +44,7 @@ const STATES = [
   ['pit-scaffold', F({ goalDy: 3, goalDist: 3, scaffold: 10, walls: 4, playerOnline: true, playerDist: 20, playerName: 'Steve' })],
   ['pit-pickaxe', F({ goalDy: 3, goalDist: 3, pickaxe: true, walls: 4, playerOnline: true, playerDist: 20, playerName: 'Steve' })],
   ['corridor', F({ walls: 2, playerOnline: true, playerDist: 6, playerName: 'Steve' })],
-  ['dead-end', F({ walls: 4, pickaxe: true })],
+  ['dead-end', F({ walls: 4, pickaxe: true, throughBlocked: true })],
   ['lava-dead-end', F({ walls: 4, pickaxe: true, lavaNear: true, playerOnline: true, playerDist: 6, playerName: 'Steve' })],
   ['boxed-alone', F({ walls: 4 })],
   ['open-field', F({ walls: 0 })],

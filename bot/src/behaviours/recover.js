@@ -28,6 +28,7 @@ const WAIT_TICKS = 10
 const APEX_TIMEOUT_TICKS = 20
 const DIG_TIMEOUT_TICKS = 40
 const SIDESTEP_TIMEOUT_TICKS = 8
+const DISPLACE_TIMEOUT_TICKS = 8 // dug-open patience (9sq): clear-but-still ticks before failed:no-progress
 const DIG_STEP_TIMEOUT_TICKS = 10 // mounting a dug step is quick or never
 const HOP_MOUNT_TICKS = 14 // walk-in plus leap cycles
 const HOP_STALL_TICKS = 2 // airborne + vel.y=0 samples before the unwedge back-off
@@ -102,6 +103,34 @@ function isWater(b) {
 
 function headBlockedAt(bot) {
   return solid(cellAt(bot, 0, 1, 0)) || solid(cellAt(bot, 0, 2, 0))
+}
+
+// Goalward 1x2 solidity for the dig_through menu fact (9sq F1): stuck.goal
+// only, mirroring the run body (no target fallback) — without a stuck goal
+// the primitive fails no-direction, so it must not be offered. Nulls read
+// as open (never offer a blind dig).
+function throughBlockedAt(bot, goal) {
+  try {
+    const bp = botPos(bot)
+    if (!bp || !goal || typeof goal.x !== 'number' || typeof goal.z !== 'number') return false
+    const dx = goal.x - bp.x
+    const dz = goal.z - bp.z
+    if (dx === 0 && dz === 0) return false
+    const step = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)]
+    return solid(cellAt(bot, step[0], 0, step[1])) || solid(cellAt(bot, step[0], 1, step[1]))
+  } catch (_) { return false }
+}
+
+// Measured displacement since the primitive started (9sq F2): sideways drift
+// past the stuck tolerance, or a grounded floor rise — the sidestep freed /
+// climbed pair, minus the goal-approach arm. A rise only counts on the
+// ground (the ak4 apex guard, like dig_step/hop_step/sidestep).
+function displaced(st, bp, grounded) {
+  try {
+    if (!st || !st.start || !bp) return false
+    if (Math.hypot(bp.x - st.start.x, bp.z - st.start.z) > PROGRESS_TOLERANCE) return true
+    return !!grounded && Math.floor(bp.y) > Math.floor(st.start.y)
+  } catch (_) { return false }
 }
 
 // Blocks a bare hand breaks fast (9sh): pit dirt/grass/sand/gravel walls.
@@ -321,6 +350,7 @@ function recoverFacts(bot, ctx, state, target) {
     pickaxe: hasPickaxe(bot),
     water: isWater(cellAt(bot, 0, 0, 0)) || !!(bot && bot.entity && bot.entity.isInWater === true),
     headBlocked: headBlockedAt(bot),
+    throughBlocked: throughBlockedAt(bot, stuck.goal),
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
@@ -529,17 +559,28 @@ function pillarUpRun(bot, ctx) {
   return 'running'
 }
 
-// Dig up: remove headroom (feet+1, then feet+2) with the pickaxe. Done when
-// both are air — the step up itself is the pathfinder's job (prod) or the
-// test harness's (unit). Lava next to the dig is a runtime veto.
+// Dig up: remove headroom (feet+1, then feet+2) with the pickaxe. Done needs
+// measured displacement since the start (9sq F2), not just air above — clear
+// headroom with a frozen body waits out the displace budget, then fails, so
+// the episode moves on to a climber (or call_player) instead of looping
+// instant dones. Lava next to the dig is a runtime veto.
 function digUpRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { waited: 0, digInFlight: false, digError: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (!st.start) st.start = { x: bp.x, y: bp.y, z: bp.z }
   if (!hasPickaxe(bot)) return 'failed:no-pickaxe'
   if (lavaNearAt(bot)) return 'failed:lava'
   const head1 = cellAt(bot, 0, 1, 0)
   const head2 = cellAt(bot, 0, 2, 0)
-  if (!solid(head1) && !solid(head2)) return 'done'
+  if (!solid(head1) && !solid(head2)) {
+    const grounded = !bot.entity || !!bot.entity.onGround
+    if (displaced(st, bp, grounded)) return 'done'
+    st.verify = (st.verify || 0) + 1
+    if (st.verify > DISPLACE_TIMEOUT_TICKS) return 'failed:no-progress'
+    return 'running'
+  }
   if (st.digError) return 'failed:dig-error'
   if (st.digInFlight) {
     if (++st.waited > DIG_TIMEOUT_TICKS) return 'failed:dig-timeout'
@@ -829,12 +870,16 @@ function sidestepRun(bot, ctx) {
 }
 
 // Dig through: a 1x2 tunnel toward the goal, feet cell first, one dig at a
-// time. Lava in a target cell is a runtime veto, like the menu feasibility.
+// time. Done needs measured displacement since the start (9sq F2), like
+// dig_up: an open tunnel with a frozen body waits out the displace budget,
+// then fails. Lava in a target cell is a runtime veto, like the menu
+// feasibility.
 function digThroughRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { waited: 0, digInFlight: false, digError: false })
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
+  if (!st.start) st.start = { x: bp.x, y: bp.y, z: bp.z }
   if (!hasPickaxe(bot)) return 'failed:no-pickaxe'
   const stuck = ctx.stuck || {}
   const gp = stuck.goal
@@ -850,7 +895,13 @@ function digThroughRun(bot, ctx) {
   const head = cellAt(bot, step[0], 1, step[1])
   if (isLava(feet) || isLava(head)) return 'failed:lava'
   if (lavaNearAt(bot)) return 'failed:lava'
-  if (!solid(feet) && !solid(head)) return 'done'
+  if (!solid(feet) && !solid(head)) {
+    const grounded = !bot.entity || !!bot.entity.onGround
+    if (displaced(st, bp, grounded)) return 'done'
+    st.verify = (st.verify || 0) + 1
+    if (st.verify > DISPLACE_TIMEOUT_TICKS) return 'failed:no-progress'
+    return 'running'
+  }
   if (st.digError) return 'failed:dig-error'
   if (st.digInFlight) {
     if (++st.waited > DIG_TIMEOUT_TICKS) return 'failed:dig-timeout'
@@ -869,11 +920,19 @@ function digThroughRun(bot, ctx) {
   return 'running'
 }
 
+// Wait out a temporary blockage. Done only on measured displacement (9sq
+// F2): a full wait with a frozen body is failed:no-progress, so a hopeless
+// wait burns budget toward call_player instead of ending the episode done.
 function waitRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { n: 0 })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (!st.start) st.start = { x: bp.x, y: bp.y, z: bp.z }
+  const grounded = !bot.entity || !!bot.entity.onGround
+  if (displaced(st, bp, grounded)) return 'done'
   st.n++
-  return st.n >= WAIT_TICKS ? 'done' : 'running'
+  return st.n >= WAIT_TICKS ? 'failed:no-progress' : 'running'
 }
 
 // Call the player for a teleport, exactly once per episode. Terminal: the
@@ -907,9 +966,11 @@ const RECOVER_MENU = {
     verb: 'pillaring up',
   },
   dig_up: {
-    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear,
+    // 9sq F1: headroom already free means nothing to dig — never offer, and
+    // never chain onto free headroom either (the chain is an offer with no ask).
+    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
     run: digUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe,
+    repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe && facts.headBlocked,
     verb: 'digging up',
   },
   dig_step: {
@@ -929,7 +990,8 @@ const RECOVER_MENU = {
     verb: 'sidestepping',
   },
   dig_through: {
-    feasible: (facts) => facts.pickaxe && !facts.lavaNear,
+    // 9sq F1: nothing solid toward the goal means nothing to tunnel.
+    feasible: (facts) => facts.pickaxe && !facts.lavaNear && facts.throughBlocked,
     run: digThroughRun,
     verb: 'digging through',
   },
@@ -1356,6 +1418,7 @@ module.exports = {
   REPEATS,
   REST_GAVE_UPS,
   WAIT_TICKS,
+  DISPLACE_TIMEOUT_TICKS,
   STUCK_TICKS_ENTRY,
   PLACE_ERROR_ENTRY,
   recoverFacts,
