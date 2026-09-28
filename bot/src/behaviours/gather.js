@@ -99,18 +99,23 @@ function gather(bot, ctx, target, state) {
   // instead of rescanning and re-chatting every tick.
   if (g.final) {
     if (g.atLogs !== logs && ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
+    let keepSkip = false
     if (g.atLogs === logs && typeof g.final === 'string' && g.final.startsWith('failed:') && !gatherFailedHolds(g, logs, bot)) {
       // Relocated past the failure point (idkcraft-gyw): the menu hold
       // already releases there, and new ground may hold nearer trees or
       // other wood — drop the latch for a fresh try instead of replaying
       // the far failure until a log count that only gather can change.
-      // atLogs=-1 rides the world-changed reset below (final, skip,
-      // streak); the searchfar phase resets so the fresh sync-48 scan runs
-      // before any new far search.
+      // atLogs=-1 rides the world-changed reset below (final, streak);
+      // the searchfar phase resets so the fresh sync-48 scan runs before
+      // any new far search. Struck skips SURVIVE the release (revmux
+      // core-2): the retry scans for untried trees, never re-walks the
+      // same unreachable crown — drops-landed still clears once anything
+      // is chopped.
       g.atLogs = -1
       g.failPos = null
       g.phase = 'walk'
       g.search = null
+      keepSkip = true
       if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
     }
     if (g.atLogs === logs) {
@@ -119,7 +124,7 @@ function gather(bot, ctx, target, state) {
       return
     }
     g.final = null
-    g.skip.clear()
+    if (!keepSkip) g.skip.clear()
     g.streak = 0
   }
   if (logs >= NEED_LOGS) {

@@ -100,6 +100,45 @@ describe('gyw behaviour latch: same spot replays, relocation retries', () => {
     assert.match(ctx.lastGoalKey, /^gather:102,64,0$/, 'fresh scan commits the near tree')
   })
 
+  it('a searchfar no-trees fail stamps failPos and releases into a fresh scan', () => {
+    // Revmux core-1: the far-search fail leaves phase=searchfar; without
+    // the phase reset the release would re-enter searchfar with a null
+    // cursor and re-fail with no rescan.
+    const spots = []
+    const names = { '96,64,0': 'stone' } // loaded probe: the staged search starts (atl.5 shape)
+    const bot = mockBot({ spots, names })
+    const ctx = { lastGoalKey: '', stepStatus: 'running' }
+    for (let i = 0; i < 60 && !(ctx.gather && ctx.gather.final); i++) gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.equal(ctx.gather.phase, 'searchfar')
+    assert.deepEqual(ctx.gather.failPos, { x: 0, y: 64, z: 0 })
+    bot.entity.position = pos(100, 64, 0)
+    spots.push(pos(102, 64, 0))
+    names['102,64,0'] = 'oak_log'
+    ctx.stepStatus = 'running' // decide() marks running on every pick
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running', 'no instant re-fail')
+    assert.equal(ctx.gather.final, null, 'latch released')
+    assert.match(ctx.lastGoalKey, /^gather:102,64,0$/, 'fresh scan commits')
+  })
+
+  it('relocation does not re-chase the struck far trunk (skips survive)', () => {
+    // Revmux core-2: the far oak that stranded the bot stays skipped —
+    // the retry walks to untried wood, never back to the same crown.
+    const bot = mockBot({
+      spots: [pos(44, 64, 0), pos(60, 64, 0)],
+      names: { '44,64,0': 'oak_log', '60,64,0': 'birch_log' },
+      at: pos(45, 64, 0),
+    })
+    const g = failedGather({ x: 0, y: 64, z: 0 })
+    g.skip.add('44,64,0')
+    const ctx = { lastGoalKey: '', stepStatus: 'running', gather: g }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(ctx.gather.skip.has('44,64,0'), 'struck trunk stays skipped')
+    assert.match(ctx.lastGoalKey, /^gather:60,64,0$/, 'untried wood wins')
+  })
+
   it('a latch without a failure point still holds (legacy ctx)', () => {
     const bot = mockBot({ spots: [pos(102, 64, 0)], names: { '102,64,0': 'birch_log' }, at: pos(100, 64, 0) })
     const g = failedGather(undefined)
