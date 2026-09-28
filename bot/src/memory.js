@@ -81,6 +81,18 @@ function homeOf(h) {
   const site = v3(h.site)
   if (!site) return null
   const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true, v: h && h.v === 2 ? 2 : 1 }
+  // Bedroom bed claims (idkcraft-ybt): without these a restart drops sleptA
+  // until the next sleep, and the respawn log under-claims (plain instead of
+  // (bed)) for the window. Additive like gear: old docs simply lack the keys;
+  // verified ghosts still retract on the next beds tick. Only strict shapes
+  // persist — a hand-edited file must not inject claims.
+  try {
+    const bedA = v3(h.bedA)
+    if (bedA) out.bedA = bedA
+    const bedB = v3(h.bedB)
+    if (bedB) out.bedB = bedB
+    if (h.sleptA === true) out.sleptA = true
+  } catch (_) { /* claims best-effort */ }
   try {
     if (h.interior && h.interior.min && h.interior.max) {
       const min = v3(h.interior.min)
