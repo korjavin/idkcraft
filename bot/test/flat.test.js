@@ -1354,11 +1354,18 @@ describe('flat verified stands (idkcraft-cm0)', () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
     const { bot, ctx } = started(world)
-    bot.entities = { 9: { id: 9, name: 'sheep', type: 'mob', position: pos(1.5, 63, 0.5) } }
+    bot.entities = {
+      9: { id: 9, name: 'sheep', type: 'mob', position: pos(1.5, 63, 0.5) },
+      11: { id: 11, name: 'oak_boat', type: 'other', position: pos(1.5, 63, 0.5) },
+    }
     for (let i = 0; i < 3 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
     assert.equal(bot.calls.places.length, 0, 'no attempt into the sheep')
     assert.ok(ctx.flat && ctx.flat.holes.length === 1, 'hole waits, not skips')
-    delete bot.entities[9] // the mob wanders off
+    delete bot.entities[9] // the sheep wanders off; the boat stays
+    for (let i = 0; i < 2 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(bot.calls.places.length, 0, 'no attempt into the boat either')
+    assert.ok(ctx.flat && ctx.flat.holes.length === 1, 'hole still waits on the boat')
+    delete bot.entities[11] // the boat is broken, the cell is free
     await drive(bot, ctx, 15)
     assert.equal(ctx.flat, null)
     assert.equal(bot.calls.places.length, 1, 'places once free')
@@ -1374,6 +1381,7 @@ describe('flat verified stands (idkcraft-cm0)', () => {
     bot.entities = {
       9: { id: 9, name: 'item', type: 'other', position: pos(1.5, 63, 0.5) },
       10: { id: 10, name: 'arrow', type: 'projectile', position: pos(1.5, 63, 0.5) },
+      11: { id: 11, name: 'experience_orb', type: 'other', position: pos(1.5, 63, 0.5) },
     }
     await drive(bot, ctx, 15)
     assert.equal(ctx.flat, null)
