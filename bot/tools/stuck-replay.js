@@ -40,7 +40,9 @@ const REACH_DIST = 2.5 // GoalNear r=2 equivalent, on 2 Hz samples
 // it): stubBrain only follows a still player at d>6 and roams inside, so a
 // guide on a close goal would never exercise the follow path (EP0 starts at
 // 5.97). reached = passed within 2.5 of the goal point OR arrived within 6
-// of the guide landing (detours count as through-walks).
+// of the guide landing (detours count as through-walks) — except spots
+// whose spawn sits inside the goal shell (<4), which judge by guide
+// arrival only (else S7's 1.87 starts reached with maxDisp 0.0).
 const DEFAULT_SPOTS = [
   { name: 'EP1', spawn: [-61.3, 66, -210.5], goal: [-72, 65, -218] },
   { name: 'CLUSTER', spawn: [-59.6, 54, -211.3], goal: [-59, 58, -205] },
@@ -177,6 +179,13 @@ function waitFor(em, ev, ms, what) {
   for (const s of spots) {
     guideDied = false
     if (tickCtx()) tickCtx().paused = true
+    // Hard-stop BEFORE the guide tp: paused takes effect on the next tick
+    // (<=1 s), but the guide tp re-plans the live GoalFollow instantly from
+    // the old spot — and stop() only latches a flag the stale path may not
+    // honor for seconds. setGoal(null) resets the path synchronously, so no
+    // walk can leak into the setup phase.
+    try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+    try { follower.clearControlStates() } catch (_) { /* control best-effort */ }
     // Guide beyond the goal (horizontal projection): the follow walk passes
     // through the goal point. Degenerate vertical goals fall back to +x.
     // Start above both ends, then verify headroom: a guide tp'd into rock
@@ -201,13 +210,23 @@ function waitFor(em, ev, ms, what) {
       await rcon(`effect give ${who} minecraft:fire_resistance 200`)
     }
     await sleep(2000) // chunks in, guide landed
+    let buried = false
     for (let i = 0; i < 6 && !guideDied; i++) {
       let head = null
       try { head = guide.blockAt(guide.entity.position.offset(0, 1, 0)) } catch (_) { head = null }
-      if (head && (head.name === 'air' || head.name === 'cave_air' || head.name === 'water')) break
+      // Passability, not block names: tall grass/kelp/vines are fine to
+      // stand in (boundingBox empty); only solid rock needs stepping over.
+      if (head && head.boundingBox === 'empty') { buried = false; break }
+      buried = true
       gy += 2
       await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
-      await sleep(500)
+      await sleep(800) // let it fall back before re-checking
+    }
+    if (buried && !guideDied) {
+      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-BURIED' })
+      console.log(`${s.name.padEnd(9)} ${String(false).padEnd(7)} ${String(0).padEnd(6)} ` +
+        `${String(0).padEnd(4)} ${String(false).padEnd(6)} ${String(0).padEnd(6)} ${(0).toFixed(1).padEnd(8)} GUIDE-BURIED`)
+      continue
     }
     if (guideDied || !guide.entity) {
       rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-DIED' })
@@ -241,6 +260,7 @@ function waitFor(em, ev, ms, what) {
     let maxDisp = 0
     let reached = false
     const tx = s.goal[0]; const ty = s.goal[1]; const tz = s.goal[2]
+    const useGoal = Math.hypot(tx - s.spawn[0], ty - s.spawn[1], tz - s.spawn[2]) >= 4
     while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
       await sleep(500)
       try {
@@ -252,7 +272,7 @@ function waitFor(em, ev, ms, what) {
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
         // Reached ends the window: post-goal walking is outside the spot.
-        if (d < REACH_DIST || gd <= 6) { reached = true; break }
+        if ((useGoal && d < REACH_DIST) || gd <= 6) { reached = true; break }
       } catch (_) { /* sampling best-effort */ }
     }
     const secs = (Date.now() - t0) / 1000
