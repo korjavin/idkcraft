@@ -22,6 +22,9 @@ D="$PRODWORLD/replay-data/$VARIANT"
 if docker ps --format '{{.Names}}' | grep -qx 'idk-replay'; then
   echo "idk-replay already running — one rig run at a time"; exit 2
 fi
+if [ "$VARIANT" = "vanilla" ]; then
+  echo "vanilla has no pristine tar (transplanted hand-built world) — refusing reset; use paper-base|paper-relaxed"; exit 2
+fi
 sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 SHA_BEFORE="$(sha_of "$PRODWORLD/world.tar")"
 echo "reset: $D/world <- world.tar"
@@ -53,9 +56,15 @@ docker exec idk-replay rcon-cli "list" >/dev/null 2>&1 || { echo " rig never cam
 # Anti-noise (repeatability, not prod combat): hostile interference (fights,
 # knockback, deaths) would make stuck/recover numbers unrepeatable.
 docker exec idk-replay rcon-cli "difficulty peaceful" >/dev/null
+docker exec idk-replay rcon-cli "gamerule fallDamage false" >/dev/null
 docker exec idk-replay rcon-cli "gamerule doWeatherCycle false" >/dev/null
 docker exec idk-replay rcon-cli "weather clear" >/dev/null
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
-[ -n "$SPOTS" ] && export REPLAY_SPOTS="$SPOTS"
+if [ -n "$SPOTS" ]; then
+  case "$SPOTS" in
+    /*) export REPLAY_SPOTS="$SPOTS" ;;
+    *) export REPLAY_SPOTS="$(cd "$(dirname "$SPOTS")" && pwd)/$(basename "$SPOTS")" ;;
+  esac
+fi
 [ -n "$SECS" ] && export REPLAY_SECS="$SECS"
 cd "$HERE/.." && node tools/stuck-replay.js

@@ -36,8 +36,11 @@ const FOLLOWER = `StuckReplay${TAG}`
 const DEFAULT_SECS = parseInt(process.argv[3] || process.env.REPLAY_SECS || '75', 10)
 const REACH_DIST = 2.5 // GoalNear r=2 equivalent, on 2 Hz samples
 
-// Rig spots (START.sh): spawn = where the bot was, goal = the walk goal it
-// held when the stuck episode was logged.
+// The guide stands BEYOND the goal along the spawn->goal walk line (not on
+// it): stubBrain only follows a still player at d>6 and roams inside, so a
+// guide on a close goal would never exercise the follow path (EP0 starts at
+// 5.97). reached = passed within 2.5 of the goal point OR arrived within 6
+// of the guide landing (detours count as through-walks).
 const DEFAULT_SPOTS = [
   { name: 'EP1', spawn: [-61.3, 66, -210.5], goal: [-72, 65, -218] },
   { name: 'CLUSTER', spawn: [-59.6, 54, -211.3], goal: [-59, 58, -205] },
@@ -112,7 +115,10 @@ function waitFor(em, ev, ms, what) {
   let chats = []
   let died = false
   const origSetStuck = recover.setStuck
-  recover.setStuck = (...args) => { stuckEps.push(args[1]); return origSetStuck(...args) }
+  // Count only declarations that stick: setStuck returns false while an
+  // episode is in flight or the latch holds (recover.js) — those calls
+  // declare nothing, so counting them would equate a latched fix with a loop.
+  recover.setStuck = (...args) => { const r = origSetStuck(...args); if (r) stuckEps.push(args[1]); return r }
 
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn')
@@ -159,19 +165,37 @@ function waitFor(em, ev, ms, what) {
     `date=${new Date().toISOString()} spots=${spots.length}`)
   console.log('spot      reached  stuck  eps  call?  secs   maxDisp  note')
   const rows = []
+  let guideDied = false
+  guide.on('death', () => { guideDied = true })
   for (const s of spots) {
-    await rcon(`tp ${GUIDE} ${s.goal[0]} ${s.goal[1]} ${s.goal[2]}`)
+    // Guide beyond the goal (horizontal projection; falls to ground, settle
+    // below): the follow walk passes through the goal point. Degenerate
+    // vertical goals fall back to +x.
+    let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
+    let len = Math.hypot(dx, dz)
+    if (!(len > 0.01)) { dx = 1; dz = 0; len = 1 }
+    const L = Math.max(14, Math.hypot(s.goal[0] - s.spawn[0], s.goal[1] - s.spawn[1], s.goal[2] - s.spawn[2]) + 6)
+    const gx = s.spawn[0] + (dx / len) * L; const gz = s.spawn[2] + (dz / len) * L
+    await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${s.spawn[1] + 1} ${gz.toFixed(1)}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
     // Fresh kit per spot (repeatability: drops picked up mid-run reset).
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
     if (s.pickaxe) await rcon(`give ${FOLLOWER} stone_pickaxe 1`)
-    await sleep(2000)
-    // Quiesce: a recover episode in flight would bleed into this window.
-    for (let i = 0; i < 40; i++) {
-      const rec = follower._tickerCtx && follower._tickerCtx.recovery
-      if (!rec || rec.status !== 'running') break
-      await sleep(250)
+    await sleep(2000) // chunks in, guide landed
+    const gl = guide.entity.position.clone()
+    // Deterministic episode boundary (a tp is already unfaithful; a clean
+    // cut beats a timed quiesce): mirror index.js clearStuck plus the
+    // streak counters and the live goal, and release held controls so a
+    // killed mid-flight primitive leaves no stuck keys.
+    const c = follower._tickerCtx
+    if (c) {
+      c.stuck = null; c.recovery = null; c.recoverLatch = null; c.retreat = null
+      c.stuckTicks = 0; c.stuckResets = 0; c.placeErrors = 0; c.lastGoalKey = ''
+    }
+    try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+    for (const k of ['jump', 'back', 'forward', 'sprint', 'sneak']) {
+      try { follower.setControlState(k, false) } catch (_) { /* control best-effort */ }
     }
     stuckEps = []
     resets = {}
@@ -180,25 +204,30 @@ function waitFor(em, ev, ms, what) {
     const t0 = Date.now()
     const p0 = follower.entity.position.clone()
     let minDist = Infinity
+    let minGuide = Infinity
     let maxDisp = 0
     let reached = false
-    const gx = s.goal[0]; const gy = s.goal[1]; const gz = s.goal[2]
-    while (Date.now() - t0 < s.secs * 1000 && !died) {
+    guideDied = false
+    const tx = s.goal[0]; const ty = s.goal[1]; const tz = s.goal[2]
+    while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
       await sleep(500)
       try {
         const p = follower.entity.position
-        const d = Math.hypot(p.x - gx, p.y - gy, p.z - gz)
+        const d = Math.hypot(p.x - tx, p.y - ty, p.z - tz)
         if (d < minDist) minDist = d
+        const gd = Math.hypot(p.x - gl.x, p.y - gl.y, p.z - gl.z)
+        if (gd < minGuide) minGuide = gd
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
-        if (d < REACH_DIST) { reached = true; break }
+        // Reached ends the window: post-goal walking is outside the spot.
+        if (d < REACH_DIST || gd <= 6) { reached = true; break }
       } catch (_) { /* sampling best-effort */ }
     }
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
-    const note = died ? 'DIED' : ''
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), note })
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : '')
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
   }
