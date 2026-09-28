@@ -620,6 +620,15 @@ describe('decide decision point', () => {
     assert.equal(r.step, 'craft')
     assert.equal(r.source, 'laya')
     assert.equal(r.fsm, 'craft')
+    // Round-2 minor: the home must reach the asked text, or a v1-sized kit
+    // silently reports planks=few to laya again (the body-2 regression).
+    const seen = {}
+    const spy = { source: 'laya', ask: async (q) => { seen.state = q && q.state; return 'rest' } }
+    const v1facts = { ...facts, logs: 0, planks: 50, maxPlanks: 50, table: 1, door: 1, home: 'site' }
+    await chooseStep(spy, v1facts, ['craft', 'gather', 'rest'], { site: pos(6, 64, 0), v: 1 })
+    assert.ok(String(seen.state).includes('planks=enough'), 'v1 home: asked text reads enough')
+    await chooseStep(spy, v1facts, ['craft', 'gather', 'rest'])
+    assert.ok(String(seen.state).includes('planks=few'), 'no home: asked text reads few')
     // ...while a rest answer against a gather fsm is the disagreement case:
     // STEP_ORDER ranks craft above gather, so no menu can pair a craft answer
     // with a gather fsm — the machinery is proven on rest-vs-gather instead.
