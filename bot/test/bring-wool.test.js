@@ -64,7 +64,7 @@ function mockBot({ items = [], chest = [], playerPos = null, animals = [], block
     },
     lookAt() {},
     attack(e) { attackCalls.push(e && e.id) },
-    useOn(e) { useOnCalls.push(e && e.id); bot._items.push({ name: 'white_wool', count: 2 }) }, // the mock server drops wool
+    useOn(e) { useOnCalls.push(e && e.id); if (e && e.position) dropLoot(bot, 'white_wool', 2, e.position) }, // the mock server drops wool
     equip: async (item) => { bot.held = item && item.name },
     inventory: { items: () => bot._items },
     findBlocks(opts) {
@@ -122,6 +122,29 @@ function sheep(id, x, woolByte = null, y = 64, z = 0) {
   return e
 }
 
+// Uncollected drops (8gc): kills and shears leave wool on the ground —
+// the pack holds it only after the body walks over, inside the server's
+// pickup box (revmux 01 core-1): ±1.5 across, no more than 0.5 below the
+// feet. Perfect-collection mocks hid the pickup bug.
+function dropLoot(bot, name, count, p) {
+  if (!bot._drops) bot._drops = []
+  bot._drops.push({ name, count, x: p.x, y: p.y, z: p.z })
+}
+function collectDrops(bot) {
+  if (!bot._drops || bot._drops.length === 0) return
+  const bp = bot.entity.position
+  bot._drops = bot._drops.filter((d) => {
+    const down = bp.y - d.y // feet above the drop
+    if (Math.hypot(bp.x - d.x, bp.z - d.z) <= 1.5 && down <= 0.5 && down >= -2) {
+      const at = bot._items.find((i) => i.name === d.name)
+      if (at) at.count += d.count
+      else bot._items.push({ name: d.name, count: d.count })
+      return false
+    }
+    return true
+  })
+}
+
 function tickerFor(bot) {
   return createTicker({
     bot,
@@ -144,6 +167,7 @@ const flush = () => new Promise((r) => { setImmediate(() => setImmediate(r)) })
 // Drive a wool order: chest leg, hunt/pickup/return, explore legs.
 async function drive(bot, ctx, onKill, maxTicks = 120) {
   for (let i = 0; i < maxTicks && ctx.bring; i++) {
+    collectDrops(bot) // last tick's steps land before this tick's count
     await bring(bot, ctx, null, {})
     await flush()
     const o = ctx.bring
@@ -175,7 +199,7 @@ function killOnce(bot, o) {
   const ent = bot.entities[o.animal.id]
   if (ent && ent.isValid !== false) {
     ent.isValid = false
-    bot._items.push({ name: 'white_wool', count: 1 })
+    dropLoot(bot, 'white_wool', 1, ent.position)
   }
 }
 
@@ -184,7 +208,7 @@ function killOwnColor(bot, o) {
   if (ent && ent.isValid !== false) {
     ent.isValid = false
     const w = wool.sheepWool(bot, ent)
-    bot._items.push({ name: `${w.color || 'white'}_wool`, count: 1 })
+    dropLoot(bot, `${w.color || 'white'}_wool`, 1, ent.position)
   }
 }
 
@@ -418,5 +442,132 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.ok(bot.lines.some((l) => l === 'only got 1 white_wool'), `lines: ${bot.lines}`)
     assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+  })
+
+  it('a kill at swing range walks onto the drops before counting (8gc)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(11, 10)] })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    let killed = false
+    let pickupSeen = 0
+    for (let i = 0; i < 60 && ctx.bring; i++) {
+      collectDrops(bot)
+      await bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      const gk = ctx.lastGoalKey || ''
+      if (o.phase === 'kill' && !killed) {
+        bot.entity.position = pos(8.3, 64, 0) // swung at range, 1.7 out
+        killOnce(bot, o)
+        killed = true
+      } else if (gk.startsWith('bring-hunt:') && o.pos) {
+        bot.entity.position = pos(8.3, 64, 0)
+        bot._moving = false
+      } else if (gk.startsWith('bring-food-pickup:') && o.dropPos) {
+        // Hold still for the count tick (the rig frame: the old gate
+        // counted here, 1.7 out, without the wool), then step in.
+        pickupSeen++
+        if (pickupSeen > 2) {
+          const bp = bot.entity.position
+          const dp = o.dropPos
+          const dx = dp.x - bp.x
+          const dz = dp.z - bp.z
+          const len = Math.hypot(dx, dz) || 1
+          const step = Math.min(1, len)
+          bot.entity.position = pos(bp.x + (dx / len) * step, dp.y, bp.z + (dz / len) * step)
+          bot._moving = len > step
+        }
+      } else if (gk.startsWith('bring-return:')) {
+        bot._moving = false
+        const pp = bot.players.P.entity.position
+        bot.entity.position = pos(pp.x, pp.y, pp.z)
+      }
+    }
+    assert.ok(killed, 'the sheep died at range')
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+    assert.equal((bot._drops || []).length, 0, 'no wool left on the ground')
+    const pickupGoal = bot.calls.goals.find((g) => g && g.constructor && g.constructor.name === 'GoalBlock')
+    assert.ok(pickupGoal, 'pickup walks a GoalBlock onto the drops (revmux 01 core-2)')
+    assert.deepEqual([pickupGoal.x, pickupGoal.y, pickupGoal.z], [10, 64, 0])
+  })
+
+  it('a kill one down across holds the count until the body steps down (8gc core-1)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(11, 10)] })
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    let killed = false
+    let pickupSeen = 0
+    for (let i = 0; i < 60 && ctx.bring; i++) {
+      collectDrops(bot)
+      await bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      const gk = ctx.lastGoalKey || ''
+      if (o.phase === 'kill' && !killed) {
+        bot.entity.position = pos(9, 65, 0) // on the rim: 1 out, 1 up
+        killOnce(bot, o)
+        killed = true
+      } else if (gk.startsWith('bring-hunt:') && o.pos) {
+        bot.entity.position = pos(9, 65, 0)
+        bot._moving = false
+      } else if (gk.startsWith('bring-food-pickup:') && o.dropPos) {
+        pickupSeen++
+        if (pickupSeen <= 3) {
+          // A sphere gate would count here (d=1.41): the cell gate holds.
+          assert.equal(o.phase, 'pickup', 'no count from the rim')
+          assert.equal(bot._items.filter((it) => it.name === 'white_wool').length, 0, 'nothing collected from the rim')
+        } else {
+          bot.entity.position = pos(o.dropPos.x, o.dropPos.y, o.dropPos.z)
+          bot._moving = false
+        }
+      } else if (gk.startsWith('bring-return:')) {
+        bot._moving = false
+        const pp = bot.players.P.entity.position
+        bot.entity.position = pos(pp.x, pp.y, pp.z)
+      }
+    }
+    assert.ok(killed, 'the sheep died in the ditch')
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.equal((bot._drops || []).length, 0, 'no wool left in the ditch')
+  })
+
+  it('a stalled chase re-finds the next sheep instead of refusing (8gc)', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(11, 10), sheep(12, 14)] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    let killSeen = 0
+    for (let i = 0; i < 80 && ctx.bring; i++) {
+      collectDrops(bot)
+      await bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      if (o.phase === 'kill' && o.animal && ++killSeen >= 3) killOnce(bot, o)
+      const gk = ctx.lastGoalKey || ''
+      if (gk.startsWith('bring-hunt:') && o.pos) {
+        // Penned sheep 11: the body never closes. Sheep 12 walks free.
+        if (!o.animal || o.animal.id !== 11) {
+          bot.entity.position = pos(o.pos.x + 1, o.pos.y, o.pos.z)
+          bot._moving = false
+        }
+      } else if (gk.startsWith('bring-food-pickup:')) {
+        bot._moving = false
+        bot.entity.position = pos(o.dropPos.x, o.dropPos.y, o.dropPos.z)
+      } else if (gk.startsWith('bring-return:')) {
+        bot._moving = false
+        const pp = bot.players.P.entity.position
+        bot.entity.position = pos(pp.x, pp.y, pp.z)
+      }
+    }
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.equal(bot.entities[11].isValid, true, 'the penned sheep stands')
+    assert.equal(bot.entities[12].isValid, false, 'the free sheep died')
+    assert.ok(bot.attackCalls.length > 0 && bot.attackCalls.every((id) => id === 12), `swings: ${bot.attackCalls}`)
+    assert.equal(bot.lines.filter((l) => l.startsWith('going for wool')).length, 1, 'one announcement, silent re-chase')
   })
 })
