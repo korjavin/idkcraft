@@ -35,7 +35,8 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const danger = require('../danger')
-const { say, clearGoal, denyReason, logDeny } = require('./util')
+const util = require('./util')
+const { say, clearGoal, denyReason, logDeny } = util
 
 const FLAT_DEFAULT_RADIUS = 8 // bare `flat` (owner 2026-09-27: 97x97 hid the bot for half an hour)
 const FLAT_MIN_RADIUS = 4
@@ -67,6 +68,7 @@ const REACH_DIST = 5 // past this the approach goal is stale (build.js guard)
 const MOVE_TOLERANCE = 0.5
 const DIRT_FIND_RADIUS = 48
 const DIRT_FIND_COUNT = 64
+const RESTOCK_MIN_EDGE_GAP = 16 // restock digs at least this far past the square edge (owner 2026-09-28: digging at the edge left fresh holes next to the flattened area)
 
 // Fill allowlist: cheap full cubes only. No gravity blocks (sand/gravel
 // would fall through the cap), no ores/logs/planks (valuables and goal
@@ -83,8 +85,10 @@ function isFillBlock(name) {
   return typeof name === 'string' && FILL_SET.has(name)
 }
 
-// Restock digs dirt outside the flat area (never inside: digging there would
-// punch the new holes the order exists to remove). All three drop dirt.
+// Restock digs dirt in the zone past RESTOCK_MIN_EDGE_GAP (never inside:
+// digging there would punch the new holes the order exists to remove). All
+// three drop dirt. Until the shared canBreak guard lands (drq), restock
+// stays inside this natural family plus the structure gate in findDirt.
 const DIRT_NAMES = new Set(['dirt', 'grass_block', 'coarse_dirt'])
 
 function isDirtName(name) {
@@ -767,18 +771,24 @@ function startDig(bot, ctx, f) {
 }
 
 // Restock origin: findBlocks returns the matches nearest to its point, so
-// searching from the bot (inside the square) would return 64 inside blocks
-// and the outside filter would drop all of them (body-1). Search from just
-// past the nearest edge instead; the inside filter stays as a backstop.
+// searching from inside the square would return 64 near blocks and the gap
+// filter would drop all of them (body-1). Search from the dig zone instead
+// (RESTOCK_MIN_EDGE_GAP past the nearest edge, in the bot's direction);
+// the gap filter stays as a backstop.
 function restockPoint(f, bp) {
   const dx = bp.x - f.cx
   const dz = bp.z - f.cz
-  if (Math.abs(dx) > f.r || Math.abs(dz) > f.r) return new Vec3(bp.x, bp.y, bp.z)
-  if (Math.abs(dx) > Math.abs(dz)) return new Vec3(f.cx + Math.sign(dx || 1) * (f.r + 4), bp.y, bp.z)
-  return new Vec3(bp.x, bp.y, f.cz + Math.sign(dz || 1) * (f.r + 4))
+  if (Math.max(Math.abs(dx), Math.abs(dz)) > f.r + RESTOCK_MIN_EDGE_GAP) return new Vec3(bp.x, bp.y, bp.z)
+  if (Math.abs(dx) > Math.abs(dz)) return new Vec3(f.cx + Math.sign(dx || 1) * (f.r + RESTOCK_MIN_EDGE_GAP), bp.y, bp.z)
+  return new Vec3(bp.x, bp.y, f.cz + Math.sign(dz || 1) * (f.r + RESTOCK_MIN_EDGE_GAP))
 }
 
-// Nearest diggable dirt outside the flat square: mnx pit memory and the
+// Nearest diggable dirt in the restock zone: at least RESTOCK_MIN_EDGE_GAP
+// past the square edge, surface-exposed only (never quarried from below the
+// local surface), raised bumps preferred over flat ground. The square level
+// is deliberately NOT a floor: the square can sit high while the dig zone
+// around it is lower, and a square-relative floor starves restock to zero
+// (live 2026-09-28: level 65, zone dirt at 57-63). mnx pit memory and the
 // block under the bot's own feet are excluded like in gather.js.
 function findDirt(bot, ctx, f, bp) {
   const ids = dirtIds(bot)
@@ -790,21 +800,42 @@ function findDirt(bot, ctx, f, bp) {
     return null
   }
   const d = f.dig
-  let best = null
-  let bestD = Infinity
+  const guard = util && typeof util.canBreak === 'function' ? util.canBreak : null
+  let guarded = null // nearest guard-rejected candidate, for one honest log
+  let guardedD = Infinity
+  const cands = []
   for (const p of found) {
-    if (Math.abs(p.x - f.cx) <= f.r && Math.abs(p.z - f.cz) <= f.r) continue
+    if (Math.max(Math.abs(p.x - f.cx), Math.abs(p.z - f.cz)) - f.r < RESTOCK_MIN_EDGE_GAP) continue
     if (d.skip.has(keyOf(p.x, p.y, p.z))) continue
     if (danger.near(ctx, p)) continue
     if (Math.floor(bp.x) === p.x && Math.floor(bp.y) - 1 === p.y && Math.floor(bp.z) === p.z) continue
     if (threatenedByPlayer(bot, p.x, p.y, p.z)) continue
-    const dd = dist3(p, bp)
-    if (dd < bestD) {
-      bestD = dd
-      best = p
+    if (cellAt(bot, p.x, p.y + 1, p.z) !== 'air') continue // below the local surface: buried or built over, never quarried
+    if (structureNear(bot, p.x, p.y, p.z)) continue // interim owner-build gate until canBreak lands (drq)
+    if (guard) {
+      let block = null
+      try { block = bot.blockAt(p) } catch (_) { block = null }
+      let ok = false
+      try { ok = block != null && guard(bot, block, ctx) === true } catch (_) { ok = false }
+      if (!ok) {
+        const dd = dist3(p, bp)
+        if (dd < guardedD) {
+          guardedD = dd
+          guarded = { p, name: (block && block.name) || 'unknown' }
+        }
+        continue
+      }
     }
+    cands.push(p)
   }
-  return best
+  if (cands.length === 0) {
+    if (guarded) console.log(`flat protected: ${guarded.name} at ${guarded.p.x} ${guarded.p.y} ${guarded.p.z}`)
+    return null
+  }
+  // Raised natural terrain first (hill tops, bumps above the local level):
+  // taking the top off a bump leaves no pit. Nearest first within a height.
+  cands.sort((a, b) => (b.y - a.y) || (dist3(a, bp) - dist3(b, bp)))
+  return cands[0]
 }
 
 function endDig(bot, ctx, f, resume) {
@@ -1455,6 +1486,7 @@ module.exports.DIG_ATTEMPTS = DIG_ATTEMPTS
 module.exports.PICKUP_STALLS = PICKUP_STALLS
 module.exports.REACH_DIG = REACH_DIG
 module.exports.restockPoint = restockPoint
+module.exports.RESTOCK_MIN_EDGE_GAP = RESTOCK_MIN_EDGE_GAP
 module.exports.guardFlatSurface = guardFlatSurface
 module.exports.SELF_OCC_LIMIT = SELF_OCC_LIMIT
 module.exports.findRef = findRef
