@@ -1010,15 +1010,11 @@ function runWithdraw(bot, ctx, next) {
   }
   ctx.gearInFlight = true
   void (async () => {
-    let requested = 0
-    let got = 0
     let errored = false
     try {
       const draw = async (name, want) => {
         if (!(want > 0)) return
-        requested += want
-        const res = await stockpileMod.withdrawFromChest(bot, ctx, name, want)
-        got += (res && typeof res.got === 'number') ? res.got : 0
+        await stockpileMod.withdrawFromChest(bot, ctx, name, want)
       }
       if (next.tier === 'iron') {
         await draw('iron_ingot', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot')))
@@ -1029,11 +1025,18 @@ function runWithdraw(bot, ctx, next) {
     } catch (_) { errored = true }
     ctx.gearInFlight = false
     try {
-      // Latch only on a short or errored draw (revmux 01 body-2): a fully
-      // satisfied draw leaves the pantry fresh, so the next mat-short
-      // rung draws from the same batch instead of digging past it. The
-      // latch still lands once the chest runs dry — one attempt per bank.
-      if (errored || got < requested || requested <= 0) g.pantrySeen = ctx.gearPantryBanked || 0
+      // Latch on the end state, not the request sum (revmux 02): a rung
+      // covered by the draw leaves the pantry fresh, so the next
+      // mat-short rung draws from the same batch instead of digging past
+      // it. Summing per-draw wants double-counts the iron path (ingot
+      // shortfall plus ore remainder) and latches a satisfied rung. A
+      // covered pack re-plans to smelt/craft, a short one latches to
+      // want/deep — no withdraw loop either way.
+      const need = next.needMat || 0
+      const stock = next.tier === 'iron'
+        ? have(bot, 'iron_ingot') + have(bot, 'raw_iron')
+        : have(bot, 'diamond')
+      if (errored || stock < need) g.pantrySeen = ctx.gearPantryBanked || 0
     } catch (_) { /* latch best-effort */ }
   })()
 }

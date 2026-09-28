@@ -531,7 +531,7 @@ describe('ipn.6 pantry tick', () => {
     const ctx = { home: homeChest({ furnace: { x: 2, y: 64, z: 0 } }), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 4 }
     gear(bot, ctx)
     await tick(300)
-    assert.equal(ctx.gear.pantrySeen, 4)
+    assert.equal(ctx.gear.pantrySeen, undefined, 'covered rung stays fresh (revmux 02)')
     assert.equal(stacks[0].count, 0, 'ingots first')
     assert.equal(stacks[1].count, 6, 'then ore to the 5-mat shortfall')
     assert.equal(ctx.stepStatus, 'running', 'no yield: re-plan next tick')
@@ -541,6 +541,21 @@ describe('ipn.6 pantry tick', () => {
     assert.equal(counts.ironOre, 3)
     const p = gear.planFor(counts, ctx, { furnace: true })
     assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
+  })
+  it('an ore-only pantry covers the rung and stays fresh (revmux 02)', async () => {
+    // The normal stranded batch: surplus banks raw_iron, not ingots. The
+    // empty ingot draw must not count as a short draw — the end state
+    // (5 ore on hand) covers the helmet, so the batch stays open.
+    const stacks = chestOf([['raw_iron', 16]])
+    const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: stacks })
+    const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1 }
+    gear(bot, ctx)
+    await tick(300)
+    assert.equal(stacks[0].count, 11)
+    assert.equal(ctx.gear.pantrySeen, undefined, 'covered rung stays fresh')
+    const counts = gear.liveCounts(bot, ctx)
+    assert.equal(counts.ironOre, 5)
+    assert.equal(counts.ingots, 0)
   })
   it('a short draw latches: the chest ran dry (body-2)', async () => {
     // Ingots run out mid-draw (2 of 5, no ore): got < requested latches,
