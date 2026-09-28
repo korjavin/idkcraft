@@ -742,7 +742,9 @@ function deep(bot, ctx, target, state) {
     }
     const lhz = landingHazard(bot, next)
     if (lhz) {
-      try { danger.mark(ctx, next) } catch (_) { /* mark best-effort */ }
+      // Drops strike unmarked (pre-b20 shape): danger marks are xz-only, so
+      // a deep-cave drop mark would steer surface site selection for 2h.
+      if (lhz !== 'drop') { try { danger.mark(ctx, next) } catch (_) { /* mark best-effort */ } }
       strikeAndReplan(bot, ctx, d, t)
       return
     }

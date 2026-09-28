@@ -586,6 +586,28 @@ describe('deep tunnel caps', () => {
     const spots = (ctx.danger && ctx.danger.spots) || []
     assert.ok(spots.some((s) => s.x === 5 && s.z === 0), 'refused landing marked')
   })
+
+  it('tunnel drop strikes unmarked (deep voids must not steer surface sites)', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    bot.entity.position = pos(3.5, -45, 0.5)
+    bot.blocks['5,-45,0'] = 'air'
+    bot.blocks['5,-44,0'] = 'air'
+    bot.blocks['5,-46,0'] = 'air'
+    bot.blocks['5,-47,0'] = 'air' // 2-void under next, stone at -48
+    const ctx = memCtx([])
+    ctx.deep = {
+      phase: 'tunnel', shaft: { x: 0, z: 0, topY: -44, dx: 1, dz: 0 }, n: 1,
+      steps: [{ x: 3, y: -45, z: 0 }], target: { x: 50, y: -45, z: 0, name: 'diamond_ore' },
+      dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: { diamond: 0 },
+      tunnelDigs: 0, tunnelSteps: 0, tunnelSeen: new Set(['3,-45,0']), cameFrom: null,
+      tunnelGoal: { x: 5, y: -45, z: 0 },
+    }
+    deep(bot, ctx, null, {})
+    assert.equal(ctx.deep.phase, 'plan', 'void landing strikes the target')
+    const spots = (ctx.danger && ctx.danger.spots) || []
+    assert.ok(!spots.some((s) => s.x === 5 && s.z === 0), 'drop strike leaves no mark')
+  })
 })
 
   it('tunnel opens feet+head (two-high tube stays walkable)', async () => {
