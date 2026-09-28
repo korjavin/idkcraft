@@ -40,7 +40,6 @@ const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
 const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
 const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
 const PROGRESS_TOLERANCE = 0.5
-const PILLAR_APEX = 1.0 // jump apex: feet rise one full block
 const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
@@ -255,12 +254,23 @@ function findScaffoldItem(bot) {
 }
 
 // Ascent issue window (2bh): fire placeBlock while RISING (vy > 0 past
-// +0.6), not at the apex. The async issue (equip + send + ack, ~100-300 ms)
-// lands the server apply at the apex; issuing AT the apex lands it on the
-// fall, feet back in the cell (self-intersection refusal). Rig paper-base,
-// S3 pit: +250/+350 ms post-jump PLACED 2/2, +450 ms refused 3/3; prod
-// post-#158 still 0/4 placed with the apex trigger. A missing velocity
-// (mocks) reads as inside the window.
+// +0.6), not at the apex. Measured jump: +0.42/+0.75/+1.00/+1.17 at
+// +50/+100/+150/+200 ms, apex +1.25 at +250 (vy +0.003), feet re-enter the
+// cell falling at ~+410. The async issue lands the server apply L later
+// (prod L ~100-300: equip + look + tick align — the old +1.0 window's 0/79
+// proves L is large, not localhost-small): +100 ms issues apply +200..+400
+// with the feet clear, while apex (+250) issues apply up to +550, feet
+// back in the cell (self-intersection refusal).
+// Deliberately NO vy floor above 0 (round-2): 1 Hz ticks against the exact
+// 600 ms jump cycle phase-lock onto 3 fixed phases per episode (rig:
+// 15 ticks, zero drift), so any window under ~200 ms can miss the whole
+// episode — a vy > 0.1 floor timed out 0/3 on the rig. Residual: apex
+// samples (vy ~+0.003) still issue and refuse at high L; the principled
+// fix is a physics-timed issue (fire at +150 ms after jump-start instead
+// of on tick phase) — idkcraft-lzw, not this bead.
+// (Fast-apply race: +100 ms issues refuse 1/3 on localhost where L < 50
+// applies before the feet exit at +154 — prod L never sits there.)
+// A missing velocity (mocks) reads as inside the window.
 function risingWindow(bot) {
   try {
     const v = bot && bot.entity && bot.entity.velocity
@@ -517,10 +527,13 @@ function pillarUpRun(bot, ctx) {
   }
   if (st.placeError) return 'failed:place-error'
   if (st.placeInFlight) return 'running'
-  // Fell below the issue height before the ack went out (slow server,
-  // knockback): jump again, never place from below into the occupied feet
-  // cell. Already solid (a twin call, an earlier cycle): verify instead of
-  // stacking a second placement into the cell (the yvi loop).
+  // Fell below the issue height with a stale place phase and nothing in
+  // flight (slow server, knockback): jump again. Same-tick fall-through
+  // from the trigger above forces this guard to match PILLAR_ISSUE_DY — a
+  // higher guard would bounce the early-rise trigger it just set (round-2).
+  // No-self-intersection comes from apply timing (see risingWindow), not
+  // from this line. Already solid (a twin call, an earlier cycle): verify
+  // instead of stacking a second placement into the cell (the yvi loop).
   if (bp.y < st.startFloor + PILLAR_ISSUE_DY - 0.01) { st.phase = 'jump'; st.waited = 0; return 'running' }
   if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return 'running' }
   // Reference: a solid neighbour of the feet cell, ground below first.

@@ -218,6 +218,18 @@ describe('pillar_up issues only inside the apex window (idkcraft-17b)', () => {
     assert.equal(bot._places, 1)
   })
 
+  it('stale place phase below the trigger: back to jump, never places', () => {
+    // Round-2 body-1: fell back (knockback, slow server) with nothing in
+    // flight — re-jump instead of placing from below.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    bot.entity.velocity = { x: 0, y: -0.2, z: 0 }
+    const ctx = pillarCtx({ phase: 'place', startFloor: 61 })
+    recover.run(bot, ctx)
+    assert.equal(bot._places, 0)
+    assert.equal(ctx.recovery.st.phase, 'jump')
+  })
+
   it('low rise (+0.3): keeps jumping, below the issue height', () => {
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
     bot.entity.position = pos(0.5, 61.3, 0.5)
