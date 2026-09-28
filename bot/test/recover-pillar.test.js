@@ -673,6 +673,25 @@ describe('pillar_up timeout hardening (idkcraft-cm0)', () => {
     assert.deepEqual(bot._targets, [[0, 61, 0]], 'targets the landing feet cell, not the mid-air arm cell')
   })
 
+  it('re-arm after a dead chain re-seeds the floor anchor (revmux-02)', async () => {
+    // The fire chain died without sampling the landing (stale startFloor
+    // above the body): the next jump-tick re-arm must anchor to the
+    // landed floor, or the rise issues one cell too high, into the body.
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61, 0.5) // landed; chain never sampled it
+    bot.entity.velocity = { x: 0, y: 0, z: 0 }
+    const ctx = pillarCtx({ phase: 'jump', startFloor: 62, lowY: 62.05, timerArmed: false, jumpAt: null, armedAt: null, waited: 0 })
+    recover.run(bot, ctx)
+    await flush()
+    assert.equal(ctx.recovery.st.startFloor, 61, 're-arm anchors to the landed floor')
+    bot.entity.position = pos(0.5, 61.9, 0.5)
+    bot.entity.velocity = { x: 0, y: 0.25, z: 0 }
+    await sleep(250)
+    await flush()
+    assert.equal(bot._places, 1)
+    assert.deepEqual(bot._targets, [[0, 61, 0]])
+  })
+
   it('ground arm issues from +0.6 rise (boundary pin)', async () => {
     const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
     bot.entity.position = pos(0.5, 61, 0.5)

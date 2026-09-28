@@ -1364,6 +1364,21 @@ describe('flat verified stands + protection (idkcraft-cm0)', () => {
     assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
   })
 
+  it('stray drop in the cap cell does not block placement', async () => {
+    // Revmux-02: drops, orbs and projectiles never collide — only mobs wait.
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.entities = {
+      9: { id: 9, name: 'item', type: 'other', position: pos(1.5, 63, 0.5) },
+      10: { id: 10, name: 'arrow', type: 'projectile', position: pos(1.5, 63, 0.5) },
+    }
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null)
+    assert.equal(bot.calls.places.length, 1, 'places into a cell holding only drops')
+    assert.ok(bot.chats.some((c) => c.includes('filled 1 hole')), bot.chats.join('\n'))
+  })
+
   it('far stand places via the visible pit-wall face, not the occluded floor', async () => {
     // Revmux-01 finding 0: below-first returns the pit floor, whose top
     // face a 2-3-block stand cannot see (the click ray clips the near

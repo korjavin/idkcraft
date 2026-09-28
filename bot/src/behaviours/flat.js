@@ -452,13 +452,17 @@ function cellOccupiedByPlayer(bot, x, y, z) {
 
 // A mob in the cap cell reads as a revert with the same message as spawn
 // protection (revmux-01): wait it out like a player instead of attempting
-// into it and mislabelling the hole protected after one try.
+// into it and mislabelling the hole protected after one try. Only entities
+// that can collide count (revmux-02): drops, orbs and projectiles never
+// block a placement, so a hole holding a stray drop still places.
+const NONBLOCKERS = new Set(['item', 'item_stack', 'experience_orb'])
 function cellOccupiedByMob(bot, x, y, z) {
   try {
     for (const e of Object.values((bot && bot.entities) || {})) {
       if (!e || !e.position) continue
-      if (e.type === 'player') continue
+      if (e.type === 'player' || e.type === 'projectile') continue
       if (bot.entity && e === bot.entity) continue
+      if (NONBLOCKERS.has((e.name || '').toLowerCase())) continue
       if (covers(e, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
@@ -757,15 +761,16 @@ function bumpDoneOrPhantom(bot, f, h) {
   if (h && (h.dugN || 0) > 0 && h.denseBefore != null) {
     let denseNow = h.denseBefore + 1
     try { denseNow = countItems(bot, () => true) } catch (_) { /* unreadable: done */ }
-    let gotN = 0
-    try { gotN = gotCount(bot) - (h.gotBefore || 0) } catch (_) { gotN = 0 }
     // Gross vacuumed drops prove real digs (ghosts drop nothing), so a
-    // flat NET delta is bridge spending, not protection (cm0) — but only
-    // when a drop was actually seen near this column (revmux-01): a stray
-    // vacuumed out of sight must not launder a ghost column into done.
-    // (A visible stray vacuumed during a ghost column still masks; rare,
-    // bounded to one column, and the only signal left is the delta.)
-    if (gotN > 0 && h.sawDrop) {
+    // flat NET delta is bridge spending, not protection (cm0). Attribution
+    // is by pickup window (revmux-02): only vacuums after this column's
+    // dig resolved count — a fast vacuum before the next 1 Hz tick still
+    // credits (no entity sampling involved), while a stray vacuumed on an
+    // earlier walk does not. (A stray vacuumed inside our own window
+    // still masks; rare and bounded to one column.)
+    let gotN = 0
+    try { gotN = gotCount(bot) - (h.gotAtPickup != null ? h.gotAtPickup : (h.gotBefore || 0)) } catch (_) { gotN = 0 }
+    if (gotN > 0) {
       shiftBumpDone(f)
       return
     }
@@ -988,6 +993,7 @@ function digFlight(bot, ctx, f, h, block) {
       await bot.dig(block)
       h.pickup = at // walk the drop into the inventory (gather pattern)
       h.retarget = null
+      if (h.gotAtPickup == null) h.gotAtPickup = gotCount(bot) // first resolve opens the window (revmux-02)
       f.lastProgressTick = f.ticks
     } catch (e) {
       h.att++
@@ -1543,7 +1549,7 @@ function shaveTick(bot, ctx, f, bp) {
     let tgt = h.pickup
     let dropId = null
     const drop = nearestDrop(bot, h.pickup.x, h.pickup.y, h.pickup.z, DROP_SCAN_R)
-    if (drop) { tgt = drop.position; dropId = drop.id; h.sawDrop = true }
+    if (drop) { tgt = drop.position; dropId = drop.id }
     // A drop 2+ above the feet needs a tower to reach — more scaffold than
     // the drop is worth. Skip the walk: the drop rides the column down as
     // the dig descends and gets vacuumed at the bottom (core-3).

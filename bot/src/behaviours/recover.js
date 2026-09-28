@@ -681,10 +681,17 @@ function pillarUpRun(bot, ctx) {
       st.timerArmed = true
       st.jumpAt = Date.now()
       st.armedAt = st.jumpAt
+      // The floor anchor re-seeds with a RE-arm only (revmux-02): after a
+      // dead chain the body may have landed somewhere the chain never
+      // sampled, and the issue targets fy=startFloor. The first arm keeps
+      // the arm height (the timer's descend rule corrects it on landing):
+      // anchoring mid-air would hold the liftoff clock in slide forever.
+      const rearm = typeof st.lowY === 'number'
       st.lowY = bp.y // post-arm low, seeded at arm (cm0): the fire issues on
       // rise-since-arm, so an inherited mid-air flight must land and re-rise
       // first. Seeding on the first fire sample instead would miss fast
       // first-rises (the +150 ms fire sees +1.00 already).
+      if (rearm) st.startFloor = Math.floor(bp.y)
       try {
         const t = setTimeout(() => firePillarTimer(bot, ctx, st), PILLAR_ISSUE_MS)
         if (t && typeof t.unref === 'function') t.unref()
