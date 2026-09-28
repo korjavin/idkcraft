@@ -8,6 +8,11 @@
 //   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],
 //     "secs":75,"scaffold":0,"pickaxe":true}]
 // secs/scaffold/pickaxe are optional (defaults 75 / 64 dirt / stone pickaxe).
+// bucket:true adds 2 water buckets (jsf.2 water_up needs a pair: high pour +
+// ledge pour, both back after the strip). REPLAY_OP=1 pre-ops both bots
+// before login (deterministic offline UUIDs, like water-assay.js ASSAY_OP):
+// spots inside spawn protection (CLUSTER, r=16) refuse un-opped pours, so
+// water_up spots run opped — mirroring a prod bot with op.
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -93,7 +98,8 @@ function loadSpots() {
     const scaffold = s.scaffold == null ? 64 : Number(s.scaffold)
     if (!Number.isFinite(scaffold) || scaffold < 0 || scaffold > 2304) throw new Error(`spots[${i}]: bad scaffold`)
     const pickaxe = s.pickaxe == null ? true : !!s.pickaxe
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe }
+    const bucket = s.bucket == null ? false : !!s.bucket
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket }
   })
 }
 
@@ -143,6 +149,12 @@ async function main() {
   // declare nothing, so counting them would equate a latched fix with a loop.
   recover.setStuck = (...args) => { const r = origSetStuck(...args); if (r) stuckEps.push(args[1]); return r }
 
+  // Pre-login op (jsf.2): offline UUIDs derive from the name, and a
+  // mid-session op does not lift spawn protection for the live session.
+  if (process.env.REPLAY_OP === '1') {
+    await rcon(`op ${GUIDE}`)
+    await rcon(`op ${FOLLOWER}`)
+  }
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn')
   // Chunks in, plus past Paper's 4000 ms connection throttle (bukkit.yml):
@@ -209,9 +221,12 @@ async function main() {
   console.log('spot      reached  stuck  eps  call?  secs   maxDisp  note')
   const rows = []
   let guideDied = false
+  let prevBucket = false
   guide.on('death', () => { guideDied = true })
   for (const s of spots) {
     guideDied = false
+    const wipeFlood = prevBucket
+    prevBucket = !!s.bucket
     if (tickCtx()) tickCtx().paused = true
     // Hard-stop BEFORE the guide tp: paused takes effect on the next tick
     // (<=1 s), but the guide tp re-plans the live GoalFollow instantly from
@@ -233,10 +248,23 @@ async function main() {
     let gy = Math.max(s.spawn[1], s.goal[1]) + 1
     await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
+    // A bucket spot's flood (failed strip, trial-budget cut mid-climb)
+    // persists in the shared world and griefs the next trial's scans: wipe
+    // water around the spawn when the previous spot poured (both bots are
+    // here now, so the chunks are loaded). Dig holes stay (harness-standard:
+    // terrain progress persists across spots).
+    if (wipeFlood) {
+      const [sx, sy, sz] = s.spawn.map(Math.floor)
+      await rcon(`fill ${sx - 12} ${sy - 6} ${sz - 12} ${sx + 12} ${sy + 12} ${sz + 12} air replace water`)
+    }
     // Fresh kit per spot (repeatability: drops picked up mid-run reset).
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
     if (s.pickaxe) await rcon(`give ${FOLLOWER} stone_pickaxe 1`)
+    if (s.bucket) {
+      await rcon(`give ${FOLLOWER} water_bucket 1`)
+      await rcon(`give ${FOLLOWER} water_bucket 1`)
+    }
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
     for (const who of [GUIDE, FOLLOWER]) {
