@@ -163,7 +163,10 @@ function snapshot(bot, ctx, now) {
         if (!p) continue
         const at = num(s.at)
         if (at === null || t - at > danger.TTL_MS) continue
-        spots.push({ x: p.x, y: p.y, z: p.z, at })
+        const spot = { x: p.x, y: p.y, z: p.z, at }
+        const r = num(s.r) // 9kd: wide water-death discs survive restart; default marks stay shapeless
+        if (r !== null && r > 0 && r !== danger.AVOID_RADIUS) spot.r = r
+        spots.push(spot)
       }
       spots = spots.slice(-danger.MAX_SPOTS)
     }
@@ -355,7 +358,10 @@ function restore(bot, ctx, file, now) {
         if (!p) continue
         const at = num(s.at)
         if (at === null || t - at > danger.TTL_MS) continue
-        spots.push({ x: p.x, y: p.y, z: p.z, at })
+        const spot = { x: p.x, y: p.y, z: p.z, at }
+        const r = num(s.r) // 9kd: pre-fix files simply lack r and read as default
+        if (r !== null && r > 0 && r !== danger.AVOID_RADIUS) spot.r = r
+        spots.push(spot)
       }
       if (spots.length) {
         ctx.danger = { spots: spots.slice(-danger.MAX_SPOTS) }

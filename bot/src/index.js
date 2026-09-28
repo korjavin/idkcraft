@@ -14,6 +14,8 @@ const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
+const dangerMod = require('./danger')
+const exploreMod = require('./behaviours/explore')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -2452,6 +2454,15 @@ function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
+  // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
+  // search rings never walk the same monument cell twice in a day. The
+  // killer leg drops with it (revmux 01+02): target cleared AND its chunk
+  // consumed — a bare clear re-picks the same target past the disc and the
+  // stale GoalXZ re-paths the same swim.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
+  } catch (_) { /* memory best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {
