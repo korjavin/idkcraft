@@ -277,6 +277,9 @@ describe('recover digs equip the pickaxe (idkcraft-17b revmux 01 body-1)', () =>
     assert.deepEqual(bot._equips, [[pick.name, 'hand']])
     assert.deepEqual(digs, [[0, 62, 0]])
     recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dug open but the body never moved (9sq F2)')
+    bot.entity.position = pos(0.5, 62, 0.5)
+    recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
   })
 

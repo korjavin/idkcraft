@@ -175,7 +175,12 @@ describe('pillar serial placement (yvi)', () => {
 
 describe('recover invalid label (acceptance 2)', () => {
   it('infeasible pillar_up falls back to FSM dig_up with disagree + stub-fallback', async () => {
-    const bot = worldBot(pitWorld(), [{ name: 'iron_pickaxe', count: 1 }])
+    // 9sq F1 gates dig_up on blocked headroom: bury the head so dig_up stays
+    // the FSM answer (the pin is the invalid-label fallback, not the menu).
+    const solids = pitWorld()
+    solids.add(key(0, 62, 0))
+    solids.add(key(0, 63, 0))
+    const bot = worldBot(solids, [{ name: 'iron_pickaxe', count: 1 }])
     const brain = { source: 'testmodel', ask: async () => 'pillar_up' } // scaffold=0: not on the menu
     const ctx = { stuck: { by: 'follow', goal: { x: 0, y: 64, z: 0 } }, brain }
     const errLines = []
@@ -469,6 +474,9 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
   function levelWorld() {
     // Floor + one dirt wall with a stone cap: walls=1, but no dig_step
     // (the cap never digs by hand), so the menu is the 4jr case exactly.
+    // Headroom stays FREE on purpose (revmux-01 body-1): a head block would
+    // exclude pillar_up by itself and mask the failed-action rules below.
+    // The dig_up fallback lives in its own buried-head test instead.
     const solids = new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)])
     return { solids, cap: key(1, 62, 0) }
   }
@@ -504,6 +512,8 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
   })
 
   it('after pillar_up failed:place-error the next ask lacks pillar_up', async () => {
+    // Head free: pillar_up stays feasible, so only the 4jr ask-exclusion
+    // removes it (revmux-01 body-1). dig_up is out (9sq F1: free headroom).
     const bot = levelBot(levelWorld().cap)
     bot.entity.position = pos(0.5, 61, 0.5)
     bot.players = {}
@@ -520,7 +530,7 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
     const r = await recover.decide(bot, ctx, null, null)
     assert.ok(seen.length === 1, 'asked once')
     assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
-    assert.equal(r.action, 'dig_up', `falls to the next climb prim, got ${r.action}`)
+    assert.equal(r.action, 'sidestep', `falls past the failed prim, got ${r.action}`)
   })
   it('a stubborn model repeating the failed prim is overruled to the FSM pick', async () => {
     // 4jr prod case: laya answered pillar_up after pillar_up:failed. The
@@ -538,7 +548,40 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
       },
     }
     const r = await recover.decide(bot, ctx, null, null)
-    assert.equal(r.action, 'dig_up', `escalated past the repeat, got ${r.action}`)
+    assert.equal(r.action, 'sidestep', `escalated past the repeat, got ${r.action}`)
+    assert.equal(r.source, 'stub-fallback')
+  })
+
+  it('a stubborn repeat is overruled to dig_up when headroom is blocked', async () => {
+    // Buried-head companion (revmux-01 body-1): with solid headroom, dig_up
+    // is legitimately offered (9sq F1) and stays the FSM fallback for a
+    // high goal when the model repeats the failed prim.
+    const w = levelWorld()
+    w.solids.add(key(0, 62, 0))
+    const bot = worldBot(w.solids, kit)
+    const raw = bot.blockAt.bind(bot)
+    bot.blockAt = (p) => {
+      const b = raw(p)
+      if (b && key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) === w.cap) {
+        return { ...b, name: 'stone' }
+      }
+      return b
+    }
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    const seen = []
+    const ctx = {
+      stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' },
+      brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return 'pillar_up' } },
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'failed:place-error',
+        st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+        calledPlayer: false, endEpisode: false, lastDy: null,
+      },
+    }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.ok(seen[0].includes('dig_up'), `buried head offers dig_up, menu: ${seen[0]}`)
+    assert.equal(r.action, 'dig_up', `escalated to the climb prim, got ${r.action}`)
     assert.equal(r.source, 'stub-fallback')
   })
 })
@@ -611,21 +654,25 @@ describe('recover no-exit episode (acceptance 3)', () => {
 describe('recover feasibility veto', () => {
   const F = (over) => ({
     scaffold: 0, pickaxe: false, headBlocked: false, walls: 0, lavaNear: false,
-    playerOnline: false, goalDy: 0, ...over,
+    playerOnline: false, goalDy: 0, throughBlocked: false, ...over,
   })
   const C = (over) => ({ recovery: null, ...over })
   it('lava vetoes both dig primitives, head blocks pillar, walls box sidestep', () => {
     assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true, lavaNear: true })), false)
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, lavaNear: true })), false)
-    assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true })), true)
+    assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true, throughBlocked: true })), true)
+    assert.equal(recover.RECOVER_MENU.dig_through.feasible(F({ pickaxe: true, throughBlocked: false })), false, '9sq F1: no tunnel with nothing toward the goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, headBlocked: true })), false)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3 })), true)
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 0 })), false, '4jr: no pillar to a level goal')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar apex in water')
     assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3, water: true })), false, '5vv: no pillar repeat in water')
     assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(F({ scaffold: 3, goalDy: 3 })), true)
-    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2 })), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2, headBlocked: true })), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 2, headBlocked: false })), false, '9sq F1: no dig-up into free headroom')
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(F({ pickaxe: true, goalDy: 0 })), false, '4jr: no dig-up to a level goal')
+    assert.equal(recover.RECOVER_MENU.dig_up.repeatable(F({ pickaxe: true, goalDy: 2, headBlocked: true })), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.repeatable(F({ pickaxe: true, goalDy: 2, headBlocked: false })), false, '9sq F1: no chain onto free headroom')
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(F({})), false) // no scaffold
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 4 })), false)
     assert.equal(recover.RECOVER_MENU.sidestep.feasible(F({ walls: 3 })), true)
@@ -1746,11 +1793,52 @@ describe('recover dig_up run body (idkcraft-rcv)', () => {
     recovery: { action: 'dig_up', status: 'running', st: null, ...over },
   })
 
-  it('done when the headroom is already air', () => {
+  it('clear headroom with a frozen body runs out the verify budget, then fails', () => {
+    // 9sq F2: air above is the precondition, not the escape — the EP1 loop
+    // was dig_up reporting done here with zero displacement. Deleting the
+    // displaced() gate fails this test (done on the first tick).
     const bot = worldBot(pitWorld(), pick())
     const ctx = rec()
     recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'clear but still: verify, never instant-done')
+    for (let i = 0; i < recover.DISPLACE_TIMEOUT_TICKS + 2; i++) recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-progress')
+  })
+
+  it('clear headroom with sideways drift reports done', () => {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    const bot = worldBot(solids, pick())
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(1.2, 61, 0.5) // 0.7 sideways: the wedge released
+    recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
+  })
+
+  it('clear headroom with a grounded climb reports done, airborne does not', () => {
+    const bot = worldBot(pitWorld(), pick())
+    const ctx = rec()
+    recover.run(bot, ctx)
+    bot.entity.position = pos(0.5, 62, 0.5)
+    bot.entity.onGround = false
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'apex sample is not an escape')
+    bot.entity.onGround = true
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done', 'grounded rise is')
+  })
+
+  it('failed:no-pos without a position', () => {
+    const bot = worldBot(pitWorld(), pick())
+    bot.entity = null
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-pos')
   })
 
   it('failed:no-pickaxe without a pickaxe', () => {
@@ -1790,6 +1878,9 @@ describe('recover dig_up run body (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.status, 'running', 'head2 still solid')
     await flush()
     recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dug open but the body never moved (9sq F2)')
+    bot.entity.position = pos(0.5, 62, 0.5) // the climb the dug headroom earns
+    recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
     assert.deepEqual(dug, [key(0, 62, 0), key(0, 63, 0)], 'head1 first, then head2')
   })
@@ -1805,6 +1896,9 @@ describe('recover dig_up run body (idkcraft-rcv)', () => {
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
     await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dug open but the body never moved (9sq F2)')
+    bot.entity.position = pos(0.5, 62, 0.5)
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
     assert.deepEqual(dug, [key(0, 63, 0)])
@@ -1907,9 +2001,23 @@ describe('recover dig_through run body (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.status, 'failed:lava')
   })
 
-  it('done when the tunnel is already open', () => {
+  it('open tunnel with a frozen body runs out the verify budget, then fails', () => {
+    // 9sq F2: the EP1 loop was dig_through reporting done here with zero
+    // displacement. Deleting the displaced() gate fails this test.
     const bot = worldBot(flatWorld(), pick())
     const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'open but still: verify, never instant-done')
+    for (let i = 0; i < recover.DISPLACE_TIMEOUT_TICKS + 2; i++) recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-progress')
+  })
+
+  it('open tunnel with goalward drift reports done', () => {
+    const bot = worldBot(flatWorld(), pick())
+    const ctx = rec({ x: 5, y: 61, z: 0 })
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(1.2, 61, 0.5) // 0.7 toward the goal: walking the tunnel
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
   })
@@ -1930,6 +2038,9 @@ describe('recover dig_through run body (idkcraft-rcv)', () => {
     assert.equal(ctx.recovery.status, 'running', 'head still solid')
     await flush()
     recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dug open but the body never moved (9sq F2)')
+    bot.entity.position = pos(1.2, 61, 0.5)
+    recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
     assert.deepEqual(dug, [key(1, 61, 0), key(1, 62, 0)], 'feet cell first, then head')
   })
@@ -1945,6 +2056,9 @@ describe('recover dig_through run body (idkcraft-rcv)', () => {
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'running')
     await flush()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'dug open but the body never moved (9sq F2)')
+    bot.entity.position = pos(0.5, 61, 1.2)
     recover.run(bot, ctx)
     assert.equal(ctx.recovery.status, 'done')
     assert.deepEqual(dug, [key(0, 61, 1)])
@@ -2325,5 +2439,126 @@ describe('quiet repeat stuck-chats (rw4.9.1)', () => {
     danger.mark(ctx, { x: 100, y: 64, z: 100 })
     await recover.decide(bot, ctx, {}, null)
     assert.equal(stuckLines(bot).length, 1, bot.chats.join(' | '))
+  })
+})
+
+describe('recover wait verifies displacement (9sq F2)', () => {
+  const rec = (over) => ({
+    stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+    recovery: { action: 'wait', status: 'running', st: null, ...over },
+  })
+  function flatWorld() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    return solids
+  }
+  it('a frozen full wait fails, burning budget toward call_player', () => {
+    // 9sq F2: wait used to end the episode done after WAIT_TICKS with zero
+    // displacement — the loop then re-fired the same situation. Deleting the
+    // failed verdict fails this test.
+    const bot = worldBot(flatWorld(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = rec()
+    for (let i = 0; i < recover.WAIT_TICKS - 1; i++) {
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'running')
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-progress')
+  })
+  it('displacement mid-wait reports done at once', () => {
+    const bot = worldBot(flatWorld(), [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    const ctx = rec()
+    recover.run(bot, ctx)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running')
+    bot.entity.position = pos(2.5, 61, 0.5) // teleported out mid-wait
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'done')
+  })
+  it('failed:no-pos without a position', () => {
+    const bot = worldBot(flatWorld(), [])
+    bot.entity = null
+    const ctx = rec()
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-pos')
+  })
+})
+
+describe('recover throughBlocked reads the goalward 1x2 (9sq F1, revmux-01 core-1)', () => {
+  // The F1 gate's own logic: direction from the stuck goal, axis-dominant
+  // step, feet-or-head solidity, no target fallback. The feasibility veto
+  // tests stub the fact; these build it from a world.
+  function flatWorld() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) {
+      for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    }
+    return solids
+  }
+  const factsFor = (solids, goal, target = null) => {
+    const bot = worldBot(solids, [])
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.players = {}
+    return recover.recoverFacts(bot, { stuck: { by: 'test', goal } }, {}, target)
+  }
+  it('open toward an x-goal reads false; a solid feet cell reads true', () => {
+    const goal = { x: 5, y: 61, z: 0 }
+    assert.equal(factsFor(flatWorld(), goal).throughBlocked, false)
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    assert.equal(factsFor(solids, goal).throughBlocked, true)
+  })
+  it('a solid head cell alone reads true', () => {
+    const solids = flatWorld()
+    solids.add(key(1, 62, 0))
+    assert.equal(factsFor(solids, { x: 5, y: 61, z: 0 }).throughBlocked, true)
+  })
+  it('z-dominant goals step along z; the x side is ignored', () => {
+    const goal = { x: 0.5, y: 61, z: 5 }
+    assert.equal(factsFor(flatWorld(), goal).throughBlocked, false)
+    const zWall = flatWorld()
+    zWall.add(key(0, 61, 1))
+    assert.equal(factsFor(zWall, goal).throughBlocked, true)
+    const xWall = flatWorld()
+    xWall.add(key(1, 61, 0))
+    assert.equal(factsFor(xWall, goal).throughBlocked, false, 'off-axis solid is not toward the goal')
+  })
+  it('a goal straight above has no direction, even with solid sides', () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    assert.equal(factsFor(solids, { x: 0.5, y: 64, z: 0.5 }).throughBlocked, false)
+  })
+  it('no stuck goal never falls back to the follow target', () => {
+    const solids = flatWorld()
+    solids.add(key(1, 61, 0))
+    const target = { position: pos(5, 61, 0) }
+    assert.equal(factsFor(solids, null, target).throughBlocked, false, 'run body has no target fallback either')
+  })
+  it('decide asks dig_through only when the goalward 1x2 is solid', async () => {
+    const pick = [{ name: 'iron_pickaxe', count: 1 }]
+    async function askedMenu(solids) {
+      const bot = worldBot(solids, pick)
+      bot.entity.position = pos(0.5, 61, 0.5)
+      bot.players = {}
+      const seen = []
+      const ctx = {
+        stuck: { by: 'follow', goal: { x: 5, y: 61, z: 0 }, key: 'follow:P' },
+        brain: { source: 'stub', ask: async (q) => { seen.push(Object.keys(q.criteria)); return seen[0][0] } },
+      }
+      const r = await recover.decide(bot, ctx, null, null)
+      return { seen: seen[0], action: r.action }
+    }
+    const open = await askedMenu(flatWorld())
+    assert.ok(!open.seen.includes('dig_through'), `open menu: ${open.seen}`)
+    assert.equal(open.action, 'sidestep')
+    const headed = flatWorld()
+    headed.add(key(1, 62, 0)) // head cell: blocks the tunnel, keeps hop_step out
+    const shut = await askedMenu(headed)
+    assert.ok(shut.seen.includes('dig_through'), `shut menu: ${shut.seen}`)
+    assert.equal(shut.action, 'sidestep')
   })
 })
