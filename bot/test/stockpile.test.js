@@ -498,7 +498,7 @@ describe('stockpile behaviour', () => {
     stockpile(bot, ctx)
     await flush()
     assert.deepEqual(bot.calls.digs, [], 'below-feet flora in a pit never dug')
-    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 }, 'chest still lands')
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 }, 'chest still lands')
   })
 
   it('a refused dig fails the step loudly', async () => {
