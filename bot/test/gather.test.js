@@ -47,8 +47,8 @@ function mockBot({ registry = LOGREG, spots = [], names = {}, items = [] } = {})
       })
     },
     blockAt(p) {
-      const n = names[`${p.x},${p.y},${p.z}`]
-      return n ? { name: n } : null
+      const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+      return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
     },
     canDigBlock: () => true,
     dig: async () => { bot.digCalls++ },
@@ -73,6 +73,44 @@ describe('gather step', () => {
     gather(bot, ctx, null, {})
     assert.match(ctx.lastGoalKey, /^gather:12,64,0$/)
     assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('drq a trap denial stays in skip, not the sticky set (stance may change)', () => {
+    const bot = mockBot({
+      spots: [pos(1, 63, 0)],
+      names: { '1,63,0': 'oak_log', '1,64,0': 'dirt', '-1,64,0': 'dirt', '0,64,1': 'dirt' },
+    })
+    const ctx = freshCtx()
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(String(l))
+    try {
+      for (let i = 0; i < 6 && !(ctx.gather && ctx.gather.skip && ctx.gather.skip.size > 0); i++) {
+        gather(bot, ctx, null, {})
+      }
+    } finally { console.log = orig }
+    assert.ok(lines.some((l) => l.startsWith('selftrap:')), 'denied by the trap rule')
+    assert.ok(ctx.gather.skip.has('1,63,0'), 'trap target skipped')
+    assert.ok(!ctx.gather.gskip || !ctx.gather.gskip.has('1,63,0'), 'stance denial not sticky')
+  })
+
+  it('drq a denied owner log is not re-walked after the next chopped log', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(8, 64, 0)],
+      names: { '2,64,0': 'oak_log', '8,64,0': 'oak_log', '8,65,0': 'oak_log', '9,65,0': 'oak_leaves' },
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 6 && !(ctx.gather && ctx.gather.gskip && ctx.gather.gskip.has('2,64,0')); i++) {
+      gather(bot, ctx, null, {})
+    }
+    assert.ok(ctx.gather.gskip.has('2,64,0'), 'owner log denied')
+    // A tree log landed elsewhere: the drop-landed clear wipes skip, the
+    // next find must still not re-pick the denied owner log.
+    ctx.gather.skip.clear()
+    ctx.gather.pos = null
+    bot._items = [{ name: 'oak_log', count: 1 }]
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:8,64,0$/, 'guard denial survives the clear')
   })
 
   it('(mnx) remembered logs within a gave-up spot are skipped', () => {
@@ -120,7 +158,7 @@ describe('gather step', () => {
     let release = null
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     bot.dig = () => new Promise((resolve) => { release = resolve; bot.digCalls++ })
     const ctx = freshCtx()
@@ -140,7 +178,7 @@ describe('gather step', () => {
   it('(c) after the dig walks onto the drop with GoalBlock', async () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     const ctx = freshCtx()
     gather(bot, ctx, null, {})
@@ -363,7 +401,7 @@ describe('gather step', () => {
   it('progress timer spans the whole step, not each target', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
       items: [{ name: 'oak_log', count: 1 }],
     })
     const ctx = freshCtx()
@@ -534,7 +572,7 @@ describe('gather step', () => {
     const { createTicker } = require('../src/index')
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     const ticker = createTicker({
       bot,
@@ -576,7 +614,7 @@ describe('stuck-detector blind spots (idkcraft-68p)', () => {
   it('chopping line repeats only when the count grows', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
       items: [{ name: 'oak_log', count: 1 }],
     })
     const ctx = freshCtx()

@@ -49,12 +49,7 @@ const REPROBE_RADIUS = 32
 // floats) stamps a park so far legs don't each cost a walk home to
 // rediscover it; a freed spot retries within the hour (revmux 03-review).
 const NO_SPOT_RETRY_MS = 60 * 60 * 1000
-const CLEAR_FLORA = new Set([
-  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush',
-  'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
-  'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
-  'white_tulip', 'pink_tulip',
-])
+const { canBreak, CLEAR_FLORA } = require('./util')
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -319,6 +314,37 @@ async function withdrawFromChest(bot, ctx, name, count) {
     return { got: res && res.status === 'ok' ? res.value : 0 }
   } catch (_) {
     return { got: 0 }
+  }
+}
+
+// Withdraw up to count across several names in one window (did.1: a whole
+// item family without one open per name). { got, name } — name is the first
+// withdrawn concrete name, null when nothing came out.
+async function withdrawAnyFromChest(bot, ctx, names, count) {
+  const want = new Set(Array.isArray(names) ? names : [])
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+      let need = count
+      let got = 0
+      let first = null
+      if (Array.isArray(stacks)) {
+        for (const s of stacks) {
+          if (need <= 0) break
+          if (!s || typeof s.name !== 'string' || !want.has(s.name)) continue
+          const take = Math.min(typeof s.count === 'number' ? s.count : 1, need)
+          if (take <= 0) continue
+          await window.withdraw(s.type, s.metadata, take)
+          if (first === null) first = s.name
+          need -= take
+          got += take
+        }
+      }
+      return { got, name: first }
+    })
+    return res && res.status === 'ok' ? res.value : { got: 0, name: null }
+  } catch (_) {
+    return { got: 0, name: null }
   }
 }
 
@@ -647,7 +673,8 @@ function placeChest(bot, ctx, spot, bp) {
       try {
         const cell = bot.blockAt(new Vec3(spot.x, spot.y, spot.z))
         if (cell && cell.name && cell.name !== 'air' && cell.name !== 'chest' &&
-          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function') {
+          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function' &&
+          canBreak(bot, cell, ctx)) {
           await bot.dig(cell)
         }
       } catch (_) {
@@ -685,6 +712,7 @@ module.exports.depositPlan = depositPlan
 module.exports.surplusCount = surplusCount
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
+module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.FOOD_KEEP = FOOD_KEEP

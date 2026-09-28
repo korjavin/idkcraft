@@ -195,7 +195,7 @@ function isExposed(bot, p) {
 // Ranking: exposed ore first (lead the player somewhere walkable, not into
 // solid rock), then closest in height to refY (the requesting player's Y;
 // the bot's own when unknown), then nearest by straight distance.
-function findNearestBlock(bot, blockName, refY = null) {
+function findNearestBlock(bot, blockName, refY = null, exclude = null) {
   const ids = resolveFindIds(bot, blockName)
   if (ids.length === 0) return 'unknown'
   const from = bot.entity && bot.entity.position
@@ -207,10 +207,12 @@ function findNearestBlock(bot, blockName, refY = null) {
     return null
   }
   const tookMs = performance.now() - t0
-  const found = from
+  let found = from
     ? (scanned || []).filter((q) => dist(q, from) <= SEARCH_FIRST)
     : (scanned || [])
-  console.log(`search ${blockName} r=${SEARCH_FIRST} took=${tookMs.toFixed(1)}ms found=${found.length}`)
+  const raw = found.length
+  if (typeof exclude === 'function') found = found.filter((q) => !exclude(q))
+  console.log(`search ${blockName} r=${SEARCH_FIRST} took=${tookMs.toFixed(1)}ms found=${found.length}${found.length !== raw ? ` (excluded ${raw - found.length})` : ''}`)
   try { metrics.searchDuration.observe({ radius: String(SEARCH_FIRST) }, tookMs / 1000) } catch { /* metrics never break search */ }
   if (found.length === 0) return null
   return rankHits(bot, found, refY)
@@ -421,8 +423,8 @@ function wrapResult(bot, blockName, p) {
   return { name, position: p, distance, exposed }
 }
 
-function findNearest(bot, blockName, refY = null) {
-  const p = findNearestBlock(bot, blockName, refY)
+function findNearest(bot, blockName, refY = null, exclude = null) {
+  const p = findNearestBlock(bot, blockName, refY, exclude)
   if (p === 'unknown') return 'unknown'
   if (!p) return null
   return wrapResult(bot, blockName, p)

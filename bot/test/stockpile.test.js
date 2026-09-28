@@ -487,6 +487,20 @@ describe('stockpile behaviour', () => {
     assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
   })
 
+  it('drq skips a below-feet flora dig in a pit, places anyway (grass is replaceable)', async () => {
+    const bot = mockBot({
+      cells: { '5,64,1': 'short_grass', '6,65,1': 'dirt', '4,65,1': 'dirt', '5,65,2': 'dirt', '5,65,0': 'dirt' },
+      inv: [{ name: 'chest', count: 1 }],
+    })
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    bot.entity.position = pos(5, 65, 1) // 1 above the spot, walled: a pit
+    stockpile(bot, ctx)
+    await flush()
+    assert.deepEqual(bot.calls.digs, [], 'below-feet flora in a pit never dug')
+    assert.deepEqual(ctx.home.chest, { x: 5, y: 64, z: 1 }, 'chest still lands')
+  })
+
   it('a refused dig fails the step loudly', async () => {
     const bot = mockBot({ cells: { '5,64,1': 'poppy' }, inv: [{ name: 'chest', count: 1 }], failDig: true })
     bot.entity.position = pos(5, 64, 1)

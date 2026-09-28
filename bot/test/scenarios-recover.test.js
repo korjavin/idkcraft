@@ -334,6 +334,8 @@ describe('4jr: level goal never offers climb, failed prims are not repeated', ()
   // Floor + one dirt wall with a stone cap: walls=1, but no dig_step (the
   // cap never digs by hand) — the 4jr menu case exactly.
   function levelBot() {
+    // Headroom stays FREE (revmux-01 body-1): a head block would exclude
+    // pillar_up by itself and mask the failed-action rules under test.
     const bot = worldBot(new Set([key(0, 60, 0), key(1, 61, 0), key(1, 62, 0)]), kit)
     const raw = bot.blockAt.bind(bot)
     bot.blockAt = (p) => {
@@ -374,7 +376,7 @@ describe('4jr: level goal never offers climb, failed prims are not repeated', ()
     }
   })
 
-  it('stubborn pillar_up repeat after place-error is overruled to dig_up', async () => {
+  it('stubborn pillar_up repeat after place-error is overruled to sidestep', async () => {
     const bot = levelBot()
     const seen = []
     const brain = {
@@ -394,7 +396,7 @@ describe('4jr: level goal never offers climb, failed prims are not repeated', ()
       const r = await ticker.tick()
       assert.equal(seen.length, 1, 're-asked once')
       assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
-      assert.equal(r.decision.action, 'dig_up', `falls to the next climb prim, got ${r.decision.action}`)
+      assert.equal(r.decision.action, 'sidestep', `no climb prim offered with free headroom (9sq F1), got ${r.decision.action}`)
       assert.equal(r.decision.source, 'stub-fallback')
       assert.ok(cap.lines.some((l) => l.includes('brain disagree')), 'overrule logged')
     } finally {

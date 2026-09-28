@@ -36,7 +36,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const danger = require('../danger')
 const util = require('./util')
-const { say, clearGoal } = util
+const { say, clearGoal, denyReason, logDeny } = util
 
 const FLAT_DEFAULT_RADIUS = 8 // bare `flat` (owner 2026-09-27: 97x97 hid the bot for half an hour)
 const FLAT_MIN_RADIUS = 4
@@ -922,6 +922,13 @@ function digTick(bot, ctx, f, bp) {
         d.pos = null
         return
       }
+      const restockDeny = denyReason(bot, block, ctx) // idkcraft-drq: restock from terrain, not builds
+      if (restockDeny) {
+        logDeny(block, restockDeny)
+        d.skip.add(keyOf(d.pos.x, d.pos.y, d.pos.z))
+        d.pos = null
+        return
+      }
       ctx.digInFlight = true
       ;(async () => {
         try { await bot.dig(block) } catch (_) { /* gone or interrupted: recount anyway */ }
@@ -1394,6 +1401,12 @@ function shaveTick(bot, ctx, f, bp) {
   try { diggable = typeof bot.canDigBlock === 'function' ? bot.canDigBlock(block) : true } catch (_) { diggable = false }
   if (!diggable) {
     shiftBumpSkip(f, 'refused')
+    return
+  }
+  const shaveDeny = denyReason(bot, block, ctx) // idkcraft-drq: shave terrain, not houses
+  if (shaveDeny) {
+    logDeny(block, shaveDeny)
+    shiftBumpSkip(f, 'protected')
     return
   }
   digFlight(bot, ctx, f, h, block)

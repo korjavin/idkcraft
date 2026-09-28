@@ -188,7 +188,7 @@ see the full table and verdicts in the idkcraft-872.3 PR body.
 | `build here` | Starts a new house next to the speaker and works on it | Always a new site (flat 4x4 at radius 6), even over a built home; replies `building a home at <x> <y> <z>` (`I can't see you, come closer` when the speaker is out of range) |
 | `find me <block>` | Finds nearest block matching name within 48 blocks | Scans loaded chunks (exposed ore first, then level with you); replies with `leading you to <name>, <N> blocks, follow me`, `no <block> within 48 blocks`, or `unknown block: <block>`; deep targets warn instead of leading |
 | `lead anyway` | Walks to a warned-about deep target | Replays the held deep offer once, then forgets it (`no deep find on hold` when there is none) |
-| `bring me <block> [count]` | Fetches blocks alone, drops them at your feet | Sync 48 scan, then sliced 96/160 far search (24 legs / 5 min budget); ores and logs only |
+| `bring me <item> [count]` | Brings an item from pack or chest, or digs blocks, to your feet | Pack first (last tool stays), then home chest, then world: sync 48 scan plus sliced 96/160 far search (24 legs / 5 min budget); digging covers ores and logs only |
 | `bring me food [count]` | Brings food from inventory or hunts animals | Second+ kill of one animal reuses the spot; `only got <n> <name>` when short |
 | `autonomous on\|off` | Stays and works with nobody online (free brain only) | Chat toggle lasts until restart; permanent default is `BOT_AUTONOMOUS` |
 | `share` | Hands over everything carried except gear | Keeps tools, weapons, armour and the 32-block pillar reserve |
@@ -256,9 +256,10 @@ memory and `explore`/`gather` route around them afterwards.
 
 #### Bring orders
 
-`bring me <block> [count]` fetches alone and drops at your feet: sync
-48-block scan first, then sliced 96/160 far-search shells across ticks
-(budget 24 legs or 5 minutes). `bring me food` takes it from inventory or
+`bring me <item> [count]` looks in the pack first (the last tool stays),
+then the home chest, then the world: sync 48-block scan first, then sliced
+96/160 far-search shells across ticks (budget 24 legs or 5 minutes); digging
+covers ores and logs only. `bring me food` takes it from inventory or
 hunts passive animals. `share` hands over everything carried except tools,
 weapons, armour and the pillar reserve. Deep targets warn instead of
 leading (`<name> is <N> blocks down, dig carefully`); `lead anyway`
