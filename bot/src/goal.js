@@ -22,10 +22,19 @@ const BLUEPRINT = buildMod.BLUEPRINT
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 
-// House budget (epic rw4): 22 wall planks + 16 roof + door (6) + table (4);
-// gather 14 logs (12 worth + spare).
+// House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
+// loose-plank target for a NEW (v2) house — 92 walls+roof+partition, plus
+// the table (4) and door (6) the gather formula adds on top, like the v1
+// budget did (38 + 4 + 6 = 48). Loads stay 14 logs (the v1-proven batch):
+// a v2 house takes ~2 full loads. Adopted v1 houses keep their old budget
+// via needPlanks(home), so a small repair never triggers a v2-sized gather.
 const NEED_LOGS = 14
-const NEED_PLANKS = 48
+const NEED_PLANKS = 102
+const NEED_PLANKS_V1 = 48
+function needPlanks(home) {
+  if (home && home.site && home.v !== 2) return NEED_PLANKS_V1
+  return NEED_PLANKS
+}
 
 // Step menu: feasible(facts, bot, ctx) means the step can make progress NOW
 // (not just ever). Most steps read facts only; build also scans the home
@@ -90,10 +99,11 @@ const MENU = {
       let other = 0
       try {
         const skip = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
-        for (let i = 0; i < BLUEPRINT.length; i++) {
+        const plan = buildMod.blueprintFor(home)
+        for (let i = 0; i < plan.length; i++) {
           if (skip.has(i)) continue
-          if (!buildMod.cellDone(bot, home, BLUEPRINT[i])) {
-            if (BLUEPRINT[i].kind === 'planks') planks++
+          if (!buildMod.cellDone(bot, home, plan[i])) {
+            if (plan[i].kind === 'planks') planks++
             else other++
           }
         }
@@ -110,7 +120,7 @@ const MENU = {
       try {
         const next = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
         if (next < 0) return false
-        const kind = BLUEPRINT[next].kind
+        const kind = buildMod.blueprintFor(home)[next].kind
         if (kind === 'table' && !(facts.table > 0)) return false
         if (kind === 'door' && !(facts.door > 0)) return false
       } catch (_) {
@@ -160,7 +170,7 @@ const MENU = {
       } catch (_) { /* fall through to facts */ }
       if (facts.home === 'built') return false
       const total = facts.planks + facts.logs * 4
-      const need = NEED_PLANKS + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
+      const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS)
     },
     chat: () => 'on my own: gathering logs',
@@ -267,19 +277,33 @@ const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'light', 'gathe
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
 const AUTONOMOUS_EXPLORE_RADIUS = 256
 
-// Home site shape (bead .4): site is the SW-corner origin at ground level,
-// interior the 2x2x2 inside (4 cells), door the LOWER door cell, table the
-// workbench cell outside the east wall — null until the workbench is really
-// placed. rw4.3 treats ctx.home.table as a PLACED station (craft walks to it
-// and crafts the door at it), so claiming the coords early would deadlock
-// craft at an empty cell; build claims them the tick the table cell lands.
-function makeHome(ox, oy, oz) {
+// Home site shape (bead .4, two blueprints since jr2.1): site is the
+// SW-corner origin at ground level, interior the standable box inside,
+// door the LOWER door cell, table the workbench cell — null until the
+// workbench is really placed. rw4.3 treats ctx.home.table as a PLACED
+// station (craft walks to it and crafts the door at it), so claiming the
+// coords early would deadlock craft at an empty cell; build claims them
+// the tick the table cell lands. v marks the blueprint (1: 4x4 hut with
+// the table outside; 2: 7x6 house with the rooms inside); new sites are
+// always founded v2, v1 comes only from adopting an old house.
+function makeHome(ox, oy, oz, v) {
+  if (v === 1) {
+    return {
+      site: { x: ox, y: oy, z: oz },
+      interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 2, y: oy + 1, z: oz + 2 } },
+      door: { x: ox + 1, y: oy, z: oz },
+      table: null,
+      built: false,
+      v: 1,
+    }
+  }
   return {
     site: { x: ox, y: oy, z: oz },
-    interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 2, y: oy + 1, z: oz + 2 } },
-    door: { x: ox + 1, y: oy, z: oz },
+    interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 5, y: oy + 1, z: oz + 4 } },
+    door: { x: ox + 3, y: oy, z: oz },
     table: null,
     built: false,
+    v: 2,
   }
 }
 
@@ -301,9 +325,10 @@ function groundY(bot, x, z, topY) {
 // 8 candidate origins around `around` at radius 6 (bead .4).
 const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
 
-// Pick a flat 4x4 site: all 16 columns resolve and lie within one block.
-// First fit wins; after 8 rejections the first candidate is taken as-is —
-// ponytail: let the house hang or half-bury rather than block the epic.
+// Pick a flat 7x6 site (jr2.1 blueprint): all 42 columns resolve and lie
+// within one block. First fit wins; after 8 rejections the first candidate
+// is taken as-is — ponytail: let the house hang or half-bury rather than
+// block the epic.
 function siteFor(bot, around) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
   const cx = Math.floor(around.x)
@@ -314,26 +339,34 @@ function siteFor(bot, around) {
     const oz = cz + dz
     const ys = []
     let ok = true
-    for (let ix = 0; ix < 4 && ok; ix++) {
-      for (let iz = 0; iz < 4 && ok; iz++) {
+    for (let ix = 0; ix < 7 && ok; ix++) {
+      for (let iz = 0; iz < 6 && ok; iz++) {
         const gy = groundY(bot, ox + ix, oz + iz, cy + 8)
         if (gy == null) { ok = false; break }
         ys.push(gy)
       }
     }
-    if (!ok || ys.length !== 16) continue
+    if (!ok || ys.length !== 42) continue
     const y0 = Math.min(...ys)
-    if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz)
+    if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz, 2)
   }
   const [fx, fz] = SITE_DIRS[0]
   const fy = groundY(bot, cx + fx, cz + fz, cy + 8)
-  return makeHome(cx + fx, fy == null ? cy : fy, cz + fz)
+  return makeHome(cx + fx, fy == null ? cy : fy, cz + fz, 2)
 }
 
 // Adopt a house built by an earlier run: a door within 32 of spawn means
-// home. Origin = door − (1,0,0); findBlocks may return the UPPER half, so
-// step down when the block below is also a door. built is lax on purpose —
-// presence (non-air) counts; exact repair is the build step's job.
+// home; findBlocks may return the UPPER half, so step down when the block
+// below is also a door. Since jr2.1 the door fits two origins —
+// door − (3,0,0) for a v2 house, door − (1,0,0) for a v1 hut — told apart
+// by the corner columns: a v2 house stands 7 wide, so both front corners
+// (either wall level: a skipped ground cell still carries its upper ring)
+// plus one back corner read planks. A lone v1 hut reads air there. An
+// unreadable probe (dark neighbour chunk) aborts the adopt — the callers
+// wait for chunks and retry — instead of misreading the version: a v2
+// house read as v1 would aim the door phases at a wall. built is lax on
+// purpose — presence (non-air) counts; exact repair is the build step's
+// job.
 function adoptHome(bot) {
   try {
     const spawn = bot && bot.spawnPoint
@@ -351,18 +384,21 @@ function adoptHome(bot) {
       const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
       if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
     } catch (_) { /* keep as found */ }
-    const home = makeHome(dx - 1, dy, dz)
+    const v2 = isV2House(bot, dx, dy, dz)
+    if (v2 == null) return null // probe dark: wait for chunks, retry later
+    const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)
+    const plan = buildMod.blueprintFor(home)
     // Claim the table coords only when the workbench block is really there
     // (same placed-station contract as a fresh site).
     try {
-      const t = BLUEPRINT[0]
+      const t = plan[0]
       const tb = bot.blockAt(new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz))
       if (tb && tb.name === 'crafting_table') {
         home.table = new Vec3(home.site.x + t.dx, home.site.y + t.dy, home.site.z + t.dz)
       }
     } catch (_) { /* unverifiable: leave unclaimed */ }
     let allPresent = true
-    for (const cell of BLUEPRINT) {
+    for (const cell of plan) {
       let name = null
       try {
         const b = bot.blockAt(new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz))
@@ -375,6 +411,36 @@ function adoptHome(bot) {
     home.built = allPresent
     try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
     return home
+  } catch (_) {
+    return null
+  }
+}
+
+// True when planks stand at the v2 corner columns around the door at
+// (dx,dy,dz); false for a v1 hut; null when any probe cell is unreadable.
+function isV2House(bot, dx, dy, dz) {
+  try {
+    const ox = dx - 3
+    const oz = dz
+    const colPlanks = (cx, cz) => {
+      let lo = null
+      let hi = null
+      try {
+        lo = bot.blockAt(new Vec3(ox + cx, dy, oz + cz))
+        hi = bot.blockAt(new Vec3(ox + cx, dy + 1, oz + cz))
+      } catch (_) {
+        return null
+      }
+      if (!lo || !hi) return null
+      const planks = (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_planks')
+      return planks(lo) || planks(hi)
+    }
+    const frontW = colPlanks(0, 0)
+    const frontE = colPlanks(6, 0)
+    const backW = colPlanks(0, 5)
+    const backE = colPlanks(6, 5)
+    if (frontW == null || frontE == null || backW == null || backE == null) return null
+    return frontW && frontE && (backW || backE)
   } catch (_) {
     return null
   }
@@ -546,7 +612,7 @@ function goalText(facts) {
   const health = facts.health < 6 ? 'low' : 'ok'
   const food = facts.food < 6 ? 'hungry' : 'ok'
   // Inside hides by day (atl.13): it gates only the night steps (stay/gohome
-  // feasibility), but the binary in/out flip on the 2x2x2 boundary re-fires
+  // feasibility), but the binary in/out flip on the interior-box boundary re-fires
   // the decision point all day (prod: 50% of re-decisions are facts-changed,
   // forage<->rest every ~15-60s on inside alone). Feasibility still reads the
   // true facts.inside; only the decision text (and the model state, whose day
@@ -750,7 +816,7 @@ function stepWhy(name, facts, bot, ctx, text) {
         const home = ctx && ctx.home
         if (home && home.site) {
           const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
-          if (ni >= 0) kind = BLUEPRINT[ni].kind
+          if (ni >= 0) kind = buildMod.blueprintFor(home)[ni].kind
         }
       } catch (_) { kind = null }
       if ((kind === 'table' && facts.table === 0) || (kind === 'door' && facts.door === 0) ||
@@ -1015,4 +1081,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS }

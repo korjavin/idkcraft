@@ -1,19 +1,30 @@
 'use strict'
 
-// build: lay the epic rw4 house plank by plank (bead rw4.4).
+// build: lay the house plank by plank (bead rw4.4, two blueprints since jr2.1).
 //
-// The house is a 4x4 outer shell, walls 2 high, flat roof, interior 2x2,
-// door in the north wall, workbench OUTSIDE at the east wall:
+// v1 (BLUEPRINT, frozen): the 4x4 hut old prod houses were built from —
+// walls 2 high, flat roof, interior 2x2, door in the north wall at
+// (1,0,0), workbench OUTSIDE at the east wall (4,0,1). Adopted houses keep
+// repairing from this plan; nothing new is founded on it.
 //
-//   y=2  roof: full 4x4 (16 planks)
-//   y=1  wall ring (11 planks; the door upper half at (1,1,0) is placed by
+// v2 (BLUEPRINT_V2): the 7x6 house (dx 0..6, dz 0..5) — common room-kitchen
+// (x1..5, z1..2: table, chest, furnace, torch, free 2x2, door path) plus
+// two bedrooms behind a partition (openings at (2,3) and (4,3), beds land
+// in jr2.2):
+//
+//   y=2  roof: full 7x6 (42 planks)
+//   y=1  wall ring (21 planks; the door upper half at (3,1,0) is placed by
 //        the server together with the lower half, so it is not in the plan)
-//   y=0  wall ring (11 planks) + door lower half at (1,0,0)
-//        workbench at (4,0,1) — outside, so the bot crafts before moving in
+//   y=0  wall ring (21 planks) + door lower half at (3,0,0)
+//        workbench INSIDE the common room at (5,0,1)
+//   y=0..1 partition posts (1,3),(3,3),(5,3) + bedroom divider (3,4)
+//        (8 planks, laid last)
 //
-// BLUEPRINT is the plan in LAY ORDER: table first (crafting precedes walls),
-// then the lower ring, the door, the upper ring, the roof. Every ring sits
-// on the previous one, so the block below is always the place reference.
+// Both plans are in LAY ORDER: table first (crafting precedes walls — the
+// door is crafted at the table while it still stands on open ground), then
+// the lower ring, the door, the upper ring, the roof, then (v2) the
+// partition. Every ring sits on the previous one, so the block below is
+// always the place reference.
 //
 // One behaviour tick advances at most one async place flight (guarded by
 // ctx.placeInFlight, same seam as eatInFlight/doEat). Materials are checked
@@ -45,7 +56,38 @@ const BLUEPRINT = (() => {
   return plan
 })()
 
+const BLUEPRINT_V2 = (() => {
+  const plan = [{ dx: 5, dy: 0, dz: 1, kind: 'table' }]
+  const ring = (dy) => {
+    for (const dx of [0, 1, 2, 4, 5, 6]) plan.push({ dx, dy, dz: 0, kind: 'planks' })
+    for (let dx = 0; dx <= 6; dx++) plan.push({ dx, dy, dz: 5, kind: 'planks' })
+    for (let dz = 1; dz <= 4; dz++) {
+      plan.push({ dx: 0, dy, dz, kind: 'planks' })
+      plan.push({ dx: 6, dy, dz, kind: 'planks' })
+    }
+  }
+  ring(0)
+  plan.push({ dx: 3, dy: 0, dz: 0, kind: 'door' })
+  ring(1)
+  for (let dz = 0; dz <= 5; dz++) {
+    for (let dx = 0; dx <= 6; dx++) plan.push({ dx, dy: 2, dz, kind: 'planks' })
+  }
+  for (const dy of [0, 1]) {
+    for (const [dx, dz] of [[1, 3], [3, 3], [5, 3], [3, 4]]) {
+      plan.push({ dx, dy, dz, kind: 'planks' })
+    }
+  }
+  return plan
+})()
+
 const PLANK_COUNT = BLUEPRINT.filter((c) => c.kind === 'planks').length
+const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
+
+// Blueprint by home version (jr2.1): v2 homes build the 7x6 house, anything
+// else (v1, or a home that predates the version mark) the frozen 4x4 plan.
+function blueprintFor(home) {
+  return home && home.v === 2 ? BLUEPRINT_V2 : BLUEPRINT
+}
 
 // Blocks the place flow is allowed to clear: a refusal usually means grass
 // or a flower grew into the cell. Anything else is left alone.
@@ -63,12 +105,22 @@ function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
 
-// Blueprint invariant (8si): the doorway column (dx 1, dz 0, both halves)
-// and the 2x2 interior (dx/dz 1..2, wall heights) are never plank targets —
-// planks walled in there break adopt and churn the rebuild. Checked for
-// planks cells before every placement, not just at plan authorship.
-function isDoorwayOrInterior(cell) {
+// Blueprint invariant (8si): the doorway column and the living rooms are
+// never plank targets — planks walled in there break adopt and churn the
+// rebuild. Checked for planks cells before every placement, not just at
+// plan authorship. v1: doorway (dx 1, dz 0, both halves) + the 2x2
+// interior; v2: doorway (dx 3, dz 0) + common room + partition openings +
+// bedrooms (the partition posts themselves are legit targets).
+function isDoorwayOrInterior(cell, home) {
   if (!cell || typeof cell.dx !== 'number') return false
+  if (home && home.v === 2) {
+    if (cell.dy > 1) return false // the roof above is always legit
+    if (cell.dx === 3 && cell.dz === 0) return true
+    if (cell.dx >= 1 && cell.dx <= 5 && cell.dz >= 1 && cell.dz <= 2) return true
+    if ((cell.dx === 2 || cell.dx === 4) && cell.dz === 3) return true
+    if (cell.dz === 4 && ((cell.dx >= 1 && cell.dx <= 2) || (cell.dx >= 4 && cell.dx <= 5))) return true
+    return false
+  }
   // Doorway column is the two wall heights only: the roof above the door
   // (dy 2) is a legit planks cell.
   if (cell.dx === 1 && cell.dz === 0 && cell.dy <= 1) return true
@@ -97,9 +149,10 @@ function cellDone(bot, home, cell) {
 // when every remaining cell is in place.
 function nextCellIdx(bot, home, skipped) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
-  for (let i = 0; i < BLUEPRINT.length; i++) {
+  const plan = blueprintFor(home)
+  for (let i = 0; i < plan.length; i++) {
     if (skip.has(i)) continue
-    if (!cellDone(bot, home, BLUEPRINT[i])) return i
+    if (!cellDone(bot, home, plan[i])) return i
   }
   return -1
 }
@@ -107,12 +160,13 @@ function nextCellIdx(bot, home, skipped) {
 // Remaining loose planks to lay (door/table need items, not planks). Without
 // a home there is no origin to scan from, so the whole wall+roof count.
 function countRemainingPlanks(bot, home, skipped) {
-  if (!home || !home.site) return PLANK_COUNT
+  if (!home || !home.site) return PLANK_COUNT_V2 // a future site is founded v2
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
+  const plan = blueprintFor(home)
   let n = 0
-  for (let i = 0; i < BLUEPRINT.length; i++) {
-    if (BLUEPRINT[i].kind !== 'planks' || skip.has(i)) continue
-    if (!cellDone(bot, home, BLUEPRINT[i])) n++
+  for (let i = 0; i < plan.length; i++) {
+    if (plan[i].kind !== 'planks' || skip.has(i)) continue
+    if (!cellDone(bot, home, plan[i])) n++
   }
   return n
 }
@@ -204,7 +258,10 @@ function guardOwnWalls(bot, ctx) {
       }
     }
     if (ids.size === 0) return
-    const box = { x0: site.x, x1: site.x + 4, y0: site.y, y1: site.y + 2, z0: site.z, z1: site.z + 3 }
+    const v2 = home && home.v === 2
+    const box = v2
+      ? { x0: site.x, x1: site.x + 6, y0: site.y, y1: site.y + 2, z0: site.z, z1: site.z + 5 }
+      : { x0: site.x, x1: site.x + 4, y0: site.y, y1: site.y + 2, z0: site.z, z1: site.z + 3 }
     const idOf = (b) => {
       if (b && typeof b.type === 'number') return b.type
       const e = b && byName[b.name]
@@ -253,8 +310,8 @@ function build(bot, ctx, target, state) {
   guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
   // another table placed here earlier (or by anyone) counts the same.
-  if (!ctx.home.table && cellDone(bot, ctx.home, BLUEPRINT[0])) {
-    const t = BLUEPRINT[0]
+  if (!ctx.home.table && cellDone(bot, ctx.home, blueprintFor(ctx.home)[0])) {
+    const t = blueprintFor(ctx.home)[0]
     ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
   }
 
@@ -266,18 +323,19 @@ function build(bot, ctx, target, state) {
     try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
     return
   }
-  const cell = BLUEPRINT[idx]
+  const plan = blueprintFor(ctx.home)
+  const cell = plan[idx]
   const p = cellAbs(ctx.home, cell)
-  if (cell.kind === 'planks' && isDoorwayOrInterior(cell)) {
+  if (cell.kind === 'planks' && isDoorwayOrInterior(cell, ctx.home)) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
   }
 
   // Progress line, at most one per 10 s.
-  const total = BLUEPRINT.length
+  const total = plan.length
   let wrong = 0
   for (let i = 0; i < total; i++) {
-    if (!ctx.buildSkip.includes(i) && !cellDone(bot, ctx.home, BLUEPRINT[i])) wrong++
+    if (!ctx.buildSkip.includes(i) && !cellDone(bot, ctx.home, plan[i])) wrong++
   }
   const now = Date.now()
   if (now - (ctx.buildLastProgressLog || 0) >= 10000) {
@@ -385,7 +443,10 @@ module.exports.findRef = findRef
 module.exports.isReplaceable = isReplaceable
 module.exports.guardOwnWalls = guardOwnWalls
 module.exports.BLUEPRINT = BLUEPRINT
+module.exports.BLUEPRINT_V2 = BLUEPRINT_V2
 module.exports.PLANK_COUNT = PLANK_COUNT
+module.exports.PLANK_COUNT_V2 = PLANK_COUNT_V2
+module.exports.blueprintFor = blueprintFor
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
