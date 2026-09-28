@@ -253,6 +253,32 @@ describe('atl.20 below-feet onto solid (unit)', () => {
     assert.ok(!cap.logged.some((l) => l.includes('refused dig iron_ore')), 'never refused')
   })
 
+  it('solid below a BUILD still skips it, never digs (revmux 01 core-1)', async () => {
+    // denyReason returns 'below-feet' before it checks protection, so the
+    // exemption must unmask the type rules first — or bring would dig the
+    // cabin floor it stands on.
+    const cells = shaftCells()
+    cells['0,62,0'] = 'oak_planks' // a build under the feet ...
+    cells['0,61,0'] = 'dirt' // ... over a proven landing
+    const bot = shaftBot(cells)
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: pos(0, 62, 0), block: 'oak_planks', drop: 'oak_planks', have: 0 },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {})
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.digCalls, 0, 'build never dug')
+    assert.equal(ctx.bring.phase, 'find', 'take the next candidate')
+    assert.ok(ctx.bring.skip && ctx.bring.skip.has('0,62,0'), 'build skipped')
+    assert.ok(!ctx.stuck, 'a build is skipped, not struck')
+    assert.ok(cap.logged.some((l) => l === 'protected: oak_planks at 0 62 0'), cap.logged.join('\n'))
+    assert.ok(!cap.logged.some((l) => l.includes('onto solid')), 'exemption never fires on a build')
+  })
+
   it('air below: the strike path still denies and raises the stuck fact', async () => {
     const cells = shaftCells()
     cells['0,61,0'] = 'air' // explicit drop under the ore: a real hazard

@@ -246,6 +246,21 @@ function denyReason(bot, block, ctx) {
         return 'gravity'
       }
     }
+    return protectedReason(bot, block, ctx)
+  } catch (_) { return 'protected' }
+}
+
+// The type-rules tail of denyReason, split out so bring's atl.20 exemption
+// can unmask what the trap rules hide: denyReason returns 'below-feet'
+// before it checks protection (pinned: trap fires before type rules), so
+// a 'below-feet' denial over solid may sit on a build. Returns null when
+// the block itself is diggable, else 'protected'. Never returns trap
+// reasons (revmux 01 core-1).
+function protectedReason(bot, block, ctx) {
+  try {
+    if (!block || typeof block.name !== 'string') return 'protected'
+    const name = block.name
+    const pos = block.position
     // Beds are never dug, even our own (idkcraft-jrp): placedByBot is
     // positional, so a stale entry (a roadside table on B-foot, hand-cleared,
     // then the bed placed into the same cell) would license a recover dig to
@@ -309,4 +324,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, solidBelow }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, solidBelow, protectedReason }
