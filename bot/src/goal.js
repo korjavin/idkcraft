@@ -437,8 +437,11 @@ function siteFor(bot, around) {
 // work-tick revalidation use. The old any-non-air presence called
 // terrain-filled cells done and froze half-verdicts with no retry.
 const ADOPT_QUORUM = 10
-// Door candidates per adopt scan: with rejection now possible the nearest
-// door may be foreign while ours stands behind it — first passing wins.
+// Distinct doors tried per adopt scan: with rejection now possible the
+// nearest door may be foreign while ours stands behind it — first passing
+// wins. findBlocks returns both halves of every door, so the scan reads
+// twice the budget and dedupes to lower halves below (revmux 01 minors:
+// 5 raw hits cover ~2.5 doors, and 3 nearer foreign doors would fill it).
 const ADOPT_DOORS = 5
 function adoptHome(bot) {
   try {
@@ -447,10 +450,16 @@ function adoptHome(bot) {
     const found = bot.findBlocks({
       matching: (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_door'),
       maxDistance: 32,
-      count: ADOPT_DOORS,
+      count: ADOPT_DOORS * 2,
     })
     if (!found || !found.length) return null
+    const tried = new Set()
     for (const door of found) {
+      if (tried.size >= ADOPT_DOORS) break
+      const lo = doorLower(bot, door)
+      const key = `${lo.x},${lo.y},${lo.z}`
+      if (tried.has(key)) continue
+      tried.add(key)
       const home = tryAdoptDoor(bot, door)
       if (home) {
         try { bot.chat(`my home is at ${home.site.x} ${home.site.y} ${home.site.z}`) } catch (_) { /* chat best-effort */ }
@@ -463,7 +472,10 @@ function adoptHome(bot) {
   }
 }
 
-function tryAdoptDoor(bot, at) {
+// Lower-half normalize: findBlocks may return the UPPER half, so step down
+// when the block below is also a door. Shared by the scan dedupe above and
+// the per-door verify below.
+function doorLower(bot, at) {
   let dx = Math.floor(at.x)
   let dy = Math.floor(at.y)
   let dz = Math.floor(at.z)
@@ -471,6 +483,14 @@ function tryAdoptDoor(bot, at) {
     const below = bot.blockAt(new Vec3(dx, dy - 1, dz))
     if (below && typeof below.name === 'string' && below.name.endsWith('_door')) dy--
   } catch (_) { /* keep as found */ }
+  return { x: dx, y: dy, z: dz }
+}
+
+function tryAdoptDoor(bot, at) {
+  const lo = doorLower(bot, at)
+  const dx = lo.x
+  const dy = lo.y
+  const dz = lo.z
   const v2 = isV2House(bot, dx, dy, dz)
   if (v2 == null) return null // probe dark: next door, callers retry later
   const home = v2 ? makeHome(dx - 3, dy, dz, 2) : makeHome(dx - 1, dy, dz, 1)

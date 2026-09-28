@@ -351,6 +351,31 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
     assert.deepEqual(bot.chats, ['my home is at 10 64 10'])
   })
 
+  it('both halves of 3 nearer foreign doors still reach the own house (revmux 01)', () => {
+    // findBlocks returns both halves of every door: 3 nearer foreign doors
+    // are 6 raw hits, which filled the 5-candidate budget before the dedupe
+    // (same door scored twice, own house never tried). The scan now reads
+    // twice the budget and dedupes to lower halves — the mock honours
+    // count like the real one, so this pins both halves of the fix.
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    paintPlan(world, site, BLUEPRINT_V2)
+    const doors = []
+    for (const fx of [30, 32, 34]) {
+      world.set(fx, 64, 30, 'jungle_door')
+      world.set(fx, 65, 30, 'jungle_door')
+      doors.push({ x: fx, y: 64, z: 30 }, { x: fx, y: 65, z: 30 })
+    }
+    doors.push({ x: 13, y: 64, z: 10 }, { x: 13, y: 65, z: 10 })
+    const bot = mockBot(world, { doors })
+    bot.findBlocks = (opts) => doors.slice(0, (opts && opts.count) || doors.length)
+    const home = goal.adoptHome(bot)
+    assert.ok(home)
+    assert.equal(home.v, 2)
+    assert.deepEqual(home.site, site)
+    assert.equal(home.built, true)
+  })
+
   it('terrain-filled cells read unbuilt: exact, not lax (hlf)', () => {
     // The old any-non-air presence called a dirt-filled wall cell done; the
     // exact verdict (nextCellIdx) reads it missing and build repairs it.
