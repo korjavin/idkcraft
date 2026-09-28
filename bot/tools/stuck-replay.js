@@ -8,6 +8,11 @@
 //   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],
 //     "secs":75,"scaffold":0,"pickaxe":true}]
 // secs/scaffold/pickaxe are optional (defaults 75 / 64 dirt / stone pickaxe).
+// bucket:true adds 2 water buckets (jsf.2 water_up needs a pair: high pour +
+// ledge pour, both back after the strip). REPLAY_OP=1 pre-ops both bots
+// before login (deterministic offline UUIDs, like water-assay.js ASSAY_OP):
+// spots inside spawn protection (CLUSTER, r=16) refuse un-opped pours, so
+// water_up spots run opped — mirroring a prod bot with op.
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -92,7 +97,8 @@ function loadSpots() {
     const scaffold = s.scaffold == null ? 64 : Number(s.scaffold)
     if (!Number.isFinite(scaffold) || scaffold < 0 || scaffold > 2304) throw new Error(`spots[${i}]: bad scaffold`)
     const pickaxe = s.pickaxe == null ? true : !!s.pickaxe
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe }
+    const bucket = s.bucket == null ? false : !!s.bucket
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket }
   })
 }
 
@@ -142,6 +148,12 @@ async function main() {
   // declare nothing, so counting them would equate a latched fix with a loop.
   recover.setStuck = (...args) => { const r = origSetStuck(...args); if (r) stuckEps.push(args[1]); return r }
 
+  // Pre-login op (jsf.2): offline UUIDs derive from the name, and a
+  // mid-session op does not lift spawn protection for the live session.
+  if (process.env.REPLAY_OP === '1') {
+    await rcon(`op ${GUIDE}`)
+    await rcon(`op ${FOLLOWER}`)
+  }
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn')
   // Chunks in, plus past Paper's 4000 ms connection throttle (bukkit.yml):
@@ -223,6 +235,10 @@ async function main() {
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
     if (s.pickaxe) await rcon(`give ${FOLLOWER} stone_pickaxe 1`)
+    if (s.bucket) {
+      await rcon(`give ${FOLLOWER} water_bucket 1`)
+      await rcon(`give ${FOLLOWER} water_bucket 1`)
+    }
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
     for (const who of [GUIDE, FOLLOWER]) {
