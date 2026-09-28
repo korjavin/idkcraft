@@ -167,6 +167,36 @@ describe('9kd water death marks a wide danger disc', () => {
     assert.deepEqual(dry.ctx.explore.target, { x: 50, z: 50 }, 'dry deaths keep the leg')
   })
 
+  it('revmux 02: the killer leg chunk is consumed, so the re-pick provably advances', () => {
+    // Round-1 gap: T outside the fresh disc was re-picked identically (plus a
+    // stale GoalXZ via the matching lastGoalKey). Death 100+ out from T.
+    const death = { x: 100, y: 62, z: 0 }
+    const T = { x: 0, z: -16 }
+    const { bot, ctx } = deathBot(death, 'water')
+    ctx.home = v2home({ x: 0, y: 64, z: 0 })
+    ctx.explore = { visited: new Set(), target: { ...T }, issuedKey: 'explore:0,-16' }
+    ctx.lastGoalKey = 'explore:0,-16'
+    quiet(() => handleDeath(bot, null))
+    assert.ok(ctx.explore.visited.has('0,-1'), 'T chunk consumed')
+    // Respawned tick: re-pick must differ from T and re-issue the goal.
+    const walker = exploreBot({ x: 0, y: 64, z: 0 })
+    ctx.stepStatus = 'running'
+    explore(walker, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 16, z: 0 }, 'past T and past the disc')
+    assert.notDeepEqual(ctx.explore.target, T)
+    assert.equal(walker.calls.goals.length, 1, 'new key re-issues the goal')
+  })
+
+  it('revmux 02: dropDeadLeg is a no-op without a leg, never throws', () => {
+    assert.equal(explore.dropDeadLeg(null), false)
+    assert.equal(explore.dropDeadLeg({}), false)
+    assert.equal(explore.dropDeadLeg({ explore: null }), false)
+    assert.equal(explore.dropDeadLeg({ explore: { visited: new Set(), target: null } }), false)
+    const noVisited = { explore: { target: { x: 1, z: 2 }, issuedKey: 'k' } }
+    assert.equal(explore.dropDeadLeg(noVisited), true)
+    assert.equal(noVisited.explore.target, null)
+  })
+
   it('wide marks keep their width, default marks keep the old shape', () => {
     const ctx = {}
     danger.mark(ctx, { x: 0, y: 64, z: 0 }, 1000, 32)
