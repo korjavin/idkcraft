@@ -217,6 +217,20 @@ describe('deep safety reads', () => {
     const d2 = deep.pickDir(bot, mouth)
     assert.ok(d2 && (d2.dx !== 1 || d2.dz !== 0), 'deep lava refuses +X')
   })
+
+  it('pickDir refuses +X when lava sits at step-2 feet (rules-assay lava must inject mid-drive)', () => {
+    // fsg: the assay plants lava at step-2 feet to prove the descend-time
+    // guard — but tubeClean sees the whole tube, so pre-planted lava refuses
+    // +X at pick time and the scenario direction is never walked. Pin the
+    // mechanism: the harness must inject mid-drive, never a tubeClean
+    // carve-out — full-tube lava refusal is the safety invariant.
+    const bot = mockBot()
+    const mouth = { x: 0, z: -3, topY: 64 }
+    const feet2 = deep.stairCells({ x: mouth.x, z: mouth.z, topY: mouth.topY, dx: 1, dz: 0 }, 2).digs[0]
+    bot.blocks[`${feet2.x},${feet2.y},${feet2.z}`] = 'lava'
+    const d = deep.pickDir(bot, mouth)
+    assert.ok(d && (d.dx !== 1 || d.dz !== 0), 'step-2 lava must refuse +X')
+  })
 })
 
 describe('bestDiamondCell', () => {
