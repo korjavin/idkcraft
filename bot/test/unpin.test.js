@@ -124,6 +124,29 @@ describe('unpin detection', () => {
     assert.equal(r, 'watching')
   })
 
+  it('lastMove guard alone blocks the send (mutant-grade)', () => {
+    // sendNudge present but no cloned shape: deleting `!st.lastMove` fires.
+    const bot = spotABot()
+    const ctx = {}
+    const sent = []
+    ctx.unpin = { teleports: [], lastMove: null, sendNudge: (dx, dz) => { sent.push([dx, dz]); return true }, anchor: null, tries: [], stoodDown: null, wins: [] }
+    feedStorm(ctx, 10000, 10)
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+    assert.equal(sent.length, 0)
+  })
+
+  it('missing sender neither throws nor sends (robustness, not a guard)', () => {
+    // NOTE (equivalent mutant, retired): with lastMove present but no
+    // sendNudge, deleting the detection-side sendNudge check is
+    // unobservable — sendTry re-checks and returns 'watching' either way.
+    // This test pins only the robustness half (no throw, no send).
+    const bot = spotABot()
+    const { ctx } = armedCtx()
+    ctx.unpin.sendNudge = null
+    feedStorm(ctx, 10000, 10)
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'watching')
+  })
+
   it('no position, no crash, no send', () => {
     const { ctx } = armedCtx()
     feedStorm(ctx, 10000, 10)
@@ -182,6 +205,29 @@ describe('unpin verify + bounds', () => {
     feedStorm(ctx, 23000, 10, { x: -30, y: 65.2, z: -212.6 })
     assert.equal(unpin.unpinTick(bot, ctx, 24000), 'nudged')
     assert.equal(sent.length, 9)
+  })
+
+  it('mid-episode escape drops the episode (displacement gate)', () => {
+    const bot = spotABot()
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 10)
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    // A grind breaks free between tries: no second nudge, episode dropped.
+    bot.entity.position = pos(-37.3, 64.6, -212.0) // 0.67 from the anchor
+    feedStorm(ctx, 12200, 5) // storm persists, but the body is out: drop it
+    assert.equal(unpin.unpinTick(bot, ctx, 13000), 'idle')
+    assert.equal(sent.length, 1)
+  })
+
+  it('re-pin at exact rest (floor adjacent, flag down) still fires', () => {
+    // The accepted revmux-01 semantics: a down flag is no verdict, and the
+    // 64.0 landing lock (proven cure on the rig) must not be gated out.
+    const bot = spotABot()
+    bot.entity.position = pos(-37.3, 64.0, -212.6) // exactly on the grass top
+    const { ctx, sent } = armedCtx()
+    feedStorm(ctx, 10000, 20, { x: -37.3, y: 64.0, z: -212.6 })
+    assert.equal(unpin.unpinTick(bot, ctx, 12000), 'nudged')
+    assert.equal(sent.length, 1)
   })
 
   it('verifying state holds inside the 700 ms gap', () => {
@@ -310,6 +356,42 @@ describe('unpin packet clone', () => {
 })
 
 describe('unpin ticker hook', () => {
+  it('runTick calls unpinTick (wiring proof, not a tautology)', async () => {
+    // Deleting the `unpin.unpinTick(bot, ctx, now())` line from runTick must
+    // fail this test: spy on the module function index.js dereferences.
+    const bot = {
+      username: 'IdkBot',
+      players: {},
+      entities: {},
+      health: 20,
+      food: 20,
+      entity: { position: pos(0, 64, 0), onGround: true, effects: [] },
+      spawnPoint: pos(0, 64, 0),
+      registry: { blocksByName: {}, itemsByName: {} },
+      inventory: { items: () => [] },
+      pathfinder: { goal: null, setGoal() {}, stop() {}, isMoving: () => false, setMovements() {} },
+      setControlState() {},
+      clearControlStates() {},
+      quit() {},
+      chat() {},
+      blockAt: () => null,
+      blockAtCursor: () => null,
+    }
+    const brain = { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, leaveAfterMs: 0 })
+    const orig = unpin.unpinTick
+    let calls = 0
+    let sawCtx = false
+    unpin.unpinTick = (...a) => { calls++; sawCtx = !!a[1] && a[1] === bot._tickerCtx; return orig(...a) }
+    try {
+      await ticker.tick()
+    } finally {
+      unpin.unpinTick = orig
+    }
+    assert.equal(calls, 1)
+    assert.equal(sawCtx, true)
+  })
+
   it('a calm tick runs the hook without firing or breaking the brain', async () => {
     const bot = {
       username: 'IdkBot',

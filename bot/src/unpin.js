@@ -22,12 +22,13 @@
 // singularity with a move packet cloned from mineflayer's own last send
 // (coordinates rebased to the live entity position = server position, so the
 // delta is pure-horizontal with no fall component to clip). Rig: storm
-// 10/s -> calm, grounded, 3/3, no re-pin. Never fires grounded (presses
-// stay recover's job: dig_step/sidestep) or wet (water pins storm the same
-// way but never free on 1 cm steps: swim owns them), never forces
-// onGround, never hand-rolls packet fields, bounded attempts then stands
-// down to the stuck flow. Ticker hook lives in index.js runTick (1 Hz
-// while active).
+// 10/s -> calm, grounded, 3/3, no re-pin. Proven rest vetoes; a down flag
+// during storms is no verdict (every teleport falsifies it), so grounded
+// press episodes may start — harmless (verified centimeters, 8 max, then
+// stand down) and sometimes curative (re-pin locks read down too). Wet
+// never fires (water pins storm the same way but never free on 1 cm
+// steps: swim owns them). Never forces onGround, never hand-rolls packet
+// fields. Ticker hook lives in index.js runTick (1 Hz while active).
 
 const { Vec3 } = require('vec3')
 const metrics = require('./metrics')
@@ -192,7 +193,13 @@ function unpinTick(bot, ctx, now = Date.now()) {
   const pos = posOf(bot)
   if (!pos) return 'idle'
   prune(st, now)
-  const airborne = !!(bot && bot.entity && bot.entity.onGround === false)
+  // The flag sample, NOT an airborne verdict: mineflayer falsifies onGround
+  // on every teleport until the next physics tick, so a grounded press storm
+  // reads down half the time. Accepted (revmux 01): re-pin locks (exact
+  // rest reading down) NEED the cure, and grounded-press episodes are
+  // harmless (verified centimeters, 8 max, then stand down) — and there is
+  // no telling them apart in one sample. Unknown/non-boolean fails closed.
+  const flagDown = !!(bot && bot.entity && bot.entity.onGround === false)
 
   // Re-arm: the body left a failed anchor behind (owner /tp, knockback,
   // a grind that finally moved) — this spot is new, judge it fresh.
@@ -234,19 +241,17 @@ function unpinTick(bot, ctx, now = Date.now()) {
       return 'stood-down'
     }
     // Fall through: same tick fires the next direction (no idle second).
-  } else if (last && last.verdict) {
-    st.tries = []
   }
 
   const inEpisode = !!st.anchor
   if (!inEpisode) {
-    // Detection: storm + zero spread + airborne + sender ready + not resting.
+    // Detection: storm + zero spread + flag down + sender ready + not resting.
     // The spread gate is the displacement evidence: a pin repeats one server
     // point exactly, a walking body under lag corrections scatters.
     if (st.teleports.length < STORM_MIN_TPS) return st.teleports.length > 0 ? 'watching' : 'idle'
     const spread = stormSpread(st)
     if (spread === null || spread >= STORM_MAX_DISP) return 'watching'
-    if (!airborne) return 'watching'
+    if (!flagDown) return 'watching'
     if (inWater(bot)) return 'watching'
     if (st.stoodDown) return 'watching'
     const rapidWins = (st.wins || []).filter((w) => dist3(pos, w) < REARM_DIST && now - w.t < PRESS_WINDOW_MS).length
@@ -262,15 +267,12 @@ function unpinTick(bot, ctx, now = Date.now()) {
     console.log(`unpin storm teleports=${st.teleports.length}/2s disp=0.00 pos=${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}`)
   }
   // Displacement gate, every tick of the episode: a body that moves (a grind
-  // escaping on its own, a fall resuming) needs no nudge — drop the episode.
+  // escaping on its own, a fall resuming past the strict tail count) needs
+  // no nudge — drop the episode. No landed-drop beside it (revmux 01): a
+  // calm landing already returned 'freed' above, a storming one (re-pin)
+  // must continue, and the flag flaps true mid-storm — dropping on it would
+  // churn episodes instead of bounding them.
   if (st.anchor && dist3(pos, { x: st.anchor.x, y: st.anchor.y, z: st.anchor.z }) >= STORM_MAX_DISP) {
-    st.anchor = null
-    st.tries = []
-    return 'idle'
-  }
-  if (!airborne) {
-    // Landed mid-episode (the nudge freed a fall, or it was never hover):
-    // grounded business belongs to recover, not to this watchdog.
     st.anchor = null
     st.tries = []
     return 'idle'
