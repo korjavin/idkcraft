@@ -6,6 +6,8 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
+const Vec3 = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
 const { createTicker, handleChat } = require('../src/index')
 const goal = require('../src/goal')
 const build = require('../src/behaviours/build')
@@ -949,5 +951,61 @@ describe('build counting and guard edges (idkcraft-l71)', () => {
     build(bot, ctx, null, null)
     assert.equal(ctx.home, null)
     assert.deepEqual(ctx.buildSkip, [])
+  })
+})
+
+describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
+  let origLog
+  let lines
+  beforeEach(() => { origLog = console.log; lines = []; console.log = (l) => { lines.push(String(l)) } })
+  afterEach(() => { console.log = origLog })
+
+  // Prod 2026-09-28: approach GoalPlaceBlock says arrived, the feet-to-corner
+  // reach check says 'far' and resets — setGoal into an already-reached goal
+  // forever, 'building 2/94' every 10 s. The stand below (5 under the cell,
+  // a slope/hole) reproduces the metric split against the REAL goal class.
+  it('goal-reached stand places within 5 ticks instead of re-approaching', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const p = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // table cell
+    // Fake pathfinder world: solid ground under the cell, clear sight line.
+    const below = new Vec3(p.x, p.y - 1, p.z)
+    const fakeWorld = {
+      getBlock: (ref) => {
+        try {
+          if (ref && ref.x === below.x && ref.y === below.y && ref.z === below.z) {
+            return { shapes: [[0, 0, 0, 1, 1, 1]] } // full cube
+          }
+        } catch (_) { /* no block */ }
+        return null
+      },
+      raycast: () => ({ position: new Vec3(below.x, below.y, below.z), face: 1 }),
+    }
+    const realGoal = new goals.GoalPlaceBlock(new Vec3(p.x, p.y, p.z), fakeWorld, { range: build.PLACE_RANGE })
+    const stand = { x: p.x + 0.5, y: p.y - 5, z: p.z + 0.5 }
+    // Premise: the goal says arrived, the old feet-to-corner check says far.
+    assert.equal(realGoal.isEnd(new Vec3(Math.floor(stand.x), Math.floor(stand.y), Math.floor(stand.z))), true)
+    assert.ok(Math.hypot(stand.x - p.x, stand.y - p.y, stand.z - p.z) > 5, 'old metric reads far')
+    bot.entity.position = pos(stand.x, stand.y, stand.z)
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let t = 0; t < 5 && bot.calls.places.length === 0 && ctx.buildSkip.length === 0; t++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    assert.ok(bot.calls.places.length === 1 || ctx.buildSkip.length === 1, 'places or skips within 5 ticks, not an endless setGoal loop')
+    assert.ok(bot.calls.goals.length <= 2, `no repeated re-approach (setGoal x${bot.calls.goals.length})`)
+  })
+
+  it('a genuinely far body skips the cell after 3 counted resets', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    // entity stays at spawn (0,65,0): ~11 head-to-centre from the table cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let t = 0; t < 7 && ctx.buildSkip.length === 0; t++) build(bot, ctx, null, null)
+    assert.equal(ctx.buildSkip.length, 1)
+    assert.equal(bot.calls.places.length, 0)
+    const skips = lines.filter((l) => l.startsWith('build skip') && l.includes('unreachable'))
+    assert.equal(skips.length, 1)
   })
 })

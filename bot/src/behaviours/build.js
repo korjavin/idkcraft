@@ -35,6 +35,16 @@ const Vec3 = require('vec3')
 const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 
+const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
+// Reach check: head (eyes) to cell CENTRE. GoalPlaceBlock.isEnd measures
+// head-to-face-centre <= PLACE_RANGE; the clicked face centre sits up to
+// ~1 off the cell centre and the float head up to ~0.9 off the
+// pathfinder's node-centred head, so range + 1.5 accepts every valid end
+// node. Feet-to-corner over-measured by ~2 on slopes (the +1.6 head, the
+// corner vs the centre) and livelocked: goal reached, check 'far', reset,
+// setGoal into an already-reached goal — 2/94 forever (idkcraft-jr2.4).
+const PLACE_REACH = PLACE_RANGE + 1.5
+
 // Plan entry: cell offset from the home origin (SW corner, ground level)
 // plus what belongs there.
 const BLUEPRINT = (() => {
@@ -360,7 +370,7 @@ function build(bot, ctx, target, state) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
-    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: 4 })) } catch (_) { /* retry next tick */ }
+    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE })) } catch (_) { /* retry next tick */ }
     return
   }
   if (moving) return
@@ -368,11 +378,15 @@ function build(bot, ctx, target, state) {
   // At the cell (or the walk never started): place — but only in reach.
   // A preemption that carried the body away (fight, flee, lead, follow me)
   // leaves a stale buildGoalIdx: attempting from out there burns refusals
-  // and skips a good cell, so force a fresh approach instead.
+  // and skips a good cell, so force a fresh approach instead. Counted like
+  // a refusal: a cell the walk can never reach ends skipped, not looping.
   try {
     const bp = bot.entity && bot.entity.position
-    if (bp && typeof bp.x === 'number' && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > 5) {
-      ctx.buildGoalIdx = -1
+    if (bp && typeof bp.x === 'number' &&
+        Math.hypot(bp.x - (p.x + 0.5), (bp.y + 1.6) - (p.y + 0.5), bp.z - (p.z + 0.5)) > PLACE_REACH) {
+      ctx.buildFails = (ctx.buildFails || 0) + 1
+      if (ctx.buildFails >= 3) skipCell(ctx, idx, p, 'unreachable')
+      else ctx.buildGoalIdx = -1
       return
     }
   } catch (_) { /* unverifiable: attempt anyway */ }
@@ -451,3 +465,5 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.PLACE_RANGE = PLACE_RANGE
+module.exports.PLACE_REACH = PLACE_REACH
