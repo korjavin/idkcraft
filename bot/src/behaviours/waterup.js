@@ -446,13 +446,16 @@ function equipStep(bot, st, name, timeoutTicks) {
     st.equipInFlight = true
     st.equipMissing = false
     st.equipError = false
+    if (st.equipGen === undefined) st.equipGen = 0
+    const gen = st.equipGen
     void (async () => {
       try {
         const item = findItem(bot, name)
-        if (!item) { st.equipMissing = true; return }
+        if (!item) { if (st.equipGen === gen) st.equipMissing = true; return }
         await bot.equip(item, 'hand')
+        if (st.equipGen !== gen) return // reset since: a newer equip owns the flags
         st.equipDone = true
-      } catch (_) { st.equipError = true } finally { st.equipInFlight = false }
+      } catch (_) { if (st.equipGen === gen) st.equipError = true } finally { if (st.equipGen === gen) st.equipInFlight = false }
     })()
   }
   if (st.equipMissing) return 'failed:no-' + (name === 'water_bucket' ? 'bucket' : 'empty-bucket')
@@ -466,7 +469,24 @@ function resetEquip(st) {
   st.equipDone = false
   st.equipMissing = false
   st.equipError = false
+  st.equipGen = (st.equipGen || 0) + 1 // invalidates a still-pending equip IIFE
   st.waited = 0
+}
+
+// The hand the activate needs (revmux 01: the eat reflex swaps it between
+// the equip and the use). Unknown API (old mock) trusts the equip.
+function handHas(bot, name) {
+  if (!bot || bot.heldItem === undefined) return true
+  return !!bot.heldItem && bot.heldItem.name === name
+}
+
+// Clear a stale equip without touching the phase timeout (a swapped hand
+// re-equips inside the existing budget; resetEquip would restart it).
+function clearEquipFlags(st) {
+  st.equipInFlight = false
+  st.equipDone = false
+  st.equipMissing = false
+  st.equipError = false
 }
 
 function waterUpRun(bot, ctx) {
@@ -572,6 +592,9 @@ function waterUpRun(bot, ctx) {
         if (eq === 'running') return 'running'
         return toStripFail(st, eq === 'failed:no-bucket' && !isA ? 'failed:need-2nd-bucket' : failReason)
       }
+      // Hand recheck (revmux 01): a reflex swapped the hand after the equip
+      // → re-equip inside the budget instead of activating the wrong item.
+      if (!handHas(bot, 'water_bucket')) { clearEquipFlags(st); return 'running' }
       // Pour-time reach recheck against server truth: the hover heaves
       // between the scan and the activate, and activating past 4.5 risks
       // the Paper quirk (bucket eaten into an occupied cell). Never
@@ -656,6 +679,9 @@ function waterUpRun(bot, ctx) {
       // the window — activate NOW, before the next rising tick exits it.
       // Falls through to pourB when the hand is not ready or the eye heaved
       // out (heave oscillates; pourB waits it out under the hover cap).
+      // A swapped hand (eat reflex) clears the stale equipDone so pourB
+      // re-equips instead of trusting it (revmux 01).
+      if (st.equipDone && !handHas(bot, 'water_bucket')) clearEquipFlags(st)
       const eye = eyeOf(bot)
       if (st.equipDone && eye && dist(eye, cellCenter(liveB.dest)) <= USE_REACH &&
           faceVisible(bot, eye, liveB.ref.position, liveB.face) && isAirish(readCell(bot, liveB.dest))) {
@@ -818,6 +844,9 @@ function waterUpRun(bot, ctx) {
         resetEquip(st)
         return 'running'
       }
+      // Hand recheck (revmux 01): firing with a water bucket would POUR
+      // instead of scooping — re-equip inside the budget instead.
+      if (!handHas(bot, 'bucket')) { clearEquipFlags(st); return 'running' }
       // Stance gate, B only: B is the support water the hover floats in,
       // and scooping it off-stand drops the body past the stand edge into
       // the shaft (replay no-gain). An airborne hover outside the scoop
@@ -916,4 +945,7 @@ module.exports = {
   findLedgePour,
   findCombo,
   waterUpRun,
+  equipStep,
+  resetEquip,
+  handHas,
 }

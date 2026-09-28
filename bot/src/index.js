@@ -651,6 +651,17 @@ function fleeReflex(bot, ctx) {
   // A stale stuck fact must not survive a mode change: the goal it names
   // belongs to the previous order.
   function clearStuck() {
+    // ponytail: an order preempting a running water_up drops its poured
+    // sources with it (the strip only runs from ctx.recovery.st) — the water
+    // stays and the buckets read lost until gear refills them (jsf.5). A later
+    // strip cannot adopt them: scooping needs 4.4 reach and the body already
+    // left. Logged so prod shows the loss instead of hiding it.
+    try {
+      const rec = ctx.recovery
+      if (rec && rec.action === 'water_up' && rec.st && rec.st.sources && rec.st.sources.length > 0) {
+        console.log(`recover action=water_up outcome=dropped phase=${rec.st.phase || '?'} sources=${rec.st.sources.length} reason=order`)
+      }
+    } catch (_) { /* log best-effort */ }
     ctx.stuck = null
     ctx.recovery = null
     ctx.stuckTicks = 0

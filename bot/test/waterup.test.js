@@ -1067,6 +1067,98 @@ describe('waterup run', () => {
     assert.equal(mk(65.8), false, 'above cap releases')
   })
 
+  it('revmux 01: a swapped hand re-equips instead of pouring wrong', () => {
+    // The eat reflex swaps the hand between the equip and the use. A stale
+    // equipDone=true with food in hand must clear and re-equip (running),
+    // never activate (uses stays 0).
+    const bot = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
+    bot.entity.position = pos(0.5, 65.4, 0.5)
+    bot.heldItem = { name: 'bread', count: 1 }
+    const st = {
+      phase: 'pourB',
+      combo: {
+        A: { dest: { x: 0, y: 66, z: 0 } },
+        B: { dest: { x: 1, y: 67, z: 0 }, ref: { position: { x: 2, y: 67, z: 0 } }, face: [-1, 0, 0] },
+        plateauY: 65.4,
+      },
+      sources: [{ x: 0, y: 66, z: 0 }],
+      used: false,
+      waited: 0,
+      equipDone: true,
+    }
+    const out = waterup.waterUpRun(bot, { recovery: { st } })
+    assert.equal(out, 'running')
+    assert.equal(st.equipDone, false)
+    assert.equal(bot.uses, 0)
+  })
+
+  it('revmux 01: the strip never scoops with a water bucket in hand', () => {
+    // Firing the scoop while holding water would POUR instead — the hand
+    // recheck re-equips the empty bucket first.
+    const items = [{ name: 'bucket', count: 1 }, { name: 'water_bucket', count: 1 }]
+    const bot = worldBot(shaftWorld(), items)
+    bot.entity.position = pos(1.5, 67, 0.5)
+    bot.entity.onGround = true
+    bot.heldItem = items[1]
+    bot._waters.add(key(1, 67, 0))
+    const st = {
+      phase: 'strip',
+      combo: { B: { dest: { x: 1, y: 67, z: 0 }, below: { x: 1, y: 66, z: 0 } } },
+      stripLeft: [{ x: 1, y: 67, z: 0 }],
+      stripTries: 0, used: false, equipDone: true,
+    }
+    const out = waterup.waterUpRun(bot, { recovery: { st } })
+    assert.equal(out, 'running')
+    assert.equal(st.equipDone, false)
+    assert.equal(bot.uses, 0)
+  })
+
+  it('revmux 01: a swapped hand skips the plateau fast path', () => {
+    // Pre-equipped but the hand now holds food: the fast path must not fire
+    // (it would eat); it falls through to pourB, which re-equips.
+    const bot = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
+    bot.entity.position = pos(0.5, 65.5, 0.5)
+    bot.heldItem = { name: 'bread', count: 1 }
+    // Seed the combo the swim expects (normally set by scan→pourA).
+    const st = {
+      phase: 'swim', waited: 3, lastY: 61, lastGainTick: 3, equipDone: true, used: false,
+      combo: { A: { dest: { x: 0, y: 66, z: 0 } }, plateauY: 65.4 },
+      sources: [{ x: 0, y: 66, z: 0 }],
+    }
+    const ctx = { recovery: { st } }
+    const out = waterup.waterUpRun(bot, ctx)
+    assert.equal(out, 'running')
+    assert.equal(st.phase, 'pourB')
+    assert.equal(st.used, false)
+    assert.equal(st.equipDone, false)
+    assert.equal(bot.uses, 0)
+  })
+
+  it('revmux 01: a late equip completion cannot set flags after a reset', async () => {
+    // A hung equip that resolves after toStripFail→resetEquip must not write
+    // equipDone into the strip's fresh state (generation guard).
+    const items = [{ name: 'water_bucket', count: 1 }]
+    const bot = worldBot(shaftWorld(), items)
+    let release
+    bot.equip = (item) => new Promise((res) => { release = () => { bot.heldItem = item; res() } })
+    const st = {}
+    assert.equal(waterup.equipStep(bot, st, 'water_bucket', 10), 'running')
+    assert.equal(st.equipInFlight, true)
+    waterup.resetEquip(st)
+    release()
+    await flush()
+    await flush()
+    assert.equal(st.equipDone, false, 'late completion ignored')
+    assert.equal(st.equipInFlight, false)
+    // Control: without the reset the same completion lands.
+    const st2 = {}
+    assert.equal(waterup.equipStep(bot, st2, 'water_bucket', 10), 'running')
+    release()
+    await flush()
+    await flush()
+    assert.equal(st2.equipDone, true)
+  })
+
   it('plateau fast path: B activates same-tick when pre-equipped', async () => {
     // Rig DUGPIT: the plateau eye sits at the TOP of the B window and one
     // more rising tick exits it, so the swim pre-equips the 2nd bucket and
