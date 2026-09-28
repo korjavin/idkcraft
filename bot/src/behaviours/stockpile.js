@@ -16,9 +16,13 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 
-// Candidate chest cells, site-relative (table is BLUEPRINT[0] at (4,0,1),
-// so (5,0,1) is table+1 east). All sit beside the east wall, clear of the
-// door walk cell (1,0,-1) and the interior.
+// Candidate chest cells, site-relative. v1 (frozen): table is BLUEPRINT[0]
+// at (4,0,1), so (5,0,1) is table+1 east; all sit beside the east wall,
+// clear of the door walk cell (1,0,-1) and the interior. v2 (jr2.1): inside
+// the common room — (5,0,2) first, then fallbacks clear of the door path
+// (3,1)-(3,2) and the bedroom approaches (2,2),(4,2). The day steps use the
+// indoor chest from outside through the wall (live-verified on the rig:
+// open, deposit and withdraw all work within reach).
 const CHEST_SPOTS = [
   { dx: 5, dy: 0, dz: 1 },
   { dx: 4, dy: 0, dz: 0 },
@@ -27,6 +31,21 @@ const CHEST_SPOTS = [
   { dx: 5, dy: 0, dz: 2 },
   { dx: 6, dy: 0, dz: 1 },
 ]
+
+const CHEST_SPOTS_V2 = [
+  { dx: 5, dy: 0, dz: 2 },
+  { dx: 1, dy: 0, dz: 2 },
+  { dx: 2, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 1 },
+  { dx: 4, dy: 0, dz: 1 },
+]
+
+// Candidate cells by home version: v2 homes bank inside the common room,
+// anything else (v1, or a home that predates the version mark) beside the
+// east wall as before.
+function spotsFor(home) {
+  return home && home.v === 2 ? CHEST_SPOTS_V2 : CHEST_SPOTS
+}
 
 // Never banked: worn/carried kit (same shape as bring share keeps), the
 // light fuel rw4.13 counts from the inventory (torch, coal, charcoal and
@@ -179,6 +198,7 @@ function blockNameAt(bot, x, y, z) {
 function chestSpotFor(bot, ctx) {
   const site = ctx && ctx.home && ctx.home.site
   if (!site || typeof site.x !== 'number') return null
+  const spots = spotsFor(ctx.home)
   let sawUnknown = false
   const cell = (s) => {
     const x = site.x + s.dx
@@ -188,11 +208,11 @@ function chestSpotFor(bot, ctx) {
     if (at === null) { sawUnknown = true; return null }
     return { x, y, z, at }
   }
-  for (const s of CHEST_SPOTS) {
+  for (const s of spots) {
     const c = cell(s)
     if (c && c.at === 'chest') return { x: c.x, y: c.y, z: c.z, adopt: true }
   }
-  for (const s of CHEST_SPOTS) {
+  for (const s of spots) {
     const c = cell(s)
     if (!c) continue
     if (c.at !== 'air' && !CLEAR_FLORA.has(c.at)) continue
@@ -214,7 +234,7 @@ function chestTodo(bot, ctx, maxPlanks) {
   try {
     const site = ctx && ctx.home && ctx.home.site
     if (site && typeof site.x === 'number') {
-      for (const s of CHEST_SPOTS) {
+      for (const s of spotsFor(ctx.home)) {
         if (blockNameAt(bot, site.x + s.dx, site.y + s.dy, site.z + s.dz) === 'chest') return 'adopt'
       }
     }
@@ -715,6 +735,8 @@ module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
+module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
+module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
 module.exports.CHEST_FULL_RETRY_MS = CHEST_FULL_RETRY_MS

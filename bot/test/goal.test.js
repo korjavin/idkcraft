@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
 const resources = require('../src/resources')
 const home = require('../src/behaviours/home')
 
@@ -33,7 +33,12 @@ function goalBot({ items = [], timeOfDay = 6000, at = pos(0, 64, 0), spawn = pos
 describe('goal constants and menu shape', () => {
   it('house budget constants', () => {
     assert.equal(NEED_LOGS, 14)
-    assert.equal(NEED_PLANKS, 48)
+    assert.equal(NEED_PLANKS, 102) // v2: 92 walls+roof+partition + table 4 + door 6
+    assert.equal(NEED_PLANKS_V1, 48) // adopted v1 huts keep the old budget
+    assert.equal(needPlanks(null), 102) // no home: a new site is founded v2
+    assert.equal(needPlanks({ site: pos(1, 2, 3) }), 48) // unmarked home: a pre-patch v1
+    assert.equal(needPlanks({ site: pos(1, 2, 3), v: 1 }), 48)
+    assert.equal(needPlanks({ site: pos(1, 2, 3), v: 2 }), 102)
   })
 
   it('menu has all thirteen steps with feasible and chat functions', () => {
@@ -93,8 +98,17 @@ describe('goalFacts', () => {
 
   it('goalText is the canonical facts line', () => {
     assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 48, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 102, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready')
     assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
+    // Version-aware plank bucket (revmux body-2): a v1-sized kit reads
+    // 'enough' on a v1 home (so laya still matches build there) and 'few'
+    // on a v2 home or none.
+    const v1line = { time: 'day', logs: 0, planks: 50, table: 1, door: 1, home: 'site', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }
+    const v1home = { site: pos(6, 64, 0), v: 1 }
+    const v2home = siteFor(goalBot(), pos(0, 64, 0))
+    assert.ok(goalText(v1line, v1home).includes('planks=enough'), 'v1 budget met reads enough')
+    assert.ok(goalText(v1line, v2home).includes('planks=few'), 'same kit reads few on v2')
+    assert.ok(goalText(v1line).includes('planks=few'), 'no home defaults to the v2 budget')
   })
 })
 
@@ -114,11 +128,17 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('craft', { ...base, logs: 1, planks: 46, table: 1, door: 1 }), false)
     // Sufficient material but no site: build defaults the site to spawn
     // (bead .4 batch gate); the owner moves it with 'build here'.
-    const ready = { ...base, logs: 0, planks: 48, table: 1, door: 1, home: 'none' }
+    const ready = { ...base, logs: 0, planks: 104, table: 1, door: 1, home: 'none' }
     assert.equal(F('gather', ready), false)
     assert.equal(F('craft', ready), false)
     assert.equal(F('build', ready, goalBot(), {}), true)
     assert.equal(goalFsm(ready, ['rest']), 'rest')
+    // Version-aware budget: a v1-sized kit ends a v1 repair gather but not a v2 one.
+    const v1ctx = { home: { site: pos(6, 64, 0), v: 1 } }
+    const v2ctx = { home: siteFor(goalBot(), pos(0, 64, 0)) }
+    const kit = { ...base, logs: 0, planks: 50, table: 1, door: 1, home: 'site' }
+    assert.equal(F('gather', kit, goalBot(), v1ctx), false)
+    assert.equal(F('gather', kit, goalBot(), v2ctx), true)
   })
   it('craft starts on a full load, not on the first log', () => {
     assert.equal(F('craft', base), false)
@@ -227,7 +247,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     // all refuse, explore stays gated, rest fills the gap.
     const bot = goalBot({
       // Geared (atl.6): a tool-less kit with a table would rearm first.
-      items: [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
+      items: [{ name: 'oak_planks', count: 104 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
         { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }],
       spawn: null,
     })
@@ -620,6 +640,15 @@ describe('decide decision point', () => {
     assert.equal(r.step, 'craft')
     assert.equal(r.source, 'laya')
     assert.equal(r.fsm, 'craft')
+    // Round-2 minor: the home must reach the asked text, or a v1-sized kit
+    // silently reports planks=few to laya again (the body-2 regression).
+    const seen = {}
+    const spy = { source: 'laya', ask: async (q) => { seen.state = q && q.state; return 'rest' } }
+    const v1facts = { ...facts, logs: 0, planks: 50, maxPlanks: 50, table: 1, door: 1, home: 'site' }
+    await chooseStep(spy, v1facts, ['craft', 'gather', 'rest'], { site: pos(6, 64, 0), v: 1 })
+    assert.ok(String(seen.state).includes('planks=enough'), 'v1 home: asked text reads enough')
+    await chooseStep(spy, v1facts, ['craft', 'gather', 'rest'])
+    assert.ok(String(seen.state).includes('planks=few'), 'no home: asked text reads few')
     // ...while a rest answer against a gather fsm is the disagreement case:
     // STEP_ORDER ranks craft above gather, so no menu can pair a craft answer
     // with a gather fsm — the machinery is proven on rest-vs-gather instead.

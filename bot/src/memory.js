@@ -80,7 +80,7 @@ function homeOf(h) {
   if (!h || !h.site) return null
   const site = v3(h.site)
   if (!site) return null
-  const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true }
+  const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true, v: h && h.v === 2 ? 2 : 1 }
   try {
     if (h.interior && h.interior.min && h.interior.max) {
       const min = v3(h.interior.min)

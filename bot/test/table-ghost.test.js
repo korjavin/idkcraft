@@ -106,8 +106,8 @@ describe('h9z menu on the prod facts (153 planks, ghost table, home=site)', () =
     const bot = baseBot(world, items)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)) }
     const s = ctx.home.site
-    ctx.home.table = pos(s.x + 4, s.y, s.z + 1) // ghost: claimed, cell is air
-    bot.entity.position = pos(s.x + 4, s.y + 1, s.z + 1)
+    ctx.home.table = pos(s.x + 5, s.y, s.z + 1) // ghost: claimed, cell is air (v2 plan cell)
+    bot.entity.position = pos(s.x + 5, s.y + 1, s.z + 1)
     return { world, bot, ctx, items }
   }
   it('facts line matches the prod shape', () => {
@@ -140,12 +140,28 @@ describe('h9z menu on the prod facts (153 planks, ghost table, home=site)', () =
     const { world, bot, ctx, items } = prodSetup()
     items.push({ name: 'crafting_table', count: 1 })
     const s = ctx.home.site
-    world.set(s.x + 4, s.y, s.z + 1, 'crafting_table') // build laid it
+    world.set(s.x + 5, s.y, s.z + 1, 'crafting_table') // build laid it (v2 plan cell)
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(goal.MENU.equip.feasible(facts, bot, ctx), true)
     assert.equal(goal.stepWhy('equip', facts, bot, ctx, ''), null)
-    world.set(s.x + 4, s.y, s.z + 1, 'air')
+    world.set(s.x + 5, s.y, s.z + 1, 'air')
     ctx.buildSkip = [0] // table cell refused x3: roadside is the only station left
+    assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
+  })
+  it('v1 home: equip waits on the v1 plan cell (+4), not v2 (+5)', () => {
+    // Round-3 gap: the ghost tests moved to v2 with siteFor, leaving the v1
+    // branch of tableYieldToBuild unpinned. A v2-cell-everywhere refactor
+    // would read air at +5 on a v1 hut and hold the rearm forever.
+    const world = makeWorld()
+    const items = [{ name: 'oak_planks', count: 48 }, { name: 'crafting_table', count: 1 }]
+    const bot = baseBot(world, items)
+    const ctx = { home: { site: { x: 6, y: 64, z: 0 }, v: 1 }, buildSkip: [] }
+    const s = ctx.home.site
+    ctx.home.table = pos(s.x + 4, s.y, s.z + 1) // ghost: claimed, cell is air
+    assert.equal(goal.MENU.build.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
+    assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
+    assert.equal(goal.stepWhy('equip', goal.goalFacts(bot, ctx), bot, ctx, ''), 'equip: waiting for the house table')
+    world.set(s.x + 4, s.y, s.z + 1, 'crafting_table') // build laid it
     assert.equal(goal.MENU.equip.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
   })
   it('homeless bot with a table yields to build when build can lay it', () => {
@@ -265,8 +281,8 @@ describe('h9z ticker: ghost table -> craft -> place -> rearm, no forage loop', (
     ctx.work = true
     ctx.home = goal.siteFor(bot, pos(0, 64, 0))
     const s = ctx.home.site
-    ctx.home.table = pos(s.x + 4, s.y, s.z + 1) // ghost: claimed, cell is air
-    bot.entity.position = pos(s.x + 4, s.y + 1, s.z + 1)
+    ctx.home.table = pos(s.x + 5, s.y, s.z + 1) // ghost: claimed, cell is air (v2 plan cell)
+    bot.entity.position = pos(s.x + 5, s.y + 1, s.z + 1)
     const lines = []
     const origLog = console.log
     const origErr = console.error
@@ -290,7 +306,7 @@ describe('h9z ticker: ghost table -> craft -> place -> rearm, no forage loop', (
       assert.ok(actions.includes('build'), `build lays the table: ${actions.join(',')}`)
       assert.ok(actions.includes('equip'), `equip rearms: ${actions.join(',')}`)
       assert.ok(!actions.includes('forage'), `never detours to forage: ${actions.join(',')}`)
-      assert.equal(world.get(s.x + 4, s.y, s.z + 1), 'crafting_table', 'site table stands')
+      assert.equal(world.get(s.x + 5, s.y, s.z + 1), 'crafting_table', 'site table stands')
       assert.ok(items.some((i) => i.name === 'wooden_pickaxe'), 'pickaxe rearmed')
       assert.ok(items.some((i) => i.name === 'wooden_sword'), 'sword rearmed')
       const failures = lines.filter((l) => l.includes('no-table'))
