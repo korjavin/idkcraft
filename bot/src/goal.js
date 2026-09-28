@@ -61,10 +61,17 @@ const MENU = {
     // sticks-or-planks-or-logs plus a table, inventory or placed), scaffold
     // blocks only once geared (they dig by hand). Blocks alone never preempt
     // early gather: a fresh bot chops first, digs later.
-    feasible: (facts) => {
+    feasible: (facts, bot, ctx) => {
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
         if (!equipWant(facts)) return false
-        return (facts.table || 0) > 0 || !!facts.tablePlaced
+        if ((facts.table || 0) <= 0 && !facts.tablePlaced) return false
+        // The house table first (h9z): while build can lay the site table,
+        // the table item belongs to build — placing roadside instead would
+        // eat the item build needs and strand the house (prod: 153 planks,
+        // home=site, door=yes, no table, equip failing no-table on a ghost
+        // claim while forage looped as the only option).
+        if ((facts.table || 0) > 0 && tableYieldToBuild(facts, bot, ctx)) return false
+        return true
       }
       // Deferred require (same cycle as registered() below): goal.js loads
       // inside the equip->craft->goal chain, so the mark is read at decide()
@@ -257,6 +264,54 @@ function equipWant(facts) {
   return null
 }
 
+// A claimed table station the world still shows (h9z): the claim plus a
+// live block read, furnace-furnaceReady precedent. A verified-different
+// block (air: mined table) is a ghost and reads as no station, so craft
+// rebuilds from planks instead of equip failing no-table forever. Null or
+// a throwing read keeps the claim: an unloaded chunk is unknown, never
+// gone — a bot far from home must not rebuild tables every trip.
+function stationStanding(bot, pos) {
+  try {
+    if (!pos || typeof pos.x !== 'number') return false
+    let block = null
+    try {
+      block = bot && bot.blockAt ? bot.blockAt(new Vec3(pos.x, pos.y, pos.z)) : null
+    } catch (_) {
+      return true
+    }
+    if (!block) return true
+    return block.name === 'crafting_table'
+  } catch (_) {
+    return true
+  }
+}
+
+// While build can lay the house table, equip's table item belongs to build
+// (h9z): a homeless bot yields so build founds the site and lays it there;
+// a sited bot yields while the blueprint table cell stands empty. A stood,
+// skipped (refused x3), or unlayable cell releases the item to the roadside
+// branch, as does an unregistered or infeasible build — equip must never
+// wait on a step that cannot run.
+function tableYieldToBuild(facts, bot, ctx) {
+  try {
+    if (!registered('build')) return false
+    let feasible = false
+    try {
+      feasible = !!MENU.build.feasible(facts, bot, ctx)
+    } catch (_) {
+      return false
+    }
+    if (!feasible) return false
+    const home = ctx && ctx.home
+    if (!home || !home.site) return true
+    const skip = Array.isArray(ctx.buildSkip) ? ctx.buildSkip : []
+    if (skip.includes(0)) return false
+    return !buildMod.cellDone(bot, home, BLUEPRINT[0])
+  } catch (_) {
+    return false
+  }
+}
+
 // Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
@@ -440,7 +495,11 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.
-  const tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
+  // Both claims verify against the world (h9z): a ghost (mined table)
+  // reads as no station so craft rebuilds instead of equip failing
+  // no-table forever; an unloaded chunk keeps its claim (stationStanding).
+  const tablePlaced = stationStanding(bot, ctx && ctx.home && ctx.home.table) ||
+    stationStanding(bot, ctx && ctx.claimedTable)
   // Home chest (atl.14): adopted coords, the no-chest todo, batched live
   // surplus, and the full park. Surplus flips only past SURPLUS_BATCH:
   // banking preempts forage, so one dug block must not re-fire the
@@ -604,7 +663,7 @@ function goalFsm(facts, feasibleNames) {
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
   gather: 'logs is none or few and home is not built: chop trees',
-  craft: 'logs is enough or planks are few or door is no: craft planks, table and door',
+  craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
@@ -734,9 +793,13 @@ function stepWhy(name, facts, bot, ctx, text) {
       return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
     case 'equip': {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
-      // scaffold blocks only once geared.
+      // scaffold blocks only once geared, the house-table yield last (h9z).
       if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
       if (!equipWant(facts)) return 'equip: no materials'
+      if ((facts.table || 0) <= 0 && !facts.tablePlaced) return 'equip: no table'
+      try {
+        if ((facts.table || 0) > 0 && tableYieldToBuild(facts, bot, ctx)) return 'equip: waiting for the house table'
+      } catch (_) { /* wording best-effort: fall through to the table line */ }
       return 'equip: no table'
     }
     case 'build': {

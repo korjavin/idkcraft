@@ -310,6 +310,25 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
 
 // ---- live world ----
 
+// Verified table claim (h9z, furnace tableBlock shape): the claim plus a
+// live block read. Verified-different is a ghost (mined table); null or a
+// throwing read keeps the claim — an unloaded chunk is unknown, never gone.
+function stationStanding(bot, tablePos) {
+  try {
+    if (!tablePos || typeof tablePos.x !== 'number') return false
+    let block = null
+    try {
+      block = bot && bot.blockAt ? bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z)) : null
+    } catch (_) {
+      return true
+    }
+    if (!block) return true
+    return block.name === 'crafting_table'
+  } catch (_) {
+    return true
+  }
+}
+
 function liveCounts(bot, ctx) {
   let planks = 0
   let logs = 0
@@ -329,7 +348,10 @@ function liveCounts(bot, ctx) {
   let tablePlaced = false
   let furnaceClaim = false
   try {
-    tablePlaced = !!((ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
+    // Verified like the menu world (h9z: countsFromFacts reads the verified
+    // facts.tablePlaced): a ghost claim waits for a rebuild instead of
+    // failing no-table every pick. Null reads unloaded, never gone.
+    tablePlaced = !!stationStanding(bot, (ctx && ctx.home && ctx.home.table) || (ctx && ctx.claimedTable))
     furnaceClaim = !!(ctx && ctx.home && ctx.home.furnace)
   } catch (_) { /* no stations */ }
   return {
