@@ -52,7 +52,7 @@ Apply every lens you carry, in full, and tag each finding with the lens that rai
 - Report the confidence you actually have.
 - Say when a problem is pre-existing rather than introduced by the change.
 - Report one problem once, naming both lenses if both apply.
-- A finding a previous round raised (`findings-r*.json` in context) or the other agent on the panel
+- A finding a previous round raised (`findings-*.json` in context) or the other agent on the panel
   raised may be dropped or downgraded only with a written reason in the finding body; livelock and
   pathing findings that recur across rounds are the ones that came back as prod bugs (3nt.19 → ak4,
   ef3 → 9sq, 2bh → lzw).

@@ -30,5 +30,5 @@ Report the exact tick sequence: state before, what fires, what the next tick pic
   starts wedged, refuses a place at the jump apex (needs +250–350 ms on the ascent), refuses every
   dig/place inside spawn protection for a non-op bot. Say what Paper does to the packet the fix sends;
   a fix verified only on the fake harness for one of these classes is a **major**
-- a finding of this lens raised in a previous round (`findings-r*.json` in context) or by the other
+- a finding of this lens raised in a previous round (`findings-*.json` in context) or by the other
   agent on the panel may not be dropped or downgraded without a written reason in the finding body
