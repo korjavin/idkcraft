@@ -36,6 +36,7 @@ const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
+const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
 // Reach check: head (eyes) to cell CENTRE. GoalPlaceBlock.isEnd measures
 // head-to-face-centre <= PLACE_RANGE; the clicked face centre sits up to
 // ~1 off the cell centre and the float head up to ~0.9 off the
@@ -378,14 +379,27 @@ function build(bot, ctx, target, state) {
   // At the cell (or the walk never started): place — but only in reach.
   // A preemption that carried the body away (fight, flee, lead, follow me)
   // leaves a stale buildGoalIdx: attempting from out there burns refusals
-  // and skips a good cell, so force a fresh approach instead. Counted like
-  // a refusal: a cell the walk can never reach ends skipped, not looping.
+  // and skips a good cell, so force a fresh approach instead. Counted on
+  // its own streak, forgiven by approach progress: a long walk-in crosses
+  // far-idle ticks between A* timeout segments (the pathfinder never
+  // chains them by itself), and those must not spend refusal strikes nor
+  // combine with them — only a stand that stops getting closer skips the
+  // cell as 'unreachable' (revmux 01 major).
   try {
     const bp = bot.entity && bot.entity.position
-    if (bp && typeof bp.x === 'number' &&
-        Math.hypot(bp.x - (p.x + 0.5), (bp.y + 1.6) - (p.y + 0.5), bp.z - (p.z + 0.5)) > PLACE_REACH) {
-      ctx.buildFails = (ctx.buildFails || 0) + 1
-      if (ctx.buildFails >= 3) skipCell(ctx, idx, p, 'unreachable')
+    const farDist = bp && typeof bp.x === 'number'
+      ? Math.hypot(bp.x - (p.x + 0.5), (bp.y + 1.6) - (p.y + 0.5), bp.z - (p.z + 0.5))
+      : -1
+    if (farDist > PLACE_REACH) {
+      if (ctx.buildFarIdx !== idx) {
+        ctx.buildFarIdx = idx
+        ctx.buildFarFails = 0
+        ctx.buildFarDist = farDist
+      }
+      if (farDist < ctx.buildFarDist - FAR_PROGRESS) ctx.buildFarFails = 0
+      else ctx.buildFarFails = (ctx.buildFarFails || 0) + 1
+      ctx.buildFarDist = farDist
+      if (ctx.buildFarFails >= 3) skipCell(ctx, idx, p, 'unreachable')
       else ctx.buildGoalIdx = -1
       return
     }

@@ -1008,4 +1008,65 @@ describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
     const skips = lines.filter((l) => l.startsWith('build skip') && l.includes('unreachable'))
     assert.equal(skips.length, 1)
   })
+
+  // Revmux 01 major: a long walk-in crosses far-idle ticks between A*
+  // timeout segments — each stop nearer than the last forgives the streak,
+  // so an approaching body never skips, then places on arrival.
+  it('a walk-in that keeps getting closer is forgiven, then places', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const p = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // table cell
+    const dist = (fx) => Math.hypot(fx - (p.x + 0.5), (64 + 1.6) - (p.y + 0.5), 1.5 - (p.z + 0.5))
+    const legs = [-8.5, -3.4, 1.56, 6.01] // head-to-centre ≈ 20, 15, 10, 5.6
+    for (let i = 1; i < legs.length; i++) {
+      assert.ok(dist(legs[i]) < dist(legs[i - 1]) - 1, 'each leg shortens by >1')
+    }
+    assert.ok(dist(legs[3]) > build.PLACE_REACH, 'last leg still reads far')
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    legs.forEach((fx, i) => {
+      bot.entity.position = pos(fx, 64, 1.5)
+      build(bot, ctx, null, null) // (re)approach
+      build(bot, ctx, null, null) // far-idle tick at the nearer stand
+      assert.equal(ctx.buildFarFails, i === 0 ? 1 : 0, `leg ${i} at ${fx}`)
+    })
+    assert.deepEqual(ctx.buildSkip, [])
+    bot.entity.position = pos(9, 64, 1.5) // in reach: the walk ends
+    build(bot, ctx, null, null)
+    build(bot, ctx, null, null)
+    await settle()
+    assert.equal(bot.calls.places.length, 1)
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  // Revmux 01 major: far resets run on their own streak — two refusals
+  // plus one preemption resume must not combine into a skip.
+  it('refusals and a resume reset do not combine into a skip', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }], failPlace: true })
+    bot.entity.position = pos(9, 64, 1.5) // in reach of the table cell
+    const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    build(bot, ctx, null, null) // approach
+    build(bot, ctx, null, null) // flight 1: refusal 1
+    await settle()
+    build(bot, ctx, null, null) // flight 2: refusal 2
+    await settle()
+    assert.equal(ctx.buildFails, 2)
+    bot.entity.position = pos(-8.5, 64, 1.5) // preemption carries the body far
+    build(bot, ctx, null, null) // resume reset: far streak 1, refusals untouched
+    assert.equal(ctx.buildFails, 2)
+    assert.equal(ctx.buildFarFails, 1)
+    assert.deepEqual(ctx.buildSkip, [])
+    bot.entity.position = pos(9, 64, 1.5) // walked back; the blockage cleared
+    bot.placeBlock = async (ref, face) => {
+      bot.calls.places.push([ref, face])
+      const rp = (ref && ref.position) || ref
+      world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+    }
+    build(bot, ctx, null, null) // re-approach
+    build(bot, ctx, null, null) // flight 3: lands
+    await settle()
+    assert.equal(bot.calls.places.length, 3, 'two refused attempts + the landing')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
 })
