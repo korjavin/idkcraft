@@ -582,6 +582,8 @@ function goalFacts(bot, ctx) {
   const ironSword = countItems(bot, (n) => n === 'iron_sword')
   const diamondPick = countItems(bot, (n) => n === 'diamond_pickaxe')
   const diamondSword = countItems(bot, (n) => n === 'diamond_sword')
+  const bucket = countItems(bot, (n) => n === 'bucket')
+  const waterBucket = countItems(bot, (n) => n === 'water_bucket')
   const furnaceItem = countItems(bot, (n) => n === 'furnace')
   // Top single-wood plank count: recipes cannot mix wood types (see above).
   let maxPlanks = 0
@@ -693,7 +695,7 @@ function goalFacts(bot, ctx) {
   let gear = 'done'
   try {
     const gm = require('./behaviours/gear')
-    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
+    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
   } catch (_) { /* unreadable ladder */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
@@ -706,7 +708,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, furnaceItem, furnace, gearHandover, gear }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, furnaceItem, furnace, gearHandover, gear }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
