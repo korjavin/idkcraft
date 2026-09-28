@@ -108,7 +108,7 @@ function explore(bot, ctx, target, state) {
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.near(ctx, { x, z }))
+    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
       // across restarts, a done-log every tick forever): start over from

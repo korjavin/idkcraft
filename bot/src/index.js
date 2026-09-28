@@ -2454,8 +2454,13 @@ function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
   // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
-  // search rings never walk the same monument cell twice in a day.
-  try { dangerMod.markWaterDeath(bot, bot && bot._tickerCtx) } catch (_) { /* memory best-effort */ }
+  // search rings never walk the same monument cell twice in a day. The
+  // in-flight leg target drops with it (revmux 01): without the clear the
+  // respawned bot re-paths to the same leg target through the same water.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (dangerMod.markWaterDeath(bot, ctx)) bringMod.clearSearchLeg(ctx)
+  } catch (_) { /* memory best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {

@@ -51,18 +51,33 @@ function mark(ctx, p, now, radius) {
   return mem.spots.length
 }
 
-// True when (x, z) lies within radius of a live mark. An explicit radius
-// covers every mark uniformly; without one each mark uses its own width
-// (9kd: a water-death disc bans ring picks 32 out, pit marks still 6).
+// True when (x, z) lies within radius of a live mark. Uniform: every mark
+// reads at the one radius (default AVOID_RADIUS), so pit-identity gates
+// (recover's stuck chats) and gather/flat/deep bans never widen under a
+// water disc (revmux 01). Per-mark width is covers(), the ring search only.
 function near(ctx, p, radius, now) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return false
   if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return false
-  const r = typeof radius === 'number' ? radius : null
+  const r = typeof radius === 'number' ? radius : AVOID_RADIUS
   const t = typeof now === 'number' ? now : Date.now()
   for (const s of mem.spots) {
     if (t - s.at > TTL_MS) continue
-    if (Math.hypot(s.x - p.x, s.z - p.z) <= (r === null ? spotRadius(s) : r)) return true
+    if (Math.hypot(s.x - p.x, s.z - p.z) <= r) return true
+  }
+  return false
+}
+
+// True when (x, z) lies within some live mark's OWN disc (9kd: the explore
+// ring ban — a water-death disc bans picks 32 out, pit marks still 6).
+function covers(ctx, p, now) {
+  const mem = ctx && ctx.danger
+  if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return false
+  if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return false
+  const t = typeof now === 'number' ? now : Date.now()
+  for (const s of mem.spots) {
+    if (t - s.at > TTL_MS) continue
+    if (Math.hypot(s.x - p.x, s.z - p.z) <= spotRadius(s)) return true
   }
   return false
 }
@@ -88,23 +103,41 @@ function spots(ctx, now) {
   } catch (_) { return [] }
 }
 
+// Blocks that mean "the body is in water" (revmux 01): monuments sit in
+// deep ocean, where the death cell is often kelp/seagrass/bubble, not
+// plain water — exact-'water' would miss those guardian kills.
+const WATER_BLOCKS = new Set(['water', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
+
+function blockName(bot, p) {
+  try {
+    const b = bot && bot.blockAt && p ? bot.blockAt(p) : null
+    return b && typeof b.name === 'string' ? b.name : null
+  } catch (_) { return null }
+}
+
 // Death in water (9kd): guardians are not in the hostile snapshot, so a
 // monument kill reads as nearest=none and nothing was ever marked — the
 // sheep search walked the same cell again 3 hours later. Any water death
 // marks the wide disc: even a zombie-chased drowning means dangerous
-// water, and the TTL bounds the ban. True when marked, never throws.
+// water, and the TTL bounds the ban. Feet first, then the head cell (a
+// bobbing body straddles the surface). True when marked, never throws.
 function markWaterDeath(bot, ctx, now) {
   try {
     const pos = bot && bot.entity && bot.entity.position
-    if (!pos || typeof pos.x !== 'number' || !ctx) return false
-    let name = null
+    if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number' || !ctx) return false
+    if (WATER_BLOCKS.has(blockName(bot, pos))) {
+      mark(ctx, pos, now, WATER_RADIUS)
+      return true
+    }
+    let head = null
     try {
-      const b = bot.blockAt && bot.blockAt(pos)
-      name = b && b.name
-    } catch (_) { name = null }
-    if (name !== 'water') return false
-    mark(ctx, pos, now, WATER_RADIUS)
-    return true
+      head = typeof pos.offset === 'function' ? pos.offset(0, 1, 0) : { x: pos.x, y: pos.y + 1, z: pos.z }
+    } catch (_) { head = null }
+    if (WATER_BLOCKS.has(blockName(bot, head))) {
+      mark(ctx, pos, now, WATER_RADIUS)
+      return true
+    }
+    return false
   } catch (_) { return false }
 }
 
@@ -126,4 +159,4 @@ function clear(ctx) {
   if (ctx && ctx.danger && Array.isArray(ctx.danger.spots)) ctx.danger.spots.length = 0
 }
 
-module.exports = { mark, near, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
+module.exports = { mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }

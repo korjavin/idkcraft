@@ -41,7 +41,7 @@ function deathBot(at, blockName) {
     time: { timeOfDay: 6000, day: 5 },
     spawnPoint: pos(0, 64, 0),
     entity: { position: pos(at.x, at.y, at.z) },
-    blockAt: () => ({ name: blockName }),
+    blockAt: (p) => ({ name: typeof blockName === 'function' ? blockName(p) : blockName }),
     chat: () => {},
   }
   bot._tickerCtx = ctx
@@ -109,15 +109,15 @@ function quiet(fn) {
 }
 
 describe('9kd water death marks a wide danger disc', () => {
-  it('death in water marks, 20 out reads near, 33 out reads far', () => {
+  it('death in water marks, 20 out reads covered, 33 out reads far', () => {
     const { bot, ctx } = deathBot(MONUMENT, 'water')
     let marked = false
     quiet(() => { marked = danger.markWaterDeath(bot, ctx) })
     assert.equal(marked, true)
     assert.equal(danger.count(ctx), 1)
-    assert.equal(danger.near(ctx, { x: MONUMENT.x + 20, z: MONUMENT.z }), true)
-    assert.equal(danger.near(ctx, { x: MONUMENT.x + 32, z: MONUMENT.z }), true, 'boundary inclusive')
-    assert.equal(danger.near(ctx, { x: MONUMENT.x + 33, z: MONUMENT.z }), false)
+    assert.equal(danger.covers(ctx, { x: MONUMENT.x + 20, z: MONUMENT.z }), true)
+    assert.equal(danger.covers(ctx, { x: MONUMENT.x + 32, z: MONUMENT.z }), true, 'boundary inclusive')
+    assert.equal(danger.covers(ctx, { x: MONUMENT.x + 33, z: MONUMENT.z }), false)
     assert.equal(danger.WATER_RADIUS, 32)
   })
 
@@ -127,14 +127,44 @@ describe('9kd water death marks a wide danger disc', () => {
     assert.equal(danger.count(ctx), 0)
   })
 
+  it('revmux 01: kelp/seagrass feet and a water head count as a water death', () => {
+    for (const name of ['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column']) {
+      const { bot, ctx } = deathBot(MONUMENT, name)
+      assert.equal(danger.markWaterDeath(bot, ctx), true, name)
+      assert.equal(danger.count(ctx), 1)
+    }
+    const feet = MONUMENT.y
+    const { bot, ctx } = deathBot(MONUMENT, (p) => (Math.floor(p.y) >= feet + 1 ? 'water' : 'sand'))
+    assert.equal(danger.markWaterDeath(bot, ctx), true, 'head under water')
+    const v3 = deathBot(MONUMENT, (p) => (Math.floor(p.y) >= feet + 1 ? 'water' : 'sand'))
+    v3.bot.entity.position.offset = (dx, dy, dz) => pos(MONUMENT.x + dx, MONUMENT.y + dy, MONUMENT.z + dz)
+    assert.equal(danger.markWaterDeath(v3.bot, v3.ctx), true, 'Vec3 offset path')
+    const dry = deathBot({ x: 10, y: 65, z: 20 }, (p) => (Math.floor(p.y) >= 66 ? 'air' : 'sand'))
+    assert.equal(danger.markWaterDeath(dry.bot, dry.ctx), false, 'dry feet and head')
+  })
+
   it('handleDeath wires the mark: water corpse bans the swim, dry corpse does not', () => {
     const wet = deathBot(MONUMENT, 'water')
     quiet(() => handleDeath(wet.bot, null))
     assert.equal(danger.count(wet.ctx), 1)
-    assert.equal(danger.near(wet.ctx, { x: MONUMENT.x, z: MONUMENT.z + 20 }), true)
+    assert.equal(danger.covers(wet.ctx, { x: MONUMENT.x, z: MONUMENT.z + 20 }), true)
     const dry = deathBot({ x: 10, y: 65, z: 20 }, 'stone')
     quiet(() => handleDeath(dry.bot, null))
     assert.equal(danger.count(dry.ctx), 0)
+  })
+
+  it('revmux 01: a water death drops the in-flight leg target, a dry one keeps it', () => {
+    const wet = deathBot(MONUMENT, 'water')
+    wet.ctx.explore = { visited: new Set(), target: { x: -200, z: -200 }, issuedKey: 'explore:-200,-200' }
+    wet.ctx.bring = { self: 'beds', phase: 'searchwalk' }
+    quiet(() => handleDeath(wet.bot, null))
+    assert.equal(wet.ctx.explore.target, null, 'leg re-picks past the disc instead of swimming back')
+    assert.equal(wet.ctx.explore.issuedKey, null)
+    assert.ok(wet.ctx.bring, 'the order itself survives, only the stale target drops')
+    const dry = deathBot({ x: 10, y: 65, z: 20 }, 'stone')
+    dry.ctx.explore = { visited: new Set(), target: { x: 50, z: 50 }, issuedKey: 'explore:50,50' }
+    quiet(() => handleDeath(dry.bot, null))
+    assert.deepEqual(dry.ctx.explore.target, { x: 50, z: 50 }, 'dry deaths keep the leg')
   })
 
   it('wide marks keep their width, default marks keep the old shape', () => {
@@ -145,9 +175,18 @@ describe('9kd water death marks a wide danger disc', () => {
       { x: 0, y: 64, z: 0, r: 32 },
       { x: 100, y: 64, z: 0 },
     ])
-    assert.equal(danger.near(ctx, { x: 20, z: 0 }, undefined, 1000), true, 'wide disc reaches 20')
-    assert.equal(danger.near(ctx, { x: 120, z: 0 }, undefined, 1000), false, 'default mark still 6')
-    assert.equal(danger.near(ctx, { x: 106, z: 0 }, undefined, 1000), true, 'default mark reaches 6')
+    assert.equal(danger.covers(ctx, { x: 20, z: 0 }, 1000), true, 'wide disc reaches 20')
+    assert.equal(danger.covers(ctx, { x: 120, z: 0 }, 1000), false, 'default mark still 6')
+    assert.equal(danger.covers(ctx, { x: 106, z: 0 }, 1000), true, 'default mark reaches 6')
+  })
+
+  it('revmux 01: near() stays uniform, so recover/gather/flat/deep never widen', () => {
+    const ctx = {}
+    danger.mark(ctx, { x: 0, y: 64, z: 0 }, 1000, 32)
+    assert.equal(danger.near(ctx, { x: 20, z: 0 }, undefined, 1000), false, 'wide disc reads 6 here')
+    assert.equal(danger.near(ctx, { x: 6, z: 0 }, undefined, 1000), true)
+    assert.equal(danger.covers(ctx, null, 1000), false)
+    assert.equal(danger.covers(null, { x: 0, z: 0 }, 1000), false)
   })
 
   it('garbage radius reads as default, huge clamps to MAX_RADIUS', () => {
@@ -186,6 +225,25 @@ describe('9kd ring search skips the water-death disc', () => {
     const ctx = {}
     danger.mark(ctx, { x: 0, y: 64, z: 0 }, Date.now())
     assert.equal(detour.via(ctx, { x: -100, y: 64, z: 10 }, { x: 100, y: 64, z: 10 }), null)
+  })
+
+  it('revmux 01: feet inside a wide disc still route around a mid-leg pit', () => {
+    const ctx = {}
+    danger.mark(ctx, { x: 0, y: 64, z: 0 }, Date.now(), danger.WATER_RADIUS)
+    danger.mark(ctx, { x: 60, y: 64, z: 0 }, Date.now())
+    // Feet 10 out of the water death: past the default feet hold, so the
+    // mid-leg pit (hit first along the walk) still gets its waypoint.
+    const w = detour.via(ctx, { x: 10, y: 64, z: 0 }, { x: 100, y: 64, z: 0 })
+    assert.ok(w, 'waypoint issued')
+    assert.ok(Math.hypot(w.x - 60, w.z - 0) > 6, `waypoint clears the pit: ${JSON.stringify(w)}`)
+    assert.ok(Math.hypot(w.x - 0, w.z - 0) > 32, `waypoint clears the disc: ${JSON.stringify(w)}`)
+  })
+
+  it('revmux 01: a leg ending inside a wide disc still goes direct', () => {
+    const ctx = {}
+    danger.mark(ctx, { x: 0, y: 64, z: 0 }, Date.now(), danger.WATER_RADIUS)
+    // Routing around a disc the leg ends inside would orbit it forever.
+    assert.equal(detour.via(ctx, { x: -100, y: 64, z: 0 }, { x: 10, y: 64, z: 0 }), null)
   })
 })
 
@@ -244,7 +302,7 @@ describe('9kd wide marks survive restart', () => {
 
   afterEach(() => {
     if (prevEnv === undefined) delete process.env.BOT_MEMORY_FILE
-    else process.env.BOT_MEMORY_FILE = file
+    else process.env.BOT_MEMORY_FILE = prevEnv
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch (_) { /* tmp best-effort */ }
   })
 
@@ -256,7 +314,7 @@ describe('9kd wide marks survive restart', () => {
     assert.equal(memory.save(botAt, ctx1, file, now), true)
     const ctx2 = {}
     assert.ok(memory.restore(botAt, ctx2, file, now))
-    assert.equal(danger.near(ctx2, { x: MONUMENT.x + 20, z: MONUMENT.z }, undefined, now), true)
-    assert.equal(danger.near(ctx2, { x: MONUMENT.x + 33, z: MONUMENT.z }, undefined, now), false)
+    assert.equal(danger.covers(ctx2, { x: MONUMENT.x + 20, z: MONUMENT.z }, now), true)
+    assert.equal(danger.covers(ctx2, { x: MONUMENT.x + 33, z: MONUMENT.z }, now), false)
   })
 })
