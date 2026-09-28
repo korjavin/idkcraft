@@ -7,7 +7,7 @@ const fightMod = require('./fight')
 const exploreMod = require('./explore')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal } = require('./util')
+const { say, clearGoal, denyReason, logDeny } = require('./util')
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -746,6 +746,13 @@ async function bring(bot, ctx, target, state) {
     try { block = bot.blockAt && bot.blockAt(o.pos) } catch (_) { block = null }
     if (!block || block.name !== o.block) {
       o.pos = null // vanished mid-order: search again
+      o.phase = 'find'
+      return
+    }
+    const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
+    if (bDeny) {
+      logDeny(block, bDeny)
+      o.pos = null // denied mid-order: search again, like a vanished block
       o.phase = 'find'
       return
     }

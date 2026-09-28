@@ -47,8 +47,8 @@ function mockBot({ registry = LOGREG, spots = [], names = {}, items = [] } = {})
       })
     },
     blockAt(p) {
-      const n = names[`${p.x},${p.y},${p.z}`]
-      return n ? { name: n } : null
+      const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+      return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
     },
     canDigBlock: () => true,
     dig: async () => { bot.digCalls++ },
@@ -120,7 +120,7 @@ describe('gather step', () => {
     let release = null
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     bot.dig = () => new Promise((resolve) => { release = resolve; bot.digCalls++ })
     const ctx = freshCtx()
@@ -140,7 +140,7 @@ describe('gather step', () => {
   it('(c) after the dig walks onto the drop with GoalBlock', async () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     const ctx = freshCtx()
     gather(bot, ctx, null, {})
@@ -363,7 +363,7 @@ describe('gather step', () => {
   it('progress timer spans the whole step, not each target', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
       items: [{ name: 'oak_log', count: 1 }],
     })
     const ctx = freshCtx()
@@ -534,7 +534,7 @@ describe('gather step', () => {
     const { createTicker } = require('../src/index')
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
     })
     const ticker = createTicker({
       bot,
@@ -576,7 +576,7 @@ describe('stuck-detector blind spots (idkcraft-68p)', () => {
   it('chopping line repeats only when the count grows', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
-      names: { '2,64,0': 'oak_log' },
+      names: { '2,64,0': 'oak_log', '2,65,0': 'oak_log', '3,65,0': 'oak_leaves' },
       items: [{ name: 'oak_log', count: 1 }],
     })
     const ctx = freshCtx()

@@ -10,6 +10,7 @@ const { addSwimExits } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
+const { trackPlaced } = require('./behaviours/util')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -212,6 +213,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
+    trackPlaced(bot, ctx) // idkcraft-drq: record own placements for the dig guard
   }
   let inFlight = false
   let lastTargetPos = null

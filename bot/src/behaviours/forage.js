@@ -25,7 +25,7 @@ const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
 const detour = require('../detour')
-const { say, clearGoal, botPos } = require('./util')
+const { say, clearGoal, botPos, denyReason, logDeny } = require('./util')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -538,6 +538,13 @@ function forage(bot, ctx, target, state) {
     let block = null
     try { block = blockAt(bot, t.pos.x, t.pos.y, t.pos.z) } catch (_) { block = null }
     if (!block || block.name !== t.name) {
+      try { resources.forget(ctx, t.pos.x, t.pos.y, t.pos.z) } catch (_) { /* memory best-effort */ }
+      if (!replan(bot, ctx, f, bp)) return
+      return
+    }
+    const fDeny = denyReason(bot, block, ctx) // idkcraft-drq: never strip owner structures
+    if (fDeny) {
+      logDeny(block, fDeny)
       try { resources.forget(ctx, t.pos.x, t.pos.y, t.pos.z) } catch (_) { /* memory best-effort */ }
       if (!replan(bot, ctx, f, bp)) return
       return

@@ -22,6 +22,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const craftMod = require('./craft')
 const buildMod = require('./build')
+const { denyReason, logDeny } = require('./util')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 
@@ -368,13 +369,20 @@ function placeTick(bot, ctx, home, idx) {
       if (occupier === 'torch' || occupier === 'wall_torch') {
         ctx.lightFails = 0 // landed while we walked: the torch stands
       } else if (occupier != null && occupier !== 'air' && buildMod.isReplaceable(occupier)) {
-        try {
-          await bot.dig(bot.blockAt(p))
-          await bot.equip(item, 'hand')
-          await bot.placeBlock(ref.ref, ref.face)
-          landed()
-        } catch (_) {
-          ctx.lightFails = fails() + 1
+        let cell = null
+        try { cell = bot.blockAt(p) } catch (_) { cell = null }
+        const clearDeny = cell && denyReason(bot, cell, ctx)
+        if (clearDeny) {
+          logDeny(cell, clearDeny) // idkcraft-drq: never clear foreign torches to light
+        } else {
+          try {
+            await bot.dig(cell || bot.blockAt(p))
+            await bot.equip(item, 'hand')
+            await bot.placeBlock(ref.ref, ref.face)
+            landed()
+          } catch (_) {
+            ctx.lightFails = fails() + 1
+          }
         }
       }
       if (fails() >= REFUSALS_TO_SKIP) skipSpot(bot, home, ctx, idx, p, occupier || 'refused')

@@ -773,11 +773,28 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.equal(ctx.flat.phase, 'shave')
     // Recover pillars cobble mid-episode on a stepped column (never scanned).
     world.set(3, 64, 0, 'cobblestone')
+    ctx.placedByBot = new Set(['3,64,0']) // recover pillar: bot-placed, sweepable (drq)
     ctx.flat.stepped.add('3,0')
     await drive(bot, ctx, 60)
     assert.equal(ctx.flat, null, 'episode ends')
     assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'air', 'bump shaved')
     assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'cobble swept')
     assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump') && c.includes('swept 1 leftover')), bot.chats.join('\n'))
+  })
+
+  it('leaves foreign cobble in stepped columns (drq protected)', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt') // one original bump: shave phase runs
+    const { bot, ctx } = started(world)
+    flat(bot, ctx, null, null); await settle() // scan
+    assert.equal(ctx.flat.phase, 'shave')
+    // Foreign cobble mid-episode on a stepped column (never scanned), and
+    // NOT in ctx.placedByBot: the sweep queues it, the guard keeps it.
+    world.set(3, 64, 0, 'cobblestone')
+    ctx.flat.stepped.add('3,0')
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'air', 'dirt bump shaved')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'cobblestone', 'foreign cobble kept')
   })
 })

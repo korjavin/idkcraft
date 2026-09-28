@@ -8,7 +8,7 @@ const danger = require('../danger')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
-const { say, clearGoal } = require('./util')
+const { say, clearGoal, denyReason, logDeny } = require('./util')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
 // function, same shape as lead.js/roam.js; registered in BEHAVIOURS under
@@ -265,6 +265,13 @@ function gather(bot, ctx, target, state) {
     // digging every tick breaks the executor and the count).
     if (ctx.digInFlight) return
     if (typeof bot.dig !== 'function') {
+      g.skip.add(keyOf(g.pos))
+      g.pos = null
+      return
+    }
+    const gDeny = denyReason(bot, g.block, ctx) // idkcraft-drq: placed logs are not trees
+    if (gDeny) {
+      logDeny(g.block, gDeny)
       g.skip.add(keyOf(g.pos))
       g.pos = null
       return

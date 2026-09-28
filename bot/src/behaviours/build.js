@@ -21,6 +21,7 @@
 // sends the bot back to gather/craft for the next batch.
 
 const Vec3 = require('vec3')
+const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 
 // Plan entry: cell offset from the home origin (SW corner, ground level)
@@ -356,13 +357,20 @@ function build(bot, ctx, target, state) {
       if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && isReplaceable(occupier)) {
-        try {
-          await bot.dig(bot.blockAt(p))
-          await bot.equip(item, 'hand')
-          await bot.placeBlock(ref.ref, ref.face)
-          ctx.buildFails = 0
-        } catch (_) {
-          ctx.buildFails = fails() + 1
+        let cell = null
+        try { cell = bot.blockAt(p) } catch (_) { cell = null }
+        const clearDeny = cell && denyReason(bot, cell, ctx)
+        if (clearDeny) {
+          logDeny(cell, clearDeny) // idkcraft-drq: never clear foreign torches to build
+        } else {
+          try {
+            await bot.dig(cell || bot.blockAt(p))
+            await bot.equip(item, 'hand')
+            await bot.placeBlock(ref.ref, ref.face)
+            ctx.buildFails = 0
+          } catch (_) {
+            ctx.buildFails = fails() + 1
+          }
         }
       }
       if (fails() >= 3) skipCell(ctx, idx, p, occupier || 'refused')

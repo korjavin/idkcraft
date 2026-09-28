@@ -49,12 +49,7 @@ const REPROBE_RADIUS = 32
 // floats) stamps a park so far legs don't each cost a walk home to
 // rediscover it; a freed spot retries within the hour (revmux 03-review).
 const NO_SPOT_RETRY_MS = 60 * 60 * 1000
-const CLEAR_FLORA = new Set([
-  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush',
-  'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
-  'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
-  'white_tulip', 'pink_tulip',
-])
+const { canBreak, CLEAR_FLORA } = require('./util')
 // A full chest parks the step, but only for this long: the owner empties
 // the chest by hand (no ctx write), so the park must expire and re-probe
 // instead of holding until a bring fetch or a restart (revmux 01-review).
@@ -642,7 +637,8 @@ function placeChest(bot, ctx, spot, bp) {
       try {
         const cell = bot.blockAt(new Vec3(spot.x, spot.y, spot.z))
         if (cell && cell.name && cell.name !== 'air' && cell.name !== 'chest' &&
-          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function') {
+          CLEAR_FLORA.has(cell.name) && typeof bot.dig === 'function' &&
+          canBreak(bot, cell, ctx)) {
           await bot.dig(cell)
         }
       } catch (_) {

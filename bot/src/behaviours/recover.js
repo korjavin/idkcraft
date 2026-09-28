@@ -20,7 +20,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
-const { botPos } = require('./util')
+const { botPos, denyReason, logDeny } = require('./util')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -547,6 +547,8 @@ function digUpRun(bot, ctx) {
   }
   if (typeof bot.dig !== 'function') return 'failed:no-dig'
   const cell = solid(head1) ? head1 : head2
+  const denyUp = denyReason(bot, cell, ctx)
+  if (denyUp) { logDeny(cell, denyUp); return 'failed:' + denyUp } // idkcraft-drq
   st.digInFlight = true
   void (async () => {
     try {
@@ -593,6 +595,8 @@ function digStepRun(bot, ctx) {
       return 'running'
     }
     if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+    const denyAbove = denyReason(bot, above, ctx)
+    if (denyAbove) { setJump(bot, false); logDeny(above, denyAbove); return 'failed:' + denyAbove } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
       try { await bot.dig(above) } catch (_) { st.digError = true } finally { st.digInFlight = false }
@@ -612,6 +616,8 @@ function digStepRun(bot, ctx) {
       return 'running'
     }
     if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+    const denyCap = denyReason(bot, cap, ctx)
+    if (denyCap) { setJump(bot, false); logDeny(cap, denyCap); return 'failed:' + denyCap } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
       try { await bot.dig(cap) } catch (_) { st.digError = true } finally { st.digInFlight = false }
@@ -858,6 +864,8 @@ function digThroughRun(bot, ctx) {
   }
   if (typeof bot.dig !== 'function') return 'failed:no-dig'
   const cell = solid(feet) ? feet : head
+  const denyThrough = denyReason(bot, cell, ctx)
+  if (denyThrough) { logDeny(cell, denyThrough); return 'failed:' + denyThrough } // idkcraft-drq
   st.digInFlight = true
   void (async () => {
     try {
