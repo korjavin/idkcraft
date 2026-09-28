@@ -203,6 +203,19 @@ function tableWoodOf(recipe, idToName) {
   return null
 }
 
+// Table recipes unfiltered (revmux 02 core-1/body-1): craftMod.recipes is
+// bot.recipesFor, which hides the table while the pack holds logs but no
+// planks yet — exactly when the make-path needs to SEE it. recipesAll
+// lists regardless of inventory; affordability is the caller's own count.
+function tableRecipes(bot) {
+  try {
+    const byName = (bot.registry && bot.registry.itemsByName) || {}
+    const e = byName.crafting_table
+    if (!e || typeof e.id !== 'number' || typeof bot.recipesAll !== 'function') return []
+    return bot.recipesAll(e.id, null, null) || []
+  } catch (_) { return [] }
+}
+
 // The table variant to make: the first affordable (4+ planks-worth of its
 // wood in the pack, logs counting quadruple) one that burns no wood the
 // final needs directly — otherwise the
@@ -215,7 +228,7 @@ function tableWoodOf(recipe, idToName) {
 function pickTableRecipe(bot, idToName, needs, pack) {
   let found = []
   try {
-    found = craftMod.recipes(bot, 'crafting_table', null) || []
+    found = tableRecipes(bot) || []
   } catch (_) { found = [] }
   if (!Array.isArray(found) || found.length === 0) return null
   const affordable = found.filter((r) => {
@@ -278,7 +291,7 @@ function planCraft(bot, ctx, names, count) {
   // Uniform per recipe shape, or variants compete on different packs.
   let reach = tablePathOf(bot, ctx, pack)
   try {
-    if (reach === 'make' && craftMod.recipes(bot, 'crafting_table', null).length === 0) reach = null
+    if (reach === 'make' && tableRecipes(bot).length === 0) reach = null
   } catch (_) { reach = null }
   let refusal = null
   let tableBlocked = null
@@ -454,7 +467,7 @@ function craftItem(bot, ctx, name, count) {
             )
             return 'running'
           }
-          const trec = plan.tableRecipe || craftMod.recipes(bot, 'crafting_table', null)[0]
+          const trec = plan.tableRecipe || tableRecipes(bot)[0]
           // Logs fund the table through a planks op for the table's own
           // wood first (did.4 core-1): the generic biggest-first op could
           // burn a whole other stack while this wood stays short. One op

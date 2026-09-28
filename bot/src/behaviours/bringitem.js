@@ -356,7 +356,16 @@ function bedGap(bot, o) {
   const target = bedMod.bedTarget(color)
   const woolHave = pack[`${color}_wool`] || 0
   if (woolHave < bedMod.BED_WOOL) {
-    return { gap: { name: `${color}_wool`, need: bedMod.BED_WOOL, have: woolHave }, target, color }
+    // Exact orders lock their colour (never released: the order is the
+    // promise). Bare orders open the bare gap even when the pack holds
+    // wool (revmux 02 core-2): the argmax colour is bot-picked, so the
+    // sub seeds it provisional and stays releasable — otherwise stranded
+    // surplus poisons the next bare order into an exact gap that hunts a
+    // colour with no sheep left. The target still names the argmax bed.
+    if (names.length === 1) {
+      return { gap: { name: `${color}_wool`, need: bedMod.BED_WOOL, have: woolHave }, target, color }
+    }
+    return { gap: { name: 'wool', need: bedMod.BED_WOOL, have: woolHave }, target, color: null }
   }
   const wood = topPlankWood(pack)
   const planksHave = pack[`${wood}_planks`] || 0
@@ -407,8 +416,9 @@ function topPlankWood(pack) {
 
 // Sub-order open (did.4): morph the item order into a gather order in
 // place — the wool hunt or the log dig — saving the parent rung in o.parent
-// for resumeSub. A wool gap hunts its exact colour (or any sheep for the
-// bare gap, locking the first pickup); a planks gap digs the same wood's
+// for resumeSub. A wool gap hunts its exact colour (or the pack top,
+// provisional and releasable, for the bare gap — any sheep when the pack
+// holds no wool); a planks gap digs the same wood's
 // logs (one log covers four planks); a stick gap digs the pack wood, or
 // any log when the pack holds no wood at all (the find re-points the drop
 // at the concrete species, the 'bring me logs' shape). Without a reachable
@@ -435,6 +445,10 @@ function openSubOrder(bot, ctx, o, gap, target, color) {
     if (name === 'wool') {
       const t = woolMod.topWoolColor(bot)
       o.drop = t ? t.name : null
+      // Provisional seed (revmux 02 core-2): hunt the pack top first, but
+      // releasably — a top-up keeps its colour, a stranded surplus
+      // releases to a live one instead of stranding again.
+      if (!o.color && o.drop) o.color = woolMod.dropColor(o.drop)
     } else {
       o.drop = name
     }
@@ -732,8 +746,12 @@ async function withdrawCraftMats(bot, ctx, o) {
     }
     const pname = `${wood}_planks`
     const lname = `${wood}_log`
+    // The made table eats 4 planks-worth first (revmux 02 core-3/body-2):
+    // without one reachable the draw funds the table too, or the plan
+    // refuses 'need a crafting table' while the stock sits in the chest.
+    const infl = tableReachable(bot, ctx) ? 0 : 4
     const have = (pack[pname] || 0) + 4 * (pack[lname] || 0)
-    const pshort = Math.max(0, bedMod.BED_PLANKS - have)
+    const pshort = Math.max(0, bedMod.BED_PLANKS + infl - have)
     if (pshort > 0) {
       try {
         const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [pname], pshort)
@@ -743,7 +761,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     // Logs cover the remaining planks-worth (body-5): without this a chest
     // holding only logs sends the bot chopping while the stock sits inside.
     const have2 = (pack[pname] || 0) + 4 * (pack[lname] || 0)
-    const lshort = Math.max(0, bedMod.BED_PLANKS - have2)
+    const lshort = Math.max(0, bedMod.BED_PLANKS + infl - have2)
     if (lshort > 0) {
       try {
         const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [lname], Math.ceil(lshort / 4))

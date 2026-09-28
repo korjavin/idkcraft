@@ -671,6 +671,11 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
       playerPos: pos(30, 64, 0),
       cells: { '1,63,0': 'dirt', ...treeCells(20, 64, 0) },
     })
+    // Prod-faithful (revmux 02 core-1/body-1): real recipesFor hides the
+    // table while the pack holds logs but no planks. The make-path must
+    // see it via recipesAll anyway — this override proves it does.
+    const origFor = bot.recipesFor
+    bot.recipesFor = (id, ...a) => (id === ITEMS.crafting_table ? [] : origFor(id, ...a))
     const ticker = tickerFor(bot)
     bot._tickerCtx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
     handleChat(bot, ticker, 'P', 'bring me bed')
@@ -810,6 +815,44 @@ describe('stranded lock release (idkcraft-did.4 rig)', () => {
     assert.equal(wool.topWoolColor(bot).name, 'light_gray_wool')
     assert.equal(wool.topWoolColor(bot, new Set(['light_gray'])).name, 'white_wool')
     assert.equal(wool.topWoolColor(bot, new Set(['light_gray', 'white'])), null)
+  })
+
+  it('stranded surplus does not poison the next bare order (core-2)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'red_wool', count: 1 }, { name: 'oak_planks', count: 4 }],
+      playerPos: pos(30, 64, 0),
+      animals: [sheep(11, 10, 0x00), sheep(12, 14, 0x00), sheep(13, 16, 0x00)],
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    bot._moving = true
+    const ticker = tickerFor(bot)
+    tableHome(bot._tickerCtx, 0, 64, 0)
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    assert.deepEqual(bot.lines, ['making you a red_bed: need 3 wool, going for sheep'])
+    assert.equal(bot._tickerCtx.bring.lockColor, true) // bot-picked, releasable
+    await drive(bot, bot._tickerCtx, killWhite)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.ok(bot.lines.includes('no more red sheep, trying another colour'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
+  })
+
+  it('tableless chest of planks funds the table too (core-3/body-2)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }],
+      chest: [{ name: 'oak_planks', count: 20 }],
+      playerPos: pos(30, 64, 0),
+      cells: { '1,63,0': 'dirt', '5,64,1': 'chest' },
+    })
+    const ticker = tickerFor(bot)
+    bot._tickerCtx.home = { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 5, y: 64, z: 1 } }
+    handleChat(bot, ticker, 'P', 'bring me bed')
+    await drive(bot, bot._tickerCtx, null)
+    assert.ok(!bot._tickerCtx.bring, 'order completed')
+    assert.deepEqual(bot.calls.craft, ['crafting_table', 'white_bed'])
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_bed, null, 1]])
+    assert.ok(bot.lines.includes('here is 1 white_bed'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.chest, [{ name: 'oak_planks', count: 13 }]) // drew 3 + 4
   })
 
   it('explicit colour subs never release the lock', async () => {
