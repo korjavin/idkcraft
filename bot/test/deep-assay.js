@@ -43,16 +43,46 @@ async function waitLoaded(bot, timeoutMs = 20000) {
 // Drive deep() until a terminal stepStatus or timeout. Returns the status.
 async function drive(bot, ctx, timeoutMs, label) {
   const end = Date.now() + timeoutMs
+  let lastPh = null // fail() nulls ctx.deep; the dump below needs the terminal phase
   for (;;) {
     try { deep(bot, ctx, null, {}) } catch (e) { console.error(`${label} THREW ${e.message}\n${e.stack.split('\n').slice(0, 6).join('\n')}`); return 'threw' }
     const ph = ctx.deep && ctx.deep.phase
+    if (ph) lastPh = ph
     const p = bot.entity.position
     if (ph === 'return' || ph === 'return-slow' || Date.now() % 4000 < TICK_MS + 50) {
       const st = ctx.deep && ctx.deep.steps
       const top = st && st.length ? st[st.length - 1] : null
-      console.log(`${new Date().toISOString().slice(11, 19)} ${label} pos=${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)} hp=${Math.round(bot.health || 0)} phase=${ph} status=${ctx.stepStatus} crumbs=${st ? st.length : '-'} crumb=${top ? `${top.x},${top.y},${top.z}` : '-'} key=${ctx.lastGoalKey} moving=${bot.pathfinder.isMoving()} stalls=${ctx.deep ? ctx.deep.stalls : '-'}`)
+      const vv = (bot.entity && bot.entity.velocity) || {}
+      const vy = typeof vv.y === 'number' ? vv.y.toFixed(2) : '?'
+      const vh = (typeof vv.x === 'number' && typeof vv.z === 'number') ? Math.hypot(vv.x, vv.z).toFixed(2) : '?'
+      const vg = !bot.entity || bot.entity.onGround !== false ? 'g' : 'a'
+      const dg = bot.targetDigBlock && bot.targetDigBlock.position ? `${bot.targetDigBlock.position.x},${bot.targetDigBlock.position.y},${bot.targetDigBlock.position.z}` : '-'
+      console.log(`${new Date().toISOString().slice(11, 19)} ${label} pos=${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)} hp=${Math.round(bot.health || 0)} phase=${ph} status=${ctx.stepStatus} crumbs=${st ? st.length : '-'} crumb=${top ? `${top.x},${top.y},${top.z}` : '-'} key=${ctx.lastGoalKey} moving=${bot.pathfinder.isMoving()} stalls=${ctx.deep ? ctx.deep.stalls : '-'} vel=${vh}/${vy}${vg} dig=${dg}`)
     }
-    if (ctx.stepStatus.startsWith('done') || ctx.stepStatus.startsWith('failed:')) return ctx.stepStatus
+    if (ctx.stepStatus.startsWith('done') || ctx.stepStatus.startsWith('failed:')) {
+      if (label === 'leg' && (ph === 'return' || lastPh === 'return')) {
+        try {
+          const Vec3 = require('vec3').Vec3
+          const bx = Math.floor(p.x)
+          const by = Math.floor(p.y)
+          const bz = Math.floor(p.z)
+          const rows = []
+          for (const zz of [bz - 1, bz, bz + 1]) {
+            for (let y = by + 1; y >= by - 2; y--) {
+              const row = []
+              for (let x = bx - 4; x <= bx + 4; x++) {
+                let b = null
+                try { b = bot.blockAt(new Vec3(x, y, zz)) } catch (_) { b = null }
+                row.push(!b ? '?' : (b.name === 'air' || b.name === 'cave_air' ? '.' : (b.name.includes('diamond') ? 'D' : (b.name.includes('lava') ? 'L' : (b.name === 'water' ? 'W' : '#')))))
+              }
+              rows.push(`z${zz} y${y} ${row.join('')}`)
+            }
+          }
+          console.log(`stall window around ${bx},${by},${bz}:\n${rows.join('\n')}`)
+        } catch (e) { console.log(`stall window failed: ${e && e.message}`) }
+      }
+      return ctx.stepStatus
+    }
     if (Date.now() > end) return `timeout@${ph}`
     await sleep(TICK_MS)
   }
@@ -226,7 +256,24 @@ async function main() {
   bot.loadPlugin(pathfinder)
   await waitFor(bot, 'spawn', 60000, 'assay spawn')
   await waitLoaded(bot)
-  bot.pathfinder.setMovements(new Movements(bot))
+  // Prod-mirror movements (index.js setMovements): the assay must verify
+  // what deploys — bare sprinting Movements dig+move race into
+  // client/server desync (ghost blocks) that prod never sees.
+  const movements = new Movements(bot)
+  movements.allowSprinting = false
+  require('../src/swim').addSwimExits(movements)
+  require('../src/nocorner').addNoCornerCut(movements)
+  require('../src/snow').addSnowGround(movements)
+  require('../src/jumpcost').addJumpUpCost(movements)
+  bot.pathfinder.setMovements(movements)
+  bot.on('path_update', (r) => {
+    let nodes = '-'
+    try { nodes = (r && r.path ? r.path : []).slice(0, 6).map((n) => `${n.x},${n.y},${n.z}`).join(' ') } catch (_) { nodes = '?' }
+    console.log(`${new Date().toISOString().slice(11, 19)} path status=${r && r.status} time=${r && r.time} nodes=${r && r.visitedNodes} len=${r && r.path && r.path.length} via=${nodes}`)
+  })
+  bot.on('goal_reached', () => console.log(`${new Date().toISOString().slice(11, 19)} path goal_reached`))
+  bot.on('forcedMove', () => { if (bot.entity) { const q = bot.entity.position; console.log(`${new Date().toISOString().slice(11, 19)} net forcedMove to=${q.x.toFixed(2)},${q.y.toFixed(2)},${q.z.toFixed(2)}`) } })
+  bot.on('path_stop', () => console.log(`${new Date().toISOString().slice(11, 19)} path path_stop`))
   console.log(`assay ${mode} as ${NAME} on ${MC_HOST}:${MC_PORT}`)
   let ok = true
   if (mode === 'rules' || mode === 'all') ok = (await rules(bot)) && ok

@@ -25,11 +25,12 @@
 //   R-tier: diamond digs need an iron pick (bring tier check); without one
 //     the leg fails honestly (failed:need-iron-pick) — the gear step must
 //     only send equipped bots (interface contract, asserted in assay).
-// Return: breadcrumb reverse-walk, hybrid drive — manual body control
-// (walk, jump straight out of a wedge) for 1-up stair steps, pathfinder
-// for level tunnel crumbs (corners). Dead ends fail honestly
-// (failed:lost-shaft) and raise the stuck fact for recover (explore
-// precedent).
+// Return: breadcrumb reverse-walk, hybrid drive — manual mount (back to
+// leap stance when pressed, leap WITH forward thrust — the hop_step shape:
+// Paper zeroes a leap from contact) for 1-up steps, pathfinder for level
+// tunnel crumbs (corners). A climb latches its crumb: no mid-climb mode
+// flap resetting the budget. Dead ends fail honestly (failed:lost-shaft)
+// and raise the stuck fact for recover (explore precedent).
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
@@ -54,6 +55,15 @@ const RETURN_STALL = 15
 const MOVE_TOLERANCE = 0.5
 const DIG_REACH = 4 // settle radius for tunnel/dig targets
 const DROP_MAX = 1 // deepest landing the bot walks into (a 1-drop climbs back; 2 is one-way and strands the return)
+const PICKUP_CRUMB_GAP = 1.3 // pickup chain spacing: above the 1.2 pop radius (no cascade), tight enough to reverse link by link
+const FLAT_TAKEOVER_TICKS = 5 // flat no-progress ticks before the manual takeover (a healthy leg displaces every tick or two)
+const FLAT_TAKEOVER_DIST = 4 // takeover leash: our own fresh crumbs only, straight-line, straightClear-verified
+const UNFREEZE_TICKS = 8 // manual static ticks before one dig-start unfreeze per crumb (mid-budget: 7 ticks left to prove it)
+const STEP_STALL = 20 // descend/tunnel no-progress budget: legs walk for real now, with room for one executor dig-recovery
+const RET_AIR_VY = 0.08 // airborne-still band (HOP_STALL_VY): a leap apex crosses it for one sample at most
+const RET_AIR_TICKS = 2 // hung-airborne samples before the back-off (HOP_STALL_TICKS)
+const RET_MOUNT_TICKS = 20 // per-crumb climb cap: hang-back-leap cycles displace, so stalls alone would spin forever
+const PROG_EPS = 0.05 // progress margin: closing less than this per tick counts as circling, not approaching
 const SITE_RINGS = [3, 4, 5, 6, 7, 8] // mouth offsets from the anchor
 const SITE_RAYS = 8
 const DIRS = [{ dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
@@ -291,6 +301,25 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// Exact-cell arrival (same test as the GoalBlock executor): the fractional
+// body sits inside the integer target cell. No radius can do this job on
+// 1.0–1.41-spaced targets — adjacent bodies sit inside every workable one.
+function inCell(p, c) {
+  return Math.floor(p.x) === c.x && Math.floor(p.y) === c.y && Math.floor(p.z) === c.z
+}
+
+// The leg reverses pre-dug ground crumb by crumb: executor detour-digs
+// (canDig) eat the stairs' floors out from under the crumbs behind them,
+// so every tick deep owns borrows canDig=false (gohome-walk shape; the
+// ticker restores the shared default on ticks deep does not own, and the
+// assay's private movements object needs no restore at all).
+function borrowNoDig(bot, ctx) {
+  try {
+    const mov = (ctx && ctx.movements) || (bot && bot.pathfinder && bot.pathfinder.movements)
+    if (mov && typeof mov.canDig === 'boolean') mov.canDig = false
+  } catch (_) { /* borrow best-effort */ }
+}
+
 function finish(bot, ctx, d, ok, reason, n) {
   const gains = {}
   try {
@@ -425,6 +454,7 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
 }
 
 function deep(bot, ctx, target, state) {
+  borrowNoDig(bot, ctx)
   if (!ctx.deep) {
     ctx.deep = { phase: 'site', shaft: null, n: 0, steps: [], target: null, dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: null, cameFrom: null }
   }
@@ -518,7 +548,12 @@ function deep(bot, ctx, target, state) {
       return
     }
     const key = `deep-descend:${d.n}`
-    const r = walkTo(bot, ctx, d, key, new goals.GoalNear(st.stand.x, st.stand.y, st.stand.z, 1), (p) => dist3(p, st.stand) <= 1.6)
+    // GoalBlock + exact-cell arrival: a 1.6 radius theaters on 1.41-diagonal
+    // stairs (the previous stand sits inside it) — n runs ahead of the body
+    // and compounds into 2-down wedges. The body must ENTER the stand cell.
+    d.stallBudget = STEP_STALL
+    const r = walkTo(bot, ctx, d, key, new goals.GoalBlock(st.stand.x, st.stand.y, st.stand.z), (p) => inCell(p, st.stand) && (!bot.entity || bot.entity.onGround !== false))
+    d.stallBudget = null
     if (r === 'arrived') {
       d.steps.push({ x: st.stand.x, y: st.stand.y, z: st.stand.z })
       d.n++
@@ -562,6 +597,7 @@ function deep(bot, ctx, target, state) {
       return
     }
     d.target = { x: cell.x, y: cell.y, z: cell.z, name: cell.name }
+    d.tunnelGoal = null
     d.tunnelSteps = 0
     d.tunnelSeen = new Set([`${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}`])
     d.cameFrom = null
@@ -583,26 +619,40 @@ function deep(bot, ctx, target, state) {
     // arrivals advance `next` before the arrival check runs, so the
     // loop breaker must not depend on arrivals firing.
     try { if (d.tunnelSeen && typeof d.tunnelSeen.add === 'function') d.tunnelSeen.add(`${head.x},${head.y},${head.z}`) } catch (_) { /* seen best-effort */ }
-    if (dist3(head, t) <= DIG_REACH) {
-      if (canDig(bot, t) && !lavaNear(bot, t.x, t.y, t.z)) {
-        d.phase = 'digcell'
-        return
-      }
-      if (lavaNear(bot, t.x, t.y, t.z)) {
-        try { danger.mark(ctx, t) } catch (_) { /* mark best-effort */ }
-      }
+    // Direct dig only level-ish (|dy|<=1) over verified-open ground: the
+    // pickup walks there with canDig=false now, so rock-between or a deep
+    // drop tunnels instead (guarded path, crumbed, reversible). In reach
+    // but undiggable-by-policy (bedrock, loose above, water beside) strikes
+    // at once — the tunnel would refuse the same cell.
+    if (dist3(head, t) <= DIG_REACH && lavaNear(bot, t.x, t.y, t.z)) {
+      try { danger.mark(ctx, t) } catch (_) { /* mark best-effort */ }
       strikeAndReplan(bot, ctx, d, t)
+      return
+    }
+    if (dist3(head, t) <= DIG_REACH && (!canDig(bot, t) || fallingAbove(bot, t.x, t.y, t.z) || waterNear(bot, t.x, t.y, t.z))) {
+      strikeAndReplan(bot, ctx, d, t)
+      return
+    }
+    if (dist3(head, t) <= DIG_REACH && Math.abs(head.y - t.y) <= 1 && walkOpen(bot, bp, t)) {
+      d.phase = 'digcell'
       return
     }
     if ((d.tunnelSteps || 0) >= TUNNEL_MAX) {
       strikeAndReplan(bot, ctx, d, t)
       return
     }
-    const next = tunnelNext(head, t, d.cameFrom, d.tunnelSeen)
-    if (!next) {
-      strikeAndReplan(bot, ctx, d, t)
-      return
+    // Latched step: recomputing from the live head every tick moves the
+    // target as the body closes in, so an exact arrival could never fire
+    // (and a radius arrival pushed unvisited rock). One committed step at
+    // a time; arrival clears the latch for the next.
+    if (!d.tunnelGoal) {
+      d.tunnelGoal = tunnelNext(head, t, d.cameFrom, d.tunnelSeen)
+      if (!d.tunnelGoal) {
+        strikeAndReplan(bot, ctx, d, t)
+        return
+      }
     }
+    const next = d.tunnelGoal
     // Two-high tube (live assay: a 1-high tube is unwalkable, so the
     // return leg could never backtrack it): feet cell, then head cell.
     const above = { x: next.x, y: next.y + 1, z: next.z }
@@ -637,12 +687,18 @@ function deep(bot, ctx, target, state) {
       return
     }
     const key = `deep-tunnel:${next.x},${next.y},${next.z}`
-    const r = walkTo(bot, ctx, d, key, new goals.GoalNear(next.x, next.y, next.z, 1), (p) => dist3(p, next) <= 1.6)
+    // Exact-cell arrival like descend (1.0-spaced targets theater under any
+    // radius: adjacent fractional bodies sit inside it): the body must ENTER
+    // the cell, or the chain crumbs unvisited rock the return cannot reverse.
+    d.stallBudget = STEP_STALL
+    const r = walkTo(bot, ctx, d, key, new goals.GoalBlock(next.x, next.y, next.z), (p) => inCell(p, next) && (!bot.entity || bot.entity.onGround !== false))
+    d.stallBudget = null
     if (r === 'arrived') {
       d.steps.push({ x: next.x, y: next.y, z: next.z })
       try { if (d.tunnelSeen && typeof d.tunnelSeen.add === 'function') d.tunnelSeen.add(`${next.x},${next.y},${next.z}`) } catch (_) { /* seen best-effort */ }
       d.tunnelSteps = (d.tunnelSteps || 0) + 1
       d.cameFrom = head
+      d.tunnelGoal = null
     } else if (r === 'stalled') {
       strikeAndReplan(bot, ctx, d, t)
     }
@@ -655,8 +711,11 @@ function deep(bot, ctx, target, state) {
     let cur = null
     try { cur = fname(bot, t.x, t.y, t.z) } catch (_) { cur = null }
     if (!cur || cur !== t.name) {
+      // Gone already (tunneled through, or stale memory): forget the cell
+      // but still walk the drop point (magnet sweep) — the pickup collects
+      // what the tunnel broke. A bare plan would strand the diamonds.
       try { resources.forget(ctx, t.x, t.y, t.z) } catch (_) { /* memory best-effort */ }
-      d.phase = 'plan'
+      d.phase = 'pickup'
       return
     }
     digOne(bot, ctx, d, t, t.name, 'pickup')
@@ -666,6 +725,18 @@ function deep(bot, ctx, target, state) {
   if (d.phase === 'pickup') {
     const t = d.target
     if (!t) { d.phase = 'plan'; return }
+    // Chain the walk (descend/tunnel arrivals crumb their steps; pickup is
+    // the only other movement): the pathfinder digs undocumented paths
+    // (canDig) with mid-path 1-ups the return executor wedges on — a
+    // 1.3-spaced chain turns the way back into short legs the pop radius
+    // (1.2) and the adjacent-above trigger reverse link by link.
+    try {
+      const crumbs = d.steps || []
+      const last = crumbs[crumbs.length - 1]
+      if (last && dist3(bp, last) > PICKUP_CRUMB_GAP) {
+        crumbs.push({ x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) })
+      }
+    } catch (_) { /* chain best-effort */ }
     const key = `deep-pickup:${t.x},${t.y},${t.z}`
     // Arrival 1.5 (item magnet range): 2.2 can strand the drop just out
     // of reach. After arrival, wait PICKUP_WAIT_MS for the count to rise
@@ -706,7 +777,12 @@ function deep(bot, ctx, target, state) {
     // the climb (live assay: skipped steps strand the return under an
     // unclimbable 2-up). The gate proves the climb happened. Arrival rest
     // distance is ~0.7, so 1.2 keeps margin on level crumbs.
-    if (dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5) {
+    // Pop proves the mount two ways: inside the crumb cell (floors match —
+    // flying through counts, since undermined/void stands cannot be stood
+    // upon, only passed), or radius + height gate + touchdown (an apex
+    // above the cell must not skip the step — the pop waits for landing).
+    const popGrounded = !bot.entity || bot.entity.onGround !== false
+    if (inCell(bp, next) || (dist3(bp, next) <= 1.2 && bp.y >= next.y - 0.5 && popGrounded)) {
       crumbs.pop()
       return
     }
@@ -716,21 +792,33 @@ function deep(bot, ctx, target, state) {
     // directly. Anything farther out — level tunnel crumbs AND above
     // crumbs around a corner — uses the pathfinder (it still turns
     // corners better than a straight-line drive); it walks under the
-    // step and the manual climb engages when adjacent.
-    if (next.y > Math.floor(bp.y) && Math.hypot(next.x - bp.x, next.z - bp.z) <= 1.5) {
-      driveStepUp(bot, ctx, d, bp, next)
+    // step and the manual climb engages when adjacent. An engaged climb
+    // latches its crumb (walk-in + stance + leap all live in driveStepUp):
+    // leaving for flat mid-climb would reset the stall budget via walkTo
+    // and could flap forever instead of failing honestly.
+    const crumbKey = `${next.x},${next.y},${next.z}`
+    const latched = d.retMode === 'up' && d.retUpKey === crumbKey
+    if (latched || (next.y > Math.floor(bp.y) && Math.hypot(next.x - bp.x, next.z - bp.z) <= 1.5)) {
+      driveStepUp(bot, ctx, d, bp, next, crumbKey)
       return
     }
     if (d.retMode !== 'flat') {
       d.retMode = 'flat'
       d.stalls = 0
-      d.retWedge = null
       try { bot.clearControlStates && bot.clearControlStates() } catch (_) { /* release manual keys */ }
     }
     d.stallBudget = RETURN_STALL
     const key = `deep-back:${crumbs.length}`
     const r = walkTo(bot, ctx, d, key, new goals.GoalNear(next.x, next.y, next.z, 1), () => false)
     d.stallBudget = null
+    if (r === 'walking' && d.stalls >= FLAT_TAKEOVER_TICKS && dist3(bp, next) <= FLAT_TAKEOVER_DIST && straightClear(bot, bp, next)) {
+      // Executor wedge (moving-but-static on a mid-path 1-up) or planner
+      // pessimism near our own fresh crumb on verified-clear ground: take
+      // over manually. One-way per crumb (the climb latches), so the
+      // budget stays bounded; blocked ground keeps the pathfinder.
+      driveStepUp(bot, ctx, d, bp, next, crumbKey)
+      return
+    }
     if (r === 'stalled') {
       try { recover.setStuck(ctx, 'deep', next, key) } catch (_) { /* stuck best-effort */ }
       fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
@@ -739,84 +827,302 @@ function deep(bot, ctx, target, state) {
   }
 }
 
-// Manual 1-up step climb: face the crumb, walk at the riser, and jump
-// STRAIGHT (forward released — the proven assay shape: rise 1.1, then
-// mount) when the riser test or 3 still ticks say wedged. Stalls count
-// horizontal displacement only: a rising jump is progress, a jumping
-// statue is stuck.
-function driveStepUp(bot, ctx, d, bp, next) {
-  if (d.retMode !== 'up') {
+// Manual 1-up step mount (recover.js wqt measurements on Paper 26.1.2): a
+// standstill leap (forward+jump together, ~zero momentum) mounts from
+// TRUE face gap 0.25-0.7 with 0 rejects; true 1.0 hits the face low (88
+// rejects); run-up leaps die grounded (107 rejects). So each grounded
+// tick re-measures the TRUE gap (center-dist minus half-cell 0.5 minus
+// half-width 0.3 — a corner-dist formula overestimates on diagonals and
+// fires from contact: ipn.2 assay leapt at formula 0.51 / true 0.1 and
+// pinned at +0.4 twice) and either backs 50ms to prime (kill momentum!),
+// leaps primed from the zone, or walks in from afar. Level crumbs walk
+// (+ pit-leap); voids stop dead. Stalls count horizontal displacement
+// only; the per-crumb mount budget bounds hang cycles that displace.
+// Airborne ticks coast (an in-flight arc completes); hung arcs back off
+// mid-air.
+const RET_GAP_MIN = 0.25 // leap zone, TRUE face gap (wqt standstill: 0.25/0.5/0.7 mount, 0 rejects)
+const RET_GAP_MAX = 0.7
+const RET_GAP_BACK_MS = 50 // ground prime hold: kills momentum without overshooting the zone
+const RET_AIR_BACK_MS = 250 // air unwedge hold: air control is weak (HOP_UNWEDGE_MS shape)
+function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
+  if (d.retMode !== 'up' || d.retUpKey !== crumbKey) {
     d.retMode = 'up'
+    d.retUpKey = crumbKey
     d.issuedKey = 'deep-return-up'
     ctx.lastGoalKey = 'deep-return-up'
     d.stalls = 0
-    d.retWedge = null
-    d.retStill = 0
-    d.retLastXZ = { x: bp.x, z: bp.z }
+    d.primed = false
+    d.retAirStall = 0
+    d.retWaited = 0
+    d.retProgBest = Infinity
+    d.retProgTicks = 0
     d.retStallPos = { x: bp.x, z: bp.z }
     try { bot.pathfinder && bot.pathfinder.setGoal(null) } catch (_) { /* release pathfinder */ }
     try { bot.clearControlStates && bot.clearControlStates() } catch (_) { /* release keys */ }
   }
+  // Mount budget (HOP_MOUNT_TICKS shape): displacement resets stalls, so a
+  // hang-back-leap-hang cycle would spin forever on stalls alone — the
+  // per-crumb tick cap fails it honestly instead.
+  if (++d.retWaited > RET_MOUNT_TICKS) {
+    try { recover.setStuck(ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
+    fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+    return
+  }
   try {
-    const r = bot.lookAt(new Vec3(next.x, bp.y + 1.6, next.z))
+    // Aim the CELL CENTER, never the crumb corner: crumbs are integer
+    // corners and the tunnel is 1-wide, so corner-aiming steers the nose
+    // into the wall face (bbox grinds: 0.1/tick + hover-flicker forever).
+    const r = bot.lookAt(new Vec3(next.x + 0.5, bp.y + 1.6, next.z + 0.5))
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch (_) { /* look best-effort */ }
   const setC = (k, v) => { try { bot.setControlState && bot.setControlState(k, v) } catch (_) { /* optional */ } }
-  const now = Date.now()
-  if (d.retWedge) {
-    if (bp.y >= d.retWedge.baseY + 1.1) {
-      d.retWedge = null
-      d.stalls = 0
-      d.retStallPos = { x: bp.x, z: bp.z }
-    } else if (now - d.retWedge.since > 2000) {
-      d.retWedge = null
-    } else {
-      setC('forward', false); setC('back', false); setC('jump', true); setC('sprint', false)
+  const dbg = (msg) => { try { if (process.env.DEEP_DEBUG) console.log(`deepdbg up ${msg} bp=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} crumb=${next.x},${next.y},${next.z} stalls=${d.stalls} waited=${d.retWaited}`) } catch (_) { /* log best-effort */ } }
+  const grounded = !bot.entity || bot.entity.onGround !== false
+  if (!grounded) {
+    // Airborne hang (ak4): pressed to the face with vel.y=0 and no ground,
+    // the held jump never fires. Back off — facing stays on the crumb, so
+    // back walks off the face — until a sample reads ground. A leap apex
+    // crosses the still band for one sample at most.
+    const vy = bot.entity && bot.entity.velocity && typeof bot.entity.velocity.y === 'number'
+      ? bot.entity.velocity.y : null
+    if (vy !== null && Math.abs(vy) < RET_AIR_VY) d.retAirStall = (d.retAirStall || 0) + 1
+    else d.retAirStall = 0
+    if ((d.retAirStall || 0) >= RET_AIR_TICKS) {
+      dbg(`unwedge vy=${vy}`)
+      setC('forward', false); setC('jump', false); setC('sprint', false)
+      setC('back', true)
+      try { setTimeout(() => setC('back', false), RET_AIR_BACK_MS) } catch (_) { /* timer best-effort */ }
       retStall(bot, ctx, d, bp, next)
       return
     }
+    dbg(`coast vy=${vy}`)
+    setC('forward', true); setC('back', false); setC('jump', true); setC('sprint', false)
+    retStall(bot, ctx, d, bp, next)
+    return
   }
-  setC('forward', true); setC('back', false); setC('jump', false); setC('sprint', false)
-  if (riserAhead(bot, bp, next) || horizStill(d, bp)) d.retWedge = { baseY: bp.y, since: now }
+  d.retAirStall = 0
+  const distXZ = Math.hypot(next.x - bp.x, next.z - bp.z)
+  if (next.y > Math.floor(bp.y)) {
+    // Above: gap-zoned standstill leap. Unprimed ticks (walk momentum!)
+    // always back off first — a run-up leap dies grounded (wqt: 107
+    // rejects). Primed ticks leap from the zone, inch out of contact,
+    // or walk in from afar.
+    const fgap = Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z) - 0.8 // TRUE face gap: center-dist minus half-cell minus half-width
+    if (!d.primed) {
+      dbg(`prime fgap=${fgap.toFixed(2)}`)
+      d.primed = true
+      setC('forward', false); setC('jump', false); setC('sprint', false)
+      setC('back', true)
+      try { setTimeout(() => setC('back', false), RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    if (fgap < RET_GAP_MIN) {
+      dbg(`inch fgap=${fgap.toFixed(2)}`)
+      setC('forward', false); setC('jump', false); setC('sprint', false)
+      setC('back', true)
+      try { setTimeout(() => setC('back', false), RET_GAP_BACK_MS) } catch (_) { /* timer best-effort */ }
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    if (fgap <= RET_GAP_MAX) {
+      dbg(`leap fgap=${fgap.toFixed(2)}`)
+      d.primed = false
+      setC('forward', true); setC('back', false); setC('sprint', false)
+      setC('jump', true)
+      retStall(bot, ctx, d, bp, next)
+      return
+    }
+    // Far: walk in (momentum OK — the zone primes before leaping).
+    dbg(`walk distXZ=${distXZ.toFixed(2)}`)
+    d.primed = false
+    setC('forward', true); setC('back', false); setC('sprint', false); setC('jump', false)
+    retStall(bot, ctx, d, bp, next)
+    return
+  }
+  // Level: walk in; leap 1-deep pits (lips dance forever), stop for voids.
+  const gap = gapAhead(bot, bp, next)
+  if (gap >= 2) {
+    dbg(`void distXZ=${distXZ.toFixed(2)}`)
+    setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
+    retStall(bot, ctx, d, bp, next)
+    return
+  }
+  setC('forward', true); setC('back', false); setC('sprint', false)
+  if (gap === 1) {
+    dbg(`leap distXZ=${distXZ.toFixed(2)} gap=${gap}`)
+    setC('jump', true)
+  } else {
+    dbg(`walk distXZ=${distXZ.toFixed(2)}`)
+    setC('jump', false)
+  }
+  d.primed = false
   retStall(bot, ctx, d, bp, next)
 }
 
-// Solid feet-level cell on the straight line to the crumb (liquids are
-// walkable-through, not risers).
-function riserAhead(bot, bp, next) {
+// Direct-dig path check: the straight walk bp -> t stays in open tube
+// (feet+head air, floor within DROP_MAX) on every cell EXCEPT t itself
+// (the solid ore about to be dug). The ore's own lava/water/loose verdict
+// lives with the caller (dig policy, not path).
+function walkOpen(bot, bp, t) {
+  const dist = dist3(bp, t)
+  if (!(dist > 0) || dist > DIG_REACH) return false
+  const y = Math.floor(Math.max(bp.y, t.y))
+  const n = Math.max(1, Math.ceil(dist / 0.5))
+  for (let i = 0; i <= n; i++) {
+    const sx = Math.floor(bp.x + ((t.x - bp.x) * i) / n)
+    const sz = Math.floor(bp.z + ((t.z - bp.z) * i) / n)
+    if (sx === t.x && y === t.y && sz === t.z) continue
+    const feet = fname(bot, sx, y, sz)
+    const head = fname(bot, sx, y + 1, sz)
+    if (feet === null || head === null) return false
+    if (!isAirName(feet) || !isAirName(head)) return false
+    if (dropBelow(bot, sx, y, sz) > DROP_MAX) return false
+  }
+  return true
+}
+
+// Manual-takeover guard: the straight walk bp -> next is hand-drivable
+// when every half-block sample is a walkable tube (feet + head air),
+// reversible (floor within DROP_MAX — 1-deep dug pits pass, voids fail),
+// and descend-grade fluid/loose guards hold at both ends + midpoint.
+// Blocked (walls mid-path, fluids, deep voids) keeps the pathfinder:
+// manual has no cornering and must never steer blind. Unreadable path
+// cells fail closed here (opposite of the lavaNear precedent: steering
+// blind is worse than not taking over).
+function straightClear(bot, bp, next) {
+  const dist = dist3(bp, next)
+  if (!(dist > 0) || dist > FLAT_TAKEOVER_DIST + 1) return false
+  const y = Math.floor(Math.max(bp.y, next.y))
+  const pts = [{ x: bp.x, z: bp.z }, { x: (bp.x + next.x) / 2, z: (bp.z + next.z) / 2 }, { x: next.x, z: next.z }]
+  for (const p of pts) {
+    const qx = Math.floor(p.x)
+    const qz = Math.floor(p.z)
+    if (lavaNear(bot, qx, y, qz) || waterNear(bot, qx, y, qz) || fallingAbove(bot, qx, y, qz)) return false
+  }
+  const n = Math.max(1, Math.ceil(dist / 0.5))
+  for (let i = 0; i <= n; i++) {
+    const sx = Math.floor(bp.x + ((next.x - bp.x) * i) / n)
+    const sz = Math.floor(bp.z + ((next.z - bp.z) * i) / n)
+    const feet = fname(bot, sx, y, sz)
+    const head = fname(bot, sx, y + 1, sz)
+    if (feet === null || head === null) return false
+    if (!isAirName(feet) || !isAirName(head)) return false
+    if (dropBelow(bot, sx, y, sz) > DROP_MAX) return false
+  }
+  return true
+}
+
+// Floor gap 1 block ahead toward the crumb: 0 = solid (walk) or riser
+// (the pressed branch owns faces), 1 = 1-deep dip (leap it — walking lips
+// dance on the edge forever: forward grinds, hover, back-off, repeat),
+// 2+ = void (never walk in; stall out and fail honestly).
+function gapAhead(bot, bp, next) {
   const dx = next.x - bp.x
   const dz = next.z - bp.z
   const len = Math.hypot(dx, dz)
-  if (len < 0.05) return false
-  const n = fname(bot, Math.floor(bp.x + (dx / len) * 0.7), Math.floor(bp.y), Math.floor(bp.z + (dz / len) * 0.7))
-  if (n === null || isAirName(n)) return false
-  return n !== 'water' && n !== 'lava'
+  if (len < 0.05) return 0
+  const ax = Math.floor(bp.x + (dx / len) * 1.0)
+  const az = Math.floor(bp.z + (dz / len) * 1.0)
+  const y = Math.floor(bp.y)
+  const feet = fname(bot, ax, y, az)
+  if (feet === null) return 0
+  if (!isAirName(feet)) return 0
+  return dropBelow(bot, ax, y, az)
 }
 
-// No horizontal displacement for 3 ticks while walking (yaw-miscount and
-// half-slab backstop for the riser test).
-function horizStill(d, bp) {
-  const last = d.retLastXZ
-  if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > 0.05) {
-    d.retLastXZ = { x: bp.x, z: bp.z }
-    d.retStill = 0
+// Paper open-air freeze / ghost-block wedge (muse-5 prod-world rig 2/2):
+// a dig-START on the block underfoot, cancelled shortly after (block
+// intact), restores movement. Raw packets, not bot.dig: bot.dig awaits
+// lookAt before START, so a sync start+abort would either noop or escape
+// into a real dig — packets land in order and touch no dig task. The
+// START must LIVE briefly: a same-tick START+CANCEL is ignored server-side
+// (ipn.2 assay: fired, still frozen). 150 ms is far below any underfoot
+// dig time down here (dirt/gravel slowest ≈ 0.75 s+). Never while a real
+// dig runs (targetDigBlock), never over air; the delayed CANCEL stands
+// down if a real dig started meanwhile (don't steal its abort).
+const UNFREEZE_ABORT_MS = 150
+function unfreeze(bot, extra) {
+  try {
+    if (!bot || typeof bot._client === 'undefined' || bot._client === null) return false
+    if (typeof bot._client.write !== 'function') return false
+    if (bot.targetDigBlock) return false
+    const bp = botPos(bot)
+    if (!bp) return false
+    const targets = []
+    const under = bot.blockAt && bot.blockAt(new Vec3(Math.floor(bp.x), Math.floor(bp.y) - 1, Math.floor(bp.z)))
+    if (under && under.position && under.name !== 'air' && under.name !== 'cave_air') targets.push(under.position)
+    for (const c of (Array.isArray(extra) ? extra : [])) {
+      if (!c || typeof c.x !== 'number') continue
+      let b = null
+      try { b = bot.blockAt && bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
+      if (b && b.position) targets.push(b.position) // client-air included: a ghost IS server-solid
+    }
+    if (targets.length === 0) return false
+    for (const at of targets) bot._client.write('block_dig', { status: 0, location: at, face: 1 })
+    try {
+      setTimeout(() => {
+        try {
+          if (bot.targetDigBlock) return
+          for (const at of targets) bot._client.write('block_dig', { status: 1, location: at, face: 1 })
+        } catch (_) { /* abort best-effort */ }
+      }, UNFREEZE_ABORT_MS)
+    } catch (_) { /* timer best-effort */ }
+    console.log(`deep unfreeze at ${targets.map((t) => `${t.x},${t.y},${t.z}`).join(' ')}`)
+    return true
+  } catch (_) {
     return false
   }
-  d.retStill = (d.retStill || 0) + 1
-  return d.retStill >= 3
+}
+
+// Cells around the stuck body worth resync-poking: the feet/head column
+// (ghosts the bbox overlaps) plus one block ahead toward the goal at both
+// levels (ghosts in the path). Client-air included by design.
+function pokeCells(bp, next) {
+  const cells = [
+    { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) },
+    { x: Math.floor(bp.x), y: Math.floor(bp.y) + 1, z: Math.floor(bp.z) },
+  ]
+  if (next && typeof next.x === 'number') {
+    const dx = next.x - bp.x
+    const dz = next.z - bp.z
+    const len = Math.hypot(dx, dz)
+    if (len >= 0.05) {
+      const ax = Math.floor(bp.x + (dx / len) * 1.0)
+      const az = Math.floor(bp.z + (dz / len) * 1.0)
+      const y = Math.floor(bp.y)
+      cells.push({ x: ax, y, z: az }, { x: ax, y: y + 1, z: az })
+    }
+  }
+  return cells
 }
 
 function retStall(bot, ctx, d, bp, next) {
   const last = d.retStallPos
+  // Net progress toward the crumb: jiggle-in-place (leap-back cycles that
+  // displace without closing) defeats the displacement stall counter, so
+  // the unfreeze also triggers on progress drought.
+  const dc = dist3(bp, next)
+  if (dc < (typeof d.retProgBest === 'number' ? d.retProgBest : Infinity) - PROG_EPS) {
+    d.retProgBest = dc
+    d.retProgTicks = 0
+  } else {
+    d.retProgTicks = (d.retProgTicks || 0) + 1
+  }
   if (last && Math.hypot(bp.x - last.x, bp.z - last.z) > 0.05) {
     d.stalls = 0
     d.retStallPos = { x: bp.x, z: bp.z }
-    return
-  }
-  if (++d.stalls >= RETURN_STALL) {
-    d.retWedge = null
+  } else if (++d.stalls >= RETURN_STALL) {
     try { recover.setStuck(ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
     fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
+    return
+  }
+  if ((d.stalls === UNFREEZE_TICKS || d.retProgTicks === UNFREEZE_TICKS) && d.retUpKey !== d.unfrozeKey) {
+    // Mid-budget static (or circling) in manual drive: frozen or
+    // ghost-wedged, not merely slow — one unfreeze per crumb (body column
+    // + ahead, ghost-included), then the budget decides.
+    d.unfrozeKey = d.retUpKey
+    unfreeze(bot, pokeCells(bp, next))
   }
 }
 
@@ -855,6 +1161,7 @@ function strikeAndReplan(bot, ctx, d, t) {
     if (typeof forageMod.skipCell === 'function') forageMod.skipCell(ctx, t)
   } catch (_) { /* skip best-effort */ }
   d.target = null
+  d.tunnelGoal = null
   d.phase = 'plan'
 }
 
@@ -871,3 +1178,5 @@ module.exports.pickSite = pickSite
 module.exports.pickDir = pickDir
 module.exports.stairCells = stairCells
 module.exports.tunnelNext = tunnelNext
+module.exports.straightClear = straightClear
+module.exports.unfreeze = unfreeze
