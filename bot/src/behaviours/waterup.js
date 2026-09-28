@@ -44,6 +44,8 @@ const SWIM_STALL_TICKS = 4 // no +0.15 gain this long: pinned, strip and fail
 const SWIM_GAIN = 0.15
 const REASCEND_TICKS = 6 // re-climb budget after sinking during the B scan
 const TRAVERSE_TIMEOUT_TICKS = 15
+const SWIM_CENTER_DIST = 0.3 // past this off the lane middle: centering tap
+const SWIM_TAP_MS = 150 // tap length (releases between 1 Hz ticks)
 const TRAVERSE_STALL_TICKS = 3 // no horizontal progress: release press 1 tick
 const SCOOP_WAIT_TICKS = 2 // scoop apply + client update
 const SCOOP_TRIES = 2 // scoop attempts per source on the happy path
@@ -386,10 +388,22 @@ function waterUpRun(bot, ctx) {
   if (st.phase === 'swim') {
     const srcAY = st.combo.A.dest.y
     const targetY = srcAY - PLATEAU_BELOW_SRC
-    // The forward guard: swim is jump ONLY — any forward press (stuck keys
-    // from a killed primitive included) rides the shaft wall into a pin.
+    // The forward guard: swim is jump ONLY — any sustained forward press
+    // (stuck keys from a killed primitive included) rides the shaft wall
+    // into a pin. The single exception is the centering tap below: open
+    // lanes drift the hover off the 1-wide column (replay slope: 0.6 out,
+    // lift lost, flood left behind), so past 0.3 off-center the body faces
+    // the lane middle and taps forward for 150 ms (hop_step's timed-tap
+    // shape — a stale timer only ever releases, never latches a press).
     setForward(bot, false)
     setJump(bot, true)
+    const laneX = st.combo.A.dest.x + 0.5
+    const laneZ = st.combo.A.dest.z + 0.5
+    if (Math.hypot(bp.x - laneX, bp.z - laneZ) > SWIM_CENTER_DIST) {
+      try { bot.lookAt(new Vec3(laneX, bp.y + 1.0, laneZ)) } catch (_) { /* facing best-effort */ }
+      setForward(bot, true)
+      try { setTimeout(() => setForward(bot, false), SWIM_TAP_MS) } catch (_) { /* timer best-effort */ }
+    }
     if (bp.y >= targetY) {
       // Jump stays held into pourB (hover — releasing sinks, rig).
       setJump(bot, true)
@@ -446,6 +460,9 @@ function waterUpRun(bot, ctx) {
       st.travStall = 0
       setForward(bot, false)
       setJump(bot, true)
+      // Drift may have yawed the body off-course: re-face the stand point
+      // while the press is released, then resume next tick.
+      try { bot.lookAt(new Vec3(B.below.x + 0.5, B.below.y + 1.0, B.below.z + 0.5)) } catch (_) { /* facing best-effort */ }
       if (++st.waited > TRAVERSE_TIMEOUT_TICKS) return toStripFail(st, 'failed:traverse')
       return 'running'
     }
@@ -560,6 +577,8 @@ module.exports = {
   POUR_TIMEOUT_TICKS,
   SWIM_TIMEOUT_TICKS,
   SWIM_STALL_TICKS,
+  SWIM_CENTER_DIST,
+  SWIM_TAP_MS,
   REASCEND_TICKS,
   TRAVERSE_TIMEOUT_TICKS,
   TRAVERSE_STALL_TICKS,

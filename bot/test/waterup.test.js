@@ -308,6 +308,31 @@ describe('waterup run', () => {
     assert.ok(swimTicks > 2, 'swim ran several ticks')
   })
 
+  it('swim taps toward the lane middle when drifted off-center', async () => {
+    // Open lanes drift the hover off the 1-wide column (replay slope): past
+    // 0.3 out the swim faces the middle and taps forward 150 ms, then the
+    // timer releases (mutation: drop the tap and forward never goes true).
+    const items = [{ name: 'water_bucket', count: 1 }, { name: 'bucket', count: 1 }]
+    const bot = worldBot(shaftWorld(), items)
+    bot.opts.sites = [{ x: 0, y: 66, z: 0 }, { x: 1, y: 67, z: 0 }]
+    // Mid-swim stance, drifted 0.8 east of the lane middle.
+    bot.entity.position = pos(1.3, 63, 0.5)
+    const st = {
+      phase: 'swim', waited: 0, startFloor: 61, start: { x: 0.5, y: 61, z: 0.5 },
+      combo: { A: { dest: { x: 0, y: 66, z: 0 } }, B: { dest: { x: 1, y: 67, z: 0 } } },
+      sources: [{ x: 0, y: 66, z: 0 }], lastY: 62.9, lastGainTick: 0,
+    }
+    // Pour the column the swim rises through.
+    bot._waters.add('0,66,0'); bot._waters.add('0,65,0'); bot._waters.add('0,64,0'); bot._waters.add('0,63,0')
+    const out = waterup.waterUpRun(bot, { recovery: { st } })
+    assert.equal(out, 'running')
+    assert.equal(bot.controls.forward, true)
+    const aim = bot.aims[bot.aims.length - 1]
+    assert.ok(Math.hypot(aim.x - 0.5, aim.z - 0.5) < 0.1, 'faces the lane middle')
+    await new Promise((r) => setTimeout(r, 250))
+    assert.equal(bot.controls.forward, false, 'the tap releases between ticks')
+  })
+
   it('one bucket is not a climb: failed:no-bucket, nothing poured', async () => {
     const items = [{ name: 'water_bucket', count: 1 }]
     const bot = worldBot(shaftWorld(), items)
