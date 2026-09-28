@@ -217,17 +217,40 @@ describe('waterup scans', () => {
     assert.deepEqual(combo.B.below, { x: 1, y: 66, z: 0 })
   })
 
-  it('no combo under a ceiling ( capped shaft)', () => {
+  it('no combo under a ceiling (capped shaft)', () => {
     const solids = shaftWorld()
     for (let y = 63; y <= 66; y++) for (let x = -3; x <= 4; x++) for (let z = -3; z <= 3; z++) solids.add(key(x, y, z))
     const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
     assert.equal(waterup.findCombo(bot), null)
-    assert.equal(waterup.openAbove(bot), false)
   })
 
-  it('openAbove reads the open shaft true', () => {
-    const bot = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
-    assert.equal(waterup.openAbove(bot), true)
+  it('a lip above the climb still combos (lane-precise, not dy2..5)', () => {
+    // Own-column rock at 66 (dy+5): a dy2..5 gate would close, but A pours
+    // at 65 under it with a clear lane and B sits at 67 — the slope-wedge
+    // shape (the pour pair fits under the lip).
+    const solids = shaftWorld()
+    solids.add(key(0, 66, 0))
+    const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
+    const combo = waterup.findCombo(bot)
+    assert.ok(combo)
+    assert.equal(combo.A.dest.y, 65)
+    assert.deepEqual(combo.B.dest, { x: 1, y: 67, z: 0 })
+  })
+
+  it('a blocked swim lane kills the combo', () => {
+    // Rock at 64 fills the lane to every A that could reach the alcove.
+    const solids = shaftWorld()
+    solids.add(key(0, 64, 0))
+    solids.add(key(0, 65, 0))
+    const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
+    assert.equal(waterup.findCombo(bot), null)
+  })
+
+  it('wall2At reads one hemmed side true, open ground false', () => {
+    assert.equal(waterup.wall2At(worldBot(shaftWorld(), [])), true)
+    const open = new Set()
+    for (let x = -3; x <= 4; x++) for (let z = -3; z <= 3; z++) for (let y = 55; y <= 60; y++) open.add(key(x, y, z))
+    assert.equal(waterup.wall2At(worldBot(open, [])), false)
   })
 
   it('B below the A source is rejected (spread current pins)', () => {

@@ -32,7 +32,7 @@ const VARIANTS = {
 function F(over) {
   return {
     by: 'stand', goalDy: 0, goalDist: 5, scaffold: 0, pickaxe: false, bucket: 0, water: false,
-    headBlocked: false, digStep: null, hopStep: null, walls: 0, pit: false, combo: false, openAbove: false,
+    headBlocked: false, digStep: null, hopStep: null, walls: 0, pit: false, combo: false, wall2: false,
     freeSides: [[1, 0]], lavaNear: false, throughBlocked: false,
     playerOnline: false, playerDist: null, playerName: null, stuckTicks: 12,
     resetsStuck: 2, resetsPlaceError: 0, last: 'none', ...over,
@@ -54,8 +54,8 @@ const STATES = [
   ['pit-stone-online', F({ goalDy: 3, goalDist: 6, walls: 3, playerOnline: true, playerDist: 6, playerName: 'Steve' })],
   ['pit-no-goal-scaffold', F({ goalDy: 0, goalDist: null, scaffold: 10, walls: 3, pit: true, playerOnline: true, playerDist: 20, playerName: 'Steve' })],
   ['pit-level-goal', F({ goalDy: 0, goalDist: 12, scaffold: 10, walls: 3, pit: true })],
-  ['pit-bare-buckets', F({ goalDy: 3, goalDist: 6, bucket: 2, walls: 4, pit: true, combo: true, openAbove: true })],
-  ['pit-bare-nogoal', F({ goalDy: 0, goalDist: null, bucket: 2, walls: 4, pit: true, combo: true, openAbove: true })],
+  ['pit-bare-buckets', F({ goalDy: 3, goalDist: 6, bucket: 2, walls: 4, pit: true, combo: true, wall2: true })],
+  ['pit-bare-nogoal', F({ goalDy: 0, goalDist: null, bucket: 2, walls: 4, pit: true, combo: true, wall2: true })],
 ]
 
 function feasibleNames(facts) {

@@ -21,7 +21,7 @@ const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
 const { botPos, denyReason, logDeny } = require('./util')
-const { waterUpRun, countBuckets, openAbove, findCombo } = require('./waterup')
+const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -500,11 +500,13 @@ function recoverFacts(bot, ctx, state, target) {
     hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
     pit: pitAt(bot),
-    // water_up (jsf.2): a climbable pour combo (high shaft pour + a dry ledge
-    // pour above its spread) and open sky to swim through. Scanned like
-    // digStep/hopStep: decide-time only, never per tick.
+    // water_up (jsf.2): a climbable pour combo (high shaft pour with a clear
+    // swim lane + a dry ledge pour above its spread) and a 2-high wall beside
+    // the body (the bead's one-side pit gate — jsf.3's 2-side pit reads false
+    // in 1-wide open shafts, the proven geometry). Scanned like digStep /
+    // hopStep: decide-time only, never per tick.
     combo: !!findCombo(bot),
-    openAbove: openAbove(bot),
+    wall2: wall2At(bot),
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
     playerOnline,
@@ -549,11 +551,12 @@ function recoverFsm(facts, names) {
   const pick = (n) => n !== failed && ok.has(n)
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_up')) return 'dig_up'
-  // jsf.2: a bare pit with buckets climbs water after the scaffold/pickaxe
-  // climbers (a pillar is cheaper and cannot lose the kit). Bare pit on
-  // purpose: with a level goal inside the pit the model still sees the menu,
-  // the FSM just reserves the same answer for the backstop (no goalDy gate).
-  if ((facts.goalDy >= 2 || facts.pit) && pick('water_up')) return 'water_up'
+  // jsf.2: buckets climb water after the scaffold/pickaxe climbers (a pillar
+  // is cheaper and cannot lose the kit). High goal, or a goalless backstop
+  // beside a 2-high wall — never a known level goal: the climb is a one-way
+  // door (4jr: the goal sits inside the pit, height gained is never given
+  // back), and hop/sidestep own the level case.
+  if ((facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)) && pick('water_up')) return 'water_up'
   if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
@@ -1271,11 +1274,14 @@ const RECOVER_MENU = {
     // jsf.2: the bare-pit climber (no scaffold, no pickaxe). Two buckets, not
     // one: a single pour cannot ratchet (a scoop takes the top source, i.e.
     // cancels the newest pour — rig), so the combo always spends a pair.
-    // No goalDy gate: backstop episodes climb goalless pits too (the strip
-    // returns both buckets, the chain re-scans the combo at each stand).
-    feasible: (facts) => (facts.bucket || 0) >= 2 && facts.pit && facts.combo && facts.openAbove && !facts.water && !facts.lavaNear && !facts.headBlocked,
+    // High goal, or a goalless backstop beside a 2-high wall: a known level
+    // goal never climbs (one-way door, see the FSM arm). The chain re-scans
+    // the combo at each stand; the strip returns both buckets.
+    feasible: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
+      (facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)),
     run: waterUpRun,
-    repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.pit && facts.combo && facts.openAbove && !facts.water && !facts.lavaNear && !facts.headBlocked,
+    repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
+      (facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)),
     verb: 'pouring water to swim up',
   },
   dig_step: {

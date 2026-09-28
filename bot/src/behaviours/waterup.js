@@ -91,17 +91,6 @@ function countBuckets(bot) {
   return countItems(bot, (n) => n === 'water_bucket')
 }
 
-// Open above the head: the A column and the swim need dy 2..5 free. A ceiling
-// (the CLUSTER pocket's stone at dy+4) reads closed — water_up is for open
-// pits only (jsf.1 finding 9).
-function openAbove(bot) {
-  for (let dy = 2; dy <= 5; dy++) {
-    if (solid(cellAt(bot, 0, dy, dz0()))) return false
-  }
-  return true
-}
-function dz0() { return 0 }
-
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
 // Aim point: the ref face plane center (vanilla crosshair). Strictly ON the
@@ -116,6 +105,18 @@ function aimFace(refPos, face) {
 
 function cellCenter(c) {
   return new Vec3(c.x + 0.5, c.y + 0.5, c.z + 0.5)
+}
+
+// A 2-high wall beside the body (at least ONE hemmed side): the bead's
+// original pit gate ("хотя бы с одной стороны"), which jsf.3's merged pitAt
+// (2+ sides, pillar economy) reads false in 1-wide open shafts — the proven
+// water_up geometry. The swim lane and the B ledge are the combo's own
+// checks; this one only keeps goalless offers out of the open.
+function wall2At(bot) {
+  for (const [dx, dz] of SIDES) {
+    if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) return true
+  }
+  return false
 }
 
 // A pour at one height: solid side ref + air dest in the own column + reach.
@@ -199,8 +200,16 @@ function findLedgePour(bot, srcAY) {
   return ledgePourAt(bot, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), p.y + EYE_HEIGHT, srcAY)
 }
 
+function laneCell(bot, cx, y, cz) {
+  try {
+    return bot.blockAt(new Vec3(cx, y, cz))
+  } catch (_) { return null }
+}
+
 // The climbable combo from the floor: highest A with a dry B above its
-// spread. The swim is vertical, so the plateau column is the floor column.
+// spread and a clear swim lane (own column, feet+1 through the source — a
+// ceiling inside the lane kills the combo even when the pour face reads
+// fine). The swim is vertical, so the plateau column is the floor column.
 function findCombo(bot) {
   const p = botPos(bot)
   if (!p) return null
@@ -209,6 +218,12 @@ function findCombo(bot) {
   for (let dy = 5; dy >= 2; dy--) {
     const A = highPourAt(bot, dy)
     if (!A) continue // eslint-disable-line no-continue
+    let lane = true
+    for (let y = Math.floor(p.y) + 1; y <= A.dest.y; y++) {
+      const c = laneCell(bot, cx, y, cz)
+      if (!isAirish(c) && !isWater(c)) { lane = false; break }
+    }
+    if (!lane) continue // eslint-disable-line no-continue
     const plateauY = A.dest.y - PLATEAU_BELOW_SRC
     const B = ledgePourAt(bot, cx, Math.floor(plateauY), cz, plateauY + EYE_HEIGHT, A.dest.y)
     if (!B) continue // eslint-disable-line no-continue
@@ -553,7 +568,7 @@ module.exports = {
   STRIP_FAIL_TRIES,
   SETTLE_TICKS,
   countBuckets,
-  openAbove,
+  wall2At,
   aimFace,
   cellCenter,
   highPourAt,

@@ -2,7 +2,8 @@
 
 // water_up menu wiring (idkcraft-jsf.2): the bare-pit bucket climber sits in
 // RECOVER_ORDER after pillar_up/dig_up and before dig_step, with facts
-// bucket (count), combo (a climbable A+B pour pair) and openAbove.
+// bucket (count), combo (a climbable A+B pour pair) and wall2 (a 2-high
+// wall beside the body — the one-side pit gate for goalless backstops).
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -101,8 +102,34 @@ describe('water_up wiring', () => {
     assert.equal(facts.bucket, 2)
     assert.equal(facts.pit, true)
     assert.equal(facts.combo, true)
-    assert.equal(facts.openAbove, true)
+    assert.equal(facts.wall2, true)
     assert.ok(names.includes('water_up'))
+  })
+
+  it('one-sided shaft + high goal offers water_up (pit reads false there)', () => {
+    // The CLUSTER shaft: a single hemmed side (pit=false under jsf.3's 2-side
+    // rule) with a climbable combo — the replay acceptance geometry.
+    const world = shaftWorld()
+    for (let y = 61; y <= 70; y++) {
+      world.solids.delete(key(-1, y, 0))
+      world.solids.delete(key(0, y, 1))
+      world.solids.delete(key(0, y, -1))
+    }
+    const bot = worldBot(world, [{ name: 'water_bucket', count: 2 }])
+    const stuck = { by: 'test', goal: { x: 0, y: 70, z: 8 } }
+    const { facts, names } = menuNames(bot, stuck)
+    assert.equal(facts.pit, false)
+    assert.equal(facts.wall2, true)
+    assert.equal(facts.combo, true)
+    assert.ok(names.includes('water_up'))
+  })
+
+  it('known level goal never climbs the one-way door', () => {
+    const bot = worldBot(shaftWorld(), [{ name: 'water_bucket', count: 2 }])
+    const stuck = { by: 'test', goal: { x: 8, y: 61, z: 0 } }
+    const { facts, names } = menuNames(bot, stuck)
+    assert.equal(facts.combo, true)
+    assert.ok(!names.includes('water_up'))
   })
 
   it('one bucket is not an offer', () => {
@@ -148,7 +175,6 @@ describe('water_up wiring', () => {
     const bot = worldBot(world, [{ name: 'water_bucket', count: 2 }])
     const { facts, names } = menuNames(bot)
     assert.equal(facts.combo, false)
-    assert.equal(facts.openAbove, false)
     assert.ok(!names.includes('water_up'))
   })
 
@@ -167,8 +193,14 @@ describe('water_up wiring', () => {
   })
 
   it('FSM climbs water in a goalless pit with no scaffold', () => {
-    const facts = { goalDy: 0, goalDist: null, pit: true, last: 'none' }
+    const facts = { goalDy: 0, goalDist: null, pit: true, wall2: true, last: 'none' }
     assert.equal(recover.recoverFsm(facts, ['water_up', 'sidestep', 'wait']), 'water_up')
+  })
+
+  it('FSM leaves a known level goal to hop/sidestep', () => {
+    const facts = { goalDy: 0, goalDist: 12, pit: true, wall2: true, last: 'none' }
+    assert.equal(recover.recoverFsm(facts, ['water_up', 'hop_step', 'sidestep', 'wait']), 'hop_step')
+    assert.equal(recover.recoverFsm(facts, ['water_up', 'sidestep', 'wait']), 'sidestep')
   })
 
   it('FSM prefers the cheaper climbers first', () => {
