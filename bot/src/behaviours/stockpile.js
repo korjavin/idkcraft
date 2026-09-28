@@ -317,6 +317,37 @@ async function withdrawFromChest(bot, ctx, name, count) {
   }
 }
 
+// Withdraw up to count across several names in one window (did.1: a whole
+// item family without one open per name). { got, name } — name is the first
+// withdrawn concrete name, null when nothing came out.
+async function withdrawAnyFromChest(bot, ctx, names, count) {
+  const want = new Set(Array.isArray(names) ? names : [])
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+      let need = count
+      let got = 0
+      let first = null
+      if (Array.isArray(stacks)) {
+        for (const s of stacks) {
+          if (need <= 0) break
+          if (!s || typeof s.name !== 'string' || !want.has(s.name)) continue
+          const take = Math.min(typeof s.count === 'number' ? s.count : 1, need)
+          if (take <= 0) continue
+          await window.withdraw(s.type, s.metadata, take)
+          if (first === null) first = s.name
+          need -= take
+          got += take
+        }
+      }
+      return { got, name: first }
+    })
+    return res && res.status === 'ok' ? res.value : { got: 0, name: null }
+  } catch (_) {
+    return { got: 0, name: null }
+  }
+}
+
 // Withdraw up to count of the first edible in the adopted chest.
 // { got, name } — name null when nothing edible came out.
 async function withdrawEdible(bot, ctx, count) {
@@ -676,6 +707,7 @@ module.exports.depositPlan = depositPlan
 module.exports.surplusCount = surplusCount
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
+module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.FOOD_KEEP = FOOD_KEEP
