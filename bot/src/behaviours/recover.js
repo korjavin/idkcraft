@@ -167,6 +167,27 @@ function scanSides(bot) {
   return { walls, free }
 }
 
+// Pit fact (jsf.3, shared with jsf.2 water_up): at least one side rises two
+// solid blocks (dy 0 AND 1) — a wall the body cannot walk or hop out of.
+// Nulls read as open (never claim a pit blind). Lava and water never count
+// (solid() reads them passable).
+function pitAt(bot) {
+  for (const [dx, dz] of SIDES) {
+    if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) return true
+  }
+  return false
+}
+
+// Climb arm for goal-less backstop episodes (jsf.3): the ticker backstop
+// fires between walk legs with no live goal (goalDist null), and a pit
+// around the body means up is the only way out (the 44-scaffold gave-up:
+// menu hop/dig_step/sidestep, pillar_up never offered). A level goal with
+// a known dist stays unclimbable even in a pit (4jr: the goal sits inside
+// the pit, a pillar to it is pointless).
+function pitClimb(facts) {
+  return !!facts && facts.goalDist === null && !!facts.pit
+}
+
 // Lava in or around the mount head: digging the cap would open a flow
 // onto the mount, and standing under lava is death either way. Mirrors the
 // executor's dontCreateFlow refusal (liquid above or beside the break).
@@ -387,6 +408,7 @@ function recoverFacts(bot, ctx, state, target) {
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
     walls: sides.walls,
+    pit: pitAt(bot),
     freeSides: sides.free,
     lavaNear: lavaNearAt(bot),
     playerOnline,
@@ -413,7 +435,7 @@ function recoverText(facts) {
   const player = !facts.playerOnline ? 'none' : facts.playerDist === null ? 'far' : facts.playerDist <= NEAR_PLAYER ? 'near' : 'far'
   return `stuck=${stuckBucket(facts.stuckTicks)} goal=${dy} dist=${dist} ` +
     `scaffold=${facts.scaffold} pickaxe=${facts.pickaxe ? 'yes' : 'no'} water=${facts.water ? 'yes' : 'no'} ` +
-    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} player=${player} ` +
+    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} pit=${facts.pit ? 'yes' : 'no'} player=${player} ` +
     `resets=${facts.resetsStuck}/${facts.resetsPlaceError} last=${facts.last}`
 }
 
@@ -429,8 +451,8 @@ function recoverFsm(facts, names) {
   const m = /^(pillar_up|dig_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
-  if (facts.goalDy >= 2 && pick('pillar_up')) return 'pillar_up'
-  if (facts.goalDy >= 2 && pick('dig_up')) return 'dig_up'
+  if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
+  if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_up')) return 'dig_up'
   if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
@@ -457,8 +479,8 @@ function recoverFsm(facts, names) {
 // 7/7 valid labels, disagreements are all safe (wait / call_player).
 const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
-  pillar_up: 'climb: goal is high, scaffold on hand, headroom free — jump and place one block under your feet',
-  dig_up: 'climb: goal is high, pickaxe on hand — dig above your head and climb',
+  pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
+  dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
   dig_step: 'climb: no pickaxe or blocks, pit wall digs by hand — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
@@ -1002,22 +1024,24 @@ function callPlayerRun(bot, ctx) {
 const RECOVER_MENU = {
   pillar_up: {
     // 4jr: a pillar to a level goal is pointless — laya took the first menu
-    // item anyway, 29 times in 16 min. Climb prims need the goal above.
+    // item anyway, 29 times in 16 min. Climb prims need the goal above —
+    // jsf.3 excepts a pit with NO goal (pitClimb): up is the only way out.
     // p4s: placing is what just failed (3 done / 49 failed:place-error a
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
     // sidestep own the escape, not the scaffold.
-    feasible: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
     run: pillarUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.scaffold > 0 && !facts.placeError && !facts.water,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
   },
   dig_up: {
     // 9sq F1: headroom already free means nothing to dig — never offer, and
     // never chain onto free headroom either (the chain is an offer with no ask).
-    feasible: (facts) => facts.goalDy >= 1 && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
+    // jsf.3: like pillar_up, a pit with no goal climbs (head still blocked).
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && facts.headBlocked,
     run: digUpRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.pickaxe && facts.headBlocked,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && facts.headBlocked,
     verb: 'digging up',
   },
   dig_step: {
