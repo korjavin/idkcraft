@@ -1166,13 +1166,184 @@ describe('ticker backstops (minor)', () => {
     for (let t = 0; t < 31; t++) await ticker.tick()
     assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
   })
-  it('no backstop while parked (executor idle)', async () => {
+  it('no backstop while parked (paused ticks never count)', async () => {
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.stop() // 'stop' parks the bot: the goal is dropped, ticks pause
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null)
+    ticker.destroy()
+  })
+  it('no backstop when idle without a goal', async () => {
+    // An 'idle' brain answer clears the goal (stopOnce): standing goal-less
+    // for 35 ticks is normal, never stuck.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath') // a stale verdict without a goal still reads quiet
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot.pathfinder.goal, null)
+    assert.equal(bot._tickerCtx.stuck, null)
+    ticker.destroy()
+  })
+  it('no backstop when idle at the goal', async () => {
+    // Resting inside follow range with a live goal: the goal reports
+    // satisfied, so 35 idle ticks stay quiet.
+    const bot = standBot()
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(2, 61, 0) } } }
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath') // satisfaction beats even a terminal verdict
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.ok(bot.pathfinder.goal, 'live goal still set')
+    assert.equal(bot._tickerCtx.stuck, null)
+    ticker.destroy()
+  })
+  it('no backstop while mid-plan (no verdict yet)', async () => {
+    // Status none/success with an idle executor is a plan in flight, not a
+    // trap: a placing build holds unsatisfiable approach goals this way for
+    // minutes (scenarios-work roof run pins the full drive).
     const bot = standBot()
     bot.pathfinder.isMoving = () => false
     const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     for (let t = 0; t < 35; t++) await ticker.tick()
     assert.equal(bot._tickerCtx.stuck, null)
+    ticker.setPathStatus('success')
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null)
+    ticker.destroy()
+  })
+  it('idle far from a live goal raises by=no-displacement (idkcraft-rra)', async () => {
+    // DUGPIT trap shape: noPath empties the executor (moving=false), the
+    // follow re-issue stream keeps the goal live, the body never moves.
+    // Deleting the idle branch in noteDisplacement fails this (never fires).
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    // 1 anchor tick + 30 still ticks to trip STUCK_TICKS_ENTRY.
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
+    assert.deepEqual(bot._tickerCtx.stuck.goal, { x: 10, y: 61, z: 0 })
+    ticker.destroy()
+  })
+  it('a timeout verdict fires like noPath (idkcraft-rra round 1)', async () => {
+    // Removing the timeout half of the terminal check fails this.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('timeout')
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
+    ticker.destroy()
+  })
+  it('a player who walked into range reads satisfied, not stuck (idkcraft-rra round 1)', async () => {
+    // GoalFollow snapshots the target: 20 ticks count against the far
+    // snapshot, then the player walks within range. follow.js rests on the
+    // live position (no re-issue, snapshot stays stale); the probe must
+    // measure live too — isEnd-on-snapshot would fire here.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    for (let t = 0; t < 20; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'no fact yet at 20 ticks')
+    bot.players.Steve.entity.position = pos(2, 61, 0)
+    // Per-tick: without the live measure the fact fires 11 ticks after the
+    // move, then the episode releases and latches back to null — an
+    // end-state assert alone would miss it.
+    for (let t = 0; t < 35; t++) {
+      await ticker.tick()
+      assert.equal(bot._tickerCtx.stuck, null, `live range beats the stale snapshot + stale noPath (tick ${t})`)
+    }
+    ticker.destroy()
+  })
+  it('a latched release point holds the idle count until relocation (idkcraft-rra round 1)', async () => {
+    // One episode + one page per trap: release() anchors the latch (next
+    // test pins the anchor); the idle branch holds while the body stays
+    // within the radius and re-arms past it.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    bot._tickerCtx.recoverLatch = { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } }
+    for (let t = 0; t < 35; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'latched trap stays quiet')
+    bot.entity.position = pos(6, 61, 0.5) // 5.5 past the anchor, still far from the player
+    for (let t = 0; t < 31; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.recoverLatch, null, 'relocation clears the latch')
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement', 're-armed trap fires again')
+    ticker.destroy()
+  })
+  it('release anchors the ticker latch at the release point (idkcraft-rra round 1)', () => {
+    const bot = standBot()
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 10, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'call_player', source: 'fsm' },
+      brain: null,
+    }
+    recover.release(bot, ctx, 'gave-up')
+    assert.equal(ctx.recoverLatch && ctx.recoverLatch.by, 'no-displacement')
+    assert.deepEqual(ctx.recoverLatch.at, { x: 0.5, y: 61, z: 0.5 })
+    assert.equal(recover.tickerLatched(ctx, bot), true)
+    bot.entity.position = pos(6, 61, 0.5)
+    assert.equal(recover.tickerLatched(ctx, bot), false, 'relocation clears')
+    assert.equal(ctx.recoverLatch, null)
+  })
+  it('release on done clears the ticker latch (idkcraft-rra round 2)', () => {
+    // A done episode may be a partial climb that leaves the body in the
+    // pit — latching that would end all further escape attempts with no
+    // page. Progress re-arms: the next trap gets a fresh episode.
+    const bot = standBot()
+    const ctx = {
+      stuck: { by: 'no-displacement', goal: { x: 10, y: 61, z: 0 }, key: 'ticker' },
+      recovery: { action: 'sidestep', source: 'fsm' },
+      brain: null,
+      recoverLatch: { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } },
+    }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.recoverLatch, null, 'no anchor on done')
+  })
+  it('relocation clears the latch on any tick, not just idle ones (idkcraft-rra round 2)', async () => {
+    // A walk away and back must re-arm: the consult runs every tick, so a
+    // moving tick past the radius clears the anchor even though the moving
+    // branch itself never counts against it.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => true
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.recoverLatch = { by: 'no-displacement', key: 'ticker', goal: { x: 10, y: 61, z: 0 }, at: { x: 0.5, y: 61, z: 0.5 } }
+    await ticker.tick() // anchor tick inside the radius
+    assert.ok(bot._tickerCtx.recoverLatch, 'latch holds inside the radius')
+    bot.entity.position = pos(6, 61, 0.5)
+    await ticker.tick() // moving tick past the radius
+    assert.equal(bot._tickerCtx.recoverLatch, null, 'moving relocation clears')
+    ticker.destroy()
+  })
+  it('displacement resets the idle count (idkcraft-rra)', async () => {
+    // 20 still ticks, one real step (still far from the goal), then the
+    // count restarts: quiet at 20 more, fired 11 after that.
+    const bot = standBot()
+    bot.pathfinder.isMoving = () => false
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setPathStatus('noPath')
+    for (let t = 0; t < 20; t++) await ticker.tick()
+    bot.entity.position = pos(1.5, 61, 0.5)
+    for (let t = 0; t < 20; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck, null, 'one step restarts the 30-tick budget')
+    for (let t = 0; t < 11; t++) await ticker.tick()
+    assert.equal(bot._tickerCtx.stuck && bot._tickerCtx.stuck.by, 'no-displacement')
+    ticker.destroy()
   })
 })
 

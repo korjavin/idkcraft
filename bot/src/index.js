@@ -522,8 +522,54 @@ function fleeReflex(bot, ctx) {
     return null
   }
 
+  // Idle-while-far probe (idkcraft-rra): a noPath verdict empties the
+  // executor, so moving reads false and the moving-only watch never counts —
+  // the trap stays silent forever. A live but unsatisfied goal with an idle
+  // executor counts the same stillness instead. Only the goal itself knows
+  // its radius, so satisfaction is asked of it; a goal without coordinates
+  // reads as no goal (conservative: no stuck).
+  function idleFarFromGoal(bp) {
+    let g = null
+    try { g = bot.pathfinder && bot.pathfinder.goal } catch (_) { return false }
+    if (!g) return false
+    // Entity goals (GoalFollow) snapshot the target: hasChanged re-anchors
+    // only past rangeSq, so the snapshot lags a walking player by up to the
+    // range — while follow.js rests on the LIVE position. Measure live like
+    // follow does, or a player who walked into range reads stuck against a
+    // stale snapshot plus a stale noPath (revmux 01 major).
+    try {
+      const ep = g.entity && g.entity.position
+      if (ep && typeof g.rangeSq === 'number' && bp &&
+        typeof ep.x === 'number' && typeof ep.y === 'number' && typeof ep.z === 'number') {
+        const dx = Math.floor(ep.x) - Math.floor(bp.x)
+        const dy = Math.floor(ep.y) - Math.floor(bp.y)
+        const dz = Math.floor(ep.z) - Math.floor(bp.z)
+        return (dx * dx + dy * dy + dz * dz) > g.rangeSq
+      }
+    } catch (_) { /* fall through to isEnd */ }
+    try {
+      if (typeof g.isEnd === 'function') {
+        const node = bp && typeof bp.floored === 'function'
+          ? bp.floored()
+          : { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+        return !g.isEnd(node)
+      }
+    } catch (_) { /* fall through to the distance check */ }
+    const gp = backstopGoal()
+    if (!gp || !bp) return false
+    let d = null
+    try { d = Math.hypot(bp.x - gp.x, bp.y - gp.y, bp.z - gp.z) } catch (_) { return false }
+    return typeof d === 'number' && d > 3
+  }
+
   function noteDisplacement() {
     if (ctx.paused) return
+    // Relocation re-arms the ticker latch on EVERY tick (rra round 2): the
+    // idle-branch consult below short-circuits while moving/at-goal, so a
+    // walk away and back would otherwise return to a stale anchor. Evaluated
+    // once here for both its clearing side effect and the idle condition.
+    let latched = false
+    try { latched = recover.tickerLatched(ctx, bot) } catch (_) { /* latch best-effort */ }
     let bp = null
     try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
     let moving = false
@@ -533,6 +579,22 @@ function fleeReflex(bot, ctx) {
     if (bp && ctx.lastPos && moving) {
       if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       else {
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuck = null
+      }
+    } else if (!moving && bp && ctx.lastPos) {
+      // Idle executor (idkcraft-rra): stillness counts only against a live
+      // unsatisfied goal after a terminal planner verdict (noPath/timeout).
+      // Normal idle at goal, without a goal, or mid-plan (none/success)
+      // resets — a placing build holds unsatisfiable approach goals with an
+      // idle executor for minutes, and must never trip this. A latched
+      // release point holds too: one episode + one page per trap, then quiet
+      // until the body relocates (revmux 01 major).
+      const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
+      if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
+        if (terminal && idleFarFromGoal(bp) && !latched) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+        else ctx.stuckTicks = 0
+      } else {
         ctx.stuckTicks = 0
         if (!ctx.recovery) ctx.stuck = null
       }
