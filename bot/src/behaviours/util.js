@@ -214,18 +214,45 @@ function solidBelow(bot, pos) {
 // the dig would deepen the hole; 'gravity': the dig would drop a sand /
 // gravel stack onto the bot's own head — owner session 2026-09-28:
 // recover dig_up opened a sand ceiling at -11 56 124 and the bot
-// suffocated 2s after the dig finished) or 'protected' (owner-build
-// protection). A below-feet dig on open ground stays allowed: it makes a
-// 1-deep hole the bot jumps out of. Both trap rules need a known position
-// and proven cells; without either they cannot prove a trap and stay out,
-// while the protection rules below them still fail closed.
+// suffocated 2s after the dig finished; 'submerged': water in the target
+// cell or above it, the dig needs a dive — prod 2026-09-28 drowned on
+// one) or 'protected' (owner-build protection). A below-feet dig on open
+// ground stays allowed: it makes a 1-deep hole the bot jumps out of.
+// Both trap rules need a known position and proven cells; without either
+// they cannot prove a trap and stay out, while the protection rules below
+// them still fail closed.
+// Water-like cells for the breath guard (idkcraft-0u9): plain water plus
+// the flora that only stands in water (mirrors swim.js WET_NAMES).
+const WET_DIG_NAMES = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass'])
+
+function isWetDigName(name) {
+  return typeof name === 'string' && WET_DIG_NAMES.has(name)
+}
+
+// Water in the cell or directly above it — the shared 'submerged'
+// predicate (bring.js costs wet candidates without digging them).
+function submergedAt(bot, x, y, z) {
+  try {
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return false
+    return isWetDigName(cellName(bot, Math.floor(x), Math.floor(y), Math.floor(z))) ||
+      isWetDigName(cellName(bot, Math.floor(x), Math.floor(y) + 1, Math.floor(z)))
+  } catch (_) { return false }
+}
+
 function denyReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
     const name = block.name
     if (name === 'air' || name === 'cave_air' || name === 'void_air') return null
-    const feet = botPos(bot)
+    // Breath (idkcraft-0u9): a dig the bot must submerge its head for —
+    // water in the target cell or directly above it. Prod 2026-09-28
+    // drowned mid-dig on an underwater vein; the ticker breath reflex
+    // rescues the body, this refusal keeps digs out of the water in the
+    // first place. A property of the target, not the stance, so it sits
+    // above the trap rules; unknown cells read dry (proof rule, above).
     const pos = block.position
+    if (pos && submergedAt(bot, pos.x, pos.y, pos.z)) return 'submerged'
+    const feet = botPos(bot)
     if (feet && pos && typeof pos.y === 'number' && Math.floor(pos.y) < Math.floor(feet.y)) {
       const near = Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 &&
         Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1
@@ -292,7 +319,7 @@ function logDeny(block, reason) {
     const at = (p && typeof p.x === 'number')
       ? `${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`
       : '? ? ?'
-    if (reason === 'below-feet' || reason === 'gravity') {
+    if (reason === 'below-feet' || reason === 'gravity' || reason === 'submerged') {
       console.log(`selftrap: refused dig ${n} at ${at} (${reason})`)
     } else {
       console.log(`protected: ${n} at ${at}`)
@@ -324,4 +351,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, solidBelow, protectedReason }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, submergedAt, solidBelow, protectedReason }

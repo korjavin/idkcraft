@@ -184,6 +184,74 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     })
   })
 
+  it('wet nearest is not committed at chat time: find opens, dry farther wins (revmux 02 core-1)', async () => {
+    const names = {
+      '10,64,0': 'iron_ore', '10,65,0': 'water', '11,64,0': 'air', // wet but exposed
+      '30,64,0': 'iron_ore', '31,64,0': 'air', // dry exposed
+    }
+    const bot = mockBot({ spots: [pos(10, 64, 0), pos(30, 64, 0)], names, items: PICK, playerPos: pos(60, 64, 0) })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['nearest iron_ore is underwater, checking for a dry one…'])
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'find', 'wet chat-time hit must not commit a walk')
+    assert.ok(ctx.bring.skip.has('10,64,0'), 'wet cell pre-seeded into o.skip (revmux 03)')
+    assert.equal(ctx.bring.sawSubmerged, true)
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [30, 64, 0])
+    assert.match(bot.lines[1], /^going for 3 iron_ore, 30 blocks away$/)
+  })
+
+  it('buried lakebed vein, no dry rival: never walks the wet shaft, refuses honestly (revmux 03 body-1)', async () => {
+    // Water at y+3: above the find pre-check (+1), so only the pre-seeded
+    // skip keeps the first find tick from re-committing the wet shaft.
+    const names = { '0,59,0': 'iron_ore', '0,62,0': 'water' }
+    const bot = mockBot({ spots: [pos(0, 59, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['nearest iron_ore is underwater, checking for a dry one…'])
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'find')
+    assert.ok(ctx.bring.skip.has('0,59,0'))
+    assert.equal(ctx.bring.sawSubmerged, true)
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring, null, 'no dry rival: the order refuses, never walks')
+    assert.deepEqual(bot.lines[1], 'could not reach iron safely')
+  })
+
+  it('seeded skip blocks a grafted wet far-cache hit (revmux 03 core-1)', async () => {
+    const names = {
+      '60,64,0': 'iron_ore', '61,64,0': 'air', // the wet hit the cache grafts
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const cache = () => ({ x: 0, y: 64, z: 0, edge: 160, hit: { name: 'iron_ore', pos: pos(60, 64, 0) }, buriedHit: null })
+    // Seeded (the shape startBlockOrder opens for a wet res): the graft is
+    // skipped, the cache take fails, find falls through to a fresh shell
+    // scan — never a walk to the wet cell.
+    const bot = mockBot({ spots: [], names, items: PICK, playerPos: pos(30, 64, 0) })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = {
+      kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false,
+      skip: new Set([bring.skipKey(pos(60, 64, 0))]), sawSubmerged: true, farCache: cache(),
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar', 'skipped graft rescans instead of committing')
+    assert.equal(ctx.bring.pos, undefined)
+    // Control without the seed: the graft commits the wet walk (the hole).
+    const bot2 = mockBot({ spots: [], names, items: PICK, playerPos: pos(30, 64, 0) })
+    tickerFor(bot2)
+    const ctx2 = bot2._tickerCtx
+    ctx2.bring = {
+      kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false,
+      farCache: cache(),
+    }
+    await bring(bot2, ctx2, null, {})
+    assert.equal(ctx2.bring.phase, 'walk')
+    assert.deepEqual([ctx2.bring.pos.x, ctx2.bring.pos.y, ctx2.bring.pos.z], [60, 64, 0])
+  })
+
   it('(3) contested costs: exactly one ask with exactly 2 criteria, answer respected', async () => {
     const names = { '0,61,0': 'iron_ore', '30,64,0': 'iron_ore', '31,64,0': 'air' }
     const bot = mockBot({ spots: [pos(0, 61, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })

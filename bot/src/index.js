@@ -11,7 +11,7 @@ const { addSwimExits, addSwimPrune } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
-const { trackPlaced } = require('./behaviours/util')
+const { trackPlaced, denyReason } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
 const dangerMod = require('./danger')
@@ -210,6 +210,354 @@ function eatReflex(bot, ctx, state) {
   return true
 }
 
+// Breath reflex (idkcraft-0u9): prod 2026-09-28 drowned mid-dig on an
+// underwater iron vein (bring dig_buried, 55 s under) — nothing read
+// bot.oxygenLevel (0-20, drains ~1/s with the head under water). At <= 10
+// with the body in water the tick preempts like flee: stop the dig, drop
+// the path, swim up; the order resumes when the lungs are full. The swim
+// is always diagonal (jump + forward toward open water): a vertical hold
+// pins forever against a wall or under a slope on Paper 26.1.2 (rig: 60
+// ticks treading, drowned) — the same wall-rise rejection swim.js
+// documents for the planner. A 1-cell lane scan cannot see a dead end, so
+// a displacement watch rotates stalled lanes (opposite-first unstick,
+// then the remaining lanes, the stalled one forgiven last): pushing one
+// face-touch forever is what drowned the first diagonal swimmer too.
+// Breathing eases off but never releases early: a head poking out
+// mid-rise floats (no input) while the episode keeps the body —
+// releasing there flap-cycles with the re-trigger every other tick,
+// resets the lane machinery, and lets the order re-dive between swims
+// (rig). Release needs full lungs, dry land, or sustained air (the last
+// is the stale-readout backstop: 5 ticks of head-out means breathing
+// even if the oxygen number never moves).
+const BREATH_OXYGEN_LOW = 10
+const BREATH_OXYGEN_FULL = 20
+const BREATH_SWIM_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+const BREATH_STILL_TICKS = 2 // no displacement this many breath ticks: the lane is a wall
+const BREATH_STILL_BLOCKS = 0.2 // swimming clears 2+ blocks/s; tread-bob stays under this
+const BREATH_UNSTICK_TICKS = 2 // blind opposite-lane ticks to break a face-touch
+const BREATH_AIR_TICKS = 5 // consecutive head-out ticks that prove breathing past a stale readout
+const BREATH_COOLDOWN_MS = 4000 // post-release calm: a breaching body lands back under within a tick, and re-triggering at once flap-cycles release/swim forever (rig) — 4 s lets it settle or float while the order gets a window (a re-dive still re-triggers)
+function breathReflex(bot, ctx, nowMs = Date.now()) {
+  let inWater = false
+  try { inWater = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { inWater = false }
+  const oxy = (bot && typeof bot.oxygenLevel === 'number') ? bot.oxygenLevel : null
+  if (!ctx.breath) {
+    if (typeof ctx.breathCoolUntil === 'number' && nowMs < ctx.breathCoolUntil) return false
+    if (oxy === null || oxy > BREATH_OXYGEN_LOW || !inWater) return false
+    try { if (typeof bot.stopDigging === 'function') bot.stopDigging() } catch (_) { /* nothing in flight */ }
+    dropBreathGoal(bot, ctx)
+    ctx.breathStill = 0
+    ctx.breathUnstick = 0
+    ctx.breathDead = null
+    ctx.breathLane = -1
+    ctx.breathPrevLane = -1
+    ctx.breathBlind = false
+    ctx.breathPrev = null
+    ctx.breathPrev2 = null
+    ctx.breathAir = 0
+    ctx.breathLastPos = null // baselined on the first drive, not the trigger
+    driveBreathSwim(bot, ctx)
+    ctx.breath = true
+    console.log(`reflex breath oxygen=${oxy}`)
+    try { metrics.events.inc({ event: 'reflex_breath' }) } catch (_) { /* metrics best-effort */ }
+    return true
+  }
+  if (oxy === null || oxy >= BREATH_OXYGEN_FULL || !inWater) {
+    releaseBreath(bot, ctx, nowMs)
+    return false
+  }
+  if (headInAir(bot)) {
+    // Breathing: ease off and float while the episode keeps the body.
+    // Floating never stalls, oscillates, or dies — freeze the swim
+    // machinery instead of feeding it surface bob.
+    ctx.breathAir = (ctx.breathAir || 0) + 1
+    freezeBreathSwim(bot, ctx)
+    setBreathControl(bot, 'jump', false)
+    setBreathControl(bot, 'forward', false)
+    if (ctx.breathAir >= BREATH_AIR_TICKS) {
+      releaseBreath(bot, ctx, nowMs)
+      return false
+    }
+    dropBreathGoal(bot, ctx)
+    return true
+  }
+  ctx.breathAir = 0
+  // Still down: keep the goal dropped (a re-issued dive would fight the
+  // rise) and keep swimming, rotating stalled lanes — but coast while
+  // rising with air just above the head: full thrust there breaches clean
+  // out of the water (!inWater release), lands back under, and re-triggers
+  // every other tick, resetting the lane machinery each time (rig).
+  // Coasting needs upward momentum: with no input the body sinks, so on
+  // the ground (or falling) inside the band the swim keeps thrusting —
+  // coasting there would pin the body on a 2-deep floor forever (revmux
+  // 01 body-1).
+  dropBreathGoal(bot, ctx)
+  if (breathSurfaceNear(bot) && breathRising(bot)) {
+    freezeBreathSwim(bot, ctx)
+    setBreathControl(bot, 'jump', false)
+    setBreathControl(bot, 'forward', false)
+    return true
+  }
+  driveBreathSwim(bot, ctx)
+  return true
+}
+
+// Upward momentum off the ground: physics velocity, fail-safe toward
+// thrust when the readout is missing (fake bots swim, never coast).
+function breathRising(bot) {
+  try {
+    const e = bot && bot.entity
+    if (!e || e.onGround === true) return false
+    const v = e.velocity
+    return !!v && typeof v.y === 'number' && v.y > 0
+  } catch (_) { return false }
+}
+
+// Air two above the feet (= above the head): the surface or a pocket.
+function breathSurfaceNear(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (!p || typeof p.x !== 'number' || typeof bot.blockAt !== 'function') return false
+    return breathIsAir(breathCellName(bot, Math.floor(p.x), Math.floor(p.y) + 2, Math.floor(p.z)))
+  } catch (_) { return false }
+}
+
+// Freeze the swim machinery on drift/float ticks: bobbing is neither
+// progress nor a stall, and must not rotate lanes or trip oscillation.
+function freezeBreathSwim(bot, ctx) {
+  ctx.breathStill = 0
+  ctx.breathLastPos = breathPos(bot)
+  ctx.breathPrev2 = null
+  ctx.breathPrev = ctx.breathLastPos
+}
+
+function releaseBreath(bot, ctx, nowMs = Date.now()) {
+  ctx.breath = false
+  ctx.breathCoolUntil = nowMs + BREATH_COOLDOWN_MS
+  ctx.breathStill = 0
+  ctx.breathUnstick = 0
+  ctx.breathDead = null
+  ctx.breathLane = -1
+  ctx.breathPrevLane = -1
+  ctx.breathBlind = false
+  ctx.breathPrev = null
+  ctx.breathPrev2 = null
+  ctx.breathAir = 0
+  ctx.breathLastPos = null
+  setBreathControl(bot, 'jump', false)
+  setBreathControl(bot, 'forward', false)
+}
+
+function breathPos(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (!p || typeof p.x !== 'number') return null
+    return { x: p.x, y: p.y, z: p.z }
+  } catch (_) { return null }
+}
+
+function breathMoved(a, b) {
+  if (!a || !b) return true // no baseline: not a stall
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z) >= BREATH_STILL_BLOCKS
+}
+
+function breathSamePos(a, b) {
+  if (!a || !b) return false
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z) < BREATH_STILL_BLOCKS
+}
+
+// Lane switch with history: the oscillation kill needs the previous lane.
+function setBreathLane(ctx, idx) {
+  if (idx !== ctx.breathLane) {
+    ctx.breathPrevLane = ctx.breathLane
+    ctx.breathLane = idx
+  }
+}
+
+function setBreathControl(bot, name, val) {
+  try { if (typeof bot.setControlState === 'function') bot.setControlState(name, val) } catch (_) { /* body best-effort */ }
+}
+
+function breathCellName(bot, x, y, z) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function') return null
+    const b = bot.blockAt(new Vec3(x, y, z))
+    return (b && typeof b.name === 'string') ? b.name : null
+  } catch (_) { return null }
+}
+
+function breathIsWater(name) {
+  return name === 'water' || name === 'bubble_column' ||
+    name === 'kelp' || name === 'kelp_plant' || name === 'seagrass' || name === 'tall_seagrass'
+}
+
+function breathIsAir(name) {
+  return name === 'air' || name === 'cave_air' || name === 'void_air'
+}
+
+// Open diagonal-rise lane: head-side water with water or air above it
+// (air-above first: that lane breaks the surface). Last resort is any
+// head-side water even under a ceiling — swimming out from under an
+// overhang beats treading under it. Null when walled in at head level.
+// dead skips lanes that already stalled this episode.
+function breathSwimDir(bot, dead) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (!p || typeof p.x !== 'number') return null
+    const fx = Math.floor(p.x)
+    const fy = Math.floor(p.y)
+    const fz = Math.floor(p.z)
+    let wetLane = null
+    let flatLane = null
+    for (let i = 0; i < BREATH_SWIM_DIRS.length; i++) {
+      if (dead instanceof Set && dead.has(i)) continue
+      const [dx, dz] = BREATH_SWIM_DIRS[i]
+      if (!breathIsWater(breathCellName(bot, fx + dx, fy + 1, fz + dz))) continue
+      if (!flatLane) flatLane = { dx, dz, idx: i }
+      const above = breathCellName(bot, fx + dx, fy + 2, fz + dz)
+      if (breathIsAir(above)) return { dx, dz, idx: i }
+      if (!wetLane && breathIsWater(above)) wetLane = { dx, dz, idx: i }
+    }
+    return wetLane || flatLane
+  } catch (_) { return null }
+}
+
+// DIRS pairs opposites adjacently (E/W, N/S): idx^1 is the way back out.
+function breathOpposite(idx) {
+  return breathLaneByIdx(idx ^ 1)
+}
+
+function breathLaneByIdx(idx) {
+  const d = BREATH_SWIM_DIRS[idx]
+  return d ? { dx: d[0], dz: d[1], idx } : null
+}
+
+function driveBreathLane(bot, lane) {
+  if (lane) {
+    try {
+      if (typeof bot.look === 'function') bot.look(Math.atan2(-lane.dx, -lane.dz), 0)
+    } catch (_) { /* facing best-effort */ }
+    setBreathControl(bot, 'forward', true)
+  } else {
+    setBreathControl(bot, 'forward', false)
+  }
+  setBreathControl(bot, 'jump', true)
+}
+
+function driveBreathSwim(bot, ctx) {
+  const now = breathPos(bot)
+  const moved = breathMoved(ctx.breathLastPos, now)
+  if (moved) {
+    ctx.breathStill = 0
+    ctx.breathLastPos = now
+  } else {
+    ctx.breathStill = (ctx.breathStill || 0) + 1
+  }
+  // Oscillation: moved last tick but back at the spot of two ticks ago —
+  // two lanes pointing at each other (rig: ±z ping-pong in a 2-cell
+  // channel, net zero while "moving"). Kill the pair and scan the rest;
+  // no blind unstick — the body is moving freely, not face-touching.
+  // Static bots skip this (the stall branch below owns face-touches).
+  if (moved && breathSamePos(now, ctx.breathPrev2) && ctx.breathLane >= 0) {
+    if (!(ctx.breathDead instanceof Set)) ctx.breathDead = new Set()
+    ctx.breathDead.add(ctx.breathLane)
+    if (ctx.breathPrevLane >= 0) ctx.breathDead.add(ctx.breathPrevLane)
+    ctx.breathStill = 0
+    ctx.breathLastPos = now
+    ctx.breathUnstick = 0
+    ctx.breathBlind = false
+    ctx.breathPrev2 = null
+    ctx.breathPrev = now
+    let lane = breathSwimDir(bot, ctx.breathDead)
+    if (!lane && ctx.breathDead.size > 0) {
+      ctx.breathDead = null // every lane dead: forgive and re-scan
+      lane = breathSwimDir(bot, null)
+    }
+    setBreathLane(ctx, lane ? lane.idx : -1)
+    driveBreathLane(bot, lane)
+    return
+  }
+  ctx.breathPrev2 = ctx.breathPrev
+  ctx.breathPrev = now
+  // Blind unstick ticks: keep driving the away lane without scanning
+  // (the scan still reads the wall lane open — that is why we stalled).
+  if ((ctx.breathUnstick || 0) > 0) {
+    ctx.breathUnstick--
+    const away = breathLaneByIdx(ctx.breathLane)
+    driveBreathLane(bot, away)
+    return
+  }
+  if ((ctx.breathStill || 0) >= BREATH_STILL_TICKS && ctx.breathLane >= 0) {
+    if (!(ctx.breathDead instanceof Set)) ctx.breathDead = new Set()
+    ctx.breathDead.add(ctx.breathLane)
+    ctx.breathStill = 0
+    ctx.breathLastPos = now
+    if (!ctx.breathBlind) {
+      // Stalled pushing a scanned lane: break the face-touch with a blind
+      // opposite run before re-scanning without the dead lane.
+      const away = breathOpposite(ctx.breathLane)
+      if (away) {
+        setBreathLane(ctx, away.idx)
+        ctx.breathBlind = true
+        ctx.breathUnstick = BREATH_UNSTICK_TICKS - 1 // this tick drives the first one
+            driveBreathLane(bot, away)
+        return
+      }
+    }
+    // The blind run stalled too (walled behind as well): give up on the
+    // unstick and scan the remaining lanes instead of ping-ponging.
+    ctx.breathBlind = false
+  }
+  // Sticky lane: keep driving the current lane while it stays open.
+  // Re-scanning every tick flip-flops between adjacent cells that point
+  // at each other (rig: ±z ping-pong under a ceiling, net zero, drowning
+  // while "moving"). The stall watch still rotates dead lanes.
+  let lane = null
+  const cur = ctx.breathLane
+  if (cur >= 0 && !(ctx.breathDead instanceof Set && ctx.breathDead.has(cur)) && breathLaneOpen(bot, cur)) {
+    lane = breathLaneByIdx(cur)
+  } else {
+    lane = breathSwimDir(bot, ctx.breathDead)
+    if (!lane && ctx.breathDead instanceof Set && ctx.breathDead.size > 0) {
+      ctx.breathDead = null // every lane dead: forgive and re-scan
+      lane = breathSwimDir(bot, null)
+    }
+  }
+  setBreathLane(ctx, lane ? lane.idx : -1)
+  ctx.breathBlind = false
+  driveBreathLane(bot, lane)
+}
+
+// Head-side water on lane idx (above ignored: a lane stays sticky even
+// flat — swimming out from under a ceiling beats re-scanning).
+function breathLaneOpen(bot, idx) {
+  try {
+    const d = BREATH_SWIM_DIRS[idx]
+    const p = bot && bot.entity && bot.entity.position
+    if (!d || !p || typeof p.x !== 'number') return false
+    return breathIsWater(breathCellName(bot, Math.floor(p.x) + d[0], Math.floor(p.y) + 1, Math.floor(p.z) + d[1]))
+  } catch (_) { return false }
+}
+
+
+// Drop the live path without pathfinder.stop(): its latch would swallow
+// the resume goal issued on the release tick (gather pattern, util.js).
+function dropBreathGoal(bot, ctx) {
+  try {
+    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+  } catch (_) { /* body best-effort */ }
+  ctx.lastGoalKey = ''
+}
+
+function headInAir(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (!p || typeof bot.blockAt !== 'function') return false
+    const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z)))
+    return !!b && (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air')
+  } catch (_) { return false }
+}
+
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null, autonomous = false }) {
   // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
   const greet = greeter || createGreeter()
@@ -320,6 +668,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // there until someone is visible. Returns true while homing (caller skips
   // stopOnce); pure stop otherwise. Fleeing still wins above.
   function walkHomeTick() {
+    // While the breath reflex owns the body the homing walk stands down:
+    // re-issuing (and re-logging) a goal the reflex drops on the same
+    // tick is pure spam (revmux 01 body-3). True = handled, no stopOnce.
+    if (ctx.breath) return true
     if ((ctx.unseenTicks || 0) < UNSEEN_HOME_TICKS) return false
     const sp = bot.spawnPoint
     const bp = bot.entity && bot.entity.position
@@ -821,6 +1173,9 @@ function fleeReflex(bot, ctx) {
         const fledParked = fleeReflex(bot, ctx)
         if (fledParked) reflexFast = true
         else stopOnce()
+        // Breath while parked (0u9): 'stop' parks the body, it must not
+        // drown it. After stopOnce (its control clear would drop the jump).
+        if (!fledParked && breathReflex(bot, ctx)) reflexFast = true
         const now = Date.now()
         if (now - lastIdleLog >= IDLE_LOG_MS) {
           lastIdleLog = now
@@ -896,6 +1251,11 @@ function fleeReflex(bot, ctx) {
           if (ctx.work && ctx.step === 'gohome') resetNightStep()
           if (!walkHomeTick()) stopOnce()
         }
+        // Breath while alone (0u9): an idle bot parked under water drowns
+        // as surely as a digging one. After the stop (its control clear
+        // would drop the jump); the stuck menu waits while it surfaces.
+        const breathedAlone = !fledAlone && breathReflex(bot, ctx)
+        if (breathedAlone) reflexFast = true
         // Melee reflex at spawn: the brain never runs here, but a hostile
         // standing on the bot still gets swung at every slow tick.
         let idleState = null
@@ -911,7 +1271,7 @@ function fleeReflex(bot, ctx) {
         // routing as the target path above. After release the walk
         // re-issues (release clears lastGoalKey) and the latch admits one
         // episode per situation.
-        if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState)) {
+        if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState) && !breathedAlone) {
           try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
           const decision = await recover.decide(bot, ctx, idleState, null)
           if (ctx.paused) {
@@ -990,6 +1350,13 @@ function fleeReflex(bot, ctx) {
         const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
         return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
+      }
+      // Drowning owns the body over every order (0u9): a dig 3 blocks down
+      // still kills when the vein sits under a lake.
+      if (breathReflex(bot, ctx)) {
+        const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
+        return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
       }
       // Hard-case stuck (ef3): displacement watch + generic backstops, then
       // the recover menu owns the body. Detectors in the behaviours raise
@@ -1275,7 +1642,13 @@ function fleeReflex(bot, ctx) {
       return { decision: null, calledBrain }
     } finally {
       inFlight = false
-      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast)
+      // A body in water ticks fast even parked: the breath trigger window
+      // (oxygen 10 → 0 ≈ 7.5 s) is shorter than one 10 s idle tick, so a
+      // slow first check can come after the lungs are already empty
+      // (revmux 01 core-2). Dry parked ticks stay slow.
+      let wetFast = false
+      try { wetFast = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { wetFast = false }
+      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast || wetFast)
     }
   }
 
@@ -1626,7 +1999,7 @@ function fleeReflex(bot, ctx) {
         // Buried 48-best (atl.15): the far shells may see exposed ore and
         // memory may know some — the buried hit is stashed as the dig
         // candidate instead of committing to the shaft at once.
-        const buried = bringMod.buriedCand(bp0, res)
+        const buried = bringMod.buriedCand(bp0, res, bot)
         let mem = null
         try { mem = bringMod.memoryExposed(bot, ctx, bp0, name, null) } catch (_) { mem = null }
         mem = bringMod.memoryInBudget(mem, buried)
@@ -2033,12 +2406,52 @@ const deepOffers = new Map()
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
 
+// Wet-commit guard (revmux 02 core-1): the same 'submerged' predicate the
+// bring loop applies — the ore cell itself for exposed targets, the dig
+// column for buried ones. Unknown cells read dry (proof rule).
+function resSubmerged(bot, ctx, res) {
+  try {
+    const rp = res && res.position
+    if (!rp || typeof rp.x !== 'number') return false
+    const blk = bot.blockAt && bot.blockAt(rp)
+    if (blk && denyReason(bot, blk, ctx) === 'submerged') return true
+    if (res.exposed === false) {
+      const bp = bot.entity && bot.entity.position
+      if (!bp || typeof bp.x !== 'number') return false
+      const cand = bringMod.buriedCand(bp, res, bot)
+      return !!cand && !!cand.wet
+    }
+    return false
+  } catch (_) { return false }
+}
+
 // Shared block-order creation (amb): sync setBring and far-search
 // completion build the same order and announce the honest distance.
 function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     return bringMod.tierRefusal(bot, res.name)
+  }
+  // The chat-time commit bypassed the bring-loop submerged skips — a wet
+  // nearest vein committed phase 'walk' and the bot dived before any skip
+  // ran. A wet res opens in 'find' instead so the loop picks the next
+  // candidate (or refuses honestly when nothing dry exists). The wet cell
+  // is pre-seeded into o.skip (revmux 03 core-1/body-1): the find
+  // pre-check only sees water at the cell or +1, so a buried vein under a
+  // water column — or a grafted far-cache hit — would otherwise re-commit
+  // to the same wet cell one tick later. sawSubmerged fronts the honest
+  // refusal when the seeded skip empties the find.
+  if (resSubmerged(bot, ctx, res)) {
+    homeMod.releaseMeet(bot, ctx)
+    if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+    ctx.unseenTicks = 0
+    ctx.resumeWork = false
+    ctx.bring = {
+      kind: 'block', name, want, by, phase: 'find', have: 0, announced: false,
+      skip: new Set([bringMod.skipKey(res.position)]), sawSubmerged: true,
+    }
+    ctx.paused = false
+    return `nearest ${res.name} is underwater, checking for a dry one…`
   }
   homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the fetch walk (jr2.3)
   if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
@@ -2096,8 +2509,8 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // buried ore, else the far hit itself. Contested asks the model once
       // (the tick awaits this); the cache rides onto the new order.
       const stash = p.buried && p.buried.position ? p.buried : null
-      const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result) : null
-      const buried = stash ? bringMod.buriedCand(bp0, stash) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null)
+      const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result, bot) : null
+      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
@@ -2179,7 +2592,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         try {
           ctx.bring.farCache = {
             x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far,
-            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result) : null,
+            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null,
           }
         } catch (_) { /* cache best-effort */ }
       }
@@ -2545,4 +2958,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
