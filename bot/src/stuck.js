@@ -358,8 +358,12 @@ function latchStale(ctx, bot, bp) {
     }
     if (L.key && L.key !== 'ticker' && realKey && cur !== L.key) return true
     if (L.by === 'lead' && L.mark != null && ctx.lead && ctx.lead.pos && bp) {
+      // 3D, like blocksLeft/nudgedAt (round 2): the mark is a 3D distance,
+      // and horizontal is never larger — a 2D read goes stale on the first
+      // tick for any ore above or below the bot and loops episodes forever.
       const op = ctx.lead.pos
-      if (typeof op.x === 'number' && Math.round(Math.hypot(bp.x - op.x, bp.z - op.z)) < L.mark) return true
+      const xyz = op && typeof op.x === 'number' && typeof op.y === 'number' && typeof op.z === 'number'
+      if (xyz && Math.round(Math.hypot(bp.x - op.x, bp.y - op.y, bp.z - op.z)) < L.mark) return true
     }
     if (L.at && typeof L.at.x === 'number' && bp) {
       if (horiz(bp, L.at) > LATCH_CLEAR) return true

@@ -619,6 +619,32 @@ describe('stuck update: COOLDOWN', () => {
     assert.equal(ctx.stuckState, 'COOLDOWN')
   })
 
+  it('an ore below the bot holds the latch: the mark is 3D, not horizontal (round 2)', () => {
+    // Ore at y=40, bot at y=64: horizontal 10 < 3D 26 — a 2D read would go
+    // stale on the first tick and loop an episode every slow threshold.
+    const bot = mockBot({ at: [0, 64, 0] })
+    const ctx = {
+      stuck: { by: 'lead', goal: { x: 10, y: 40, z: 0 }, key: 'lead:10,40,0' },
+      recovery: { action: 'sidestep', source: 'fsm' },
+      lead: { name: 'ore', pos: { x: 10, y: 40, z: 0 }, stuckTicks: 5, workTicks: 40 },
+      brain: null,
+    }
+    recover.release(bot, ctx, 'done')
+    assert.equal(ctx.recoverLatch.mark, 26, 'mark is the 3D distance')
+    ctx.lastGoalKey = 'lead:10,40,0'
+    ctx.lastPos = { x: 0, y: 64, z: 0 }
+    bot._moving = true
+    bot.pathfinder.goal = new goals.GoalNear(10, 40, 0, 2)
+    for (let i = 0; i < 35; i++) stuck.update(bot, ctx)
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.stuckState, 'COOLDOWN', '35 still ticks hold, no re-fire')
+    // Real 3D gain still re-arms, inside the latch radius: straight down to
+    // y=60 leaves 22 of 26 — the mark rule alone clears the latch.
+    bot.entity.position = pos(0, 60, 0)
+    stuck.update(bot, ctx)
+    assert.equal(ctx.recoverLatch, null, '3D gain past the mark re-arms')
+  })
+
   it('real gain past the mark re-arms the lead latch for a new wedge (core-4)', () => {
     const bot = mockBot({ at: [0, 64, 0], moving: true, goal: new goals.GoalNear(10, 64, 0, 2) })
     const ctx = {
