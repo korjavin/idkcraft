@@ -79,9 +79,21 @@ function progressed(bot, ctx, bp) {
   const last = ctx && ctx.lastPos
   if (!bp || !last) return false
   if (horiz(bp, last) > MOVE_TOLERANCE) return true
-  const grounded = !bot.entity || bot.entity.onGround !== false
-  return !!(grounded && typeof bp.y === 'number' && typeof last.y === 'number' &&
+  return !!(groundedNow(bot) && typeof bp.y === 'number' && typeof last.y === 'number' &&
     Math.floor(bp.y) !== Math.floor(last.y))
+}
+
+function groundedNow(bot) {
+  try {
+    return !bot.entity || bot.entity.onGround !== false
+  } catch (_) { return true }
+}
+
+// Still-tick maintenance for the fast gate: consecutive grounded stills
+// grow, any airborne tick restarts. Called on still ticks only — progress
+// zeroes through zeroCounters.
+function stillGrounded(bot, ctx) {
+  ctx.groundedStills = groundedNow(bot) ? (ctx.groundedStills || 0) + 1 : 0
 }
 
 // Return-home: after UNSEEN_HOME_TICKS online-but-unseen ticks, walk to
@@ -372,7 +384,15 @@ function zeroCounters(ctx) {
   ctx.stuckTicks = 0
   ctx.stuckResets = 0
   ctx.placeErrors = 0
+  ctx.groundedStills = 0
 }
+
+// Consecutive grounded still ticks needed before the fast entry fires
+// (core-2 follow-up): tower attempts apex airborne every jump, so a streak
+// alone must not wedge mid-jump-cycle — master cleared the streaks on every
+// 3D jump instead. Genuine ground wedges pass this in 3 ticks, far below the
+// ~7 s reset spacing, so the gate costs nothing there.
+const GROUNDED_STILLS_ENTRY = 3
 
 // Read-only verdict for behaviours: the ONLY stuck state they may consult
 // (target give-up reads stills/resets/placeErrors/episode; the counters
@@ -417,6 +437,7 @@ function update(bot, ctx) {
       anchor()
     } else {
       ctx.stuckState = 'STUCK'
+      stillGrounded(bot, ctx)
     }
     return
   }
@@ -432,6 +453,8 @@ function update(bot, ctx) {
       if (progressed(bot, ctx, bp)) {
         zeroCounters(ctx)
         anchor()
+      } else {
+        stillGrounded(bot, ctx)
       }
       if (ctx.restGaveUpAt) {
         try { recover.clearRelocatedRestMark(ctx, bot) } catch (_) { /* mark best-effort */ }
@@ -441,8 +464,10 @@ function update(bot, ctx) {
   }
   // First sample (or bodiless tick): anchor only, never count — a seeded
   // counter survives the anchor tick and trips on the first real still.
+  // Groundedness is known without a baseline, so the fast gate starts here.
   if (!bp || !ctx.lastPos) {
     anchor()
+    ctx.groundedStills = groundedNow(bot) ? 1 : 0
     if (!ctx.stuckState) ctx.stuckState = 'MOVING'
     return
   }
@@ -460,6 +485,7 @@ function update(bot, ctx) {
     // Parked/at-goal/mid-plan stillness resets.
     const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
     const shouldCount = moving || (!moving && terminal && idleFarFromGoal(bot, bp))
+    stillGrounded(bot, ctx)
     if (!shouldCount) {
       ctx.stuckTicks = 0
       ctx.stuckState = 'MOVING'
@@ -467,7 +493,7 @@ function update(bot, ctx) {
       ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       ctx.stuckState = 'SUSPECT'
       if (!raiseExempt(ctx, bot)) {
-        const fast = moving && fastKey(ctx) &&
+        const fast = moving && fastKey(ctx) && (ctx.groundedStills || 0) >= GROUNDED_STILLS_ENTRY &&
           ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)
         const slow = (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY
         if (fast || slow) {
@@ -502,6 +528,7 @@ function clearStuck(ctx) {
   ctx.stuckTicks = 0
   ctx.stuckResets = 0
   ctx.placeErrors = 0
+  ctx.groundedStills = 0
   ctx.stuckState = 'MOVING'
   ctx.recoverLatch = null
   ctx.retreat = null // orders end a retreat episode like any other step

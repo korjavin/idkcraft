@@ -1626,6 +1626,7 @@ function release(bot, ctx, how) {
   ctx.stuckResets = 0
   ctx.placeErrors = 0
   ctx.stuckTicks = 0
+  ctx.groundedStills = 0
   ctx.stuck = null
   ctx.recovery = null
   // Terminal dones are already counted by decide() per finished primitive;

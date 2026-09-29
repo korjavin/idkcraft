@@ -437,7 +437,7 @@ async function main() {
     if (c) {
       c.stuck = null; c.recovery = null; c.recoverLatch = null; c.retreat = null
       c.stuckTicks = 0; c.stuckResets = 0; c.placeErrors = 0; c.lastGoalKey = ''
-      c.stuckState = 'MOVING'
+      c.stuckState = 'MOVING'; c.groundedStills = 0
     }
     stuckEps = []
     resets = {}

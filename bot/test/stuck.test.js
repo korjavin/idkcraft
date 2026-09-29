@@ -263,7 +263,7 @@ describe('stuck update: fast entry', () => {
 
   it("two 'stuck' resets with no displacement raise by=follow", () => {
     const { bot } = wedgedBot()
-    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 }, groundedStills: 2 }
     const cap = capture()
     try {
       stuck.countPathReset(ctx, 'stuck')
@@ -301,7 +301,7 @@ describe('stuck update: fast entry', () => {
       ['fight:1', false],
     ]) {
       const { bot } = wedgedBot()
-      const ctx = { lastGoalKey: key, lastPos: { x: 0, y: 64, z: 0 } }
+      const ctx = { lastGoalKey: key, lastPos: { x: 0, y: 64, z: 0 }, groundedStills: 2 }
       const cap = capture()
       try {
         stuck.countPathReset(ctx, 'stuck')
@@ -322,6 +322,29 @@ describe('stuck update: fast entry', () => {
     stuck.update(bot, ctx)
     assert.equal(ctx.stuck || null, null)
     assert.equal(ctx.stuckState, 'MOVING')
+  })
+
+  it('fast entry waits out the jump cycle: 3 grounded stills first', () => {
+    // Tower attempts apex airborne every jump — a streak alone must not
+    // wedge mid-jump-cycle (master cleared the streaks on every 3D jump).
+    // Genuine ground wedges pass the gate in 3 ticks.
+    const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
+    const bot = mockBot({ moving: true, goal: followGoal(target) })
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    stuck.countPathReset(ctx, 'stuck')
+    stuck.countPathReset(ctx, 'stuck')
+    bot.entity.onGround = false // apex
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuck || null, null, 'airborne streak never fast-fires')
+    assert.equal(ctx.stuckState, 'SUSPECT')
+    bot.entity.onGround = true
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuck || null, null, 'one grounded still is not enough')
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuck || null, null, 'two grounded stills are not enough')
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuckState, 'STUCK', 'three grounded stills fire')
+    assert.equal(ctx.stuck.by, 'follow')
   })
 
   it('any other reset reason breaks only the place_error streak', () => {
@@ -606,7 +629,7 @@ describe('stuck raise lines (formats frozen)', () => {
     const bot = mockBot({ at: [-40.4, 64.4, -207.7], moving: true, goal: followGoal(target), blocks: BLOCKS })
     const ctx = {
       lastGoalKey: 'follow:P', lastPos: { x: -40.4, y: 64.4, z: -207.7 },
-      lastPathNext: pos(-39, 64, -207),
+      lastPathNext: pos(-39, 64, -207), groundedStills: 2,
     }
     stuck.countPathReset(ctx, 'stuck')
     stuck.countPathReset(ctx, 'stuck')
@@ -625,7 +648,7 @@ describe('stuck raise lines (formats frozen)', () => {
     const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
     const bot = mockBot({ at: [-40.4, 64.4, -207.7], moving: true, goal: followGoal(target) })
     bot.blockAt = () => { throw new Error('unloaded') }
-    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: -40.4, y: 64.4, z: -207.7 } }
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: -40.4, y: 64.4, z: -207.7 }, groundedStills: 2 }
     stuck.countPathReset(ctx, 'stuck')
     stuck.countPathReset(ctx, 'stuck')
     const cap = capture()
@@ -640,7 +663,7 @@ describe('stuck raise lines (formats frozen)', () => {
   it('roam prints pos with one decimal and the goal (1hy)', () => {
     const target = { id: 7, username: 'S', position: pos(20, 64, 0) }
     const bot = mockBot({ at: [7.36, 64, 0], moving: true, goal: followGoal(target) })
-    const ctx = { lastGoalKey: 'roam-back:S', lastPos: { x: 7.36, y: 64, z: 0 } }
+    const ctx = { lastGoalKey: 'roam-back:S', lastPos: { x: 7.36, y: 64, z: 0 }, groundedStills: 2 }
     stuck.countPathReset(ctx, 'stuck')
     stuck.countPathReset(ctx, 'stuck')
     const cap = capture()
@@ -732,13 +755,13 @@ describe('stuck clearStuck', () => {
   it('a mode change resets the machine, counters and latch', () => {
     const ctx = {
       stuck: { by: 'follow' }, recovery: { action: 'wait' },
-      stuckTicks: 10, stuckResets: 1, placeErrors: 2,
+      stuckTicks: 10, stuckResets: 1, placeErrors: 2, groundedStills: 5,
       stuckState: 'SUSPECT', recoverLatch: { by: 'follow', key: 'follow:P' }, retreat: { action: 'pillar' },
     }
     stuck.clearStuck(ctx)
     assert.deepEqual(
-      [ctx.stuck, ctx.recovery, ctx.stuckTicks, ctx.stuckResets, ctx.placeErrors, ctx.stuckState, ctx.recoverLatch, ctx.retreat],
-      [null, null, 0, 0, 0, 'MOVING', null, null],
+      [ctx.stuck, ctx.recovery, ctx.stuckTicks, ctx.stuckResets, ctx.placeErrors, ctx.groundedStills, ctx.stuckState, ctx.recoverLatch, ctx.retreat],
+      [null, null, 0, 0, 0, 0, 'MOVING', null, null],
     )
   })
 })
