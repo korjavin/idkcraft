@@ -174,6 +174,23 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.deepEqual([bot._tickerCtx.bring.pos.x, bot._tickerCtx.bring.pos.y, bot._tickerCtx.bring.pos.z], [10, 64, 0])
   })
 
+  it('wet nearest is not committed at chat time: find opens, dry farther wins (revmux 02 core-1)', async () => {
+    const names = {
+      '10,64,0': 'iron_ore', '10,65,0': 'water', '11,64,0': 'air', // wet but exposed
+      '30,64,0': 'iron_ore', '31,64,0': 'air', // dry exposed
+    }
+    const bot = mockBot({ spots: [pos(10, 64, 0), pos(30, 64, 0)], names, items: PICK, playerPos: pos(60, 64, 0) })
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['nearest iron_ore is underwater, checking for a dry one…'])
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'find', 'wet chat-time hit must not commit a walk')
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [30, 64, 0])
+    assert.match(bot.lines[1], /^going for 3 iron_ore, 30 blocks away$/)
+  })
+
   it('(3) contested costs: exactly one ask with exactly 2 criteria, answer respected', async () => {
     const names = { '0,61,0': 'iron_ore', '30,64,0': 'iron_ore', '31,64,0': 'air' }
     const bot = mockBot({ spots: [pos(0, 61, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })

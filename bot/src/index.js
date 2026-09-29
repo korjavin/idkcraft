@@ -11,7 +11,7 @@ const { addSwimExits, addSwimPrune } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
-const { trackPlaced } = require('./behaviours/util')
+const { trackPlaced, denyReason } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
@@ -2384,6 +2384,25 @@ const deepOffers = new Map()
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
 
+// Wet-commit guard (revmux 02 core-1): the same 'submerged' predicate the
+// bring loop applies — the ore cell itself for exposed targets, the dig
+// column for buried ones. Unknown cells read dry (proof rule).
+function resSubmerged(bot, ctx, res) {
+  try {
+    const rp = res && res.position
+    if (!rp || typeof rp.x !== 'number') return false
+    const blk = bot.blockAt && bot.blockAt(rp)
+    if (blk && denyReason(bot, blk, ctx) === 'submerged') return true
+    if (res.exposed === false) {
+      const bp = bot.entity && bot.entity.position
+      if (!bp || typeof bp.x !== 'number') return false
+      const cand = bringMod.buriedCand(bp, res, bot)
+      return !!cand && !!cand.wet
+    }
+    return false
+  } catch (_) { return false }
+}
+
 // Shared block-order creation (amb): sync setBring and far-search
 // completion build the same order and announce the honest distance.
 function startBlockOrder(bot, ctx, { name, want, by }, res) {
@@ -2391,6 +2410,20 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     const tier = bringMod.requiredTier(res.name)
     return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+  }
+  // The chat-time commit bypassed the bring-loop submerged skips — a wet
+  // nearest vein committed phase 'walk' and the bot dived before any skip
+  // ran. A wet res opens in 'find' instead so the loop picks the next
+  // candidate (or refuses honestly when nothing dry exists); the find
+  // pre-check skips the wet cell itself.
+  if (resSubmerged(bot, ctx, res)) {
+    homeMod.releaseMeet(bot, ctx)
+    if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+    ctx.unseenTicks = 0
+    ctx.resumeWork = false
+    ctx.bring = { kind: 'block', name, want, by, phase: 'find', have: 0, announced: false }
+    ctx.paused = false
+    return `nearest ${res.name} is underwater, checking for a dry one…`
   }
   homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the fetch walk (jr2.3)
   if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
