@@ -233,6 +233,19 @@ describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
   it('overlong bot names fail fast with the real cause', () => {
     assert.ok(replay.includes('bot names exceed 16 chars'), 'name-length guard missing')
   })
+
+  it('exit guard installs before index loads and arms right before the verdict exit', () => {
+    const lines = replay.split('\n')
+    const lineNo = (s) => lines.findIndex((l) => l.includes(s))
+    const install = lineNo('process.exit = exitGuard.exit')
+    const load = lineNo("require('../src/index')")
+    assert.ok(install !== -1 && load !== -1 && install < load,
+      'guard must install before index loads (else a fatal exit 1 reads as regression)')
+    const arm = lineNo('exitGuard.arm()')
+    const verdict = lineNo('process.exit(code)')
+    assert.ok(arm !== -1 && verdict !== -1 && verdict - arm <= 2 && arm < verdict,
+      'gate must arm just before its verdict exit (else regressions exit 2)')
+  })
 })
 
 describe('makeExitGuard (idkcraft-6x7.4 round 2)', () => {
