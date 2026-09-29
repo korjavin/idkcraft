@@ -106,7 +106,7 @@ describe("help command (idkcraft-kae)", () => {
   })
 
   it('every command handleChat understands is in COMMANDS', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.js'), 'utf8')
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'chat.js'), 'utf8')
     const literals = [...src.matchAll(/msg === '([^']+)'/g)].map((m) => m[1])
     const starts = [...src.matchAll(/msg\.startsWith\('([^']+)'\)/g)]
       .map((m) => m[1].trim())
