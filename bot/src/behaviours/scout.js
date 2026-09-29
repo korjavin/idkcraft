@@ -289,7 +289,7 @@ function buildQueue(origin, edge) {
   return queue
 }
 
-function startFarSearch(bot, blockName, refY = null) {
+function startFarSearch(bot, blockName, refY = null, opts = null) {
   const ids = resolveFindIds(bot, blockName)
   if (ids.length === 0) return 'unknown'
   const origin = clonePos(bot.entity && bot.entity.position)
@@ -297,17 +297,26 @@ function startFarSearch(bot, blockName, refY = null) {
   const edge = loadedSearchRadius(bot)
   const queue = buildQueue(origin, edge)
   if (queue.length === 0) return null
-  return { blockName, ids, refY, queue, at: 0, hits: new Map(), stageMs: {}, stageScans: {}, edge, origin }
+  const exposedOnly = !!(opts && opts.exposedOnly)
+  return { blockName, ids, refY, queue, at: 0, hits: new Map(), stageMs: {}, stageScans: {}, edge, origin, exposedOnly }
 }
 
 // True once the completed ring's shell holds a hit inside its claim:
-// ring 70 covers (48..96], rings 110/150 the (96..160] shell.
+// ring 70 covers (48..96], rings 110/150 the (96..160] shell. In
+// exposed-only mode (bring candidate (a), atl.19) only an exposed hit
+// closes the ring: buried ore inside 96 must not stop the shells short
+// of an open vein at 100-150.
 function farShellDone(cursor, bot, ring) {
   const origin = cursor.origin || (bot.entity && bot.entity.position)
   if (!origin) return false
   const edge = ring === 70 ? 96 : SEARCH_MAX
+  const exposedOnly = !!(cursor && cursor.exposedOnly)
   for (const q of cursor.hits.values()) {
-    if (dist(q, origin) <= edge) return true
+    if (dist(q, origin) > edge) continue
+    if (!exposedOnly) return true
+    let exposed = false
+    try { exposed = isExposed(bot, q) } catch { exposed = false }
+    if (exposed) return true
   }
   return false
 }
@@ -315,9 +324,13 @@ function farShellDone(cursor, bot, ring) {
 // opts.exclude(q): hits to ignore (atl.5: gather's skipped trunks and the
 // sync-48 shell). Excluded hits are never collected, never stop the search
 // early, never win ranking. Omitted by bring.js: behaviour unchanged there.
+// opts.exposedOnly (atl.19): opt-in exposed mode for bring candidate (a),
+// same flag as startFarSearch; when present it wins over the cursor's.
+// Gather and find-me pass neither: their path below is byte-identical.
 function stepFarSearch(bot, cursor, opts) {
   if (!cursor || cursor === 'unknown') return { done: true, result: cursor, edge: null }
   const excluded = opts && typeof opts.exclude === 'function' ? opts.exclude : null
+  if (opts && opts.exposedOnly !== undefined) cursor.exposedOnly = !!opts.exposedOnly
   const live = bot.entity && bot.entity.position
   if (!live || typeof live.x !== 'number') return { done: true, result: null, edge: cursor.edge }
   // Coverage is anchored at the start origin with the start edge. A walked-
@@ -395,10 +408,37 @@ function stepFarSearch(bot, cursor, opts) {
     try { metrics.searchDuration.observe({ radius: String(edge) }, cursor.stageMs[ring] / 1000) } catch { /* never break search */ }
   }
   const kept = excluded ? [...cursor.hits.values()].filter((q) => !excluded(q)) : [...cursor.hits.values()]
-  const within96 = kept.filter((q) => dist(q, origin) <= 96)
-  const pool = within96.length > 0 ? within96 : kept
-  if (pool.length === 0) return { done: true, result: null, edge: cursor.edge }
-  return { done: true, result: wrapResult(bot, cursor.blockName, rankHits(bot, pool, cursor.refY)), edge: cursor.edge }
+  if (!cursor.exposedOnly) {
+    const within96 = kept.filter((q) => dist(q, origin) <= 96)
+    const pool = within96.length > 0 ? within96 : kept
+    if (pool.length === 0) return { done: true, result: null, edge: cursor.edge }
+    return { done: true, result: wrapResult(bot, cursor.blockName, rankHits(bot, pool, cursor.refY)), edge: cursor.edge }
+  }
+  // Exposed mode: two passes over the same collected hits (buried hits are
+  // still collected — they just never close a ring). result is the exposed
+  // winner (a) or null; buried is the buried winner (c) for empty-48
+  // orders, ranked exactly as the default pool so buried-only worlds read
+  // the same as before. Either may be null.
+  const exposedHits = []
+  const buriedHits = []
+  for (const q of kept) {
+    let e = false
+    try { e = isExposed(bot, q) } catch { e = false }
+    if (e) exposedHits.push(q)
+    else buriedHits.push(q)
+  }
+  const pick = (hits) => {
+    const w96 = hits.filter((q) => dist(q, origin) <= 96)
+    return w96.length > 0 ? w96 : hits
+  }
+  const epool = pick(exposedHits)
+  const bpool = pick(buriedHits)
+  return {
+    done: true,
+    result: epool.length > 0 ? wrapResult(bot, cursor.blockName, rankHits(bot, epool, cursor.refY)) : null,
+    buried: bpool.length > 0 ? wrapResult(bot, cursor.blockName, rankHits(bot, bpool, cursor.refY)) : null,
+    edge: cursor.edge,
+  }
 }
 
 function compareScore(a, b) {

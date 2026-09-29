@@ -300,7 +300,7 @@ function createOrders(box) {
         // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb).
         // A null cursor (unreadable world) answers from sync alone — unless
         // an anchor exists, when the order opens and search legs walk (atl.8).
-        const search = startFarSearch(bot, name)
+        const search = startFarSearch(bot, name, null, { exposedOnly: true })
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
           if (!bringMod.canSearch(bot, ctx)) {
@@ -342,7 +342,7 @@ function createOrders(box) {
         let mem = null
         try { mem = bringMod.memoryExposed(bot, ctx, bp0, name, null) } catch (_) { mem = null }
         mem = bringMod.memoryInBudget(mem, buried)
-        const search = startFarSearch(bot, name)
+        const search = startFarSearch(bot, name, null, { exposedOnly: true })
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
           // Edge 48, no shells: decide now; a contested pair opens the

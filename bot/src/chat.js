@@ -120,10 +120,13 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // Shells done (atl.15): the verdict weighs live exposed (a) against
       // memory (b) and the dig (c) — the stashed 48 hit when creation saw
       // buried ore, else the far hit itself. Contested asks the model once
-      // (the tick awaits this); the cache rides onto the new order.
+      // (the tick awaits this); the cache rides onto the new order. The
+      // cursor ran in exposed mode (atl.19), so (c) rides r.buried (the
+      // second pass over the same hits).
       const stash = p.buried && p.buried.position ? p.buried : null
       const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result, bot) : null
-      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null)
+      const farBuried = r.result && r.result.exposed === false ? r.result : (r.buried || null)
+      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
@@ -205,7 +208,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         try {
           ctx.bring.farCache = {
             x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far,
-            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null,
+            buriedHit: farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null,
           }
         } catch (_) { /* cache best-effort */ }
       }
