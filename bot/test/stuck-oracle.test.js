@@ -43,9 +43,9 @@ describe('compareBaseline verdicts (idkcraft-6x7.4)', () => {
     assert.match(d.why, /episodes 2 > 1/)
   })
 
-  it('improvement is not a regression', () => {
+  it('under-ceiling runs are ok, not improved (green runs stay quiet)', () => {
     const [d] = compareBaseline([row('A', true, 0, 0)], base)
-    assert.equal(d.verdict, 'improved')
+    assert.equal(d.verdict, 'ok')
   })
 
   it('reached flipping false->true is improved', () => {

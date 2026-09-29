@@ -64,8 +64,9 @@ The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps }`.
   (ik7 saw S6 stuck 0..3 across two opped runs on one build). Re-measure,
   do not hand-tune; `npm test` fails when a corpus spot lacks an entry.
 - Judge: plain `sh bot/tools/stuck-run.sh` → exit 0/1 with the diff.
-- Improvement (`IMPROVED`, exit still 0) means the baseline is stale:
-  re-record and commit the new entry in the same PR.
+  Green runs are quiet (under-ceiling counts are `ok`, not news).
+- Improvement (`IMPROVED`: reached flipped false→true, exit still 0) means
+  the entry is stale: re-record and commit the new entry in the same PR.
 
 A `laya` run never judges against the stub baseline (different menu policy):
 it records and exits 0 until a laya baseline ships.

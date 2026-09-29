@@ -122,10 +122,13 @@ function loadSpots() {
 
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
 //   { brain: 'stub', spots: { NAME: { reached: bool, maxStuck: n, maxEps: m } } }
-// was/now diffs print per spot; verdicts: 'ok', 'improved' (better than the
-// baseline — exit stays 0, the baseline wants updating), 'regressed',
+// was/now diffs print per spot; verdicts: 'ok', 'improved' (reached flipped
+// false->true — exit stays 0, the entry wants updating), 'regressed',
 // 'no-baseline' (a corpus spot without an entry fails the gate: record via
 // REPLAY_BASELINE_OFF=1, then commit the entry with the spot).
+// Ceilings are tripwires with slack, so under-ceiling runs are 'ok', not
+// 'improved' — a green run must be quiet, else the gate trains its readers
+// to skim (the first judged run printed 15 IMPROVED lines for a clean 0/0).
 function compareBaseline(rows, baseline) {
   const want = (baseline && baseline.spots) || {}
   return rows.map((r) => {
@@ -140,9 +143,7 @@ function compareBaseline(rows, baseline) {
     if (!r.reached && e.reached) return { spot: r.spot, verdict: 'regressed', was, now, why: 'unreached (was reached)' }
     if (r.stuck > e.maxStuck) return { spot: r.spot, verdict: 'regressed', was, now, why: `stuck ${r.stuck} > ${e.maxStuck}` }
     if (r.eps > e.maxEps) return { spot: r.spot, verdict: 'regressed', was, now, why: `episodes ${r.eps} > ${e.maxEps}` }
-    if ((r.reached && !e.reached) || r.stuck < e.maxStuck || r.eps < e.maxEps) {
-      return { spot: r.spot, verdict: 'improved', was, now }
-    }
+    if (r.reached && !e.reached) return { spot: r.spot, verdict: 'improved', was, now }
     return { spot: r.spot, verdict: 'ok', was, now }
   })
 }
