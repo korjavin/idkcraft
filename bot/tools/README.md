@@ -71,6 +71,18 @@ The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps }`.
 A `laya` run never judges against the stub baseline (different menu policy):
 it records and exits 0 until a laya baseline ships.
 
+## Sensitivity (what the gate sees, and what it does not)
+
+The gate sees planner/reflex/follow regressions: a reached flip or a stuck
+overrun on any spot exits 1 (proven: `canDig=false` sabotage flips the
+dig-through spots — see the 6x7.4 PR).
+
+It does NOT see recover-menu breakage in follow mode: `MAX_FAILS=0`
+measured exit 0 (15/15 ok), because follow re-issues after give-up — the
+walk is identical and the counters only shrink, which reads as improvement.
+Recover-sensitivity needs order-driven spots (idkcraft-6x7.7), where a
+give-up fails the order instead of re-issuing the same walk.
+
 ## Corpus rules
 
 `stuck-spots.json` is the corpus. Spot shape:
