@@ -191,6 +191,23 @@ function gravityAbove(bot, pos) {
   } catch (_) { return null }
 }
 
+// atl.20: is the cell directly below pos a PROVEN solid landing (a known
+// solid block — air, water/lava and unknown cells are not)? The landing
+// is never dug, only stood on, so protection does not apply to it. Used
+// by bring's below-feet exemption: digging the ore under your feet onto
+// solid stone is what a player does (a safe 1-block drop), not a trap.
+// The guard itself stays conservative for every other behaviour (equip's
+// no-deepen rule, forage/flat skips), which never loop on this denial.
+function solidBelow(bot, pos) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !pos) return false
+    const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z)))
+    if (!b) return false
+    if (b.boundingBox === 'empty') return false
+    return isWall(b.name)
+  } catch (_) { return false }
+}
+
 // denyReason is the guard's single decision point. Returns null when the
 // dig is allowed, else a self-trap reason ('below-feet': the target is
 // below the feet plane while the bot already stands in a depression, so
@@ -256,6 +273,21 @@ function denyReason(bot, block, ctx) {
         return 'gravity'
       }
     }
+    return protectedReason(bot, block, ctx)
+  } catch (_) { return 'protected' }
+}
+
+// The type-rules tail of denyReason, split out so bring's atl.20 exemption
+// can unmask what the trap rules hide: denyReason returns 'below-feet'
+// before it checks protection (pinned: trap fires before type rules), so
+// a 'below-feet' denial over solid may sit on a build. Returns null when
+// the block itself is diggable, else 'protected'. Never returns trap
+// reasons (revmux 01 core-1).
+function protectedReason(bot, block, ctx) {
+  try {
+    if (!block || typeof block.name !== 'string') return 'protected'
+    const name = block.name
+    const pos = block.position
     // Beds are never dug, even our own (idkcraft-jrp): placedByBot is
     // positional, so a stale entry (a roadside table on B-foot, hand-cleared,
     // then the bed placed into the same cell) would license a recover dig to
@@ -319,4 +351,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, submergedAt }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, submergedAt, solidBelow, protectedReason }

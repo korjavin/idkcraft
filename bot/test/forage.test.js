@@ -1377,3 +1377,107 @@ describe('forage ore branches (idkcraft-g9k)', () => {
     assert.equal(stale.phase, 'dig', 'late ack does not touch a dead step')
   })
 })
+
+describe('gear latch preference (idkcraft-ipn.9)', () => {
+  function latchCtx(cells, saidNeed) {
+    const ctx = memCtx(cells)
+    ctx.gear = { saidNeed }
+    return ctx
+  }
+
+  it('bead case: want-ore, near logs, far iron, stone pick -> iron_ore', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 64, z: 0, name: 'oak_log' },
+      { x: 60, y: 60, z: 0, name: 'iron_ore' },
+    ], 'want-ore')
+    const p = forage.planForage(bot, ctx)
+    assert.equal(p.name, 'iron_ore')
+    assert.equal(p.drop, 'raw_iron')
+  })
+
+  it('want-coal prefers far coal over near iron', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 60, z: 0, name: 'iron_ore' },
+      { x: 60, y: 60, z: 0, name: 'coal_ore' },
+    ], 'want-coal')
+    assert.equal(forage.planForage(bot, ctx).name, 'coal_ore')
+  })
+
+  it('want-ore prefers far iron over near gold with an iron pick', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 60, z: 0, name: 'gold_ore' },
+      { x: 60, y: 60, z: 0, name: 'iron_ore' },
+    ], 'want-ore')
+    assert.equal(forage.planForage(bot, ctx).name, 'iron_ore')
+  })
+
+  it('want-ore prefers far iron over near diamond: the promise names iron', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 50, z: 0, name: 'diamond_ore' },
+      { x: 60, y: 60, z: 0, name: 'iron_ore' },
+    ], 'want-ore')
+    assert.equal(forage.planForage(bot, ctx).name, 'iron_ore')
+  })
+
+  it('gated latched ore falls through to the rank: wooden pick cannot take iron', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'wooden_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 60, z: 0, name: 'iron_ore' },
+      { x: 5, y: 64, z: 0, name: 'oak_log' },
+    ], 'want-ore')
+    assert.equal(forage.planForage(bot, ctx).name, 'oak_log')
+  })
+
+  it('struck latched ore falls through to the rank', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 60, z: 0, name: 'iron_ore' },
+      { x: 50, y: 64, z: 0, name: 'oak_log' },
+    ], 'want-ore')
+    ctx.forageSkip = new Set(['10,60,0'])
+    assert.equal(forage.planForage(bot, ctx).name, 'oak_log')
+  })
+
+  it('deepslate iron satisfies want-ore', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 10, y: 64, z: 0, name: 'oak_log' },
+      { x: 60, y: 50, z: 0, name: 'deepslate_iron_ore' },
+    ], 'want-ore')
+    assert.equal(forage.planForage(bot, ctx).name, 'deepslate_iron_ore')
+  })
+
+  it('want-cobble prefers remembered stone and banks cobblestone', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([
+      { x: 5, y: 60, z: 0, name: 'iron_ore' },
+      { x: 10, y: 60, z: 0, name: 'stone' },
+    ], 'want-cobble')
+    const p = forage.planForage(bot, ctx)
+    assert.equal(p.name, 'stone')
+    assert.equal(p.drop, 'cobblestone')
+  })
+
+  it('gearWantCell: unknown latch, empty memory, and missing pos read null', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = latchCtx([{ x: 10, y: 60, z: 0, name: 'iron_ore' }], 'want-ore')
+    const bp = { x: 0, y: 64, z: 0, distanceTo: (q) => Math.hypot(q.x, q.y - 64, q.z) }
+    assert.equal(forage.gearWantCell(bot, ctx, bp, 'want-logs'), null)
+    assert.equal(forage.gearWantCell(bot, memCtx([]), bp, 'want-ore'), null)
+    assert.equal(forage.gearWantCell(bot, ctx, null, 'want-ore'), null)
+    assert.equal(forage.gearWantCell(bot, ctx, bp, 'want-ore').name, 'iron_ore')
+  })
+})

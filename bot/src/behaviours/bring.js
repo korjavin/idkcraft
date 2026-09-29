@@ -9,7 +9,7 @@ const exploreMod = require('./explore')
 const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, denyReason, logDeny, submergedAt } = require('./util')
+const { say, clearGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason } = require('./util')
 const itemMod = require('./bringitem')
 const Vec3 = require('vec3')
 
@@ -92,8 +92,7 @@ function requiredTier(blockName) {
   if (/(gold|diamond|redstone|emerald)$/.test(base)) return 'iron'
   return 'stone'
 }
-function hasPickaxe(bot, blockName) {
-  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+function bestPickRank(bot) {
   let best = -1
   try {
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -101,11 +100,35 @@ function hasPickaxe(bot, blockName) {
       const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
       if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
     }
-  } catch (_) { return false }
-  return best >= need
+  } catch (_) { return -1 }
+  return best
+}
+function hasPickaxe(bot, blockName) {
+  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+  return bestPickRank(bot) >= need
 }
 function tierArticle(tier) {
   return tier === 'iron' ? 'an' : 'a'
+}
+
+// Honest tier refusal (idkcraft-x15): the legacy line names the required
+// tier; when the bot HOLDS a weaker pickaxe it says so — prod refused 'need
+// a stone pickaxe' with kit pickaxe=yes and read as a contradiction (the
+// held one was wooden). No pickaxe at all keeps the bare line.
+function tierRefusal(bot, blockName) {
+  const tier = requiredTier(blockName)
+  const base = `need ${tierArticle(tier)} ${tier} pickaxe for ${blockName}`
+  let held = null
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    let rank = -1
+    for (const i of items) {
+      const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+      if (m && PICKAXE_RANK[m[1]] > rank) { rank = PICKAXE_RANK[m[1]]; held = i.name }
+    }
+  } catch (_) { held = null }
+  if (!held) return base
+  return `${base} (my ${held} can't break it)`
 }
 
 
@@ -242,7 +265,7 @@ function fenceFact(bot, animal) {
     const p = animal.position
     const around = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
     for (const [ox, oy, oz] of around) {
-      const b = bot.blockAt && bot.blockAt({ x: Math.floor(p.x) + ox, y: Math.floor(p.y) + oy, z: Math.floor(p.z) + oz })
+      const b = bot.blockAt && bot.blockAt(new Vec3(Math.floor(p.x) + ox, Math.floor(p.y) + oy, Math.floor(p.z) + oz))
       if (b && typeof b.name === 'string' && b.name.endsWith('_fence')) {
         console.log(`hunt animal near fences: ${animal.name} at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}`)
         return
@@ -314,12 +337,15 @@ async function chooseBringSearch(brain, text, legsLeft) {
 // hit. Costs are rough seconds: walk at ~4 blocks/s, digging ~2 s/block
 // plus a fixed shaft penalty once the hole is deeper than a quick dig (a
 // >4-deep shaft is where prod self-traps: 9 buried-refusals in 14 days),
-// remembered spots ×1.5 for staleness. No A*: if relief lies about
-// distance, bot.pathfinder.getPathTo(movements, goal, timeout) is the
-// upgrade path. Plain constants — the values never change at runtime;
-// tests stub them through the module export below.
+// remembered spots ×1.5 for staleness. The walk leg prices the vertical
+// too (atl.21): a descent to a deep cave is not free — atl.18 S2 priced a
+// 77-block hike with a 60-deep descent under 20 s and walked 337 s. No A*:
+// if relief lies about distance, bot.pathfinder.getPathTo(movements, goal,
+// timeout) is the upgrade path. Plain constants — the values never change
+// at runtime; tests stub them through the module export below.
 const SOURCE_COST = {
   walkBlocksPerSec: 4,
+  vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg
   digSecPerBlock: 2,
   deepDigDepth: 4,
   shaftPenaltySec: 25,
@@ -339,6 +365,10 @@ function walkCost(distH) {
   return Math.max(0, distH) / SOURCE_COST.walkBlocksPerSec
 }
 
+function vertCost(dy) {
+  return Math.abs(dy) * SOURCE_COST.vertSecPerBlock
+}
+
 function digCost(depthBelow) {
   const d = Math.max(0, depthBelow)
   return d * SOURCE_COST.digSecPerBlock + (d > SOURCE_COST.deepDigDepth ? SOURCE_COST.shaftPenaltySec : 0)
@@ -352,8 +382,9 @@ function liveExposed(bp, res, bot = null) {
   if (!res || !res.position || res.exposed === false) return null
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
+  const dy = Math.floor(bp.y) - Math.floor(p.y) // +below, the buried depthBelow gauge
   const wet = !!bot && submergedAt(bot, p.x, p.y, p.z)
-  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, wet, cost: walkCost(distH) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
+  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, dy, wet, cost: walkCost(distH) + vertCost(dy) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
 }
 
 // A buried hit under open water floods the shaft: the vein sits below the
@@ -424,16 +455,17 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     if (now !== true) return null // closed up or mined out since noted
     let pre = null
     try {
-      const blk = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) })
+      const blk = bot.blockAt && bot.blockAt(new Vec3(Math.floor(item.x), Math.floor(item.y), Math.floor(item.z)))
       pre = blk && denyReason(bot, blk, ctx)
     } catch (_) { pre = null }
     if (pre === 'protected' || pre === 'submerged') return null // owner build or dive: same rule as the live loop
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
+    const dy = Math.floor(bp.y) - Math.floor(item.y) // +below, priced like the live leg
     const wet = submergedAt(bot, item.x, item.y, item.z)
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
-      distH, dist, wet, cost: walkCost(distH) * SOURCE_COST.memoryFactor + (wet ? SOURCE_COST.wetPenaltySec : 0),
+      distH, dist, dy, wet, cost: walkCost(distH) * SOURCE_COST.memoryFactor + vertCost(dy) + (wet ? SOURCE_COST.wetPenaltySec : 0),
       ageMs: typeof item.at === 'number' ? Date.now() - item.at : null,
     }
   } catch (_) { return null }
@@ -576,9 +608,9 @@ function takeFarCache(bot, o, bp) {
     if (c.buriedHit && !skipped(c.buriedHit.pos)) {
       let there = false
       try {
-        const blk = bot.blockAt && bot.blockAt({
-          x: Math.floor(c.buriedHit.pos.x), y: Math.floor(c.buriedHit.pos.y), z: Math.floor(c.buriedHit.pos.z),
-        })
+        const blk = bot.blockAt && bot.blockAt(new Vec3(
+          Math.floor(c.buriedHit.pos.x), Math.floor(c.buriedHit.pos.y), Math.floor(c.buriedHit.pos.z),
+        ))
         there = !blk || (!!blk.name && blk.name === c.buriedHit.name)
       } catch (_) { there = false }
       if (there) {
@@ -651,6 +683,30 @@ function choiceRes(win, rival, bp) {
   return res
 }
 
+// One-line verdict for the bot log (atl.21): both candidates with coords
+// and priced costs plus the pick, so a bad walk traces to the number that
+// chose it. Pure for tests; commitSource logs it on every verdict.
+function verdictLine(name, exposed, buried, pick) {
+  const side = (c, label) => c
+    ? `${label} ${c.kind} @${Math.floor(c.pos.x)},${Math.floor(c.pos.y)},${Math.floor(c.pos.z)} ${c.cost.toFixed(1)}s`
+    : `${label} none`
+  return `bring verdict ${name}: ${side(exposed, 'walk')} vs ${side(buried, 'dig')} -> ${pick}`
+}
+
+function verdictPos(c) {
+  if (!c || !c.pos) return null
+  return { x: Math.floor(c.pos.x), y: Math.floor(c.pos.y), z: Math.floor(c.pos.z), cost: c.cost }
+}
+
+// Structured verdict facts for the order (revmux 01 core-1): the find
+// verdict stores them via commitSource, the creation verdicts in index.js
+// attach the same shape to the order they create.
+function verdictFacts(exposed, buried, pick) {
+  const win = pick === 'buried' ? buried : exposed
+  const rival = pick === 'buried' ? exposed : buried
+  return { pick, win: verdictPos(win), rival: verdictPos(rival) }
+}
+
 // Shared commit for the find and searchfar verdicts (and order creation,
 // via the same res shape): plants the target, checks the pickaxe tier,
 // announces once. A memory target rides o.far — unloaded is not gone
@@ -658,6 +714,8 @@ function choiceRes(win, rival, bp) {
 function commitSource(bot, ctx, o, exposed, buried, pick) {
   const win = pick === 'buried' ? buried : exposed
   const rival = pick === 'buried' ? exposed : buried
+  o.verdict = verdictFacts(exposed, buried, pick)
+  console.log(verdictLine((o && o.name) || (win && win.name) || 'block', exposed, buried, pick))
   const bp = bot.entity && bot.entity.position
   const res = choiceRes(win, rival, bp)
   o.pos = res.position
@@ -671,8 +729,7 @@ function commitSource(bot, ctx, o, exposed, buried, pick) {
   o.far = win.kind === 'memory' || !readable
   o.drop = dropFor(res.name)
   if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
-    const tier = requiredTier(res.name)
-    refuse(bot, ctx, `need ${tierArticle(tier)} ${tier} pickaxe for ${res.name}`)
+    refuse(bot, ctx, tierRefusal(bot, res.name))
     return false
   }
   if (!o.announced) {
@@ -1392,8 +1449,26 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
-    const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
-    if (bDeny) {
+    let bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
+    if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && protectedReason(bot, block, ctx) !== null) {
+      // revmux 01 core-1: the trap denial masks protection (denyReason
+      // returns 'below-feet' before it checks the type rules), so a
+      // below-feet stance over solid may sit on a build. Unmask it: the
+      // protected path skips the block instead of striking or digging.
+      bDeny = 'protected'
+    }
+    if (bDeny === 'below-feet' && solidBelow(bot, o.pos)) {
+      // atl.20: the shaft-bottom loop (atl.18 5/9: selftrap → sidestep →
+      // re-find the same block → walk back on top → refuse) died on this
+      // denial with SOLID stone under the ore. Digging it is what a player
+      // does — a safe 1-block drop onto a proven landing — so dig instead
+      // of striking. Falls through to the dig below with no strike and no
+      // stuck fact. The refusal stays for real hazards (air/water/lava or
+      // unknown below), and the guard itself is untouched for every other
+      // behaviour (equip's no-deepen rule, forage/flat skips). The block
+      // itself is type-clean here (protected was unmasked above).
+      try { console.log(`below-feet ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} onto solid — digging (atl.20)`) } catch (_) { /* logging never breaks a dig */ }
+    } else if (bDeny) {
       logDeny(block, bDeny)
       if (bDeny === 'protected' || bDeny === 'submerged') {
         // Skip it and take the next candidate: a nearer build — or a dive
@@ -1558,6 +1633,8 @@ module.exports.orderCraftNames = itemMod.orderCraftNames
 module.exports.packCounts = itemMod.packCounts
 module.exports.itemRefusal = itemMod.itemRefusal
 module.exports.tierArticle = tierArticle
+module.exports.tierRefusal = tierRefusal
+module.exports.bestPickRank = bestPickRank
 module.exports.findEdible = itemMod.findEdible
 module.exports.findAnimal = findAnimal
 module.exports.sharePlan = itemMod.sharePlan
@@ -1582,6 +1659,8 @@ module.exports.skipKey = skipKey
 module.exports.bestExposed = bestExposed
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText
+module.exports.verdictLine = verdictLine
+module.exports.verdictFacts = verdictFacts
 module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch

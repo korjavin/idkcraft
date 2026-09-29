@@ -168,13 +168,16 @@ describe('disk memory', () => {
     const ctx = {}
     fillCtx(ctx, now)
     const bot = botAt(SPAWN_A)
+    // Assert on content, not mtime: two writes microseconds apart share an mtime
+    // on ext4/CI (kernel tick granularity), so the old notEqual(mtime) was red there.
+    const builtOnDisk = () => JSON.parse(fs.readFileSync(file, 'utf8')).homes.at(-1).built
     assert.equal(memory.saveThrottled(bot, ctx, now), true)
-    const mtime = fs.statSync(file).mtimeMs
+    assert.equal(builtOnDisk(), true)
     ctx.home.built = false
     assert.equal(memory.saveThrottled(bot, ctx, now + 1000), false)
-    assert.equal(fs.statSync(file).mtimeMs, mtime)
+    assert.equal(builtOnDisk(), true) // throttled: nothing written
     assert.equal(memory.saveThrottled(bot, ctx, now + memory.SAVE_MIN_MS + 1), true)
-    assert.notEqual(fs.statSync(file).mtimeMs, mtime)
+    assert.equal(builtOnDisk(), false)
   })
 
   it('ticker setHome persists; a new ticker with the same file resumes it', () => {

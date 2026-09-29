@@ -9,6 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const gear = require('../src/behaviours/gear')
 const stockpile = require('../src/behaviours/stockpile')
+const resources = require('../src/resources')
 const deliver = require('../src/behaviours/deliver')
 const { wornItems } = require('../src/perception')
 
@@ -571,6 +572,7 @@ describe('ipn.6 pantry tick', () => {
   it('empty chest latches and yields want-ore exactly once', async () => {
     const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: chestOf([]) })
     const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1 }
+    resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'iron_ore' }], 1000) // ipn.9: diggable iron keeps the promise line
     gear(bot, ctx)
     await tick(300)
     assert.equal(ctx.gear.pantrySeen, 1)

@@ -361,6 +361,7 @@ describe('stockpile behaviour', () => {
     await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(bot.inv, [
+      { name: 'oak_log', count: 1 }, // ipn.8: open ladder keeps one log for sticks
       { name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 10 }, { name: 'dirt', count: 32 },
     ])
     assert.ok(bot.chats.some((m) => m.startsWith('stockpiled ')), `chats: ${bot.chats.join('|')}`)
@@ -713,7 +714,7 @@ describe('stockpile guard residuals (idkcraft-cq7 batch B1)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'done', `errs: ${ctx.stepStatus}`)
-    assert.deepEqual(bot.calls.deposits, ['20 oak_log'])
+    assert.deepEqual(bot.calls.deposits, ['19 oak_log']) // ipn.8: one log kept for the open ladder
   })
 
   it('B-close a throwing close still banks the deposit', async () => {
@@ -729,7 +730,7 @@ describe('stockpile guard residuals (idkcraft-cq7 batch B1)', () => {
     await flush()
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.chestErrorAt, null)
-    assert.deepEqual(bot.calls.deposits, ['20 oak_log'])
+    assert.deepEqual(bot.calls.deposits, ['19 oak_log']) // ipn.8: one log kept for the open ladder
   })
 
   it('B-noopen a missing chest driver unadopts instead of failing', async () => {
@@ -1022,3 +1023,86 @@ describe('stockpile walk residuals (idkcraft-cq7 batch W)', () => {
 //   withdraw unknown and gone both report { got: 0 }, so the distinction is
 //   untestable. (The gone branch itself IS pinned — B-noopen drives it with
 //   a missing chest driver and kills the dropped-branch mutant.)
+
+describe('stockpile gear reserve (idkcraft-ipn.8)', () => {
+  const gear = require('../src/behaviours/gear')
+  const FULL_GIVEN = {
+    iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1, water_bucket: 2,
+    iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+    diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+  }
+  const openCtx = (over = {}) => homeCtx({ ctx: over })
+  const doneCtx = (over = {}) => homeCtx({ ctx: { gearGiven: { ...FULL_GIVEN }, ...over } })
+
+  it('prod 10:37 shape: 106 planks + table + 7 cobble keeps the rung alive', () => {
+    const bot = mockBot({ inv: [
+      { name: 'acacia_planks', count: 64 }, { name: 'acacia_planks', count: 42 },
+      { name: 'crafting_table', count: 1 }, { name: 'cobblestone', count: 7 },
+      { name: 'coal', count: 4 },
+    ] })
+    assert.deepEqual(stockpile.depositPlan(bot, openCtx()), [
+      { name: 'acacia_planks', count: 60 }, { name: 'acacia_planks', count: 42 },
+    ])
+  })
+
+  it('keeps one log when the pack holds no sticks material', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_log', count: 6 }] })
+    assert.deepEqual(stockpile.depositPlan(bot, openCtx()), [{ name: 'oak_log', count: 5 }])
+  })
+
+  it('banks all logs when planks already cover the sticks', () => {
+    const bot = mockBot({ inv: [{ name: 'oak_planks', count: 10 }, { name: 'oak_log', count: 6 }] })
+    assert.deepEqual(stockpile.depositPlan(bot, openCtx()), [
+      { name: 'oak_planks', count: 6 }, { name: 'oak_log', count: 6 },
+    ])
+  })
+
+  it('keeps furnace cobble ahead of the dirt-first scaffold pool', () => {
+    const dirtFirst = mockBot({ inv: [{ name: 'dirt', count: 40 }, { name: 'cobblestone', count: 7 }] })
+    assert.deepEqual(stockpile.depositPlan(dirtFirst, openCtx()), [{ name: 'dirt', count: 8 }])
+    const cobbleFirst = mockBot({ inv: [{ name: 'cobblestone', count: 7 }, { name: 'dirt', count: 40 }] })
+    assert.deepEqual(stockpile.depositPlan(cobbleFirst, openCtx()), [{ name: 'dirt', count: 8 }])
+    const surplus = mockBot({ inv: [{ name: 'cobblestone', count: 50 }] })
+    assert.deepEqual(stockpile.depositPlan(surplus, openCtx()), [{ name: 'cobblestone', count: 10 }])
+  })
+
+  it('keeps one crafting table, banks the spares', () => {
+    const bot = mockBot({ inv: [{ name: 'crafting_table', count: 2 }] })
+    assert.deepEqual(stockpile.depositPlan(bot, openCtx()), [{ name: 'crafting_table', count: 1 }])
+  })
+
+  it('a finished ladder banks everything (old behaviour)', () => {
+    const bot = mockBot({ inv: [
+      { name: 'oak_planks', count: 20 }, { name: 'oak_log', count: 10 },
+      { name: 'crafting_table', count: 1 }, { name: 'cobblestone', count: 20 },
+      { name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 },
+    ] })
+    assert.deepEqual(stockpile.depositPlan(bot, doneCtx()), [
+      { name: 'oak_planks', count: 20 }, { name: 'oak_log', count: 10 },
+      { name: 'crafting_table', count: 1 },
+    ])
+  })
+
+  it('gearLadderDone reads the ledger plus the self picks', () => {
+    const picks = mockBot({ inv: [{ name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }] })
+    assert.equal(stockpile.gearLadderDone(picks, doneCtx()), true)
+    assert.equal(stockpile.gearLadderDone(picks, openCtx()), false)
+    const short = doneCtx()
+    short.gearGiven.iron_sword = 0
+    assert.equal(stockpile.gearLadderDone(picks, short), false)
+    assert.equal(stockpile.gearLadderDone(mockBot({ inv: [] }), doneCtx()), false)
+    const dry = doneCtx({ gear: { noWater: true } })
+    dry.gearGiven.water_bucket = 0
+    assert.equal(stockpile.gearLadderDone(picks, dry), true)
+    assert.equal(stockpile.gearLadderDone(null, null), false)
+  })
+
+  it('the kept planks keep the next gear plan off want-logs', () => {
+    const kept = { sticks: 0, maxPlanks: stockpile.GEAR_RESERVE_PLANKS, logs: 0 }
+    const plan = gear.menuPlan(kept, openCtx())
+    assert.equal(plan.state, 'ready')
+    assert.equal(plan.action, 'sticks')
+    const stripped = gear.menuPlan({ sticks: 0, maxPlanks: 0, logs: 0 }, openCtx())
+    assert.equal(stripped.key, 'want-logs')
+  })
+})

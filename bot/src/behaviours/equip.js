@@ -33,6 +33,12 @@ const SCAFFOLD_FULL = 32
 const CRAFT_STALL_STRIKES = 3
 // Dig attempts before giving up (drops lost, no dirt near): fail, hold, rest.
 const DIG_STALL_STRIKES = 64
+// Consecutive digs without the kit growing (drops lost, ghost blocks):
+// fail dig-stall so the goal menu moves on (dj3: the prod lakebed grind).
+const DIG_NOGAIN_STRIKES = 5
+// One dig that never settles (hung driver): fail dig-stall on the
+// deadline instead of wedging the step (craft-timeout precedent).
+const DIG_TIMEOUT_MS = 10000
 
 function scaffoldCount(bot) {
   return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
@@ -44,6 +50,59 @@ function hasSword(bot) {
 
 function hasPickaxe(bot) {
   return countItems(bot, (n) => n.endsWith('_pickaxe')) > 0
+}
+
+// Harvest ladder mirror (bring.js PICKAXE_RANK has the original; a require
+// would close the bring->bringitem->craftany->equip cycle): wooden and
+// golden mine no ore, so a rank-0 pickaxe upgrades itself to stone (x15)
+// instead of refusing every iron order while reading 'pickaxe=yes'.
+const PICKAXE_RANK = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 }
+function bestPickRank(bot) {
+  let best = -1
+  try {
+    for (const i of itemsOf(bot)) {
+      const m = i && typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+      if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
+    }
+  } catch (_) { return -1 }
+  return best
+}
+function pickRank(name) {
+  const m = typeof name === 'string' && name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+  return m ? PICKAXE_RANK[m[1]] : 0
+}
+// The stone chain behind toolOp's pickaxe branch: 3 cobble plus 2 sticks
+// on hand or one stick-op away (2 same planks or any log — toolOp's own
+// conditions, so a due upgrade always yields stone, never a second wooden).
+function stoneUpgradeDue(bot) {
+  try {
+    if (bestPickRank(bot) !== 0) return false
+    if (countItems(bot, (n) => n === 'cobblestone') < 3) return false
+    if (countItems(bot, (n) => n === 'stick') >= 2) return true
+    if (craftMod.tally(bot, '_log').size > 0) return true
+    const planks = craftMod.sortedWoods(craftMod.tally(bot, '_planks'))
+    return planks.length > 0 && planks[0][1] >= 2
+  } catch (_) { return false }
+}
+// A table the upgrade can craft on right now: the inventory item or a claim
+// the world still shows. Unreadable (unloaded chunk) reads as NO — the
+// upgrade is opportunistic, so an uncertain table digs scaffold exactly as
+// before instead of failing the step (unlike a fresh craft, which fails
+// loud through tableFor and holds).
+function tableReady(bot, ctx) {
+  try {
+    if (itemsOf(bot).some((i) => i && i.name === 'crafting_table')) return true
+    if (!bot || typeof bot.blockAt !== 'function') return false
+    const st = ctx && ctx.equip
+    const claims = [ctx && ctx.home && ctx.home.table, st && st.tablePos, ctx && ctx.claimedTable]
+    for (const t of claims) {
+      if (!t || typeof t.x !== 'number') continue
+      let block = null
+      try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
+      if (block && block.name === 'crafting_table') return true
+    }
+  } catch (_) { /* probe best-effort */ }
+  return false
 }
 
 function itemsOf(bot) {
@@ -71,11 +130,23 @@ function resetRunCounters(ctx) {
       delete st.walkWaits
       delete st.approachWaits
       delete st.made
+      delete st.noGain
+      delete st.lastScaffold
     }
   } catch (_) { /* reset best-effort */ }
 }
 
 function fail(ctx, item, err) {
+  // Stale async settlement (revmux dj3 round-1): equipDigInFlight is not in
+  // decide's preemption guard, so a facts-changed re-decide can switch
+  // steps mid-dig — a late fail must not mark the NEW step failed (the
+  // hold would poison it). Drop the report, but still spend the run
+  // counters so a later re-pick starts fresh. An unset step (unit tests,
+  // direct dispatch) fails loudly as before.
+  if (ctx.step && ctx.step !== 'equip') {
+    resetRunCounters(ctx)
+    return
+  }
   ctx.stepStatus = `failed:equip-${item}`
   resetRunCounters(ctx)
   try {
@@ -264,12 +335,60 @@ function digTargets(bot) {
   return names
 }
 
+// Cells that make a dig wet (swim.js executor-water minus lava): mining
+// through them is ~5x slower without aqua affinity, the bot must stand in
+// water, and the drop floats off — the prod 22:04 stall (dj3: lakebed
+// dirt, minutes of silent digging).
+const WET = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass'])
+// True when digging (x, y, z) means digging wet: water in the cell above
+// (a submerged target) or around it at target/head level (the hole
+// floods, or the bot stands in water to reach it). Null reads are dry
+// (unloaded chunk, unknown — the deep.js precedent: only confirmed
+// blocks decide).
+function wetDig(bot, x, y, z) {
+  if (!bot || typeof bot.blockAt !== 'function') return false
+  const ring = [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]
+  const fx = Math.floor(x)
+  const fy = Math.floor(y)
+  const fz = Math.floor(z)
+  for (const [dx, dy, dz] of ring) {
+    let n = null
+    try {
+      const b = bot.blockAt(new Vec3(fx + dx, fy + dy, fz + dz))
+      n = b && b.name
+    } catch (_) { n = null }
+    if (typeof n === 'string' && WET.has(n)) return true
+  }
+  return false
+}
+
+// A submerged body digs ~5x slower and every drop floats off, so no
+// candidate near it is worth starting (dj3 rig: a sunk body dug buried
+// lakebed stone the ring reads as dry, and only the deadline saved it).
+// Feet AND head both water: wading (feet only) still digs a dry bank
+// fine. Nulls read dry (unloaded chunk — the wetDig precedent).
+function bodyUnderwater(bot, bp) {
+  if (!bot || typeof bot.blockAt !== 'function' || !bp) return false
+  try {
+    const feet = bot.blockAt(new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z)))
+    const head = bot.blockAt(new Vec3(Math.floor(bp.x), Math.floor(bp.y) + 1, Math.floor(bp.z)))
+    const fn = feet && feet.name
+    const hn = head && head.name
+    return (typeof fn === 'string' && WET.has(fn)) && (typeof hn === 'string' && WET.has(hn))
+  } catch (_) { return false }
+}
+
 function equip(bot, ctx) {
   if (ctx.equipInFlight) return // exactly one op at a time
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
-  const kind = !hasPickaxe(bot) ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
+  // A wooden/golden pickaxe upgrades to stone while the chain can land
+  // (x15): rank-0 mines no ore, and the kit header promises stone. The
+  // table probe keeps it opportunistic — without a verified station the
+  // step digs scaffold exactly as before instead of failing no-table.
+  const upgradePick = stoneUpgradeDue(bot) && tableReady(bot, ctx)
+  const kind = !hasPickaxe(bot) || upgradePick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
       ctx.stepStatus = 'done'
@@ -335,7 +454,10 @@ function craftOne(bot, ctx, op) {
     const strikes = (st.made && st.made[op.item]) || 0
     const landed = op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
       : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
-      : op.item.endsWith('_pickaxe') ? hasPickaxe(bot) : hasSword(bot)
+      // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
+      // the old wooden as landed and burns the cobble retrying. Fresh
+      // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
+      : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
     if (!landed) {
       st.made = st.made || {}
       st.made[op.item] = strikes + 1
@@ -372,7 +494,7 @@ function digTick(bot, ctx, st, bp) {
     found = bot.findBlocks && bot.findBlocks({
       matching: (b) => !!b && typeof b.name === 'string' && names.includes(b.name),
       maxDistance: 12,
-      count: 8,
+      count: 16, // the wet filter below shrinks the pool: scan wider
     })
   } catch (_) { found = null }
   if (!found || !found.length) {
@@ -387,6 +509,8 @@ function digTick(bot, ctx, st, bp) {
   const feetY = Math.floor(bp.y) - 1
   const feetZ = Math.floor(bp.z)
   const cands = []
+  let wetSkipped = 0
+  const sunk = bodyUnderwater(bot, bp)
   for (const v of found) {
     if (!v || typeof v.x !== 'number') continue
     if (Math.floor(v.x) === feetX && Math.floor(v.y) === feetY && Math.floor(v.z) === feetZ) continue
@@ -397,6 +521,7 @@ function digTick(bot, ctx, st, bp) {
       if (blk && typeof blk.name === 'string') name = blk.name
     }
     if (!name || !names.includes(name)) continue
+    if (sunk || wetDig(bot, v.x, v.y, v.z)) { wetSkipped++; continue } // dj3: never dig wet
     const hard = name === 'stone' || name === 'cobblestone'
     cands.push({ v, blk, name, hard, d: Math.hypot(v.x - bp.x, v.y - bp.y, v.z - bp.z) })
   }
@@ -405,6 +530,9 @@ function digTick(bot, ctx, st, bp) {
   const pick = cands.find((c) => canBreak(bot, blockOf(c), ctx))
   if (!pick) {
     if (cands[0]) { const d0 = denyReason(bot, blockOf(cands[0]), ctx); logDeny(blockOf(cands[0]), d0) } // idkcraft-drq: scaffold, not the hut
+    if (wetSkipped > 0) {
+      try { console.log(sunk ? `equip: body underwater, skipped ${wetSkipped} dig target(s)` : `equip: skipped ${wetSkipped} wet dig target(s)`) } catch (_) { /* logging best-effort */ }
+    }
     fail(ctx, 'blocks', new Error('no-dirt'))
     return
   }
@@ -433,8 +561,37 @@ function digTick(bot, ctx, st, bp) {
   }
   st.approachWaits = 0
   if (ctx.equipDigInFlight || typeof bot.dig !== 'function') return
+  // No-gain limit (dj3): consecutive digs that never grow the kit (drops
+  // lost, ghost digs) fail dig-stall so the menu moves on. The snapshot
+  // is taken at dig start and compared at the NEXT dig start, so pickups
+  // have a full dig cycle to land before a strike counts.
+  const kit = scaffoldCount(bot)
+  if (st.lastScaffold != null && kit <= st.lastScaffold) {
+    st.noGain = (st.noGain || 0) + 1
+    if (st.noGain >= DIG_NOGAIN_STRIKES) {
+      fail(ctx, 'blocks', new Error('dig-stall'))
+      return
+    }
+  } else {
+    st.noGain = 0
+  }
+  st.lastScaffold = kit
   ctx.equipDigInFlight = true
   st.digs++
+  try {
+    console.log(`equip digging ${pick.name} at ${Math.floor(block.x)} ${Math.floor(block.y)} ${Math.floor(block.z)} scaffold=${kit}`)
+  } catch (_) { /* logging best-effort */ }
+  // Exactly-once settlement (craftOne shape): a hung driver (ghost block,
+  // unloaded chunk) fails dig-stall on the deadline instead of wedging
+  // the step with the flag stuck — the menu moves on, the next pick
+  // retries with a fresh budget.
+  let settled = false
+  const finish = (fn) => {
+    if (settled) return
+    settled = true
+    ctx.equipDigInFlight = false
+    if (typeof fn === 'function') fn()
+  }
   const run = async () => {
     try {
       const target = pick.blk || block
@@ -445,13 +602,18 @@ function digTick(bot, ctx, st, bp) {
       }
       await bot.dig(target)
     } catch (err) {
-      ctx.equipDigInFlight = false
-      fail(ctx, 'blocks', err)
+      finish(() => fail(ctx, 'blocks', err))
       return
     }
-    ctx.equipDigInFlight = false
+    finish()
   }
-  void run()
+  const timeout = new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new Error('dig-stall')), DIG_TIMEOUT_MS)
+    if (t && typeof t.unref === 'function') t.unref()
+  })
+  void Promise.race([run(), timeout]).catch((err) => {
+    finish(() => fail(ctx, 'blocks', err))
+  })
 }
 
 module.exports = equip
@@ -459,3 +621,8 @@ module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
+// Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain,
+// plus the table probe — the gate and the behaviour must agree on the
+// station, or an unloaded claim diverts into an instant-done loop.
+module.exports.stoneUpgradeDue = stoneUpgradeDue
+module.exports.tableReady = tableReady

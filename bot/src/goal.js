@@ -70,9 +70,15 @@ const MENU = {
     // sticks-or-planks-or-logs plus a table, inventory or placed), scaffold
     // blocks only once geared (they dig by hand). Blocks alone never preempt
     // early gather: a fresh bot chops first, digs later.
+    // x15: a wooden/golden pickaxe is an unfinished kit while the stone
+    // chain is on hand and the behaviour's own table probe passes — the
+    // gate and the behaviour share that probe, so a ghost or unloaded
+    // claim only digs scaffold (or reads kit-complete) instead of
+    // diverting into an instant-done re-pick loop (revmux 01).
     feasible: (facts, bot, ctx) => {
-      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0) {
-        if (!equipWant(facts)) return false
+      const upgrade = equipUpgradeDue(bot, ctx)
+      if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
+        if (!upgrade && !equipWant(facts)) return false
         if ((facts.table || 0) <= 0 && !facts.tablePlaced) return false
         // The house table first (h9z): while build can lay the site table,
         // the table item belongs to build — placing roadside instead would
@@ -146,7 +152,12 @@ const MENU = {
     // the hunt owns the body and must not run past dark (bring dusk-cancels
     // self orders, but the step never opens one at night in the first place).
     // Non-v2 homes read beds='both' (nothing owed), so no version check here.
-    feasible: (facts) => facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'),
+    // 9kd: two sheepless hunts in one MC day latch beds off until tomorrow
+    // (death-respawns release the stepFail hold, so it cannot hold this).
+    feasible: (facts, bot, ctx) => {
+      if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
+      try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
+    },
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
   },
@@ -308,6 +319,22 @@ function equipWant(facts) {
     return (cobble >= 2 || equiv >= 3) && stick1 ? 'sword' : null
   }
   return null
+}
+
+// Pickaxe-upgrade diversion (x15): wooden/golden in hand, the stone chain
+// affordable, and the behaviour's own table probe passing — the SAME probe
+// equip() runs before crafting, so the gate can never divert where the
+// behaviour would dig or finish done (an optimistic claim here wedged the
+// menu into an instant-done re-pick loop, revmux 01). Single source for
+// MENU.equip.feasible and the stepWhy wording; deferred require (same
+// equip->craft->goal cycle as the SCAFFOLD_LOW read in feasible).
+function equipUpgradeDue(bot, ctx) {
+  try {
+    const equipMod = require('./behaviours/equip')
+    return !!equipMod.stoneUpgradeDue(bot) && !!equipMod.tableReady(bot, ctx)
+  } catch (_) {
+    return false
+  }
 }
 
 // A claimed table station the world still shows (h9z): the claim plus a
@@ -1034,8 +1061,10 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'equip': {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
       // scaffold blocks only once geared, the house-table yield last (h9z).
-      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0) return 'equip: kit complete'
-      if (!equipWant(facts)) return 'equip: no materials'
+      // x15: a due stone upgrade is an unfinished kit, not 'kit complete'.
+      const upgrade = equipUpgradeDue(bot, ctx)
+      if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0 && !upgrade) return 'equip: kit complete'
+      if (!upgrade && !equipWant(facts)) return 'equip: no materials'
       if ((facts.table || 0) <= 0 && !facts.tablePlaced) return 'equip: no table'
       try {
         if ((facts.table || 0) > 0 && tableYieldToBuild(facts, bot, ctx)) return 'equip: waiting for the house table'
@@ -1065,6 +1094,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      try { if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'beds: no sheep today' } catch (_) { /* wording best-effort */ }
       return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
@@ -1214,7 +1244,14 @@ async function decide(bot, ctx) {
         const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
         if (reason === 'no-cobble' || reason === 'no-fuel') {
           const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-          const line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          // ipn.9: same honest rule as gear's sync announce (the coal
+          // promise needs a diggable remembered cell); cobble keeps its
+          // line — stone is not a memory resource.
+          try {
+            const gearMod = require('./behaviours/gear')
+            line = gearMod.honestLine(bot, ctx, bot && bot.entity && bot.entity.position, key, line)
+          } catch (_) { /* announce best-effort: keep the line */ }
           try {
             if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
             if (ctx.gear.saidNeed !== key) {
@@ -1281,8 +1318,13 @@ async function decide(bot, ctx) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
-    // re-pick forever.
-    if (prev && ctx.askedKey === askKey && !chainOwns && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    // re-pick forever. A gear yield never rides it either (ipn.7): gear
+    // ends done to hand off to the fetchers (latched announce), and the
+    // same text plus the same 'done' status re-issues it every tick —
+    // prod stood 8-10 min with 'going to dig' until the facts moved. The
+    // fresh menu pick below keeps gear out via the said-latch until a new
+    // need arrives; no hold is recorded (gear yields are never holds).
+    if (prev && ctx.askedKey === askKey && !chainOwns && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {

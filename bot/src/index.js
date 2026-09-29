@@ -14,6 +14,8 @@ const { addJumpUpCost } = require('./jumpcost')
 const { trackPlaced, denyReason } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
+const dangerMod = require('./danger')
+const exploreMod = require('./behaviours/explore')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const metrics = require('./metrics')
 
@@ -68,6 +70,7 @@ const BEHAVIOURS = {
   // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
+  water_up: (bot, ctx) => recover.run(bot, ctx),
   dig_step: (bot, ctx) => recover.run(bot, ctx),
   hop_step: (bot, ctx) => recover.run(bot, ctx),
   sidestep: (bot, ctx) => recover.run(bot, ctx),
@@ -1002,6 +1005,17 @@ function fleeReflex(bot, ctx) {
   // A stale stuck fact must not survive a mode change: the goal it names
   // belongs to the previous order.
   function clearStuck() {
+    // ponytail: an order preempting a running water_up drops its poured
+    // sources with it (the strip only runs from ctx.recovery.st) — the water
+    // stays and the buckets read lost until gear refills them (jsf.5). A later
+    // strip cannot adopt them: scooping needs 4.4 reach and the body already
+    // left. Logged so prod shows the loss instead of hiding it.
+    try {
+      const rec = ctx.recovery
+      if (rec && rec.action === 'water_up' && rec.st && rec.st.sources && rec.st.sources.length > 0) {
+        console.log(`recover action=water_up outcome=dropped phase=${rec.st.phase || '?'} sources=${rec.st.sources.length} reason=order`)
+      }
+    } catch (_) { /* log best-effort */ }
     ctx.stuck = null
     ctx.recovery = null
     ctx.stuckTicks = 0
@@ -1980,8 +1994,7 @@ function fleeReflex(bot, ctx) {
         if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
           clearStuck()
           if (plan && plan.have > 0) return openPackOrder()
-          const tier = bringMod.requiredTier(res.name)
-          return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+          return bringMod.tierRefusal(bot, res.name)
         }
         // Buried 48-best (atl.15): the far shells may see exposed ore and
         // memory may know some — the buried hit is stashed as the dig
@@ -2000,7 +2013,10 @@ function fleeReflex(bot, ctx) {
             clearStuck()
             const win = d.pick === 'buried' ? buried : mem
             const rival = d.pick === 'buried' ? mem : buried
+            console.log(bringMod.verdictLine(name, mem, buried, d.pick))
+            const prevOrder = ctx.bring
             const answer = startBlockOrder(bot, ctx, { name, want, by }, bringMod.choiceRes(win, rival, bp0))
+            if (ctx.bring && ctx.bring !== prevOrder) ctx.bring.verdict = bringMod.verdictFacts(mem, buried, d.pick)
             if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
             return answer
           }
@@ -2017,7 +2033,13 @@ function fleeReflex(bot, ctx) {
         return `only buried ${name} within 48, checking further for open ore…`
       }
       clearStuck()
+      const prevDirect = ctx.bring
       const answer = startBlockOrder(bot, ctx, { name, want, by }, res)
+      if (ctx.bring && ctx.bring !== prevDirect) {
+        const only = bp0 ? bringMod.liveExposed(bp0, res) : null
+        console.log(bringMod.verdictLine(name, only, null, 'exposed'))
+        ctx.bring.verdict = bringMod.verdictFacts(only, null, 'exposed')
+      }
       // A refused block order (pickaxe tier) still gives a short pack.
       if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
       return answer
@@ -2408,8 +2430,7 @@ function resSubmerged(bot, ctx, res) {
 function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
-    const tier = bringMod.requiredTier(res.name)
-    return `need ${bringMod.tierArticle(tier)} ${tier} pickaxe for ${res.name}`
+    return bringMod.tierRefusal(bot, res.name)
   }
   // The chat-time commit bypassed the bring-loop submerged skips — a wet
   // nearest vein committed phase 'walk' and the bot dived before any skip
@@ -2559,12 +2580,14 @@ async function advancePendingSearch(bot, ticker, ctx) {
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
       const win = pick === 'buried' ? buried : exposed
       const rival = pick === 'buried' ? exposed : buried
+      console.log(bringMod.verdictLine(p.name, exposed, buried, pick))
       // A refusal (tier/unbringable) leaves a surviving older order in
       // place: attach the verdict only to an order this commit created
       // (revmux 02 core-1), never graft it onto the old one.
       const prev = ctx.bring
       bot.chat(startBlockOrder(bot, ctx, p, bringMod.choiceRes(win, rival, bp0)))
       if (ctx.bring && ctx.bring !== prev) {
+        ctx.bring.verdict = bringMod.verdictFacts(exposed, buried, pick)
         if (cache.sourceAsked) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
         try {
           ctx.bring.farCache = {
@@ -2855,6 +2878,15 @@ function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   console.log(deathLine(bot))
+  // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
+  // search rings never walk the same monument cell twice in a day. The
+  // killer leg drops with it (revmux 01+02): target cleared AND its chunk
+  // consumed — a bare clear re-picks the same target past the disc and the
+  // stale GoalXZ re-paths the same swim.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
+  } catch (_) { /* memory best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {
