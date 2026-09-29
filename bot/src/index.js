@@ -1640,7 +1640,10 @@ function fleeReflex(bot, ctx) {
             clearStuck()
             const win = d.pick === 'buried' ? buried : mem
             const rival = d.pick === 'buried' ? mem : buried
+            console.log(bringMod.verdictLine(name, mem, buried, d.pick))
+            const prevOrder = ctx.bring
             const answer = startBlockOrder(bot, ctx, { name, want, by }, bringMod.choiceRes(win, rival, bp0))
+            if (ctx.bring && ctx.bring !== prevOrder) ctx.bring.verdict = bringMod.verdictFacts(mem, buried, d.pick)
             if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
             return answer
           }
@@ -1657,7 +1660,13 @@ function fleeReflex(bot, ctx) {
         return `only buried ${name} within 48, checking further for open ore…`
       }
       clearStuck()
+      const prevDirect = ctx.bring
       const answer = startBlockOrder(bot, ctx, { name, want, by }, res)
+      if (ctx.bring && ctx.bring !== prevDirect) {
+        const only = bp0 ? bringMod.liveExposed(bp0, res) : null
+        console.log(bringMod.verdictLine(name, only, null, 'exposed'))
+        ctx.bring.verdict = bringMod.verdictFacts(only, null, 'exposed')
+      }
       // A refused block order (pickaxe tier) still gives a short pack.
       if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
       return answer
@@ -2158,12 +2167,14 @@ async function advancePendingSearch(bot, ticker, ctx) {
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
       const win = pick === 'buried' ? buried : exposed
       const rival = pick === 'buried' ? exposed : buried
+      console.log(bringMod.verdictLine(p.name, exposed, buried, pick))
       // A refusal (tier/unbringable) leaves a surviving older order in
       // place: attach the verdict only to an order this commit created
       // (revmux 02 core-1), never graft it onto the old one.
       const prev = ctx.bring
       bot.chat(startBlockOrder(bot, ctx, p, bringMod.choiceRes(win, rival, bp0)))
       if (ctx.bring && ctx.bring !== prev) {
+        ctx.bring.verdict = bringMod.verdictFacts(exposed, buried, pick)
         if (cache.sourceAsked) { ctx.bring.sourceAsked = true; ctx.bring.sourcePick = cache.sourcePick }
         try {
           ctx.bring.farCache = {
