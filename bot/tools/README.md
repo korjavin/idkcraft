@@ -56,12 +56,13 @@ No Minecraft client needed; Docker is required.
 
 ## Baseline workflow
 
-The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps }`.
+The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps, maxCalls }`.
 
 - Record: `REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh`, then copy the
-  measured `reached`/`stuck`/`eps` per spot into `stuck-baseline.json`.
+  measured `reached`/`stuck`/`eps`/`call` per spot into `stuck-baseline.json`.
 - Slack: ceilings carry observed + 2 stuck / + 1 episode — single runs vary
-  (ik7 saw S6 stuck 0..3 across two opped runs on one build). Re-measure,
+  (ik7 saw S6 stuck 0..3 across two opped runs on one build). `maxCalls`
+  carries no slack (a page is a gave-up — see Sensitivity). Re-measure,
   do not hand-tune; `npm test` fails when a corpus spot lacks an entry.
 - Judge: plain `sh bot/tools/stuck-run.sh` → exit 0/1 with the diff.
   Green runs are quiet (under-ceiling counts are `ok`, not news).
@@ -77,11 +78,27 @@ The gate sees planner/reflex/follow regressions: a reached flip or a stuck
 overrun on any spot exits 1 (proven: `canDig=false` sabotage flips the
 dig-through spots — see the 6x7.4 PR).
 
-It does NOT see recover-menu breakage in follow mode: `MAX_FAILS=0`
-measured exit 0 (15/15 ok), because follow re-issues after give-up — the
-walk is identical and the counters only shrink, which reads as improvement.
-Recover-sensitivity needs order-driven spots (idkcraft-6x7.7), where a
-give-up fails the order instead of re-issuing the same walk.
+It also sees recover-budget breakage — via premature paging, not via
+reached. S6-PIT wedges under a dirt brow every run: healthy code fails
+`dig_up`, rescues with a `dig_step` chain, and reaches silently; with
+`MAX_FAILS=0` the first failed primitive pages the owner (`call_player`)
+and gives up instead of rescuing. The give-up still reaches (a fresh plan
+finishes the dug void), so `reached` cannot flip — but `calls` flips 0→1
+against the strict `maxCalls: 0`, and the run exits 1 (proven: full-suite
+sabotage run, `BASELINE S6-PIT … REGRESSION (calls 1 > 0)` — see the PR).
+
+`maxCalls` carries no slack on any spot because a page is a gave-up: a
+decision, not physics. Zero healthy pages in 30+ spot-runs across the
+corpus; a page on a healthy run means the bot gave up somewhere, which is
+news, not noise — investigate first, re-record only when the new behavior
+is the intended one. `npm test` pins S6-PIT's `maxCalls: 0`: any slack
+there would un-flip the sabotage.
+
+What it does NOT see: recover breakage that changes neither the walk nor
+the paging (a first-try rescue needs no budget — `MAX_FAILS=0` is silent
+on all 15 other spots), and order-level give-up cost. Order-driven spots
+(idkcraft-6x7.7), where a give-up fails the order instead of re-issuing
+the walk, cover that side.
 
 ## Corpus rules
 

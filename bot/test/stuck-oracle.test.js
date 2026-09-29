@@ -13,12 +13,12 @@ const { compareBaseline, pickBrain, gateCode, makeExitGuard } = require('../tool
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
-function row(spot, reached, stuck, eps) {
-  return { spot, reached, stuck, eps, by: [], call: 0, secs: 10, maxDisp: 1, minDist: 1, minGuide: 1, note: '' }
+function row(spot, reached, stuck, eps, call = 0) {
+  return { spot, reached, stuck, eps, by: [], call, secs: 10, maxDisp: 1, minDist: 1, minGuide: 1, note: '' }
 }
 
 describe('compareBaseline verdicts (idkcraft-6x7.4)', () => {
-  const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1 } } }
+  const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0 } } }
 
   it('exact match is ok', () => {
     const [d] = compareBaseline([row('A', true, 2, 1)], base)
@@ -43,13 +43,19 @@ describe('compareBaseline verdicts (idkcraft-6x7.4)', () => {
     assert.match(d.why, /episodes 2 > 1/)
   })
 
+  it('calls over the ceiling are regressed (the recover-budget tripwire)', () => {
+    const [d] = compareBaseline([row('A', true, 0, 0, 1)], base)
+    assert.equal(d.verdict, 'regressed')
+    assert.match(d.why, /calls 1 > 0/)
+  })
+
   it('under-ceiling runs are ok, not improved (green runs stay quiet)', () => {
     const [d] = compareBaseline([row('A', true, 0, 0)], base)
     assert.equal(d.verdict, 'ok')
   })
 
   it('reached flipping false->true is improved', () => {
-    const b = { brain: 'stub', spots: { A: { reached: false, maxStuck: 5, maxEps: 2 } } }
+    const b = { brain: 'stub', spots: { A: { reached: false, maxStuck: 5, maxEps: 2, maxCalls: 0 } } }
     const [d] = compareBaseline([row('A', true, 5, 2)], b)
     assert.equal(d.verdict, 'improved')
   })
@@ -66,10 +72,16 @@ describe('compareBaseline verdicts (idkcraft-6x7.4)', () => {
     assert.equal(d.verdict, 'no-baseline')
   })
 
+  it('entry without maxCalls counts as missing (strict shape)', () => {
+    const b = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1 } } }
+    const [d] = compareBaseline([row('A', true, 0, 0)], b)
+    assert.equal(d.verdict, 'no-baseline')
+  })
+
   it('was/now diff prints on every non-ok verdict', () => {
     const [d] = compareBaseline([row('A', false, 9, 3)], base)
-    assert.match(d.was, /reached=true stuck<=2 eps<=1/)
-    assert.match(d.now, /reached=false stuck=9 eps=3/)
+    assert.match(d.was, /reached=true stuck<=2 eps<=1 calls<=0/)
+    assert.match(d.now, /reached=false stuck=9 eps=3 calls=0/)
   })
 })
 
@@ -172,7 +184,15 @@ describe('stuck-baseline.json covers the corpus (idkcraft-6x7.4)', () => {
       assert.equal(typeof e.reached, 'boolean', `${s.name}: reached must be boolean`)
       assert.ok(Number.isInteger(e.maxStuck) && e.maxStuck >= 0, `${s.name}: bad maxStuck`)
       assert.ok(Number.isInteger(e.maxEps) && e.maxEps >= 0, `${s.name}: bad maxEps`)
+      assert.ok(Number.isInteger(e.maxCalls) && e.maxCalls >= 0, `${s.name}: bad maxCalls`)
     }
+  })
+
+  it('S6-PIT is the recover-budget tripwire: cites the bead, maxCalls 0 strict', () => {
+    const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+    assert.ok(byName['S6-PIT'], 'missing recover-budget spot S6-PIT')
+    assert.ok((byName['S6-PIT'].bead || '').includes('idkcraft-6x7.4'), 'S6-PIT must cite idkcraft-6x7.4')
+    assert.equal(baseline.spots['S6-PIT'].maxCalls, 0, 'S6-PIT maxCalls must stay 0: slack would un-flip MAX_FAILS=0')
   })
 
   it('no baseline entry dangles off-corpus', () => {
