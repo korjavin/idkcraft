@@ -1,0 +1,25 @@
+{
+  "brain": "stub",
+  "variant": "paper-base",
+  "worldsha": "85a1422228ef",
+  "measuredAt": "PLACEHOLDER-2026-09-29",
+  "gitsha": "PLACEHOLDER",
+  "note": "Ceilings carry slack over single-run observations (ik7 saw S6 stuck 0..3 across two opped runs): maxStuck = observed + 2, maxEps = observed + 1. Re-measure, do not hand-tune.",
+  "spots": {
+    "EP1": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "CLUSTER": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "CLUSTER-PICK": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "CLUSTER-BARE": { "reached": false, "maxStuck": 20, "maxEps": 3 },
+    "SHAFT-BARE": { "reached": false, "maxStuck": 20, "maxEps": 3 },
+    "EP2": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "EP0": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "S3": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "S4": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "S5": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "S6": { "reached": true, "maxStuck": 5, "maxEps": 2 },
+    "S7": { "reached": true, "maxStuck": 2, "maxEps": 2 },
+    "ATL-SHAFT": { "reached": true, "maxStuck": 5, "maxEps": 3 },
+    "JR-SLOPE": { "reached": true, "maxStuck": 5, "maxEps": 3 },
+    "Q0H-PIT": { "reached": true, "maxStuck": 5, "maxEps": 3 }
+  }
+}

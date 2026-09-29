@@ -1,11 +1,18 @@
 #!/bin/sh
-# STUCK REGRESSION RUN wrapper (idkcraft-4rz): reset the disposable world
-# copy, boot the rig via START.sh, run stuck-replay.js, tear down.
+# STUCK ORACLE (idkcraft-6x7.4): the pre-merge gate for movement code — reset
+# the disposable world copy, boot the rig via START.sh, run stuck-replay.js
+# (which judges the run against stuck-baseline.json), tear down.
 # Usage: sh stuck-run.sh [variant] [spots.json] [secs]   (defaults below)
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
-#   REPLAY_TAG, REPLAY_OUT (passed through to stuck-replay.js).
+#   REPLAY_TAG (bot name suffix; default run$$ — exported so the pre-op
+#   below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
+#   REPLAY_BASELINE* (passed through to stuck-replay.js).
+# Exit codes: 0 = baseline holds, 1 = REGRESSION vs the baseline (from the
+# replay), 2 = environment failure (no START.sh/snapshot, rig never came up,
+# anti-noise rejected, pristine world.tar changed mid-run).
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf);
-# the wrapper prints its sha before/after so runs stay comparable.
+# the wrapper checks its sha before/after and fails the run (exit 2) on a
+# mismatch so runs stay comparable.
 # Refuses when an idk-replay container already runs: two rig runs share
 # one world and invalidate each other.
 set -e
@@ -38,15 +45,31 @@ mkfifo "$FIFO"
 exec 9<> "$FIFO" # held open: Paper's console reader blocks instead of EOF-exiting (muse-5: START.sh dies on stdin EOF)
 sh "$PRODWORLD/START.sh" "$VARIANT" >"$LOG" 2>&1 <&9 &
 SRVPID=$!
-cleanup() {
+teardown() {
   docker stop -t 5 idk-replay >/dev/null 2>&1 || true
   kill "$SRVPID" >/dev/null 2>&1 || true
   exec 9<&- || true
   rm -f "$FIFO" || true
-  SHA_AFTER="$(sha_of "$PRODWORLD/world.tar")"
-  if [ "$SHA_AFTER" = "$SHA_BEFORE" ]; then echo "pristine world.tar untouched ($SHA_AFTER)"; else echo "PRISTINE world.tar CHANGED: $SHA_BEFORE -> $SHA_AFTER"; fi
 }
-trap cleanup EXIT INT TERM
+on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay 2
+  rc=$?
+  teardown
+  SHA_AFTER="$(sha_of "$PRODWORLD/world.tar")"
+  if [ "$SHA_AFTER" = "$SHA_BEFORE" ]; then
+    echo "pristine world.tar untouched ($SHA_AFTER)"
+    exit "$rc"
+  else
+    echo "PRISTINE world.tar CHANGED: $SHA_BEFORE -> $SHA_AFTER"
+    exit 2 # env failure dominates: the run is no longer comparable
+  fi
+}
+on_sig() { # INT/TERM: never report a kill as a pass
+  teardown
+  echo "interrupted"
+  exit 130
+}
+trap on_exit EXIT
+trap on_sig INT TERM
 echo -n "wait: rcon"
 for _ in $(seq 1 36); do
   if docker exec idk-replay rcon-cli "list" >/dev/null 2>&1; then echo " up"; break; fi
@@ -69,6 +92,16 @@ rcon_assert "difficulty peaceful"
 rcon_assert "gamerule fall_damage false"
 rcon_assert "gamerule advance_weather false"
 rcon_assert "weather clear"
+# Spawn protection (3ro): the spawn-cluster spots sit inside r=16 of world
+# spawn and Paper enforces protection once ops.json is non-empty — one stray
+# op armed it mid-day and the baseline collapsed to 3/10 with no code change.
+# Pre-op both bots (offline names resolve pre-login) so protection is off
+# from the first tick; the replay re-ops post-spawn as the asserted
+# guarantee. The TAG is exported (not random-in-replay) so both ops and the
+# login target the same names.
+export REPLAY_TAG="${REPLAY_TAG:-run$$}"
+rcon_assert "op StuckGuide$REPLAY_TAG"
+rcon_assert "op StuckReplay$REPLAY_TAG"
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then
   case "$SPOTS" in

@@ -12,6 +12,9 @@ data/
 # Bot dependencies
 bot/node_modules/
 
+# Stuck oracle: last gate run results (recorded, never committed)
+bot/tools/last-replay.json
+
 # Environment configurations
 .env
 *.env

@@ -20,9 +20,20 @@
 //   table stays readable — recover/stuck lines always print),
 //   REPLAY_HOST (127.0.0.1), REPLAY_PORT (25571),
 //   REPLAY_CONTAINER (idk-replay, docker exec rcon-cli for tp/op),
-//   REPLAY_TAG (bot name suffix; default random), REPLAY_OUT (optional JSON
-//   results path), REPLAY_VARIANT/REPLAY_WORLDSHA/REPLAY_GITSHA (run header,
+//   REPLAY_TAG (bot name suffix; default random), REPLAY_OUT (JSON results
+//   path; default tools/last-replay.json, gitignored),
+//   REPLAY_BASELINE (baseline file; default stuck-baseline.json next to
+//   this file), REPLAY_BASELINE_OFF=1 (record only, skip the comparison),
+//   REPLAY_BRAIN (stub|laya; default stub — laya runs the follower on the
+//   hybrid brain against the prod sidecar, see REPLAY_BRAIN_URL),
+//   REPLAY_BRAIN_URL (default http://localhost:8000/v1/systemone — the
+//   operator's tunnel to the prod sidecar; sequential single-bot calls,
+//   inference only, never a local stand),
+//   REPLAY_VARIANT/REPLAY_WORLDSHA/REPLAY_GITSHA (run header,
 //   set by stuck-run.sh). The rig server must already be up.
+// Exit codes: 0 = baseline holds (or comparison skipped), 1 = REGRESSION
+// vs the baseline (a spot flipped reached->unreached, or overran its
+// stuck/episode ceiling, or has no baseline entry), 2 = harness/env error.
 // Code under test is imported, never copied: runOnce, recover.setStuck,
 // the shipped follow path and movement wrappers.
 const mineflayer = require('mineflayer')
@@ -99,8 +110,69 @@ function loadSpots() {
     if (!Number.isFinite(scaffold) || scaffold < 0 || scaffold > 2304) throw new Error(`spots[${i}]: bad scaffold`)
     const pickaxe = s.pickaxe == null ? true : !!s.pickaxe
     const bucket = s.bucket == null ? false : !!s.bucket
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket }
+    // bead: provenance for the corpus rule (every closed movement bead adds
+    // its prod coords + a baseline entry). Optional, validated, passed
+    // through to the row so the JSON stays traceable.
+    const bead = s.bead == null ? '' : String(s.bead)
+    if (bead.length > 64) throw new Error(`spots[${i}]: bad bead`)
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead }
   })
+}
+
+// Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
+//   { brain: 'stub', spots: { NAME: { reached: bool, maxStuck: n, maxEps: m } } }
+// was/now diffs print per spot; verdicts: 'ok', 'improved' (better than the
+// baseline — exit stays 0, the baseline wants updating), 'regressed',
+// 'no-baseline' (a corpus spot without an entry fails the gate: record via
+// REPLAY_BASELINE_OFF=1, then commit the entry with the spot).
+function compareBaseline(rows, baseline) {
+  const want = (baseline && baseline.spots) || {}
+  return rows.map((r) => {
+    const e = want[r.spot]
+    if (!e || typeof e.reached !== 'boolean' ||
+        !Number.isInteger(e.maxStuck) || e.maxStuck < 0 ||
+        !Number.isInteger(e.maxEps) || e.maxEps < 0) {
+      return { spot: r.spot, verdict: 'no-baseline', was: 'none', now: `reached=${r.reached} stuck=${r.stuck} eps=${r.eps}` }
+    }
+    const was = `reached=${e.reached} stuck<=${e.maxStuck} eps<=${e.maxEps}`
+    const now = `reached=${r.reached} stuck=${r.stuck} eps=${r.eps}`
+    if (!r.reached && e.reached) return { spot: r.spot, verdict: 'regressed', was, now, why: 'unreached (was reached)' }
+    if (r.stuck > e.maxStuck) return { spot: r.spot, verdict: 'regressed', was, now, why: `stuck ${r.stuck} > ${e.maxStuck}` }
+    if (r.eps > e.maxEps) return { spot: r.spot, verdict: 'regressed', was, now, why: `episodes ${r.eps} > ${e.maxEps}` }
+    if ((r.reached && !e.reached) || r.stuck < e.maxStuck || r.eps < e.maxEps) {
+      return { spot: r.spot, verdict: 'improved', was, now }
+    }
+    return { spot: r.spot, verdict: 'ok', was, now }
+  })
+}
+
+function loadBaseline() {
+  const path = require('node:path')
+  const file = process.env.REPLAY_BASELINE || path.join(__dirname, 'stuck-baseline.json')
+  if (!fs.existsSync(file)) return { file, baseline: null }
+  return { file, baseline: JSON.parse(fs.readFileSync(file, 'utf8')) }
+}
+
+// Follower brain (idkcraft-6x7.4): stub by default; laya runs the shipped
+// hybrid (FSM primary, model on hard states only) against the prod sidecar
+// via the operator's tunnel — sequential single-bot inference calls, the
+// same read-only shape the stands use. Unknown values fail loud (exit 2):
+// a typo must not silently measure the wrong brain.
+function pickBrain() {
+  const which = process.env.REPLAY_BRAIN || 'stub'
+  if (which === 'stub') return { label: 'stub', make: () => require('../src/brain').stubBrain }
+  if (which === 'laya') {
+    const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'
+    const timeout = parseInt(process.env.REPLAY_BRAIN_TIMEOUT_MS || '10000', 10)
+    return {
+      label: `laya(${url})`,
+      make: () => {
+        const { jevBrain, hybridBrain } = require('../src/brain')
+        return hybridBrain(jevBrain('replay', undefined, Number.isFinite(timeout) ? timeout : 10000, url))
+      },
+    }
+  }
+  throw new Error(`REPLAY_BRAIN: want stub|laya, got ${JSON.stringify(which)}`)
 }
 
 function waitFor(em, ev, ms, what) {
@@ -133,8 +205,9 @@ async function verifyHeadroom(readHead, tpUp, alive, steps = 6) {
 
 async function main() {
   const spots = loadSpots()
+  const picked = pickBrain()
   const index = require('../src/index')
-  const { stubBrain } = require('../src/brain')
+  const brain = picked.make()
   const recover = require('../src/behaviours/recover')
 
   // Windowed counters (reset per spot): stuck declarations, path resets by
@@ -185,7 +258,7 @@ async function main() {
   }
   index.runOnce({
     host: HOST, port: PORT, username: FOLLOWER, tickMs: 1000, idleTickMs: 1000,
-    brain: stubBrain, leaveAfterMs: 0, followName: GUIDE, createBot: mk,
+    brain, leaveAfterMs: 0, followName: GUIDE, createBot: mk,
     pingFn: async () => ({ players: {} }),
   }).then(() => {}, (e) => { console.error('REPLAY-ERROR runOnce rejected:', e && e.message ? e.message : e); process.exit(2) })
   if (!follower) throw new Error('follower never created')
@@ -194,8 +267,9 @@ async function main() {
     (async () => { for (let i = 0; i < 240 && !follower.entity; i++) await sleep(250) })(),
   ])
   await sleep(3000)
-  // Operator status (idkcraft-3ro): every replay spot sits inside the
-  // spawn-protection radius (world spawn (-48,65,-208), r=16), and Paper
+  // Operator status (idkcraft-3ro): the spawn-cluster replay spots sit
+  // inside the spawn-protection radius (world spawn (-48,65,-208), r=16),
+  // and Paper
   // enforces protection once ops.json is non-empty — one afternoon op
   // (another rig's probes, 2026-09-28) armed it for every later run and
   // the baseline collapsed to 3/10 with no code change anywhere (only
@@ -215,7 +289,7 @@ async function main() {
   const tickCtx = () => follower._tickerCtx
   if (tickCtx()) tickCtx().paused = true
 
-  console.log(`stuck-replay tag=${TAG} variant=${process.env.REPLAY_VARIANT || '?'} ` +
+  console.log(`stuck-replay tag=${TAG} variant=${process.env.REPLAY_VARIANT || '?'} brain=${picked.label} ` +
     `worldsha=${(process.env.REPLAY_WORLDSHA || '?').slice(0, 12)} gitsha=${process.env.REPLAY_GITSHA || '?'} ` +
     `date=${new Date().toISOString()} spots=${spots.length}`)
   console.log('spot      reached  stuck  eps  call?  secs   maxDisp  note')
@@ -282,13 +356,13 @@ async function main() {
       () => !guideDied,
     )
     if (buried && !guideDied) {
-      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-BURIED' })
+      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-BURIED', bead: s.bead || undefined })
       console.log(`${s.name.padEnd(9)} ${String(false).padEnd(7)} ${String(0).padEnd(6)} ` +
         `${String(0).padEnd(4)} ${String(false).padEnd(6)} ${String(0).padEnd(6)} ${(0).toFixed(1).padEnd(8)} GUIDE-BURIED`)
       continue
     }
     if (guideDied || !guide.entity) {
-      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-DIED' })
+      rows.push({ spot: s.name, reached: false, stuck: 0, eps: 0, by: [], call: 0, secs: 0, maxDisp: 0, minDist: -1, minGuide: -1, note: 'GUIDE-DIED', bead: s.bead || undefined })
       console.log(`${s.name.padEnd(9)} ${String(false).padEnd(7)} ${String(0).padEnd(6)} ` +
         `${String(0).padEnd(4)} ${String(false).padEnd(6)} ${String(0).padEnd(6)} ${(0).toFixed(1).padEnd(8)} GUIDE-DIED`)
       continue
@@ -338,22 +412,58 @@ async function main() {
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
     const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : '')
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
   }
-  if (process.env.REPLAY_OUT) {
-    fs.writeFileSync(process.env.REPLAY_OUT, JSON.stringify(rows, null, 1) + '\n')
+  const path = require('node:path')
+  const outFile = process.env.REPLAY_OUT || path.join(__dirname, 'last-replay.json')
+  fs.writeFileSync(outFile, JSON.stringify(rows, null, 1) + '\n')
+  console.log(`results: ${outFile}`)
+  // Baseline gate (idkcraft-6x7.4): compare, print the was/now diff, exit 1
+  // on any regression. A laya run never judges against the stub baseline
+  // (different menu policy): it records and exits 0 until a laya baseline
+  // ships. REPLAY_BASELINE_OFF=1 records without judging (how a new spot's
+  // entry is measured before it is committed).
+  let code = 0
+  const brainName = (process.env.REPLAY_BRAIN || 'stub')
+  if (process.env.REPLAY_BASELINE_OFF === '1') {
+    console.log('baseline: skipped (REPLAY_BASELINE_OFF=1)')
+  } else if (brainName !== 'stub') {
+    console.log(`baseline: skipped (no ${brainName} baseline committed; stub baseline does not apply)`)
+  } else {
+    const { file, baseline } = loadBaseline()
+    if (!baseline) {
+      console.log(`baseline: no file at ${file} — run unjudged (commit the baseline to arm the gate)`)
+    } else {
+      const diffs = compareBaseline(rows, baseline)
+      let bad = 0
+      let better = 0
+      for (const d of diffs) {
+        if (d.verdict === 'ok') continue
+        if (d.verdict === 'improved') {
+          better++
+          console.log(`BASELINE ${d.spot}: was ${d.was} | now ${d.now} — IMPROVED (update the baseline)`)
+        } else {
+          bad++
+          const why = d.verdict === 'no-baseline' ? 'NO BASELINE ENTRY' : `REGRESSION (${d.why})`
+          console.log(`BASELINE ${d.spot}: was ${d.was} | now ${d.now} — ${why}`)
+        }
+      }
+      const ok = diffs.length - bad - better
+      console.log(`baseline: ${ok}/${diffs.length} ok, ${better} improved, ${bad} regressed (${file})`)
+      if (bad > 0) code = 1
+    }
   }
   // Quit the guide only: quitting the follower trips runOnce's fatal end
-  // path (exit 1 races our exit 0). The follower socket dies with us.
+  // path (exit 1 races our gate code). The follower socket dies with us.
   try { guide.quit() } catch (_) {}
   await sleep(1000)
-  process.exit(0)
+  process.exit(code)
 }
 
 if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots }

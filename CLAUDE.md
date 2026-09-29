@@ -148,6 +148,12 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   (`LENSES=` overrides).
 - Risky files: the review archive is **mandatory** for merge, and the round gets the
   `bot/tools/stuck-run.sh` before/after output via `STUCKRUN=<file>` (lands in `input/context/`).
+- Stuck oracle gate (idkcraft-6x7.4): a PR touching risky files above attaches the
+  `sh bot/tools/stuck-run.sh` table from before AND after the change, and does not merge
+  while it exits 1 (regression) — exit 2 is an environment failure, fix the rig, not the code.
+  Every closed movement bead adds its prod coords to `bot/tools/stuck-spots.json` (with `bead`)
+  plus the measured entry in `bot/tools/stuck-baseline.json`; one without the other fails
+  the gate or `npm test`. Manual: `bot/tools/README.md`.
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
   .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta). Minors are fixed in the same commit
   and never trigger another round. Max 3 rounds; whatever is still gating is outstanding in the handoff.
