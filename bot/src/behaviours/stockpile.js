@@ -129,6 +129,48 @@ function invItems(bot) {
 // share the self pick's item name, so the allowance counts the pack minus
 // the hands — a toss plus a bank can never spend the bot's own pick.
 const GEAR_SELF_RESERVE = { iron_pickaxe: 1, diamond_pickaxe: 1, water_bucket: 2 }
+// Gear reserve (ipn.8): while the ladder is unfinished the pack keeps sticks
+// material (planks, else a log), a crafting table, and furnace cobble.
+// Prod 2026-09-28 banked 106 planks + the table right before gear, which then
+// idled on 'need logs for sticks', and banked 7 cobble while the furnace
+// needs 8. Coal/charcoal/sticks already keep via EXACT_KEEP. Mirror of
+// gear.js OWNER_WANT (no shared import: this module must not require gear —
+// craft/goal cycle); the reserve only feeds stick/cobble/table rungs, so the
+// done check covers the owner ledger plus the self pick rungs — a ladder past
+// the last pick/sword rung needs nothing kept. Anything unreadable reads
+// unfinished: a kept reserve is harmless, a banked one strands gear.
+const GEAR_OWNER_WANT = {
+  iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1, water_bucket: 2,
+  iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+  diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
+}
+const GEAR_RESERVE_PLANKS = 4
+const GEAR_RESERVE_COBBLE = 8
+function gearLadderDone(bot, ctx) {
+  try {
+    const given = (ctx && ctx.gearGiven) || {}
+    let noWater = false
+    try {
+      noWater = !!(ctx && ctx.gear && ctx.gear.noWater)
+    } catch (_) { /* water unknown: rungs flow */ }
+    for (const name of Object.keys(GEAR_OWNER_WANT)) {
+      if (noWater && name === 'water_bucket') continue // dry home skips the bucket rung (jsf.5)
+      if ((given[name] || 0) < GEAR_OWNER_WANT[name]) return false
+    }
+    // Self pick rungs read the pack (gear.js deriveNext selfHave shape).
+    let ironPick = 0
+    let diaPick = 0
+    for (const i of invItems(bot)) {
+      if (!i || typeof i.name !== 'string') continue
+      const n = typeof i.count === 'number' ? i.count : 1
+      if (i.name === 'iron_pickaxe') ironPick += n
+      else if (i.name === 'diamond_pickaxe') diaPick += n
+    }
+    return ironPick >= 1 && diaPick >= 1
+  } catch (_) {
+    return false
+  }
+}
 // Finished-goods exception (ipn.3): forged owner tools bank up to the gear
 // ledger count (ctx.gearFinished); the rest of the kit stays. Without ctx
 // the behaviour is exactly the old one.
@@ -169,6 +211,33 @@ function depositPlan(bot, ctx) {
       left -= k
     }
   }
+  // Gear reserve (ipn.8): arms while the ladder is unfinished. Without ctx
+  // the behaviour is exactly the old one (finished-goods precedent).
+  const gearOpen = !!ctx && !gearLadderDone(bot, ctx)
+  const gearPlankKeep = {}
+  let keepGearLogs = 0
+  let keepGearTable = 0
+  let keepGearCobble = 0
+  if (gearOpen) {
+    const totals = {}
+    for (const j of list) {
+      if (!j || typeof j.name !== 'string' || !j.name.endsWith('_planks')) continue
+      totals[j.name] = (totals[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+    let totalPlanks = 0
+    for (const v of Object.values(totals)) totalPlanks += v
+    // Top-wood-first like the bed keep above: gear's maxPlanks reads ONE
+    // wood, so the reserve must not split across woods.
+    let left = GEAR_RESERVE_PLANKS
+    for (const w of Object.keys(totals).sort((a, b) => totals[b] - totals[a])) {
+      const k = Math.min(left, totals[w])
+      gearPlankKeep[w] = k
+      left -= k
+    }
+    if (totalPlanks < 2) keepGearLogs = 1 // no sticks material: one log crafts 4 planks
+    keepGearTable = 1
+    keepGearCobble = GEAR_RESERVE_COBBLE
+  }
   let finished = null
   try {
     finished = (ctx && ctx.gearFinished) || null
@@ -204,11 +273,39 @@ function depositPlan(bot, ctx) {
       n -= k
       if (n <= 0) continue
     }
+    if (gearOpen && i.name.endsWith('_planks')) {
+      const k = Math.min(gearPlankKeep[i.name] || 0, n)
+      gearPlankKeep[i.name] = (gearPlankKeep[i.name] || 0) - k
+      n -= k
+      if (n <= 0) continue
+    }
+    if (gearOpen && keepGearLogs > 0 && i.name.endsWith('_log')) {
+      const k = Math.min(keepGearLogs, n)
+      keepGearLogs -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    if (gearOpen && keepGearTable > 0 && i.name === 'crafting_table') {
+      const k = Math.min(keepGearTable, n)
+      keepGearTable -= k
+      n -= k
+      if (n <= 0) continue
+    }
     if (edible.has(i.name)) {
       const k = Math.min(keepFood, n)
       keepFood -= k
       n -= k
-    } else if (i.name === 'dirt' || i.name === 'cobblestone') {
+    } else if (i.name === 'cobblestone') {
+      // Furnace cobble first (ipn.8): the shared scaffold pool below is
+      // dirt-first, so without this a dirt-heavy pack banks the 7 cobble a
+      // furnace still needs. The remainder joins the scaffold pool as before.
+      const g = Math.min(keepGearCobble, n)
+      keepGearCobble -= g
+      n -= g
+      const k = Math.min(keepScaffold, n)
+      keepScaffold -= k
+      n -= k
+    } else if (i.name === 'dirt') {
       const k = Math.min(keepScaffold, n)
       keepScaffold -= k
       n -= k
@@ -824,6 +921,10 @@ module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
 module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
+module.exports.GEAR_RESERVE_PLANKS = GEAR_RESERVE_PLANKS
+module.exports.GEAR_RESERVE_COBBLE = GEAR_RESERVE_COBBLE
+module.exports.GEAR_OWNER_WANT = GEAR_OWNER_WANT
+module.exports.gearLadderDone = gearLadderDone
 module.exports.CHEST_FULL_RETRY_MS = CHEST_FULL_RETRY_MS
 module.exports.INTERACT_REACH = INTERACT_REACH
 module.exports.PLACE_REACH = PLACE_REACH
