@@ -803,10 +803,13 @@ describe('bring source helpers (idkcraft-atl.15)', () => {
 })
 
 describe('bring exposed far shells (idkcraft-atl.19)', () => {
-  // Buried deep at 60 (24 down: a shaft, not a dig) plus an open vein at
-  // ~150 in a ring-70 corner gap (>88 from every ring-70 center, so only
-  // ring 110+ collects it with a center-aware world). The walk to open
-  // ore (37.6 s) is a clear winner over the shaft (88 s): no model ask.
+  // Buried deep at 60 (24 down: a gated shaft under chv, not a dig rival)
+  // plus an open vein at ~150 in a ring-70 corner gap (>88 from every
+  // ring-70 center, so only ring 110+ collects it with a center-aware
+  // world). The walk to open ore is unopposed: no model ask. What this
+  // block pins is the exposed-mode shell coverage (the 150 vein is found
+  // past the buried 60), not the rival bookkeeping — the gated shaft
+  // carries no (exposed) suffix and no rival facts.
   const NAMES = {
     '60,40,0': 'iron_ore',
     '139,64,57': 'iron_ore', '140,64,57': 'air',
@@ -833,22 +836,16 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
     assert.equal(bot._tickerCtx.pendingSearch, null)
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away (exposed)'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away'), `lines: ${bot.lines}`)
     const o = bot._tickerCtx.bring
     assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [139, 64, 57])
     assert.deepEqual(o.verdict, {
       pick: 'exposed',
       win: { x: 139, y: 64, z: 57, cost: Math.hypot(139, 57) / SOURCE_COST.walkBlocksPerSec },
-      rival: {
-        x: 60, y: 40, z: 0,
-        cost: 60 / SOURCE_COST.walkBlocksPerSec + 24 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec,
-      },
+      rival: null, // the 24-down shaft is gated (chv), not a rival
     })
-    assert.deepEqual(
-      [o.farCache.hit.pos.x, o.farCache.buriedHit.pos.x],
-      [139, 60],
-      'both halves cached: (a) exposed, (c) buried',
-    )
+    assert.equal(o.farCache.hit.pos.x, 139, 'exposed half cached')
+    assert.equal(o.farCache.buriedHit, null, 'gated shaft not cached (chv)')
   })
 
   it('find phase: the same pair verdicts from the order path, no ask', async () => {
@@ -862,15 +859,15 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     assert.equal(ctx.bring.phase, 'searchfar')
     await bring(bot, ctx, null, {})
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away (exposed)'])
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away'])
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
     assert.equal(ctx.bring.phase, 'walk')
   })
 
   // Buried-48 path (revmux 01 core-3): the stashed sync hit is a deep
-  // shaft (34 down, 93 s), the open vein at 150 a clear winner (37.6 s).
+  // shaft (34 down, gated under chv), the open vein at 150 unopposed.
   // Without the exposed flag the re-read stash closes ring 70 and the
-  // verdict digs.
+  // verdict never sees the open vein.
   const BNAMES = {
     '0,30,0': 'iron_ore',
     '139,64,57': 'iron_ore', '140,64,57': 'air',
@@ -890,13 +887,13 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
     assert.equal(bot._tickerCtx.pendingSearch, null)
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away (exposed)'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away'), `lines: ${bot.lines}`)
     const o = bot._tickerCtx.bring
     assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [139, 64, 57])
     assert.deepEqual(o.verdict, {
       pick: 'exposed',
       win: { x: 139, y: 64, z: 57, cost: Math.hypot(139, 57) / SOURCE_COST.walkBlocksPerSec },
-      rival: { x: 0, y: 30, z: 0, cost: 34 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+      rival: null, // the 34-down stash is gated (chv), not a rival
     })
   })
 
@@ -911,7 +908,7 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     assert.equal(ctx.bring.phase, 'searchfar')
     await bring(bot, ctx, null, {})
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away (exposed)'])
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away'])
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
     assert.equal(ctx.bring.phase, 'walk')
   })
