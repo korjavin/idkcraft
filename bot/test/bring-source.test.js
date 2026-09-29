@@ -866,4 +866,53 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
     assert.equal(ctx.bring.phase, 'walk')
   })
+
+  // Buried-48 path (revmux 01 core-3): the stashed sync hit is a deep
+  // shaft (34 down, 93 s), the open vein at 150 a clear winner (37.6 s).
+  // Without the exposed flag the re-read stash closes ring 70 and the
+  // verdict digs.
+  const BNAMES = {
+    '0,30,0': 'iron_ore',
+    '139,64,57': 'iron_ore', '140,64,57': 'air',
+    '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+  }
+  const BSPOTS = () => [pos(0, 30, 0), pos(139, 64, 57)]
+
+  it('creation with a buried 48 stash: still walks to the open vein, no ask', async () => {
+    const bot = mockBot({ spots: BSPOTS(), names: { ...BNAMES }, items: PICK, playerPos: pos(30, 64, 0) })
+    centerAware(bot)
+    const { seen, brain } = countingBrain('dig_buried') // must never be consulted
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    assert.ok(bot._tickerCtx.pendingSearch, 'far search pending')
+    assert.ok(bot._tickerCtx.pendingSearch.buried, 'buried hit stashed')
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    assert.equal(bot._tickerCtx.pendingSearch, null)
+    assert.equal(seen.length, 0, 'clear winner asks nothing')
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away (exposed)'), `lines: ${bot.lines}`)
+    const o = bot._tickerCtx.bring
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [139, 64, 57])
+    assert.deepEqual(o.verdict, {
+      pick: 'exposed',
+      win: { x: 139, y: 64, z: 57, cost: Math.hypot(139, 57) / SOURCE_COST.walkBlocksPerSec },
+      rival: { x: 0, y: 30, z: 0, cost: 34 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+    })
+  })
+
+  it('find phase with a buried 48 stash: still walks to the open vein, no ask', async () => {
+    const bot = mockBot({ spots: BSPOTS(), names: { ...BNAMES }, items: PICK, playerPos: pos(30, 64, 0) })
+    centerAware(bot)
+    const { seen, brain } = countingBrain('dig_buried') // must never be consulted
+    tickerFor(bot, brain)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar')
+    await bring(bot, ctx, null, {})
+    assert.equal(seen.length, 0, 'clear winner asks nothing')
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away (exposed)'])
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
+    assert.equal(ctx.bring.phase, 'walk')
+  })
 })
