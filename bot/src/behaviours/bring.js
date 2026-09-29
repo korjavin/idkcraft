@@ -353,11 +353,10 @@ const SOURCE_COST = {
   // risk — priced above a deep shaft so a dry rival wins deterministically.
   wetPenaltySec: 30,
   memoryFactor: 1.5,
-  budget: 160, // == scout SEARCH_MAX, the loaded-world edge. Known gap
-  // (revmux 01 body-2, follow-up bead): farShellDone and the within96
-  // pool stop the shells at 96 whenever nearer ore exists, so live
-  // exposed past 96 is found only when the inner shells are empty —
-  // exposed-aware shells need a scout change shared with gather/find-me.
+  budget: 160, // == scout SEARCH_MAX, the loaded-world edge. The shells
+  // run in exposed mode here (atl.19): buried ore inside 96 neither
+  // closes a ring nor drops exposed hits past 96 from the final pool,
+  // while the buried second pass still feeds candidate (c).
   clearRatio: 0.5, // cheaper than half the rival: a clear winner, no model
 }
 
@@ -1312,7 +1311,7 @@ async function bring(bot, ctx, target, state) {
         await verdictSource(bot, ctx, o, exposedEmpty, cachedEmpty.buried)
         return
       }
-      o.search = startFarSearch(bot, o.name)
+      o.search = startFarSearch(bot, o.name, null, { exposedOnly: true })
       if (o.search === 'unknown') {
         refuse(bot, ctx, `unknown block: ${o.name}`)
         return
@@ -1352,7 +1351,7 @@ async function bring(bot, ctx, target, state) {
       await verdictSource(bot, ctx, o, bestExposed(cachedBuried.far, o.memKnown || null), o.buried)
       return
     }
-    o.search = startFarSearch(bot, o.name)
+    o.search = startFarSearch(bot, o.name, null, { exposedOnly: true })
     if (o.search === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
@@ -1379,15 +1378,18 @@ async function bring(bot, ctx, target, state) {
     }
     // Shells done: (a) live exposed wins the far result, a buried far hit
     // loses to the nearer stashed 48 hit — or stands alone when 48 was
-    // empty. The verdict weighs it against the stashed memory (b).
+    // empty. The verdict weighs it against the stashed memory (b). The
+    // cursor ran in exposed mode, so (c) rides r.buried (the second pass
+    // over the same hits); the legacy r.result branch stays for shape.
     const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result, bot) : null
-    const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result, bot) : null)
+    const farBuried = r.result && r.result.exposed === false ? r.result : (r.buried || null)
+    const buried = o.buried || (farBuried ? buriedCand(bp, farBuried, bot) : null)
     const exposed = bestExposed(far, o.memKnown || null)
     const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
     try {
       o.farCache = {
         x: bp.x, y: bp.y, z: bp.z, edge, hit: far,
-        buriedHit: r.result && r.result.exposed === false ? buriedCand(bp, r.result, bot) : null,
+        buriedHit: farBuried ? buriedCand(bp, farBuried, bot) : null,
       }
     } catch (_) { /* cache best-effort */ }
     if (!exposed && !buried) {

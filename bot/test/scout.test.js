@@ -761,6 +761,104 @@ describe("chat command 'find me <block>'", () => {
   })
 })
 
+describe('far search exposed mode (idkcraft-atl.19)', () => {
+  const NAMES = { iron_ore: 15, stone: 1 }
+  const PROBES = { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' }
+
+  function centerAware(bot) {
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+  }
+
+  function run(bot, cursor, opts) {
+    const { stepFarSearch } = require('../src/behaviours/scout')
+    let r = { done: false, result: null }
+    for (let i = 0; i < 200 && !r.done; i++) r = stepFarSearch(bot, cursor, opts)
+    return r
+  }
+
+  it('exposed mode: buried at 60 + exposed at 120 → (a) exposed, (c) buried', () => {
+    const { startFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [pos(60, 64, 0), pos(120, 64, 0)],
+      names: { ...PROBES, '60,64,0': 'iron_ore', '120,64,0': 'iron_ore', '121,64,0': 'air' },
+    })
+    const cursor = startFarSearch(bot, 'iron', null, { exposedOnly: true })
+    assert.equal(cursor.exposedOnly, true)
+    const r = run(bot, cursor)
+    assert.ok(r.done)
+    assert.ok(r.result, 'exposed vein at 120 must be found')
+    assert.deepEqual([r.result.position.x, r.result.position.z], [120, 0])
+    assert.equal(r.result.exposed, true)
+    assert.ok(r.buried, 'the buried second pass feeds candidate (c)')
+    assert.deepEqual([r.buried.position.x, r.buried.position.z], [60, 0])
+    assert.equal(r.buried.exposed, false)
+  })
+
+  it('default mode on the same world: buried at 60 wins, exposed at 120 dropped', () => {
+    const { startFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [pos(60, 64, 0), pos(120, 64, 0)],
+      names: { ...PROBES, '60,64,0': 'iron_ore', '120,64,0': 'iron_ore', '121,64,0': 'air' },
+    })
+    const cursor = startFarSearch(bot, 'iron')
+    assert.ok(!cursor.exposedOnly, 'default stays off')
+    const r = run(bot, cursor)
+    assert.ok(r.done && r.result)
+    assert.deepEqual([r.result.position.x, r.result.position.z], [60, 0])
+    assert.ok(!('buried' in r), 'default result shape unchanged')
+  })
+
+  it('exposed mode keeps the rings open past buried ore (farShellDone)', () => {
+    // Center-aware world: the exposed vein sits in a ring-70 corner gap
+    // (>88 from every ring-70 center), so only ring 110+ collects it.
+    const { startFarSearch } = require('../src/behaviours/scout')
+    const world = () => {
+      const bot = mockBot({
+        registry: NAMES,
+        spots: [pos(60, 64, 0), pos(139, 64, 57)],
+        names: { ...PROBES, '60,64,0': 'iron_ore', '139,64,57': 'iron_ore', '140,64,57': 'air' },
+      })
+      centerAware(bot)
+      return bot
+    }
+    const open = world()
+    const r1 = run(open, startFarSearch(open, 'iron', null, { exposedOnly: true }))
+    assert.ok(r1.done && r1.result, 'rings stay open: exposed at 150 found')
+    assert.deepEqual([r1.result.position.x, r1.result.position.z], [139, 57])
+    const shut = world()
+    const r2 = run(shut, startFarSearch(shut, 'iron'))
+    assert.ok(r2.done && r2.result)
+    assert.deepEqual([r2.result.position.x, r2.result.position.z], [60, 0], 'default closes ring 70 on buried ore')
+  })
+
+  it('stepFarSearch opts can opt a default cursor into exposed mode', () => {
+    const { startFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({
+      registry: NAMES,
+      spots: [pos(60, 64, 0), pos(120, 64, 0)],
+      names: { ...PROBES, '60,64,0': 'iron_ore', '120,64,0': 'iron_ore', '121,64,0': 'air' },
+    })
+    const r = run(bot, startFarSearch(bot, 'iron'), { exposedOnly: true })
+    assert.ok(r.done && r.result)
+    assert.deepEqual([r.result.position.x, r.result.position.z], [120, 0])
+  })
+
+  it('exposed mode with nothing found: null result and null buried', () => {
+    const { startFarSearch } = require('../src/behaviours/scout')
+    const bot = mockBot({ registry: NAMES, spots: [], names: { ...PROBES } })
+    const r = run(bot, startFarSearch(bot, 'iron', null, { exposedOnly: true }))
+    assert.ok(r.done)
+    assert.equal(r.result, null)
+    assert.equal(r.buried, null)
+  })
+})
+
 describe('scout ranking edges (idkcraft-l71)', () => {
   it('unknown ore base ranks last in the report', () => {
     // A remapped registry names an id outside ORE_NAMES: rankOf falls back
