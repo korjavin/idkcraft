@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES, MAX_DIG_DEPTH } = require('./scout')
 const { countItems } = require('../perception')
 const resources = require('../resources')
 const fightMod = require('./fight')
@@ -348,6 +348,12 @@ const SOURCE_COST = {
   vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg
   digSecPerBlock: 2,
   deepDigDepth: 4,
+  // Dig-down gate (idkcraft-chv): a buried hit deeper than this below the
+  // feet is no dig candidate at all — walk+canDig cannot finish the shaft
+  // (S1 9-10 delivered, 15+ stalled). buriedCand returns null past it, so
+  // the verdict sees no-dig and the order hunts legs or refuses honestly
+  // with the vein coords instead of stalling on the surface.
+  maxDigDepth: MAX_DIG_DEPTH,
   shaftPenaltySec: 25,
   // Breath (idkcraft-0u9): a dive costs a surface trip plus the drowning
   // risk — priced above a deep shaft so a dry rival wins deterministically.
@@ -397,6 +403,7 @@ function buriedCand(bp, res, bot = null) {
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const depthBelow = Math.max(0, Math.floor(bp.y) - Math.floor(p.y))
+  if (depthBelow > SOURCE_COST.maxDigDepth) return null // gated shaft: no-dig (chv)
   let wet = false
   if (bot) {
     for (let i = 0; i < WET_COLUMN_CELLS && !wet; i++) wet = submergedAt(bot, p.x, p.y + i, p.z)
@@ -409,6 +416,33 @@ function buriedCand(bp, res, bot = null) {
 function bestExposed(a, b) {
   if (a && b) return a.cost <= b.cost ? a : b
   return a || b || null
+}
+
+// The gated shaft for the honest refusal (chv): when the gate drops every
+// dig candidate, the order remembers the vein so the refusal names coords
+// instead of stalling silently. Overwritten on every gate, never cleared —
+// a stale entry only surfaces in the legs-exhausted line, labelled 'known'.
+function deepVeinOf(bp, res) {
+  if (!res || !res.position || !bp || typeof bp.y !== 'number') return null
+  return {
+    name: res.name,
+    x: Math.floor(res.position.x), y: Math.floor(res.position.y), z: Math.floor(res.position.z),
+    depth: Math.max(0, Math.floor(bp.y) - Math.floor(res.position.y)),
+  }
+}
+
+function deepRefusal(o) {
+  const v = o && o.deepVein
+  if (!v) return null
+  return `${v.name} at ${v.x} ${v.y} ${v.z} is ${v.depth} down — too deep to dig`
+}
+
+// Empty-find refusal text with the gated shaft preferred (chv): 'no X
+// within N' would be a lie when the vein is there but undiggable.
+function gatedOrEmptyRefusal(o, edge) {
+  const deep = deepRefusal(o)
+  if (deep) return deep
+  return emptyRefusal(o, edge)
 }
 
 // Canonical memory type names for a bring request: memory stores exact
@@ -750,6 +784,11 @@ function refuseExhausted(bot, ctx, o) {
   const base = o.have > 0 ? `only got ${o.have} ${o.drop}`
     : (o.sawSubmerged && kind !== 'food' && kind !== 'wool') ? `could not reach ${o.name} safely`
     : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
+  // A gated shaft seen along the way (chv): the legs proved no diggable
+  // vein exists nearby, so the refusal names the known deep one.
+  const deep = kind === 'block' && !(o.have > 0) && !o.sawSubmerged && o.deepVein
+    ? ` — nearest known vein too deep at ${o.deepVein.x} ${o.deepVein.y} ${o.deepVein.z}`
+    : ''
   // A wool hunt that gathered something still hands it over instead of
   // refusing with a full pack (the short-pack rung promised a top-up, and
   // the legs proved none is coming). A sub-order (did.4) never hands over:
@@ -761,7 +800,7 @@ function refuseExhausted(bot, ctx, o) {
     o.saidWaiting = false
     return
   }
-  refuse(bot, ctx, `searched ${n} areas, ${base}`)
+  refuse(bot, ctx, `searched ${n} areas, ${base}${deep}`)
 }
 
 // Drop a cancelled mid-leg explore pursuit (stop/follow/work/lead): the
@@ -1253,7 +1292,7 @@ async function bring(bot, ctx, target, state) {
     }
     if (o.searchSkipFar) { // pending far search just came up empty: skip the re-scan
       o.searchSkipFar = false
-      await enterSearch(bot, ctx, o, emptyRefusal(o, loadedSearchRadius(bot)))
+      await enterSearch(bot, ctx, o, gatedOrEmptyRefusal(o, loadedSearchRadius(bot)))
       return
     }
     // idkcraft-drq: pre-check the guard at find time, so a nearer build
@@ -1340,6 +1379,9 @@ async function bring(bot, ctx, target, state) {
     // candidate (b), and run the far shells for live exposed ore (a) —
     // buried-only-48 counts as empty for the exposed search (atl.15).
     o.buried = buriedCand(bp, res, bot)
+    // Gated shaft (chv): remember the vein for the honest refusal — the
+    // verdict below then weighs exposed-or-legs with no dig in play.
+    if (!o.buried) o.deepVein = deepVeinOf(bp, res)
     {
       let mem = null
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
@@ -1349,7 +1391,12 @@ async function bring(bot, ctx, target, state) {
     // and memory above are always re-derived fresh and cheap.
     const cachedBuried = takeFarCache(bot, o, bp)
     if (cachedBuried !== undefined) {
-      await verdictSource(bot, ctx, o, bestExposed(cachedBuried.far, o.memKnown || null), o.buried)
+      const exposedCached = bestExposed(cachedBuried.far, o.memKnown || null)
+      if (!exposedCached && !o.buried) {
+        await enterSearch(bot, ctx, o, gatedOrEmptyRefusal(o, loadedSearchRadius(bot)))
+        return
+      }
+      await verdictSource(bot, ctx, o, exposedCached, o.buried)
       return
     }
     o.search = startFarSearch(bot, o.name)
@@ -1360,6 +1407,10 @@ async function bring(bot, ctx, target, state) {
     if (!o.search) {
       // Edge 48, no shells: decide between memory and buried now, asking
       // the model once when contested (the tick awaits bring).
+      if (!o.memKnown && !o.buried) {
+        await enterSearch(bot, ctx, o, gatedOrEmptyRefusal(o, loadedSearchRadius(bot)))
+        return
+      }
       await verdictSource(bot, ctx, o, o.memKnown, o.buried)
       return
     }
@@ -1382,6 +1433,9 @@ async function bring(bot, ctx, target, state) {
     // empty. The verdict weighs it against the stashed memory (b).
     const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result, bot) : null
     const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result, bot) : null)
+    // A far shaft the gate dropped (chv): the nearer 48 stash — when one
+    // passed — already stands, so only a missing dig remembers the vein.
+    if (!buried && r.result && r.result.exposed === false && !o.deepVein) o.deepVein = deepVeinOf(bp, r.result)
     const exposed = bestExposed(far, o.memKnown || null)
     const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
     try {
@@ -1391,7 +1445,7 @@ async function bring(bot, ctx, target, state) {
       }
     } catch (_) { /* cache best-effort */ }
     if (!exposed && !buried) {
-      await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : emptyRefusal(o, edge))
+      await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : gatedOrEmptyRefusal(o, edge))
       return
     }
     await verdictSource(bot, ctx, o, exposed, buried)
@@ -1429,7 +1483,11 @@ async function bring(bot, ctx, target, state) {
         o.stalls = 0
         o.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (++o.stalls >= WALK_STALL_TICKS) {
-        refuse(bot, ctx, `could not reach ${o.block}` + (o.exposed === false ? ' (buried, no path in)' : ''))
+        // Buried stalls name the vein coords (chv): the acceptance fallback
+        // is an honest refusal with coords, never a silent surface trample.
+        // The exposed line stays byte-identical (pinned by test).
+        const at = o.pos ? ` at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)}` : ''
+        refuse(bot, ctx, `could not reach ${o.block}` + (o.exposed === false ? ` (buried, no path in)${at}` : ''))
       }
       return
     }
@@ -1657,6 +1715,8 @@ module.exports.liveExposed = liveExposed
 module.exports.buriedCand = buriedCand
 module.exports.skipKey = skipKey
 module.exports.bestExposed = bestExposed
+module.exports.deepVeinOf = deepVeinOf
+module.exports.deepRefusal = deepRefusal
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText
 module.exports.verdictLine = verdictLine

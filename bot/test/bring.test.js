@@ -241,7 +241,7 @@ describe('bring me order', () => {
     }
     for (let i = 0; i < 12 && c.bring; i++) bring(bot, c, null, {})
     assert.equal(c.bring, null, 'order refused')
-    assert.ok(bot.lines.includes('could not reach iron_ore (buried, no path in)'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('could not reach iron_ore (buried, no path in) at 10 64 0'), `lines: ${bot.lines}`)
   })
 
   it('walk stall on exposed ore keeps the plain refusal', () => {

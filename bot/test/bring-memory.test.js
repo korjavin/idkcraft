@@ -151,8 +151,11 @@ describe('bring-me memory verdict (idkcraft-t9k)', () => {
       { x: 62, y: 64, z: 0, name: 'coal_ore', exposed: true },
     ], Date.now())
     handleChat(bot, ticker, 'P', 'bring me coal_ore 3')
+    // The depth-24 decoy is a gated shaft (chv), not a feasible rival, so
+    // the memory commit carries no (exposed) suffix — feasible-rival
+    // suffixes stay pinned in bring-source.test.js.
     assert.ok(
-      bot.lines.some((l) => /^going for 3 coal_ore, \d+ blocks away \(exposed\)$/.test(l)),
+      bot.lines.some((l) => /^going for 3 coal_ore, \d+ blocks away$/.test(l)),
       `memory verdict line: ${bot.lines}`,
     )
     await drive(bot, bot._tickerCtx)
