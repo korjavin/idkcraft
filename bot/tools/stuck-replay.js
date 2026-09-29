@@ -33,7 +33,8 @@
 //   set by stuck-run.sh). The rig server must already be up.
 // Exit codes: 0 = baseline holds (or comparison skipped), 1 = REGRESSION
 // vs the baseline (a spot flipped reached->unreached, or overran its
-// stuck/episode ceiling, or has no baseline entry), 2 = harness/env error.
+// stuck/episode ceiling, or has no baseline entry), 2 = harness/env error
+// (guide setup failed, follower dropped mid-run, rig never came up).
 // Code under test is imported, never copied: runOnce, recover.setStuck,
 // the shipped follow path and movement wrappers.
 const mineflayer = require('mineflayer')
@@ -153,6 +154,30 @@ function loadBaseline() {
   return { file, baseline: JSON.parse(fs.readFileSync(file, 'utf8')) }
 }
 
+// Gate verdict (idkcraft-6x7.4): pure, unit-tested. diffs aligns with rows
+// by index (see compareBaseline). Rows the bot never ran (the guide buried
+// or died in setup) are environment failures, not regressions: they skip
+// the comparison and force exit 2. Env dominates a co-occurring regression
+// (3ro's lesson: never send the dev to bisect code while the rig is sick —
+// the rerun re-surfaces any real regression; both print either way).
+// A dropped follower never reaches here (the exit wrapper maps it to 2);
+// a dead follower (DIED) stays judged — dying is behavior.
+const ENV_NOTES = new Set(['GUIDE-BURIED', 'GUIDE-DIED'])
+function gateCode(rows, diffs) {
+  let ok = 0
+  let better = 0
+  let bad = 0
+  let env = 0
+  diffs.forEach((d, i) => {
+    if (ENV_NOTES.has(rows[i] && rows[i].note)) { env++; return }
+    if (d.verdict === 'ok') ok++
+    else if (d.verdict === 'improved') better++
+    else bad++ // regressed + no-baseline both fail the gate
+  })
+  const code = env > 0 ? 2 : bad > 0 ? 1 : 0
+  return { code, ok, better, bad, env }
+}
+
 // Follower brain (idkcraft-6x7.4): stub by default; laya runs the shipped
 // hybrid (FSM primary, model on hard states only) against the prod sidecar
 // via the operator's tunnel — sequential single-bot inference calls, the
@@ -211,6 +236,22 @@ async function main() {
     throw new Error(`bot names exceed 16 chars (TAG=${JSON.stringify(TAG)}); set a shorter REPLAY_TAG`)
   }
   const picked = pickBrain()
+  // runOnce's fatal path (follower kicked/error/disconnected) hard-exits 1,
+  // which the wrapper would read as REGRESSION. Interpose: any exit(1)
+  // before the gate verdict is a dropped follower (env), so log + exit 2.
+  // The gate's own exit sets gating and passes through untouched; the only
+  // other exit(1) in bot/src is this same fatal (index.js), so nothing
+  // legitimate is converted. No runOnce hook exists and index.js is out of
+  // scope for rig code, hence the wrapper instead of a parameter.
+  let gating = false
+  const realExit = process.exit.bind(process)
+  process.exit = (code) => {
+    if (code === 1 && !gating) {
+      console.error('REPLAY-ERROR follower dropped before the verdict (kicked/error/disconnect?)')
+      return realExit(2)
+    }
+    return realExit(code)
+  }
   const index = require('../src/index')
   const brain = picked.make()
   const recover = require('../src/behaviours/recover')
@@ -442,28 +483,31 @@ async function main() {
       console.log(`baseline: no file at ${file} — run unjudged (commit the baseline to arm the gate)`)
     } else {
       const diffs = compareBaseline(rows, baseline)
-      let bad = 0
-      let better = 0
-      for (const d of diffs) {
-        if (d.verdict === 'ok') continue
+      const verdict = gateCode(rows, diffs)
+      diffs.forEach((d, i) => {
+        if (ENV_NOTES.has(rows[i] && rows[i].note)) {
+          console.log(`BASELINE ${d.spot}: ${rows[i].note} — ENV (setup failed, not judged)`)
+          return
+        }
+        if (d.verdict === 'ok') return
         if (d.verdict === 'improved') {
-          better++
           console.log(`BASELINE ${d.spot}: was ${d.was} | now ${d.now} — IMPROVED (update the baseline)`)
         } else {
-          bad++
           const why = d.verdict === 'no-baseline' ? 'NO BASELINE ENTRY' : `REGRESSION (${d.why})`
           console.log(`BASELINE ${d.spot}: was ${d.was} | now ${d.now} — ${why}`)
         }
-      }
-      const ok = diffs.length - bad - better
-      console.log(`baseline: ${ok}/${diffs.length} ok, ${better} improved, ${bad} regressed (${file})`)
-      if (bad > 0) code = 1
+      })
+      console.log(`baseline: ${verdict.ok}/${diffs.length} ok, ${verdict.better} improved, ` +
+        `${verdict.bad} regressed, ${verdict.env} env (${file})`)
+      code = verdict.code
     }
   }
   // Quit the guide only: quitting the follower trips runOnce's fatal end
-  // path (exit 1 races our gate code). The follower socket dies with us.
+  // path (exit 1 races our gate code — and the wrapper above would map it
+  // to 2). The follower socket dies with us.
   try { guide.quit() } catch (_) {}
   await sleep(1000)
+  gating = true
   process.exit(code)
 }
 
@@ -471,4 +515,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES }

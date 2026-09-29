@@ -18,7 +18,7 @@ anti-noise, pre-op, replay, tear down, judge. Exit codes:
 | ---- | ------- |
 | 0 | baseline holds (or comparison skipped — see below) |
 | 1 | REGRESSION vs `stuck-baseline.json`: a spot flipped reached→unreached, overran its stuck/episode ceiling, or has no baseline entry |
-| 2 | environment failure: no START.sh/snapshot, rig never came up, anti-noise rejected, pristine `world.tar` changed mid-run |
+| 2 | environment failure: no START.sh/snapshot, rig never came up, anti-noise rejected, pristine `world.tar` changed mid-run, guide setup failed (`GUIDE-BURIED`/`GUIDE-DIED`), follower dropped mid-run |
 | 130 | interrupted (never a pass) |
 
 Results land in `bot/tools/last-replay.json` (gitignored); the run table
@@ -112,5 +112,6 @@ for evals (owner direction). It measures menu choice, not just the FSM.
 - Same-IP login gap: Paper's connection throttle kicks a second login
   inside its window, so the follower waits past it before joining.
 - Dirty-baseline guards: `GUIDE-BURIED` / `GUIDE-DIED` rows (guide tp'd
-  into rock or dead) fail `reached` instead of faking a pass; a bucket
-  spot's flood is wiped before the next trial.
+  into rock or dead) skip the comparison and force exit 2 — the bot was
+  never measured, so judging them as regressions would block PRs on rig
+  luck; a bucket spot's flood is wiped before the next trial.

@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -70,6 +70,57 @@ describe('compareBaseline verdicts (idkcraft-6x7.4)', () => {
     const [d] = compareBaseline([row('A', false, 9, 3)], base)
     assert.match(d.was, /reached=true stuck<=2 eps<=1/)
     assert.match(d.now, /reached=false stuck=9 eps=3/)
+  })
+})
+
+describe('gateCode verdict reduction (idkcraft-6x7.4 round 2)', () => {
+  const diff = (spot, verdict, why = 'x') => ({ spot, verdict, was: 'w', now: 'n', why })
+  const rowWith = (note) => ({ spot: 'A', reached: false, stuck: 0, eps: 0, note })
+
+  it('all ok exits 0', () => {
+    const v = gateCode([rowWith('')], [diff('A', 'ok')])
+    assert.deepEqual(v, { code: 0, ok: 1, better: 0, bad: 0, env: 0 })
+  })
+
+  it('regressed exits 1', () => {
+    const v = gateCode([rowWith('')], [diff('A', 'regressed')])
+    assert.equal(v.code, 1)
+    assert.equal(v.bad, 1)
+  })
+
+  it('no-baseline exits 1 (the corpus rule fails the gate)', () => {
+    const v = gateCode([rowWith('')], [diff('A', 'no-baseline')])
+    assert.equal(v.code, 1)
+    assert.equal(v.bad, 1)
+  })
+
+  it('improved exits 0', () => {
+    const v = gateCode([rowWith('')], [diff('A', 'improved')])
+    assert.deepEqual(v, { code: 0, ok: 0, better: 1, bad: 0, env: 0 })
+  })
+
+  it('GUIDE-BURIED skips the comparison and exits 2', () => {
+    const v = gateCode([rowWith('GUIDE-BURIED')], [diff('A', 'regressed')])
+    assert.deepEqual(v, { code: 2, ok: 0, better: 0, bad: 0, env: 1 })
+  })
+
+  it('GUIDE-DIED exits 2 like buried', () => {
+    const v = gateCode([rowWith('GUIDE-DIED')], [diff('A', 'regressed')])
+    assert.equal(v.code, 2)
+    assert.equal(v.env, 1)
+  })
+
+  it('env dominates a co-occurring regression', () => {
+    const v = gateCode([rowWith('GUIDE-BURIED'), rowWith('')], [diff('A', 'regressed'), diff('B', 'regressed')])
+    assert.equal(v.code, 2)
+    assert.equal(v.bad, 1)
+    assert.equal(v.env, 1)
+  })
+
+  it('DIED stays judged (dying is behavior)', () => {
+    const v = gateCode([rowWith('DIED')], [diff('A', 'regressed')])
+    assert.equal(v.code, 1)
+    assert.equal(v.env, 0)
   })
 })
 
@@ -148,10 +199,15 @@ describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
       'REPLAY_OUT default missing')
   })
 
-  it('regression exits 1, harness errors exit 2', () => {
-    assert.ok(replay.includes('if (bad > 0) code = 1'), 'regression must set exit 1')
+  it('no unconditional exit 0 survives (the always-green bug)', () => {
+    assert.ok(!replay.includes('process.exit(0)'), 'unconditional exit 0 is back')
     assert.ok(replay.includes('process.exit(code)'), 'gate code must reach the exit')
-    assert.ok(replay.includes("process.exit(2)"), 'harness errors must exit 2')
+    assert.ok(replay.includes('process.exit(2)'), 'harness errors must exit 2')
+  })
+
+  it('a dropped follower exits 2, never 1', () => {
+    assert.ok(replay.includes('follower dropped before the verdict'), 'drop log missing')
+    assert.ok(replay.includes('gating = true'), 'gate exit must pass the wrapper through')
   })
 
   it('laya runs never judge against the stub baseline', () => {

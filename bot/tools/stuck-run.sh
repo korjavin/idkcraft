@@ -9,7 +9,8 @@
 #   REPLAY_BASELINE* (passed through to stuck-replay.js).
 # Exit codes: 0 = baseline holds, 1 = REGRESSION vs the baseline (from the
 # replay), 2 = environment failure (no START.sh/snapshot, rig never came up,
-# anti-noise rejected, pristine world.tar changed mid-run).
+# anti-noise rejected, pristine world.tar changed mid-run, guide setup
+# failed, follower dropped mid-run).
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf);
 # the wrapper checks its sha before/after and fails the run (exit 2) on a
 # mismatch so runs stay comparable.
