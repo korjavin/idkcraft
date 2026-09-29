@@ -1121,6 +1121,32 @@ function announceYield(ctx, g, bot, key, line) {
   ctx.stepStatus = 'done'
 }
 
+// Honest want lines (idkcraft-ipn.9): 'going to dig' is a promise forage
+// keeps through its latch preference — but only while the want names a
+// remembered, pickaxe-diggable, unstruck cell. Without one the need is
+// announced without the promise; the latch still stands, so a later find
+// sends forage out with no re-announce. Single source for the sync
+// announces here and the async furnace translation in goal.js. Cobble is
+// absent on purpose: stone is not a memory resource (scan notes ores+logs
+// only), so a memory check would always misreport it — its fetch gap is a
+// separate bead. Fail-open: a broken check keeps the old line, never gags.
+const HONEST_WANT = {
+  'want-ore': 'need raw iron, none known',
+  'want-coal': 'need coal above the reserve, none known',
+}
+
+function honestLine(bot, ctx, bp, key, line) {
+  const honest = HONEST_WANT[key]
+  if (!honest) return line
+  try {
+    const forageMod = require('./forage')
+    if (forageMod.gearWantCell(bot, ctx, bp, key)) return line
+  } catch (_) {
+    return line
+  }
+  return honest
+}
+
 function gear(bot, ctx, target, state) {
   if (!ctx) return
   if (ctx.gearInFlight || ctx.furnaceInFlight) return // exactly one window op at a time
@@ -1159,7 +1185,7 @@ function gear(bot, ctx, target, state) {
     return
   }
   if (plan.state === 'want' || plan.state === 'wait') {
-    announceYield(ctx, g, bot, plan.key, plan.line)
+    announceYield(ctx, g, bot, plan.key, honestLine(bot, ctx, bp, plan.key, plan.line))
     return
   }
   if (plan.state !== 'ready') {
@@ -1195,11 +1221,11 @@ function gear(bot, ctx, target, state) {
     if (out === 'done') return // ingots landed; re-plan next tick
     const reason = out.startsWith('failed:') ? out.slice('failed:'.length) : out
     if (reason === 'no-cobble') {
-      announceYield(ctx, g, bot, 'want-cobble', 'need 8 cobble for the furnace, going to dig')
+      announceYield(ctx, g, bot, 'want-cobble', honestLine(bot, ctx, bp, 'want-cobble', 'need 8 cobble for the furnace, going to dig'))
       return
     }
     if (reason === 'no-fuel') {
-      announceYield(ctx, g, bot, 'want-coal', 'need coal above the reserve, going to dig')
+      announceYield(ctx, g, bot, 'want-coal', honestLine(bot, ctx, bp, 'want-coal', 'need coal above the reserve, going to dig'))
       return
     }
     fail(ctx, `furnace-${reason}`)
@@ -1281,6 +1307,7 @@ module.exports.OWNER_WANT = OWNER_WANT
 module.exports.deriveNext = deriveNext
 module.exports.reconcile = reconcile
 module.exports.menuPlan = menuPlan
+module.exports.honestLine = honestLine
 module.exports.planFor = planFor
 module.exports.countsFromFacts = countsFromFacts
 module.exports.handoverWaiting = handoverWaiting

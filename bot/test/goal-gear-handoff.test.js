@@ -65,7 +65,10 @@ describe('idkcraft-ipn.7: gear yield hands off', () => {
     gear(bot, ctx) // the behaviour announces the need and yields done
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.gear.saidNeed, 'want-ore')
-    assert.ok(bot.chats.some((m) => m.includes('going to dig')), `announced, chats=${JSON.stringify(bot.chats)}`)
+    // ipn.9: the announce keeps the raw-iron want with or without a
+    // diggable remembered cell ('going to dig' vs 'none known' — the exact
+    // wording is gear.test.js's contract); this test pins the handoff.
+    assert.ok(bot.chats.some((m) => m.includes('raw iron')), `announced, chats=${JSON.stringify(bot.chats)}`)
 
     const facts = goalFacts(bot, ctx)
     assert.equal(goalText(facts, ctx.home), pickedText, 'facts unchanged across the yield')

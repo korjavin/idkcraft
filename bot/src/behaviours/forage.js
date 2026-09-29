@@ -94,6 +94,45 @@ function bestMemoryCell(bot, ctx, bp) {
   return best
 }
 
+// Gear-latch preference (idkcraft-ipn.9): when gear latched a want
+// (ctx.gear.saidNeed), the matching resource wins over the value rank —
+// a near diamond must not shadow the far iron the ladder waits for, and
+// fresh iron must not shadow the coal the smelt needs. Nearest remembered
+// cell of the latched kind, still pickaxe-gated and skip-honouring: a
+// struck or ungated cell falls through to the normal rank below, so the
+// step keeps digging something. Pure like bestMemoryCell; gear.js shares
+// this for its honest want lines. Null when the latch names nothing
+// diggable. Stone/cobblestone (want-cobble) never lands in memory today
+// (scan notes ores+logs only) but stays a correct matcher if it ever does.
+const GEAR_WANT = {
+  'want-ore': /iron_ore$/,
+  'want-coal': /coal_ore$/,
+  'want-cobble': /^(stone|cobblestone)$/,
+}
+
+function gearWantCell(bot, ctx, bp, key) {
+  const re = GEAR_WANT[key]
+  const mem = ctx && ctx.resources
+  if (!re || !mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
+  if (!bp || typeof bp.x !== 'number') return null
+  let skip = null
+  try { skip = ctx.forageSkip || null } catch (_) { skip = null }
+  let best = null
+  let bestD = Infinity
+  for (const item of mem.items.values()) {
+    if (!item || typeof item.x !== 'number' || typeof item.name !== 'string') continue
+    if (!re.test(item.name)) continue
+    if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
+    if (!bring.hasPickaxe(bot, item.name)) continue
+    const d = dist(bp, item)
+    if (d < bestD) {
+      bestD = d
+      best = item
+    }
+  }
+  return best
+}
+
 // Best remembered DIAMOND cell for the deep leg (ipn.2): nearest cell
 // whose name holds diamond, unstruck, iron-tier gated like bestMemoryCell
 // (emeralds excluded — the gear ladder wants diamonds). Grounded cells
@@ -136,6 +175,20 @@ function bestDiamondCell(bot, ctx, bp) {
 function planForage(bot, ctx) {
   const bp = botPos(bot)
   if (!bp) return null
+  // ipn.9: gear's latched want first — the promise 'going to dig' names a
+  // resource, so the step digs that resource while it can.
+  let latched = null
+  try { latched = ctx && ctx.gear && ctx.gear.saidNeed } catch (_) { latched = null }
+  if (latched && GEAR_WANT[latched]) {
+    const want = gearWantCell(bot, ctx, bp, latched)
+    if (want) {
+      const kind = want.name.endsWith('_log') ? 'log' : 'ore'
+      // Stone drops cobblestone, not stone: dropFor would pin the batch
+      // counter at zero and the step would quarry forever.
+      const drop = latched === 'want-cobble' ? 'cobblestone' : bring.dropFor(want.name)
+      return { kind, name: want.name, pos: { x: want.x, y: want.y, z: want.z }, drop, want: FORAGE_WANT }
+    }
+  }
   const cell = bestMemoryCell(bot, ctx, bp)
   if (cell) {
     const kind = cell.name.endsWith('_log') ? 'log' : 'ore'
@@ -631,6 +684,7 @@ function forage(bot, ctx, target, state) {
 
 module.exports = forage
 module.exports.planForage = planForage
+module.exports.gearWantCell = gearWantCell
 module.exports.bestDiamondCell = bestDiamondCell
 module.exports.skipCell = skipCell
 module.exports.FORAGE_WANT = FORAGE_WANT
