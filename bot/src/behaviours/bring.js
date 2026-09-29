@@ -9,7 +9,7 @@ const exploreMod = require('./explore')
 const recover = require('./recover')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, denyReason, logDeny } = require('./util')
+const { say, clearGoal, denyReason, logDeny, submergedAt } = require('./util')
 const itemMod = require('./bringitem')
 const Vec3 = require('vec3')
 
@@ -323,6 +323,9 @@ const SOURCE_COST = {
   digSecPerBlock: 2,
   deepDigDepth: 4,
   shaftPenaltySec: 25,
+  // Breath (idkcraft-0u9): a dive costs a surface trip plus the drowning
+  // risk — priced above a deep shaft so a dry rival wins deterministically.
+  wetPenaltySec: 30,
   memoryFactor: 1.5,
   budget: 160, // == scout SEARCH_MAX, the loaded-world edge. Known gap
   // (revmux 01 body-2, follow-up bead): farShellDone and the within96
@@ -343,19 +346,31 @@ function digCost(depthBelow) {
 
 // Scout results normalised to costed candidates. Exposed (live or memory)
 // always means walk; buried means walk-to plus the dig below the feet.
-function liveExposed(bp, res) {
+// bot is optional (unit shorthand): without a world view no wet check runs
+// and the costs are exactly the legacy ones.
+function liveExposed(bp, res, bot = null) {
   if (!res || !res.position || res.exposed === false) return null
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
-  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, cost: walkCost(distH), ageMs: null }
+  const wet = !!bot && submergedAt(bot, p.x, p.y, p.z)
+  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, wet, cost: walkCost(distH) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
 }
 
-function buriedCand(bp, res) {
+// A buried hit under open water floods the shaft: the vein sits below the
+// lakebed, so the check scans the column above the target (bounded: a lake
+// over the vein is within a few cells of it).
+const WET_COLUMN_CELLS = 8
+
+function buriedCand(bp, res, bot = null) {
   if (!res || !res.position) return null
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const depthBelow = Math.max(0, Math.floor(bp.y) - Math.floor(p.y))
-  return { kind: 'buried', name: res.name, pos: p, distH, dist: res.distance, depthBelow, cost: walkCost(distH) + digCost(depthBelow), ageMs: null }
+  let wet = false
+  if (bot) {
+    for (let i = 0; i < WET_COLUMN_CELLS && !wet; i++) wet = submergedAt(bot, p.x, p.y + i, p.z)
+  }
+  return { kind: 'buried', name: res.name, pos: p, distH, dist: res.distance, depthBelow, wet, cost: walkCost(distH) + digCost(depthBelow) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
 }
 
 // Cheaper walk wins between the two exposed candidates — same action
@@ -412,12 +427,13 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
       const blk = bot.blockAt && bot.blockAt({ x: Math.floor(item.x), y: Math.floor(item.y), z: Math.floor(item.z) })
       pre = blk && denyReason(bot, blk, ctx)
     } catch (_) { pre = null }
-    if (pre === 'protected') return null // owner build: same rule as the live loop
+    if (pre === 'protected' || pre === 'submerged') return null // owner build or dive: same rule as the live loop
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
+    const wet = submergedAt(bot, item.x, item.y, item.z)
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
-      distH, dist, cost: walkCost(distH) * SOURCE_COST.memoryFactor,
+      distH, dist, wet, cost: walkCost(distH) * SOURCE_COST.memoryFactor + (wet ? SOURCE_COST.wetPenaltySec : 0),
       ageMs: typeof item.at === 'number' ? Date.now() - item.at : null,
     }
   } catch (_) { return null }
@@ -444,10 +460,10 @@ function ageText(ageMs) {
 
 function sourceText(o, exposed, buried) {
   const e = exposed
-    ? `walk:${exposed.cost.toFixed(1)}s(dist=${Math.round(exposed.distH)},${exposed.kind === 'memory' ? `age=${ageText(exposed.ageMs)}` : 'live'})`
+    ? `walk:${exposed.cost.toFixed(1)}s(dist=${Math.round(exposed.distH)},${exposed.kind === 'memory' ? `age=${ageText(exposed.ageMs)}` : 'live'}${exposed.wet ? ',underwater' : ''})`
     : 'walk:none'
   const b = buried
-    ? `dig:${buried.cost.toFixed(1)}s(dist=${Math.round(buried.distH)},depth=${Math.round(buried.depthBelow)})`
+    ? `dig:${buried.cost.toFixed(1)}s(dist=${Math.round(buried.distH)},depth=${Math.round(buried.depthBelow)}${buried.wet ? ',underwater' : ''})`
     : 'dig:none'
   return `source=${(o && o.name) || 'block'} ${e} ${b}`
 }
@@ -460,6 +476,12 @@ function decideBringSource(exposed, buried) {
   if (buried && !exposed) return { pick: 'buried', why: 'only-option' }
   if (!exposed && !buried) return { pick: null, why: 'none' }
   const memoryFar = exposed.kind === 'memory' && exposed.dist > SOURCE_COST.budget
+  // A wet source is a certain refusal ('submerged' denies the dig), so a
+  // dry rival wins outright instead of going to the model (revmux 01
+  // core-3) — except a beyond-budget memory hike, which the model still
+  // judges per the rule below.
+  if (exposed.wet && buried && !buried.wet) return { pick: 'buried', why: 'clear' }
+  if (buried.wet && !exposed.wet && !memoryFar) return { pick: 'exposed', why: 'clear' }
   if (!memoryFar && exposed.cost < buried.cost * SOURCE_COST.clearRatio) return { pick: 'exposed', why: 'clear' }
   if (buried.cost < exposed.cost * SOURCE_COST.clearRatio) return { pick: 'buried', why: 'clear' }
   return { contested: true }
@@ -471,13 +493,16 @@ function decideBringSource(exposed, buried) {
 // walks to exposed ore. At most one ask per order: the pick is cached on
 // o and a later contested re-find replays it instead of flip-flopping
 // between the shaft and the hike per drop.
-const SOURCE_INSTRUCTIONS = 'Choose whether the bring order walks to exposed ore or digs a buried block'
+const SOURCE_INSTRUCTIONS = 'Choose whether the bring order walks to exposed ore or digs a buried block. An underwater source always fails: never pick one when the other is dry'
 const SOURCE_CRITERIA = {
   walk_exposed: 'exposed ore is worth the walk: reliable, no shaft to dig',
   dig_buried: 'digging the buried block is faster than the long walk',
 }
 
 async function chooseBringSource(brain, text, exposed, buried, o) {
+  // The FSM reserve walks to exposed ore. Wet-vs-dry pairs never reach it:
+  // decideBringSource resolves those deterministically above (revmux 01
+  // core-3); only the model path can still see one (memory-far edge).
   const fsm = 'walk_exposed'
   const d = decideBringSource(exposed, buried)
   if (!d.contested) {
@@ -544,7 +569,7 @@ function takeFarCache(bot, o, bp) {
         far = liveExposed(bp, {
           name: c.hit.name, position: p,
           distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: true,
-        })
+        }, bot)
       }
     }
     let buried = null
@@ -561,7 +586,7 @@ function takeFarCache(bot, o, bp) {
         buried = buriedCand(bp, {
           name: c.buriedHit.name, position: p,
           distance: Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z), exposed: false,
-        })
+        }, bot)
       }
     }
     if ((c.hit && !far) || (c.buriedHit && !buried && !(o && o.buried))) return undefined
@@ -665,7 +690,9 @@ function refuseExhausted(bot, ctx, o) {
   const n = o.searchLegs ? o.searchLegs.legs : 0
   const kind = o.kind || 'block'
   const woolNone = o.color ? `no ${o.color} sheep` : 'no sheep'
-  const base = o.have > 0 ? `only got ${o.have} ${o.drop}` : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
+  const base = o.have > 0 ? `only got ${o.have} ${o.drop}`
+    : (o.sawSubmerged && kind !== 'food' && kind !== 'wool') ? `could not reach ${o.name} safely`
+    : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
   // A wool hunt that gathered something still hands it over instead of
   // refusing with a full pack (the short-pack rung promised a top-up, and
   // the legs proved none is coming). A sub-order (did.4) never hands over:
@@ -721,6 +748,13 @@ function canBringName(bot, name) {
   } catch (_) {
     return false
   }
+}
+
+// Empty-find refusal text: when every candidate was skipped as a dive,
+// 'no X' would be a lie — the ore is there, just unreachable safely.
+function emptyRefusal(o, edge) {
+  if (o && o.sawSubmerged && !(o.have > 0)) return `could not reach ${o.name} safely`
+  return `no ${o.name} within ${edge} blocks (loaded area)`
 }
 
 async function enterSearch(bot, ctx, o, legacy) {
@@ -1162,14 +1196,16 @@ async function bring(bot, ctx, target, state) {
     }
     if (o.searchSkipFar) { // pending far search just came up empty: skip the re-scan
       o.searchSkipFar = false
-      await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+      await enterSearch(bot, ctx, o, emptyRefusal(o, loadedSearchRadius(bot)))
       return
     }
     // idkcraft-drq: pre-check the guard at find time, so a nearer build
     // is skipped without walking to each of its blocks first. Only
-    // 'protected' counts here: trap rules depend on the dig-time stance
-    // and are judged at the dig site. Each loop either commits or grows
-    // o.skip, and find empties when all is skipped — it terminates.
+    // 'protected' and 'submerged' count here: trap rules depend on the
+    // dig-time stance and are judged at the dig site, while a dive is a
+    // property of the target (0u9: skipping it here lets a dry farther
+    // vein win without four dives first). Each loop either commits or
+    // grows o.skip, and find empties when all is skipped — it terminates.
     let res = null
     for (;;) {
       res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
@@ -1179,7 +1215,8 @@ async function bring(bot, ctx, target, state) {
         const blk = bot.blockAt && bot.blockAt(res.position)
         pre = blk && denyReason(bot, blk, ctx)
       } catch (_) { pre = null }
-      if (pre !== 'protected') break
+      if (pre !== 'protected' && pre !== 'submerged') break
+      if (pre === 'submerged') o.sawSubmerged = true
       logDeny({ name: res.name, position: res.position }, pre)
       if (!o.skip) o.skip = new Set()
       o.skip.add(skipKey(res.position))
@@ -1212,7 +1249,7 @@ async function bring(bot, ctx, target, state) {
       if (cachedEmpty !== undefined) {
         const exposedEmpty = bestExposed(cachedEmpty.far, o.memKnown || null)
         if (!exposedEmpty && !cachedEmpty.buried) {
-          await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+          await enterSearch(bot, ctx, o, emptyRefusal(o, loadedSearchRadius(bot)))
           return
         }
         await verdictSource(bot, ctx, o, exposedEmpty, cachedEmpty.buried)
@@ -1230,7 +1267,7 @@ async function bring(bot, ctx, target, state) {
           commitSource(bot, ctx, o, o.memKnown, null, 'exposed')
           return
         }
-        await enterSearch(bot, ctx, o, `no ${o.name} within ${loadedSearchRadius(bot)} blocks (loaded area)`)
+        await enterSearch(bot, ctx, o, emptyRefusal(o, loadedSearchRadius(bot)))
         return
       }
       o.phase = 'searchfar'
@@ -1239,13 +1276,13 @@ async function bring(bot, ctx, target, state) {
     if (res.exposed !== false) {
       // Exposed and nearest: commit exactly as before (no rival consulted,
       // the legacy line byte-identical).
-      commitSource(bot, ctx, o, liveExposed(bp, res), null, 'exposed')
+      commitSource(bot, ctx, o, liveExposed(bp, res, bot), null, 'exposed')
       return
     }
     // 48-best buried: stash it as the dig candidate (c), read the memory
     // candidate (b), and run the far shells for live exposed ore (a) —
     // buried-only-48 counts as empty for the exposed search (atl.15).
-    o.buried = buriedCand(bp, res)
+    o.buried = buriedCand(bp, res, bot)
     {
       let mem = null
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
@@ -1286,18 +1323,18 @@ async function bring(bot, ctx, target, state) {
     // Shells done: (a) live exposed wins the far result, a buried far hit
     // loses to the nearer stashed 48 hit — or stands alone when 48 was
     // empty. The verdict weighs it against the stashed memory (b).
-    const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result) : null
-    const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null)
+    const far = r.result && r.result.exposed !== false ? liveExposed(bp, r.result, bot) : null
+    const buried = o.buried || (r.result && r.result.exposed === false ? buriedCand(bp, r.result, bot) : null)
     const exposed = bestExposed(far, o.memKnown || null)
     const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
     try {
       o.farCache = {
         x: bp.x, y: bp.y, z: bp.z, edge, hit: far,
-        buriedHit: r.result && r.result.exposed === false ? buriedCand(bp, r.result) : null,
+        buriedHit: r.result && r.result.exposed === false ? buriedCand(bp, r.result, bot) : null,
       }
     } catch (_) { /* cache best-effort */ }
     if (!exposed && !buried) {
-      await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : `no ${o.name} within ${edge} blocks (loaded area)`)
+      await enterSearch(bot, ctx, o, o.have > 0 ? `only got ${o.have} ${o.drop}` : emptyRefusal(o, edge))
       return
     }
     await verdictSource(bot, ctx, o, exposed, buried)
@@ -1358,10 +1395,12 @@ async function bring(bot, ctx, target, state) {
     const bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
     if (bDeny) {
       logDeny(block, bDeny)
-      if (bDeny === 'protected') {
-        // Skip it and take the next candidate: a nearer build must not
+      if (bDeny === 'protected' || bDeny === 'submerged') {
+        // Skip it and take the next candidate: a nearer build — or a dive
+        // (0u9: also a property of the target, not the stance) — must not
         // end an order while terrain blocks exist further away. Refusal
         // happens when find comes up empty (the have>0 path delivers).
+        if (bDeny === 'submerged') o.sawSubmerged = true
         if (!o.skip) o.skip = new Set()
         o.skip.add(skipKey(o.pos))
         o.pos = null
