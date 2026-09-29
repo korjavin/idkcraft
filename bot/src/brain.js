@@ -10,6 +10,7 @@ const metrics = require('./metrics')
 
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
+const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
 
 // Remote-brain source name: the JEV hostname stays 'jev', anything else
 // (e.g. the compose service laya) is addressed by its own hostname.
@@ -20,6 +21,19 @@ function sourceForUrl(url) {
   } catch {
     return 'jev'
   }
+}
+
+function brainTimeoutMs(env) {
+  const raw = parseInt((env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000', 10)
+  return Number.isFinite(raw) ? raw : 1000
+}
+
+// Laya address for the autonomous downgrade (dxl): BRAIN_URL only when it
+// does NOT point at JEV — a JEV-configured BRAIN_URL would keep the paid
+// brain running under a 'laya' label. Null means off.
+function layaUrl() {
+  const env = process.env && process.env.BRAIN_URL
+  return env && sourceForUrl(env) !== 'jev' ? env : null
 }
 
 const stubBrain = {
@@ -343,4 +357,4 @@ function makeBrain(env) {
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl }
