@@ -6,6 +6,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const rest = require('../src/behaviours/rest')
+const stuck = require('../src/stuck')
 const Vec3 = require('vec3')
 
 function pos(x, y, z) {
@@ -101,18 +102,23 @@ describe('rest pit climbs to the site (idkcraft-q0h)', () => {
   it('roam-back wedge carries the site goal, the menu pillars up', async () => {
     // Prod 2026-09-24: 82 min in a pit 4 below the site, recover facts
     // goal=level dist=none — roam-back returned before any detector and the
-    // goal-less backstop chose sidestep/wait. Deleting the roam-back detector
-    // fails this test (no stuck fact raised).
+    // goal-less backstop chose sidestep/wait. 6x7.2: the raise moved to
+    // stuck.js fast entry off the roam-back key — rest only walks back.
     const bot = pitBot()
     bot._moving = true // wedged executor claims motion, the body stands still
     const site = { x: 20, y: 65, z: 0 }
     const ctx = {
       work: true, step: 'rest', stepStatus: 'running',
-      lastGoalKey: 'roam-back:undefined', stuckResets: 2,
-      roamLastPos: pos(0.5, 61, 0.5), home: { site }, brain: null,
+      lastGoalKey: '', home: { site }, brain: null,
+      lastPos: { x: 0.5, y: 61, z: 0.5 },
     }
     rest(bot, ctx, null, {})
-    assert.ok(ctx.stuck, 'roam-back raises the wedge')
+    assert.match(ctx.lastGoalKey, /^roam-back:/)
+    assert.equal(ctx.stuck || null, null, 'no fact from the walk-back itself')
+    stuck.countPathReset(ctx, 'stuck')
+    stuck.countPathReset(ctx, 'stuck')
+    stuck.update(bot, ctx)
+    assert.ok(ctx.stuck, 'central raises the wedge')
     assert.equal(ctx.stuck.by, 'roam')
     assert.deepEqual(ctx.stuck.goal, site)
     const facts = recover.recoverFacts(bot, ctx, {}, null)

@@ -124,14 +124,16 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
   it('re-issues a new point after two stuck resets, never raises (p4s)', () => {
     // Contract change (idkcraft-p4s): the ef3 detector handover is gone —
     // a wedge takes another stroll point, the body never goes to recover.
+    // 6x7.2: the reset streak is the central detector's (read via the
+    // verdict); roam only marks it seen.
     const bot = wedgedBot()
-    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0), roamGoal: { x: 1, y: 64, z: 1 } }
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamGoal: { x: 1, y: 64, z: 1 } }
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(ctx.stuck, undefined)
     assert.equal(bot.calls.setGoal, 1)
     assert.match(ctx.lastGoalKey, /^roam:/)
     assert.equal(bot.controls.jump, undefined)
-    assert.equal(ctx.stuckResets, 0)
+    assert.equal(ctx.roamSeenResets, 2)
   })
 
   it('stays quiet while a recover episode runs (no fact, no goal)', () => {
@@ -145,14 +147,18 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
   it('a re-wedge at the same spot re-issues, never latches (p4s)', () => {
     // Contract change (idkcraft-p4s): no setStuck, no recoverLatch round-trip
     // for roam — every wedge (same spot or not) is just another point.
+    // 6x7.2: the streak is central and sticky, so a repeat wedge arrives as
+    // a HIGHER count (same value twice is one knock, seen already).
     const bot = wedgedBot()
-    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0), roamGoal: { x: 1, y: 64, z: 1 } }
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamGoal: { x: 1, y: 64, z: 1 } }
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(ctx.stuck, undefined)
     assert.equal(bot.calls.setGoal, 1)
     assert.equal(ctx.recoverLatch, undefined)
     ctx.roamGoal = { x: -3, y: 64, z: 4 }
-    ctx.stuckResets = 2
+    roam(bot, ctx, playerEntity(2), {})
+    assert.equal(bot.calls.setGoal, 1, 'same knock twice is not a new wedge')
+    ctx.stuckResets = 3
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(ctx.stuck, undefined)
     assert.equal(bot.calls.setGoal, 2)
@@ -166,13 +172,14 @@ describe('roam wedge recovery (prod: 10 ticks dist=4.6, 3x reset=stuck)', () => 
     assert.equal(ctx.stuckResets, 1)
   })
 
-  it('displacement zeroes the wedge counter (no nudge after real progress)', () => {
+  it('a cleared streak keeps strolling (central zeroes on displacement)', () => {
+    // 6x7.2: displacement clears live in stuck.js (pinned there) — roam
+    // only reads the verdict, so a zeroed streak strolls on quietly.
     const bot = wedgedBot()
-    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 2, roamLastPos: pos(0, 64, 0) }
     bot.entity.position = pos(3, 64, 0) // moved 3 blocks since last tick
+    const ctx = { lastGoalKey: 'roam:1,64,1', stuckResets: 0 }
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(bot.calls.setGoal, 0)
-    assert.equal(ctx.stuckResets, 0)
   })
 })
 
@@ -254,46 +261,22 @@ describe('roam wedge without recover (idkcraft-p4s)', () => {
     const bot = mockBot()
     bot._moving = true // wedged executor claims motion, body stands still
     const player = playerEntity(2)
-    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(0, 64, 0) }
+    const ctx = { lastGoalKey: '', stuckResets: 2 }
     roam(bot, ctx, player, {})
     assert.equal(ctx.stuck, undefined)
     assert.equal(bot.calls.setGoal, 1)
     assert.match(ctx.lastGoalKey, /^roam:/)
-    // Still wedged on the next ticks: every re-issue is a new point, still no stuck.
-    ctx.stuckResets = 2
-    const key1 = ctx.lastGoalKey
+    // Still wedged on the next ticks: every NEW knock re-issues, still no stuck.
+    ctx.stuckResets = 3
     roam(bot, ctx, player, {})
     assert.equal(ctx.stuck, undefined)
     assert.equal(bot.calls.setGoal, 2)
   })
 })
 
-describe('roam-back latch re-arms on relocation (idkcraft-q0h round 2)', () => {
-  it('relocation past the latch anchor raises again, same point stays latched', () => {
-    // Round-1 core-2: the roam latch on the static site never cleared, so the
-    // detector fired once per session. Release anchors the point; moving on
-    // clears it.
-    const bot = mockBot()
-    bot._moving = true
-    const site = { x: 20, y: 64, z: 0 }
-    bot.entity.position = pos(0, 64, 0)
-    const ctx = {
-      lastGoalKey: 'roam-back:undefined', stuckResets: 2, roamLastPos: pos(0, 64, 0),
-      recoverLatch: { by: 'roam', key: 'roam-back:undefined', goal: { x: 20, y: 64, z: 0 }, at: { x: 0, y: 64, z: 8 } },
-    }
-    roam(bot, ctx, { position: site }, {})
-    assert.ok(ctx.stuck, 're-armed detector raises after relocation')
-    assert.equal(ctx.stuck.by, 'roam')
-    assert.deepEqual(ctx.stuck.goal, site)
-    // Same wedge point: the latch still suppresses.
-    const ctx2 = {
-      lastGoalKey: 'roam-back:undefined', stuckResets: 2, roamLastPos: pos(0, 64, 0),
-      recoverLatch: { by: 'roam', key: 'roam-back:undefined', goal: { x: 20, y: 64, z: 0 }, at: { x: 0, y: 64, z: 1 } },
-    }
-    roam(bot, ctx2, { position: site }, {})
-    assert.equal(ctx2.stuck, undefined)
-  })
-})
+// 6x7.2: the roam-back raise, its latch consult and the wedge line moved to
+// stuck.js — pinned in stuck.test.js (COOLDOWN consults, roam raise line,
+// rest-hold gate, refused-raise silence).
 
 describe('roam branch residuals (idkcraft-1hy)', () => {
   it('does nothing without a body', () => {
@@ -354,126 +337,14 @@ describe('roam branch residuals (idkcraft-1hy)', () => {
 })
 
 describe('roam wedge arms (idkcraft-1hy)', () => {
-  function wedgeBot() {
-    const bot = mockBot()
-    bot._moving = true
-    return bot
-  }
-
-  it('a resting hold suppresses the wedge raise, the walk-back still issues', () => {
-    const bot = wedgeBot()
-    const ctx = {
-      lastGoalKey: '', stuckResets: 2, roamLastPos: pos(0, 64, 0),
-      work: {}, step: 'rest', restGaveUpAt: { x: 0, y: 64, z: 0 },
-    }
-    roam(bot, ctx, playerEntity(20), {})
-    assert.equal(ctx.stuck, undefined, 'rest hold suppresses the raise')
-    assert.equal(bot.calls.goals[0].constructor.name, 'GoalFollow')
-  })
-
-  it('a raise that setStuck refuses stays silent and resets the counter', () => {
-    const bot = wedgeBot()
-    const ctx = {
-      lastGoalKey: '', stuckResets: 2, roamLastPos: pos(0, 64, 0),
-      stuck: { by: 'fight', goal: null, key: 'fight' },
-    }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      roam(bot, ctx, playerEntity(20), {})
-    } finally {
-      console.log = origLog
-    }
-    assert.equal(ctx.stuckResets, 0)
-    assert.equal(bot.calls.setGoal, 0, 'refused raise still returns before the walk-back')
-    assert.ok(!logs.some((m) => m.includes('stuck reason=wedge')), 'no wedge line without a stuck fact')
-  })
-
-  it('the wedge line prints fractional feet with one decimal', () => {
-    const bot = wedgeBot()
-    bot.entity.position = Object.assign(pos(7.36, 64, 0), {})
-    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7.36, 64, 0) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      roam(bot, ctx, playerEntity(20), {})
-    } finally {
-      console.log = origLog
-    }
-    assert.ok(ctx.stuck, 'wedge raised')
-    assert.ok(logs.some((m) => m.includes('pos=7.4,64,0')), `feet rounded: ${logs.join('|')}`)
-    assert.ok(logs.some((m) => m.includes('goal=20,64,0')), `goal ints: ${logs.join('|')}`)
-  })
-
-  it('non-numeric feet print as zeroes, fractional z rounds', () => {
-    const bot = wedgeBot()
-    bot.entity.position = {
-      x: '7', y: '64', z: 0.25,
-      distanceTo: () => 0,
-      clone: () => pos(7, 64, 0),
-    }
-    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64, 0) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      roam(bot, ctx, playerEntity(20), {})
-    } finally {
-      console.log = origLog
-    }
-    assert.ok(ctx.stuck, 'wedge raised')
-    assert.ok(logs.some((m) => m.includes('pos=0,0,0.3')), `string feet zeroed: ${logs.join('|')}`)
-  })
-
-  it('a non-numeric z prints as zero', () => {
-    // The typeof guard exists so a non-number never reaches .toFixed (which
-    // would throw): without it this tick crashes instead of logging.
-    const bot = wedgeBot()
-    bot.entity.position = {
-      x: 7, y: 64, z: '0',
-      distanceTo: () => 0,
-      clone: () => pos(7, 64, 0),
-    }
-    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64, 0) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      roam(bot, ctx, playerEntity(20), {})
-    } finally {
-      console.log = origLog
-    }
-    assert.ok(ctx.stuck, 'wedge raised')
-    assert.ok(logs.some((m) => m.includes('pos=7,64,0')), `z zeroed: ${logs.join('|')}`)
-  })
-
+  // 6x7.2: the raise, its rest-hold gate, the refusal silence and the wedge
+  // line moved to stuck.js — pinned in stuck.test.js. Roam only walks back
+  // and strolls; a plain body strolls with no tracking at all.
   it('a plain body in stroll range still strolls without tracking', () => {
     const bot = mockBot()
     bot.entity.position = { x: 0, y: 64, z: 0 }
-    const ctx = { lastGoalKey: '', roamLastPos: pos(5, 64, 5) }
+    const ctx = { lastGoalKey: '' }
     roam(bot, ctx, playerEntity(2), {})
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
-    assert.deepEqual([ctx.roamLastPos.x, ctx.roamLastPos.z], [5, 5], 'no clone, no update')
-  })
-})
-
-describe('roam wedge line y (idkcraft-1hy)', () => {
-  it('fractional height rounds to one decimal', () => {
-    const bot = mockBot()
-    bot._moving = true
-    bot.entity.position = Object.assign(pos(7, 64.55, 0), {})
-    const ctx = { lastGoalKey: '', stuckResets: 2, roamLastPos: pos(7, 64.55, 0) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      roam(bot, ctx, { id: 7, username: 'S', position: pos(20, 64, 0) }, {})
-    } finally {
-      console.log = origLog
-    }
-    assert.ok(ctx.stuck, 'wedge raised')
-    assert.ok(logs.some((m) => /pos=7,64\.5,0/.test(m)), `height rounded: ${logs.join('|')}`)
   })
 })

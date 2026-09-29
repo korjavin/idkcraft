@@ -243,7 +243,9 @@ describe('explore walk and arrival', () => {
     assert.ok(nt.x === 16 && nt.z === 0, `next target ${nt.x},${nt.z}`)
   })
 
-  it('ten still ticks fail unreachable with an explore fact', () => {
+  it('ten still ticks fail unreachable with no fact (target give-up)', () => {
+    // 6x7.2: the stall fails the TARGET only — the body fact is the central
+    // detector's (stuck.js raises off the explore key; pinned there).
     const bot = mockBot()
     bot._moving = true // executor claims motion, body stands still
     const lines = []
@@ -253,7 +255,7 @@ describe('explore walk and arrival', () => {
       const ctx = homeCtx()
       for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
       assert.equal(ctx.stepStatus, 'failed:unreachable')
-      assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 0, y: 64, z: -16 }, key: 'explore:0,-16' })
+      assert.equal(ctx.stuck, undefined)
       // The unreachable point is consumed: the next dispatch advances the
       // spiral instead of walking the same obstacle again.
       ctx.stepStatus = 'running'
@@ -291,7 +293,7 @@ describe('explore walk and arrival', () => {
     ctx.lastGoalKey = 'fight:1' // fight owned this tick
     for (let i = 1; i <= 6; i++) explore(bot, ctx, null, null)
     assert.equal(ctx.stepStatus, 'failed:unreachable')
-    assert.equal(ctx.stuck.by, 'explore')
+    assert.equal(ctx.stuck, undefined, 'target give-up claims no body')
   })
 
   it('departure chat at most every 30 s', () => {

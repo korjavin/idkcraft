@@ -50,46 +50,8 @@ function wedgedBot() {
 }
 
 describe('follow wedge line (idkcraft-b50)', () => {
-  it('names feet/head/next blocks on the wedge line', () => {
-    const bot = wedgedBot()
-    const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
-    const ctx = {
-      lastGoalKey: 'follow:P', stuckResets: 2, followLastPos: pos(-40.4, 64.4, -207.7),
-      lastPathNext: pos(-39, 64, -207), // setPathNext stores a Vec3 clone, never a plain object
-    }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      follow(bot, ctx, target, { distance_to_player: 20 })
-    } finally {
-      console.log = origLog
-    }
-    assert.equal(logs.length, 1)
-    assert.match(logs[0], /^stuck reason=wedge pos=/)
-    assert.ok(logs[0].includes('feet=water'), logs[0])
-    assert.ok(logs[0].includes('head=air'), logs[0])
-    assert.ok(logs[0].includes('next=-39,64,-207:dirt'), logs[0])
-  })
-
-  it('unreadable cells read ? instead of throwing', () => {
-    const bot = wedgedBot()
-    bot.blockAt = () => { throw new Error('unloaded') }
-    const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
-    const ctx = { lastGoalKey: 'follow:P', stuckResets: 2, followLastPos: pos(-40.4, 64.4, -207.7) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      follow(bot, ctx, target, { distance_to_player: 20 })
-    } finally {
-      console.log = origLog
-    }
-    assert.equal(logs.length, 1)
-    assert.ok(logs[0].includes('feet=?'), logs[0])
-    assert.ok(logs[0].includes('next=?:?'), logs[0])
-  })
-
+  // 6x7.2: the wedge raise moved to stuck.js (fast entry off the follow
+  // key) — the feet/head/next formats are pinned in stuck.test.js.
   it('setPathNext stores the plan head for the wedge line', () => {
     const bot = {
       username: 'IdkBot', players: {}, entities: {}, health: 20, food: 20,
@@ -115,9 +77,9 @@ describe('follow wedge line (idkcraft-b50)', () => {
 })
 
 describe('follow place_error streak (idkcraft-2oe)', () => {
-  // Ticker-capable mock with a stationary body: createTicker owns the
-  // counters (setPathReset), follow() is driven per tick like the ticker
-  // drives it, so the test fails until follow counts placeErrors itself.
+  // 6x7.2: the streak raise moved to stuck.js fast entry — pinned through
+  // the ticker in scenarios-follow (2oe) and as a unit in stuck.test.js.
+  // Follow itself only re-issues here, never raises.
   function stillBot() {
     const bot = {
       username: 'IdkBot', players: {}, entities: {}, health: 20, food: 20,
@@ -135,33 +97,6 @@ describe('follow place_error streak (idkcraft-2oe)', () => {
     }
     return bot
   }
-
-  it('three place_error with no displacement raise the same wedge', () => {
-    const bot = stillBot()
-    const ticker = createTicker({
-      bot, brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
-      tickMs: 10, idleTickMs: 10,
-    })
-    const ctx = bot._tickerCtx
-    const target = { username: 'P', id: 7, position: pos(20, 64, 0) }
-    const logs = []
-    const origLog = console.log
-    console.log = (m) => logs.push(String(m))
-    try {
-      follow(bot, ctx, target, { distance_to_player: 20 }) // issues GoalFollow
-      for (let i = 0; i < 3; i++) {
-        ticker.setPathReset('place_error')
-        bot._moving = (i % 2 === 0) // prod blink: moving true/false
-        follow(bot, ctx, target, { distance_to_player: 20 })
-      }
-    } finally {
-      console.log = origLog
-    }
-    const wedge = logs.filter((l) => l.includes('stuck reason=wedge'))
-    assert.equal(wedge.length, 1)
-    assert.match(wedge[0], /^stuck reason=wedge pos=0,64,0 dist=20\.0 /)
-    assert.deepEqual(ctx.stuck, { by: 'follow', goal: { x: 20, y: 64, z: 0 }, key: 'follow:P' })
-  })
 
   it('stale plans re-issue to the player, never raise stuck (idkcraft-5vv)', () => {
     // Owner decision: follow never gives up. A stale noPath/timeout plan
@@ -291,21 +226,3 @@ describe('follow never gives up (idkcraft-5vv)', () => {
   })
 })
 
-describe('follow position snapshot (idkcraft-g9k)', () => {
-  it('missing body snapshots null, restored body starts tracking', () => {
-    // Respawn/unload tick issues the goal with no body (snapshot null);
-    // the next tick with a body back starts displacement tracking instead
-    // of wedging on a null lastPos.
-    const bot = wedgedBot()
-    bot.entity = null
-    const target = { username: 'P', id: 7, position: pos(-20, 64, -207) }
-    const ctx = { lastGoalKey: '' }
-    follow(bot, ctx, target, {})
-    assert.equal(ctx.lastGoalKey, 'follow:P')
-    assert.equal(ctx.followLastPos, null)
-    bot.entity = { position: pos(-40.4, 64.4, -207.7) }
-    follow(bot, ctx, target, {})
-    assert.ok(ctx.followLastPos, 'tracking starts when the body returns')
-    assert.equal(ctx.followLastPos.x, -40.4)
-  })
-})

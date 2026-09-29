@@ -125,12 +125,14 @@ describe('2oe: place_error streak wedges follow and opens the menu', () => {
 describe('2oe: wedged homing walk reaches the menu', () => {
   it('return-spawn with no displacement raises the home fact and sidesteps', async () => {
     // Prod 2oe, second half: the unseen-player walk home (walkHomeTick) had
-    // no detector at all — a wedged homing walk stood forever. Fixed: the
-    // walk counts its own stillness and raises with the spawn as the goal.
+    // no detector at all — a wedged homing walk stood forever. 6x7.2: the
+    // walk is a plain walk, the central detector raises by=home off the
+    // return-spawn key at the unified slow threshold (30 stills).
     const bot = scenarioBot()
     bot.entity.position = pos(100, 64, 0)
     bot.spawnPoint = pos(0, 64, 0)
     bot.players = { P: { username: 'P', entity: null } } // roster online, nobody visible
+    bot._moving = true // executor claims to drive the homing walk
     const brain = scriptBrain(() => ({ action: 'follow', sprint: false, source: 'stub' }))
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     ticker.setFollow('P')
@@ -140,7 +142,7 @@ describe('2oe: wedged homing walk reaches the menu', () => {
       assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:0,64,0$/)
       assert.ok(bot._goals[bot._goals.length - 1] instanceof goals.GoalNear)
       let r = null
-      for (let i = 0; i < 10; i++) r = await ticker.tick() // wedged walk, no displacement
+      for (let i = 0; i < 31; i++) r = await ticker.tick() // wedged walk, no displacement
       const wedge = cap.lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(wedge.length, 1, cap.lines.join('\n'))
       assert.equal(bot._tickerCtx.stuck.by, 'home')
@@ -158,10 +160,12 @@ describe('2oe: wedged homing walk reaches the menu', () => {
 describe('68p: wedge budget survives a fight tick stealing the body', () => {
   it('follow wedges after two stuck resets despite a fight tick in between', async () => {
     // Prod 68p: every fight/bring tick flipped lastGoalKey and zeroed the
-    // stuck counters, so a wedged pursuit never raised. Fixed: retaking the
-    // same target re-issues the goal but keeps the budget. The brain here
-    // answers fight while the zombie is near, follow otherwise — the theft
-    // arrives through the real arbitration path, not a ctx poke.
+    // stuck counters, so a wedged pursuit never raised. 6x7.2: the streak
+    // is the central detector's and sticky across brain-action switches (a
+    // fight tick is not an order — no clearStuck), so the second knock
+    // still wedges after the theft. The brain here answers fight while the
+    // zombie is near, follow otherwise — the theft arrives through the
+    // real arbitration path, not a ctx poke.
     const bot = scenarioBot()
     bot.players = { P: visiblePlayer('P', 20) }
     bot._moving = true
@@ -175,12 +179,12 @@ describe('68p: wedge budget survives a fight tick stealing the body', () => {
       await ticker.tick() // follow issues GoalFollow
       ticker.setPathReset('stuck')
       await ticker.tick() // first knock: replan, budget kept
-      ticker.setPathReset('stuck')
       bot.entities = { 1: zombie(1, 5) } // fight steals the body for one tick
       await ticker.tick()
       assert.match(bot._tickerCtx.lastGoalKey, /^fight:1$/)
       bot.entities = {}
-      await ticker.tick() // follow retakes the same target: re-issue, no reset
+      ticker.setPathReset('stuck')
+      await ticker.tick() // follow retakes the same target: re-issue
       assert.equal(bot._tickerCtx.lastGoalKey, 'follow:P')
       await ticker.tick() // second stuck reset still counted: wedge
       const wedge = cap.lines.filter((l) => l.includes('stuck reason=wedge'))

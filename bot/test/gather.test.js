@@ -514,11 +514,12 @@ describe('gather step', () => {
     assert.equal(bot.pathfinder.goal, null)
   })
 
-  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, fact at final', async () => {
+  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, no fact at final', async () => {
     // M1 regression: the ticker place_error backstop must not preempt
     // gather's own column skip (endless ask-episodes on one trunk). Drives
-    // real ticker.tick() in work mode: skips happen locally, the stuck fact
-    // raises only at the unreachable final, with by=gather (not place_error).
+    // real ticker.tick() in work mode: skips happen locally, and the final
+    // is a target give-up with no body fact (6x7.2: a wedged body raises
+    // centrally off the gather key instead — pinned in stuck.test.js).
     const names = {}
     const spots = []
     for (const cx of [2, 6, 9]) {
@@ -556,11 +557,7 @@ describe('gather step', () => {
     for (let i = 0; i < 32 && ctx.stepStatus !== 'failed:unreachable'; i++) await tick()
     assert.equal(ctx.stepStatus, 'failed:unreachable')
     assert.ok(bot.lines.includes('cannot reach the trees'))
-    // Asserted on the final tick, not N ticks later: the episode this fact
-    // opens ends (gave-up) and clears it, so a later read pins how long the
-    // escape takes — not who raised the fact. What matters here is the
-    // attribution: by=gather from the detector, not the ticker backstop.
-    assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'fact raised by the detector, not the backstop')
+    assert.equal(ctx.stuck, null, 'target give-up claims no body')
   })
 
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
@@ -644,9 +641,10 @@ describe('gather edges (idkcraft-l71)', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
-  it('fresh drops clear stale skips and release the gather latch', () => {
+  it('fresh drops clear stale skips and leave the central latch alone', () => {
     // A recovered-then-chopped trunk proves the world changed: old skips
-    // go stale, the streak resets, the recover latch releases.
+    // go stale, the streak resets. The release latch is the central
+    // detector's (per-tree keys scope it) — gather never touches it.
     const bot = mockBot({ items: [{ name: 'oak_log', count: 5 }] })
     const ctx = freshCtx()
     ctx.gather = {
@@ -654,11 +652,12 @@ describe('gather edges (idkcraft-l71)', () => {
       skip: new Set(['9,9,9']), streak: 2, final: null, atLogs: -1,
       seenLogs: 0, lastProgressAt: Date.now(),
     }
-    ctx.recoverLatch = { by: 'gather' }
+    const latch = { by: 'gather', key: 'gather:12,64,0' }
+    ctx.recoverLatch = latch
     gather(bot, ctx, null, {})
     assert.equal(ctx.gather.skip.size, 0)
     assert.equal(ctx.gather.streak, 0)
-    assert.equal(ctx.recoverLatch, null)
+    assert.equal(ctx.recoverLatch, latch)
     assert.equal(ctx.stepStatus, 'running')
   })
 

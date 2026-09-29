@@ -2,8 +2,9 @@
 
 // atl.17: ore under the feet in the bot's own shaft — the below-feet trap
 // denial is a property of the PLACE, so re-finding the same nearest block
-// never changes it. Bring raises the stuck fact and the recover menu owns
-// the sidestep; release() resumes ctx.bring untouched.
+// never changes it. 6x7.2: bring no longer raises (the stance changes only
+// when the body itself wedges and stuck.js raises off the bring key) — a
+// standing-still strike loop refuses honestly at the denyStrikes ceiling.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -104,7 +105,7 @@ function capture() {
 }
 
 describe('atl.17 bring below-feet stance (unit)', () => {
-  it('a below-feet denial raises the bring stuck fact and searches again', async () => {
+  it('a below-feet denial strikes and searches again with no stuck fact', async () => {
     const bot = shaftBot(shaftCells())
     const ctx = {
       lastGoalKey: '',
@@ -118,10 +119,7 @@ describe('atl.17 bring below-feet stance (unit)', () => {
     }
     assert.equal(ctx.bring.phase, 'find', 'search again after the strike')
     assert.equal(ctx.bring.denyStrikes, 1, 'one strike counted')
-    assert.ok(ctx.stuck, 'stuck fact raised')
-    assert.equal(ctx.stuck.by, 'bring')
-    assert.deepEqual([ctx.stuck.goal.x, ctx.stuck.goal.y, ctx.stuck.goal.z], [0, 62, 0])
-    assert.equal(ctx.stuck.key, 'bring:0,62,0')
+    assert.ok(!ctx.stuck, 'no stuck fact from the order itself')
     assert.ok(cap.logged.some((l) => l === 'selftrap: refused dig iron_ore at 0 62 0 (below-feet)'), cap.logged.join('\n'))
   })
 
@@ -158,7 +156,11 @@ describe('atl.17 bring below-feet stance (unit)', () => {
 })
 
 describe('atl.17 bring below-feet stance (fake-player e2e)', () => {
-  it('shaft stance: one selftrap, sidestep episode, ore dug, here is 1 raw_iron', async () => {
+  it('shaft stance over unknown below: four selftraps, honest refusal, no episode', async () => {
+    // 6x7.2: the atl.17 sidestep episode is gone with the bring raise — the
+    // stance never changes (same nearest block every find), so the order
+    // strikes out and refuses instead of digging. Solid below still digs
+    // (atl.20, below); a wedged body still raises centrally off the key.
     const cells = shaftCells()
     const bot = shaftBot(cells)
     const ticker = createTicker({
@@ -193,12 +195,10 @@ describe('atl.17 bring below-feet stance (fake-player e2e)', () => {
       cap.release()
     }
     const traps = cap.logged.filter((l) => l === 'selftrap: refused dig iron_ore at 0 62 0 (below-feet)')
-    assert.equal(traps.length, 1, `exactly one below-feet refusal, got ${traps.length}:\n${cap.logged.join('\n')}`)
-    assert.ok(bot.lines.includes('stuck, trying sidestepping (fsm)'), `episode ran: ${bot.lines.join(' | ')}`)
-    assert.ok(!('0,62,0' in cells), 'ore dug after the stance change')
-    assert.ok(bot.entity.position.z < -0.5, `stance changed: z=${bot.entity.position.z}`)
-    assert.ok(bot.lines.includes('here is 1 raw_iron'), `chats: ${bot.lines.join(' | ')}`)
-    assert.ok(!bot.lines.some((l) => l.includes('could not reach iron_ore safely')), 'never refused')
+    assert.equal(traps.length, 4, `four strikes then refuse, got ${traps.length}:\n${cap.logged.join('\n')}`)
+    assert.ok(!bot.lines.some((l) => l.includes('stuck, trying')), `no episode: ${bot.lines.join(' | ')}`)
+    assert.ok('0,62,0' in cells, 'hazard never dug')
+    assert.ok(bot.lines.some((l) => l.includes('could not reach iron_ore safely')), `refused: ${bot.lines.join(' | ')}`)
   })
 })
 
@@ -279,7 +279,7 @@ describe('atl.20 below-feet onto solid (unit)', () => {
     assert.ok(!cap.logged.some((l) => l.includes('onto solid')), 'exemption never fires on a build')
   })
 
-  it('air below: the strike path still denies and raises the stuck fact', async () => {
+  it('air below: the strike path still denies, with no stuck fact', async () => {
     const cells = shaftCells()
     cells['0,61,0'] = 'air' // explicit drop under the ore: a real hazard
     const bot = shaftBot(cells)
@@ -296,7 +296,7 @@ describe('atl.20 below-feet onto solid (unit)', () => {
     assert.equal(bot.digCalls, 0, 'hazard never dug')
     assert.equal(ctx.bring.phase, 'find', 'search again after the strike')
     assert.equal(ctx.bring.denyStrikes, 1, 'one strike counted')
-    assert.ok(ctx.stuck && ctx.stuck.by === 'bring', 'stuck fact raised (atl.17 path)')
+    assert.ok(!ctx.stuck, 'no stuck fact from the order itself')
     assert.ok(cap.logged.some((l) => l === 'selftrap: refused dig iron_ore at 0 62 0 (below-feet)'), cap.logged.join('\n'))
   })
 })

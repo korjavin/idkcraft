@@ -519,8 +519,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // A visible player with skipped work resumes it at once (one-shot):
       // sighting is the normal end of the homing walk, arrival the other.
       if (target && ctx.resumeWork && !followName) startWork()
-      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
+      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') {
+        // Sighting ends the homing walk: the spawn goal is moot, and so is
+        // the still streak that raised it — without the reset the streak
+        // re-raises by=home on this same tick (the stale return-spawn key
+        // flips to follow: only when follow dispatches below).
+        ctx.stuck = null
+        ctx.stuckTicks = 0
+        ctx.stuckState = 'MOVING'
+      }
       if (homeReached()) {
+        // Arrived means the homing goal is met, not stuck: pin the still
+        // streak at zero while standing at spawn (was the walkHomeTick
+        // arrival reset) so a parked bot never wedges here.
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuckState = 'MOVING'
         // At spawn there is nothing to walk for — unless a follow order is
         // pending: then keep the latch (counter tripped, no work) and stand
         // until the player is visible, instead of oscillating work-vs-home.

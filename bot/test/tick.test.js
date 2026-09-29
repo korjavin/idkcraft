@@ -586,20 +586,23 @@ describe('follow behaviour and unstuck reflex', () => {
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
 
       ticker.setPathReset('stuck')
-      await ticker.tick() // 2nd stuck, no displacement: the real wedge, menu
-      assert.equal(bot.calls.setGoal, 2)
-      assert.equal(bot.calls.jump, 0)
+      await ticker.tick() // 2nd stuck, no displacement: the real wedge, menu same tick
       assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
       const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(stuckLines.length, 1)
       assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
 
-      await ticker.tick() // episode tick: null + menu sidestep + one-tick jump
+      // 6x7.2: the central raise lands before the routing check, so the
+      // episode opens on the wedge tick itself (was: dispatch-time raise,
+      // routed next tick): null + menu sidestep + one-tick jump at once.
       assert.equal(bot.calls.setGoal, 4)
       assert.equal(bot.calls.goals[2], null)
       assert.equal(bot.calls.goals[3].constructor.name, 'GoalNear')
       assert.equal(bot.calls.jump, 1)
       assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
+      const r = await ticker.tick() // running tick: the episode holds the body
+      assert.equal(r.decision.action, 'sidestep')
+      assert.equal(r.calledBrain, false)
     } finally {
       console.log = origLog
     }
@@ -626,21 +629,22 @@ describe('follow behaviour and unstuck reflex', () => {
       await ticker.tick() // 2nd: blind, no wedge
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 0)
       ticker.setPathReset('place_error')
-      await ticker.tick() // 3rd: follow wedge with relief names, body untouched
-      assert.equal(bot.calls.setGoal, 1)
-      assert.equal(bot.calls.jump, 0)
+      await ticker.tick() // 3rd: follow wedge with relief names, menu same tick
       assert.deepEqual(bot._tickerCtx.stuck, { by: 'follow', goal: { x: 10, y: 64, z: 0 }, key: 'follow:7' })
       const stuckLines = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(stuckLines.length, 1)
       assert.match(stuckLines[0], /^stuck reason=wedge pos=0,64,0 dist=10\.0 feet=\? head=\? next=\?:\?$/)
 
-      await ticker.tick() // episode tick: null + menu sidestep + one-tick jump
+      // 6x7.2: same-tick routing (see above): null + menu sidestep + jump.
       assert.equal(bot.calls.setGoal, 3)
       assert.equal(bot.calls.goals[1], null)
       assert.equal(bot.calls.goals[2].constructor.name, 'GoalNear')
       assert.equal(bot.calls.jump, 1)
       assert.equal(lines.filter((l) => l.includes('stuck reason=wedge')).length, 1)
       assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
+      const r = await ticker.tick() // running tick: the episode holds the body
+      assert.equal(r.decision.action, 'sidestep')
+      assert.equal(r.calledBrain, false)
     } finally {
       console.log = origLog
     }
@@ -1563,7 +1567,7 @@ describe('work mode (epic rw4)', () => {
       const origLog = console.log
       console.log = (l) => { lines.push(String(l)) }
       try {
-        for (let i = 0; i < 24; i++) await ticker.tick()
+        for (let i = 0; i < 35; i++) await ticker.tick() // wedge at 31 (unified slow entry), routed same tick
       const wedge = lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(wedge.length, 1)
       assert.match(wedge[0], /^stuck reason=wedge pos=-205,39,-35 dist=/)
@@ -1599,7 +1603,7 @@ describe('work mode (epic rw4)', () => {
       const origLog = console.log
       console.log = (l) => { lines.push(String(l)) }
       try {
-        for (let i = 0; i < 21; i++) await ticker.tick() // wedge at 20, episode starts at 21
+        for (let i = 0; i < 32; i++) await ticker.tick() // wedge at 31, routed same tick
         assert.ok(lines.some((l) => l.includes('recover action=sidestep source=fsm outcome=chosen')))
         bot.entity.position = pos(-203, 39, -35) // the sidestep moved the body
         for (let i = 0; i < 8; i++) await ticker.tick()
@@ -1642,12 +1646,12 @@ describe('work mode (epic rw4)', () => {
       const origLog = console.log
       console.log = (l) => { lines.push(String(l)) }
       try {
-        for (let i = 0; i < 21; i++) await ticker.tick() // wedge at 20, episode starts at 21
+        for (let i = 0; i < 32; i++) await ticker.tick() // wedge at 31, routed same tick
         bot.entity.position = pos(-203, 39, -35) // the sidestep moved the body
         for (let i = 0; i < 8; i++) await ticker.tick() // release done
         assert.ok(lines.some((l) => l.includes('outcome=done')))
         bot.entity.position = pos(-205, 39, -35) // walked back into the wedge cell
-        for (let i = 0; i < 22; i++) await ticker.tick() // re-issue + two full stall cycles
+        for (let i = 0; i < 65; i++) await ticker.tick() // re-issue + two full stall cycles
       } finally {
         console.log = origLog
       }
@@ -1669,7 +1673,7 @@ describe('work mode (epic rw4)', () => {
       const origLog = console.log
       console.log = (l) => { lines.push(String(l)) }
       try {
-        for (let i = 0; i < 20; i++) await ticker.tick()
+        for (let i = 0; i < 32; i++) await ticker.tick() // homing walk wedges at 31
       } finally {
         console.log = origLog
       }

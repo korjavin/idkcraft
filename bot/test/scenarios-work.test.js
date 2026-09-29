@@ -9,6 +9,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
+const { goals } = require('mineflayer-pathfinder')
 const { createTicker } = require('../src/index')
 
 function pos(x, y, z) {
@@ -139,12 +140,21 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       assert.ok(t < 24, 'gather fails through ticks (place_error fast path)')
       assert.deepEqual(bot.lines.filter((l) => l === 'cannot reach the trees'),
         ['cannot reach the trees'], 'one chat at the final')
-      assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'detector raises, menu gets one shot')
+      assert.equal(ctx.stuck, null, 'target give-up claims no body (6x7.2)')
       assert.equal(bot.pathfinder.goal, null, 'dead goal dropped at the final (yvi)')
       assert.equal(ctx.lastGoalKey, '', 'goal key cleared with it')
 
-      // 2. The escape episode plays out: sidestep walks free sideways.
+      // 2. The body wedged on the gather walk raises centrally (one tick
+      // below the slow threshold, same stillness); the escape episode
+      // plays out: sidestep walks free sideways.
       bot.entity.position = pos(0, 64, 5)
+      bot._moving = true
+      ctx.lastGoalKey = 'gather:9,64,0'
+      bot.pathfinder.goal = new goals.GoalNear(9, 64, 0, 2)
+      ctx.lastPos = { x: 0, y: 64, z: 5 }
+      ctx.stuckTicks = 29
+      await ticker.tick()
+      assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'central raises off the gather key')
       const stepBody = () => {
         const g = bot.pathfinder.goal
         if (!g || typeof g.x !== 'number') return
