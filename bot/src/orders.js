@@ -347,6 +347,22 @@ function createOrders(box) {
         if (!search) {
           // Edge 48, no shells: decide now; a contested pair opens the
           // order in find so the first (awaited) tick asks the model once.
+          // A gated shaft with no exposed rival (chv) is no verdict at all:
+          // the order opens in find so the legs hunt diggable ground (or
+          // refuse honestly with the vein coords when anchorless).
+          if (!mem && !buried) {
+            if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+            ctx.unseenTicks = 0
+            ctx.resumeWork = false
+            clearStuck()
+            homeMod.releaseMeet(bot, ctx)
+            ctx.bring = {
+              kind: 'block', name, want, by, phase: bringMod.openPhase(ctx), have: 0, announced: false,
+              deepVein: bringMod.deepVeinOf(bp0, res),
+            }
+            ctx.paused = false
+            return `nearest ${name} too deep to dig, looking for a diggable vein…`
+          }
           const d = bringMod.decideBringSource(mem, buried)
           if (!d.contested) {
             clearStuck()

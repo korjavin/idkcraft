@@ -126,7 +126,10 @@ async function advancePendingSearch(bot, ticker, ctx) {
       const stash = p.buried && p.buried.position ? p.buried : null
       const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result, bot) : null
       const farBuried = r.result && r.result.exposed === false ? r.result : (r.buried || null)
-      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
+      // A gated stash falls back to the far shaft (chv): buriedCand returns
+      // null past the gate, and the stash merely existing must not hide a
+      // diggable far hit (the searchfar twin already falls back this way).
+      const buried = (stash && bringMod.buriedCand(bp0, stash, bot)) || (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
@@ -138,9 +141,13 @@ async function advancePendingSearch(bot, ticker, ctx) {
           return
         }
         homeMod.releaseMeet(bot, ctx)
+        // A shaft the gate dropped (chv) rides along for the honest refusal:
+        // the stashed 48 hit when creation saw buried ore, else the far hit.
+        const gated = stash || farBuried
         ctx.bring = {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
+          deepVein: gated ? bringMod.deepVeinOf(bp0, gated) : undefined,
         }
         try {
           ctx.bring.farCache = { x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: null, buriedHit: null }

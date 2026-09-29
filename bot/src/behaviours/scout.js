@@ -62,6 +62,21 @@ function keyOf(p) {
 const SEARCH_FIRST = 48
 const SEARCH_MAX = 160
 
+// Dig-down gate (idkcraft-chv): a buried hit is infeasible when it is BOTH
+// deep and far — the walk phase cannot commit down a shallow approach
+// (atl.20 S3 0/3: dy 15+ at distH ~33 stalled without digging). Either axis
+// alone digs: S1 delivered dy 9-10, and a steep dy-16 shaft at distH 11
+// dug through solid ground and delivered (S4 assay). A cheap winner past
+// the gate triggers a full-pool rescan for a diggable rival, and bring
+// prices gated hits as no-dig (SOURCE_COST.maxDigDepth/maxDigDistH default
+// here). Two empirical cutoffs, not theory: deliver points (10,11),(16,11),
+// stall points (15+,33+).
+const MAX_DIG_DEPTH = 12
+const MAX_DIG_DISTH = 20
+// Full-pool rescan count: the within-48 pool at the S3 spot holds 266 hits
+// (probe 2026-09-29); 2048 sees all of it with margin for richer ground.
+const FIND_FULL_COUNT = 2048
+
 function scanRadius(r) {
   return Math.ceil(r * Math.sqrt(3))
 }
@@ -217,16 +232,63 @@ function findNearestBlock(bot, blockName, refY = null, exclude = null) {
   console.log(`search ${blockName} r=${SEARCH_FIRST} took=${tookMs.toFixed(1)}ms found=${found.length}${found.length !== raw ? ` (excluded ${raw - found.length})` : ''}`)
   try { metrics.searchDuration.observe({ radius: String(SEARCH_FIRST) }, tookMs / 1000) } catch { /* metrics never break search */ }
   if (found.length === 0) return null
-  return rankHits(bot, found, refY)
+  const best = rankHits(bot, found, refY)
+  if (!needsFullRescan(bot, from, best)) return best
+  // The cheap pool's winner is an undiggable shaft (chv): the count-64 cut
+  // keeps the nearest walk-order hits, which sit deep below the feet in
+  // ore-rich ground (near=deep, shallow=far), so a diggable rival never
+  // enters the pool. One full-pool rescan ranks everything within 48 —
+  // ~0.5 s, and only on this path; the exposed/shallow fast path above is
+  // untouched. A throwing rescan keeps the cheap winner, never null.
+  let full = null
+  const t1 = performance.now()
+  try {
+    full = bot.findBlocks({ matching: ids, maxDistance: scanRadius(SEARCH_FIRST), count: FIND_FULL_COUNT })
+  } catch {
+    return best
+  }
+  const tookFull = performance.now() - t1
+  let pool = from
+    ? (full || []).filter((q) => dist(q, from) <= SEARCH_FIRST)
+    : (full || [])
+  const rawFull = pool.length
+  if (typeof exclude === 'function') pool = pool.filter((q) => !exclude(q))
+  console.log(`search ${blockName} r=${SEARCH_FIRST} full took=${tookFull.toFixed(1)}ms found=${pool.length}${pool.length !== rawFull ? ` (excluded ${rawFull - pool.length})` : ''}`)
+  try { metrics.searchDuration.observe({ radius: String(SEARCH_FIRST) }, tookFull / 1000) } catch { /* metrics never break search */ }
+  if (pool.length === 0) return best
+  return rankHits(bot, pool, refY, true)
+}
+
+// A buried cheap winner past the dig-down gate: walk+canDig cannot finish
+// the shaft, so the full pool is worth one rescan. Exposed, shallow, near,
+// and above-feet winners (and an unreadable origin) skip it. The predicate
+// matches the bring verdict gate exactly (buriedCand): trigger and gate
+// must never disagree about what is diggable.
+function needsFullRescan(bot, from, best) {
+  if (!best || !from || typeof from.y !== 'number' || typeof best.y !== 'number') return false
+  if (typeof best.x !== 'number' || typeof best.z !== 'number') return false
+  let exposed = false
+  try { exposed = isExposed(bot, best) } catch { exposed = false }
+  if (exposed) return false
+  return gatedShaft(Math.floor(from.y) - Math.floor(best.y), Math.hypot(best.x - from.x, best.z - from.z))
+}
+
+// Gate predicate (chv): true when the shaft is too deep AND too far out to
+// walk-dig. needsFullRescan applies it with the scout defaults; buriedCand
+// mirrors it with SOURCE_COST (stub-able in tests) — the two must agree.
+function gatedShaft(depthBelow, distH) {
+  return depthBelow > MAX_DIG_DEPTH && distH >= MAX_DIG_DISTH
 }
 
 // Shared ranking: exposed first (walkable, not solid rock), then closest in
 // height to refY, then nearest by straight distance. Capped to the nearest
 // 64 by distance first: a far search can merge hundreds of hits, and each
 // exposure check costs up to six blockAt reads on the completion tick.
-function rankHits(bot, found, refY = null) {
+// full skips the cap: the chv rescan ranks the whole within-48 pool, where
+// the distance cap would re-impose the same near=deep lottery it rescans for.
+function rankHits(bot, found, refY = null, full = false) {
   const origin = bot.entity && bot.entity.position
-  if (origin && found.length > 64) {
+  if (!full && origin && found.length > 64) {
     found = [...found].sort((a, b) => dist(a, origin) - dist(b, origin)).slice(0, 64)
   }
   const y0 = typeof refY === 'number' ? refY
@@ -244,9 +306,17 @@ function rankHits(bot, found, refY = null) {
 
   function scoreOf(p) {
     const exposed = isExposed(bot, p) ? 0 : 1
+    // Diggable before gated (chv): the rescan exists to find a shaft the
+    // walk can finish, so a gated-but-shallower hit must not outrank a
+    // diggable deep-near one. Exposed hits are never gated (walkable by
+    // definition — the gate lives in buriedCand only), and an unreadable
+    // origin ranks fail-open (legacy).
+    const gated = exposed === 0 ? 0 : (origin && typeof origin.x === 'number' && typeof origin.y === 'number' && typeof origin.z === 'number' &&
+      p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number' &&
+      gatedShaft(Math.floor(origin.y) - Math.floor(p.y), Math.hypot(p.x - origin.x, p.z - origin.z)) ? 1 : 0)
     const dy = y0 != null && typeof p.y === 'number' ? Math.abs(p.y - y0) : 0
     const d = origin ? dist(p, origin) : 0
-    return [exposed, dy, d]
+    return [exposed, gated, dy, d]
   }
 }
 
@@ -442,7 +512,7 @@ function stepFarSearch(bot, cursor, opts) {
 }
 
 function compareScore(a, b) {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return a[i] - b[i]
   }
   return 0
@@ -549,4 +619,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf }
+module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }
