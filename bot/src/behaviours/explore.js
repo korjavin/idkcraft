@@ -40,6 +40,26 @@ function chunkOf(x, z) {
   return `${Math.floor(x / 16)},${Math.floor(z / 16)}`
 }
 
+// Drop a leg the bot died on (9kd round 2): the target alone is not enough —
+// pickTarget is deterministic, so a target outside the fresh disc would be
+// re-picked and re-pathed identically after respawn (stale GoalXZ included:
+// lastGoalKey still matches, so setGoal is skipped). Consuming the target
+// chunk advances the spiral past the killer leg — the unreachable-stall
+// precedent — and the new key re-issues the goal. The bring order itself
+// survives (legs uncounted), visited stays shared. True when a leg dropped.
+function dropDeadLeg(ctx) {
+  try {
+    const e = ctx && ctx.explore
+    if (!e || typeof e !== 'object' || !e.target) return false
+    if (e.visited instanceof Set) {
+      try { e.visited.add(chunkOf(e.target.x, e.target.z)) } catch (_) { /* consume best-effort */ }
+    }
+    e.target = null
+    e.issuedKey = null
+    return true
+  } catch (_) { return false }
+}
+
 function compass(dx, dz) {
   const idx = ((Math.round(8 * Math.atan2(dx, -dz) / (2 * Math.PI)) % 8) + 8) % 8
   return DIRS[idx]
@@ -108,7 +128,7 @@ function explore(bot, ctx, target, state) {
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.near(ctx, { x, z }))
+    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
       // across restarts, a done-log every tick forever): start over from
@@ -176,3 +196,4 @@ function explore(bot, ctx, target, state) {
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
+module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target

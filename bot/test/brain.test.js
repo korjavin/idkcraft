@@ -426,6 +426,22 @@ describe('jevBrain timeout', () => {
   })
 })
 
+describe('jevBrain body-read deadline', () => {
+  it('a response whose body never arrives still falls back within the deadline', async () => {
+    // headers ok, body never arrives; like undici, the body read honours the signal.
+    // If clearTimeout ran before res.json(), no abort would come and this would hang,
+    // so the decide() is raced against a 500 ms guard instead of relying on a hang.
+    const headersOnly = async (url, opts) => ({
+      ok: true,
+      json: () => new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true }))
+    })
+    const guard = new Promise((resolve) => setTimeout(() => resolve('hung'), 500))
+    const decision = await Promise.race([jevBrain('k', headersOnly, 50).decide({ distance_to_player: 12 }), guard])
+    assert.notEqual(decision, 'hung', 'body-read deadline did not fire')
+    assert.equal(decision.source, 'stub-fallback')
+  })
+})
+
 describe('configurable brain endpoint (laya sidecar)', () => {
   const LAYA = 'http://laya:8000/v1/systemone'
   const state = { distance_to_player: 5, player_visible: true, player_moving: false, bot_health: 20, bot_food: 20, nearby_hostiles: 0 }

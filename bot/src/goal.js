@@ -152,7 +152,12 @@ const MENU = {
     // the hunt owns the body and must not run past dark (bring dusk-cancels
     // self orders, but the step never opens one at night in the first place).
     // Non-v2 homes read beds='both' (nothing owed), so no version check here.
-    feasible: (facts) => facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'),
+    // 9kd: two sheepless hunts in one MC day latch beds off until tomorrow
+    // (death-respawns release the stepFail hold, so it cannot hold this).
+    feasible: (facts, bot, ctx) => {
+      if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
+      try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
+    },
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
   },
@@ -1089,6 +1094,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      try { if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'beds: no sheep today' } catch (_) { /* wording best-effort */ }
       return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
@@ -1312,8 +1318,13 @@ async function decide(bot, ctx) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
-    // re-pick forever.
-    if (prev && ctx.askedKey === askKey && !chainOwns && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    // re-pick forever. A gear yield never rides it either (ipn.7): gear
+    // ends done to hand off to the fetchers (latched announce), and the
+    // same text plus the same 'done' status re-issues it every tick —
+    // prod stood 8-10 min with 'going to dig' until the facts moved. The
+    // fresh menu pick below keeps gear out via the said-latch until a new
+    // need arrives; no hold is recorded (gear yields are never holds).
+    if (prev && ctx.askedKey === askKey && !chainOwns && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {

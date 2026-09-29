@@ -29,6 +29,7 @@ const { canBreak } = require('./util')
 // one bed at a time — a x2 plan would strand on 4 oak + 4 birch).
 const WANT_WOOL = 6
 const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:no-wool
+const NOWOOL_LATCH = 2 // failed wool hunts per MC day before beds latches off until tomorrow
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -334,6 +335,37 @@ function shearsTick(bot, ctx, st, pack, craftsOwed) {
   try { console.log(`beds shears: ${(res && res.line) || 'crafting failed'}, hunting instead`) } catch (_) { /* logging best-effort */ }
 }
 
+// Day latch (idkcraft-9kd): the atl.4 stepFail hold releases on relocation —
+// and a death-respawn IS a relocation — so one sheepless morning re-hunted
+// after every death (prod: 9 guardian kills in a day). The second failed
+// wool hunt of the same MC day latches beds infeasible until tomorrow; the
+// menu feasible gate reads it, the step itself just counts failures.
+function dayOf(bot) {
+  try {
+    const d = bot && bot.time && bot.time.day
+    return typeof d === 'number' ? d : 0
+  } catch (_) { return 0 }
+}
+
+function noteNoWool(st, day) {
+  try {
+    if (!st || typeof st !== 'object') return 0
+    const cur = st.noWool && typeof st.noWool === 'object' ? st.noWool : null
+    const fails = cur && cur.day === day ? (cur.fails || 0) + 1 : 1
+    st.noWool = { day, fails }
+    return fails
+  } catch (_) { return 0 }
+}
+
+function sheepLatched(ctx, bot) {
+  try {
+    const st = ctx && ctx.beds
+    const cur = st && st.noWool
+    if (!cur || typeof cur !== 'object') return false
+    return cur.day === dayOf(bot) && (cur.fails || 0) >= NOWOOL_LATCH
+  } catch (_) { return false }
+}
+
 // Wool through a self bring order (the did.3 mob rung): the return phase
 // keeps the goods, dusk cancels, the bed step reopens in the morning. A hunt
 // that searched the whole budget is genuinely sheepless (failed:no-wool, the
@@ -364,6 +396,7 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     const budget = (bringMod.SEARCH_BUDGET && bringMod.SEARCH_BUDGET.legs) || 24
     if (legs >= budget || timedOut || (st.reopens || 0) >= HUNT_REOPENS) {
       st.reopens = 0
+      noteNoWool(st, dayOf(bot))
       ctx.stepStatus = 'failed:no-wool'
       return
     }
@@ -635,6 +668,8 @@ module.exports.bedAt = bedAt
 module.exports.bedroomBed = bedroomBed
 module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact
+module.exports.sheepLatched = sheepLatched
+module.exports.NOWOOL_LATCH = NOWOOL_LATCH
 module.exports.fillNeed = fillNeed
 module.exports.needsFillGround = needsFillGround
 module.exports.WANT_WOOL = WANT_WOOL
