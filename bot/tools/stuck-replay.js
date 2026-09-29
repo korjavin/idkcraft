@@ -163,6 +163,26 @@ function loadBaseline() {
 // the rerun re-surfaces any real regression; both print either way).
 // A dropped follower never reaches here (the exit wrapper maps it to 2);
 // a dead follower (DIED) stays judged — dying is behavior.
+// Follower-drop guard (idkcraft-6x7.4): runOnce's fatal path (follower
+// kicked/error/disconnected) hard-exits 1, which the wrapper would read as
+// REGRESSION. The guard maps any exit(1) before arm() to exit 2 (env); the
+// gate's own exit arms first and passes through untouched. Pure over the
+// injected realExit, unit-tested. No runOnce hook exists and index.js is
+// out of scope for rig code, hence the interposer instead of a parameter.
+function makeExitGuard(realExit) {
+  let armed = false
+  return {
+    arm() { armed = true },
+    exit(code) {
+      if (code === 1 && !armed) {
+        console.error('REPLAY-ERROR follower dropped before the verdict (kicked/error/disconnect?)')
+        return realExit(2)
+      }
+      return realExit(code)
+    },
+  }
+}
+
 const ENV_NOTES = new Set(['GUIDE-BURIED', 'GUIDE-DIED'])
 function gateCode(rows, diffs) {
   let ok = 0
@@ -237,22 +257,10 @@ async function main() {
     throw new Error(`bot names exceed 16 chars (TAG=${JSON.stringify(TAG)}); set a shorter REPLAY_TAG`)
   }
   const picked = pickBrain()
-  // runOnce's fatal path (follower kicked/error/disconnected) hard-exits 1,
-  // which the wrapper would read as REGRESSION. Interpose: any exit(1)
-  // before the gate verdict is a dropped follower (env), so log + exit 2.
-  // The gate's own exit sets gating and passes through untouched; the only
-  // other exit(1) in bot/src is this same fatal (index.js), so nothing
-  // legitimate is converted. No runOnce hook exists and index.js is out of
-  // scope for rig code, hence the wrapper instead of a parameter.
-  let gating = false
-  const realExit = process.exit.bind(process)
-  process.exit = (code) => {
-    if (code === 1 && !gating) {
-      console.error('REPLAY-ERROR follower dropped before the verdict (kicked/error/disconnect?)')
-      return realExit(2)
-    }
-    return realExit(code)
-  }
+  // Installed before the follower exists: any fatal exit(1) from here on
+  // is a dropped follower (env → 2) until the gate arms its own verdict.
+  const exitGuard = makeExitGuard(process.exit.bind(process))
+  process.exit = exitGuard.exit
   const index = require('../src/index')
   const brain = picked.make()
   const recover = require('../src/behaviours/recover')
@@ -504,11 +512,11 @@ async function main() {
     }
   }
   // Quit the guide only: quitting the follower trips runOnce's fatal end
-  // path (exit 1 races our gate code — and the wrapper above would map it
+  // path (exit 1 races our gate code — and the guard above would map it
   // to 2). The follower socket dies with us.
   try { guide.quit() } catch (_) {}
   await sleep(1000)
-  gating = true
+  exitGuard.arm()
   process.exit(code)
 }
 
@@ -516,4 +524,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard }

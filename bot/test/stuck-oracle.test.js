@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -205,11 +205,6 @@ describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
     assert.ok(replay.includes('process.exit(2)'), 'harness errors must exit 2')
   })
 
-  it('a dropped follower exits 2, never 1', () => {
-    assert.ok(replay.includes('follower dropped before the verdict'), 'drop log missing')
-    assert.ok(replay.includes('gating = true'), 'gate exit must pass the wrapper through')
-  })
-
   it('laya runs never judge against the stub baseline', () => {
     assert.ok(replay.includes("brainName !== 'stub'"), 'brain guard missing')
     assert.ok(replay.includes('stub baseline does not apply'), 'skip message missing')
@@ -217,6 +212,39 @@ describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
 
   it('overlong bot names fail fast with the real cause', () => {
     assert.ok(replay.includes('bot names exceed 16 chars'), 'name-length guard missing')
+  })
+})
+
+describe('makeExitGuard (idkcraft-6x7.4 round 2)', () => {
+  it('maps a pre-arm exit 1 to exit 2', () => {
+    const calls = []
+    const origErr = console.error
+    console.error = () => {}
+    try {
+      makeExitGuard((c) => calls.push(c)).exit(1)
+    } finally {
+      console.error = origErr
+    }
+    assert.deepEqual(calls, [2])
+  })
+
+  it('passes exit 1 through after arm (the gate verdict)', () => {
+    const calls = []
+    const g = makeExitGuard((c) => calls.push(c))
+    g.arm()
+    g.exit(1)
+    assert.deepEqual(calls, [1])
+  })
+
+  it('passes other codes through pre- and post-arm', () => {
+    const calls = []
+    const g = makeExitGuard((c) => calls.push(c))
+    g.exit(0)
+    g.exit(2)
+    g.arm()
+    g.exit(0)
+    g.exit(2)
+    assert.deepEqual(calls, [0, 2, 0, 2])
   })
 })
 
