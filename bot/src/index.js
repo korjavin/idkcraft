@@ -1961,7 +1961,7 @@ function fleeReflex(bot, ctx) {
         // Sync 48 is empty: the 96/160 shells run sliced across ticks (amb).
         // A null cursor (unreadable world) answers from sync alone — unless
         // an anchor exists, when the order opens and search legs walk (atl.8).
-        const search = startFarSearch(bot, name)
+        const search = startFarSearch(bot, name, null, { exposedOnly: true })
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
           if (!bringMod.canSearch(bot, ctx)) {
@@ -2003,7 +2003,7 @@ function fleeReflex(bot, ctx) {
         let mem = null
         try { mem = bringMod.memoryExposed(bot, ctx, bp0, name, null) } catch (_) { mem = null }
         mem = bringMod.memoryInBudget(mem, buried)
-        const search = startFarSearch(bot, name)
+        const search = startFarSearch(bot, name, null, { exposedOnly: true })
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
           // Edge 48, no shells: decide now; a contested pair opens the
@@ -2523,10 +2523,13 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // Shells done (atl.15): the verdict weighs live exposed (a) against
       // memory (b) and the dig (c) — the stashed 48 hit when creation saw
       // buried ore, else the far hit itself. Contested asks the model once
-      // (the tick awaits this); the cache rides onto the new order.
+      // (the tick awaits this); the cache rides onto the new order. The
+      // cursor ran in exposed mode (atl.19), so (c) rides r.buried (the
+      // second pass over the same hits).
       const stash = p.buried && p.buried.position ? p.buried : null
       const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result, bot) : null
-      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null)
+      const farBuried = r.result && r.result.exposed === false ? r.result : (r.buried || null)
+      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))
@@ -2540,7 +2543,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         homeMod.releaseMeet(bot, ctx)
         // A shaft the gate dropped (chv) rides along for the honest refusal:
         // the stashed 48 hit when creation saw buried ore, else the far hit.
-        const gated = stash || (r.result && r.result.exposed === false ? r.result : null)
+        const gated = stash || farBuried
         ctx.bring = {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
@@ -2612,7 +2615,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         try {
           ctx.bring.farCache = {
             x: bp0.x, y: bp0.y, z: bp0.z, edge, hit: far,
-            buriedHit: r.result && r.result.exposed === false ? bringMod.buriedCand(bp0, r.result, bot) : null,
+            buriedHit: farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null,
           }
         } catch (_) { /* cache best-effort */ }
       }
