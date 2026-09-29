@@ -7,6 +7,7 @@ const assert = require('node:assert/strict')
 const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
 const resources = require('../src/resources')
 const home = require('../src/behaviours/home')
+const stockpileMod = require('../src/behaviours/stockpile')
 
 function pos(x, y, z) {
   const p = {
@@ -286,10 +287,13 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     assert.equal(goalFsm(facts, feasibleNames(facts, bot, ctx)), 'stockpile')
   })
   it('surplus fact sees the bed reserve (no stockpile re-pick loop)', () => {
-    const items = [{ name: 'white_wool', count: 11 }, { name: 'oak_planks', count: 6 }]
-    const v2 = { home: { v: 2, site: pos(10, 64, 20) } }
+    // Ladder done (ipn.8): this pins the BED keep, not the gear reserve.
+    const items = [{ name: 'white_wool', count: 11 }, { name: 'oak_planks', count: 6 },
+      { name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }]
+    const given = { gearGiven: { ...stockpileMod.GEAR_OWNER_WANT } }
+    const v2 = { home: { v: 2, site: pos(10, 64, 20) }, ...given }
     assert.equal(goalFacts(goalBot({ items }), v2).surplus, 'no', 'reserved-only pack: nothing to deposit')
-    assert.equal(goalFacts(goalBot({ items }), {}).surplus, 'yes', 'no bedroom: the same pack is surplus')
+    assert.equal(goalFacts(goalBot({ items }), { ...given }).surplus, 'yes', 'no bedroom: the same pack is surplus')
   })
   it('criteria name one fact each', () => {
     assert.ok(STEP_CRITERIA.forage.includes('known is near'))

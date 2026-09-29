@@ -15,6 +15,13 @@ const stockpileMod = require('../src/behaviours/stockpile')
 const goal = require('../src/goal')
 const { respawnLine, wakeBody, createLifecycle } = require('../src/index')
 
+// Done-ladder ctx (ipn.8): the bed-reserve tests pin the BED keep, so they
+// close the gear ladder — otherwise the gear reserve keeps 4 more planks and
+// the assertions pin two features at once. Picks ride the pack (self rungs
+// read the inventory); they are TOOL_KEEP and never enter the plan.
+const LADDER_DONE = { gearGiven: { ...stockpileMod.GEAR_OWNER_WANT } }
+const LADDER_PICKS = [{ name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }]
+
 const SITE = { x: 10, y: 64, z: 20 }
 // Bedroom A (bot's): foot (11,64,24) head (12,64,24); B (owner's): (14,64,24) (15,64,24).
 const A_FOOT = { x: 11, y: 64, z: 24 }
@@ -380,6 +387,7 @@ describe('jr2.2 stockpile keeps bed work-in-progress while beds are owed', () =>
         { name: 'white_bed', count: 1 },
         { name: 'oak_planks', count: 10 },
         { name: 'dirt', count: 40 },
+        ...LADDER_PICKS,
       ],
       cells,
     })
@@ -387,13 +395,13 @@ describe('jr2.2 stockpile keeps bed work-in-progress while beds are owed', () =>
 
   it('owed: all wool, all beds, first 6 planks stay; done: everything banks', () => {
     const owed = packBot({})
-    const planOwed = stockpileMod.depositPlan(owed, { home: v2home() })
+    const planOwed = stockpileMod.depositPlan(owed, { home: v2home(), ...LADDER_DONE })
     const names = planOwed.map((p) => `${p.count} ${p.name}`)
     assert.ok(!names.some((l) => l.includes('wool')), `banks no wool: ${names}`)
     assert.ok(!names.some((l) => l.includes('bed')), `banks no beds: ${names}`)
     assert.deepEqual(planOwed.filter((p) => p.name === 'oak_planks'), [{ name: 'oak_planks', count: 4 }])
     const done = packBot({ [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed', [cellKey(B_FOOT)]: 'white_bed', [cellKey(B_HEAD)]: 'white_bed' })
-    const planDone = stockpileMod.depositPlan(done, { home: v2home() })
+    const planDone = stockpileMod.depositPlan(done, { home: v2home(), ...LADDER_DONE })
     assert.ok(planDone.some((p) => p.name === 'white_wool'), 'leftovers bank once both beds are in')
     assert.ok(planDone.some((p) => p.name === 'white_bed'), 'spare beds bank once both beds are in')
   })
@@ -1078,11 +1086,11 @@ describe('jr2.2 ground patches under floorless-house dips', () => {
   })
 
   it('stockpile keeps patch planks while dips are owed', () => {
-    const one = mockBot({ items: [{ name: 'oak_planks', count: 10 }], cells: { [AG]: 'air' } })
-    const planOne = stockpileMod.depositPlan(one, { home: v2home() })
+    const one = mockBot({ items: [{ name: 'oak_planks', count: 10 }, ...LADDER_PICKS], cells: { [AG]: 'air' } })
+    const planOne = stockpileMod.depositPlan(one, { home: v2home(), ...LADDER_DONE })
     assert.deepEqual(planOne.filter((p) => p.name === 'oak_planks'), [{ name: 'oak_planks', count: 3 }], '6 + 1 patch')
-    const four = mockBot({ items: [{ name: 'oak_planks', count: 10 }], cells: { [AG]: 'air', [AGH]: 'air', [BG]: 'air', [BGH]: 'air' } })
-    assert.deepEqual(stockpileMod.depositPlan(four, { home: v2home() }).filter((p) => p.name === 'oak_planks'), [], '6 + 4 patches hold the stack')
+    const four = mockBot({ items: [{ name: 'oak_planks', count: 10 }, ...LADDER_PICKS], cells: { [AG]: 'air', [AGH]: 'air', [BG]: 'air', [BGH]: 'air' } })
+    assert.deepEqual(stockpileMod.depositPlan(four, { home: v2home(), ...LADDER_DONE }).filter((p) => p.name === 'oak_planks'), [], '6 + 4 patches hold the stack')
   })
 })
 
@@ -1090,13 +1098,13 @@ describe('jr2.2 plank reserve fills the top single wood first', () => {
   it('mixed pack: top wood kept, rest banked (gather gate agrees)', () => {
     // Revmux shape: 2 birch early + 50 oak keeps 6 oak (maxPlanks=6, gate
     // closed) — never 2+4 mixed (maxPlanks=4, gate open forever).
-    const bot = mockBot({ items: [{ name: 'birch_planks', count: 2 }, { name: 'oak_planks', count: 50 }] })
-    const plan = stockpileMod.depositPlan(bot, { home: v2home() })
+    const bot = mockBot({ items: [{ name: 'birch_planks', count: 2 }, { name: 'oak_planks', count: 50 }, ...LADDER_PICKS] })
+    const plan = stockpileMod.depositPlan(bot, { home: v2home(), ...LADDER_DONE })
     const banked = {}
     for (const p of plan) if (p.name.endsWith('_planks')) banked[p.name] = p.count
     assert.deepEqual(banked, { birch_planks: 2, oak_planks: 44 })
-    const short = mockBot({ items: [{ name: 'birch_planks', count: 2 }, { name: 'oak_planks', count: 4 }] })
-    assert.deepEqual(stockpileMod.depositPlan(short, { home: v2home() }).filter((p) => p.name.endsWith('_planks')), [], 'short pack: all 6 stay')
+    const short = mockBot({ items: [{ name: 'birch_planks', count: 2 }, { name: 'oak_planks', count: 4 }, ...LADDER_PICKS] })
+    assert.deepEqual(stockpileMod.depositPlan(short, { home: v2home(), ...LADDER_DONE }).filter((p) => p.name.endsWith('_planks')), [], 'short pack: all 6 stay')
   })
 })
 

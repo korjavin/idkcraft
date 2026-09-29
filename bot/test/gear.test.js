@@ -535,8 +535,9 @@ describe('gear finished-goods handover', () => {
   it('depositPlan banks finished tools only with ctx (mutant pair)', () => {
     // Mutant: deleting the finished-goods allowance fails the WITH case
     // while the WITHOUT case still passes — the pair pins the exception.
-    const inv = () => [{ name: 'iron_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 40 }]
-    const withPlan = stockpile.depositPlan(mockBot({ items: inv() }), { gearFinished: { iron_sword: 1 } })
+    const inv = () => [{ name: 'iron_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 40 },
+      { name: 'iron_pickaxe', count: 1 }, { name: 'diamond_pickaxe', count: 1 }] // ladder done: isolate the finished-goods math (ipn.8)
+    const withPlan = stockpile.depositPlan(mockBot({ items: inv() }), { gearFinished: { iron_sword: 1 }, gearGiven: { ...stockpile.GEAR_OWNER_WANT } })
     assert.deepEqual(withPlan, [{ name: 'iron_sword', count: 1 }, { name: 'cobblestone', count: 8 }])
     const withoutPlan = stockpile.depositPlan(mockBot({ items: inv() }))
     assert.deepEqual(withoutPlan, [{ name: 'cobblestone', count: 8 }])
