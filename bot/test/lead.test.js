@@ -202,6 +202,20 @@ describe('lead behaviour', () => {
     assert.ok(bot.calls.chats.some((l) => l === 'cannot reach diamond_ore at 10 64 0; following you again'))
   })
 
+  it('holds the order while an episode runs or waits', () => {
+    // 6x7.2: the escape may still reach the ore — a set fact or a running
+    // episode waits instead of striking (the request would refuse anyway).
+    const bot = mockBot()
+    const ctx = {
+      lastGoalKey: 'lead:10,64,0', lead: orderAt(10, 64, 0, 'iron_ore'),
+      stuck: { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' },
+    }
+    for (let t = 0; t <= GIVE_UP_TICKS + 1; t++) {
+      lead(bot, ctx, playerEntity(2), { distance_to_player: 2 })
+      assert.ok(ctx.lead, `order dropped mid-episode at tick ${t}`)
+    }
+  })
+
   it('moving resets the give-up budget', () => {
     const bot = mockBot()
     const order = orderAt(10, 64, 0)

@@ -10,12 +10,12 @@
 // a few blocks out — failing there would mark every forest ring
 // unreachable without ever scanning it.
 //
-// Stuck is the existing machinery: a no-displacement stall raises the
-// fact via recover.setStuck and the ef3 menu owns the escape; the ticker
-// backstops cover the rest. Detector only, like follow/gather.
+// Stuck is the central machinery: a no-displacement stall fails the target
+// (give-up, below) and stuck.js raises the fact off the explore key when
+// the body itself wedges; the ef3 menu owns the escape.
 
 const { goals } = require('mineflayer-pathfinder')
-const recover = require('./recover')
+const stuck = require('../stuck')
 const resources = require('../resources')
 const danger = require('../danger')
 const { say, clearGoal } = require('./util')
@@ -31,7 +31,7 @@ const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
 const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
 const MAX_RADIUS = 256 // spiral reach cap, feet from anchor (dxl: no players)
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const CHAT_MS = 30000 // departure chat at most this often
 
 const DIRS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
@@ -188,8 +188,11 @@ function explore(bot, ctx, target, state) {
     e.issuedKey = null
     ctx.stepStatus = 'failed:unreachable'
     // The target is the goal: without it dig_through has no direction and
-    // goalDy/goalDist describe a bystander player (revmux round 1).
-    recover.setStuck(ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
+    // goalDy/goalDist describe a bystander player (revmux round 1). One
+    // escape per failed leg through stuck.request (core-1: give-ups reset
+    // the central stills, so a pit would cycle targets forever with no
+    // episode otherwise).
+    stuck.request(bot, ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
   }
 }
 

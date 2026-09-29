@@ -117,7 +117,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, lastPos: null, homeStalls: 0, homeLastPos: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
   ctx.greeter = greet // deliver greets arrivals through the same latch
   ctx.autonomous = !!autonomous
   ctx.manualBrain = null
@@ -283,7 +283,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
 
-  // Stuck detectors (backstopGoal/idleFarFromGoal/noteDisplacement) live in stuck.js.
+  // Stuck detection (the MOVING→…→COOLDOWN machine) lives in stuck.js; the
+  // ticker samples it once per tick on both branches and routes the fact.
 
   // A hostile inside swing reach preempts recovery: the body fights first,
   // the stuck fact waits for the next tick.
@@ -518,8 +519,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // A visible player with skipped work resumes it at once (one-shot):
       // sighting is the normal end of the homing walk, arrival the other.
       if (target && ctx.resumeWork && !followName) startWork()
-      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
+      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') {
+        // Sighting ends the homing walk: the spawn goal is moot, and so is
+        // the still streak that raised it — without the reset the streak
+        // re-raises by=home on this same tick (the stale return-spawn key
+        // flips to follow: only when follow dispatches below).
+        ctx.stuck = null
+        ctx.stuckTicks = 0
+        ctx.stuckState = 'MOVING'
+      }
       if (homeReached()) {
+        // Arrived means the homing goal is met, not stuck: pin the still
+        // streak at zero while standing at spawn (was the walkHomeTick
+        // arrival reset) so a parked bot never wedges here.
+        ctx.stuckTicks = 0
+        if (!ctx.recovery) ctx.stuckState = 'MOVING'
         // At spawn there is nothing to walk for — unless a follow order is
         // pending: then keep the latch (counter tripped, no work) and stand
         // until the player is visible, instead of oscillating work-vs-home.
@@ -570,6 +584,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (meleeReflex(bot, ctx, idleState)) reflexFast = true
           eatReflex(bot, ctx, idleState)
         } catch (_) { /* facts best-effort */ }
+        // Sample the stuck machine for the homing walk (2oe): pure local
+        // math, no brain call, so the cost guard holds. A wedged homing
+        // walk raises by=home off the return-spawn key.
+        stuck.update(bot, ctx)
         // Only the home fact: the idle branch is cost-guarded (no brain
         // calls with nobody online), so a pre-existing follow/gather
         // episode pauses while alone and resumes on sighting — while a
@@ -665,7 +683,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
       }
       // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
-      stuck.stuckBackstop(bot, ctx)
+      stuck.update(bot, ctx)
       let decision = null
       if (ctx.stuck && !urgentFight(state)) {
         try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }

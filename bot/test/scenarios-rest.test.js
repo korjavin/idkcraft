@@ -136,6 +136,7 @@ describe('q0h: rest pit escalates instead of spinning episodes', () => {
       ticker.setPathReset('stuck')
       ticker.setPathReset('stuck')
       await ticker.tick()
+      await ticker.tick() // still tick lets the seeded streak fast-fire
       const wedge = cap.lines.filter((l) => l.includes('stuck reason=wedge'))
       assert.equal(wedge.length, 1, 'roam-back raises on the wedge')
       assert.deepEqual(ctx.stuck && ctx.stuck.goal, { x: 20, y: 65, z: 0 }, 'fact carries the site goal')
@@ -169,6 +170,8 @@ describe('q0h: rest pit escalates instead of spinning episodes', () => {
       ticker.setPathReset('stuck')
       ticker.setPathReset('stuck')
       await ticker.tick()
+      await ticker.tick()
+      await ticker.tick() // still tick lets the seeded streak fast-fire
       assert.equal(cap.lines.filter((l) => l.includes('stuck reason=wedge')).length, wedgesAfterMark + 1,
         'relocation re-arms the roam-back detector')
       assert.ok(ctx.stuck, 'fact raises again past the mark')

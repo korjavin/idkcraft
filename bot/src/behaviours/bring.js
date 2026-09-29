@@ -6,7 +6,7 @@ const { countItems } = require('../perception')
 const resources = require('../resources')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
-const recover = require('./recover')
+const stuck = require('../stuck')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason } = require('./util')
@@ -43,7 +43,7 @@ const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before skipping an unreachable target
 const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
   // far reading is often a recovering pathfinder, not an unreachable chest)
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const RETURN_RANGE = 2
 
 // Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
@@ -1563,16 +1563,16 @@ async function bring(bot, ctx, target, state) {
           : `could not reach ${o.block} safely`)
         return
       }
+      // atl.17: below-feet is a property of the PLACE — find re-picks the
+      // same nearest block and the stance never changes, so the dig
+      // refuses with the bot standing still (prod 2026-09-28). Ask the menu
+      // for one escape through stuck.request (a target event, not body
+      // detection — same choke point as the central raise); release()
+      // resumes ctx.bring untouched, find re-picks the same block from the
+      // new stance, and the dig passes. One episode per strike at most (the
+      // fact refuses while one runs); denyStrikes stays the ceiling.
       if (bDeny === 'below-feet') {
-        // atl.17: below-feet is a property of the PLACE — find re-picks the
-        // same nearest block and the stance never changes, so the dig
-        // refuses 3 times with the bot standing still (prod 2026-09-28).
-        // Raise the stuck fact and let the recover menu change the stance
-        // (sidestep); release() resumes ctx.bring untouched, find re-picks
-        // the same block from the new stance, and the dig passes. One
-        // episode per strike at most (setStuck latches while one runs);
-        // denyStrikes stays the ceiling.
-        try { recover.setStuck(ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
+        try { stuck.request(bot, ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }
       o.pos = null
       o.phase = 'find'

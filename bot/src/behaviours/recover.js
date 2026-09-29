@@ -3,9 +3,9 @@
 // Recovery menu (idkcraft-ef3): 'stuck' is a HARD STATE — the smart model
 // picks the escape from a feasibility-gated menu of body primitives through
 // the shared brain.ask(), with the FSM below as reserve and disagreement
-// reference (same shape as goal.js chooseStep). Detectors in
-// follow/roam/lead/gather only raise the stuck fact via setStuck(); the
-// handwritten sidestep/jump they used to do lives here as the sidestep
+// reference (same shape as goal.js chooseStep). The stuck fact is raised by
+// the single detector in stuck.js via setStuck() below; the handwritten
+// sidestep/jump the old detectors used to do lives here as the sidestep
 // primitive. Safety veto is feasibility, not separate logic: a dangerous
 // option never reaches the menu (lava near the dig_* primitives).
 //
@@ -37,8 +37,7 @@ const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held
 const HOP_RETRY_BACK_MS = 100 // short back-off to leap stance: gap 0.25-0.5 off the face (wqt assay)
 const HOP_PRESS_DIST = 1.0 // pressed: closer than this to the anchor a leap goes into the face (flush is 0.8)
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
-const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long
-const PLACE_ERROR_ENTRY = 3 // generic backstop: consecutive place_error
+const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long (canonical home: the recoverText buckets below need it too, and stuck.js reads it — one number, not two)
 const PROGRESS_TOLERANCE = 0.5
 const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
 const PILLAR_FAST_DY = 0.9 // fast-path issue height (round-3: see below)
@@ -1364,11 +1363,12 @@ const RECOVER_MENU = {
 
 // --- episode ---
 
-// Detectors call this instead of moving the body themselves. True on the
-// transition (fact raised), false when an episode already runs, the fact is
-// already set, or the latch holds for the same situation (a just-finished
-// episode: re-firing without new information would ask+chat every few
-// seconds). A moved goal clears the latch and raises fresh.
+// The single detector (stuck.js) calls this instead of moving the body
+// itself. True on the transition (fact raised), false when an episode
+// already runs, the fact is already set, or the latch holds for the same
+// situation (a just-finished episode: re-firing without new information
+// would ask+chat every few seconds). A moved goal clears the latch and
+// raises fresh.
 function goalClose(a, b) {
   if (!a || !b) return !a && !b
   if (typeof a.x !== 'number' || typeof b.x !== 'number') return false
@@ -1390,7 +1390,7 @@ function anyPlayerOnline(bot) {
 const REST_GIVE_UP_DIST = 2
 // Relocation ends the hold in any step or mode (core-1 follow-up): the
 // detectors consult the gate only when firing, so a clean /tp out would
-// otherwise leave a stale mark behind. Called every tick (noteDisplacement)
+// otherwise leave a stale mark behind. Called every tick (stuck.update)
 // and from the gate itself.
 function clearRelocatedRestMark(ctx, bot) {
   try {
@@ -1425,38 +1425,12 @@ function restGaveUpHolds(ctx, bot) {
   } catch (_) { return false }
 }
 
-const ROAM_LATCH_CLEAR = 4 // mirrors HOME_LATCH_CLEAR (index.js); lives here because roam cannot require index (cycle)
-// A roam latch anchored at another wedge point is stale once the body
-// relocated: clear it so the roam-back detector fires again (round 2).
-function clearStaleRoamLatch(ctx, bot) {
-  try {
-    const L = ctx && ctx.recoverLatch
-    if (!L || L.by !== 'roam' || !L.at || typeof L.at.x !== 'number') return
-    const bp = botPos(bot)
-    if (bp && Math.hypot(bp.x - L.at.x, bp.z - L.at.z) > ROAM_LATCH_CLEAR) ctx.recoverLatch = null
-  } catch (_) { /* latch best-effort */ }
-}
-
-const TICKER_LATCH_CLEAR = 4 // same radius as the home/roam release latches
-// Ticker latch (rra round 1): the ticker backstop sets ctx.stuck directly,
-// bypassing setStuck, so a noPath trap would re-fire an episode (model ask
-// + call_player) every ~45 s forever. release() anchors the release point;
-// the idle branch holds while the body stays within the radius. Relocation
-// re-arms, orders clear via clearStuck. Clears stale anchors like the roam
-// helper above, so one call both consults and re-arms.
-function tickerLatched(ctx, bot) {
-  try {
-    const L = ctx && ctx.recoverLatch
-    if (!L || L.by !== 'no-displacement' || !L.at || typeof L.at.x !== 'number') return false
-    const bp = botPos(bot)
-    if (bp && Math.hypot(bp.x - L.at.x, bp.z - L.at.z) > TICKER_LATCH_CLEAR) {
-      ctx.recoverLatch = null
-      return false
-    }
-    return true
-  } catch (_) { return false }
-}
-
+// Latch consults (were tickerLatched/clearStaleRoamLatch plus the walkHomeTick
+// inline check, with three copies of the radius): since 6x7.2 the one
+// release latch lives in stuck.js COOLDOWN — one radius (LATCH_CLEAR), one
+// consult covering every owner. The backstop raises through setStuck like
+// every other owner, so a noPath trap re-fires only past the latch radius
+// (rra round 1), never every ~45 s.
 function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
   const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
@@ -1605,18 +1579,23 @@ function release(bot, ctx, how) {
   // the body in the pit — latching that would end all further escape
   // attempts with no page. Progress clears the old anchor instead, so the
   // next trap gets a fresh episode.
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || (by === 'no-displacement' && how === 'gave-up')) {
+  // Lead anchors like the other owned walks (6x7.2): without a latch the
+  // central detector re-fires every slow threshold through a mining stall
+  // (episodes reset both budgets) and the order never gives up. Anchored
+  // like home/roam (the order goal is static), plus the no-gain mark: real
+  // gain past it re-arms for a second, different wedge (M3, core-4).
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && how === 'gave-up')) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
-    if (by === 'home' || by === 'roam' || by === 'no-displacement') {
+    if (by === 'home' || by === 'roam' || by === 'no-displacement' || by === 'lead') {
       // Static goals never move, so goal-closeness cannot tell one wedge
-      // from the next: anchor the release point instead. walkHomeTick
-      // (home) and the roam-back branch (roam) re-arm only once the body
-      // relocated past the latch radius; the ticker idle branch consults
-      // its anchor through tickerLatched (rra round 1).
+      // from the next: anchor the release point instead. The stuck.js
+      // COOLDOWN consult re-arms once the body relocated past the latch
+      // radius (was walkHomeTick/roam-back/tickerLatched, rra round 1).
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
+      if (by === 'lead' && ctx.lead) ctx.recoverLatch.mark = ctx.lead.nudgedAt
     }
   } else if (by === 'no-displacement' && ctx.recoverLatch && ctx.recoverLatch.by === 'no-displacement') {
     ctx.recoverLatch = null
@@ -1647,6 +1626,7 @@ function release(bot, ctx, how) {
   ctx.stuckResets = 0
   ctx.placeErrors = 0
   ctx.stuckTicks = 0
+  ctx.jumpCooldown = 0
   ctx.stuck = null
   ctx.recovery = null
   // Terminal dones are already counted by decide() per finished primitive;
@@ -1832,7 +1812,7 @@ module.exports = {
   WAIT_TICKS,
   DISPLACE_TIMEOUT_TICKS,
   STUCK_TICKS_ENTRY,
-  PLACE_ERROR_ENTRY,
+  goalClose,
   recoverFacts,
   recoverText,
   recoverFsm,
@@ -1841,8 +1821,6 @@ module.exports = {
   setStuck,
   restGaveUpHolds,
   clearRelocatedRestMark,
-  clearStaleRoamLatch,
-  tickerLatched,
   decide,
   release,
   run,

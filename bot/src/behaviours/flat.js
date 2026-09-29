@@ -35,6 +35,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const danger = require('../danger')
+const stuck = require('../stuck')
 const util = require('./util')
 const { say, clearGoal, denyReason, logDeny } = util
 
@@ -66,7 +67,7 @@ const DIG_STREAK = 3
 const PLACE_RANGE = 4 // GoalPlaceBlock range, like build.js
 const EYE_HEIGHT = 1.62 // survival eye height above the feet
 const EYE_REACH = 4.4 // server survival block reach (4.5) minus pose/float margin
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const DIRT_FIND_RADIUS = 48
 const DIRT_FIND_COUNT = 64
 const RESTOCK_MIN_EDGE_GAP = 16 // restock digs at least this far past the square edge (owner 2026-09-28: digging at the edge left fresh holes next to the flattened area)

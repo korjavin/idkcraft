@@ -313,3 +313,55 @@ describe('explore walk and arrival', () => {
     assert.equal(BEHAVIOURS.explore, explore)
   })
 })
+
+describe('explore pit escape through the ticker (core-1)', () => {
+  // Flat world, full ticker: the real explore step from a pit (body still,
+  // executor driving). The leg fails at 10, the give-up requests one
+  // escape, the next tick routes the menu with the leg target as the goal —
+  // without the request the spiral would cycle targets forever, the central
+  // stills resetting on every give-up.
+  function pitBot() {
+    const bot = mockBot()
+    bot.health = 20
+    bot.food = 20
+    bot.entity = { position: pos(0, 64, 0), onGround: true }
+    bot.players = { P: { username: 'P', entity: { id: 7, username: 'P', position: pos(30, 64, 0) } } }
+    bot.entities = {}
+    bot._moving = true
+    bot.pathfinder.stop = () => {}
+    bot.pathfinder.setMovements = () => {}
+    bot.setControlState = () => {}
+    bot.getControlState = () => false
+    bot.clearControlStates = () => {}
+    bot.attack = () => {}
+    bot.lookAt = () => {}
+    bot.inventory = { items: () => [] }
+    return bot
+  }
+
+  it('a failed leg requests an escape and the menu opens', async () => {
+    const bot = pitBot()
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'explore', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    ctx.home = { site: { x: 0, y: 64, z: 0 } }
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      for (let i = 0; i < 11; i++) await ticker.tick()
+      assert.equal(ctx.stepStatus, 'failed:unreachable')
+      assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 0, y: 64, z: -16 }, key: 'explore:0,-16' })
+      await ticker.tick() // the requested fact routes the menu
+      assert.ok(ctx.recovery, 'episode opens for the failed leg')
+      assert.ok(lines.some((l) => l.includes('outcome=chosen')), 'menu chose')
+    } finally {
+      console.log = origLog
+      ticker.destroy()
+    }
+  })
+})
