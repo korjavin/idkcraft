@@ -205,6 +205,11 @@ async function verifyHeadroom(readHead, tpUp, alive, steps = 6) {
 
 async function main() {
   const spots = loadSpots()
+  // Usernames cap at 16 chars: an overlong TAG dies in the hello decode
+  // with a cryptic server-side error, so fail fast with the real cause.
+  if (GUIDE.length > 16 || FOLLOWER.length > 16) {
+    throw new Error(`bot names exceed 16 chars (TAG=${JSON.stringify(TAG)}); set a shorter REPLAY_TAG`)
+  }
   const picked = pickBrain()
   const index = require('../src/index')
   const brain = picked.make()

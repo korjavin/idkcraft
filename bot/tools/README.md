@@ -42,7 +42,7 @@ No Minecraft client needed; Docker is required.
 | var | default | meaning |
 | --- | ------- | ------- |
 | `PRODWORLD` | `/Users/iv/Projects/.idkcraft-prodworld` | rig dir (outside the repo) |
-| `REPLAY_TAG` | `run$$` | bot name suffix; the wrapper pre-ops these names |
+| `REPLAY_TAG` | `r` + 3 pid digits | bot name suffix (16-char username cap); the wrapper pre-ops these names |
 | `REPLAY_OUT` | `bot/tools/last-replay.json` | JSON results path |
 | `REPLAY_BASELINE` | `bot/tools/stuck-baseline.json` | baseline file |
 | `REPLAY_BASELINE_OFF=1` | — | record only, skip the comparison |

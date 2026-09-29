@@ -158,13 +158,18 @@ describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
     assert.ok(replay.includes("brainName !== 'stub'"), 'brain guard missing')
     assert.ok(replay.includes('stub baseline does not apply'), 'skip message missing')
   })
+
+  it('overlong bot names fail fast with the real cause', () => {
+    assert.ok(replay.includes('bot names exceed 16 chars'), 'name-length guard missing')
+  })
 })
 
 describe('stuck-run.sh oracle wiring (idkcraft-6x7.4)', () => {
   const script = fs.readFileSync(path.join(TOOLS, 'stuck-run.sh'), 'utf8')
 
   it('exports a stable REPLAY_TAG and pre-ops both bots', () => {
-    assert.ok(script.includes('export REPLAY_TAG="${REPLAY_TAG:-run$$}"'), 'TAG default missing')
+    assert.ok(script.includes('_ptail=$(( $$ % 1000 ))'), 'TAG pid-tail missing')
+    assert.ok(script.includes('export REPLAY_TAG="${REPLAY_TAG:-r$_ptail}"'), 'TAG default missing')
     assert.ok(script.includes('rcon_assert "op StuckGuide$REPLAY_TAG"'), 'guide pre-op missing')
     assert.ok(script.includes('rcon_assert "op StuckReplay$REPLAY_TAG"'), 'follower pre-op missing')
   })

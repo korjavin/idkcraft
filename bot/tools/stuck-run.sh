@@ -4,8 +4,8 @@
 # (which judges the run against stuck-baseline.json), tear down.
 # Usage: sh stuck-run.sh [variant] [spots.json] [secs]   (defaults below)
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
-#   REPLAY_TAG (bot name suffix; default run$$ — exported so the pre-op
-#   below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
+#   REPLAY_TAG (bot name suffix; default r + 3 pid digits — exported so
+#   the pre-op below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
 #   REPLAY_BASELINE* (passed through to stuck-replay.js).
 # Exit codes: 0 = baseline holds, 1 = REGRESSION vs the baseline (from the
 # replay), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -98,8 +98,11 @@ rcon_assert "weather clear"
 # Pre-op both bots (offline names resolve pre-login) so protection is off
 # from the first tick; the replay re-ops post-spawn as the asserted
 # guarantee. The TAG is exported (not random-in-replay) so both ops and the
-# login target the same names.
-export REPLAY_TAG="${REPLAY_TAG:-run$$}"
+# login target the same names. Usernames cap at 16 chars (StuckReplay + tag
+# must fit), so the default tag is r + 3 pid digits — a full pid overflows
+# the hello and the login dies server-side with a decode error.
+_ptail=$(( $$ % 1000 ))
+export REPLAY_TAG="${REPLAY_TAG:-r$_ptail}"
 rcon_assert "op StuckGuide$REPLAY_TAG"
 rcon_assert "op StuckReplay$REPLAY_TAG"
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
