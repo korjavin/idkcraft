@@ -9,7 +9,7 @@ const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
 const {
   decideBringSource, chooseBringSource, memoryNames, memoryExposed, memoryInBudget,
-  liveExposed, buriedCand, bestExposed, verdictLine, SOURCE_COST,
+  liveExposed, buriedCand, bestExposed, verdictLine, verdictFacts, SOURCE_COST,
 } = require('../src/behaviours/bring')
 const { handleChat, createTicker } = require('../src/index')
 
@@ -122,6 +122,11 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [40, 64, 0])
     assert.equal(o.exposed, true)
     assert.equal(o.far, true)
+    assert.deepEqual(o.verdict, {
+      pick: 'exposed',
+      win: { x: 40, y: 64, z: 0, cost: (40 / SOURCE_COST.walkBlocksPerSec) * SOURCE_COST.memoryFactor },
+      rival: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+    })
   })
 
   it('(1b) the same verdict on a find-phase re-find', async () => {
@@ -172,6 +177,11 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.deepEqual(bot.lines, ['going for 3 iron_ore, 10 blocks away'])
     assert.equal(seen.length, 0)
     assert.deepEqual([bot._tickerCtx.bring.pos.x, bot._tickerCtx.bring.pos.y, bot._tickerCtx.bring.pos.z], [10, 64, 0])
+    assert.deepEqual(bot._tickerCtx.bring.verdict, {
+      pick: 'exposed',
+      win: { x: 10, y: 64, z: 0, cost: 10 / SOURCE_COST.walkBlocksPerSec },
+      rival: null,
+    })
   })
 
   it('(3) contested costs: exactly one ask with exactly 2 criteria, answer respected', async () => {
@@ -276,6 +286,11 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     assert.equal(seen.length, 0, 'clear winner asks nothing')
     assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away (exposed)'), `lines: ${bot.lines}`)
     assert.deepEqual([bot._tickerCtx.bring.pos.x, bot._tickerCtx.bring.pos.y, bot._tickerCtx.bring.pos.z], [60, 64, 0])
+    assert.deepEqual(bot._tickerCtx.bring.verdict, {
+      pick: 'exposed',
+      win: { x: 60, y: 64, z: 0, cost: 60 / SOURCE_COST.walkBlocksPerSec },
+      rival: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+    })
   })
 
   it('creation contested at edge 48: interim line, then one ask on the first tick', async () => {
@@ -679,6 +694,21 @@ describe('bring source helpers (idkcraft-atl.15)', () => {
       verdictLine('iron', exp, null, 'exposed'),
       'bring verdict iron: walk live @50,14,0 87.5s vs dig none -> exposed',
     )
+  })
+
+  it('verdictFacts shapes the order facts the creation paths attach (revmux 01 core-1)', () => {
+    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(50, 14, 0), distance: 71, exposed: true })
+    const dig = buriedCand(bp, { name: 'iron_ore', position: pos(0, 63, 0), distance: 1, exposed: false })
+    assert.deepEqual(verdictFacts(exp, dig, 'buried'), {
+      pick: 'buried',
+      win: { x: 0, y: 63, z: 0, cost: dig.cost },
+      rival: { x: 50, y: 14, z: 0, cost: exp.cost },
+    })
+    assert.deepEqual(verdictFacts(exp, null, 'exposed'), {
+      pick: 'exposed',
+      win: { x: 50, y: 14, z: 0, cost: exp.cost },
+      rival: null,
+    })
   })
 
   it('chooseBringSource: invalid and timeout fall back with escalation; cached replays', async () => {

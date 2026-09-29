@@ -650,6 +650,15 @@ function verdictPos(c) {
   return { x: Math.floor(c.pos.x), y: Math.floor(c.pos.y), z: Math.floor(c.pos.z), cost: c.cost }
 }
 
+// Structured verdict facts for the order (revmux 01 core-1): the find
+// verdict stores them via commitSource, the creation verdicts in index.js
+// attach the same shape to the order they create.
+function verdictFacts(exposed, buried, pick) {
+  const win = pick === 'buried' ? buried : exposed
+  const rival = pick === 'buried' ? exposed : buried
+  return { pick, win: verdictPos(win), rival: verdictPos(rival) }
+}
+
 // Shared commit for the find and searchfar verdicts (and order creation,
 // via the same res shape): plants the target, checks the pickaxe tier,
 // announces once. A memory target rides o.far — unloaded is not gone
@@ -657,7 +666,7 @@ function verdictPos(c) {
 function commitSource(bot, ctx, o, exposed, buried, pick) {
   const win = pick === 'buried' ? buried : exposed
   const rival = pick === 'buried' ? exposed : buried
-  o.verdict = { pick, win: verdictPos(win), rival: verdictPos(rival) }
+  o.verdict = verdictFacts(exposed, buried, pick)
   console.log(verdictLine((o && o.name) || (win && win.name) || 'block', exposed, buried, pick))
   const bp = bot.entity && bot.entity.position
   const res = choiceRes(win, rival, bp)
@@ -1587,6 +1596,7 @@ module.exports.bestExposed = bestExposed
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText
 module.exports.verdictLine = verdictLine
+module.exports.verdictFacts = verdictFacts
 module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
