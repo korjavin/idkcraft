@@ -2414,14 +2414,21 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   // The chat-time commit bypassed the bring-loop submerged skips — a wet
   // nearest vein committed phase 'walk' and the bot dived before any skip
   // ran. A wet res opens in 'find' instead so the loop picks the next
-  // candidate (or refuses honestly when nothing dry exists); the find
-  // pre-check skips the wet cell itself.
+  // candidate (or refuses honestly when nothing dry exists). The wet cell
+  // is pre-seeded into o.skip (revmux 03 core-1/body-1): the find
+  // pre-check only sees water at the cell or +1, so a buried vein under a
+  // water column — or a grafted far-cache hit — would otherwise re-commit
+  // to the same wet cell one tick later. sawSubmerged fronts the honest
+  // refusal when the seeded skip empties the find.
   if (resSubmerged(bot, ctx, res)) {
     homeMod.releaseMeet(bot, ctx)
     if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
     ctx.unseenTicks = 0
     ctx.resumeWork = false
-    ctx.bring = { kind: 'block', name, want, by, phase: 'find', have: 0, announced: false }
+    ctx.bring = {
+      kind: 'block', name, want, by, phase: 'find', have: 0, announced: false,
+      skip: new Set([bringMod.skipKey(res.position)]), sawSubmerged: true,
+    }
     ctx.paused = false
     return `nearest ${res.name} is underwater, checking for a dry one…`
   }

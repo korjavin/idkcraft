@@ -1578,6 +1578,7 @@ module.exports.memoryExposed = memoryExposed
 module.exports.memoryInBudget = memoryInBudget
 module.exports.liveExposed = liveExposed
 module.exports.buriedCand = buriedCand
+module.exports.skipKey = skipKey
 module.exports.bestExposed = bestExposed
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText
