@@ -6,7 +6,7 @@
 // tossed, or crafted away since) and prunes.
 //
 // Visible player (tracked entity): the follow behaviour walks the body
-// (GoalFollow 3, its own wedge facts — reused, not reinvented) and the
+// (GoalFollow 3; wedges raise centrally off the follow key) and the
 // toss lands within 3.5; the shared greeter announces the arrival (v92
 // seam, same latch as follow/bring). Online but unseen: 3a7 honesty —
 // say where the bot is, wait at home/spawn, KEEP the haul. Nobody
@@ -15,6 +15,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const follow = require('./follow')
 const bring = require('./bring')
+const stuck = require('../stuck')
 const { countItems } = require('../perception')
 const { say, clearGoal, botPos } = require('./util')
 
@@ -26,7 +27,7 @@ const TOSS_RANGE = DELIVER_RANGE + 0.5
 // survives this long (revmux 01: ctx.stuck never reaches a goal step — the
 // ticker routes stuck ticks to recover — so a deliver-side counter owns it).
 const NO_PATH_TICKS = 20
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 
 // Gear self reserve, mirror of gear.js SELF_RESERVE like stockpile's
 // GEAR_SELF_RESERVE (no shared import: deliver must not require gear —

@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const recover = require('./recover')
+const stuck = require('../stuck')
 const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
@@ -31,7 +31,6 @@ const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
 // not per column — acacia crowns branch into neighbouring x,z-columns, while
 // trunks a full 3 blocks apart still count as different trees
-const PLACE_ERROR_STALLS = 3 // consecutive place_error resets with no displacement count as a stall
 const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
 
 
@@ -110,13 +109,13 @@ function gather(bot, ctx, target, state) {
   // decide() re-picks the step with status 'running', so re-assert here
   // instead of rescanning and re-chatting every tick.
   if (g.final) {
-    if (g.atLogs !== logs && ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
     let keepSkip = false
     if (g.atLogs === logs && typeof g.final === 'string' && g.final.startsWith('failed:') && !gatherFailedHolds(g, logs, bot)) {
       // Relocated past the failure point (idkcraft-gyw): the menu hold
       // already releases there, and new ground may hold nearer trees or
-      // other wood — drop the latch for a fresh try instead of replaying
-      // the far failure until a log count that only gather can change.
+      // other wood — retry fresh instead of replaying the far failure
+      // until a log count that only gather can change. (The release latch
+      // re-arms on relocation inside stuck.js; per-tree keys scope it.)
       // atLogs=-1 rides the world-changed reset below (final, streak);
       // the searchfar phase resets so the fresh sync-48 scan runs before
       // any new far search. Struck skips SURVIVE the release (revmux
@@ -128,7 +127,6 @@ function gather(bot, ctx, target, state) {
       g.phase = 'walk'
       g.search = null
       keepSkip = true
-      if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
     }
     if (g.atLogs === logs) {
       ctx.stepStatus = g.final
@@ -218,7 +216,6 @@ function gather(bot, ctx, target, state) {
     // Drops landed: the world changed, old skips may be stale.
     g.skip.clear()
     g.streak = 0
-    if (ctx.recoverLatch && ctx.recoverLatch.by === 'gather') ctx.recoverLatch = null
   }
   g.seenLogs = logs
   // Progress line only when the count grew (68p): repeating 'chopping
@@ -237,11 +234,12 @@ function gather(bot, ctx, target, state) {
       if (key !== g.issuedKey || prevKey === '' || prevKey === 'idle') {
         // Another trunk (or an explicit fresh start): fresh stall budget.
         // The SAME trunk retaken after a fight/bring tick stole the body
-        // (68p) only re-issues the stolen goal above — stalls, placeErrors
-        // and lastPos survive, and the walk continues below this same tick.
+        // (68p) only re-issues the stolen goal above — stalls and lastPos
+        // survive, and the walk continues below this same tick. The
+        // place_error streak is the central detector's (read, never
+        // written, via the verdict below).
         g.issuedKey = key
         g.stalls = 0
-        ctx.placeErrors = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
         return
       }
@@ -271,11 +269,12 @@ function gather(bot, ctx, target, state) {
       // Stall by displacement, not isMoving (follow.js wedge lesson: a
       // wedged executor keeps reporting moving while the body stands still).
       const grounded = !bot.entity || bot.entity.onGround !== false
+      // A place_error streak with no displacement counts as a stall too
+      // (yvi): the streak is the central detector's, read via the verdict.
       if (bring.progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
-        ctx.placeErrors = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-      } else if (++g.stalls >= STALL_TICKS || (ctx.placeErrors || 0) >= PLACE_ERROR_STALLS) {
+      } else if (++g.stalls >= STALL_TICKS || stuck.verdict(ctx).placeErrors >= stuck.PLACE_ERRORS_ENTRY) {
         // One strike per tree, not per log or column: a stalled trunk's
         // mates would each burn 10 ticks and a strike, failing the step with
         // reachable trees nearby — and an acacia crown branches into
@@ -293,9 +292,8 @@ function gather(bot, ctx, target, state) {
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)
-          // Detector (ef3): the menu gets one shot before the arbiter moves
-          // on. Transition only — re-asserts of the same final stay quiet.
-          recover.setStuck(ctx, 'gather', g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null, 'gather')
+          // Target give-up only (6x7.2): no stuck fact — a wedged body
+          // raises centrally off the gather key, with the live walk goal.
         }
       }
       return

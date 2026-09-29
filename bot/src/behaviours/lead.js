@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const recoverMenu = require('./recover')
+const stuck = require('../stuck')
 
 // Lead: walk the player to the ore named by 'find me <block>'.
 //
@@ -18,7 +18,7 @@ const RESUME_DIST = 8
 const GIVE_UP_TICKS = 10
 const WORK_STALL_TICKS = GIVE_UP_TICKS * 6
 const RETRY_EVERY_TICKS = 6
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 
 // Wait budget (ticks at BRAIN_TICK_MS, ~120 s at the 1 s default): a player
 // who never comes back within RESUME_DIST must not pin the order forever.
@@ -93,24 +93,17 @@ function finish(bot, ctx, message) {
   ctx.leadStuck = 0
 }
 
-function recover(bot, ctx, order, bp, now) {
-  if (order.nudged) {
-    // A recover episode already ran for this order and the bot still makes
-    // no progress: second strike, give up like before.
-    finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
-    holdGoal(bot, ctx)
-    return
-  }
-  // Detector only (ef3): raise the stuck fact, the recover menu picks the
-  // escape. order.nudged is set by the episode release, so a still-stuck
-  // order gives up on the next stall instead of looping episodes.
-  if (ctx.recovery) return // episode running: wait for the menu
-  const gp = order.pos ? { x: order.pos.x, y: order.pos.y, z: order.pos.z } : null
-  const gk = order.pos ? `lead:${order.pos.x},${order.pos.y},${order.pos.z}` : 'lead'
-  if (recoverMenu.setStuck(ctx, 'lead', gp, gk)) {
-    order.stallDist = blocksLeft(bp, order.pos)
-    console.log(`stuck reason=nudge pos=${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)}`)
-  }
+// Target give-up (6x7.2): the body wedge is the central detector's — lead
+// never raises. While it counts toward an episode (SUSPECT) or one runs or
+// waits (STUCK/RECOVERING), hold the order: the escape may still reach the
+// ore. When the detector is not engaged (a parked executor will never trip
+// it; COOLDOWN after an episode already tried), the target is unreachable:
+// give up like the old second strike.
+function stalled(bot, ctx, order) {
+  const v = stuck.verdict(ctx)
+  if (v.state === 'SUSPECT' || v.episode) return
+  finish(bot, ctx, `cannot reach ${order.name} at ${order.pos.x} ${order.pos.y} ${order.pos.z}`)
+  holdGoal(bot, ctx)
 }
 
 function lead(bot, ctx, target, state) {
@@ -174,10 +167,6 @@ function lead(bot, ctx, target, state) {
   if (moved) {
     order.stuckTicks = 0
     order.workTicks = 0
-    // Fresh strikes only on real gain toward the goal (ef3): walking back
-    // to the wedge point is displacement, not progress, so nudged stays and
-    // the second strike still gives up instead of looping episodes.
-    if (order.nudged && order.nudgedAt != null && blocksLeft(bp, order.pos) < order.nudgedAt) order.nudged = false
     if (!working && blocksLeft(bp, order.pos) > ARRIVE_DIST && now - (order.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
       bot.chat(`${order.name}: ${blocksLeft(bp, order.pos)} blocks left`)
       order.lastProgressAt = now
@@ -186,12 +175,12 @@ function lead(bot, ctx, target, state) {
   }
   if (working) {
     order.workTicks = (order.workTicks || 0) + 1
-    if (order.workTicks > WORK_STALL_TICKS) recover(bot, ctx, order, bp, now)
+    if (order.workTicks > WORK_STALL_TICKS) stalled(bot, ctx, order)
     return
   }
   order.stuckTicks = (order.stuckTicks || 0) + 1
   if (order.stuckTicks > GIVE_UP_TICKS) {
-    recover(bot, ctx, order, bp, now)
+    stalled(bot, ctx, order)
     return
   }
   if (order.stuckTicks % RETRY_EVERY_TICKS === 0 && !bot.pathfinder.isMoving()) {

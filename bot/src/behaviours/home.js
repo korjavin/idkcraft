@@ -4,6 +4,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { goalFacts } = require('../goal')
 const detour = require('../detour')
+const stuck = require('../stuck')
 const { botPos } = require('./util')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
@@ -23,7 +24,7 @@ const { botPos } = require('./util')
 // Stall by displacement, not isMoving (gather lesson: a wedged executor
 // keeps reporting moving while the body stands still).
 const STALL_TICKS = 10
-const MOVE_TOLERANCE = 0.5
+const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const MAX_REISSUES = 3
 // A lagged block update can hide a toggle we just did; re-trying at once
 // would flip the door back. One attempt per window is plenty.

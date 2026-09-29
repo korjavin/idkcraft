@@ -1,10 +1,40 @@
 'use strict'
 
-// Stuck detection (idkcraft-6x7.1): mechanically moved from index.js —
-// displacement watch, homing walk + stall, path-reset counters. The recover
-// menu (routing) stays in runTick; the state machine lands in 6x7.2.
+// Stuck detection (idkcraft-6x7.2): the ONLY body-stuck detector — a state
+// machine owned end to end by this module: MOVING -> SUSPECT -> STUCK ->
+// RECOVERING -> COOLDOWN. It owns every counter (stuckTicks, stuckResets,
+// placeErrors), every body threshold and the release latch; behaviours keep
+// only their TARGET give-up (skip/fail/refuse) and read this module's
+// verdict() — they never count resets, never touch the latch, never raise.
+// Thresholds: the old ticker backstop (STUCK_TICKS_ENTRY=30, canonical in
+// recover.js for the recoverText buckets) plus a fast entry on path resets
+// (2 'stuck' / 3 consecutive place_error) for the follow/roam-back wedges.
+// Attribution (by/goal/key) derives from the live goal key, so release()
+// keeps its per-owner branches with no behaviour cooperation.
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./behaviours/recover')
+
+// The single displacement tolerance: every stall budget in every behaviour
+// measures against this (was 8 copies of MOVE_TOLERANCE=0.5).
+const MOVE_TOLERANCE = 0.5
+// Fast entry: wedged-executor resets with no displacement (was the
+// follow/roam-back wedge rule, inline 2).
+const STUCK_RESETS_ENTRY = 2
+// Fast entry: consecutive place_error resets with no displacement (was
+// follow/gather PLACE_ERROR_STALLS and the dead recover PLACE_ERROR_ENTRY).
+const PLACE_ERRORS_ENTRY = 3
+// The single latch radius (was HOME_LATCH_CLEAR/ROAM_LATCH_CLEAR/
+// TICKER_LATCH_CLEAR, three copies of 4): release anchors here, relocation
+// past it re-arms.
+const LATCH_CLEAR = 4
+
+// Detector states. MOVING: displacing (or parked/at-goal/mid-plan).
+// SUSPECT: still while the body should move, counting toward the entry.
+// STUCK: fact raised, waiting for the recover route. RECOVERING: an episode
+// (or a retreat pillar borrowing ctx.recovery) owns the body — hold.
+// COOLDOWN: a release latch stands — hold until the situation changes
+// (relocation past LATCH_CLEAR, a new pursuit key, a moved goal).
+const STATES = ['MOVING', 'SUSPECT', 'STUCK', 'RECOVERING', 'COOLDOWN']
 
 // Online-but-unseen ticks before walking back to world spawn (return-home):
 // death+respawn at spawn, or walked out of entity range. Same 10-tick scale
@@ -13,18 +43,33 @@ const UNSEEN_HOME_TICKS = 10
 
 // GoalNear range of the homing walk, and arrival radius for resuming work.
 const RETURN_HOME_RANGE = 2
-// Homing ticks with no displacement before the stuck fact (2oe): the same
-// 10-tick budget as the gather walk stall detector.
-const HOME_STALL_TICKS = 10
-// A homing episode latches its release point; only walking this far from it
-// re-arms another episode. Wider than one sidestep (2): walking back into
-// the same wedge must not chat+ask every ~15 ticks (revmux round 3).
-const HOME_LATCH_CLEAR = 4
+
+function bodyPos(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (p && typeof p.x === 'number' && typeof p.z === 'number') return p
+  } catch (_) { /* unknown body */ }
+  return null
+}
+
+function movingNow(bot) {
+  try {
+    return !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
+  } catch (_) { return false }
+}
+
+function horiz(a, b) {
+  return Math.hypot(a.x - b.x, a.z - b.z)
+}
 
 // Return-home: after UNSEEN_HOME_TICKS online-but-unseen ticks, walk to
 // world spawn once (GoalNear keyed, so no re-issue) and keep standing
 // there until someone is visible. Returns true while homing (caller skips
 // stopOnce); pure stop otherwise. Fleeing still wins above.
+// Detection-free since 6x7.2 (was its own 10-tick stall detector): the
+// homing leg is a plain walk, the central update() below watches the body
+// and raises by=home off the return-spawn key. Arrival/fact hygiene lives
+// with the ticker (homeReached branches in index.js).
 function walkHomeTick(bot, ctx) {
   // While the breath reflex owns the body the homing walk stands down:
   // re-issuing (and re-logging) a goal the reflex drops on the same
@@ -32,42 +77,13 @@ function walkHomeTick(bot, ctx) {
   if (ctx.breath) return true
   if ((ctx.unseenTicks || 0) < UNSEEN_HOME_TICKS) return false
   const sp = bot.spawnPoint
-  const bp = bot.entity && bot.entity.position
+  const bp = bodyPos(bot)
   if (!sp || !bp) return false
   const key = `return-spawn:${sp.x},${sp.y},${sp.z}`
-  const homePos = { x: bp.x, y: bp.y, z: bp.z }
   if (key !== ctx.lastGoalKey) {
     bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), false)
     ctx.lastGoalKey = key
-    ctx.homeStalls = 0
-    ctx.homeLastPos = homePos
     console.log(`returning to spawn dist=${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))}`)
-  } else if (homeReached(bot) || (ctx.homeLastPos && Math.hypot(bp.x - ctx.homeLastPos.x, bp.z - ctx.homeLastPos.z) > 0.5)) {
-    // Standing at spawn is the goal, not a stall (06v holds spawn); real
-    // displacement breaks the streak like the gather walk detector. Either
-    // clears a stale home fact the same way noteDisplacement does.
-    ctx.homeStalls = 0
-    ctx.homeLastPos = homePos
-    // Moved = new situation only when genuinely relocated: the homing
-    // walk itself is displacement, so any 0.5-block move re-arming the
-    // episode loops it on the same wedge. Clear against the release
-    // point the latch carries (lead's nudgedAt pattern).
-    if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') {
-      const at = ctx.recoverLatch.at
-      if (at && Math.hypot(bp.x - at.x, bp.z - at.z) > HOME_LATCH_CLEAR) ctx.recoverLatch = null
-    }
-    // Never under a running episode: clearing the fact while recovery is
-    // set orphans it — no routing, no release, every detector stays off.
-    if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
-  } else if (++ctx.homeStalls >= HOME_STALL_TICKS) {
-    // Detection only (2oe) — the recover menu owns the escape, same as
-    // every other detector. Fires once per episode: setStuck latches.
-    const dist = Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z).toFixed(1)
-    const fx = Number.isInteger(bp.x) ? bp.x : bp.x.toFixed(1)
-    const fy = Number.isInteger(bp.y) ? bp.y : bp.y.toFixed(1)
-    const fz = Number.isInteger(bp.z) ? bp.z : bp.z.toFixed(1)
-    if (recover.setStuck(ctx, 'home', { x: sp.x, y: sp.y, z: sp.z }, key)) console.log(`stuck reason=wedge pos=${fx},${fy},${fz} dist=${dist}`)
-    ctx.homeStalls = 0
   }
   return true
 }
@@ -141,47 +157,273 @@ function idleFarFromGoal(bot, bp) {
   return typeof d === 'number' && d > 3
 }
 
-function noteDisplacement(bot, ctx) {
-  if (ctx.paused) return
-  // Relocation re-arms the ticker latch on EVERY tick (rra round 2): the
-  // idle-branch consult below short-circuits while moving/at-goal, so a
-  // walk away and back would otherwise return to a stale anchor. Evaluated
-  // once here for both its clearing side effect and the idle condition.
-  let latched = false
-  try { latched = recover.tickerLatched(ctx, bot) } catch (_) { /* latch best-effort */ }
-  let bp = null
-  try { bp = bot.entity && bot.entity.position } catch (_) { bp = null }
-  let moving = false
+// Owner attribution for a raise: the behaviour whose walk wedged, read off
+// the live goal key (release() branches on it: lead nudges, gather clears
+// skips, follow/roam/gather/home/lead anchor the latch). Stroll keys
+// ('roam:x,y,z') attribute to roam for the latch but never fast-enter (p4s:
+// a wedged stroll takes another point, the menu only gets a genuinely
+// motionless body via the slow path). Anything unrecognised is the generic
+// backstop.
+function ownerOf(ctx) {
+  const k = (ctx && ctx.lastGoalKey) || ''
+  if (k.startsWith('follow:')) return 'follow'
+  if (k.startsWith('roam-back:') || k.startsWith('roam:')) return 'roam'
+  if (k.startsWith('lead:')) return 'lead'
+  if (k.startsWith('gather')) return 'gather'
+  if (k.startsWith('explore:')) return 'explore'
+  if (k.startsWith('bring:')) return 'bring'
+  if (k.startsWith('deep')) return 'deep'
+  if (k.startsWith('return-spawn:')) return 'home'
+  return 'no-displacement'
+}
+
+// Fast entry (reset streaks) replaces exactly the old reset-based detectors:
+// follow and roam-back. Every other owner unifies on the slow threshold —
+// gather owns its place_error streak for column skips (yvi), and a ticker
+// place_error backstop is what p4s deleted.
+function fastKey(ctx) {
+  const k = (ctx && ctx.lastGoalKey) || ''
+  return k.startsWith('follow:') || k.startsWith('roam-back:')
+}
+
+// The raise key is the live goal key for owned walks (same strings the old
+// detectors carried: follow:X, lead:x,y,z, explore:x,z, deep-*, ...), so
+// the setStuck latch scopes per situation; the generic backstop keeps the
+// historical 'ticker' key the rra latch tests seed.
+function raiseKey(ctx, by) {
+  if (by !== 'no-displacement' && ctx && ctx.lastGoalKey) return ctx.lastGoalKey
+  return 'ticker'
+}
+
+// Coord fallback for goals without an x/y/z snapshot (GoalXZ has no y, so
+// the live-goal read is null for every explore leg): parse the key the walk
+// issued. y falls back to the body level for the x,z-only explore key.
+function keyCoords(ctx, bp) {
   try {
-    moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
-  } catch (_) { /* stationary default */ }
-  if (bp && ctx.lastPos && moving) {
-    if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
-    else {
-      ctx.stuckTicks = 0
-      if (!ctx.recovery) ctx.stuck = null
+    const k = (ctx && ctx.lastGoalKey) || ''
+    const m = /^(-?[0-9.]+),(-?[0-9.]+)(?:,(-?[0-9.]+))?$/.exec(k.slice(k.indexOf(':') + 1))
+    if (!m) return null
+    const nums = m.slice(1).filter((s) => s !== undefined).map(Number)
+    if (nums.some((n) => !Number.isFinite(n))) return null
+    if (nums.length === 3) return { x: nums[0], y: nums[1], z: nums[2] }
+    if (nums.length === 2 && bp && typeof bp.y === 'number') return { x: nums[0], y: bp.y, z: nums[1] }
+  } catch (_) { /* key-less goal */ }
+  return null
+}
+
+function goalForRaise(bot, ctx, bp) {
+  return backstopGoal(bot) || keyCoords(ctx, bp)
+}
+
+// Wedge-line diagnostics (moved from follow.js/roam.js verbatim — formats
+// frozen): feet/head/next block names so the next prod trap names its edge.
+// Positions must stay Vec3: real blockAt calls pos.floored() and throws on
+// plain {x,y,z}. Guarded: mocks and unloaded cells read '?'.
+function blockNameAt(bot, p) {
+  try {
+    const b = p && typeof p.floored === 'function' && bot.blockAt && bot.blockAt(p)
+    return (b && b.name) || '?'
+  } catch (_) { return '?' }
+}
+
+function formatPos(p) {
+  if (!p) return 'unknown'
+  const fx = typeof p.x === 'number' ? (Number.isInteger(p.x) ? p.x : p.x.toFixed(1)) : '0'
+  const fy = typeof p.y === 'number' ? (Number.isInteger(p.y) ? p.y : p.y.toFixed(1)) : '0'
+  const fz = typeof p.z === 'number' ? (Number.isInteger(p.z) ? p.z : p.z.toFixed(1)) : '0'
+  return `${fx},${fy},${fz}`
+}
+
+// Raise lines, one per owner that ever printed one (byte-identical to the
+// old detectors): follow/roam/home wedge lines, the lead nudge line. All
+// other owners raised silently and still do.
+function logRaise(bot, ctx, bp, by, goal) {
+  try {
+    if (by === 'follow') {
+      const dist = goal && bp ? Math.hypot(bp.x - goal.x, bp.y - goal.y, bp.z - goal.z).toFixed(1) : 'none'
+      const feetP = bp && typeof bp.floored === 'function' ? bp.floored() : null
+      const headP = feetP && typeof feetP.offset === 'function' ? feetP.offset(0, 1, 0) : null
+      const next = ctx.lastPathNext
+      const nextStr = next ? `${next.x},${next.y},${next.z}:${blockNameAt(bot, next)}` : '?:?'
+      console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist} feet=${blockNameAt(bot, feetP)} head=${blockNameAt(bot, headP)} next=${nextStr}`)
+    } else if (by === 'roam') {
+      const dist = goal && bp ? Math.hypot(bp.x - goal.x, bp.y - goal.y, bp.z - goal.z).toFixed(1) : 'none'
+      console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist} goal=${formatPos(goal)}`)
+    } else if (by === 'home') {
+      const dist = goal && bp ? Math.hypot(bp.x - goal.x, bp.y - goal.y, bp.z - goal.z).toFixed(1) : 'none'
+      console.log(`stuck reason=wedge pos=${formatPos(bp)} dist=${dist}`)
+    } else if (by === 'lead') {
+      const rx = bp ? Math.round(bp.x) : '?'
+      const ry = bp ? Math.round(bp.y) : '?'
+      const rz = bp ? Math.round(bp.z) : '?'
+      console.log(`stuck reason=nudge pos=${rx},${ry},${rz}`)
     }
-  } else if (!moving && bp && ctx.lastPos) {
-    // Idle executor (idkcraft-rra): stillness counts only against a live
-    // unsatisfied goal after a terminal planner verdict (noPath/timeout).
-    // Normal idle at goal, without a goal, or mid-plan (none/success)
-    // resets — a placing build holds unsatisfiable approach goals with an
-    // idle executor for minutes, and must never trip this. A latched
-    // release point holds too: one episode + one page per trap, then quiet
-    // until the body relocates (revmux 01 major).
-    const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
-    if (Math.hypot(bp.x - ctx.lastPos.x, bp.z - ctx.lastPos.z) < 0.5) {
-      if (terminal && idleFarFromGoal(bot, bp) && !latched) ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
-      else ctx.stuckTicks = 0
+  } catch (_) { /* logging never breaks detection */ }
+}
+
+// The single raise path (was ~10 setStuck call sites plus the ticker's
+// direct ctx.stuck assignment, which bypassed the setStuck latch). Through
+// setStuck, so the latch semantics hold for every owner including the
+// generic backstop. True when the fact stuck.
+function raise(bot, ctx, bp) {
+  const by = ownerOf(ctx)
+  const goal = goalForRaise(bot, ctx, bp)
+  const key = raiseKey(ctx, by)
+  let ok = false
+  try { ok = recover.setStuck(ctx, by, goal, key) } catch (_) { ok = false }
+  if (ok) logRaise(bot, ctx, bp, by, goal)
+  return ok
+}
+
+// COOLDOWN consult: is the release latch stale (re-arm) or standing (hold)?
+// At-anchored latches (home/roam/ticker) clear on relocation past the
+// radius; real-key at-latches also clear on a new pursuit (was follow.js's
+// preserve-ticker-drop-others rule), while the synthetic 'ticker' key is
+// sticky across pursuits by design (rra: one episode per trap). Goal
+// latches (follow/gather/lead) clear on a new pursuit key or a moved goal
+// (was setStuck's raise-time goalClose, now consulted every tick).
+function latchStale(ctx, bot, bp) {
+  const L = ctx && ctx.recoverLatch
+  if (!L || typeof L !== 'object') return true
+  try {
+    const cur = (ctx && ctx.lastGoalKey) || ''
+    const realKey = cur !== '' && cur !== 'idle'
+    if (!L.at) {
+      if (L.key && realKey && cur !== L.key) return true
+      if (L.goal) {
+        const g = backstopGoal(bot)
+        if (g && !recover.goalClose(L.goal, g)) return true
+      }
+      return false
+    }
+    if (L.key && L.key !== 'ticker' && realKey && cur !== L.key) return true
+    if (L.at && typeof L.at.x === 'number' && bp) {
+      if (horiz(bp, L.at) > LATCH_CLEAR) return true
+    }
+    return false
+  } catch (_) { return false }
+}
+
+// Raise exemptions (gates, not states — counting continues underneath, as
+// the old backstop did; the raise waits for the exemption to lift).
+// Gohome/stay own their approach stalls (rw4.5): walkTo re-issues and fails
+// the step itself (cannot-reach-home) — a backstop here sidesteps the body
+// mid-doorway every slow approach and the arrival starves into an orbit.
+// The come-home meet owns its own the same way (jr2.3). The rest gave-up
+// hold (q0h) owns repeats at its marked point.
+function raiseExempt(ctx, bot) {
+  const nightOwns = (ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')) || !!ctx.comehome
+  if (nightOwns) return true
+  try {
+    if (recover.restGaveUpHolds(ctx, bot)) return true
+  } catch (_) { /* hold best-effort */ }
+  return false
+}
+
+function zeroCounters(ctx) {
+  ctx.stuckTicks = 0
+  ctx.stuckResets = 0
+  ctx.placeErrors = 0
+}
+
+// Read-only verdict for behaviours: the ONLY stuck state they may consult
+// (target give-up reads stills/resets/placeErrors/episode; the counters
+// themselves are written here alone). Fresh object per call, no aliasing.
+function verdict(ctx) {
+  return {
+    state: (ctx && ctx.stuckState) || 'MOVING',
+    stills: (ctx && ctx.stuckTicks) || 0,
+    resets: (ctx && ctx.stuckResets) || 0,
+    placeErrors: (ctx && ctx.placeErrors) || 0,
+    episode: !!(ctx && (ctx.stuck || ctx.recovery)),
+    latched: !!(ctx && ctx.recoverLatch),
+  }
+}
+
+// The tick: sample displacement, advance the machine, raise at most once.
+// Called from both ticker branches (target path and the nobody-online idle
+// branch, where the homing walk wedges); paused ticks never sample.
+function update(bot, ctx) {
+  if (!ctx || ctx.paused) return
+  const bp = bodyPos(bot)
+  const moving = movingNow(bot)
+  const anchor = () => { if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z } }
+  // An episode (or a retreat pillar borrowing ctx.recovery) owns the body:
+  // hold, keep the anchor fresh so the release samples from the freed body.
+  if (ctx.recovery) {
+    ctx.stuckState = 'RECOVERING'
+    anchor()
+    return
+  }
+  // A raised fact waits for the route (urgent fight, idle cost guard):
+  // hold it, but displacement still clears a stale fact — the body moved,
+  // the situation is gone. Never under a running episode (set above).
+  if (ctx.stuck) {
+    if (bp && ctx.lastPos && horiz(bp, ctx.lastPos) > MOVE_TOLERANCE) {
+      ctx.stuck = null
+      zeroCounters(ctx)
+      ctx.stuckState = 'MOVING'
     } else {
-      ctx.stuckTicks = 0
-      if (!ctx.recovery) ctx.stuck = null
+      ctx.stuckState = 'STUCK'
     }
-  } else if (!moving) ctx.stuckTicks = 0
-  if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    anchor()
+    return
+  }
+  // A release latch holds new episodes until the situation changes; a
+  // stale latch clears and the tick falls through to counting below.
+  if (ctx.recoverLatch) {
+    if (latchStale(ctx, bot, bp)) ctx.recoverLatch = null
+    else {
+      ctx.stuckState = 'COOLDOWN'
+      anchor()
+      if (ctx.restGaveUpAt) {
+        try { recover.clearRelocatedRestMark(ctx, bot) } catch (_) { /* mark best-effort */ }
+      }
+      return
+    }
+  }
+  // First sample (or bodiless tick): anchor only, never count — a seeded
+  // counter survives the anchor tick and trips on the first real still.
+  if (!bp || !ctx.lastPos) {
+    anchor()
+    if (!ctx.stuckState) ctx.stuckState = 'MOVING'
+    return
+  }
+  if (horiz(bp, ctx.lastPos) > MOVE_TOLERANCE) {
+    // Progress clears everything: the still streak and both reset streaks
+    // (was the follow/roam/gather displacement clears, now one place).
+    zeroCounters(ctx)
+    ctx.stuckState = 'MOVING'
+    anchor()
+  } else {
+    // Still. Counting needs a body that should move: a driving executor,
+    // or an idle one against a live unsatisfied goal after a terminal
+    // planner verdict (rra). Parked/at-goal/mid-plan stillness resets.
+    const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
+    const shouldCount = moving || (!moving && terminal && idleFarFromGoal(bot, bp))
+    if (!shouldCount) {
+      ctx.stuckTicks = 0
+      ctx.stuckState = 'MOVING'
+      anchor()
+    } else {
+      ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+      ctx.stuckState = 'SUSPECT'
+      anchor()
+      if (!raiseExempt(ctx, bot)) {
+        const fast = moving && fastKey(ctx) &&
+          ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)
+        const slow = (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY
+        if (fast || slow) {
+          ctx.stuckState = raise(bot, ctx, bp) ? 'STUCK' : 'SUSPECT'
+        }
+      }
+    }
+  }
   // A clean relocation (a /tp out) ends the rest gave-up hold even when no
   // detector fires to consult the gate (core-1 follow-up).
-  if (ctx.restGaveUpAt) recover.clearRelocatedRestMark(ctx, bot)
+  if (ctx.restGaveUpAt) {
+    try { recover.clearRelocatedRestMark(ctx, bot) } catch (_) { /* mark best-effort */ }
+  }
 }
 
 // A stale stuck fact must not survive a mode change: the goal it names
@@ -201,54 +443,40 @@ function clearStuck(ctx) {
   ctx.stuck = null
   ctx.recovery = null
   ctx.stuckTicks = 0
+  ctx.stuckResets = 0
+  ctx.placeErrors = 0
+  ctx.stuckState = 'MOVING'
   ctx.recoverLatch = null
   ctx.retreat = null // orders end a retreat episode like any other step
 }
 
-// Hard-case stuck (ef3): displacement watch + generic backstops, then
-// the recover menu owns the body. Detectors in the behaviours raise
-// ctx.stuck with the goal they pursued; place_error streaks and long
-// stillness while the executor claims to move raise it here. An urgent
-// fight skips recovery (safety beats escape) and the brain call is
-// skipped — the episode asks the model at decision points only.
-function stuckBackstop(bot, ctx) {
-  noteDisplacement(bot, ctx)
-  if (!ctx.recovery && !ctx.stuck) {
-    // The place_error streak belongs to gather: its own stall logic
-    // skips the column (the yvi fix) and raises the fact at the
-    // unreachable final. A ticker backstop here would starve the skip
-    // and loop episodes on one trunk. Other placers keep the backstop.
-    const gatherOwns = ctx.work && ctx.step === 'gather' && !!ctx.gather
-    // Follow owns its place_error streaks (2oe): its wedge names the
-    // relief and carries the goal, while this backstop would preempt it
-    // with a goal-less fact on the same tick. Other owners keep it.
-    const followOwns = (ctx.lastGoalKey || '').startsWith('follow:')
-    // Gohome/stay own their approach stalls (rw4.5): walkTo re-issues
-    // and fails the step itself (cannot-reach-home) — a ticker backstop
-    // here sidesteps the body mid-doorway every slow approach and the
-    // arrival starves into an orbit. The come-home meet owns its own the
-    // same way (jr2.3): its walk re-issues and fails the order itself,
-    // its doorway legs unstick and re-arm.
-    const nightOwns = (ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')) || !!ctx.comehome
-    // p4s: no place_error backstop — a placement-error streak is the
-    // step's own signal (follow/gather count it toward their stalls), and
-    // handing the body to recover on it turned rest/roam traps into long
-    // sidestep/dig/call episodes. Only the no-displacement backstop stays.
-    if (!nightOwns && (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY && !recover.restGaveUpHolds(ctx, bot)) {
-      ctx.stuck = { by: 'no-displacement', goal: backstopGoal(bot), key: 'ticker' }
-    }
-  }
-}
-
 // place_error streaks (tower attempts into the same cell while a previous
 // placeBlock still awaits blockUpdate): consecutive only — any other
-// reset reason breaks the streak. Behaviours treat N>=3 with no
-// displacement as a stall, the shared fact the hard-case stuck menu needs.
+// reset reason breaks the streak. The 'stuck' streak instead survives
+// across resets until displacement (a wedged executor replans identically
+// for minutes); episodes and orders clear both.
 function countPathReset(ctx, reason) {
-ctx.lastPathReset = reason || null
-if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1
-if (reason === 'place_error') ctx.placeErrors = (ctx.placeErrors || 0) + 1
-else ctx.placeErrors = 0
+  ctx.lastPathReset = reason || null
+  if (reason === 'stuck') ctx.stuckResets = (ctx.stuckResets || 0) + 1
+  if (reason === 'place_error') ctx.placeErrors = (ctx.placeErrors || 0) + 1
+  else ctx.placeErrors = 0
 }
 
-module.exports = { backstopGoal, idleFarFromGoal, noteDisplacement, clearStuck, walkHomeTick, homeReached, stuckBackstop, countPathReset, UNSEEN_HOME_TICKS, RETURN_HOME_RANGE, HOME_STALL_TICKS, HOME_LATCH_CLEAR }
+module.exports = {
+  STATES,
+  MOVE_TOLERANCE,
+  STUCK_RESETS_ENTRY,
+  PLACE_ERRORS_ENTRY,
+  LATCH_CLEAR,
+  UNSEEN_HOME_TICKS,
+  RETURN_HOME_RANGE,
+  ownerOf,
+  backstopGoal,
+  idleFarFromGoal,
+  verdict,
+  update,
+  clearStuck,
+  walkHomeTick,
+  homeReached,
+  countPathReset,
+}
