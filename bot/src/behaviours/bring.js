@@ -314,12 +314,15 @@ async function chooseBringSearch(brain, text, legsLeft) {
 // hit. Costs are rough seconds: walk at ~4 blocks/s, digging ~2 s/block
 // plus a fixed shaft penalty once the hole is deeper than a quick dig (a
 // >4-deep shaft is where prod self-traps: 9 buried-refusals in 14 days),
-// remembered spots ×1.5 for staleness. No A*: if relief lies about
-// distance, bot.pathfinder.getPathTo(movements, goal, timeout) is the
-// upgrade path. Plain constants — the values never change at runtime;
-// tests stub them through the module export below.
+// remembered spots ×1.5 for staleness. The walk leg prices the vertical
+// too (atl.21): a descent to a deep cave is not free — atl.18 S2 priced a
+// 77-block hike with a 60-deep descent under 20 s and walked 337 s. No A*:
+// if relief lies about distance, bot.pathfinder.getPathTo(movements, goal,
+// timeout) is the upgrade path. Plain constants — the values never change
+// at runtime; tests stub them through the module export below.
 const SOURCE_COST = {
   walkBlocksPerSec: 4,
+  vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg
   digSecPerBlock: 2,
   deepDigDepth: 4,
   shaftPenaltySec: 25,
@@ -336,6 +339,10 @@ function walkCost(distH) {
   return Math.max(0, distH) / SOURCE_COST.walkBlocksPerSec
 }
 
+function vertCost(dy) {
+  return Math.abs(dy) * SOURCE_COST.vertSecPerBlock
+}
+
 function digCost(depthBelow) {
   const d = Math.max(0, depthBelow)
   return d * SOURCE_COST.digSecPerBlock + (d > SOURCE_COST.deepDigDepth ? SOURCE_COST.shaftPenaltySec : 0)
@@ -347,7 +354,8 @@ function liveExposed(bp, res) {
   if (!res || !res.position || res.exposed === false) return null
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
-  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, cost: walkCost(distH), ageMs: null }
+  const dy = Math.floor(bp.y) - Math.floor(p.y) // +below, the buried depthBelow gauge
+  return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, dy, cost: walkCost(distH) + vertCost(dy), ageMs: null }
 }
 
 function buriedCand(bp, res) {
@@ -415,9 +423,10 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     if (pre === 'protected') return null // owner build: same rule as the live loop
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
+    const dy = Math.floor(bp.y) - Math.floor(item.y) // +below, priced like the live leg
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
-      distH, dist, cost: walkCost(distH) * SOURCE_COST.memoryFactor,
+      distH, dist, dy, cost: walkCost(distH) * SOURCE_COST.memoryFactor + vertCost(dy),
       ageMs: typeof item.at === 'number' ? Date.now() - item.at : null,
     }
   } catch (_) { return null }
@@ -626,6 +635,21 @@ function choiceRes(win, rival, bp) {
   return res
 }
 
+// One-line verdict for the bot log (atl.21): both candidates with coords
+// and priced costs plus the pick, so a bad walk traces to the number that
+// chose it. Pure for tests; commitSource logs it on every verdict.
+function verdictLine(name, exposed, buried, pick) {
+  const side = (c, label) => c
+    ? `${label} ${c.kind} @${Math.floor(c.pos.x)},${Math.floor(c.pos.y)},${Math.floor(c.pos.z)} ${c.cost.toFixed(1)}s`
+    : `${label} none`
+  return `bring verdict ${name}: ${side(exposed, 'walk')} vs ${side(buried, 'dig')} -> ${pick}`
+}
+
+function verdictPos(c) {
+  if (!c || !c.pos) return null
+  return { x: Math.floor(c.pos.x), y: Math.floor(c.pos.y), z: Math.floor(c.pos.z), cost: c.cost }
+}
+
 // Shared commit for the find and searchfar verdicts (and order creation,
 // via the same res shape): plants the target, checks the pickaxe tier,
 // announces once. A memory target rides o.far — unloaded is not gone
@@ -633,6 +657,8 @@ function choiceRes(win, rival, bp) {
 function commitSource(bot, ctx, o, exposed, buried, pick) {
   const win = pick === 'buried' ? buried : exposed
   const rival = pick === 'buried' ? exposed : buried
+  o.verdict = { pick, win: verdictPos(win), rival: verdictPos(rival) }
+  console.log(verdictLine((o && o.name) || (win && win.name) || 'block', exposed, buried, pick))
   const bp = bot.entity && bot.entity.position
   const res = choiceRes(win, rival, bp)
   o.pos = res.position
@@ -1560,6 +1586,7 @@ module.exports.buriedCand = buriedCand
 module.exports.bestExposed = bestExposed
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText
+module.exports.verdictLine = verdictLine
 module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
 module.exports.canSearch = canSearch
