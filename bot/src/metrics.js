@@ -121,9 +121,19 @@ const light = new client.Counter({
   help: 'Torch lighting by op (crafted batches|placed torches|charcoal smelted)',
   labelNames: ['op']
 })
+const gearForged = new client.Counter({
+  name: 'idkcraft_bot_gear_forged_total',
+  help: 'Blacksmith forges at the table by piece and owner (self|owner); first-seen ts is the time-to-piece (ipn.5)',
+  labelNames: ['piece', 'owner']
+})
+const gearGiven = new client.Counter({
+  name: 'idkcraft_bot_gear_given_total',
+  help: 'Finished owner pieces handed over by channel (toss = deliver to an online player, bank = stockpile to the home chest); mirrors the gear ledger exactly, toss includes death-forgiven losses (ipn.5)',
+  labelNames: ['piece', 'channel']
+})
 const recover = new client.Counter({
   name: 'idkcraft_bot_recover_total',
   help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
   labelNames: ['action', 'source', 'outcome']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, setVitals, serve }
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, setVitals, serve }

@@ -47,6 +47,7 @@ const craftMod = require('./craft')
 const { COAL_RESERVE } = require('./light')
 const { countItems, wornItems } = require('../perception')
 const { say } = require('./util')
+const metrics = require('../metrics')
 
 // Ladder data: tiers in order, pieces in order. kind+owner name the want;
 // the item name is `${tier}_${kind}` unless the piece overrides it. Buckets
@@ -273,7 +274,12 @@ function reconcile(ctx, bot) {
         // want, capped. Single-unit wants land exactly as before.
         const handed = Math.max(0, prevFin - (finished[name] || 0))
         if (handed > 0 && (ctx.gearGiven[name] || 0) < OWNER_WANT[name]) {
-          ctx.gearGiven[name] = Math.min(OWNER_WANT[name], (ctx.gearGiven[name] || 0) + handed)
+          const before = ctx.gearGiven[name] || 0
+          ctx.gearGiven[name] = Math.min(OWNER_WANT[name], before + handed)
+          try {
+            // The ledger delta, not handed: the want cap above may trim it.
+            metrics.gearGiven.inc({ piece: name, channel: 'toss' }, ctx.gearGiven[name] - before)
+          } catch (_) { /* metrics best-effort */ }
         }
         // A settled unit leaves the pipeline: with both channels at zero,
         // made clears so the next unit of a multi-unit want (water_bucket
@@ -1011,6 +1017,9 @@ function forged(bot, ctx, next) {
   try {
     console.log(`gear forged ${next.name} for ${next.owner ? 'owner' : 'self'}`)
   } catch (_) { /* logging best-effort */ }
+  try {
+    metrics.gearForged.inc({ piece: next.name, owner: next.owner ? 'owner' : 'self' })
+  } catch (_) { /* metrics best-effort */ }
 }
 
 // Self armour goes on the body at the forge (ipn.6): find the fresh piece
