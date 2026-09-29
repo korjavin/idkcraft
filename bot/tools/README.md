@@ -87,8 +87,8 @@ it records and exits 0 until a laya baseline ships.
   (`NO BASELINE ENTRY` → exit 1) or `npm test`.
 - Work-bug terrains (bring shaft, build slope, rest pit) replay through the
   follow driver: the walk covers the prod ground where the work bug lived.
-  Order-driven work spots (chat an order, judge the outcome) are follow-up
-  work, not this rig.
+  Order-driven work spots (chat an order, judge the outcome) are
+  idkcraft-6x7.7, not this rig.
 
 ## `REPLAY_BRAIN=laya`
 
