@@ -110,7 +110,7 @@ describe('rest pit climbs to the site (idkcraft-q0h)', () => {
     const ctx = {
       work: true, step: 'rest', stepStatus: 'running',
       lastGoalKey: '', home: { site }, brain: null,
-      lastPos: { x: 0.5, y: 61, z: 0.5 }, groundedStills: 2,
+      lastPos: { x: 0.5, y: 61, z: 0.5 },
     }
     rest(bot, ctx, null, {})
     assert.match(ctx.lastGoalKey, /^roam-back:/)

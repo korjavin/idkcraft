@@ -89,11 +89,15 @@ function groundedNow(bot) {
   } catch (_) { return true }
 }
 
-// Still-tick maintenance for the fast gate: consecutive grounded stills
-// grow, any airborne tick restarts. Called on still ticks only — progress
-// zeroes through zeroCounters.
-function stillGrounded(bot, ctx) {
-  ctx.groundedStills = groundedNow(bot) ? (ctx.groundedStills || 0) + 1 : 0
+// Still-tick maintenance for the fast gate: a 3D jump (apex-size move from
+// the anchor that is not progress — the landing returns to the anchor, so
+// only the apex trips this) re-arms the quiet window, otherwise it decays.
+// Called on still ticks only — progress zeroes through zeroCounters.
+function trackJump(bot, ctx, bp) {
+  const last = ctx && ctx.lastPos
+  const jumped = !!(bp && last && typeof bp.y === 'number' && typeof last.y === 'number' &&
+    Math.hypot(bp.x - last.x, bp.y - last.y, bp.z - last.z) > MOVE_TOLERANCE)
+  ctx.jumpCooldown = jumped ? JUMP_QUIET_TICKS : Math.max(0, (ctx.jumpCooldown || 0) - 1)
 }
 
 // Return-home: after UNSEEN_HOME_TICKS online-but-unseen ticks, walk to
@@ -384,15 +388,17 @@ function zeroCounters(ctx) {
   ctx.stuckTicks = 0
   ctx.stuckResets = 0
   ctx.placeErrors = 0
-  ctx.groundedStills = 0
+  ctx.jumpCooldown = 0
 }
 
-// Consecutive grounded still ticks needed before the fast entry fires
-// (core-2 follow-up): tower attempts apex airborne every jump, so a streak
-// alone must not wedge mid-jump-cycle — master cleared the streaks on every
-// 3D jump instead. Genuine ground wedges pass this in 3 ticks, far below the
-// ~7 s reset spacing, so the gate costs nothing there.
-const GROUNDED_STILLS_ENTRY = 3
+// Still ticks after a 3D jump during which the fast entry holds fire
+// (core-2 follow-up): tower attempts apex every jump, so a streak alone
+// must not wedge mid-jump-cycle — master cleared the streaks on every 3D
+// jump instead. Genuine ground wedges (no jumps) pass immediately. Small
+// oscillations (water bobbing ±0.3) are not jumps, so a bobbing pit still
+// fires like master (S6-PIT); jump-spam pits fall through to the slow
+// entry at 30, exactly like master's ticker backstop.
+const JUMP_QUIET_TICKS = 4
 
 // Read-only verdict for behaviours: the ONLY stuck state they may consult
 // (target give-up reads stills/resets/placeErrors/episode; the counters
@@ -437,7 +443,7 @@ function update(bot, ctx) {
       anchor()
     } else {
       ctx.stuckState = 'STUCK'
-      stillGrounded(bot, ctx)
+      trackJump(bot, ctx, bp)
     }
     return
   }
@@ -454,7 +460,7 @@ function update(bot, ctx) {
         zeroCounters(ctx)
         anchor()
       } else {
-        stillGrounded(bot, ctx)
+        trackJump(bot, ctx, bp)
       }
       if (ctx.restGaveUpAt) {
         try { recover.clearRelocatedRestMark(ctx, bot) } catch (_) { /* mark best-effort */ }
@@ -464,10 +470,8 @@ function update(bot, ctx) {
   }
   // First sample (or bodiless tick): anchor only, never count — a seeded
   // counter survives the anchor tick and trips on the first real still.
-  // Groundedness is known without a baseline, so the fast gate starts here.
   if (!bp || !ctx.lastPos) {
     anchor()
-    ctx.groundedStills = groundedNow(bot) ? 1 : 0
     if (!ctx.stuckState) ctx.stuckState = 'MOVING'
     return
   }
@@ -485,7 +489,7 @@ function update(bot, ctx) {
     // Parked/at-goal/mid-plan stillness resets.
     const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
     const shouldCount = moving || (!moving && terminal && idleFarFromGoal(bot, bp))
-    stillGrounded(bot, ctx)
+    trackJump(bot, ctx, bp)
     if (!shouldCount) {
       ctx.stuckTicks = 0
       ctx.stuckState = 'MOVING'
@@ -493,7 +497,7 @@ function update(bot, ctx) {
       ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       ctx.stuckState = 'SUSPECT'
       if (!raiseExempt(ctx, bot)) {
-        const fast = moving && fastKey(ctx) && (ctx.groundedStills || 0) >= GROUNDED_STILLS_ENTRY &&
+        const fast = moving && fastKey(ctx) && (ctx.jumpCooldown || 0) <= 0 &&
           ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)
         const slow = (ctx.stuckTicks || 0) >= recover.STUCK_TICKS_ENTRY
         if (fast || slow) {
@@ -528,7 +532,7 @@ function clearStuck(ctx) {
   ctx.stuckTicks = 0
   ctx.stuckResets = 0
   ctx.placeErrors = 0
-  ctx.groundedStills = 0
+  ctx.jumpCooldown = 0
   ctx.stuckState = 'MOVING'
   ctx.recoverLatch = null
   ctx.retreat = null // orders end a retreat episode like any other step
