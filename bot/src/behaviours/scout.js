@@ -306,9 +306,17 @@ function rankHits(bot, found, refY = null, full = false) {
 
   function scoreOf(p) {
     const exposed = isExposed(bot, p) ? 0 : 1
+    // Diggable before gated (chv): the rescan exists to find a shaft the
+    // walk can finish, so a gated-but-shallower hit must not outrank a
+    // diggable deep-near one. Exposed hits are never gated (walkable by
+    // definition — the gate lives in buriedCand only), and an unreadable
+    // origin ranks fail-open (legacy).
+    const gated = exposed === 0 ? 0 : (origin && typeof origin.x === 'number' && typeof origin.y === 'number' && typeof origin.z === 'number' &&
+      p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number' &&
+      gatedShaft(Math.floor(origin.y) - Math.floor(p.y), Math.hypot(p.x - origin.x, p.z - origin.z)) ? 1 : 0)
     const dy = y0 != null && typeof p.y === 'number' ? Math.abs(p.y - y0) : 0
     const d = origin ? dist(p, origin) : 0
-    return [exposed, dy, d]
+    return [exposed, gated, dy, d]
   }
 }
 
@@ -504,7 +512,7 @@ function stepFarSearch(bot, cursor, opts) {
 }
 
 function compareScore(a, b) {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return a[i] - b[i]
   }
   return 0

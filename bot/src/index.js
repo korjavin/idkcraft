@@ -2018,7 +2018,7 @@ function fleeReflex(bot, ctx) {
             clearStuck()
             homeMod.releaseMeet(bot, ctx)
             ctx.bring = {
-              kind: 'block', name, want, by, phase: 'find', have: 0, announced: false,
+              kind: 'block', name, want, by, phase: bringMod.openPhase(ctx), have: 0, announced: false,
               deepVein: bringMod.deepVeinOf(bp0, res),
             }
             ctx.paused = false
@@ -2529,7 +2529,10 @@ async function advancePendingSearch(bot, ticker, ctx) {
       const stash = p.buried && p.buried.position ? p.buried : null
       const far = r.result && r.result.exposed !== false ? bringMod.liveExposed(bp0, r.result, bot) : null
       const farBuried = r.result && r.result.exposed === false ? r.result : (r.buried || null)
-      const buried = stash ? bringMod.buriedCand(bp0, stash, bot) : (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
+      // A gated stash falls back to the far shaft (chv): buriedCand returns
+      // null past the gate, and the stash merely existing must not hide a
+      // diggable far hit (the searchfar twin already falls back this way).
+      const buried = (stash && bringMod.buriedCand(bp0, stash, bot)) || (farBuried ? bringMod.buriedCand(bp0, farBuried, bot) : null)
       let mem = null
       try { mem = bringMod.memoryExposed(bot, ctx, bp0, p.name, null) } catch (_) { mem = null }
       const exposed = bringMod.bestExposed(far, bringMod.memoryInBudget(mem, buried))

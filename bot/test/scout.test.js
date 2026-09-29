@@ -1043,3 +1043,40 @@ describe('findNearestBlock full-pool rescan (idkcraft-chv)', () => {
     assert.deepEqual([best.x, best.y, best.z], [21, 40, 0])
   })
 })
+
+describe('rankHits diggable-first (idkcraft-chv revmux 01)', () => {
+  const NAMES = { iron_ore: 15, deepslate_iron_ore: 16 }
+  // A: gated-but-shallower (dy 13, distH 25); B: diggable deep-near
+  // (dy 24, distH 5). The gate key outranks dy in every pool.
+  const A = pos(25, 51, 0)
+  const B = pos(5, 40, 0)
+  const NAMES_AB = { '25,51,0': 'iron_ore', '5,40,0': 'iron_ore' }
+
+  it('a diggable deep-near vein beats a gated shallower one in the cheap pool', () => {
+    const bot = mockBot({ registry: NAMES, spots: [A, B], names: NAMES_AB })
+    const best = findNearestBlock(bot, 'iron')
+    assert.deepEqual([best.x, best.y, best.z], [5, 40, 0])
+    assert.equal(bot.findCalls, 1, 'diggable winner needs no rescan')
+  })
+
+  it('the rescan ranks the full pool diggable-first too', () => {
+    const spots = []
+    const names = { ...NAMES_AB }
+    for (let x = 21; x <= 40; x++) {
+      for (let z = 0; z <= 3; z++) {
+        spots.push(pos(x, 40, z))
+        names[`${x},40,${z}`] = 'iron_ore'
+      }
+    }
+    spots.push(A, B) // past the count-64 cut, like the S3 geometry
+    const bot = mockBot({
+      registry: NAMES,
+      findImpl: (opts) => spots.slice(0, typeof opts.count === 'number' ? opts.count : 64),
+      names,
+    })
+    const best = findNearestBlock(bot, 'iron')
+    assert.deepEqual([best.x, best.y, best.z], [5, 40, 0])
+    assert.equal(bot.findCalls, 2)
+    assert.ok(logs.some((l) => l.includes('r=48 full')), `logs: ${logs}`)
+  })
+})

@@ -1389,6 +1389,13 @@ async function bring(bot, ctx, target, state) {
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
       o.memKnown = memoryInBudget(mem, o.buried)
     }
+    // Gated with no dig in play (chv): like an empty find, the adopted
+    // chest comes before the shells and legs (atl.14 fetch-first). A
+    // feasible stash digs directly, as before.
+    if (!o.buried && !o.chestTried && o.have < o.want && ctx && ctx.home && ctx.home.chest) {
+      o.phase = 'chestfetch'
+      return
+    }
     // A cached far verdict skips the rescan (body-3): the buried stash
     // and memory above are always re-derived fresh and cheap.
     const cachedBuried = takeFarCache(bot, o, bp)

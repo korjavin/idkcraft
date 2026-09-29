@@ -200,3 +200,87 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
     )
   })
 })
+
+describe('chv revmux 01 follow-ups', () => {
+  const PROBES = { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' }
+
+  function centerAware(bot) {
+    const inner = bot.findBlocks.bind(bot)
+    bot.findBlocks = (o) => {
+      const c = o.point || { x: 0, y: 64, z: 0 }
+      return inner(o).filter((q) => Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) <= o.maxDistance)
+    }
+  }
+
+  // Gated 48 stash (dy 24, distH 25) plus a diggable far shaft (dy 4 at
+  // 60): the stash merely existing must not hide the far dig.
+  function stashFarBot(extra = {}) {
+    const bot = mockBot({
+      spots: [pos(25, 40, 0), pos(60, 60, 0)],
+      names: { '25,40,0': 'iron_ore', '60,60,0': 'iron_ore', ...PROBES },
+      items: PICK,
+      playerPos: pos(30, 64, 0),
+      ...extra,
+    })
+    centerAware(bot)
+    return bot
+  }
+
+  it('creation: gated stash falls back to the diggable far shaft', async () => {
+    const bot = stashFarBot()
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    assert.ok(bot._tickerCtx.pendingSearch.buried, 'buried hit stashed')
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    const o = bot._tickerCtx.bring
+    assert.ok(o, 'order opened')
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away'), `lines: ${bot.lines}`)
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [60, 60, 0])
+    assert.equal(o.verdict.pick, 'buried')
+    assert.equal(o.verdict.rival, null, 'gated stash is no rival')
+    assert.equal(o.farCache.buriedHit.pos.x, 60)
+  })
+
+  it('find phase: gated stash falls back to the diggable far shaft', async () => {
+    const bot = stashFarBot()
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar')
+    await bring(bot, ctx, null, {})
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 60 blocks away'])
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 60, 0])
+    assert.equal(ctx.bring.phase, 'walk')
+  })
+
+  it('creation with a gated-only 48 checks the adopted chest first', () => {
+    const bot = mockBot({
+      spots: [pos(25, 40, 0)],
+      names: { '25,40,0': 'iron_ore' },
+      items: PICK,
+      playerPos: pos(30, 64, 0),
+    })
+    const ticker = tickerFor(bot)
+    bot._tickerCtx.home = { chest: { x: 1, y: 64, z: 0 } }
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['nearest iron too deep to dig, looking for a diggable vein…'])
+    assert.equal(bot._tickerCtx.bring.phase, 'chestfetch')
+  })
+
+  it('find phase with a gated-only 48 checks the adopted chest first', async () => {
+    const bot = mockBot({
+      spots: [pos(25, 40, 0)],
+      names: { '25,40,0': 'iron_ore' },
+      items: PICK,
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.home = { chest: { x: 1, y: 64, z: 0 } }
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'chestfetch')
+  })
+})
