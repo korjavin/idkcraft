@@ -62,12 +62,17 @@ function keyOf(p) {
 const SEARCH_FIRST = 48
 const SEARCH_MAX = 160
 
-// Dig-down gate (idkcraft-chv): a buried hit more than this far below the
-// feet is not a shaft the walk phase can finish — S1 dug 9-10 down and
-// delivered, 15+ stalled into 'buried, no path in' (atl.20 S3 0/3). A cheap
-// winner past the gate triggers a full-pool rescan for a diggable rival, and
-// bring prices gated hits as no-dig (SOURCE_COST.maxDigDepth defaults here).
+// Dig-down gate (idkcraft-chv): a buried hit is infeasible when it is BOTH
+// deep and far — the walk phase cannot commit down a shallow approach
+// (atl.20 S3 0/3: dy 15+ at distH ~33 stalled without digging). Either axis
+// alone digs: S1 delivered dy 9-10, and a steep dy-16 shaft at distH 11
+// dug through solid ground and delivered (S4 assay). A cheap winner past
+// the gate triggers a full-pool rescan for a diggable rival, and bring
+// prices gated hits as no-dig (SOURCE_COST.maxDigDepth/maxDigDistH default
+// here). Two empirical cutoffs, not theory: deliver points (10,11),(16,11),
+// stall points (15+,33+).
 const MAX_DIG_DEPTH = 12
+const MAX_DIG_DISTH = 20
 // Full-pool rescan count: the within-48 pool at the S3 spot holds 266 hits
 // (probe 2026-09-29); 2048 sees all of it with margin for richer ground.
 const FIND_FULL_COUNT = 2048
@@ -255,14 +260,24 @@ function findNearestBlock(bot, blockName, refY = null, exclude = null) {
 }
 
 // A buried cheap winner past the dig-down gate: walk+canDig cannot finish
-// the shaft, so the full pool is worth one rescan. Exposed, shallow, and
-// above-feet winners (and an unreadable origin) skip it.
+// the shaft, so the full pool is worth one rescan. Exposed, shallow, near,
+// and above-feet winners (and an unreadable origin) skip it. The predicate
+// matches the bring verdict gate exactly (buriedCand): trigger and gate
+// must never disagree about what is diggable.
 function needsFullRescan(bot, from, best) {
   if (!best || !from || typeof from.y !== 'number' || typeof best.y !== 'number') return false
+  if (typeof best.x !== 'number' || typeof best.z !== 'number') return false
   let exposed = false
   try { exposed = isExposed(bot, best) } catch { exposed = false }
   if (exposed) return false
-  return Math.floor(from.y) - Math.floor(best.y) > MAX_DIG_DEPTH
+  return gatedShaft(Math.floor(from.y) - Math.floor(best.y), Math.hypot(best.x - from.x, best.z - from.z))
+}
+
+// Gate predicate (chv): true when the shaft is too deep AND too far out to
+// walk-dig. needsFullRescan applies it with the scout defaults; buriedCand
+// mirrors it with SOURCE_COST (stub-able in tests) — the two must agree.
+function gatedShaft(depthBelow, distH) {
+  return depthBelow > MAX_DIG_DEPTH && distH >= MAX_DIG_DISTH
 }
 
 // Shared ranking: exposed first (walkable, not solid rock), then closest in
@@ -596,4 +611,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf, MAX_DIG_DEPTH }
+module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }

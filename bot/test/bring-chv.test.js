@@ -87,12 +87,17 @@ function tickerFor(bot, brain) {
 }
 
 describe('bring dig-down gate (idkcraft-chv)', () => {
-  it('buriedCand gates past maxDigDepth, keeps the boundary', () => {
+  it('buriedCand gates deep-and-far, keeps either axis alone', () => {
     const bp = pos(0, 64, 0)
-    const at = (y) => ({ name: 'iron_ore', position: pos(0, y, 0), distance: 64 - y, exposed: false })
-    assert.ok(buriedCand(bp, at(52)), 'depth 12 digs')
-    assert.equal(buriedCand(bp, at(51)), null, 'depth 13 is no-dig')
+    const at = (x, y) => ({ name: 'iron_ore', position: pos(x, y, 0), distance: 64 - y, exposed: false })
+    assert.ok(buriedCand(bp, at(25, 52)), 'depth 12 digs at any reach')
+    assert.equal(buriedCand(bp, at(25, 51)), null, 'depth 13 at distH 25 is no-dig')
+    assert.ok(buriedCand(bp, at(5, 40)), 'a deep near shaft digs (S4 steep dy-16)')
+    assert.ok(buriedCand(bp, at(25, 60)), 'a far shallow vein digs')
+    assert.equal(buriedCand(bp, at(20, 40)), null, 'distH boundary is inclusive')
+    assert.ok(buriedCand(bp, at(19, 40)), 'distH 19 digs')
     assert.equal(SOURCE_COST.maxDigDepth, 12)
+    assert.equal(SOURCE_COST.maxDigDistH, 20)
   })
 
   it('deepVeinOf/deepRefusal name the vein coords', () => {
@@ -104,8 +109,8 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
 
   it('creation with only a deep vein opens find, then refuses honestly with coords', async () => {
     const bot = mockBot({
-      spots: [pos(0, 40, 0)],
-      names: { '0,40,0': 'iron_ore' },
+      spots: [pos(25, 40, 0)],
+      names: { '25,40,0': 'iron_ore' },
       items: PICK,
       playerPos: pos(30, 64, 0),
     })
@@ -115,11 +120,11 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
     const o = bot._tickerCtx.bring
     assert.ok(o, 'order opened')
     assert.equal(o.phase, 'find')
-    assert.deepEqual(o.deepVein, { name: 'iron_ore', x: 0, y: 40, z: 0, depth: 24 })
+    assert.deepEqual(o.deepVein, { name: 'iron_ore', x: 25, y: 40, z: 0, depth: 24 })
     for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null, 'order refused')
     assert.ok(
-      bot.lines.includes('iron_ore at 0 40 0 is 24 down — too deep to dig'),
+      bot.lines.includes('iron_ore at 25 40 0 is 24 down — too deep to dig'),
       `lines: ${bot.lines}`,
     )
     assert.equal(bot.calls.setGoal, 0, 'never walked to the undiggable shaft')
@@ -127,8 +132,8 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
 
   it('spent legs name the known deep vein instead of a bare no-ore', async () => {
     const bot = mockBot({
-      spots: [pos(0, 40, 0)],
-      names: { '0,40,0': 'iron_ore' },
+      spots: [pos(25, 40, 0)],
+      names: { '25,40,0': 'iron_ore' },
       items: PICK,
       playerPos: pos(30, 64, 0),
       spawnPoint: pos(0, 64, 0), // anchor: legs exist, so exhaustion is reachable
@@ -141,7 +146,7 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
     for (let i = 0; i < 10 && bot._tickerCtx.bring; i++) await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null, 'order refused')
     assert.ok(
-      bot.lines.includes('searched 24 areas, no iron — nearest known vein too deep at 0 40 0'),
+      bot.lines.includes('searched 24 areas, no iron — nearest known vein too deep at 25 40 0'),
       `lines: ${bot.lines}`,
     )
   })
@@ -168,9 +173,9 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
     // order alive for the deepVein assertion; the skip-far re-find below
     // runs anchorless so the refusal lands on this tick, deterministically.
     const bot = mockBot({
-      spots: [pos(0, 40, 0)],
+      spots: [pos(25, 40, 0)],
       names: {
-        '0,40,0': 'iron_ore',
+        '25,40,0': 'iron_ore',
         '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
       },
       items: PICK,
@@ -183,14 +188,14 @@ describe('bring dig-down gate (idkcraft-chv)', () => {
     for (let i = 0; i < 200 && !bot._tickerCtx.bring; i++) await ticker.tick()
     const o = bot._tickerCtx.bring
     assert.ok(o, 'legs order opened after the empty shells')
-    assert.deepEqual(o.deepVein, { name: 'iron_ore', x: 0, y: 40, z: 0, depth: 24 })
+    assert.deepEqual(o.deepVein, { name: 'iron_ore', x: 25, y: 40, z: 0, depth: 24 })
     o.phase = 'find'
     o.searchSkipFar = true
     delete bot.spawnPoint
     await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null, 'order refused')
     assert.ok(
-      bot.lines.includes('iron_ore at 0 40 0 is 24 down — too deep to dig'),
+      bot.lines.includes('iron_ore at 25 40 0 is 24 down — too deep to dig'),
       `lines: ${bot.lines}`,
     )
   })

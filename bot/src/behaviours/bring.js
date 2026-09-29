@@ -1,7 +1,7 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
-const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES, MAX_DIG_DEPTH } = require('./scout')
+const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES, MAX_DIG_DEPTH, MAX_DIG_DISTH } = require('./scout')
 const { countItems } = require('../perception')
 const resources = require('../resources')
 const fightMod = require('./fight')
@@ -348,12 +348,15 @@ const SOURCE_COST = {
   vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg
   digSecPerBlock: 2,
   deepDigDepth: 4,
-  // Dig-down gate (idkcraft-chv): a buried hit deeper than this below the
-  // feet is no dig candidate at all — walk+canDig cannot finish the shaft
-  // (S1 9-10 delivered, 15+ stalled). buriedCand returns null past it, so
-  // the verdict sees no-dig and the order hunts legs or refuses honestly
-  // with the vein coords instead of stalling on the surface.
+  // Dig-down gate (idkcraft-chv): a buried hit deeper than maxDigDepth
+  // AND further out than maxDigDistH is no dig candidate at all — the walk
+  // cannot commit down a shallow approach (atl.20 S3: dy 15+ at distH ~33
+  // stalled without digging), while either axis alone digs (S1 dy 9-10, S4
+  // steep dy-16 at distH 11 through solid ground). buriedCand returns null
+  // past both, so the verdict hunts legs or refuses honestly with the vein
+  // coords instead of stalling on the surface. Mirrors scout gatedShaft.
   maxDigDepth: MAX_DIG_DEPTH,
+  maxDigDistH: MAX_DIG_DISTH,
   shaftPenaltySec: 25,
   // Breath (idkcraft-0u9): a dive costs a surface trip plus the drowning
   // risk — priced above a deep shaft so a dry rival wins deterministically.
@@ -402,7 +405,7 @@ function buriedCand(bp, res, bot = null) {
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const depthBelow = Math.max(0, Math.floor(bp.y) - Math.floor(p.y))
-  if (depthBelow > SOURCE_COST.maxDigDepth) return null // gated shaft: no-dig (chv)
+  if (depthBelow > SOURCE_COST.maxDigDepth && distH >= SOURCE_COST.maxDigDistH) return null // gated shaft: no-dig (chv)
   let wet = false
   if (bot) {
     for (let i = 0; i < WET_COLUMN_CELLS && !wet; i++) wet = submergedAt(bot, p.x, p.y + i, p.z)

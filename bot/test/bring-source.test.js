@@ -865,9 +865,10 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
   })
 
   // Buried-48 path (revmux 01 core-3): the stashed sync hit is a deep
-  // shaft (34 down, gated under chv), the open vein at 150 unopposed.
-  // Without the exposed flag the re-read stash closes ring 70 and the
-  // verdict never sees the open vein.
+  // shaft (34 down, 93 s), the open vein at 150 a clear winner (37.6 s).
+  // Near-field (distH 0), so a feasible rival under the chv gate — the
+  // (exposed) suffix and rival facts stand. Without the exposed flag the
+  // re-read stash closes ring 70 and the verdict digs.
   const BNAMES = {
     '0,30,0': 'iron_ore',
     '139,64,57': 'iron_ore', '140,64,57': 'air',
@@ -887,13 +888,13 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
     assert.equal(bot._tickerCtx.pendingSearch, null)
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away (exposed)'), `lines: ${bot.lines}`)
     const o = bot._tickerCtx.bring
     assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [139, 64, 57])
     assert.deepEqual(o.verdict, {
       pick: 'exposed',
       win: { x: 139, y: 64, z: 57, cost: Math.hypot(139, 57) / SOURCE_COST.walkBlocksPerSec },
-      rival: null, // the 34-down stash is gated (chv), not a rival
+      rival: { x: 0, y: 30, z: 0, cost: 34 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
     })
   })
 
@@ -908,7 +909,7 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     assert.equal(ctx.bring.phase, 'searchfar')
     await bring(bot, ctx, null, {})
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away'])
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away (exposed)'])
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
     assert.equal(ctx.bring.phase, 'walk')
   })

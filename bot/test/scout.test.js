@@ -945,14 +945,15 @@ describe('scout ranking edges (idkcraft-l71)', () => {
 describe('findNearestBlock full-pool rescan (idkcraft-chv)', () => {
   const NAMES = { iron_ore: 15, deepslate_iron_ore: 16 }
 
-  // Walk-order pool: 70 deep decoys (walk order = array order in the mock),
-  // then one shallow vein the count-64 cut never sees.
+  // Walk-order pool: 80 deep-far decoys (walk order = array order in the
+  // mock), then one shallow vein the count-64 cut never sees. Every decoy
+  // is past both gate axes (dy 24, distH 21+), so the cheap winner rescans.
   function richGround() {
     const spots = []
     const names = {}
-    for (let x = 1; x <= 35; x++) {
-      for (const z of [0, 1]) {
-        spots.push(pos(x, 40, 0 + z))
+    for (let x = 21; x <= 40; x++) {
+      for (let z = 0; z <= 3; z++) {
+        spots.push(pos(x, 40, z))
         names[`${x},40,${z}`] = 'iron_ore'
       }
     }
@@ -1001,12 +1002,22 @@ describe('findNearestBlock full-pool rescan (idkcraft-chv)', () => {
   })
 
   it('gate boundary: 12 down skips the rescan, 13 down rescans', () => {
-    const even = mockBot({ registry: NAMES, spots: [pos(5, 52, 0)], names: { '5,52,0': 'iron_ore' } })
+    const even = mockBot({ registry: NAMES, spots: [pos(25, 52, 0)], names: { '25,52,0': 'iron_ore' } })
     findNearestBlock(even, 'iron')
     assert.equal(even.findCalls, 1, 'depth 12 is diggable, no rescan')
-    const odd = mockBot({ registry: NAMES, spots: [pos(5, 51, 0)], names: { '5,51,0': 'iron_ore' } })
+    const odd = mockBot({ registry: NAMES, spots: [pos(25, 51, 0)], names: { '25,51,0': 'iron_ore' } })
     findNearestBlock(odd, 'iron')
     assert.equal(odd.findCalls, 2, 'depth 13 rescans')
+  })
+
+  it('gate boundary: a deep shaft inside distH 20 never rescans (S4 steep dig)', () => {
+    const near = mockBot({ registry: NAMES, spots: [pos(19, 40, 0)], names: { '19,40,0': 'iron_ore' } })
+    findNearestBlock(near, 'iron')
+    assert.equal(near.findCalls, 1, 'distH 19 digs without a rescan')
+    const far = mockBot({ registry: NAMES, spots: [pos(20, 40, 0)], names: { '20,40,0': 'iron_ore' } })
+    const best = findNearestBlock(far, 'iron')
+    assert.equal(far.findCalls, 2, 'distH 20 rescans')
+    assert.deepEqual([best.x, best.y, best.z], [20, 40, 0])
   })
 
   it('a throwing rescan keeps the cheap winner', () => {
@@ -1020,7 +1031,7 @@ describe('findNearestBlock full-pool rescan (idkcraft-chv)', () => {
       names,
     })
     const best = findNearestBlock(bot, 'iron')
-    assert.deepEqual([best.x, best.y, best.z], [1, 40, 0])
+    assert.deepEqual([best.x, best.y, best.z], [21, 40, 0])
   })
 
   it('the rescan honors the skip filter', () => {
@@ -1029,6 +1040,6 @@ describe('findNearestBlock full-pool rescan (idkcraft-chv)', () => {
     const best = findNearestBlock(bot, 'iron', null, (q) => q.x === 10 && q.y === 60)
     // The shallow rival is skipped: the deep cheap winner stands, gated
     // downstream by the bring verdict instead of here.
-    assert.deepEqual([best.x, best.y, best.z], [1, 40, 0])
+    assert.deepEqual([best.x, best.y, best.z], [21, 40, 0])
   })
 })
