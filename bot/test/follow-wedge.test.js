@@ -224,5 +224,24 @@ describe('follow never gives up (idkcraft-5vv)', () => {
     assert.equal(logs.filter((l) => l.includes('stuck reason=')).length, 0)
     assert.equal(ctx.followSeenStuck, 1)
   })
+
+  it('the seen-marker resyncs down, so a later knock replans again (body-1)', () => {
+    // The streak is the central detector's and zeroes on displacement; the
+    // marker follows it down, or the replan knock fires once per pursuit
+    // and every later knock escalates toward the menu instead.
+    const bot = wedgedBot()
+    bot.entity.position = pos(0, 64.4, 0)
+    const ctx = { lastGoalKey: 'follow:P', stuckResets: 1, followSeenStuck: 0 }
+    quiet(() => follow(bot, ctx, target, { distance_to_player: 20 }))
+    assert.equal(bot.calls.setGoal, 1)
+    assert.equal(ctx.followSeenStuck, 1)
+    ctx.stuckResets = 0 // central zeroed on displacement
+    quiet(() => follow(bot, ctx, target, { distance_to_player: 20 }))
+    assert.equal(bot.calls.setGoal, 1, 'no knock, no replan')
+    assert.equal(ctx.followSeenStuck, 0, 'marker resynced down')
+    ctx.stuckResets = 1 // next knock
+    quiet(() => follow(bot, ctx, target, { distance_to_player: 20 }))
+    assert.equal(bot.calls.setGoal, 2, 'second knock replans again')
+  })
 })
 

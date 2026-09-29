@@ -43,6 +43,7 @@ const { Vec3 } = require('vec3')
 const resources = require('../resources')
 const danger = require('../danger')
 const bring = require('./bring')
+const stuck = require('../stuck')
 const exploreMod = require('./explore')
 const forageMod = require('./forage')
 const deliverMod = require('./deliver')
@@ -622,6 +623,9 @@ function deep(bot, ctx, target, state) {
       d.steps.push({ x: st.stand.x, y: st.stand.y, z: st.stand.z })
       d.n++
     } else if (r === 'stalled') {
+      // One escape per failed step through stuck.request (core-1): the fail
+      // ends the step, so the stills never reach the slow threshold alone.
+      try { stuck.request(bot, ctx, 'deep', st.stand, key) } catch (_) { /* stuck best-effort */ }
       fail(bot, ctx, d, 'shaft-stuck', st.stand, 'stuck in the shaft')
     }
     return
@@ -905,11 +909,13 @@ function deep(bot, ctx, target, state) {
       const okey = `${next.x},${next.y},${next.z}`
       d.fillSeen = d.fillSeen || {}
       if ((d.fillSeen[okey] || 0) >= 2) {
+        try { stuck.request(bot, ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
         fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
         return
       }
       const mid = fillMid(bot, bp, next)
       if (!mid) {
+        try { stuck.request(bot, ctx, 'deep', next, `deep-back:${crumbs.length}`) } catch (_) { /* stuck best-effort */ }
         fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
         return
       }
@@ -962,6 +968,7 @@ function deep(bot, ctx, target, state) {
       try { bot.pathfinder.setGoal(goal, false) } catch (_) { /* replan best-effort */ }
     }
     if (r === 'stalled') {
+      try { stuck.request(bot, ctx, 'deep', next, key) } catch (_) { /* stuck best-effort */ }
       fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
     }
     return
@@ -1027,6 +1034,7 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
   // hang-back-leap-hang cycle would spin forever on stalls alone — the
   // per-crumb tick cap fails it honestly instead.
   if (++d.retWaited > RET_MOUNT_TICKS) {
+    try { stuck.request(bot, ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
     fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
     return
   }
@@ -1198,6 +1206,7 @@ function driveStepUp(bot, ctx, d, bp, next, crumbKey) {
         setC('forward', false); setC('back', false); setC('jump', false); setC('sprint', false)
         retStall(bot, ctx, d, bp, next)
         if (d.wedgedTicks >= WEDGED_FAIL_TICKS && d.stalls >= WEDGED_FAIL_TICKS && ctx.stepStatus === 'running') {
+          try { stuck.request(bot, ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
           fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
         }
         return
@@ -1445,6 +1454,7 @@ function retStall(bot, ctx, d, bp, next) {
     d.stalls = 0
     d.retStallPos = { x: bp.x, z: bp.z }
   } else if (++d.stalls >= RETURN_STALL) {
+    try { stuck.request(bot, ctx, 'deep', next, 'deep-return-up') } catch (_) { /* stuck best-effort */ }
     fail(bot, ctx, d, 'lost-shaft', next, 'lost the way back')
     return
   }

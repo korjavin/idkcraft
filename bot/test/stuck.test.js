@@ -123,6 +123,47 @@ describe('stuck update: sampling', () => {
     assert.equal(ctx.stuckState, 'SUSPECT')
   })
 
+  it('slow movement accumulates from the progress anchor (core-2)', () => {
+    // Water/soul-sand pace (0.4/tick) is real movement: the anchor holds on
+    // still ticks, so the second shuffle trips the tolerance from the same
+    // point. Per-tick re-anchoring would read still forever and wedge.
+    const bot = mockBot({ moving: true })
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    bot.entity.position = pos(0.4, 64, 0)
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuckTicks, 1)
+    assert.deepEqual(ctx.lastPos, { x: 0, y: 64, z: 0 }, 'anchor holds on still ticks')
+    bot.entity.position = pos(0.8, 64, 0)
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuckTicks, 0, 'cumulative 0.8 clears the streak')
+    assert.equal(ctx.stuckState, 'MOVING')
+    assert.deepEqual(ctx.lastPos, { x: 0.8, y: 64, z: 0 }, 'anchor moves on progress')
+  })
+
+  it('a grounded level change is progress, tower jumps are still (core-2)', () => {
+    // Towering lands grounded at a new level: progress, streaks clear (was:
+    // horizontal-only sampling fast-entered a wedge mid-climb on the tower
+    // place_error streaks).
+    const bot = mockBot({ moving: true })
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 }, stuckTicks: 5, placeErrors: 3 }
+    bot.entity.position = pos(0, 65, 0)
+    bot.entity.onGround = true
+    stuck.update(bot, ctx)
+    assert.equal(ctx.stuckTicks, 0)
+    assert.equal(ctx.placeErrors, 0)
+    // Jumping in place: the apex is airborne (ignored) and the landing
+    // returns to the anchor level — still counts.
+    const ctx2 = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    bot.entity.position = pos(0, 65.2, 0)
+    bot.entity.onGround = false
+    stuck.update(bot, ctx2)
+    bot.entity.position = pos(0, 64, 0)
+    bot.entity.onGround = true
+    stuck.update(bot, ctx2)
+    assert.equal(ctx2.stuckTicks, 2)
+    assert.equal(ctx2.stuckState, 'SUSPECT')
+  })
+
   it('a non-numeric body never samples (no count, no raise)', () => {
     const bot = mockBot({ moving: true })
     bot.entity.position = { x: '0', y: 64, z: 0 }
@@ -510,6 +551,8 @@ describe('stuck update: COOLDOWN', () => {
     }
     recover.release(bot, ctx, 'done')
     assert.equal(ctx.recoverLatch && ctx.recoverLatch.by, 'lead')
+    assert.deepEqual(ctx.recoverLatch.at, { x: 0, y: 64, z: 0 }, 'lead latch anchored (core-4)')
+    assert.equal(ctx.recoverLatch.mark, 10, 'no-gain mark rides the latch')
     assert.equal(ctx.lead.nudged, true)
     // Post-episode stills hold instead of re-firing every slow threshold.
     ctx.lastGoalKey = 'lead:10,64,0'
@@ -519,6 +562,37 @@ describe('stuck update: COOLDOWN', () => {
     for (let i = 0; i < 35; i++) stuck.update(bot, ctx)
     assert.equal(ctx.stuck, null)
     assert.equal(ctx.stuckState, 'COOLDOWN')
+  })
+
+  it('real gain past the mark re-arms the lead latch for a new wedge (core-4)', () => {
+    const bot = mockBot({ at: [0, 64, 0], moving: true, goal: new goals.GoalNear(10, 64, 0, 2) })
+    const ctx = {
+      lastGoalKey: 'lead:10,64,0', lastPos: { x: 0, y: 64, z: 0 },
+      lead: { name: 'ore', pos: { x: 10, y: 64, z: 0 }, nudged: true, nudgedAt: 10 },
+      recoverLatch: { by: 'lead', key: 'lead:10,64,0', goal: { x: 10, y: 64, z: 0 }, at: { x: 0, y: 64, z: 0 }, mark: 10 },
+    }
+    stuck.update(bot, ctx)
+    assert.ok(ctx.recoverLatch, 'no gain: the latch holds')
+    bot.entity.position = pos(5, 64, 0) // 5 left of 10: real gain
+    stuck.update(bot, ctx)
+    assert.equal(ctx.recoverLatch, null, 'gain past the mark re-arms')
+  })
+
+  it('progress while latched zeroes the streaks (core-5)', () => {
+    // Resets keep arriving while the body walks normally under a latch;
+    // they must not fire a fast wedge on the tick the latch goes stale.
+    const bot = mockBot({ moving: true })
+    const ctx = {
+      lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 },
+      stuckResets: 2, placeErrors: 1,
+      recoverLatch: { by: 'follow', key: 'follow:P', goal: { x: 20, y: 64, z: 0 } },
+    }
+    bot.entity.position = pos(3, 64, 0) // walking, same pursuit: latch holds
+    stuck.update(bot, ctx)
+    assert.ok(ctx.recoverLatch)
+    assert.equal(ctx.stuckState, 'COOLDOWN')
+    assert.equal(ctx.stuckResets, 0)
+    assert.equal(ctx.placeErrors, 0)
   })
 })
 
@@ -620,6 +694,37 @@ describe('stuck raise lines (formats frozen)', () => {
       assert.ok(ctx.stuck, `${key} raised`)
       assert.equal(cap.lines.filter((l) => l.includes('stuck reason=')).length, 0, `${key} silent`)
     }
+  })
+})
+
+describe('stuck request (give-up escape)', () => {
+  it('raises through the same choke point: fact, line, STUCK state', () => {
+    const bot = mockBot({ at: [0.4, 64, 0] })
+    const ctx = { lastGoalKey: 'lead:10,64,0' }
+    const cap = capture()
+    let ok = false
+    try {
+      ok = stuck.request(bot, ctx, 'lead', { x: 10, y: 64, z: 0 }, 'lead:10,64,0')
+    } finally { cap.release() }
+    assert.equal(ok, true)
+    assert.deepEqual(ctx.stuck, { by: 'lead', goal: { x: 10, y: 64, z: 0 }, key: 'lead:10,64,0' })
+    assert.equal(ctx.stuckState, 'STUCK')
+    assert.ok(cap.lines.some((m) => m === 'stuck reason=nudge pos=0,64,0'), cap.lines.join('|'))
+  })
+
+  it('refuses while a fact, an episode, or the same latch holds', () => {
+    const bot = mockBot()
+    assert.equal(stuck.request(bot, { stuck: { by: 'fight' } }, 'bring', null, 'bring:0,62,0'), false)
+    assert.equal(stuck.request(bot, { recovery: { action: 'wait' } }, 'bring', null, 'bring:0,62,0'), false)
+    const cap = capture()
+    let ok = true
+    try {
+      ok = stuck.request(bot, {
+        recoverLatch: { by: 'bring', key: 'bring:0,62,0', goal: { x: 0, y: 62, z: 0 } },
+      }, 'bring', { x: 0, y: 62, z: 0 }, 'bring:0,62,0')
+    } finally { cap.release() }
+    assert.equal(ok, false, 'latch holds the same situation')
+    assert.equal(cap.lines.length, 0, 'refused requests stay silent')
   })
 })
 

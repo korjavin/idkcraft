@@ -1581,20 +1581,21 @@ function release(bot, ctx, how) {
   // next trap gets a fresh episode.
   // Lead anchors like the other owned walks (6x7.2): without a latch the
   // central detector re-fires every slow threshold through a mining stall
-  // (episodes reset both budgets) and the order never gives up. A goal
-  // latch, not anchored: the order goal is static and order-scoped, so a
-  // new order (new key) or its end re-arms.
+  // (episodes reset both budgets) and the order never gives up. Anchored
+  // like home/roam (the order goal is static), plus the no-gain mark: real
+  // gain past it re-arms for a second, different wedge (M3, core-4).
   if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && how === 'gave-up')) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
-    if (by === 'home' || by === 'roam' || by === 'no-displacement') {
+    if (by === 'home' || by === 'roam' || by === 'no-displacement' || by === 'lead') {
       // Static goals never move, so goal-closeness cannot tell one wedge
       // from the next: anchor the release point instead. The stuck.js
       // COOLDOWN consult re-arms once the body relocated past the latch
       // radius (was walkHomeTick/roam-back/tickerLatched, rra round 1).
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
+      if (by === 'lead' && ctx.lead) ctx.recoverLatch.mark = ctx.lead.nudgedAt
     }
   } else if (by === 'no-displacement' && ctx.recoverLatch && ctx.recoverLatch.by === 'no-displacement') {
     ctx.recoverLatch = null

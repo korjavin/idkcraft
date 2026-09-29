@@ -1563,11 +1563,17 @@ async function bring(bot, ctx, target, state) {
           : `could not reach ${o.block} safely`)
         return
       }
-      // Below-feet is a property of the PLACE — find re-picks the same
-      // nearest block and the stance never changes (atl.17 raised a stuck
-      // fact here so the menu sidestepped; 6x7.2: the stance changes only
-      // when the body itself wedges and stuck.js raises off the bring
-      // key — a standing-still strike loop refuses at the ceiling above).
+      // atl.17: below-feet is a property of the PLACE — find re-picks the
+      // same nearest block and the stance never changes, so the dig
+      // refuses with the bot standing still (prod 2026-09-28). Ask the menu
+      // for one escape through stuck.request (a target event, not body
+      // detection — same choke point as the central raise); release()
+      // resumes ctx.bring untouched, find re-picks the same block from the
+      // new stance, and the dig passes. One episode per strike at most (the
+      // fact refuses while one runs); denyStrikes stays the ceiling.
+      if (bDeny === 'below-feet') {
+        try { stuck.request(bot, ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
+      }
       o.pos = null
       o.phase = 'find'
       return

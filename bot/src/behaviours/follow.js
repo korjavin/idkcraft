@@ -66,7 +66,11 @@ function follow(bot, ctx, target, state) {
   // re-anchors GoalFollow faster than the 3.5 s window): just replan to
   // their current position.
   if (isMoving) {
+    // Seen-marker (body-1): the streak is the central detector's and drops
+    // on displacement — resync down with it, or the replan knock fires once
+    // per pursuit and every later knock escalates to the menu instead.
     const resets = stuck.verdict(ctx).resets
+    if (resets < (ctx.followSeenStuck || 0)) ctx.followSeenStuck = resets
     if (resets > (ctx.followSeenStuck || 0)) {
       ctx.followSeenStuck = resets
       bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)

@@ -187,9 +187,12 @@ function explore(bot, ctx, target, state) {
     e.target = null
     e.issuedKey = null
     ctx.stepStatus = 'failed:unreachable'
-    // Target give-up only (6x7.2): no stuck fact here — when the body
-    // itself wedges, stuck.js raises off the explore key with this target
-    // as the goal (parsed from the key: GoalXZ carries no y).
+    // The target is the goal: without it dig_through has no direction and
+    // goalDy/goalDist describe a bystander player (revmux round 1). One
+    // escape per failed leg through stuck.request (core-1: give-ups reset
+    // the central stills, so a pit would cycle targets forever with no
+    // episode otherwise).
+    stuck.request(bot, ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
   }
 }
 

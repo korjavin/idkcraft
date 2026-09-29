@@ -292,8 +292,15 @@ function gather(bot, ctx, target, state) {
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)
-          // Target give-up only (6x7.2): no stuck fact — a wedged body
-          // raises centrally off the gather key, with the live walk goal.
+          // One escape at the final through stuck.request (core-1): skips
+          // reset the central stills every leg, so a trunk wedge would
+          // otherwise fail with no episode. Per-tree key (not the old
+          // global 'gather'): the release latch scopes per situation, so
+          // the old manual latch clears stay deleted. Transition only —
+          // re-asserts of the same final stay quiet (early return above).
+          stuck.request(bot, ctx, 'gather',
+            g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null,
+            key)
         }
       }
       return

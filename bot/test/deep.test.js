@@ -1704,7 +1704,7 @@ describe('deep behaviour legs', () => {
     assert.equal(bot.controls.back, false)
   })
 
-  it('no back-room waits the glide out, wedges fail early at 8 with no fact', () => {
+  it('no back-room waits the glide out, wedges fail early at 8 with the stuck fact', () => {
     const bot = mockBot()
     for (const k of ['10,-45,0', '10,-44,0', '10,-46,0', '10,-47,0']) bot.blocks[k] = 'air' // void behind at the 0.5 sample (drop 2)
     const writes = []
@@ -1731,10 +1731,12 @@ describe('deep behaviour legs', () => {
     assert.equal(ctx.deep.primed, true)
     for (let i = 0; i < 6 && ctx.stepStatus === 'running'; i++) deep(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'running') // 7 wedged ticks: still holding
-    deep(bot, ctx, null, {}) // 8th wedged + static: one unfreeze poke, then fail early (no fact: 6x7.2)
+    deep(bot, ctx, null, {}) // 8th wedged + static: one unfreeze poke, then fail early to recover
     assert.equal(ctx.stepStatus, 'failed:lost-shaft')
     assert.equal(writes.length, 4) // the poke-then-fail unfreeze STARTs (feet/head + ahead; underfoot is air here)
-    assert.ok(!ctx.stuck, 'target give-up claims no body')
+    assert.ok(ctx.stuck)
+    assert.equal(ctx.stuck.by, 'deep')
+    assert.deepEqual(ctx.stuck.goal, { x: 9, y: -44, z: 0 })
   })
 
   it('return never pops a step from the floor below', () => {
@@ -1907,7 +1909,7 @@ describe('deep ssn return', () => {
     deep(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:lost-shaft')
     assert.equal(ctx.deep, null)
-    assert.ok(!ctx.stuck, 'no fact from the step itself')
+    assert.ok(ctx.stuck)
   })
 
   it('ssn: second fill for the same crumb is allowed (one fall retry)', () => {
@@ -1945,10 +1947,10 @@ describe('deep ssn return', () => {
     bot.entity.position = pos(10.15, -45, 0) // hold still: stalls climb, the fail lands
     for (let i = 0; i < 8 && ctx.stepStatus === 'running'; i++) deep(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:lost-shaft')
-    assert.ok(!ctx.stuck, 'no fact from the step itself')
+    assert.ok(ctx.stuck)
   })
 
-  it('multi-up with no standable mid fails early with no fact', () => {
+  it('multi-up with no standable mid fails early with the stuck fact', () => {
     const bot = mockBot() // default stone everywhere: no air mid at -50
     bot.entity.position = pos(55.6, -51, -201.7)
     const ctx = memCtx([])
@@ -1960,7 +1962,8 @@ describe('deep ssn return', () => {
     }
     deep(bot, ctx, null, {}) // one tick: no 20-tick futile climb
     assert.equal(ctx.stepStatus, 'failed:lost-shaft')
-    assert.ok(!ctx.stuck, 'no fact from the step itself')
+    assert.ok(ctx.stuck)
+    assert.equal(ctx.stuck.by, 'deep')
   })
 
   it('ssn: tunnel digs feet, head, and headroom (3-high tube)', async () => {

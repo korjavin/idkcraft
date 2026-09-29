@@ -514,12 +514,12 @@ describe('gather step', () => {
     assert.equal(bot.pathfinder.goal, null)
   })
 
-  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, no fact at final', async () => {
+  it('tick-level yvi: place_error streaks skip columns, no backstop hijack, fact at final', async () => {
     // M1 regression: the ticker place_error backstop must not preempt
     // gather's own column skip (endless ask-episodes on one trunk). Drives
-    // real ticker.tick() in work mode: skips happen locally, and the final
-    // is a target give-up with no body fact (6x7.2: a wedged body raises
-    // centrally off the gather key instead — pinned in stuck.test.js).
+    // real ticker.tick() in work mode: skips happen locally, the stuck fact
+    // raises only at the unreachable final, with by=gather (not place_error)
+    // — one escape through stuck.request at the give-up (core-1).
     const names = {}
     const spots = []
     for (const cx of [2, 6, 9]) {
@@ -557,7 +557,11 @@ describe('gather step', () => {
     for (let i = 0; i < 32 && ctx.stepStatus !== 'failed:unreachable'; i++) await tick()
     assert.equal(ctx.stepStatus, 'failed:unreachable')
     assert.ok(bot.lines.includes('cannot reach the trees'))
-    assert.equal(ctx.stuck, null, 'target give-up claims no body')
+    // Asserted on the final tick, not N ticks later: the episode this fact
+    // opens ends (gave-up) and clears it, so a later read pins how long the
+    // escape takes — not who raised the fact. What matters here is the
+    // attribution: by=gather from the give-up request, not the backstop.
+    assert.equal(ctx.stuck && ctx.stuck.by, 'gather', 'fact requested at the final, not by the backstop')
   })
 
   it('registers in BEHAVIOURS under gather (one line in index.js)', () => {
