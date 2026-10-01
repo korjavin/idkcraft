@@ -168,6 +168,23 @@ function matchOrderLine(line, expect, fail) {
   return null
 }
 
+// Window verdict step (idkcraft-6x7.7 revmux 01 core-2): pure,
+// unit-tested. Follow spots end on position; order spots NEVER do — the
+// bot starts within guide range (gd<=6 at t=0 on ATL-SHAFT), so a
+// position break would end the window before any chat marker is scanned
+// and the spot would pass no matter what the order did (fail-open).
+// Only the chat verdict judges an order. Returns true/false on a
+// terminal verdict, null to keep the window open.
+function windowReached(mode, useGoal, d, gd, orderVerdict) {
+  if (mode === 'order') {
+    if (orderVerdict === 'expect') return true
+    if (orderVerdict === 'fail') return false
+    return null
+  }
+  if ((useGoal && d !== null && d < REACH_DIST) || (gd !== null && gd <= 6)) return true
+  return null
+}
+
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
 //   { brain: 'stub', spots: { NAME: { reached: bool, maxStuck: n, maxEps: m, maxCalls: k } } }
 // was/now diffs print per spot; verdicts: 'ok', 'improved' (reached flipped
@@ -543,22 +560,25 @@ async function main() {
     const useGoal = Math.hypot(tx - s.spawn[0], ty - s.spawn[1], tz - s.spawn[2]) >= 4
     while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
       await sleep(500)
+      let d = null
+      let gd = null
       try {
         const p = follower.entity.position
-        const d = Math.hypot(p.x - tx, p.y - ty, p.z - tz)
+        d = Math.hypot(p.x - tx, p.y - ty, p.z - tz)
         if (d < minDist) minDist = d
-        const gd = Math.hypot(p.x - gl.x, p.y - gl.y, p.z - gl.z)
+        gd = Math.hypot(p.x - gl.x, p.y - gl.y, p.z - gl.z)
         if (gd < minGuide) minGuide = gd
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
-        // Reached ends the window: post-goal walking is outside the spot.
-        if (s.mode !== 'order' && ((useGoal && d < REACH_DIST) || gd <= 6)) { reached = true; break }
       } catch (_) { /* sampling best-effort */ }
       scanOrderChat()
-      if (orderVerdict) { reached = orderVerdict === 'expect'; break }
+      // Reached ends the window: post-goal walking is outside the spot.
+      const w = windowReached(s.mode, useGoal, d, gd, orderVerdict)
+      if (w !== null) { reached = w; break }
     }
     scanOrderChat() // final gap: a marker in the last <500 ms still counts
-    if (s.mode === 'order' && orderVerdict) reached = orderVerdict === 'expect'
+    const wEnd = windowReached(s.mode, false, null, null, orderVerdict)
+    if (wEnd !== null) reached = wEnd
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
@@ -626,4 +646,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached }

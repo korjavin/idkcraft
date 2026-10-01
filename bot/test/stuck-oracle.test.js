@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -325,6 +325,35 @@ describe('order spots (idkcraft-6x7.7)', () => {
     ]) {
       assert.equal(matchOrderLine(line, EXP, FAIL), null, line)
     }
+  })
+})
+
+describe('windowReached (idkcraft-6x7.7 revmux 01 core-2)', () => {
+  it('order spots ignore position: only the chat verdict judges', () => {
+    // Fail-open pin: the bot starts within guide range (gd<=6 at t=0 on
+    // ATL-SHAFT) — judging by position would end the window before any
+    // marker and pass the spot no matter what the order did.
+    assert.equal(windowReached('order', true, 0, 0, null), null)
+    assert.equal(windowReached('order', true, 2.4, 3.2, null), null)
+    assert.equal(windowReached('order', true, 0, 0, 'expect'), true)
+    assert.equal(windowReached('order', true, 0, 0, 'fail'), false)
+    assert.equal(windowReached('order', false, 999, 999, 'expect'), true)
+    assert.equal(windowReached('order', false, 999, 999, 'fail'), false)
+    assert.equal(windowReached('order', false, 999, 999, null), null)
+  })
+
+  it('follow spots end on position (goal shell or guide arrival)', () => {
+    assert.equal(windowReached('follow', true, 1.0, 99, null), true)
+    assert.equal(windowReached('follow', false, 1.0, 99, null), null) // spawn inside the goal shell: guide arrival only
+    assert.equal(windowReached('follow', false, 99, 5, null), true)
+    assert.equal(windowReached('follow', true, 99, 99, null), null)
+    assert.equal(windowReached('follow', true, 2.5, 6.1, null), null) // boundary: reach is strict
+  })
+
+  it('a failed sample keeps the window open (no verdict on nulls)', () => {
+    assert.equal(windowReached('follow', true, null, null, null), null)
+    assert.equal(windowReached('follow', true, 1.0, null, null), true) // partial sample still judges
+    assert.equal(windowReached('follow', true, null, 5, null), true)
   })
 })
 

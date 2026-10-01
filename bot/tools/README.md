@@ -113,8 +113,8 @@ byte-identical row). The green order runs episode-free — the atl.20
 exemption digs below-feet ore onto solid without ever asking the recover
 menu, so the budget is never read. An order spot proves recover-sensitivity
 only where its green path fails a primitive and rescues; the budget guard
-stays S6-PIT `maxCalls` until such an order spot exists (the Q0H-PIT rest
-conversion is the natural carrier — the q0h escalation fails the step on
+stays S6-PIT `maxCalls` until such an order spot exists (idkcraft-6x7.8:
+the Q0H-PIT rest conversion is the natural carrier — the q0h escalation fails the step on
 consecutive gave-ups by design).
 
 ## Corpus rules
