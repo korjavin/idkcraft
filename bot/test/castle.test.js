@@ -220,6 +220,20 @@ describe('castle slice reach invariant (range 4, ref face, LOS, way back)', () =
     assert.equal(r.ok, false, 'lifted cell must fail the invariant')
   })
 
+  it('mutation: a landing ceiling over a stair jump blocks the climb (revmux 02)', () => {
+    // Round-1 regression pin: a plank at (4,3,4) ceilings F1's first jump
+    // (getMoveJumpUp blockA), so no L1 stance is walkable and the L1 torch
+    // that needs one must fail.
+    const plan = castle.PLAN.map((c) => ({ ...c }))
+    const slabIdx = plan.findIndex((c) => c.dy === 3 && c.kind === 'planks')
+    assert.ok(slabIdx !== -1, 'L1 slab found')
+    plan.splice(slabIdx, 0, { dx: 4, dy: 3, dz: 4, kind: 'planks' })
+    const torchIdx = plan.findIndex((c) => c.kind === 'torch' && c.dx === 5 && c.dy === 4 && c.dz === 5)
+    assert.ok(torchIdx !== -1, 'L1 torch found')
+    const r = checkPrefix(plan, castle.SITE_W, castle.SITE_D, castle.ENTRANCE, torchIdx)
+    assert.equal(r.ok, false, 'ceiled staircase must fail the invariant')
+  })
+
   it('mutation: a tall pillar outruns range 4 with no stance', () => {
     const plan = castle.PLAN.map((c) => ({ ...c }))
     for (let dy = 0; dy <= 8; dy++) plan.push({ dx: 0, dy, dz: 0, kind: 'stone' })
