@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode, makeExitGuard } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -207,6 +207,123 @@ describe('stuck-baseline.json covers the corpus (idkcraft-6x7.4)', () => {
     for (const [spot, bead] of [['ATL-SHAFT', 'idkcraft-atl.17'], ['JR-SLOPE', 'idkcraft-jr2.4'], ['Q0H-PIT', 'idkcraft-q0h']]) {
       assert.ok(byName[spot], `missing work-terrain spot ${spot}`)
       assert.ok((byName[spot].bead || '').includes(bead), `${spot} must cite ${bead}`)
+    }
+  })
+})
+
+describe('order spots (idkcraft-6x7.7)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+  // The corpus markers themselves judge these lines: the test pins the
+  // committed contract against the real bring.js chat shapes, not a copy.
+  const atl = byName['ATL-SHAFT']
+  const EXP = atl.expect
+  const FAIL = atl.fail
+
+  it('ATL-SHAFT is the order-driven bring spot', () => {
+    assert.equal(atl.mode, 'order')
+    assert.match(atl.order, /^bring me iron_ore/)
+    assert.ok(EXP.includes('here is ') && EXP.includes('here are '))
+    assert.ok(FAIL.includes('could not '))
+  })
+
+  it('every order spot carries a well-formed order contract', () => {
+    const orders = spots.filter((x) => x.mode === 'order')
+    assert.ok(orders.length >= 1, 'want at least one order spot')
+    for (const o of orders) {
+      assert.equal(typeof o.order, 'string', `${o.name}: order must be chat text`)
+      assert.ok(o.order.length > 0 && o.order.length <= 256, `${o.name}: bad order length`)
+      for (const k of ['expect', 'fail']) {
+        assert.ok(Array.isArray(o[k]) && o[k].length > 0 && o[k].length <= 16, `${o.name}: bad ${k}`)
+        for (const m of o[k]) assert.ok(typeof m === 'string' && m.length > 0 && m.length <= 80, `${o.name}: bad ${k} marker`)
+      }
+    }
+  })
+
+  it('loadSpots accepts the committed corpus', () => {
+    const saved = process.argv[2]
+    process.argv[2] = path.join(TOOLS, 'stuck-spots.json')
+    try {
+      const list = loadSpots()
+      const a = list.find((x) => x.name === 'ATL-SHAFT')
+      assert.equal(a.mode, 'order')
+      assert.equal(a.order, atl.order)
+      assert.deepEqual(a.expect, EXP)
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+    }
+  })
+
+  it('loadSpots rejects malformed order contracts', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'order-spots-'))
+    const saved = process.argv[2]
+    const bad = (spot, why) => {
+      const f = path.join(dir, `${why}.json`)
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], ...spot }]))
+      process.argv[2] = f
+      assert.throws(() => loadSpots(), new RegExp(why), `${why} must throw`)
+    }
+    try {
+      bad({ mode: 'bogus' }, 'bad mode')
+      bad({ mode: 'order' }, 'need a chat order')
+      bad({ mode: 'order', order: 'bring me x', expect: [], fail: ['could not '] }, 'non-empty expect markers')
+      bad({ mode: 'order', order: 'bring me x', expect: ['here is '], fail: [''] }, 'bad fail marker')
+      bad({ order: 'bring me x' }, 'need mode=order')
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('delivery lines are expect', () => {
+    assert.equal(matchOrderLine('here are 2 iron_ore', EXP, FAIL), 'expect')
+    assert.equal(matchOrderLine('here is 1 iron_ore', EXP, FAIL), 'expect')
+  })
+
+  it('terminal refusals are fail', () => {
+    for (const line of [
+      'could not reach iron_ore safely',
+      'could not reach iron_ore (buried, no path in) at 59 56 -205',
+      'could not break iron_ore',
+      'could not bring iron_ore',
+      'could not toss iron_ore',
+      'could not pick up iron_ore',
+      'only got 1 iron_ore \u2014 could not reach iron_ore safely',
+      'need a stone pickaxe for iron_ore',
+      'need an iron pickaxe for diamond_ore (my stone_pickaxe can\'t break it)',
+      'searched 0 areas, no iron_ore',
+      'searched 3 areas, no iron_ore \u2014 nearest known vein too deep at 59 52 -205',
+      'only got 1 iron_ore',
+      'no iron_ore within 48 blocks (loaded area)',
+      'iron_ore at 59 52 -205 is 12 down \u2014 too deep to dig',
+      'unknown block: iron_ore',
+      'unknown item: iron_ore',
+      'can\'t bring dirt \u2014 ores and logs only',
+    ]) {
+      assert.equal(matchOrderLine(line, EXP, FAIL), 'fail', line)
+    }
+  })
+
+  it('non-terminal order chatter matches nothing', () => {
+    for (const line of [
+      'going for 2 iron_ore, 8 blocks away (digging)',
+      'going for 2 iron_ore, 40 blocks away (exposed)',
+      'nothing within 48, widening the search for iron_ore\u2026',
+      'nothing within 48, searching for iron_ore\u2026',
+      'only buried iron_ore within 48, checking further for open ore\u2026',
+      'comparing open and buried iron_ore\u2026',
+      'nearest iron_ore too deep to dig, looking for a diggable vein\u2026',
+      'nearest iron_ore is underwater, checking for a dry one\u2026',
+      'no iron_ore nearby, searching\u2026',
+      'checking the home chest for iron_ore',
+      'coming with 2 iron_ore',
+      'I can\'t see you \u2014 I\'m at 59 54 -205 with your 2 iron_ore; come closer',
+      'Following StuckGuider123',
+    ]) {
+      assert.equal(matchOrderLine(line, EXP, FAIL), null, line)
     }
   })
 })

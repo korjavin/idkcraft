@@ -3,8 +3,8 @@
 // prod-world snapshot with the REAL bot stack (runOnce + stubBrain following
 // a guide parked on the logged goal) and print a per-spot table:
 //   spot | reached? | stuck resets | recover episodes | call_player? | time
-// Spots are data (default: stuck-spots.json next to this file, 9 rig
-// spots with per-spot kit; argv[2]/REPLAY_SPOTS overrides with another file):
+// Spots are data (default: stuck-spots.json next to this file; argv[2]/
+// REPLAY_SPOTS overrides with another file):
 //   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],
 //     "secs":75,"scaffold":0,"pickaxe":true}]
 // secs/scaffold/pickaxe are optional (defaults 75 / 64 dirt / stone pickaxe).
@@ -13,6 +13,14 @@
 // before login (deterministic offline UUIDs, like water-assay.js ASSAY_OP):
 // spots inside spawn protection (CLUSTER, r=16) refuse un-opped pours, so
 // water_up spots run opped — mirroring a prod bot with op.
+// Order spots (idkcraft-6x7.7) replay work mode instead of a follow walk:
+// the guide parks ON the goal (the delivery point, near the spawn) and chats
+// `order` at window start; reached = an `expect` marker seen in follower
+// chat, a `fail` marker ends the window unreached:
+//   [{"name":"ATL-SHAFT","mode":"order","spawn":[59.5,64,-205.5],
+//     "goal":[62.5,64,-205.5],"order":"bring me iron_ore 2",
+//     "expect":["here is ","here are "],"fail":["could not "]}]
+// mode defaults to follow; goal keeps its feet-coords convention in both.
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -116,8 +124,48 @@ function loadSpots() {
     // through to the row so the JSON stays traceable.
     const bead = s.bead == null ? '' : String(s.bead)
     if (bead.length > 64) throw new Error(`spots[${i}]: bad bead`)
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead }
+    // Order spots (idkcraft-6x7.7): mode=order replays a guide-chatted work
+    // order instead of a follow walk. order/expect/fail are required there
+    // and rejected on follow spots (dead data in a gate corpus confuses).
+    const mode = s.mode == null ? 'follow' : String(s.mode)
+    if (mode !== 'follow' && mode !== 'order') throw new Error(`spots[${i}]: bad mode (want follow|order)`)
+    let order = null
+    let expect = null
+    let fail = null
+    if (mode === 'order') {
+      if (typeof s.order !== 'string' || !s.order.trim() || s.order.length > 256) {
+        throw new Error(`spots[${i}]: order spots need a chat order (<=256 chars)`)
+      }
+      order = s.order
+      for (const [k, v] of [['expect', s.expect], ['fail', s.fail]]) {
+        if (!Array.isArray(v) || v.length === 0 || v.length > 16) {
+          throw new Error(`spots[${i}]: order spots need non-empty ${k} markers (<=16)`)
+        }
+        for (const m of v) {
+          if (typeof m !== 'string' || !m || m.length > 80) throw new Error(`spots[${i}]: bad ${k} marker`)
+        }
+      }
+      expect = s.expect.slice()
+      fail = s.fail.slice()
+    } else if (s.order != null || s.expect != null || s.fail != null) {
+      throw new Error(`spots[${i}]: order/expect/fail need mode=order`)
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail }
   })
+}
+
+// Order-spot chat verdict (idkcraft-6x7.7): pure, unit-tested. Matches one
+// follower chat line against the spot's expect/fail markers (substring —
+// bot lines carry counts and coords, e.g. 'here are 2 iron_ore'). Markers
+// are per-order-kind data: every expect/fail hit must be terminal for THAT
+// order (a bring's 'here are' delivers; its 'I can't see you' waits and is
+// NOT a fail marker). Expect wins when one line matches both (no shipped
+// line does — the order keeps the matcher total, not opinionated).
+function matchOrderLine(line, expect, fail) {
+  const s = String(line)
+  if (expect.some((m) => s.includes(m))) return 'expect'
+  if (fail.some((m) => s.includes(m))) return 'fail'
+  return null
 }
 
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
@@ -270,6 +318,7 @@ async function main() {
   const index = require('../src/index')
   const brain = picked.make()
   const recover = require('../src/behaviours/recover')
+  const bringMod = require('../src/behaviours/bring')
 
   // Windowed counters (reset per spot): stuck declarations, path resets by
   // reason, follower-sent chats. Patched once — the ticker reads them live.
@@ -375,12 +424,19 @@ async function main() {
     // Start above both ends, then verify headroom: a guide tp'd into rock
     // suffocates (baseline-1 S6) and a buried guide near spawn fakes
     // reached (baseline-1 EP0/S4).
-    let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
-    let len = Math.hypot(dx, dz)
-    if (!(len > 0.01)) { dx = 1; dz = 0; len = 1 }
-    const L = Math.max(14, Math.hypot(s.goal[0] - s.spawn[0], s.goal[1] - s.spawn[1], s.goal[2] - s.spawn[2]) + 6)
-    const gx = s.spawn[0] + (dx / len) * L; const gz = s.spawn[2] + (dz / len) * L
-    let gy = Math.max(s.spawn[1], s.goal[1]) + 1
+    // Order spots park the guide ON the goal instead: it is the delivery
+    // point (corpus rule: near the spawn), and the bot walks back to it.
+    let gx; let gz; let gy
+    if (s.mode === 'order') {
+      gx = s.goal[0]; gz = s.goal[2]; gy = s.goal[1] + 1
+    } else {
+      let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
+      let len = Math.hypot(dx, dz)
+      if (!(len > 0.01)) { dx = 1; dz = 0; len = 1 }
+      const L = Math.max(14, Math.hypot(s.goal[0] - s.spawn[0], s.goal[1] - s.spawn[1], s.goal[2] - s.spawn[2]) + 6)
+      gx = s.spawn[0] + (dx / len) * L; gz = s.spawn[2] + (dz / len) * L
+      gy = Math.max(s.spawn[1], s.goal[1]) + 1
+    }
     await rcon(`tp ${GUIDE} ${gx.toFixed(1)} ${gy} ${gz.toFixed(1)}`)
     await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
     // A bucket spot's flood (failed strip, trial-budget cut mid-climb)
@@ -438,12 +494,27 @@ async function main() {
       c.stuck = null; c.recovery = null; c.recoverLatch = null; c.retreat = null
       c.stuckTicks = 0; c.stuckResets = 0; c.placeErrors = 0; c.lastGoalKey = ''
       c.stuckState = 'MOVING'; c.jumpCooldown = 0
+      // Order-spot hygiene (idkcraft-6x7.7): a timed-out order owns the body
+      // over follow, so a live ctx.bring (or a pending far search about to
+      // open one) would hijack the NEXT window's walk. Drop both at the cut.
+      if (c.bring) { c.bring = null; try { bringMod.clearSearchLeg(c) } catch (_) { /* legs best-effort */ } }
+      c.pendingSearch = null
     }
     stuckEps = []
     resets = {}
     chats = []
     died = false
     if (c) c.paused = false
+    // Order spots (idkcraft-6x7.7): the guide chats the work order at window
+    // start, like a player would — the follower takes it through the real
+    // handleChat path (a bring owns the body over follow). A send failure
+    // is rig sickness, not a verdict: fail loud (exit 2), never burn the
+    // window and misreport a timeout as a regression.
+    if (s.mode === 'order') {
+      try { guide.chat(s.order) } catch (e) {
+        throw new Error(`spot ${s.name}: order chat failed: ${e && e.message ? e.message : e}`)
+      }
+    }
     const t0 = Date.now()
     try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
     for (const k of ['jump', 'back', 'forward', 'sprint', 'sneak']) {
@@ -454,6 +525,20 @@ async function main() {
     let minGuide = Infinity
     let maxDisp = 0
     let reached = false
+    // Order-spot verdict (idkcraft-6x7.7): the first expect/fail marker in
+    // windowed follower chat. scannedChats cursors the shared array so each
+    // line judges once; position never judges an order (the bot starts
+    // within guide range, so a position break would end the window at t=0).
+    let orderVerdict = null
+    let orderLine = ''
+    let scannedChats = 0
+    const scanOrderChat = () => {
+      if (s.mode !== 'order' || orderVerdict) return
+      for (; scannedChats < chats.length; scannedChats++) {
+        const v = matchOrderLine(chats[scannedChats], s.expect, s.fail)
+        if (v) { orderVerdict = v; orderLine = String(chats[scannedChats]); break }
+      }
+    }
     const tx = s.goal[0]; const ty = s.goal[1]; const tz = s.goal[2]
     const useGoal = Math.hypot(tx - s.spawn[0], ty - s.spawn[1], tz - s.spawn[2]) >= 4
     while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
@@ -467,14 +552,24 @@ async function main() {
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
         // Reached ends the window: post-goal walking is outside the spot.
-        if ((useGoal && d < REACH_DIST) || gd <= 6) { reached = true; break }
+        if (s.mode !== 'order' && ((useGoal && d < REACH_DIST) || gd <= 6)) { reached = true; break }
       } catch (_) { /* sampling best-effort */ }
+      scanOrderChat()
+      if (orderVerdict) { reached = orderVerdict === 'expect'; break }
     }
+    scanOrderChat() // final gap: a marker in the last <500 ms still counts
+    if (s.mode === 'order' && orderVerdict) reached = orderVerdict === 'expect'
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
-    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : '')
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined })
+    // Order spots report the terminal line (truncated): TIMEOUT vs FAIL
+    // tells a hung order from a refused one at a glance. Death keeps its
+    // note (dying is behavior, judged like any unreached row).
+    const onote = s.mode === 'order'
+      ? (orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
+      : ''
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : onote)
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
   }
@@ -531,4 +626,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine }

@@ -96,9 +96,26 @@ there would un-flip the sabotage.
 
 What it does NOT see: recover breakage that changes neither the walk nor
 the paging (a first-try rescue needs no budget — `MAX_FAILS=0` is silent
-on all 15 other spots), and order-level give-up cost. Order-driven spots
-(idkcraft-6x7.7), where a give-up fails the order instead of re-issuing
-the walk, cover that side.
+on every spot whose green run never fails a primitive).
+
+Order-driven spots (idkcraft-6x7.7) judge the outcome of a guide-chatted
+work order instead of a follow walk: the guide parks on the goal (the
+delivery point, near the spawn), chats the order at window start, and the
+window ends at the first `expect`/`fail` chat marker. A give-up that fails
+the order (a bring `refuse` — no delivery, no `here are`) flips `reached`
+instead of re-issuing the walk, so bring-behavior breakage exits 1 with a
+diff (proven: atl.20-exemption sabotage on ATL-SHAFT refuses `could not
+reach iron_ore safely` after 3 escape episodes — `REGRESSION (unreached
+(was reached))`, plus an episode overrun 3 > 1).
+
+Honest limit, measured: `MAX_FAILS=0` is silent on ATL-SHAFT too (exit 0,
+byte-identical row). The green order runs episode-free — the atl.20
+exemption digs below-feet ore onto solid without ever asking the recover
+menu, so the budget is never read. An order spot proves recover-sensitivity
+only where its green path fails a primitive and rescues; the budget guard
+stays S6-PIT `maxCalls` until such an order spot exists (the Q0H-PIT rest
+conversion is the natural carrier — the q0h escalation fails the step on
+consecutive gave-ups by design).
 
 ## Corpus rules
 
@@ -115,10 +132,31 @@ the walk, cover that side.
 - Every closed movement bead adds its prod coords as a spot (with `bead`)
   PLUS the measured baseline entry — one without the other fails the gate
   (`NO BASELINE ENTRY` → exit 1) or `npm test`.
-- Work-bug terrains (bring shaft, build slope, rest pit) replay through the
-  follow driver: the walk covers the prod ground where the work bug lived.
-  Order-driven work spots (chat an order, judge the outcome) are
-  idkcraft-6x7.7, not this rig.
+- Order spots (`mode: "order"`) replay a work order instead of a follow
+  walk:
+
+```json
+{"name": "ATL-SHAFT", "mode": "order", "spawn": [59.5, 64, -205.5],
+ "goal": [62.5, 64, -205.5], "order": "bring me iron_ore 2",
+ "expect": ["here is ", "here are "], "fail": ["could not ", "…"]}
+```
+
+  `goal` is the guide's park point (the delivery point — keep it near the
+  spawn); `order` is the guide's chat at window start; `expect`/`fail`
+  are substring markers over follower chat (the first hit ends the
+  window). Markers are per-order-kind data: every one must be terminal
+  for THAT order — a bring's `here are` delivers, but its `I can't see
+  you` only waits and must never be a `fail` marker (the committed
+  markers are pinned against the real bring.js lines in
+  `test/stuck-oracle.test.js`).
+- The remaining work-bug terrains (build slope, rest pit) still replay
+  through the follow driver until their order conversions land (build
+  needs a home/plan, rest needs autonomous + a far home).
+- ATL-SHAFT orders `bring me iron_ore 2`, not the bare order: the pristine
+  shaft vein holds exactly 2 (probed from `world.tar`), and want=3 would
+  send the bot hunting a second vein 15+ blocks off-terrain — slower and
+  flakier, for no extra shaft-loop coverage (the atl.17/atl.20 below-feet
+  stance is exercised by the first ore).
 
 ## `REPLAY_BRAIN=laya`
 
