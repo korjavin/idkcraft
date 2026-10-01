@@ -31,15 +31,14 @@ const GLYPHS = {
 function parseArgs(argv) {
   const out = { origin: [0, 64, 0], rot: 0, mode: 'both' }
   const nums = []
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
     if (a === '--ascii') out.mode = 'ascii'
     else if (a === '--commands') out.mode = 'commands'
     else if (a.startsWith('--rot=')) out.rot = Number(a.slice(6))
-    else if (a === '--rot') out.rot = NaN // consumed below
+    else if (a === '--rot') { out.rot = Number(argv[i + 1]); i++ } // skip the value: not an origin coord
     else if (Number.isFinite(Number(a))) nums.push(Number(a))
   }
-  const rotIdx = argv.indexOf('--rot')
-  if (rotIdx !== -1 && argv[rotIdx + 1] !== undefined) out.rot = Number(argv[rotIdx + 1])
   if (nums.length >= 3) out.origin = [nums[0], nums[1], nums[2]]
   if (![0, 1, 2, 3].includes(out.rot)) {
     console.error('bad --rot (want 0..3)')
@@ -72,6 +71,11 @@ function main() {
   }
 
   if (mode === 'both' || mode === 'commands') {
+    // Door upper halves are emitted with their door; the keep-clear marker
+    // at the same cell must not wipe them afterwards (revmux 01 core-2).
+    const doorUppers = new Set(
+      plan.filter((c) => c.kind === 'door').map((c) => `${c.dx},${c.dy + 1},${c.dz}`),
+    )
     for (const c of plan) {
       const x = ox + c.dx
       const y = oy + c.dy
@@ -80,6 +84,8 @@ function main() {
         // Doors are two blocks; /setblock places exactly one.
         console.log(`setblock ${x} ${y} ${z} ${BLOCKS.door}[half=lower]`)
         console.log(`setblock ${x} ${y + 1} ${z} ${BLOCKS.door}[half=upper]`)
+      } else if (c.kind === 'air' && doorUppers.has(`${c.dx},${c.dy},${c.dz}`)) {
+        continue
       } else {
         console.log(`setblock ${x} ${y} ${z} ${BLOCKS[c.kind] || 'air'}`)
       }

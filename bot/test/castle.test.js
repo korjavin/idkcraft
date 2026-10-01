@@ -131,6 +131,11 @@ function checkPrefix(plan, W, D, entrance, idx) {
         const k = key(nx, ny, nz)
         if (seen.has(k)) continue
         if (!standable(solids, W, D, nx, ny, nz)) continue
+        // Jump/drop headroom (pathfinder getMoveJumpUp blockA / getMoveDropDown
+        // blockB): a jump needs air above the origin head, a drop needs air
+        // above the destination head (revmux 01 core-1).
+        if (dy === 1 && isSolid(solids, sx, sy + 2, sz)) continue
+        if (dy === -1 && isSolid(solids, nx, sy + 1, nz)) continue
         seen.add(k)
         queue.push([nx, ny, nz])
       }

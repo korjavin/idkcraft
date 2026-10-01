@@ -55,12 +55,15 @@ const FLIGHTS = [
 ]
 
 // Landing slabs (planks): full 3x3 interior minus the stairwell column
-// (headroom for the flight below; the flight's top step fills one hole).
+// (headroom for the flight below; the flight's top step fills one hole)
+// minus the cell above each flight's first jump origin — the jump needs
+// 3 air above its origin feet (pathfinder getMoveJumpUp blockA), so the
+// landing above the origin stays open (revmux 01 core-1).
 const LANDINGS = [
-  { dy: 3, skip: new Set(['4,5', '4,6']) }, // L1 (F1 top step stays below)
-  { dy: 6, skip: new Set(['6,4', '6,5', '6,6']) }, // L2 (F2 top step at (6,6,4))
-  { dy: 9, skip: new Set(['4,4', '4,5', '4,6']) }, // L3 (F3 top step at (4,9,6))
-  { dy: 12, skip: new Set(['6,4', '6,5', '6,6']) }, // L4 (F4 top step at (6,12,4))
+  { dy: 3, skip: new Set(['4,4', '4,5', '4,6']) }, // L1 + jump ceiling (4,3,4)
+  { dy: 6, skip: new Set(['6,4', '6,5', '6,6', '5,6']) }, // L2 + jump ceiling (5,6,6)
+  { dy: 9, skip: new Set(['4,4', '4,5', '4,6', '5,4']) }, // L3 + jump ceiling (5,9,4)
+  { dy: 12, skip: new Set(['6,4', '6,5', '6,6', '5,6']) }, // L4 + jump ceiling (5,12,6)
 ]
 
 // Torches: ground floor + every landing, each on its floor.
@@ -125,11 +128,13 @@ function buildPlan() {
     }
     // Flight steps at this layer.
     for (const [x, z] of flightByDy.get(dy) || []) push(x, dy, z, 'stone')
-    // Landing slab at this layer (row-major from the wall ring).
+    // Landing slab at this layer, east-first row-major: the first cell of
+    // each slab leans on the north wall ring, the rest on laid neighbours
+    // (west-first strands cells east of the stairwell skips).
     const landing = landingByDy.get(dy)
     if (landing) {
       for (let z = TOWER.z0 + 1; z < TOWER.z0 + TOWER.size - 1; z++) {
-        for (let x = TOWER.x0 + 1; x < TOWER.x0 + TOWER.size - 1; x++) {
+        for (let x = TOWER.x0 + TOWER.size - 2; x >= TOWER.x0 + 1; x--) {
           if (landing.skip.has(x + ',' + z)) continue
           push(x, dy, z, 'planks')
         }
