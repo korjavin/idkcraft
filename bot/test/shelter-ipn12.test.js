@@ -162,6 +162,60 @@ describe('ipn.12 decide: night-far shelters past feasible day steps', () => {
     }
   })
 
+  it('a night-far gohome walk converts to shelter past the stickiness', async () => {
+    // The dusk march (or a respawn) mid-walk at night, facts UNCHANGED (a
+    // keepInventory death moves no bucket): without the force the
+    // stickiness plus the askedKey shortcut would march the dark forever.
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      const bot = menuBot({ x: 0, y: 64, z: 0 }, 15000)
+      const ctx = menuCtx()
+      ctx.step = 'gohome'
+      ctx.stepStatus = 'running'
+      ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+      const text = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+      ctx.goalText = text // unchanged facts
+      ctx.askedKey = `${text}\nrunning` // the shortcut would re-issue gohome
+      const r = await goal.decide(bot, ctx)
+      assert.equal(r.action, 'shelter', 'forced past stickiness and shortcut')
+      assert.equal(ctx.gohome, null, 'interrupted walk resets for the next march')
+      assert.deepEqual(ctx.shelter, {}, 'fresh pillar state')
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('dusk-far and door-phase walks keep their stickiness', async () => {
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      const duskBot = menuBot({ x: 0, y: 64, z: 0 }, 12500)
+      const duskCtx = menuCtx()
+      duskCtx.step = 'gohome'
+      duskCtx.stepStatus = 'running'
+      duskCtx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+      const duskText = goal.goalText(goal.goalFacts(duskBot, duskCtx), duskCtx.home)
+      duskCtx.goalText = duskText
+      duskCtx.askedKey = `${duskText}\nrunning`
+      assert.equal((await goal.decide(duskBot, duskCtx)).action, 'gohome', 'dusk marches on')
+
+      // A doorway phase never converts, wherever the body reads: the force
+      // is walk-only, so it cannot break an open door mid-swing.
+      const doorBot = menuBot({ x: 0, y: 64, z: 0 }, 15000)
+      const doorCtx = menuCtx()
+      doorCtx.step = 'gohome'
+      doorCtx.stepStatus = 'running'
+      doorCtx.gohome = { phase: 'open', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
+      const doorText = goal.goalText(goal.goalFacts(doorBot, doorCtx), doorCtx.home)
+      doorCtx.goalText = doorText
+      doorCtx.askedKey = `${doorText}\nrunning`
+      assert.equal((await goal.decide(doorBot, doorCtx)).action, 'gohome', 'door phases stick')
+    } finally {
+      console.log = origLog
+    }
+  })
+
   it('a fresh shelter pick re-arms the pillar state', async () => {
     const origLog = console.log
     console.log = () => {}
@@ -174,6 +228,61 @@ describe('ipn.12 decide: night-far shelters past feasible day steps', () => {
       assert.deepEqual(ctx.shelter, {}, 'fresh pick re-pillars')
     } finally {
       console.log = origLog
+    }
+  })
+
+  it('the night hold sticks past a model re-pick to a day step', async () => {
+    // Revmux 01 body-2: a laya re-pick to a day step would walk off the
+    // pillar and work the dark with inShelter still armed (no fight, no
+    // retreat, till dawn). Stale facts defeat the askedKey shortcut, so only
+    // the stickiness returns shelter — the model is never even asked.
+    const origLog = console.log
+    const origErr = console.error
+    console.log = () => {}
+    console.error = () => {}
+    try {
+      const bot = menuBot({ x: 0, y: 64, z: 0 }, 15000)
+      const ctx = menuCtx()
+      ctx.step = 'shelter'
+      ctx.stepStatus = 'running'
+      ctx.shelter = { pillared: true }
+      ctx.goalText = 'stale'
+      ctx.askedKey = 'stale'
+      let asked = 0
+      ctx.brain = { source: 'laya', ask: async () => { asked++; return 'craft' } }
+      const r = await goal.decide(bot, ctx)
+      assert.equal(r.action, 'shelter', 'the hold continues')
+      assert.equal(asked, 0, 'stickiness bypasses the model re-pick')
+      assert.deepEqual(ctx.shelter, { pillared: true }, 'no re-pillar mid-hold')
+    } finally {
+      console.log = origLog
+      console.error = origErr
+    }
+  })
+
+  it('day exits the hold through the menu', async () => {
+    // Body-2 control: shelter is night-infeasible, so the day re-decide
+    // cannot stick and the model re-pick lands.
+    const origLog = console.log
+    const origErr = console.error
+    console.log = () => {}
+    console.error = () => {}
+    try {
+      const bot = menuBot({ x: 0, y: 64, z: 0 }, 6000)
+      const ctx = menuCtx()
+      ctx.step = 'shelter'
+      ctx.stepStatus = 'running'
+      ctx.shelter = { pillared: true }
+      ctx.goalText = 'stale'
+      ctx.askedKey = 'stale'
+      let asked = 0
+      ctx.brain = { source: 'laya', ask: async () => { asked++; return 'craft' } }
+      const r = await goal.decide(bot, ctx)
+      assert.notEqual(r.action, 'shelter', 'day never holds the pillar')
+      assert.equal(asked, 1, 'the day re-decide consults the model')
+    } finally {
+      console.log = origLog
+      console.error = origErr
     }
   })
 })

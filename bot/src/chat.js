@@ -320,7 +320,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     // b2o: then the same transition as 'go work' — follow drops the body
     // and the goal loop starts building instead of trailing the owner.
     const site = goal.siteFor(bot, pos)
-    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site)
+    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site, { fresh: true })
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)

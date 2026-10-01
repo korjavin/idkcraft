@@ -51,6 +51,12 @@ const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset
 // displace and never trip it.
 const CELL_TICK_BUDGET = 120
 const CELL_PROGRESS = 1
+// Hard per-cell cap (revmux 01 core-3): displacement forgiveness cannot tell
+// an approach from an oscillation, and a back-and-forth re-approach would
+// reset the stall budget forever. 600 ticks ≈ 10 min bound every shape of
+// the loop — a 230-block death-walkback (~4 min) still fits — and with the
+// 1h skip retry a false skip re-probes instead of fossilizing.
+const CELL_HARD_CAP = 600
 // Hung own-flight deadline (craft-timeout precedent): a place flight that
 // never settles wedges every later tick on the placeInFlight early-return.
 // Only build's own flights carry the stamp — a foreign (beds/light) flight
@@ -362,9 +368,41 @@ function guardOwnWalls(bot, ctx) {
 function skipCell(ctx, idx, p, why) {
   if (!Array.isArray(ctx.buildSkip)) ctx.buildSkip = []
   if (!ctx.buildSkip.includes(idx)) ctx.buildSkip.push(idx)
+  // Wall-clock verdict stamp (revmux 01 core-4): a skip is retried after
+  // BUILD_SKIP_RETRY_MS — transient refusals heal, structural cells
+  // re-skip budget-capped — so persistence can never fossilize a hole.
+  try {
+    if (!ctx.buildSkipAt || typeof ctx.buildSkipAt !== 'object') ctx.buildSkipAt = {}
+    ctx.buildSkipAt[idx] = Date.now()
+  } catch (_) { /* stamp best-effort */ }
   ctx.buildFails = 0
   if (why === 'cell-budget') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_TICK_BUDGET} ticks without progress (${why})`)
+  else if (why === 'cell-hard-cap') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_HARD_CAP} ticks on one cell (${why})`)
   else console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
+}
+
+// Skip retry (revmux 01 core-4): re-probe skips older than the window —
+// transient refusals (a mob in the cell) lay on retry, structural cells
+// re-skip budget-capped. Unstamped skips (pre-fix sessions, hand-set tests)
+// never prune: only verdicts this code stamped may expire. Called from the
+// build menu gate (the live re-probe; restored stale skips drop on the
+// first decide, so a deploy heals stale holes like the pre-persistence
+// code did).
+const BUILD_SKIP_RETRY_MS = 3600000
+function pruneBuildSkips(ctx, now) {
+  try {
+    if (!ctx || !Array.isArray(ctx.buildSkip) || ctx.buildSkip.length === 0) return
+    const t = typeof now === 'number' ? now : Date.now()
+    const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt : {}
+    const fresh = ctx.buildSkip.filter((i) => typeof at[i] !== 'number' || t - at[i] < BUILD_SKIP_RETRY_MS)
+    if (fresh.length === ctx.buildSkip.length) return
+    ctx.buildSkip = fresh
+    const keep = {}
+    for (const i of fresh) {
+      if (typeof at[i] === 'number') keep[i] = at[i]
+    }
+    ctx.buildSkipAt = keep
+  } catch (_) { /* prune best-effort */ }
 }
 
 function build(bot, ctx, target, state) {
@@ -379,6 +417,7 @@ function build(bot, ctx, target, state) {
       ctx.home = null
     }
     ctx.buildSkip = []
+    ctx.buildSkipAt = {}
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1
@@ -429,7 +468,9 @@ function build(bot, ctx, target, state) {
   // no advance past the max cell, no displacement past CELL_PROGRESS —
   // skip it like a refusal. Keyed by site, so a home move re-arms without
   // touching the setHome/adopt reset lists. An unreadable body counts:
-  // two minutes of unknown position is broken by any definition.
+  // two minutes of unknown position is broken by any definition. The hard
+  // cap below counts every non-advancing tick unforgiven, so an
+  // oscillation that keeps displacing still ends (revmux 01 core-3).
   try {
     const site = ctx.home.site
     const siteKey = `${site.x},${site.y},${site.z},v${ctx.home.v === 2 ? 2 : 1}`
@@ -437,14 +478,21 @@ function build(bot, ctx, target, state) {
       ctx.buildCellSite = siteKey
       ctx.buildMaxIdx = -1
       ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
       ctx.buildAnchor = null
     }
     if (idx > (typeof ctx.buildMaxIdx === 'number' ? ctx.buildMaxIdx : -1)) {
       ctx.buildMaxIdx = idx
       ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
       const bp0 = bot.entity && bot.entity.position
       ctx.buildAnchor = bp0 && typeof bp0.x === 'number' ? { x: bp0.x, y: bp0.y, z: bp0.z } : null
     } else {
+      ctx.buildHardTicks = (ctx.buildHardTicks || 0) + 1
+      if (ctx.buildHardTicks >= CELL_HARD_CAP) {
+        skipCell(ctx, idx, p, 'cell-hard-cap')
+        return
+      }
       let moved = false
       try {
         const bp = bot.entity && bot.entity.position
@@ -617,8 +665,11 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.pruneBuildSkips = pruneBuildSkips
+module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS
 module.exports.PLACE_RANGE = PLACE_RANGE
 module.exports.PLACE_REACH = PLACE_REACH
 module.exports.CELL_TICK_BUDGET = CELL_TICK_BUDGET
 module.exports.CELL_PROGRESS = CELL_PROGRESS
+module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS

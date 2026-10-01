@@ -50,7 +50,7 @@ function createOrders(box) {
     // adopt object at the same site keeps the skips. The facts text
     // (home none->site) re-decides.
     home: () => ctx.home || null,
-    setHome: (home) => {
+    setHome: (home, opts) => {
       // A standing meet releases against the OLD house first: the exit legs
       // run against the pinned order.home, and the shelter refresh lands in
       // startWork's release right after (revmux 01 core-1). No meet: no-op.
@@ -60,13 +60,26 @@ function createOrders(box) {
       // next sleep. A new site keeps its dropped claims (new bedrooms).
       try { if (home) bedsMod.migrateClaims(ctx.home, home) } catch (_) { /* claims best-effort */ }
       // Same-site skips ride too (ipn.10): indices belong to the site's
-      // plan, so only a same site AND version keeps them.
+      // plan, so only a same site AND version keeps them. An explicit
+      // 'build here' (opts.fresh, revmux 01 core-4) re-verdicts even
+      // same-site: the owner may have fixed the terrain, so given-up cells
+      // re-probe instead of fossilizing.
+      const fresh = !!(opts && opts.fresh)
       let keepSkip = []
       try {
         const a = ctx.home
-        if (a && home && a.site && home.site && a.site.x === home.site.x && a.site.y === home.site.y && a.site.z === home.site.z && (a.v || 1) === (home.v || 1) && Array.isArray(ctx.buildSkip)) keepSkip = ctx.buildSkip.filter((n) => typeof n === 'number')
+        if (!fresh && a && home && a.site && home.site && a.site.x === home.site.x && a.site.y === home.site.y && a.site.z === home.site.z && (a.v || 1) === (home.v || 1) && Array.isArray(ctx.buildSkip)) keepSkip = ctx.buildSkip.filter((n) => typeof n === 'number')
       } catch (_) { keepSkip = [] }
-      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      let keepAt = {}
+      try {
+        const at = ctx.buildSkipAt
+        if (keepSkip.length && at && typeof at === 'object') {
+          for (const n of keepSkip) {
+            if (typeof at[n] === 'number') keepAt[n] = at[n]
+          }
+        }
+      } catch (_) { keepAt = {} }
+      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
@@ -472,7 +485,7 @@ function createOrders(box) {
       clearStuck()
       resetNightStep()
       if (home !== ctx.home) {
-        ctx.home = home; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+        ctx.home = home; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }

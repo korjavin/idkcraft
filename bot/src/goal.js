@@ -119,6 +119,10 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
+      // Skip retry (revmux 01 core-4): re-probe stamped skips past the
+      // window — a restored stale skip drops on the first decide, so a
+      // deploy heals stale holes like the pre-persistence code did.
+      try { buildMod.pruneBuildSkips(ctx) } catch (_) { /* prune best-effort */ }
       // No scannable origin (no home yet, or a home without site): nothing
       // is verifiable, so the whole wall+roof count counts.
       if (!home || !home.site) return facts.planks >= Math.min(PLANK_COUNT, 16)
@@ -404,10 +408,10 @@ function tableYieldToBuild(facts, bot, ctx) {
 // through the dark dies again and again (prod: 53 of 62 deaths in gohome).
 // At night the bot only walks home when close; far from home it shelters in
 // place till dawn. Dusk still marches at any distance (the going-home
-// window) — nightfall converts a still-far march into shelter via the
-// time-bucket re-decide. Range is the retreat chain's (single source:
-// beyond it a walk through mobs is a death march). Unreadable position
-// reads near: the old march, never a new hold.
+// window) — nightfall forces a still-far march into shelter past the
+// gohome stickiness (nightFarWalk in decide). Range is the retreat chain's
+// (single source: beyond it a walk through mobs is a death march).
+// Unreadable position reads near: the old march, never a new hold.
 function nightFarFromHome(bot, ctx) {
   try {
     const range = require('./behaviours/retreat').HOME_WALK_RANGE || 96
@@ -1349,7 +1353,20 @@ async function decide(bot, ctx) {
   if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  if (!finished && (prev === 'gohome' || prev === 'stay')) {
+  // Night-far gohome does not stick (ipn.12): a dusk march that is still far
+  // at nightfall — or a respawn far from home — must re-decide into shelter
+  // instead of marching the dark, even with unchanged facts (a keepInventory
+  // death moves no bucket). Door phases only run near home, so the far check
+  // never breaks a doorway. Like a chain handoff it forces a real re-decide
+  // past the askedKey shortcut, not just a release.
+  const nightFarWalk = !finished && prev === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk' &&
+    facts.time === 'night' && nightFarFromHome(bot, ctx)
+  // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
+  // step would walk off the pillar and work the dark with inShelter still
+  // armed (no fight, no retreat, till dawn). Day exits through the menu —
+  // shelter is night-infeasible — and through the behaviour's own done.
+  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night'))) {
+    if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
@@ -1358,7 +1375,7 @@ async function decide(bot, ctx) {
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
   const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
-  if (!prev || finished || ctx.goalText !== text || chainOwns) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
@@ -1368,7 +1385,7 @@ async function decide(bot, ctx) {
     // prod stood 8-10 min with 'going to dig' until the facts moved. The
     // fresh menu pick below keeps gear out via the said-latch until a new
     // need arrives; no hold is recorded (gear yields are never holds).
-    if (prev && ctx.askedKey === askKey && !chainOwns && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !chainOwns && !nightFarWalk && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
@@ -1378,7 +1395,7 @@ async function decide(bot, ctx) {
       }
       return !failHolds(ctx, n, text, bot)
     })
-    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : 'facts-changed'
+    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     const ms = Date.now() - t0
@@ -1390,8 +1407,14 @@ async function decide(bot, ctx) {
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
     // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
-    // an order-interrupted night would otherwise hold on open ground.
-    if (choice.step === 'shelter' && choice.step !== prev) ctx.shelter = {}
+    // an order-interrupted night would otherwise hold on open ground. The
+    // interrupted gohome walk resets too, so the next march starts from the
+    // current body with a fresh stall record (and drops the walk's no-dig
+    // borrow at the next lease refresh) instead of resuming stale legs.
+    if (choice.step === 'shelter' && choice.step !== prev) {
+      ctx.shelter = {}
+      ctx.gohome = null
+    }
     ctx.stepStatus = 'running'
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })

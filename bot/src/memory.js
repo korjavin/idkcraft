@@ -80,6 +80,27 @@ function v3(p) {
 // ways (a hand-edited file must not inject shapes). Cap 256 — the v2 plan
 // holds 99; anything longer is garbage, not a plan.
 const BUILD_SKIP_MAX = 256
+// Verdict stamps for the skip retry (revmux 01 core-4): { idx: epochMs }.
+// Same sanitize-and-cap discipline as skipOf — a hand-edited file must not
+// inject shapes, and a far-future stamp must not freeze a cell past its
+// retry window. Only skips already accepted by skipOf keep their stamps.
+function skipAtOf(v, skip) {
+  const out = {}
+  try {
+    if (v && typeof v === 'object' && Array.isArray(skip) && skip.length) {
+      const keep = new Set(skip)
+      for (const k of Object.keys(v)) {
+        const n = Number(k)
+        const t = v[k]
+        if (!Number.isInteger(n) || n < 0 || n >= BUILD_SKIP_MAX) continue
+        if (!keep.has(n)) continue
+        if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0 || t > Date.now() + 86400000) continue
+        out[n] = t
+      }
+    }
+  } catch (_) { /* stamps best-effort */ }
+  return out
+}
 function skipOf(v) {
   const out = []
   try {
@@ -104,6 +125,8 @@ function homeOf(h) {
   try {
     const skip = skipOf(h.skip)
     if (skip.length) out.skip = skip
+    const at = skipAtOf(h.skipAt, skip)
+    if (skip.length && Object.keys(at).length) out.skipAt = at
   } catch (_) { /* skip best-effort */ }
   // Bedroom bed claims (idkcraft-ybt): without these a restart drops sleptA
   // until the next sleep, and the respawn log under-claims (plain instead of
@@ -149,6 +172,9 @@ function snapshot(bot, ctx, now) {
       const skip = skipOf(ctx.buildSkip)
       if (skip.length) cur.skip = skip
       else delete cur.skip
+      const at = skipAtOf(ctx.buildSkipAt, skip)
+      if (skip.length && Object.keys(at).length) cur.skipAt = at
+      else delete cur.skipAt
     } catch (_) { /* skip best-effort */ }
     homes.push(cur)
   }
@@ -356,7 +382,10 @@ function restore(bot, ctx, file, now) {
         ctx.home = h
         // The record's skips are this home's (ipn.10): a deploy mid-build
         // resumes past the given-up cells instead of re-looping them.
-        try { ctx.buildSkip = skipOf(h.skip) } catch (_) { /* skip best-effort */ }
+        try {
+          ctx.buildSkip = skipOf(h.skip)
+          ctx.buildSkipAt = skipAtOf(h.skipAt, ctx.buildSkip)
+        } catch (_) { /* skip best-effort */ }
         out.homes = Math.min(doc.homes.length, HOMES_MAX)
       }
     }
