@@ -344,6 +344,52 @@ describe('ipn.12 shelter behaviour: pillar once, hold till dawn', () => {
     assert.equal(ctx.inShelter, true)
   })
 
+  it('a displaced hold re-pillars at the new body (death/respawn)', () => {
+    // Revmux 01 core-2: death respawns the body far from the pillar while
+    // the step survives — holding there would camp open ground at spawn.
+    const bot = holdBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      home.shelter(bot, ctx, null, null) // pillars (fails, no scaffold), holds
+      assert.equal(ctx.shelter.pillared, true)
+      assert.deepEqual(ctx.shelter.pillarAt, { x: 0, z: 0 })
+      bot.entity.position = pos(50, 64, 50) // death: the body wakes far away
+      home.shelter(bot, ctx, null, null)
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(logs.some((m) => m.includes('shelter displaced, re-pillaring')), `re-pillar logged: ${JSON.stringify(logs)}`)
+    assert.deepEqual(ctx.shelter.pillarAt, { x: 50, z: 50 }, 're-anchored at the new body')
+    assert.equal(ctx.shelter.pillared, true, 'failed re-pillar still holds — at the new spot')
+    assert.equal(ctx.inShelter, true)
+  })
+
+  it('a displaced climb drops the stale episode and re-pillars', () => {
+    // Core-2 mid-climb half: a running pillar_up from the old spot must not
+    // resume at the new position. A resumed episode would skip beginPillar
+    // and leave pillarAt null — the re-anchor proves the drop.
+    const bot = holdBot()
+    const ctx = {
+      home: v2home(SITE), step: 'shelter', stepStatus: 'running',
+      shelter: { pillarAt: { x: 0, z: 0 } },
+      recovery: { action: 'pillar_up', source: 'shelter', model: null, status: 'running', st: {} },
+    }
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      bot.entity.position = pos(50, 64, 50)
+      home.shelter(bot, ctx, null, null)
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(logs.some((m) => m.includes('shelter displaced, re-pillaring')), `re-pillar logged: ${JSON.stringify(logs)}`)
+    assert.deepEqual(ctx.shelter.pillarAt, { x: 50, z: 50 }, 'stale climb dropped, re-anchored')
+  })
+
   it('dawn ends the step with the night report', () => {
     const chats = []
     const bot = holdBot()

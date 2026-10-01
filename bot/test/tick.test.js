@@ -1354,6 +1354,37 @@ describe('work mode (epic rw4)', () => {
         ticker.destroy()
       }
     })
+
+    it('climbing shelter fights instead of idling (inShelter arms only on the pillar)', async () => {
+      // Revmux ipn 01 core-1: arming inShelter before the pillar stands turns
+      // every fight tick idle at the ticker gate, and stopOnce kills the
+      // pillar jump — freezing the climb on the first hostile. The climb
+      // state comes from the real first shelter tick, not hand-set: pre-fix
+      // it armed inShelter and this fight tick idled.
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 2) }
+      bot._items = [{ name: 'cobblestone', count: 64 }] // scaffold: the climb stays running
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.step = 'shelter'
+      ctx.shelter = {}
+      homeMod.shelter(bot, ctx, null, null) // the real first climb tick
+      assert.equal(ctx.recovery && ctx.recovery.status, 'running', 'mid-climb state')
+      assert.equal(ctx.inShelter || false, false, 'unsheltered until the pillar stands')
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1, 'the climb does not idle fight ticks')
+        assert.equal(ctx.recovery && ctx.recovery.action, 'pillar_up', 'the climb episode survives the fight tick')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
   })
 
   it('(d) follow me in chat resets work: next tick follows', async () => {
