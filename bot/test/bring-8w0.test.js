@@ -159,6 +159,20 @@ describe('bring walk gate (idkcraft-8w0)', () => {
     assert.equal(hit.cost, (30 / SOURCE_COST.walkBlocksPerSec) * SOURCE_COST.memoryFactor + 12 * SOURCE_COST.vertSecPerBlock + 18 * SOURCE_COST.deepVertSecPerBlock)
   })
 
+  it('a deep nearest note does not mask a shallower remembered vein (revmux 01 core-2)', () => {
+    // Nearest-by-distance is the gated cave note (3D ~54, dy 54); the gate
+    // must skip past it to the walkable note (3D 80, dy 4), not null the call.
+    const names = { '5,10,5': 'iron_ore', '6,10,5': 'air', '80,60,0': 'iron_ore', '81,60,0': 'air' }
+    const bot = mockBot({ names, items: PICK })
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    seedMemory(ctx, 5, 10, 5, 'iron_ore')
+    seedMemory(ctx, 80, 60, 0, 'iron_ore')
+    const hit = memoryExposed(bot, ctx, bp, 'iron', null)
+    assert.ok(hit, 'shallower memory survives the gated nearest')
+    assert.deepEqual([hit.pos.x, hit.pos.y, hit.pos.z], [80, 60, 0])
+  })
+
   it('the bead pair: gated 90-deep walk leaves the dig the only option, no ask', () => {
     const exposed = liveExposed(bp, at(23, -26))
     const buried = buriedCand(bp, { name: 'iron_ore', position: pos(20, 58, 0), distance: 21, exposed: false })

@@ -501,7 +501,12 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     const names = memoryNames(bot, requestName)
     if (names.length === 0) return null
     const hasSkip = skip && typeof skip.has === 'function'
-    const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || (hasSkip && skip.has(skipKey(it))))
+    // The descent gate filters the nearest pick itself (revmux 01 core-2):
+    // a deep nearest note must not mask a shallower remembered vein — the
+    // pick skips past gated notes instead of nulling the whole call.
+    const gated = (it) => it && typeof it.y === 'number' && typeof bp.y === 'number' &&
+      Math.floor(bp.y) - Math.floor(it.y) > SOURCE_COST.maxWalkDescent
+    const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || gated(it) || (hasSkip && skip.has(skipKey(it))))
     if (!item || typeof item.x !== 'number') return null
     let now = false
     try { now = resources.exposedOf(bot, item) } catch (_) { now = false }
@@ -515,7 +520,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
     const dy = Math.floor(bp.y) - Math.floor(item.y) // +below, priced like the live leg
-    if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0)
+    if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0, safety net past the pick filter)
     const wet = submergedAt(bot, item.x, item.y, item.z)
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
