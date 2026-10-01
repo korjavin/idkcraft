@@ -147,9 +147,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   `--no-synthesis`). Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
   (`LENSES=` overrides).
 - Risky files: the review archive is **mandatory** for merge, and the round gets the
-  `bot/tools/stuck-run.sh` before/after output via `STUCKRUN=<file>` (lands in `input/context/`).
+  `bot/tools/stuck-run.sh` output via `STUCKRUN=<file>` (lands in `input/context/`).
 - Stuck oracle gate (idkcraft-6x7.4): a PR touching risky files above attaches the
-  `sh bot/tools/stuck-run.sh` table from before AND after the change, and does not merge
+  `sh bot/tools/stuck-run.sh` output of the branch (judged against `stuck-baseline.json` —
+  no master "before" run), and does not merge
   while it exits 1 (regression) — exit 2 is an environment failure, fix the rig, not the code.
   Every closed movement bead adds its prod coords to `bot/tools/stuck-spots.json` (with `bead`)
   plus the measured entry in `bot/tools/stuck-baseline.json`; one without the other fails

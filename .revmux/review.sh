@@ -58,7 +58,7 @@ if [ -n "$PREV" ]; then
 else
   DIFFCMD="git diff $BASE...HEAD"; STAT="$(git diff --shortstat "$BASE...HEAD")"; EXTRA=""
 fi
-# STUCKRUN=<stuck-run.sh output/JSON> puts the before/after numbers in front of the reviewer
+# STUCKRUN=<stuck-run.sh output/JSON> puts the oracle numbers (vs stuck-baseline.json) in front of the reviewer
 [ -n "$STUCKRUN" ] && cp "$STUCKRUN" "$IN/context/stuck-run.txt"
 bd show "$BEAD" > "$IN/context/bead.md" 2>/dev/null || true
 {
@@ -72,7 +72,7 @@ bd show "$BEAD" > "$IN/context/bead.md" 2>/dev/null || true
 {
   echo "# Merge gate: $BEAD — correct only if the bead's acceptance holds"
   bd show "$BEAD" 2>/dev/null | sed -n '/DESCRIPTION/,/NOTES/p' | rg -i -A20 'ПРИЁМКА|ACCEPTANCE|Acceptance' | head -30 || true
-  if [ -n "$STUCKRUN" ]; then echo "- Movement/stuck change: stuck-run.sh before/after numbers are in context/stuck-run.txt — a spot that got worse is a major."
+  if [ -n "$STUCKRUN" ]; then echo "- Movement/stuck change: stuck-run.sh numbers vs stuck-baseline.json are in context/stuck-run.txt — a spot that got worse is a major."
   elif [ "$PROFILE" = idkcraft-risky ]; then echo "- Movement/stuck change with NO stuck-run.sh numbers supplied (STUCKRUN unset): report it as a major (tests lens) unless the diff cannot change movement."; fi
 } > "$IN/goal.md"
 revmux --task "$BEAD" --run "$RUN" --tasks-dir "$TASKS" --workdir "$PWD" --profile "$PROFILE" --no-tui $SYNTH $LENSFLAG > "$OUT.stdout" 2> "$TASKS/$BEAD/$RUN/revmux.log" || true
