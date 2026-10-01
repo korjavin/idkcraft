@@ -400,6 +400,14 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
       ctx.stepStatus = 'failed:no-wool'
       return
     }
+    // Partial hunt (ipn.11): wool gained but the need still unmet — the old
+    // code reopened forever ('searched 4 areas, only got 1', 7x a day) and
+    // the latch never armed. A partial counts toward the daily latch, so
+    // two thin hunts yield the rest of the day to gear.
+    try {
+      const atOpen = typeof st.huntWool === 'number' ? st.huntWool : null
+      if (atOpen !== null && totalWool(pack) > atOpen) noteNoWool(st, dayOf(bot))
+    } catch (_) { /* latch best-effort */ }
     st.reopens = (st.reopens || 0) + 1
   }
   // Chest-first while the pack is short overall (the did.1 ladder pulls
@@ -415,6 +423,7 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
   if (!o) { ctx.stepStatus = 'failed:no-wool'; return }
   o.self = 'beds'
   st.hunt = o
+  try { st.huntWool = totalWool(pack) } catch (_) { /* latch best-effort */ }
   ctx.bring = o
 }
 

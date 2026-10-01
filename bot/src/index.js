@@ -46,6 +46,7 @@ const BEHAVIOURS = {
   rest: require('./behaviours/rest'),
   gohome: homeMod.gohome,
   stay: homeMod.stay,
+  shelter: homeMod.shelter,
   comehome: homeMod.comehome,
   build: require('./behaviours/build'),
   beds: require('./behaviours/beds'),
@@ -232,6 +233,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.stepStatus = null
     ctx.gohome = null
     ctx.stay = null
+    ctx.shelter = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
     // canDig is the body's (body.js): clearing ctx.gohome above ends the

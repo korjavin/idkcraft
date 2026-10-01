@@ -45,8 +45,10 @@ function createOrders(box) {
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
     work: () => { startWork() },
     // Home site (epic rw4.4): 'build here' and spawn adoption replace the
-    // site. Build progress resets with it — old skips/fail counts belong
-    // to the old origin. The facts text (home none->site) re-decides.
+    // site. Fail counts reset with it — a new origin is a new plan — but
+    // given-up cells ride a same-site swap (ipn.10, ybt mirror): a fresh
+    // adopt object at the same site keeps the skips. The facts text
+    // (home none->site) re-decides.
     home: () => ctx.home || null,
     setHome: (home) => {
       // A standing meet releases against the OLD house first: the exit legs
@@ -57,7 +59,14 @@ function createOrders(box) {
       // adopt object at the same site would otherwise drop sleptA until the
       // next sleep. A new site keeps its dropped claims (new bedrooms).
       try { if (home) bedsMod.migrateClaims(ctx.home, home) } catch (_) { /* claims best-effort */ }
-      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      // Same-site skips ride too (ipn.10): indices belong to the site's
+      // plan, so only a same site AND version keeps them.
+      let keepSkip = []
+      try {
+        const a = ctx.home
+        if (a && home && a.site && home.site && a.site.x === home.site.x && a.site.y === home.site.y && a.site.z === home.site.z && (a.v || 1) === (home.v || 1) && Array.isArray(ctx.buildSkip)) keepSkip = ctx.buildSkip.filter((n) => typeof n === 'number')
+      } catch (_) { keepSkip = [] }
+      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.

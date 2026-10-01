@@ -1015,7 +1015,8 @@ describe('work mode (epic rw4)', () => {
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
     const ctx = bot._tickerCtx
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+    ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
@@ -1103,7 +1104,8 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.movements = movements
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+    ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
@@ -1137,7 +1139,9 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.movements = movements
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near the bot (ipn.12): a night-far gohome now shelters instead of
+    // walking. The bot stays far from spawn, so homing still takes over.
+    ctx.home = { site: { x: 190, y: 64, z: 190 }, built: true, interior: { min: { x: 191, y: 64, z: 191 }, max: { x: 192, y: 65, z: 192 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }

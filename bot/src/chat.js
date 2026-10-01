@@ -158,6 +158,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         ctx.stepStatus = null
         ctx.gohome = null
         ctx.stay = null
+        ctx.shelter = null
         ctx.inShelter = false
         wakeBody(bot)
         ctx.paused = false
@@ -190,6 +191,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.stepStatus = null
       ctx.gohome = null
       ctx.stay = null
+      ctx.shelter = null
       ctx.inShelter = false
       wakeBody(bot) // jr2.2: an order takes the body even at night
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
@@ -232,6 +234,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.stepStatus = null
       ctx.gohome = null
       ctx.stay = null
+      ctx.shelter = null
       ctx.inShelter = false
       wakeBody(bot)
       ctx.paused = false
@@ -245,6 +248,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
     ctx.stepStatus = null
     ctx.gohome = null
     ctx.stay = null
+    ctx.shelter = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
     bot.chat(startBlockOrder(bot, ctx, p, r.result))

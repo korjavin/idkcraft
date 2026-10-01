@@ -380,7 +380,9 @@ function latchStale(ctx, bot, bp) {
 // The come-home meet owns its own the same way (jr2.3). The rest gave-up
 // hold (q0h) owns repeats at its marked point.
 function raiseExempt(ctx, bot) {
-  const nightOwns = (ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay')) || !!ctx.comehome
+  // Shelter holds still all night by design (ipn.12): the backstop must not
+  // raise a recovery episode into the hold, like gohome/stay.
+  const nightOwns = (ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay' || ctx.step === 'shelter')) || !!ctx.comehome
   if (nightOwns) return true
   try {
     if (recover.restGaveUpHolds(ctx, bot)) return true

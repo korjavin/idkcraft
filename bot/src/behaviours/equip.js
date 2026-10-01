@@ -136,7 +136,39 @@ function resetRunCounters(ctx) {
   } catch (_) { /* reset best-effort */ }
 }
 
-function fail(ctx, item, err) {
+// Same-reason day latch (idkcraft-ipn.11): the atl.4 stepFail hold releases
+// on relocation — and a death-respawn IS a relocation — so one failing
+// table re-armed after every death (prod: 'wooden_sword table-unreachable'
+// at 14:04, 14:23, 14:25, 'equip failed' 30x a day, gear starved). The
+// second same-reason failure of one MC day latches equip infeasible until
+// tomorrow; the menu feasible gate reads it (beds no-wool mirror). Lives on
+// ctx, NOT on ctx.equip: decide resets ctx.equip on every fresh pick,
+// which would wipe the latch.
+const EQUIP_LATCH = 2
+function dayOf(bot) {
+  try {
+    const d = bot && bot.time && bot.time.day
+    return typeof d === 'number' ? d : 0
+  } catch (_) { return 0 }
+}
+function noteEquipFail(ctx, day, key) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return 0
+    const cur = ctx.equipLatch && typeof ctx.equipLatch === 'object' ? ctx.equipLatch : null
+    const fails = cur && cur.day === day && cur.key === key ? (cur.fails || 0) + 1 : 1
+    ctx.equipLatch = { day, key, fails }
+    return fails
+  } catch (_) { return 0 }
+}
+function equipLatched(ctx, bot) {
+  try {
+    const cur = ctx && ctx.equipLatch
+    if (!cur || typeof cur !== 'object') return false
+    return cur.day === dayOf(bot) && (cur.fails || 0) >= EQUIP_LATCH
+  } catch (_) { return false }
+}
+
+function fail(bot, ctx, item, err) {
   // Stale async settlement (revmux dj3 round-1): equipDigInFlight is not in
   // decide's preemption guard, so a facts-changed re-decide can switch
   // steps mid-dig — a late fail must not mark the NEW step failed (the
@@ -147,6 +179,12 @@ function fail(ctx, item, err) {
     resetRunCounters(ctx)
     return
   }
+  // Same-reason day latch (ipn.11): keyed on item + error — a repeating
+  // identical failure yields the day to gear instead of re-arming forever.
+  try {
+    const msg = err && err.message ? String(err.message) : String(err)
+    noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
+  } catch (_) { /* latch best-effort */ }
   ctx.stepStatus = `failed:equip-${item}`
   resetRunCounters(ctx)
   try {
@@ -401,7 +439,7 @@ function equip(bot, ctx) {
   const op = toolOp(bot, kind)
   if (!op) return
   if (op.fail) {
-    fail(ctx, kind, new Error(op.fail))
+    fail(bot, ctx, kind, new Error(op.fail))
     return
   }
   if (op.tabled) {
@@ -412,14 +450,14 @@ function equip(bot, ctx) {
         if (!t) return // walking into reach: stay silent, retry next tick
         const found = craftMod.recipes(bot, op.item, t.block)
         if (found.length === 0) {
-          fail(ctx, op.item, new Error('no-recipe'))
+          fail(bot, ctx, op.item, new Error('no-recipe'))
           return
         }
         craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block })
       },
       (err) => {
         ctx.equipInFlight = false
-        fail(ctx, op.item, err)
+        fail(bot, ctx, op.item, err)
       },
     )
     return
@@ -429,7 +467,7 @@ function equip(bot, ctx) {
 
 function craftOne(bot, ctx, op) {
   if (typeof bot.craft !== 'function') {
-    fail(ctx, op.item, new Error('bot.craft missing'))
+    fail(bot, ctx, op.item, new Error('bot.craft missing'))
     return
   }
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
@@ -447,7 +485,7 @@ function craftOne(bot, ctx, op) {
     try {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table)
     } catch (err) {
-      finish(() => fail(ctx, op.item, err))
+      finish(() => fail(bot, ctx, op.item, err))
       return
     }
     finish()
@@ -462,7 +500,7 @@ function craftOne(bot, ctx, op) {
       st.made = st.made || {}
       st.made[op.item] = strikes + 1
       if (st.made[op.item] >= CRAFT_STALL_STRIKES) {
-        fail(ctx, op.item, new Error('craft-stall'))
+        fail(bot, ctx, op.item, new Error('craft-stall'))
         return
       }
     } else if (st.made) {
@@ -478,14 +516,14 @@ function craftOne(bot, ctx, op) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   void Promise.race([run(), timeout]).catch((err) => {
-    finish(() => fail(ctx, op.item, err))
+    finish(() => fail(bot, ctx, op.item, err))
   })
 }
 
 function digTick(bot, ctx, st, bp) {
   if (st.digs == null) st.digs = 0
   if (st.digs >= DIG_STALL_STRIKES) {
-    fail(ctx, 'blocks', new Error('dig-stall'))
+    fail(bot, ctx, 'blocks', new Error('dig-stall'))
     return
   }
   const names = digTargets(bot)
@@ -498,7 +536,7 @@ function digTick(bot, ctx, st, bp) {
     })
   } catch (_) { found = null }
   if (!found || !found.length) {
-    fail(ctx, 'blocks', new Error('no-dirt'))
+    fail(bot, ctx, 'blocks', new Error('no-dirt'))
     return
   }
   // Never dig the ground under our own feet: dig around, not down.
@@ -533,7 +571,7 @@ function digTick(bot, ctx, st, bp) {
     if (wetSkipped > 0) {
       try { console.log(sunk ? `equip: body underwater, skipped ${wetSkipped} dig target(s)` : `equip: skipped ${wetSkipped} wet dig target(s)`) } catch (_) { /* logging best-effort */ }
     }
-    fail(ctx, 'blocks', new Error('no-dirt'))
+    fail(bot, ctx, 'blocks', new Error('no-dirt'))
     return
   }
   const block = pick.v
@@ -546,7 +584,7 @@ function digTick(bot, ctx, st, bp) {
       ctx.lastGoalKey = key
     }
     st.approachWaits = (st.approachWaits || 0) + 1
-    if (st.approachWaits > 30) fail(ctx, 'blocks', new Error('dig-unreachable'))
+    if (st.approachWaits > 30) fail(bot, ctx, 'blocks', new Error('dig-unreachable'))
   }
   if (pick.d > DIG_REACH) {
     // Walk into reach, then dig on a later tick.
@@ -569,7 +607,7 @@ function digTick(bot, ctx, st, bp) {
   if (st.lastScaffold != null && kit <= st.lastScaffold) {
     st.noGain = (st.noGain || 0) + 1
     if (st.noGain >= DIG_NOGAIN_STRIKES) {
-      fail(ctx, 'blocks', new Error('dig-stall'))
+      fail(bot, ctx, 'blocks', new Error('dig-stall'))
       return
     }
   } else {
@@ -602,7 +640,7 @@ function digTick(bot, ctx, st, bp) {
       }
       await bot.dig(target)
     } catch (err) {
-      finish(() => fail(ctx, 'blocks', err))
+      finish(() => fail(bot, ctx, 'blocks', err))
       return
     }
     finish()
@@ -612,7 +650,7 @@ function digTick(bot, ctx, st, bp) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   void Promise.race([run(), timeout]).catch((err) => {
-    finish(() => fail(ctx, 'blocks', err))
+    finish(() => fail(bot, ctx, 'blocks', err))
   })
 }
 
@@ -626,3 +664,7 @@ module.exports.tableFor = tableFor
 // station, or an unloaded claim diverts into an instant-done loop.
 module.exports.stoneUpgradeDue = stoneUpgradeDue
 module.exports.tableReady = tableReady
+// Goal-gate reuse (idkcraft-ipn.11): the same-reason day latch — the menu
+// reads it, the behaviour counts it (beds sheepLatched mirror).
+module.exports.equipLatched = equipLatched
+module.exports.EQUIP_LATCH = EQUIP_LATCH
