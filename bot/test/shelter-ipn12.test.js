@@ -261,10 +261,11 @@ describe('ipn.12 decide: night-far shelters past feasible day steps', () => {
   })
 
   it('near home at night the hold releases to the walk in', async () => {
-    // Revmux 02: the night stickiness only holds far from home — a death
+    // Revmux 02+03: the night stickiness only holds far from home — a death
     // that respawns by the house must walk in (gohome), not pillar outside
-    // it all night. Stale facts defeat the askedKey shortcut, so only the
-    // menu pick returns gohome.
+    // it all night. Facts UNCHANGED (a keepInventory death moves no bucket):
+    // without the nightNearShelter force the askedKey shortcut would
+    // re-issue shelter, the mirror of the night-far conversion above.
     const origLog = console.log
     console.log = () => {}
     try {
@@ -273,8 +274,9 @@ describe('ipn.12 decide: night-far shelters past feasible day steps', () => {
       ctx.step = 'shelter'
       ctx.stepStatus = 'running'
       ctx.shelter = { pillared: true }
-      ctx.goalText = 'stale'
-      ctx.askedKey = 'stale'
+      const text = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+      ctx.goalText = text // unchanged facts
+      ctx.askedKey = `${text}\nrunning` // the shortcut would re-issue shelter
       const r = await goal.decide(bot, ctx)
       assert.equal(r.action, 'gohome', 'near home the night re-decides into the walk in')
     } finally {

@@ -1361,6 +1361,11 @@ async function decide(bot, ctx) {
   // past the askedKey shortcut, not just a release.
   const nightFarWalk = !finished && prev === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk' &&
     facts.time === 'night' && nightFarFromHome(bot, ctx)
+  // Night-near shelter does not hold (revmux 03): the mirror force — a
+  // keepInventory respawn by the house moves no bucket, so without the
+  // force the askedKey shortcut below would re-issue shelter all night.
+  const nightNearShelter = !finished && prev === 'shelter' &&
+    facts.time === 'night' && !nightFarFromHome(bot, ctx)
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
@@ -1377,7 +1382,7 @@ async function decide(bot, ctx) {
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
   const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
@@ -1387,7 +1392,7 @@ async function decide(bot, ctx) {
     // prod stood 8-10 min with 'going to dig' until the facts moved. The
     // fresh menu pick below keeps gear out via the said-latch until a new
     // need arrives; no hold is recorded (gear yields are never holds).
-    if (prev && ctx.askedKey === askKey && !chainOwns && !nightFarWalk && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !chainOwns && !nightFarWalk && !nightNearShelter && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
@@ -1397,7 +1402,7 @@ async function decide(bot, ctx) {
       }
       return !failHolds(ctx, n, text, bot)
     })
-    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : 'facts-changed'
+    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     const ms = Date.now() - t0
