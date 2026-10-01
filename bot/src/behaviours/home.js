@@ -6,6 +6,7 @@ const { goalFacts } = require('../goal')
 const detour = require('../detour')
 const stuck = require('../stuck')
 const { botPos } = require('./util')
+const body = require('../body')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -388,44 +389,13 @@ function stepThrough(bot, ctx, st, legs, arrived, laneDX) {
   return false
 }
 
-// The gohome walk never digs: with the house unbreakable, A* prefers
-// tunneling through dirt beside the walls over routing around (and the dig
-// branches blow the search budget into timeout partial-paths that push into
-// the wall). The bot that digs a 2-deep pit beside the door can never climb
-// out. canDig is restored whenever the walk ends (live 8kc).
-function setWalkDig(bot, allow) {
-  try {
-    const mov = bot && bot.pathfinder && bot.pathfinder.movements
-    if (mov && typeof mov.canDig === 'boolean') mov.canDig = allow
-  } catch (_) { /* approach best-effort */ }
-}
-
-// Flat-run sprint (rw4.10): same gate as follow.js flat-pursuit sprint
-// (5vv) — far from the door and every plan node within one sprint tick
-// level, or the sprint-jump wedges on a +1 step (3nt.24). A raw
+// Walk flags moved to body.js (idkcraft-6x7.3): the walk borrows no-dig
+// via lease claims at the walk/seat phases (the gohome walk never digs —
+// with the house unbreakable A* would tunnel through dirt beside the
+// walls, live 8kc), and the flat-run sprint gate (rw4.10, same inputs as
+// follow.js 5vv) runs in movementsFor off the ctx.shelterLeg stash. A raw
 // setControlState would die in 50 ms (the 20 Hz executor rewrites sprint
-// from allowSprinting), so this drives the flag the executor reads.
-// runTick restores both flags on ticks gohome does not own.
-const SHELTER_SPRINT_DIST = 8
-const SHELTER_SPRINT_LOOKAHEAD = 6
-function setShelterSprint(bot, ctx, out) {
-  try {
-    const mov = ctx && ctx.movements
-    if (!mov || typeof mov.allowSprinting !== 'boolean') return
-    const bp = botPos(bot)
-    const d = bp ? Math.hypot(bp.x - (out.x + 0.5), bp.y - out.y, bp.z - (out.z + 0.5)) : null
-    const nodes = ctx.lastPathNodes
-    const flat = !!(bp && Array.isArray(nodes) && nodes.length > 0 && nodes.every((n) => {
-      if (!n || typeof n.y !== 'number') return false
-      if (typeof n.x === 'number' && typeof n.z === 'number' &&
-        Math.hypot(n.x - bp.x, n.z - bp.z) > SHELTER_SPRINT_LOOKAHEAD) return true
-      return Math.floor(n.y) === Math.floor(bp.y)
-    }))
-    const sprint = d !== null && d > SHELTER_SPRINT_DIST && flat
-    mov.allowSprinting = sprint
-    if (typeof mov.allowParkour === 'boolean') mov.allowParkour = !sprint
-  } catch (_) { /* sprint best-effort */ }
-}
+// from allowSprinting), so the lease drives the flag the executor reads.
 
 // Shelter-run contract (rw4.10, dispatch half in atl.12): gohome stamps
 // ctx.shelterRun with Date.now() on every night walk tick. Dispatch treats
@@ -441,7 +411,8 @@ function gohome(bot, ctx, target, state) {
   const home = ctx && ctx.home
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
-    setWalkDig(bot, true) // walk never owned the drill past this return
+    // The walk borrow needs a home site: refresh to release a leaked one.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
     return
   }
   if (!ctx.gohome || ctx.gohome.phase === 'done' || ctx.gohome.phase === 'failed') {
@@ -459,7 +430,11 @@ function gohome(bot, ctx, target, state) {
   const out = outsidePos(home)
   const inn = insidePos(home)
   if (st.phase === 'walk') {
-    setWalkDig(bot, false)
+    // Lease refresh pre-issue (the walk plans no-dig — explicit borrow,
+    // the walk dispatches) + the shelter anchor for the post-dispatch
+    // sprint gate.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = out } catch (_) { /* lease stash best-effort */ }
     // rw4.12: a live mark on the leg diverts via a waypoint first; a dead
     // detour leg falls back to direct once (never noPath instead of home).
     if (st.via === undefined) {
@@ -488,7 +463,8 @@ function gohome(bot, ctx, target, state) {
         ctx.lastGoalKey = ''
         return
       }
-      setWalkDig(bot, true); return
+      try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
+      ctx.shelterLeg = null; return // a failed leg holds no sprint stash
     } // walkTo failed the step
     if (arrived) {
       if (st.via && !st.viaDone) {
@@ -502,7 +478,7 @@ function gohome(bot, ctx, target, state) {
       // sprinted; fight churn on the way killed prod 7 times in 3.5 min),
       // and every night walk tick stamps the shelter run for dispatch
       // (atl.12) — gait-independent: rough legs walk but still count.
-      setShelterSprint(bot, ctx, out)
+      // (rw4.10 sprint runs in movementsFor off the stash above.)
       try {
         if (goalFacts(bot, ctx).time === 'night') ctx.shelterRun = Date.now()
       } catch (_) { /* unknown time: no stamp (fail closed) */ }
@@ -510,7 +486,8 @@ function gohome(bot, ctx, target, state) {
     }
   }
   if (st.phase === 'open') {
-    setWalkDig(bot, true)
+    // No-dig released: the phase moved (the walk borrow is walk-scoped).
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'enter'
     else {
@@ -801,7 +778,8 @@ function failMeet(bot, ctx, status) {
   if (order) order.phase = 'failed'
   ctx.stepStatus = status
   ctx.comehome = null
-  setWalkDig(bot, true)
+  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
+  ctx.shelterLeg = null
   try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
   if (status === 'failed:cannot-seat') {
     try { bot.chat('cannot reach the common room') } catch (_) { /* chat best-effort */ }
@@ -819,7 +797,7 @@ function arriveMeet(bot, ctx, order) {
   order.phase = 'hold'
   ctx.stepStatus = 'done'
   ctx.inShelter = true
-  setWalkDig(bot, true)
+  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   try { bot.chat('home') } catch (_) { /* chat best-effort */ }
 }
 
@@ -953,7 +931,11 @@ function comehome(bot, ctx, target, state) {
   const out = outsidePos(home)
   const meet = meetPos(home)
   if (order.phase === 'walk') {
-    setWalkDig(bot, false)
+    // Lease refresh pre-issue (the walk plans no-dig — explicit borrow,
+    // the walk dispatches) + the shelter anchor for the post-dispatch
+    // sprint gate.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = out } catch (_) { /* lease stash best-effort */ }
     // rw4.12 detour mirror: a live mark diverts via a waypoint first; a dead
     // detour leg falls back to direct once.
     if (order.via === undefined) {
@@ -979,7 +961,6 @@ function comehome(bot, ctx, target, state) {
         ctx.lastGoalKey = ''
         return
       }
-      setWalkDig(bot, true)
       failMeet(bot, ctx, 'failed:cannot-reach-home')
       return
     }
@@ -990,15 +971,16 @@ function comehome(bot, ctx, target, state) {
         ctx.lastGoalKey = ''
       } else order.phase = 'open'
     } else {
-      // Same flat-run sprint as the night walk (rw4.10); no shelterRun stamp:
-      // the atl.12 gate only holds fight for work steps, and the meet is an
-      // order — fight preempts it like lead/bring/flat.
-      setShelterSprint(bot, ctx, out)
+      // Same flat-run sprint as the night walk (rw4.10, in movementsFor);
+      // no shelterRun stamp: the atl.12 gate only holds fight for work
+      // steps, and the meet is an order — fight preempts it like
+      // lead/bring/flat.
       return
     }
   }
   if (order.phase === 'open') {
-    setWalkDig(bot, true)
+    // No-dig released: the phase moved (the walk borrow is walk-scoped).
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome') } catch (_) { /* lease best-effort */ }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'enter'
     else {
@@ -1035,7 +1017,11 @@ function comehome(bot, ctx, target, state) {
       ctx.stepStatus = 'running'
       return
     }
-    setWalkDig(bot, false)
+    // Lease refresh pre-issue (the seat walk plans no-dig — explicit
+    // borrow, the walk dispatches) + the shelter anchor for the
+    // post-dispatch sprint gate.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = meet } catch (_) { /* lease stash best-effort */ }
     // Arrival matches the settle radius (revmux jr2.3-02 body-2): a
     // tighter band strands a seat that stops in (1.2, 1.5] — inside the
     // room, failing 'cannot reach the common room'.
@@ -1047,13 +1033,11 @@ function comehome(bot, ctx, target, state) {
       } catch (_) { return false }
     })
     if (order.phase === 'failed') {
-      setWalkDig(bot, true)
       failMeet(bot, ctx, 'failed:cannot-seat')
       return
     }
     if (arrived) arriveMeet(bot, ctx, order)
-    else setShelterSprint(bot, ctx, meet)
-    return
+    return // (seat sprint runs in movementsFor off the stash above)
   }
   if (order.phase === 'close') {
     // A settle (ordered while already inside) holds as-is: the bot is home,

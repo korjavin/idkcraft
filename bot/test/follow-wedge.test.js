@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker } = require('../src/index')
 const follow = require('../src/behaviours/follow')
+const body = require('../src/body')
 
 function pos(x, y, z) {
   const p = {
@@ -142,10 +143,16 @@ describe('follow sprint on flat pursuit (idkcraft-5vv)', () => {
   }
   const N = (x, y, z) => pos(x, y, z)
   const target = { username: 'P', id: 7, position: pos(12, 64, 0) }
+  // Sprint applies in the post-dispatch refresh (body.js), not in follow()
+  // itself: direct calls below simulate it with the dispatch's own inputs.
+  function refresh(bot, ctx, t, dist) {
+    body.movementsFor('idle', bot, ctx, { sprint: true, target: t, dist })
+  }
   it('dist 12 with level nodes in the window sprints, parkour off', () => {
     const bot = sprintBot()
     const ctx = sprintCtx([N(3, 64, 0), N(6, 64, 0)])
     follow(bot, ctx, target, { distance_to_player: 12 })
+    refresh(bot, ctx, target, 12)
     assert.equal(ctx.movements.allowSprinting, true)
     assert.equal(ctx.movements.allowParkour, false)
   })
@@ -153,6 +160,7 @@ describe('follow sprint on flat pursuit (idkcraft-5vv)', () => {
     const bot = sprintBot()
     const ctx = sprintCtx([N(3, 64, 0), N(5, 65, 0)]) // step inside the 6-block window
     follow(bot, ctx, target, { distance_to_player: 12 })
+    refresh(bot, ctx, target, 12)
     assert.equal(ctx.movements.allowSprinting, false)
     assert.equal(ctx.movements.allowParkour, true)
   })
@@ -160,18 +168,21 @@ describe('follow sprint on flat pursuit (idkcraft-5vv)', () => {
     const bot = sprintBot()
     const ctx = sprintCtx([N(3, 64, 0), N(10, 65, 0)]) // unreachable this tick
     follow(bot, ctx, target, { distance_to_player: 12 })
+    refresh(bot, ctx, target, 12)
     assert.equal(ctx.movements.allowSprinting, true)
   })
   it('no plan nodes yet means no sprint', () => {
     const bot = sprintBot()
     const ctx = sprintCtx(null)
     follow(bot, ctx, target, { distance_to_player: 12 })
+    refresh(bot, ctx, target, 12)
     assert.equal(ctx.movements.allowSprinting, false)
   })
   it('close pursuit never sprints', () => {
     const bot = sprintBot()
     const ctx = sprintCtx([N(3, 64, 0)])
     follow(bot, ctx, { username: 'P', id: 7, position: pos(5, 64, 0) }, { distance_to_player: 5 })
+    refresh(bot, ctx, target, 5)
     assert.equal(ctx.movements.allowSprinting, false)
   })
   it('a new pursuit clears the previous goal nodes', () => {
@@ -179,6 +190,7 @@ describe('follow sprint on flat pursuit (idkcraft-5vv)', () => {
     const ctx = sprintCtx([N(3, 64, 0)])
     ctx.lastGoalKey = 'follow:Q' // different key: fresh setGoal below
     follow(bot, ctx, target, { distance_to_player: 12 })
+    refresh(bot, ctx, target, 12)
     assert.equal(ctx.lastPathNodes, null)
     assert.equal(ctx.movements.allowSprinting, false)
   })

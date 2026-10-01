@@ -6,6 +6,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const home = require('../src/behaviours/home')
+const body = require('../src/body')
 
 const SITE = { x: 10, y: 64, z: 20 }
 // Door lower cell, outside approach cell, first interior cell behind the door.
@@ -436,6 +437,7 @@ describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
     home.gohome(bot, ctx)
     ctx.lastPathNodes = nodes === undefined ? flatNodes : nodes
     home.gohome(bot, ctx)
+    body.movementsFor('work', bot, ctx, { sprint: true }) // post-dispatch refresh: the lease applies sprint
   }
   it('night walk far+flat sprints and stamps a fresh shelterRun', () => {
     const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
@@ -482,11 +484,13 @@ describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
     const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
     const ctx = walkCtx({ lastGoalKey: 'gather', lastPathNodes: flatNodes })
     home.gohome(bot, ctx) // issues: stale nodes dropped, no sprint yet
+    body.movementsFor('work', bot, ctx, { sprint: true }) // post-dispatch refresh
     assert.equal(ctx.gohome.phase, 'walk')
     assert.equal(ctx.lastPathNodes, null)
     assert.equal(ctx.movements.allowSprinting, false)
     ctx.lastPathNodes = flatNodes // path_update lands the fresh plan
     home.gohome(bot, ctx)
+    body.movementsFor('work', bot, ctx, { sprint: true }) // post-dispatch refresh
     assert.equal(ctx.movements.allowSprinting, true)
   })
   it('off-walk ticks do not refresh the stamp', () => {

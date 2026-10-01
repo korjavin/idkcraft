@@ -5,8 +5,6 @@ const stuck = require('../stuck')
 
 const FOLLOW_RANGE = 3
 const SEARCH_TIMEOUT_MS = 6000
-const FOLLOW_SPRINT_DIST = 8 // far pursuit: walking (4.3 b/s) bleeds ~1.4 b/s against a runner (5.6 b/s)
-const FOLLOW_SPRINT_LOOKAHEAD = 6 // blocks covered in one sprint tick: every node inside must be level
 
 // Follow behaviour with spaced re-issue and no stuck detector of its own:
 // Avoids tearing down running A* search every tick while stationary.
@@ -17,6 +15,7 @@ const FOLLOW_SPRINT_LOOKAHEAD = 6 // blocks covered in one sprint tick: every no
 // stuck.js (fast entry off the follow key); the only reset follow reads is
 // the replan knock below, via stuck.verdict().
 function follow(bot, ctx, target, state) {
+  ctx.followRan = true // lease stash: movementsFor sprints only on a fresh follow key (body.js)
   if (!target) return
   const key = `follow:${target.username || target.id}`
   const now = Date.now()
@@ -30,32 +29,8 @@ function follow(bot, ctx, target, state) {
     ctx.followSeenStuck = 0
     return
   }
-  // Flat-pursuit sprint (5vv): sprint only when far and every plan node
-  // within one sprint tick is level with the feet; a +1 anywhere in the
-  // window kills it before the sprint-jump can wedge against the step face
-  // (3nt.24, revmux 5vv round 1: the head alone is stale and too narrow).
-  // Planning rides the same movements object, so the window also holds
-  // parkour off — a maxD=4 plan would strand the next sprint-off tick.
-  // runTick restores both defaults on every tick follow does not own.
-  try {
-    const mov = ctx && ctx.movements
-    if (mov && typeof mov.allowSprinting === 'boolean') {
-      const d = typeof state?.distance_to_player === 'number'
-        ? state.distance_to_player
-        : (bp && target.position ? bp.distanceTo(target.position) : null)
-      const nodes = ctx.lastPathNodes
-      const flat = !!(bp && Array.isArray(nodes) && nodes.length > 0 && nodes.every((n) => {
-        if (!n || typeof n.y !== 'number') return false
-        if (typeof n.x === 'number' && typeof n.z === 'number' &&
-          Math.hypot(n.x - bp.x, n.z - bp.z) > FOLLOW_SPRINT_LOOKAHEAD) return true
-        return Math.floor(n.y) === Math.floor(bp.y)
-      }))
-      const sprint = d !== null && d > FOLLOW_SPRINT_DIST && flat
-      mov.allowSprinting = sprint
-      if (typeof mov.allowParkour === 'boolean') mov.allowParkour = !sprint
-    }
-  } catch (_) { /* sprint best-effort */ }
-
+  // Flat-pursuit sprint (5vv) lives in body.js movementsFor now: the
+  // post-dispatch refresh re-evaluates the same gate with fresh keys.
   const isMoving = bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' ? bot.pathfinder.isMoving() : false
 
   // Wedged executor: the pathfinder keeps reporting isMoving() while its

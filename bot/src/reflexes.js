@@ -6,6 +6,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { findCreeper, snapHostiles } = require('./perception')
+const body = require('./body')
 const metrics = require('./metrics')
 const fightMod = require('./behaviours/fight')
 
@@ -118,6 +119,9 @@ function breathReflex(bot, ctx, nowMs = Date.now()) {
     if (oxy === null || oxy > BREATH_OXYGEN_LOW || !inWater) return false
     try { if (typeof bot.stopDigging === 'function') bot.stopDigging() } catch (_) { /* nothing in flight */ }
     dropBreathGoal(bot, ctx)
+    // Lease: the reflex owns from the trigger tick (pre-drive), so the
+    // switch lands before the swim, not mid-episode at tick start.
+    try { body.claimBody(bot, ctx, 'breath') } catch (_) { /* lease best-effort */ }
     ctx.breathStill = 0
     ctx.breathUnstick = 0
     ctx.breathDead = null

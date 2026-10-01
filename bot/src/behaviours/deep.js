@@ -39,6 +39,7 @@
 // and raise the stuck fact for recover (explore precedent).
 
 const { goals } = require('mineflayer-pathfinder')
+const body = require('../body')
 const { Vec3 } = require('vec3')
 const resources = require('../resources')
 const danger = require('../danger')
@@ -345,18 +346,6 @@ function inCell(p, c) {
   return Math.floor(p.x) === c.x && Math.floor(p.y) === c.y && Math.floor(p.z) === c.z
 }
 
-// The leg reverses pre-dug ground crumb by crumb: executor detour-digs
-// (canDig) eat the stairs' floors out from under the crumbs behind them,
-// so every tick deep owns borrows canDig=false (gohome-walk shape; the
-// ticker restores the shared default on ticks deep does not own, and the
-// assay's private movements object needs no restore at all).
-function borrowNoDig(bot, ctx) {
-  try {
-    const mov = (ctx && ctx.movements) || (bot && bot.pathfinder && bot.pathfinder.movements)
-    if (mov && typeof mov.canDig === 'boolean') mov.canDig = false
-  } catch (_) { /* borrow best-effort */ }
-}
-
 function finish(bot, ctx, d, ok, reason, n) {
   const gains = {}
   try {
@@ -515,7 +504,13 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
 }
 
 function deep(bot, ctx, target, state) {
-  borrowNoDig(bot, ctx)
+  // The leg reverses pre-dug ground crumb by crumb: executor detour-digs
+  // would eat the stairs' floors from under the crumbs, so deep borrows
+  // canDig=false via the ctx.deepRan dispatch stash (body.js): the stash
+  // survives the post-dispatch refresh, an extra would not (revmux 6x7.3
+  // core-1 — deep runs inside applyDecision, after the pre-claim).
+  try { ctx.deepRan = true } catch (_) { /* lease stash best-effort */ }
+  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
   if (!ctx.deep) {
     ctx.deep = { phase: 'site', shaft: null, n: 0, steps: [], target: null, dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: null, cameFrom: null }
   }

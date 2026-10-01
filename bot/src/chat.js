@@ -160,10 +160,6 @@ async function advancePendingSearch(bot, ticker, ctx) {
         ctx.stay = null
         ctx.inShelter = false
         wakeBody(bot)
-        try {
-          const mov = ctx.movements
-          if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-        } catch (_) { /* reset best-effort */ }
         ctx.paused = false
         return
       }
@@ -188,17 +184,13 @@ async function advancePendingSearch(bot, ticker, ctx) {
       }
       if (ticker && typeof ticker.clearStuck === 'function') ticker.clearStuck()
       // Bring owns the body now: end any night step at once (module scope has
-      // no resetNightStep, so inline it). Otherwise the walk's borrowed
-      // canDig=false leaks onto the shared Movements for the whole bring.
+      // no resetNightStep, so inline it). canDig is the body's (body.js):
+      // clearing the walk above ends the borrow; the lease re-applies it.
       ctx.step = null
       ctx.stepStatus = null
       ctx.gohome = null
       ctx.stay = null
       ctx.inShelter = false
-      try {
-        const mov = ctx.movements
-        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-      } catch (_) { /* reset best-effort */ }
       wakeBody(bot) // jr2.2: an order takes the body even at night
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
       const win = pick === 'buried' ? buried : exposed
@@ -242,27 +234,19 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.stay = null
       ctx.inShelter = false
       wakeBody(bot)
-      try {
-        const mov = ctx.movements
-        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-      } catch (_) { /* reset best-effort */ }
       ctx.paused = false
       return
     }
     if (ticker && typeof ticker.clearStuck === 'function') ticker.clearStuck()
     // Bring owns the body now: end any night step at once (module scope has
-    // no resetNightStep, so inline it). Otherwise the walk's borrowed
-    // canDig=false leaks onto the shared Movements for the whole bring.
+    // no resetNightStep, so inline it). canDig is the body's (body.js):
+    // clearing the walk above ends the borrow; the lease re-applies it.
     ctx.step = null
     ctx.stepStatus = null
     ctx.gohome = null
     ctx.stay = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
-    try {
-      const mov = ctx.movements
-      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-    } catch (_) { /* reset best-effort */ }
     bot.chat(startBlockOrder(bot, ctx, p, r.result))
     return
   }

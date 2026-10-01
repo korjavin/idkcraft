@@ -7,6 +7,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const deep = require('../src/behaviours/deep')
+const body = require('../src/body')
 const forage = require('../src/behaviours/forage')
 const resources = require('../src/resources')
 const danger = require('../src/danger')
@@ -1094,9 +1095,15 @@ describe('deep no-dig round', () => {
     ctx.movements = { canDig: true }
     deep(bot, ctx, null, {})
     assert.equal(ctx.movements.canDig, false)
+    // Deep runs inside applyDecision (via gear): the post-dispatch refresh
+    // must not reopen the drill (revmux 6x7.3 core-1).
+    body.movementsFor('work', bot, ctx, { sprint: true })
+    assert.equal(ctx.movements.canDig, false)
     delete ctx.movements
     bot.pathfinder.movements = { canDig: true }
     deep(bot, ctx, null, {})
+    assert.equal(bot.pathfinder.movements.canDig, false)
+    body.movementsFor('work', bot, ctx, { sprint: true })
     assert.equal(bot.pathfinder.movements.canDig, false)
   })
 
