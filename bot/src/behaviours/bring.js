@@ -341,11 +341,25 @@ async function chooseBringSearch(brain, text, legsLeft) {
 // too (atl.21): a descent to a deep cave is not free — atl.18 S2 priced a
 // 77-block hike with a 60-deep descent under 20 s and walked 337 s. No A*:
 // if relief lies about distance, bot.pathfinder.getPathTo(movements, goal,
-// timeout) is the upgrade path. Plain constants — the values never change
-// at runtime; tests stub them through the module export below.
+// timeout) is the upgrade path. The vertical is two-rate (idkcraft-8w0):
+// shallow relief prices linear, cave-scale relief past the knee prices at
+// the S2-observed ~6 s/block — the linear 1.5 s still underpriced deep
+// descents (a 90-deep hike quoted 140 s and timed out the 600 s order on
+// master). Past maxWalkDescent the hike is not offered at all: a dy-48
+// round trip already fills the order budget, so the verdict digs, walks
+// legs, or refuses instead. Plain constants — the values never change at
+// runtime; tests stub them through the module export below.
 const SOURCE_COST = {
   walkBlocksPerSec: 4,
-  vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg
+  vertSecPerBlock: 1.5, // each block of climb/descent on a walk leg, to the knee
+  deepVertSecPerBlock: 6, // past vertKneeBlocks: cave navigation, falls, backtracking
+  vertKneeBlocks: 12, // shallow relief prices linear; past it, the cave rate rules
+  // Walk gate (idkcraft-8w0): an exposed vein deeper than this below the
+  // feet is no walk candidate (liveExposed/memoryExposed return null, the
+  // chv shape). == the sync-48 edge, so a creation direct-commit — always
+  // within 48 in real geometry — never gates; only far/memory verdicts do.
+  // Climbs stay ungated (no failure class observed); descents only.
+  maxWalkDescent: 48,
   digSecPerBlock: 2,
   deepDigDepth: 4,
   // Dig-down gate (idkcraft-chv): a buried hit deeper than maxDigDepth
@@ -374,7 +388,9 @@ function walkCost(distH) {
 }
 
 function vertCost(dy) {
-  return Math.abs(dy) * SOURCE_COST.vertSecPerBlock
+  const d = Math.abs(dy)
+  const knee = Math.min(d, SOURCE_COST.vertKneeBlocks)
+  return knee * SOURCE_COST.vertSecPerBlock + (d - knee) * SOURCE_COST.deepVertSecPerBlock
 }
 
 function digCost(depthBelow) {
@@ -391,6 +407,7 @@ function liveExposed(bp, res, bot = null) {
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const dy = Math.floor(bp.y) - Math.floor(p.y) // +below, the buried depthBelow gauge
+  if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0)
   const wet = !!bot && submergedAt(bot, p.x, p.y, p.z)
   return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, dy, wet, cost: walkCost(distH) + vertCost(dy) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
 }
@@ -498,6 +515,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
     const dy = Math.floor(bp.y) - Math.floor(item.y) // +below, priced like the live leg
+    if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0)
     const wet = submergedAt(bot, item.x, item.y, item.z)
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
@@ -1373,7 +1391,8 @@ async function bring(bot, ctx, target, state) {
     }
     if (res.exposed !== false) {
       // Exposed and nearest: commit exactly as before (no rival consulted,
-      // the legacy line byte-identical).
+      // the legacy line byte-identical). The walk gate (8w0) never bites
+      // here: sync-48 bounds dy, so liveExposed is non-null.
       commitSource(bot, ctx, o, liveExposed(bp, res, bot), null, 'exposed')
       return
     }
