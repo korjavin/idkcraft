@@ -8,6 +8,7 @@ const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHost
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
 const { UNSEEN_HOME_TICKS } = stuck
+const body = require('./body')
 const { handleChat, advancePendingSearch, clearPendingSearch, wakeBody } = require('./chat')
 const { createOrders } = require('./orders')
 const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard } = require('./reflexes')
@@ -233,13 +234,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.stay = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
-    // The gohome walk borrows canDig=false on this shared object; an order,
-    // stop or fresh work that ends the walk mid-phase must give it back, or
-    // every other behaviour loses digging until rejoin (revmux 8kc).
-    try {
-      const mov = ctx.movements
-      if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-    } catch (_) { /* reset best-effort */ }
+    // canDig is the body's (body.js): clearing ctx.gohome above ends the
+    // walk borrow — re-apply here, not next tick, so an order/stop/homing
+    // that ends the walk mid-phase restores digging at once (8kc e3/e5).
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   }
   function startWork() {
     clearPendingSearch(ctx)
@@ -363,6 +361,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     } else {
       stopOnce()
     }
+    // Lease refresh with the dispatch's own target/state and fresh keys —
+    // the only sprint application (see body.js). Same owner, no cleanup.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle', { sprint: true, target, dist: state && state.distance_to_player }) } catch (_) { /* lease best-effort */ }
     greetCheck(decision)
     // sprint stays on the decision line as the brain's opinion; the body
     // sprints only on flat follow pursuit (see follow.js).
@@ -414,32 +415,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // at most one cloned packet per second, only on the airborne + storm +
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
-    // canDig belongs to the gohome walk alone: any tick it does not own the
-    // body gets the shared default back, so a mid-walk preemption (orders,
-    // homing, death) cannot leak no-dig into other behaviours (revmux 8kc).
-    // The come-home walk and seating borrow it the same way (jr2.3): without
-    // the exemption the tick-start restore reopens the dig window for the
-    // whole brain await (revmux 01 body-4).
-    const meetDig = ctx.comehome && !ctx.comehome.exiting && (ctx.comehome.phase === 'walk' || ctx.comehome.phase === 'seat')
-    if (!(ctx.work && ctx.step === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk') && !meetDig) {
-      try {
-        const mov = ctx.movements
-        if (mov && typeof mov.canDig === 'boolean') mov.canDig = true
-      } catch (_) { /* default best-effort */ }
-    }
-    // Sprint belongs to flat follow pursuit alone (5vv): any tick follow
-    // does not own gets the shared default back, so a stolen body
-    // (fight/bring) or a mode switch (work/stop) cannot inherit it and
-    // sprint-jump into a +1 step (3nt.24).
-    try {
-      const smov = ctx.movements
-      if (smov && typeof smov.allowSprinting === 'boolean') smov.allowSprinting = false
-      // Planning rides the same object (5vv): a sprint window with parkour
-      // on would plan 3-4 gap jumps the next sprint-off tick cannot run.
-      if (smov && typeof smov.allowParkour === 'boolean') smov.allowParkour = true
-    } catch (_) { /* default best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
+    // after the far-search await (a setLead mid-await takes the body this
+    // tick) and before any dispatch. A switch runs the single cleanup and
+    // applies movementsFor; otherwise this only re-applies the flags.
+    try { body.resetTick(ctx); body.claimBody(bot, ctx, body.pickOwner(ctx)) } catch (_) { /* lease best-effort */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
@@ -597,6 +579,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // episode per situation.
         if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState) && !breathedAlone) {
           try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+          // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
+          try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
           const decision = await recover.decide(bot, ctx, idleState, null)
           if (ctx.paused) {
             stopOnce()
@@ -687,6 +671,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       let decision = null
       if (ctx.stuck && !urgentFight(state)) {
         try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+        // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
+        try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
         decision = await recover.decide(bot, ctx, state, target)
         if (ctx.paused) {
           // 'stop' landed during the recover await: same stale-decision
@@ -730,6 +716,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (ctx.comehome && decision.action !== 'fight') {
         const handler = BEHAVIOURS.comehome
         if (typeof handler === 'function') handler(bot, ctx, target, state)
+        // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
+        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
         const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'comehome' }, calledBrain }
@@ -890,6 +878,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           stopOnce()
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
+        // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
+        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
         applyDecision(decision, target, state)
         // Stale-built revalidation (idkcraft-hlf): an adopt that ran while
         // one plan cell read missing (mid-build, mid-repair, dark chunk)
@@ -971,12 +961,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // ponytail: sprint-jump wedges the bot flush against a 1-block step
     // (sprint speed reaches the face before the queued jump lifts off, so
     // physics resolves vel.y=0 with onGround=false and no later jump can
-    // fire). Hold the flag off here — the single write site — so neither
-    // applyDecision nor the lead branch can re-enable it per tick; sprint on
-    // the decision line stays the brain's opinion only. Upgrade path: sprint
-    // only on flat segments: follow.js toggles it per tick on far level
-    // pursuit (5vv), and runTick restores the default on every other tick.
-    setMovements: (m) => { if (m) { m.allowSprinting = false; addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m) },
+    // fire). Movements flags are the body's (body.js, the single write
+    // site): installing adopts the lease defaults here, sprint only ever
+    // opens on the flat-pursuit gates, and sprint on the decision line
+    // stays the brain's opinion only.
+    setMovements: (m) => { if (m) { addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
     destroy,
     rearm,
     ...createOrders(ordersBox),

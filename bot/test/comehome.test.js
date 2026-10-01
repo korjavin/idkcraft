@@ -10,6 +10,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const home = require('../src/behaviours/home')
+const body = require('../src/body')
 const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const { lookupCommand, detailLine } = require('../src/commands')
 
@@ -362,6 +363,7 @@ describe('jr2.3 night order runs the same wire to the common room', () => {
     home.comehome(bot, ctx)
     ctx.lastPathNodes = [{ x: 20, y: 64, z: 14 }, { x: 18, y: 64, z: 16 }]
     home.comehome(bot, ctx)
+    body.movementsFor('comehome', bot, ctx, { sprint: true }) // post-dispatch refresh
     assert.equal(ctx.comehome.phase, 'walk')
     assert.equal(ctx.movements.allowSprinting, true)
     assert.equal(ctx.shelterRun, undefined, 'meet is an order: fight preempts, no shelter hold')
@@ -1090,7 +1092,7 @@ describe('jr2.3 the walk borrow holds across the brain await', () => {
     return { bot, ticker, ctx, seen }
   }
 
-  it('walk: the brain sees canDig false on the second tick', async () => {
+  it('walk: the brain sees canDig false (the lease borrows at tick start)', async () => {
     const { bot, ticker, seen } = seeingBot({ x: 30, y: 64, z: 30 }, 'walk')
     const cap = capture()
     try {
@@ -1100,10 +1102,10 @@ describe('jr2.3 the walk borrow holds across the brain await', () => {
     } finally {
       cap.release()
     }
-    assert.deepEqual(seen, [true, false], 'no restore between the borrow and the brain')
+    assert.deepEqual(seen, [false, false], 'no dig window across the brain await: the lease borrows eagerly at tick start')
   })
 
-  it('seat: the brain sees canDig false on the second tick', async () => {
+  it('seat: the brain sees canDig false (the lease borrows at tick start)', async () => {
     const { bot, ticker, seen } = seeingBot({ x: 13, y: 64, z: 24 }, 'seat')
     const cap = capture()
     try {
@@ -1113,7 +1115,7 @@ describe('jr2.3 the walk borrow holds across the brain await', () => {
     } finally {
       cap.release()
     }
-    assert.deepEqual(seen, [true, false], 'no restore between the borrow and the brain')
+    assert.deepEqual(seen, [false, false], 'no dig window across the brain await: the lease borrows eagerly at tick start')
   })
 
   it('no meet: the tick start still restores the default', async () => {
