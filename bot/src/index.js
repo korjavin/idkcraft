@@ -366,7 +366,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle', { sprint: true, target, dist: state && state.distance_to_player }) } catch (_) { /* lease best-effort */ }
     greetCheck(decision)
     // sprint stays on the decision line as the brain's opinion; the body
-    // sprints only on flat follow pursuit (see follow.js).
+    // sprints only on flat follow pursuit (see body.js).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
     console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
   }

@@ -506,8 +506,11 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
 function deep(bot, ctx, target, state) {
   // The leg reverses pre-dug ground crumb by crumb: executor detour-digs
   // would eat the stairs' floors from under the crumbs, so deep borrows
-  // canDig=false via an explicit lease extra (body.js), never from ctx.
-  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { deep: true }) } catch (_) { /* lease best-effort */ }
+  // canDig=false via the ctx.deepRan dispatch stash (body.js): the stash
+  // survives the post-dispatch refresh, an extra would not (revmux 6x7.3
+  // core-1 — deep runs inside applyDecision, after the pre-claim).
+  try { ctx.deepRan = true } catch (_) { /* lease stash best-effort */ }
+  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
   if (!ctx.deep) {
     ctx.deep = { phase: 'site', shaft: null, n: 0, steps: [], target: null, dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: null, cameFrom: null }
   }

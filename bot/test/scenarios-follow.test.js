@@ -202,7 +202,7 @@ describe('5vv: sprint on flat pursuit end to end', () => {
   it('level plan nodes sprint, a +1 node kills it', async () => {
     // Prod 5vv: the bot walked (4.3 b/s) behind a runner (5.6 b/s), dist
     // 6→58 in 36 s. Fixed: far level pursuit sprints; the flag is owned by
-    // the tick — follow sets it, runTick restores it on every other tick.
+    // the tick — the lease applies it post-dispatch, tick start holds the default.
     const bot = scenarioBot()
     bot.players = { P: visiblePlayer('P', 12) }
     const brain = scriptBrain(() => ({ action: 'follow', sprint: false, source: 'stub' }))

@@ -65,10 +65,15 @@ function pickOwner(ctx) {
 //     manual work step never sprints on a stale one.
 //   ctx.shelterLeg: { x, y, z } anchor (the door-out or meet cell) when
 //     a shelter leg (gohome walk, comehome walk/seat) dispatched.
+//   ctx.deepRan: deep() dispatched this tick. Deep runs inside
+//     applyDecision (via gear), so an extra would die at the pre-claim
+//     and the post-dispatch refresh would reopen the drill (revmux
+//     6x7.3 core-1); the stash survives it like followRan.
 function resetTick(ctx) {
   if (!ctx) return
   ctx.followRan = false
   ctx.shelterLeg = null
+  ctx.deepRan = false
 }
 
 // No-dig borrows. The gohome walk and the comehome walk/seat never dig:
@@ -79,8 +84,8 @@ function resetTick(ctx) {
 // that never dispatch the walk) keeps no-dig, same as before. Only an
 // order/stop/fresh-work (which clears ctx.gohome) or a phase/step move
 // re-opens the drill. Deep borrows differently (see movementsFor): the
-// old tick start never exempted it, so it borrows only via an explicit
-// extra from its dispatch site, never from ctx.
+// old tick start never exempted it, so it borrows only via its dispatch
+// stash, never from ctx (a stale ctx.deep borrows nothing).
 function gohomeWalk(ctx) {
   return !!(ctx && ctx.work && ctx.step === 'gohome' && ctx.gohome &&
     ctx.gohome.phase === 'walk' && ctx.home && ctx.home.site)
@@ -124,9 +129,9 @@ function bodyPos(bot) {
 // allowSprinting/canDig/allowParkour.
 //
 // extra selects the application mode:
-//   - tick-start / pre-dispatch claims pass nothing (or { deep: true } /
-//     { walk: true } from the dispatch sites that borrow pre-issue):
-//     canDig policy + forced sprint defaults.
+//   - tick-start / pre-dispatch claims pass nothing (or { walk: true }
+//     from the walk dispatch sites that borrow pre-issue): canDig
+//     policy + forced sprint defaults.
 //     Sprint gates need fresh keys, which only exist post-dispatch —
 //     enabling sprint on a stale follow key would plan a fight goal at
 //     maxD=4 and execute it sprint-off (the 5vv bug, injected).
@@ -156,7 +161,7 @@ function movementsFor(owner, bot, ctx, extra) {
   let sprint = false
   let parkour = true
   try {
-    if ((extra && (extra.deep || extra.walk)) || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
+    if ((extra && extra.walk) || ctx.deepRan || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes

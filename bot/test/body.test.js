@@ -33,7 +33,8 @@ function mockBot() {
         calls.setGoal++
         calls.goals.push(g)
         bot.pathfinder.goal = g
-        bot.clearControlStates()
+        // NOTE: deliberately does not clear controls (unlike tick.test.js):
+        // the switch tests below pin claimBody's explicit clear.
       },
       stop: () => { calls.stop++ },
       isMoving: () => false,
@@ -144,11 +145,16 @@ describe('movementsFor', () => {
     }
   })
 
-  it('borrows no-dig only via the deep extra, never from ctx', () => {
+  it('borrows no-dig on the deep dispatch stash, never from ctx', () => {
     const ctx = ctxWithMov({ deep: { phase: 'dig' } })
     body.movementsFor('work', bot, ctx)
     assert.equal(ctx.movements.canDig, true) // stale ctx.deep alone borrows nothing
-    body.movementsFor('work', bot, ctx, { deep: true })
+    ctx.deepRan = true // deep() dispatched this tick
+    body.movementsFor('work', bot, ctx)
+    assert.equal(ctx.movements.canDig, false)
+    // The applyDecision post-dispatch refresh must not reopen it (core-1):
+    // deep runs inside applyDecision, after the pre-claim.
+    body.movementsFor('work', bot, ctx, { sprint: true })
     assert.equal(ctx.movements.canDig, false)
   })
 
@@ -230,6 +236,22 @@ describe('claimBody', () => {
     assert.deepEqual(lines, ['body owner idle -> bring'])
   })
 
+  it('a switch clears controls without nulling a moving goal', () => {
+    const bot = mockBot()
+    bot.pathfinder.isMoving = () => true
+    const ctx = { movements: { canDig: true, allowSprinting: false, allowParkour: true } }
+    body.claimBody(bot, ctx, 'idle')
+    const goal = { kind: 'live' }
+    bot.pathfinder.goal = goal
+    bot.setControlState('forward', true)
+    const clears = bot.calls.clears
+    body.claimBody(bot, ctx, 'bring')
+    assert.equal(bot.pathfinder.goal, goal) // moving executor untouched (latch safety)
+    assert.ok(!bot.calls.goals.includes(null))
+    assert.equal(bot.getControlState('forward'), false) // explicit clear only
+    assert.equal(bot.calls.clears, clears + 1)
+  })
+
   it('same owner refreshes flags without touching goal or controls', () => {
     const bot = mockBot()
     const ctx = { movements: { canDig: true, allowSprinting: false, allowParkour: true } }
@@ -266,10 +288,11 @@ describe('claimBody', () => {
   })
 
   it('resetTick clears the dispatch stashes', () => {
-    const ctx = { followRan: true, shelterLeg: { x: 1, y: 2, z: 3 } }
+    const ctx = { followRan: true, shelterLeg: { x: 1, y: 2, z: 3 }, deepRan: true }
     body.resetTick(ctx)
     assert.equal(ctx.followRan, false)
     assert.equal(ctx.shelterLeg, null)
+    assert.equal(ctx.deepRan, false)
   })
 })
 
@@ -290,5 +313,21 @@ describe('ticker body lease', () => {
     assert.ok(bot.calls.goals.includes(null)) // the follow goal died on the switch
     assert.equal(bot.getControlState('forward'), false)
     assert.match(bot._tickerCtx.lastGoalKey, /^lead:/) // the new owner re-issued
+  })
+
+  it('a switch to an order clears controls but never nulls a moving goal', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(10, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.setMovements({ canDig: true, allowSprinting: false, allowParkour: true })
+    await ticker.tick() // follow owns: live follow goal
+    bot.setControlState('forward', true)
+    bot.pathfinder.isMoving = () => true
+    ticker.setLead({ name: 'coal', pos: pos(10, 64, 0) })
+    await ticker.tick()
+    assert.equal(bot._tickerCtx.body.owner, 'lead')
+    assert.ok(!bot.calls.goals.includes(null)) // moving executor untouched (latch safety)
+    assert.equal(bot.getControlState('forward'), false) // explicit clear only
+    assert.match(bot._tickerCtx.lastGoalKey, /^lead:/) // the new owner overwrote on issue
   })
 })
