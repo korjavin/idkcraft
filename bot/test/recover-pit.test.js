@@ -233,6 +233,46 @@ describe('pit climb menu (jsf.3 acceptance trio)', () => {
     assert.equal(recover.recoverFsm(f, ['water_up', 'sidestep', 'wait']), 'sidestep')
   })
 
+  it('2-sided corner + far goal: no pillar_up, hop_step/sidestep keep the escape (jsf.6 r2)', () => {
+    // A concave corner reads pit=yes (2 adjacent 2-high sides) but the open
+    // sides are the escape — revmux jsf.6-01 major.
+    const f = facts({ goalDy: 0, goalDist: 300, pit: true, scaffold: 44, walls: 2, hopStep: [1, 0], freeSides: [[0, 1], [0, -1]] })
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), false)
+    const names = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(f, {}) } catch (_) { return false }
+    })
+    assert.ok(!names.includes('pillar_up'), `menu: ${names}`)
+    assert.equal(recover.recoverFsm(f, names), 'hop_step')
+    const g = facts({ goalDy: 0, goalDist: 300, pit: true, scaffold: 44, walls: 2 })
+    const namesG = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(g, {}) } catch (_) { return false }
+    })
+    assert.equal(recover.recoverFsm(g, namesG), 'sidestep')
+  })
+
+  it('far below goal in a pit: no climber, dig_through/sidestep own it (jsf.6 r2)', () => {
+    // Climbing away from a below goal is the 4jr one-way door — revmux
+    // jsf.6-01 major (tunnel toward deep ore: dig, don't pillar).
+    const f = facts({ goalDy: -40, goalDist: 100, pit: true, pickaxe: true, headBlocked: true, throughBlocked: true, walls: 4, bucket: 2, combo: true, wall2: true })
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), false)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(f), false)
+    assert.equal(recover.RECOVER_MENU.water_up.feasible(f, {}), false)
+    const names = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(f, {}) } catch (_) { return false }
+    })
+    assert.equal(recover.recoverFsm(f, names), 'dig_through')
+    const g = facts({ goalDy: -40, goalDist: 100, pit: true, walls: 3 })
+    const namesG = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(g, {}) } catch (_) { return false }
+    })
+    assert.equal(recover.recoverFsm(g, namesG), 'sidestep')
+  })
+
+  it('far-goal climb gate follows the level bucket: goalDy -1 climbs, -2 does not (jsf.6 r2)', () => {
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ goalDy: -1, goalDist: 300, pit: true, scaffold: 44, walls: 3 })), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts({ goalDy: -2, goalDist: 300, pit: true, scaffold: 44, walls: 3 })), false)
+  })
+
   it('no pit and no goal: no pillar_up', () => {
     const f = facts({ goalDist: null, pit: false, scaffold: 5, walls: 1 })
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), false)
@@ -332,5 +372,83 @@ describe('goal-less pit escape e2e (jsf.3)', () => {
     assert.ok(!seen[0].includes('pillar_up'), `menu: ${seen[0]}`)
     assert.ok(!seen[0].includes('dig_up'), `menu: ${seen[0]}`)
     assert.ok(r.action !== 'pillar_up' && r.action !== 'dig_up', `got ${r.action}`)
+  })
+})
+
+describe('far-goal pit escape e2e (jsf.6)', () => {
+  it('one far-goal episode chains REPEATS pillar blocks, then releases', async () => {
+    // The jsf.3 chain test with a live explore leg 300 blocks out: same
+    // shaft, same kit, same honest-jump harness. The goal arm would stop
+    // this after 1-2 blocks (live goalDy samples the mid-air arc), so the
+    // dirt count pins the verified-height routing (revmux jsf.6-01 major).
+    const kit = [{ name: 'dirt', count: 10 }]
+    const bot = worldBot(pitWorld(), kit)
+    const ctx = { stuck: { by: 'follow', goal: { x: 300, y: 61, z: 0 }, key: 'follow:P' }, brain: null }
+    const step = harness(bot)
+    const first = []
+    let ticks = 0
+    for (; ticks < 200 && (ctx.stuck || ctx.recovery); ticks++) {
+      if (!ctx.recovery || ctx.recovery.status !== 'running') {
+        await recover.decide(bot, ctx, null, null)
+        if (ctx.recovery && ctx.recovery.action && first.length === 0) first.push(ctx.recovery.action)
+      } else {
+        recover.run(bot, ctx)
+        step()
+        if (bot.getControlState('jump')) {
+          const st = ctx.recovery && ctx.recovery.st
+          const capY = st && typeof st.startFloor === 'number' ? st.startFloor + 1.05 : 61.05
+          if (bot.entity.position.y > capY) bot.entity.position.y = capY
+        } else {
+          const top = bot.blockAt({ x: bot.entity.position.x, y: bot.entity.position.y - 0.1, z: bot.entity.position.z })
+          if (top && top.boundingBox !== 'empty') bot.entity.position.y = Math.floor(bot.entity.position.y - 0.1) + 1
+        }
+      }
+      await flush()
+      await sleep(25)
+    }
+    assert.equal(first[0], 'pillar_up', `first choice, got ${first}`)
+    assert.ok(ticks < 200, 'episode ends')
+    assert.equal(kit[0].count, 6, `one episode places exactly REPEATS new blocks, dirt left ${kit[0].count}`)
+    assert.ok(Math.floor(bot.entity.position.y) >= 64, `chained to the top blocks, y=${bot.entity.position.y}`)
+    assert.equal(ctx.stuck, null, 'episode released')
+    assert.equal(ctx.recovery, null, 'episode released')
+  })
+})
+
+describe('far-goal chain routing (jsf.6 r2)', () => {
+  // The mock climbs exactly +1.0 per cycle, so live goalDy falls
+  // monotonically and the e2e above cannot tell the chain arms apart. These
+  // stage one chain step directly: a flat goalDy re-verify (the prod
+  // mid-air twin) with risen verified height.
+  function chainCtx(lastY, flats, lastDy) {
+    const bot = worldBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    const ctx = {
+      stuck: { by: 'follow', goal: { x: 300, y: 59, z: 0 }, key: 'follow:P' },
+      brain: null,
+      recovery: {
+        action: 'pillar_up', source: 'fsm', status: 'done', st: { startFloor: 63 },
+        lastY, flats, repeats: 2, lastDy, fails: 0, last: null,
+      },
+    }
+    return { bot, ctx }
+  }
+
+  it('flat goalDy + risen height chains on (verified-height arm)', async () => {
+    // goalDy -2 flat vs lastDy -2 (mid-air twin), verified 63 > 62: the
+    // goal arm would release here, the height arm chains.
+    const { bot, ctx } = chainCtx(62, 0, -2)
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'pillar_up', `chains, got ${r.action}`)
+    assert.equal(ctx.recovery.status, 'running')
+    assert.ok(ctx.stuck, 'episode continues')
+    assert.equal(ctx.recovery.repeats, 3)
+  })
+
+  it('a second flat ends the episode (chain discipline survives the reroute)', async () => {
+    const { bot, ctx } = chainCtx(63, 1, -2)
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'idle', `releases, got ${r.action}`)
+    assert.equal(ctx.stuck, null, 'episode released')
+    assert.equal(ctx.recovery, null, 'episode released')
   })
 })

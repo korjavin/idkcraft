@@ -279,16 +279,37 @@ function pitAt(bot) {
   return high >= 2
 }
 
-// Climb arm for a hemmed body with no goal worth walking to (jsf.3, jsf.6):
-// the ticker backstop fires between walk legs with no live goal (goalDist
-// null), and after the 6x7.2 attribution the live goal key usually survives
-// — a pit around the body with that goal hundreds of blocks out still means
-// up is the only way out (a goal that far cannot sit inside the pit; the
-// 44-scaffold gave-up now reads goalDist 300, not null). A level goal with
-// a NEAR known dist stays unclimbable even in a pit (4jr: the goal sits
-// inside the pit, a pillar to it is pointless). hemmed defaults to the
-// 2-side pit; water_up passes its one-side wall2 gate.
+// Climb OFFER for a hemmed body with no goal worth walking to (jsf.3,
+// jsf.6): the ticker backstop fires between walk legs with no live goal
+// (goalDist null), and after the 6x7.2 attribution the live goal key
+// usually survives — a pit around the body with that goal hundreds of
+// blocks out still means up is the only way out (a goal that far cannot
+// sit inside the pit; the 44-scaffold gave-up now reads goalDist 300, not
+// null). A level goal with a NEAR known dist stays unclimbable even in a
+// pit (4jr: the goal sits inside the pit, a pillar to it is pointless).
+// The far-goal arm is gated twice (revmux jsf.6-01 major): up must be
+// toward-or-neutral to the goal (goalDy -1..: level per the recoverText
+// buckets — a below goal owns the dig, climbing away from it is the 4jr
+// one-way door), and the body must be really hemmed (3+ walls: a 2-sided
+// corner/slot reads pit=yes but keeps its hop/sidestep escape). The
+// goal-less arm stays ungated: with no walk to resume, up is the only
+// directed move. hemmed defaults to the 2-side pit; water_up passes its
+// one-side wall2 gate.
 function pitClimb(facts, hemmed) {
+  if (!facts) return false
+  if (hemmed === undefined) hemmed = facts.pit
+  if (!hemmed) return false
+  if (facts.goalDist === null) return true
+  return facts.goalDist > PIT_GOAL_INSIDE && facts.goalDy >= -1 && facts.walls >= 3
+}
+
+// Climb CONTINUATION (revmux jsf.6-01 major): once a pit climb started,
+// finishing the exit is progress even after the body rises past goal
+// height (goalDy drifts negative mid-chain — the offer gate answers
+// "start?", this one answers "keep rising?"). Read by the climber
+// repeatables and the chain arm below; the verified-height closer still
+// demands risen dones and REPEATS still bounds the climb.
+function pitChain(facts, hemmed) {
   if (!facts) return false
   if (hemmed === undefined) hemmed = facts.pit
   return !!hemmed && (facts.goalDist === null || facts.goalDist > PIT_GOAL_INSIDE)
@@ -1312,7 +1333,7 @@ const RECOVER_MENU = {
     // sidestep own the escape, not the scaffold.
     feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
     run: pillarUpRun,
-    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
   },
   dig_up: {
@@ -1323,7 +1344,7 @@ const RECOVER_MENU = {
     // leaves nothing to dig; the fallback keeps stand/tests literals working.
     feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && (facts.ownHeadBlocked ?? facts.headBlocked),
     run: digUpRun,
-    repeatable: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && (facts.ownHeadBlocked ?? facts.headBlocked),
+    repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.pickaxe && (facts.ownHeadBlocked ?? facts.headBlocked),
     verb: 'digging up',
   },
   water_up: {
@@ -1338,7 +1359,7 @@ const RECOVER_MENU = {
       (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)),
     run: waterUpRun,
     repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
-      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)),
+      (facts.goalDy >= 2 || pitChain(facts, facts.wall2)),
     verb: 'pouring water to swim up',
   },
   dig_step: {
@@ -1708,13 +1729,18 @@ async function decide(bot, ctx, state, target) {
       // (goalDy falling) with a goal, upward without one — goalDy stays 0
       // on the goal-less path, so the goal arm would stop a pit chain after
       // one repeat (revmux 01: every goal-less episode climbed at most 2
-      // blocks). A done fires the tick the ack lands, often mid-air, so the
-      // next cycle starts at the old floor and re-verifies it once before
-      // the climb resumes (prod and mock alike): one flat twin chains free,
-      // a second flat or a fell-back done ends the episode. REPEATS counts
-      // risen dones, so a flat twin never eats the climb budget either way.
+      // blocks). A far-goal pit climb (jsf.6) joins the upward arm: with a
+      // level goal 300 out, live goalDy samples the mid-air arc and the
+      // goal arm would stop the chain after 1-2 blocks (revmux jsf.6-01
+      // major). High goals keep the goal arm (falling goalDy is real
+      // progress there); near level goals never climb. A done fires the
+      // tick the ack lands, often mid-air, so the next cycle starts at the
+      // old floor and re-verifies it once before the climb resumes (prod
+      // and mock alike): one flat twin chains free, a second flat or a
+      // fell-back done ends the episode. REPEATS counts risen dones, so a
+      // flat twin never eats the climb budget either way.
       let closer
-      if (fresh.goalDist === null) {
+      if (fresh.goalDist === null || (fresh.goalDy < 2 && pitChain(fresh, fresh.pit || fresh.wall2))) {
         // Verified height, not live height: the verified block (the
         // cycle's startFloor) tracks the climb while live y samples the
         // mid-air arc. Primitives without a startFloor (dig_up) fall back
