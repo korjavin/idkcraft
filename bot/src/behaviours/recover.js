@@ -48,6 +48,12 @@ const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: 
 const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
 const NEAR_PLAYER = 8
+// jsf.6: a live goal nearer than this MIGHT sit inside the pit (the 4jr
+// veto stands); farther out it cannot — the walls hem the body while the
+// walk leg runs elsewhere (prod: 150/160 pit chosen-rows carry a live goal
+// 240-320 blocks out). Above the CLUSTER half-diagonal (~14) and the 4jr
+// probe dist=12; tune inside [16,32] without asking.
+const PIT_GOAL_INSIDE = 24
 
 const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
@@ -273,14 +279,19 @@ function pitAt(bot) {
   return high >= 2
 }
 
-// Climb arm for goal-less backstop episodes (jsf.3): the ticker backstop
-// fires between walk legs with no live goal (goalDist null), and a pit
-// around the body means up is the only way out (the 44-scaffold gave-up:
-// menu hop/dig_step/sidestep, pillar_up never offered). A level goal with
-// a known dist stays unclimbable even in a pit (4jr: the goal sits inside
-// the pit, a pillar to it is pointless).
-function pitClimb(facts) {
-  return !!facts && facts.goalDist === null && !!facts.pit
+// Climb arm for a hemmed body with no goal worth walking to (jsf.3, jsf.6):
+// the ticker backstop fires between walk legs with no live goal (goalDist
+// null), and after the 6x7.2 attribution the live goal key usually survives
+// — a pit around the body with that goal hundreds of blocks out still means
+// up is the only way out (a goal that far cannot sit inside the pit; the
+// 44-scaffold gave-up now reads goalDist 300, not null). A level goal with
+// a NEAR known dist stays unclimbable even in a pit (4jr: the goal sits
+// inside the pit, a pillar to it is pointless). hemmed defaults to the
+// 2-side pit; water_up passes its one-side wall2 gate.
+function pitClimb(facts, hemmed) {
+  if (!facts) return false
+  if (hemmed === undefined) hemmed = facts.pit
+  return !!hemmed && (facts.goalDist === null || facts.goalDist > PIT_GOAL_INSIDE)
 }
 
 // Lava in or around the mount head: digging the cap would open a flow
@@ -576,11 +587,12 @@ function recoverFsm(facts, names) {
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_up')) return 'dig_up'
   // jsf.2: buckets climb water after the scaffold/pickaxe climbers (a pillar
-  // is cheaper and cannot lose the kit). High goal, or a goalless backstop
-  // beside a 2-high wall — never a known level goal: the climb is a one-way
-  // door (4jr: the goal sits inside the pit, height gained is never given
-  // back), and hop/sidestep own the level case.
-  if ((facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)) && pick('water_up')) return 'water_up'
+  // is cheaper and cannot lose the kit). High goal, or a hemmed body beside
+  // a 2-high wall with the goal far away (jsf.6: the pitClimb arm with the
+  // wall2 gate — one formula, not two) — never a known NEAR level goal:
+  // the climb is a one-way door (4jr: the goal sits inside the pit, height
+  // gained is never given back), and hop/sidestep own the level case.
+  if ((facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && pick('water_up')) return 'water_up'
   if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
@@ -607,9 +619,9 @@ function recoverFsm(facts, names) {
 // 7/7 valid labels, disagreements are all safe (wait / call_player).
 const RECOVER_INSTRUCTIONS = 'The bot is stuck. Pick one recovery action'
 const RECOVER_CRITERIA = {
-  pillar_up: 'climb: goal is high or in a pit, scaffold on hand, headroom free — jump and place one block under your feet',
-  dig_up: 'climb: goal is high or in a pit, pickaxe on hand — dig above your head and climb',
-  water_up: 'climb: water bucket on hand, wall too high — pour water on the wall, swim up the fall, scoop it back',
+  pillar_up: 'climb: goal is high, or in a pit with the goal far away, scaffold on hand, headroom free — jump and place one block under your feet',
+  dig_up: 'climb: goal is high, or in a pit with the goal far away, pickaxe on hand — dig above your head and climb',
+  water_up: 'climb: goal is high, or in a pit with the goal far away, water bucket on hand — pour water on the wall, swim up the fall, scoop it back',
   dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
@@ -1292,7 +1304,8 @@ const RECOVER_MENU = {
   pillar_up: {
     // 4jr: a pillar to a level goal is pointless — laya took the first menu
     // item anyway, 29 times in 16 min. Climb prims need the goal above —
-    // jsf.3 excepts a pit with NO goal (pitClimb): up is the only way out.
+    // jsf.3/jsf.6 except a pit with no reachable goal (pitClimb): up is the
+    // only way out.
     // p4s: placing is what just failed (3 done / 49 failed:place-error a
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
@@ -1305,7 +1318,7 @@ const RECOVER_MENU = {
   dig_up: {
     // 9sq F1: headroom already free means nothing to dig — never offer, and
     // never chain onto free headroom either (the chain is an offer with no ask).
-    // jsf.3: like pillar_up, a pit with no goal climbs (head still blocked).
+    // jsf.3/jsf.6: like pillar_up, a pit with no reachable goal climbs (head still blocked).
     // oz8: the own-column gate — a neighbour lip vetoes the pillar above but
     // leaves nothing to dig; the fallback keeps stand/tests literals working.
     feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && (facts.ownHeadBlocked ?? facts.headBlocked),
@@ -1317,14 +1330,15 @@ const RECOVER_MENU = {
     // jsf.2: the bare-pit climber (no scaffold, no pickaxe). Two buckets, not
     // one: a single pour cannot ratchet (a scoop takes the top source, i.e.
     // cancels the newest pour — rig), so the combo always spends a pair.
-    // High goal, or a goalless backstop beside a 2-high wall: a known level
-    // goal never climbs (one-way door, see the FSM arm). The chain re-scans
-    // the combo at each stand; the strip returns both buckets.
+    // High goal, or a hemmed body beside a 2-high wall with the goal far
+    // away (jsf.6: the FSM arm's pitClimb gate, one formula): a known NEAR
+    // level goal never climbs (one-way door, see the FSM arm). The chain
+    // re-scans the combo at each stand; the strip returns both buckets.
     feasible: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
-      (facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)),
+      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)),
     run: waterUpRun,
     repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
-      (facts.goalDy >= 2 || (facts.goalDist === null && facts.wall2)),
+      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)),
     verb: 'pouring water to swim up',
   },
   dig_step: {

@@ -200,6 +200,39 @@ describe('pit climb menu (jsf.3 acceptance trio)', () => {
     assert.equal(recover.RECOVER_MENU.dig_up.feasible(facts({ goalDy: 0, goalDist: 12, pit: true, pickaxe: true, headBlocked: true })), false)
   })
 
+  it('pit + far live goal + scaffold: pillar_up climbs (jsf.6)', () => {
+    // Prod 2026-09-29..10-01: 150/160 pit chosen-rows carry a LIVE explore/
+    // gohome goal 240-320 blocks out — a goal that far cannot sit inside
+    // the pit, so up is still the only way out.
+    const f = facts({ goalDy: 0, goalDist: 300, pit: true, scaffold: 44, walls: 3 })
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), true)
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(f), true)
+    assert.equal(recover.RECOVER_MENU.dig_up.feasible(facts({ goalDy: 0, goalDist: 300, pit: true, pickaxe: true, headBlocked: true })), true)
+    const names = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(f, {}) } catch (_) { return false }
+    })
+    assert.ok(names.includes('pillar_up'), `menu: ${names}`)
+    assert.equal(recover.recoverFsm(f, names), 'pillar_up')
+  })
+
+  it('wall2 + bucket pair + far live goal: water_up climbs with no scaffold (jsf.6)', () => {
+    const f = facts({ goalDy: 0, goalDist: 300, pit: true, wall2: true, combo: true, bucket: 2, scaffold: 0, walls: 3 })
+    assert.equal(recover.RECOVER_MENU.water_up.feasible(f, {}), true)
+    assert.equal(recover.RECOVER_MENU.water_up.repeatable(f, {}), true)
+    const names = recover.RECOVER_ORDER.filter((n) => {
+      try { return recover.RECOVER_MENU[n].feasible(f, {}) } catch (_) { return false }
+    })
+    assert.ok(names.includes('water_up'), `menu: ${names}`)
+    assert.equal(recover.recoverFsm(f, names), 'water_up')
+  })
+
+  it('wall2 + bucket pair + near level goal: no water_up (4jr veto stands)', () => {
+    const f = facts({ goalDy: 0, goalDist: 12, pit: true, wall2: true, combo: true, bucket: 2, scaffold: 0, walls: 3 })
+    assert.equal(recover.RECOVER_MENU.water_up.feasible(f, {}), false)
+    assert.equal(recover.RECOVER_MENU.water_up.repeatable(f, {}), false)
+    assert.equal(recover.recoverFsm(f, ['water_up', 'sidestep', 'wait']), 'sidestep')
+  })
+
   it('no pit and no goal: no pillar_up', () => {
     const f = facts({ goalDist: null, pit: false, scaffold: 5, walls: 1 })
     assert.equal(recover.RECOVER_MENU.pillar_up.feasible(f), false)
