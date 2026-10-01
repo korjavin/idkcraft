@@ -1365,7 +1365,9 @@ async function decide(bot, ctx) {
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
   // shelter is night-infeasible — and through the behaviour's own done.
-  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night'))) {
+  // Near home the hold releases too (revmux 02): a death that respawns by
+  // the house must walk in (gohome/stay), not pillar outside it all night.
+  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night' && nightFarFromHome(bot, ctx)))) {
     if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }

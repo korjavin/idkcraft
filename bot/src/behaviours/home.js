@@ -821,6 +821,16 @@ function shelter(bot, ctx, target, state) {
       }
       try { ctx.recovery = null } catch (_) { /* release best-effort */ }
     }
+    // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
+    // above, so holding here would leave pillarAt null and the death/
+    // respawn displacement check dead — the round-1 open-ground camp on
+    // another path. Anchor at the current body instead.
+    if (!st.pillarAt) {
+      try {
+        const bp2 = botPos(bot)
+        if (bp2) st.pillarAt = { x: bp2.x, z: bp2.z }
+      } catch (_) { /* anchor best-effort */ }
+    }
     st.pillared = true
   }
   ctx.inShelter = true

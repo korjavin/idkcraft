@@ -375,7 +375,13 @@ function skipCell(ctx, idx, p, why) {
     if (!ctx.buildSkipAt || typeof ctx.buildSkipAt !== 'object') ctx.buildSkipAt = {}
     ctx.buildSkipAt[idx] = Date.now()
   } catch (_) { /* stamp best-effort */ }
+  // The next cell starts its own budget (revmux 02): without this a skip
+  // below a fully-traversed max hands the next lower cell the exhausted
+  // remainder and skips it on its first tick.
   ctx.buildFails = 0
+  ctx.buildStallTicks = 0
+  ctx.buildHardTicks = 0
+  ctx.buildAnchor = null
   if (why === 'cell-budget') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_TICK_BUDGET} ticks without progress (${why})`)
   else if (why === 'cell-hard-cap') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_HARD_CAP} ticks on one cell (${why})`)
   else console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
@@ -470,16 +476,27 @@ function build(bot, ctx, target, state) {
   // touching the setHome/adopt reset lists. An unreadable body counts:
   // two minutes of unknown position is broken by any definition. The hard
   // cap below counts every non-advancing tick unforgiven, so an
-  // oscillation that keeps displacing still ends (revmux 01 core-3).
+  // oscillation that keeps displacing still ends (revmux 01 core-3). Both
+  // counters are keyed to the cell (revmux 02): once the house is fully
+  // traversed a later lower cell must get its own budget, not the
+  // remainder of a shared one.
   try {
     const site = ctx.home.site
     const siteKey = `${site.x},${site.y},${site.z},v${ctx.home.v === 2 ? 2 : 1}`
     if (ctx.buildCellSite !== siteKey) {
       ctx.buildCellSite = siteKey
       ctx.buildMaxIdx = -1
+      ctx.buildCellIdx = -1
       ctx.buildStallTicks = 0
       ctx.buildHardTicks = 0
       ctx.buildAnchor = null
+    }
+    if (ctx.buildCellIdx !== idx) {
+      ctx.buildCellIdx = idx
+      ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
+      const bpc = bot.entity && bot.entity.position
+      ctx.buildAnchor = bpc && typeof bpc.x === 'number' ? { x: bpc.x, y: bpc.y, z: bpc.z } : null
     }
     if (idx > (typeof ctx.buildMaxIdx === 'number' ? ctx.buildMaxIdx : -1)) {
       ctx.buildMaxIdx = idx

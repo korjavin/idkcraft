@@ -260,6 +260,28 @@ describe('ipn.12 decide: night-far shelters past feasible day steps', () => {
     }
   })
 
+  it('near home at night the hold releases to the walk in', async () => {
+    // Revmux 02: the night stickiness only holds far from home — a death
+    // that respawns by the house must walk in (gohome), not pillar outside
+    // it all night. Stale facts defeat the askedKey shortcut, so only the
+    // menu pick returns gohome.
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      const bot = menuBot({ x: 195, y: 64, z: 195 }, 15000)
+      const ctx = menuCtx()
+      ctx.step = 'shelter'
+      ctx.stepStatus = 'running'
+      ctx.shelter = { pillared: true }
+      ctx.goalText = 'stale'
+      ctx.askedKey = 'stale'
+      const r = await goal.decide(bot, ctx)
+      assert.equal(r.action, 'gohome', 'near home the night re-decides into the walk in')
+    } finally {
+      console.log = origLog
+    }
+  })
+
   it('day exits the hold through the menu', async () => {
     // Body-2 control: shelter is night-infeasible, so the day re-decide
     // cannot stick and the model re-pick lands.
@@ -388,6 +410,31 @@ describe('ipn.12 shelter behaviour: pillar once, hold till dawn', () => {
     }
     assert.ok(logs.some((m) => m.includes('shelter displaced, re-pillaring')), `re-pillar logged: ${JSON.stringify(logs)}`)
     assert.deepEqual(ctx.shelter.pillarAt, { x: 50, z: 50 }, 'stale climb dropped, re-anchored')
+  })
+
+  it('a first tick under a foreign episode still anchors the hold', () => {
+    // Revmux 02: a foreign live episode skips beginPillar, so the hold used
+    // to stand with pillarAt null and the death/respawn displacement check
+    // dead — the round-1 open-ground camp on another path. The foreign
+    // episode itself is never touched.
+    const bot = holdBot()
+    const foreign = { action: 'dig_step', source: 'stuck', model: null, status: 'running', st: {} }
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running', recovery: foreign }
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      home.shelter(bot, ctx, null, null)
+      assert.equal(ctx.shelter.pillared, true, 'the hold stands past the foreign episode')
+      assert.deepEqual(ctx.shelter.pillarAt, { x: 0, z: 0 }, 'anchored at the current body')
+      assert.equal(ctx.recovery, foreign, 'foreign episode untouched')
+      bot.entity.position = pos(50, 64, 50) // death: the body wakes far away
+      home.shelter(bot, ctx, null, null)
+    } finally {
+      console.log = origLog
+    }
+    assert.ok(logs.some((m) => m.includes('shelter displaced, re-pillaring')), `re-pillar logged: ${JSON.stringify(logs)}`)
+    assert.deepEqual(ctx.shelter.pillarAt, { x: 50, z: 50 }, 're-anchored at the new body')
   })
 
   it('dawn ends the step with the night report', () => {

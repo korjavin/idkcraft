@@ -255,6 +255,7 @@ describe('ipn.10 per-cell attempt budget', () => {
       // Budget-trip cell 10 while the flight hangs.
       ctx.buildCellSite = `${home.site.x},${home.site.y},${home.site.z},v2`
       ctx.buildMaxIdx = 10
+      ctx.buildCellIdx = 10
       ctx.buildStallTicks = build.CELL_TICK_BUDGET - 1
       ctx.buildAnchor = { ...bot.entity.position }
       ctx.placeInFlight = false // the deadline path would have cleared it
@@ -398,7 +399,7 @@ describe('ipn.10 revmux 01: hard cap and skip retry', () => {
     })
     const ctx = {
       home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now(),
-      buildCellSite: '0,64,0,v2', buildMaxIdx: stuckIdx, buildStallTicks: 0,
+      buildCellSite: '0,64,0,v2', buildMaxIdx: stuckIdx, buildCellIdx: stuckIdx, buildStallTicks: 0,
       buildHardTicks: build.CELL_HARD_CAP - 3, buildAnchor: { ...bot.entity.position },
     }
     const q = quiet()
@@ -416,6 +417,42 @@ describe('ipn.10 revmux 01: hard cap and skip retry', () => {
     }
     assert.deepEqual(ctx.buildSkip, [stuckIdx], 'oscillation ends at the hard cap')
     assert.ok(q.lines.some((m) => m.includes('cell-hard-cap')), `hard-cap skip logged: ${JSON.stringify(q.lines)}`)
+  })
+
+  it('below a traversed max, each lower cell gets its own budget', async () => {
+    // Revmux 02: the hard and stall counters were shared across cells, so
+    // once the house had been fully traversed a skip handed the next lower
+    // cell the exhausted remainder and skipped it on its first tick.
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const world = makeWorld()
+    paintHouse(world, home, [6, 7]) // two broken lower cells, max stands at 98
+    const cell = build.blueprintFor(home)[6]
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_planks', count: 64 }],
+      at: pos(home.site.x + cell.dx + 0.5, home.site.y + cell.dy, home.site.z + cell.dz + 2.5),
+      place: async (ref, face) => { bot.calls.places.push([ref, face]) }, // unplaceable
+    })
+    const ctx = {
+      home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now(),
+      buildCellSite: '0,64,0,v2', buildMaxIdx: 98, buildCellIdx: 6,
+      buildStallTicks: build.CELL_TICK_BUDGET - 1, buildHardTicks: build.CELL_HARD_CAP - 1,
+      buildAnchor: { ...bot.entity.position },
+    }
+    const q = quiet()
+    try {
+      build(bot, ctx, null, null) // cell 6 exhausts the shared remainder, skips
+      await settle()
+      assert.deepEqual(ctx.buildSkip, [6], 'cell 6 skips at the cap')
+      for (let t = 0; t < 5; t++) { // cell 7 starts its own budget
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [6], 'cell 7 is not skipped on the remainder')
+    assert.ok(ctx.buildHardTicks <= 6, `cell 7 counts its own ticks (${ctx.buildHardTicks})`)
+    assert.ok(ctx.buildStallTicks <= 6, `stall budget re-armed too (${ctx.buildStallTicks})`)
   })
 
   it('stamped skips retry after the window, fresh and unstamped skips stay', () => {
