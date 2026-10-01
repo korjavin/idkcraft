@@ -725,10 +725,11 @@ describe('bring source helpers (idkcraft-atl.15)', () => {
 
   it('liveExposed prices the descent: deep exposed loses to the dig at the feet (atl.21)', () => {
     // atl.18 S2: exposed @77 with a 60-deep descent priced <20 s and walked
-    // 337 s. The vertical now costs, so the shaft dig wins outright.
-    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(50, 14, 0), distance: 71, exposed: true })
-    assert.equal(exp.dy, 50)
-    assert.equal(exp.cost, 50 / SOURCE_COST.walkBlocksPerSec + 50 * SOURCE_COST.vertSecPerBlock)
+    // 337 s. The vertical now costs (two-rate since 8w0: past the knee the
+    // cave rate rules), so the shaft dig wins outright.
+    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(40, 24, 0), distance: 57, exposed: true })
+    assert.equal(exp.dy, 40)
+    assert.equal(exp.cost, 40 / SOURCE_COST.walkBlocksPerSec + 12 * SOURCE_COST.vertSecPerBlock + 28 * SOURCE_COST.deepVertSecPerBlock)
     const dig = buriedCand(bp, { name: 'iron_ore', position: pos(0, 63, 0), distance: 1, exposed: false })
     assert.deepEqual(decideBringSource(exp, dig), { pick: 'buried', why: 'clear' })
   })
@@ -748,33 +749,33 @@ describe('bring source helpers (idkcraft-atl.15)', () => {
     const hit = memoryExposed(bot, ctx, bp, 'iron', null)
     assert.ok(hit)
     assert.equal(hit.dy, 30)
-    assert.equal(hit.cost, (30 / SOURCE_COST.walkBlocksPerSec) * SOURCE_COST.memoryFactor + 30 * SOURCE_COST.vertSecPerBlock)
+    assert.equal(hit.cost, (30 / SOURCE_COST.walkBlocksPerSec) * SOURCE_COST.memoryFactor + 12 * SOURCE_COST.vertSecPerBlock + 18 * SOURCE_COST.deepVertSecPerBlock)
   })
 
   it('verdictLine names both candidates with coords, costs and the pick (atl.21)', () => {
-    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(50, 14, 0), distance: 71, exposed: true })
+    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(40, 24, 0), distance: 57, exposed: true })
     const dig = buriedCand(bp, { name: 'iron_ore', position: pos(0, 63, 0), distance: 1, exposed: false })
     assert.equal(
       verdictLine('iron', exp, dig, 'buried'),
-      'bring verdict iron: walk live @50,14,0 87.5s vs dig buried @0,63,0 2.0s -> buried',
+      'bring verdict iron: walk live @40,24,0 196.0s vs dig buried @0,63,0 2.0s -> buried',
     )
     assert.equal(
       verdictLine('iron', exp, null, 'exposed'),
-      'bring verdict iron: walk live @50,14,0 87.5s vs dig none -> exposed',
+      'bring verdict iron: walk live @40,24,0 196.0s vs dig none -> exposed',
     )
   })
 
   it('verdictFacts shapes the order facts the creation paths attach (revmux 01 core-1)', () => {
-    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(50, 14, 0), distance: 71, exposed: true })
+    const exp = liveExposed(bp, { name: 'iron_ore', position: pos(40, 24, 0), distance: 57, exposed: true })
     const dig = buriedCand(bp, { name: 'iron_ore', position: pos(0, 63, 0), distance: 1, exposed: false })
     assert.deepEqual(verdictFacts(exp, dig, 'buried'), {
       pick: 'buried',
       win: { x: 0, y: 63, z: 0, cost: dig.cost },
-      rival: { x: 50, y: 14, z: 0, cost: exp.cost },
+      rival: { x: 40, y: 24, z: 0, cost: exp.cost },
     })
     assert.deepEqual(verdictFacts(exp, null, 'exposed'), {
       pick: 'exposed',
-      win: { x: 50, y: 14, z: 0, cost: exp.cost },
+      win: { x: 40, y: 24, z: 0, cost: exp.cost },
       rival: null,
     })
   })
