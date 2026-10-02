@@ -601,3 +601,28 @@ describe('self-trap rule (idkcraft-drq)', () => {
     assert.equal(canBreak(under('sand'), blk('stone', 0, 66, 0), {}), false, 'canBreak mirrors gravity')
   })
 })
+
+describe('house footprint (idkcraft-e5ba)', () => {
+  const home = { v: 2, site: { x: 97, y: 71, z: -357 }, interior: { min: { x: 98, y: 71, z: -356 }, max: { x: 102, y: 72, z: -353 } } }
+  const bot = worldBot(new Map())
+  const d = (n, x, y, z) => denyReason(bot, blk(n, x, y, z), { home })
+  it('protects floor under inside cell, door support and door-front', () => {
+    assert.equal(d('grass_block', 100, 70, -356), 'protected')
+    assert.equal(d('grass_block', 100, 70, -357), 'protected')
+    assert.equal(d('dirt', 100, 70, -358), 'protected')
+    assert.equal(d('dirt', 103, 70, -352), 'protected')
+    assert.equal(d('dirt', 100, 69, -356), 'protected') // under the floor
+  })
+  it('placedByBot: floor patch stays protected, air-box dirt is diggable', () => {
+    const c = { home, placedByBot: new Set(['100,70,-356', '100,71,-356']) }
+    assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), c), 'protected')
+    assert.equal(denyReason(bot, blk('dirt', 100, 71, -356), c), null)
+  })
+  it('leaves distant ground, flora and snow alone', () => {
+    assert.equal(d('grass_block', 100, 70, -350), null)
+    assert.equal(d('dirt', 107, 70, -355), null)
+    assert.equal(d('snow', 100, 71, -356), null)
+    assert.equal(d('short_grass', 100, 71, -356), null)
+  })
+  it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
+})
