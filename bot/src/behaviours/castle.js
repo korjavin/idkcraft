@@ -193,7 +193,14 @@ function sidestep(bot, ctx, st, c, now) {
   if (so.n > flat.SELF_OCC_LIMIT) { blockCell(ctx, st, c, 'occupied', now); return }
   const bp = bodyPos(bot)
   const s = SIDESTEPS[so.n % SIDESTEPS.length]
-  try { if (bp) bot.pathfinder.setGoal(new goals.GoalNear(bp.x + s[0], bp.y, bp.z + s[1], 1)) } catch (_) { /* retry next tick */ }
+  // GoalBlock, not GoalNear(.., 1): a range-1 goal one step away is already
+  // satisfied where we stand, so the pathfinder never moves (rig).
+  try {
+    if (bp) {
+      ctx.castleGoal = new goals.GoalBlock(Math.floor(bp.x) + s[0], Math.floor(bp.y), Math.floor(bp.z) + s[1])
+      bot.pathfinder.setGoal(ctx.castleGoal)
+    }
+  } catch (_) { /* retry next tick */ }
 }
 
 // Out of reach after the approach ended: re-approach; only a stand that
