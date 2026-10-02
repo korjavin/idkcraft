@@ -68,6 +68,13 @@ The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps, max
   Green runs are quiet (under-ceiling counts are `ok`, not news).
 - Improvement (`IMPROVED`: reached flipped false→true, exit still 0) means
   the entry is stale: re-record and commit the new entry in the same PR.
+- Control spots (idkcraft-jsf.7) are the one exception to `maxCalls: 0`:
+  DUGPIT-VALIDATE is a trap that MUST page, so its entry is
+  `reached: false, maxCalls: 1, minCalls: 1`. `minCalls` (optional, any
+  entry) regresses a run that pages less — a silent trap (the no-path
+  detector broke) or a leaking one (the bot walked out, and BARE's
+  `reached` stops proving water_up), so a control that walks out
+  silently regresses instead of reading `IMPROVED`.
 
 A `laya` run never judges against the stub baseline (different menu policy):
 it records and exits 0 until a laya baseline ships.
@@ -198,6 +205,28 @@ reopens this.
   send the bot hunting a second vein 15+ blocks off-terrain — slower and
   flakier, for no extra shaft-loop coverage (the atl.17/atl.20 below-feet
   stance is exercised by the first ore).
+- `prep` (idkcraft-jsf.7): optional list of rcon world edits — `fill`/
+  `setblock` only (no `give`/`op`/`tp`: kit and state stay in the spot
+  contract) — run every trial after both tps (chunks loaded) and before
+  the kit. A failed command exits 2 (`No blocks were filled` is the
+  idempotent re-run, not a failure). It builds a fixture the pristine
+  map lacks, on the disposable copy only — never on `world.tar`.
+- DUGPIT-BARE / DUGPIT-VALIDATE (idkcraft-jsf.2/jsf.7) are the water_up
+  carriers. CLUSTER-BARE and SHAFT-BARE are walked out after ik7 (no
+  recover runs there), so no prod-map spot exercised water_up. The prep
+  rebuilds muse-5's rig arena (read back from its rig world): drain the
+  pond around it, clear the ring x -56..-45 z -206..-197 above y59,
+  2-thick obsidian walls y57-62 around a 4x4 interior x -52..-49
+  z -202..-199, bedrock floor y56, and a 1x2x4 notch in the east wall
+  (x -48 y62-63 z -202..-199 — natural pits have ledges; a flat sheer pit
+  has no ledge-pour site and water_up rightly declines it). No pickaxe,
+  no scaffold: the only way out is the water climb.
+  BARE (2 buckets) must escape; VALIDATE (no buckets, same arena) must
+  NOT and must page once. A water spot without its control is a vacuum:
+  if the trap leaked, BARE would reach by walking and a broken water_up
+  would still pass. Both stay before the follow-revoking orders; the
+  arena persists in the world for the later spots (they sit outside the
+  ring).
 
 ## `REPLAY_BRAIN=laya`
 

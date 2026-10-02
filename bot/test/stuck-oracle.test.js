@@ -692,3 +692,91 @@ describe('stuck-run.sh oracle wiring (idkcraft-6x7.4)', () => {
     assert.ok(rootIgnore.includes('bot/tools/last-replay.json'), 'results file must be gitignored')
   })
 })
+
+describe('prep arenas (idkcraft-jsf.7)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+  const withPrep = spots.filter((s) => s.prep != null)
+  const ctl = { brain: 'stub', spots: { V: { reached: false, maxStuck: 2, maxEps: 2, maxCalls: 1, minCalls: 1 } } }
+
+  it('committed prep is fill/setblock strings only', () => {
+    assert.ok(withPrep.length >= 2, 'want the DUGPIT pair')
+    for (const s of withPrep) {
+      assert.ok(Array.isArray(s.prep) && s.prep.length > 0, `${s.name}: prep must be a non-empty array`)
+      for (const c of s.prep) {
+        assert.equal(typeof c, 'string', `${s.name}: prep entries are rcon strings`)
+        assert.match(c, /^(fill|setblock) /, `${s.name}: prep allows fill/setblock only: ${c}`)
+      }
+    }
+  })
+
+  it('every prep spot has a baseline entry', () => {
+    for (const s of withPrep) assert.ok(baseline.spots[s.name], `prep spot ${s.name} has no baseline entry`)
+  })
+
+  it('the water_up spot has its no-kit control on the identical arena', () => {
+    const bare = byName['DUGPIT-BARE']
+    const val = byName['DUGPIT-VALIDATE']
+    assert.ok(bare && val, 'missing DUGPIT-BARE / DUGPIT-VALIDATE')
+    assert.deepEqual(val.prep, bare.prep, 'control must rebuild the same arena')
+    assert.deepEqual([val.spawn, val.goal], [bare.spawn, bare.goal])
+    assert.equal(bare.bucket, true)
+    assert.equal(val.bucket, false)
+    for (const s of [bare, val]) {
+      assert.equal(s.pickaxe, false, `${s.name}: a pickaxe opens a dig path`)
+      assert.equal(s.scaffold, 0, `${s.name}: scaffold opens a pillar path`)
+      assert.ok((s.bead || '').includes('idkcraft-jsf.7'), `${s.name} must cite idkcraft-jsf.7`)
+    }
+    assert.equal(baseline.spots['DUGPIT-BARE'].reached, true)
+    const v = baseline.spots['DUGPIT-VALIDATE']
+    assert.equal(v.reached, false, 'the control trap holds')
+    assert.ok(Number.isInteger(v.minCalls) && v.minCalls >= 1, 'the control must page (minCalls >= 1)')
+  })
+
+  it('a control that pages is ok', () => {
+    assert.equal(compareBaseline([row('V', false, 0, 2, 1)], ctl)[0].verdict, 'ok')
+  })
+
+  it('a silent control trap regresses (detector broke)', () => {
+    const [d] = compareBaseline([row('V', false, 0, 0, 0)], ctl)
+    assert.equal(d.verdict, 'regressed')
+    assert.match(d.why, /calls 0 < 1/)
+  })
+
+  it('a leaking control trap regresses, not improves (its twin proves nothing)', () => {
+    const [d] = compareBaseline([row('V', true, 0, 0, 0)], ctl)
+    assert.equal(d.verdict, 'regressed')
+  })
+
+  it('loadSpots passes prep through and rejects non-world commands', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-spots-'))
+    const saved = process.argv[2]
+    const load = (prep) => {
+      const f = path.join(dir, 'p.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], prep }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      assert.deepEqual(load(['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])[0].prep, ['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])
+      assert.deepEqual(load(undefined)[0].prep, [])
+      for (const bad of [['give @a water_bucket 1'], ['op X'], ['tp X 0 0 0'], [' fill 0 0 0 1 1 1 air'], [7], 'fill 0 0 0 1 1 1 air']) {
+        assert.throws(() => load(bad), /bad prep|fill\/setblock only/, JSON.stringify(bad))
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prep runs after both tps and before the kit', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    const at = (needle) => { const i = replay.indexOf(needle); assert.ok(i >= 0, needle); return i }
+    const prep = at('for (const cmd of s.prep) await rcon(cmd)')
+    assert.ok(at('await rcon(`tp ${FOLLOWER}') < prep, 'prep must follow the tps (chunks loaded)')
+    assert.ok(prep < at('await rcon(`clear ${FOLLOWER}`)'), 'prep must precede the kit')
+  })
+})
