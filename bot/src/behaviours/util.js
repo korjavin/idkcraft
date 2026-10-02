@@ -280,7 +280,7 @@ function denyReason(bot, block, ctx) {
 }
 
 // Interior box + 1 ring (walls) (all the way down) to the roof, plus
-// the door-front column. Home shape: site, interior{min,max}, v (door dx 3 on v2, else 1).
+// the apron (yard ground around it, below the doorstep level). Home shape: site, interior{min,max}, v (door dx 3 on v2, else 1).
 function inHouseFootprint(home, pos) {
   try {
     const s = home && home.site
@@ -288,7 +288,11 @@ function inHouseFootprint(home, pos) {
     if (!s || !b || !b.min || !b.max || !pos) return false
     const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
     if (x >= b.min.x - 1 && x <= b.max.x + 1 && z >= b.min.z - 1 && z <= b.max.z + 1 && y <= b.max.y + 1) return true
-    return x === s.x + (home.v === 2 ? 3 : 1) && z === s.z - 1 && y <= s.y + 1
+    // Apron (idkcraft-0mlh): 2 cells of yard ground past the walls (3 on
+    // the door side: outsidePos and two cells in front of it), up to the
+    // doorstep level. Prod 2026-10-02: equip dug a 2-4 deep pit on the porch,
+    // gohome then arrived at y=69 and died at the door.
+    return x >= b.min.x - 3 && x <= b.max.x + 3 && z >= Math.min(b.min.z - 3, s.z - 3) && z <= b.max.z + 3 && y <= s.y + 1
   } catch (_) { return false }
 }
 

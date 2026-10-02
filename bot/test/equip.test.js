@@ -307,6 +307,33 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  it('never digs the porch: apron ground is skipped in the scan (idkcraft-0mlh)', async () => {
+    const home = { v: 2, site: { x: 97, y: 71, z: -357 }, interior: { min: { x: 98, y: 71, z: -356 }, max: { x: 102, y: 72, z: -353 } } }
+    const porch = [{ x: 100, y: 70, z: -359 }, { x: 101, y: 70, z: -358 }, { x: 98, y: 69, z: -360 }]
+    const far = { x: 100, y: 70, z: -366 }
+    // Mirrors mineflayer: a useExtraInfo function filters full blocks.
+    const scan = (cells) => (o) => cells.map((v) => ({ ...v, name: 'grass_block' }))
+      .filter((v) => !o.useExtraInfo || o.useExtraInfo({ name: v.name, position: v }))
+    const kit = [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }]
+    let bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([...porch, far]) })
+    bot.entity.position = { x: 100.5, y: 71, z: -357.5 } // at the door
+    let ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.match(ctx.lastGoalKey, /^equip-dig:100,70,-366$/, 'walks past the porch to open ground')
+    bot.restoreError()
+    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan(porch) })
+    bot.entity.position = { x: 100.5, y: 71, z: -357.5 }
+    ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'only porch ground: no-dirt, never the pit')
+    bot.restoreError()
+  })
+
   it('stone holds the pickaxe first: no hand-mining, no lost drops', async () => {
     const pick = { name: 'stone_pickaxe', count: 1 }
     const bot = mockBot({

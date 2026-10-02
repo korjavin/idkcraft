@@ -619,10 +619,22 @@ describe('house footprint (idkcraft-e5ba)', () => {
     assert.equal(denyReason(bot, blk('dirt', 100, 71, -356), c), null)
   })
   it('leaves distant ground, flora and snow alone', () => {
-    assert.equal(d('grass_block', 100, 70, -350), null)
-    assert.equal(d('dirt', 107, 70, -355), null)
+    assert.equal(d('grass_block', 100, 70, -349), null)
+    assert.equal(d('dirt', 106, 70, -355), null)
+    assert.equal(d('grass_block', 100, 70, -366), null)
+    assert.equal(d('grass_block', 100, 73, -359), null, 'yard ground above the doorstep level')
     assert.equal(d('snow', 100, 71, -356), null)
     assert.equal(d('short_grass', 100, 71, -356), null)
+  })
+  it('apron (idkcraft-0mlh): porch, door approach and yard ring are protected', () => {
+    assert.equal(d('grass_block', 100, 70, -358), 'protected') // under outsidePos
+    assert.equal(d('grass_block', 98, 69, -360), 'protected') // two cells in front of it
+    assert.equal(d('dirt', 101, 68, -359), 'protected') // pit bottom on the porch
+    assert.equal(d('dirt', 105, 69, -355), 'protected') // east yard ring
+    assert.equal(d('dirt', 95, 72, -350), 'protected') // doorstep level + 1
+    assert.equal(d('stone', 100, 66, -361), null) // past the door-side apron
+    const c = { home, placedByBot: new Set(['104,71,-355']) }
+    assert.equal(denyReason(bot, blk('dirt', 104, 71, -355), c), null, 'our own patch on the yard stays diggable')
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
 })
