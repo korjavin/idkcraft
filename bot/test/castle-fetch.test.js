@@ -93,7 +93,7 @@ function makeBot({ items = [], set = new Map(), at = pos(SITE.x - 4, 64, SITE.z 
 }
 
 function castleState(extra) {
-  return { site: { ...SITE }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'body', blocked: {}, parked: false, ...extra }
+  return { site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false, ...extra }
 }
 
 const TOOLS = () => [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 }] // scaffold kit: equip is content
@@ -362,5 +362,89 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     for (let i = 0; i < 40 && !(ctx.castleFetch && ctx.castleFetch.chestDone); i++) fetch(bot, ctx)
     assert.ok(ctx.castleFetch.chestDone)
     assert.equal(bot.calls.opens.length, 0)
+  })
+})
+
+describe('castle v2 materials: frame logs and the chest (g0z.12)', () => {
+  const realCraft = fetch.deps.craftItem
+  const realGather = fetch.deps.gather
+  const realFact = castleMod.menuFact
+  afterEach(() => {
+    fetch.deps.craftItem = realCraft
+    fetch.deps.gather = realGather
+    castleMod.menuFact = realFact
+  })
+  const LAID = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log', chest: 'chest' }
+  // A v2 world laid up to (not including) the first cell of `kind`.
+  function upTo(kind) {
+    const set = new Map()
+    for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
+      if (c.kind === kind) break
+      if (LAID[c.kind]) set.set(`${c.x},${c.y},${c.z}`, LAID[c.kind])
+    }
+    return set
+  }
+
+  it('the frame batch is one gather load (gather stops at NEED_LOGS)', () => {
+    assert.equal(castleMod.batchOf('frame'), goal.NEED_LOGS)
+    assert.equal(fetch.FETCH.frame, goal.NEED_LOGS)
+    assert.equal(castleMod.batchOf('stone'), castleMod.BATCH)
+  })
+
+  it('frame-none -> castlefetch chops logs; a full load reads frame-batch and the castle lays it (never crafted to planks)', async () => {
+    const set = upTo('frame')
+    const items = TOOLS()
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    assert.equal(goal.goalFacts(makeBot({ items, set }), ctx).castle, 'frame-none')
+    assert.equal((await goal.decide(makeBot({ items, set }), ctx)).action, 'castlefetch')
+    let chopped = 0
+    fetch.deps.gather = (bot, c) => { chopped++; c.stepStatus = 'running' }
+    fetch.deps.craftItem = () => { throw new Error('frame is never crafted') }
+    fetch(makeBot({ items, set }), ctx)
+    assert.equal(chopped, 1)
+    items.push({ name: 'oak_log', count: goal.NEED_LOGS }) // gather's 'done' load
+    const bot = makeBot({ items, set })
+    const full = { castle: castleState({ blueprintVersion: 2 }) }
+    const facts = goal.goalFacts(bot, full)
+    assert.equal(facts.castle, 'frame-batch')
+    assert.equal(goal.MENU.craft.feasible(facts, bot, full), false, 'the craft step leaves frame logs alone')
+    assert.equal((await goal.decide(bot, full)).action, 'castle')
+    assert.equal(castleMod.findItem(bot, 'frame').name, 'oak_log')
+  })
+
+  it('frame from the castle chest: logs withdraw one per beam', async () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'frame', left: 70 }; return 'frame-none' }
+    const set = new Map([[`${SITE.x},${SITE.y},${SITE.z}`, 'chest']])
+    const items = []
+    const bot = makeBot({ items, set, chest: [{ name: 'oak_log', count: 64 }], at: pos(SITE.x + 1.5, 64, SITE.z - 0.5) })
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    fetch(bot, ctx)
+    await settle(); await settle()
+    assert.equal(count(items, 'oak_log'), goal.NEED_LOGS)
+  })
+
+  it('chest-none: crafts one chest; with nothing to craft from it chops logs', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'chest', left: 1 }; return 'chest-none' }
+    const asked = []
+    fetch.deps.craftItem = (bot, ctx, names, n) => { asked.push([names, n]); return 'running' }
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    fetch(makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), ctx)
+    assert.deepEqual(asked, [[['chest'], 1]])
+    fetch.deps.craftItem = () => ({ done: false, line: 'need 8 planks' })
+    let chopped = 0
+    fetch.deps.gather = (bot, c) => { chopped++; c.stepStatus = 'running' }
+    const bare = { castle: castleState({ blueprintVersion: 2 }) }
+    fetch(makeBot({ items: [] }), bare)
+    assert.equal(chopped, 1)
+    fetch.deps.gather = () => { chopped++ }
+    const full = { castle: castleState({ blueprintVersion: 2 }) }
+    fetch(makeBot({ items: [{ name: 'oak_log', count: goal.NEED_LOGS }] }), full)
+    assert.equal(full.stepStatus, 'failed:castlefetch-craft-chest', 'a full load that cannot craft holds, not chops')
+  })
+
+  it('chest on hand reads chest-batch (a 1-cell remainder)', () => {
+    const set = upTo('chest')
+    const bot = makeBot({ items: [{ name: 'chest', count: 1 }], set })
+    assert.equal(goal.goalFacts(bot, { castle: castleState({ blueprintVersion: 2 }) }).castle, 'chest-batch')
   })
 })

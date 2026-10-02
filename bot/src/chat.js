@@ -449,7 +449,8 @@ function castleSite(pos, yaw) {
   const [dx, dz, rot] = Math.abs(lx) > Math.abs(lz)
     ? (lx > 0 ? [1, 0, 3] : [-1, 0, 1])
     : (lz > 0 ? [0, 1, 0] : [0, -1, 2])
-  const e = blueprint.rotatePlan([{ ...blueprint.ENTRANCE, kind: 'air' }], rot)[0]
+  const bp = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION) // new orders only
+  const e = blueprint.rotatePlan([{ ...bp.ENTRANCE, kind: 'air' }], rot, bp.version)[0]
   const site = {
     x: Math.floor(pos.x) + 2 * dx - e.dx,
     y: Math.floor(pos.y),
@@ -464,7 +465,7 @@ function overlapsHome(home, site, rot) {
   if (!home || !home.site) return false
   const lo = home.interior && home.interior.min ? { x: home.interior.min.x - 2, z: home.interior.min.z - 2 } : { x: home.site.x - 1, z: home.site.z - 1 }
   const hi = home.interior && home.interior.max ? { x: home.interior.max.x + 2, z: home.interior.max.z + 2 } : { x: home.site.x + 7, z: home.site.z + 6 }
-  const { w, d } = blueprint.siteDimensions(rot)
+  const { w, d } = blueprint.siteDimensions(rot, blueprint.BLUEPRINT_VERSION)
   return site.x <= hi.x && site.x + w - 1 >= lo.x && site.z <= hi.z && site.z + d - 1 >= lo.z
 }
 
@@ -484,18 +485,22 @@ function castleChat(bot, ticker, playerName, cmd) {
     if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
     const { site, rot } = castleSite(pos, speaker.yaw)
     if (overlapsHome(ctx.home, site, rot)) return `that castle would sit on my house at ${at(ctx.home.site)} — step further away and ask again`
-    const bad = castleMod.siteCheck(bot, site, rot)
+    const bad = castleMod.siteCheck(bot, site, rot, blueprint.BLUEPRINT_VERSION)
     if (bad) return `I can't build a castle here: ${bad}. Step to flatter, open ground and ask again`
     ticker.setCastle({ site, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'prep', blocked: {}, parked: false })
     ticker.work()
-    const n = blueprint.PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+    const n = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION).PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
     return `castle at ${at(site)}, ~${n} blocks, this will take many hours; I work while someone is online (or autonomous on)`
   }
   if (!st) return 'no castle yet — say build castle'
   if (cmd === 'castle') {
     const now = Date.now()
     let loaded = false
-    try { loaded = !!bot.blockAt(new Vec3(st.site.x, st.site.y, st.site.z)) } catch (_) { loaded = false }
+    // All four footprint corners (the v2 site spans up to 3x3 chunks).
+    try {
+      const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+      loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+    } catch (_) { loaded = false }
     const blocked = Object.values(st.blocked || {}).filter((e) => e && e.until > now).length
     const tail = `now: ${st.parked ? 'parked — say castle go' : (st.status || 'waiting for its turn')}; blocked ${blocked}`
     if (!loaded) return `castle at ${at(st.site)}: too far to count; ${tail}`

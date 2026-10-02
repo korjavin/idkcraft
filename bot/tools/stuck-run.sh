@@ -7,8 +7,9 @@
 #   REPLAY_TAG (bot name suffix; default r + 3 pid digits — exported so
 #   the pre-op below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
 #   REPLAY_BASELINE* (passed through to stuck-replay.js).
-# Exit codes: 0 = baseline holds, 1 = REGRESSION vs the baseline (from the
-# replay), 2 = environment failure (no START.sh/snapshot, rig never came up,
+# Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
+# one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
+# the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
 # anti-noise rejected, pristine world.tar changed mid-run, guide setup
 # failed, follower dropped mid-run).
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf);
@@ -117,26 +118,23 @@ if [ "$VARIANT" = "vanilla" ]; then
 fi
 sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 SHA_BEFORE="$(sha_of "$PRODWORLD/world.tar")"
-echo "reset: $D/world <- world.tar"
-rm -rf "$D/world"
-tar -xf "$PRODWORLD/world.tar" -C "$D"
 GITSHA="$(git -C "$TREE" rev-parse --short HEAD 2>/dev/null || echo '?')"
 LOG="/tmp/stuck-run-$VARIANT${RIG_ID:+-$RIG_ID}.log"
-echo "boot: $VARIANT (log $LOG)"
+: > "$LOG"
 FIFO="/tmp/stuck-stdin-$$.fifo"
-mkfifo "$FIFO"
-exec 9<> "$FIFO" # held open: Paper's console reader blocks instead of EOF-exiting (muse-5: START.sh dies on stdin EOF)
-sh "$RIGDIR/START.sh" "$VARIANT" >"$LOG" 2>&1 <&9 &
-SRVPID=$!
+RERUN="/tmp/stuck-rerun-$$.json"
+SRVPID=
 teardown() {
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
-  kill "$SRVPID" >/dev/null 2>&1 || true
+  if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
+  SRVPID=
   exec 9<&- || true
   rm -f "$FIFO" || true
 }
 on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay 2
   rc=$?
   teardown
+  rm -f "$RERUN"
   rig_release
   SHA_AFTER="$(sha_of "$PRODWORLD/world.tar")"
   if [ "$SHA_AFTER" = "$SHA_BEFORE" ]; then
@@ -154,12 +152,6 @@ on_sig() { # INT/TERM: never report a kill as a pass
 }
 trap on_exit EXIT
 trap on_sig INT TERM
-echo -n "wait: rcon"
-for _ in $(seq 1 36); do
-  if docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1; then echo " up"; break; fi
-  echo -n "."; sleep 5
-done
-docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1 || { echo " rig never came up (see $LOG)"; exit 2; }
 # Anti-noise (repeatability, not prod combat): hostile interference (fights,
 # knockback, deaths) would make stuck/recover numbers unrepeatable. Every
 # command asserts and echoes: Paper 26.1 renamed gamerules to snake_case and
@@ -172,10 +164,6 @@ rcon_assert() { # $1 = command; fails the run unless rcon accepts it
   esac
   echo "anti-noise [$1]: $(printf '%s' "$_out" | head -n 1)"
 }
-rcon_assert "difficulty peaceful"
-rcon_assert "gamerule fall_damage false"
-rcon_assert "gamerule advance_weather false"
-rcon_assert "weather clear"
 # Spawn protection (3ro): the spawn-cluster spots sit inside r=16 of world
 # spawn and Paper enforces protection once ops.json is non-empty — one stray
 # op armed it mid-day and the baseline collapsed to 3/10 with no code change.
@@ -187,8 +175,29 @@ rcon_assert "weather clear"
 # the hello and the login dies server-side with a decode error.
 _ptail=$(( $$ % 1000 ))
 export REPLAY_TAG="${REPLAY_TAG:-r$_ptail}"
-rcon_assert "op StuckGuide$REPLAY_TAG"
-rcon_assert "op StuckReplay$REPLAY_TAG"
+boot() { # reset the world copy from the pristine tar, start the rig, anti-noise, pre-op
+  echo "reset: $D/world <- world.tar"
+  rm -rf "$D/world"
+  tar -xf "$PRODWORLD/world.tar" -C "$D"
+  echo "boot: $VARIANT (log $LOG)"
+  mkfifo "$FIFO"
+  exec 9<> "$FIFO" # held open: Paper's console reader blocks instead of EOF-exiting (muse-5: START.sh dies on stdin EOF)
+  sh "$RIGDIR/START.sh" "$VARIANT" >>"$LOG" 2>&1 <&9 &
+  SRVPID=$!
+  echo -n "wait: rcon"
+  for _ in $(seq 1 36); do
+    if docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1; then echo " up"; break; fi
+    echo -n "."; sleep 5
+  done
+  docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1 || { echo " rig never came up (see $LOG)"; exit 2; }
+  rcon_assert "difficulty peaceful"
+  rcon_assert "gamerule fall_damage false"
+  rcon_assert "gamerule advance_weather false"
+  rcon_assert "weather clear"
+  rcon_assert "op StuckGuide$REPLAY_TAG"
+  rcon_assert "op StuckReplay$REPLAY_TAG"
+}
+boot
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then
   case "$SPOTS" in
@@ -197,4 +206,33 @@ if [ -n "$SPOTS" ]; then
   esac
 fi
 [ -n "$SECS" ] && export REPLAY_SECS="$SECS"
-cd "$HERE/.." && node tools/stuck-replay.js
+cd "$HERE/.."
+set +e; node tools/stuck-replay.js; rc=$?; set -e
+[ "$rc" = 1 ] || exit "$rc"
+# Flake protocol (idkcraft-6x7.9): the corpus is non-deterministic by
+# construction (recover's random sidestep side, Paper water ticks) and that
+# randomness is prod behavior, so it is never seeded. A regression gets ONE
+# rerun of only the regressed spots on a freshly reset world (dug terrain
+# persists across spots): repeats = REGRESSION, exit 1; holds = FLAKY, exit 0.
+# A spot without a baseline entry is deterministic: no rerun. Ceilings stay.
+BAD="$(node -e '
+const fs = require("fs"), r = require("./tools/stuck-replay.js")
+const [out, spotsFile, dst] = process.argv.slice(1)
+const diffs = r.compareBaseline(JSON.parse(fs.readFileSync(out, "utf8")), r.loadBaseline().baseline)
+if (diffs.some((d) => d.verdict === "no-baseline")) process.exit(0)
+const bad = new Set(diffs.filter((d) => d.verdict === "regressed").map((d) => d.spot))
+fs.writeFileSync(dst, JSON.stringify(JSON.parse(fs.readFileSync(spotsFile, "utf8")).filter((s) => bad.has(s.name))))
+console.log([...bad].join(" "))
+' "${REPLAY_OUT:-tools/last-replay.json}" "${REPLAY_SPOTS:-tools/stuck-spots.json}" "$RERUN")"
+[ -n "$BAD" ] || { echo "verdict: REGRESSION (no rerun: a spot has no baseline entry)"; exit 1; }
+echo "RERUN (flake check): $BAD — once, on a freshly reset world"
+teardown
+for _ in $(seq 1 30); do docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER" || break; sleep 1; done
+boot
+set +e; REPLAY_SPOTS="$RERUN" REPLAY_OUT="/tmp/stuck-rerun-$VARIANT${RIG_ID:+-$RIG_ID}.json" node tools/stuck-replay.js; rc=$?; set -e
+case "$rc" in
+  0) for s in $BAD; do echo "FLAKY $s: regressed on the first run (BASELINE line above), baseline held on the rerun"; done
+     echo "verdict: FLAKY — $BAD (exit 0)"; exit 0 ;;
+  1) echo "verdict: REGRESSION (repeated on the rerun)"; exit 1 ;;
+  *) exit "$rc" ;;
+esac

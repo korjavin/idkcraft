@@ -145,8 +145,8 @@ function checkPrefix(plan, W, D, entrance, idx) {
 }
 
 describe('castle slice blueprint version', () => {
-  it('exports BLUEPRINT_VERSION 1', () => {
-    assert.equal(castle.BLUEPRINT_VERSION, 1)
+  it('exports BLUEPRINT_VERSION 2 (new orders: the full castle, g0z.12)', () => {
+    assert.equal(castle.BLUEPRINT_VERSION, 2)
     assert.equal(typeof castle.BLUEPRINT_VERSION, 'number')
   })
 })
