@@ -9,9 +9,12 @@
 // block at body levels — the same getNeighbors wrap shape as addSwimExits.
 // Kept: diagonals the executor digs first (every solid side cell in
 // move.toBreak — the corner is open after digging) and openable blocks.
-// Note the lib's openable set is gate-named blocks only (fence gates are
-// already non-physical): doors and trapdoors count as solid here and their
-// diagonals are dropped, which is conservative while canOpenDoors=false.
+// Note the lib's openable set is gate-named blocks plus the hand doors
+// (doors.js extends it so the fork's postProcessPath centres doorway nodes;
+// canOpenDoors stays false): openable side cells are skipped here, so a
+// diagonal grazing a door panel is allowed — the thin panel slides, and no
+// diagonal INTO a door cell exists anyway (unbreakable, straight-only
+// edges). Iron doors and trapdoors stay solid and their diagonals stay dropped.
 function addNoCornerCut(movements) {
   // setMovements also accepts plain movement-like objects (unit mocks carry
   // only flags): wrap only a real Movements with getNeighbors.

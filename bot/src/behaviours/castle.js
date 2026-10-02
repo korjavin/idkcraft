@@ -149,11 +149,12 @@ function strike(ctx, st, c, why, now) {
 }
 
 // Work order = plan order with the door deferred past every other place
-// cell (revmux 01): A* never opens doors (canOpenDoors=false) and the laid
-// door is break-vetoed, so the doorway stays an open passage while the bot
-// still needs the interior. Then the keep-clear cells, the moat digs (v2,
-// g0z.6: the bridge deck is an ordinary place cell, so it exists before
-// any dig) and the fence ring last. Indices stay plan indices (blocked keys).
+// cell (revmux 01): the laid door is break-vetoed, so the doorway stays an
+// open passage while the bot still needs the interior (A* opens wooden
+// doors since idkcraft-6xno, but an unlaid doorway still beats a toggle per
+// trip). Then the keep-clear cells, the moat digs (v2, g0z.6: the bridge
+// deck is an ordinary place cell, so it exists before any dig) and the
+// fence ring last. Indices stay plan indices (blocked keys).
 const RANK = { door: 1, air: 2, dig: 3, fence: 4 }
 function rank(c) { return RANK[c.kind] || 0 }
 // Interior work (g0z.6): an undone cell ranked before the moat. While one

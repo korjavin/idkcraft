@@ -14,6 +14,7 @@ const { createOrders } = require('./orders')
 const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard } = require('./reflexes')
 const { createGreeter } = require('./greet')
 const { addSwimExits, addSwimPrune } = require('./swim')
+const doors = require('./doors')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
@@ -422,6 +423,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // at most one cloned packet per second, only on the airborne + storm +
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
+    // Door reflex (idkcraft-6xno): open the plan's next door within reach,
+    // shut our own openings behind us. Reads only + activateBlock, so it
+    // runs ahead of every branch (paused, alone, normal) like unpin.
+    try { doors.doorReflex(bot, ctx) } catch (_) { /* doors best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
@@ -986,7 +991,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // site): installing adopts the lease defaults here, sprint only ever
     // opens on the flat-pursuit gates, and sprint on the decision line
     // stays the brain's opinion only.
-    setMovements: (m) => { if (m) { addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
+    setMovements: (m) => { if (m) { doors.banDoorBreaks(m); doors.addDoorPassages(m); addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
     destroy,
     rearm,
     ...createOrders(ordersBox),

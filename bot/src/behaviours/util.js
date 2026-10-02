@@ -498,4 +498,45 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects }
+// Door state + crossing lane (moved from behaviours/home.js for idkcraft-6xno:
+// the A* door reflex reads the same open state, so one copy serves both).
+function doorOpen(block) {
+  try {
+    const props = block && typeof block.getProperties === 'function' && block.getProperties()
+    return !!props && props.open === true
+  } catch (_) {
+    return false
+  }
+}
+
+// Door-crossing lane (bv6): an open door leaves a 0.8125-wide gap beside its
+// 0.1875 panel, so the 0.6 body crossing at cell centre clears the panel by
+// ~1 cm — and a diagonal entry (the walk ends up to 1.5 off-centre, the legs
+// cut corners at the 0.6 met radius) pushes the body INTO the panel face at
+// a steep angle, where friction holds it: no slide, the unstick backs up and
+// re-drives the same line, 60 ticks, failed:cannot-reach-home (two nights in
+// a row on rig-m4, door left standing open). The lane is the free gap's
+// centre — cell centre +/- half a panel — on the side AWAY from the open
+// panel. Panel slices per mc-data collision boxes (prismarine-block): with
+// open=true, north/left and south/right hug the west edge, north/right and
+// south/left the east edge. North-wall doors cross along z, so only
+// north/south facings lane; east/west (no z gap), closed, or unreadable
+// doors read 0 and keep today's centre crossing.
+const DOOR_LANE_DX = 0.09375
+function doorLaneDX(block) {
+  try {
+    if (!block || !doorOpen(block)) return 0
+    const props = typeof block.getProperties === 'function' && block.getProperties()
+    if (!props) return 0
+    const { facing, hinge } = props
+    if (facing !== 'north' && facing !== 'south') return 0
+    if (hinge !== 'left' && hinge !== 'right') return 0
+    // Open panel on the west slice -> lane east of centre, and vice versa.
+    const panelWest = (facing === 'north') === (hinge === 'left')
+    return panelWest ? DOOR_LANE_DX : -DOOR_LANE_DX
+  } catch (_) {
+    return 0
+  }
+}
+
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX }
