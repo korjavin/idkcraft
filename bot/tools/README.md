@@ -146,18 +146,35 @@ constructed carriers failed green and were dropped, not committed: a
 come-home through the S6 brow (the brow noPaths canDig-false planning
 — no wedge, the walk stalls at 0 displacement and refuses in 31 s) and
 a bring across it (bring picks the nearer east source and noPath-refuses
-in 11 s). `build here` orders are un-gateable: two identical runs
-stalled at different points (92/99 inside the house, then below 80/99
-east of it) and paged every run (1 then 2) — flaky progress plus a
-gave-up on green breaks both the reached pin and strict `maxCalls`
-(idkcraft-d7i; JR-SLOPE brings slope ore instead).
-The mechanism analysis says why: the only deterministic fail-then-rescue
-shape (S6: `dig_up` fails, `dig_step` rescues) OPENS its wedge — the
-failed dig digs the void the post-gave-up plan walks — so sabotage
-reaches for every order kind; wedges that fail closed (sidestep against
-a wide wall) are either routed around by A* or noPath green-red. The
-budget guard stays S6-PIT `maxCalls` until a bot or terrain change
-reopens this.
+in 11 s). JR-BUILD (`build here`, idkcraft-d7i) completes on green but
+never asks the recover menu either (eps 0), so it is a build gate, not
+a budget carrier. The common cause: the only deterministic
+fail-then-rescue shape (S6: `dig_up` fails, `dig_step` rescues) OPENS
+its wedge — the failed dig digs the void a post-gave-up re-plan walks —
+so every order that re-plans after a gave-up still delivers.
+
+S6-LEAD (idkcraft-au4j) is the order that does not re-plan. `find me
+emerald_block` leads to a block the prep plants in the S6 brow
+(`setblock -47 63 -231 emerald_block` — one block the order can name,
+none other within 48), from S6-PIT's spawn. Green: the lead wedges under
+the brow, the menu fails `dig_up`, rescues with a `dig_step` chain, and
+the lead arrives (`here: emerald_block …`; eps 1, 0 pages). A lead
+episode that gives up (`release`, `by=lead`) drops `ctx.lead` itself —
+no re-issue, no `here:` ever — so `MAX_FAILS=0` pages after the failed
+`dig_up`, the order dies, and the window times out: `BASELINE S6-LEAD …
+REGRESSION (unreached (was reached))`, exit 1 (proven, see the au4j
+PR). Dug terrain persists across spots, and both shapes dig the same
+brow: a second lead in a row ran eps 0, and a lead before S6-PIT once
+walked S6-PIT out of its wedge (eps 0, 5 s). So S6-LEAD runs after
+S6-PIT and its prep first restores the pristine brow (26 `fill`s over
+x -50..-43 y 61..66 z -232..-224, read from `world.tar`; grass folds
+into dirt, short grass into air) before planting the target. The guide
+parks on open ground east of the pit (-43 64 -224), not on S6-PIT's
+goal: that goal is inside the hill, and a guide parked there suffocated
+~85 s into every sabotage window (`GUIDE-DIED` → exit 2, never the
+flip — green windows end at ~80 s and hid it). The
+recover budget is now guarded twice — S6-PIT by the page (`maxCalls`),
+S6-LEAD by the lost order (`reached`).
 
 ## Corpus rules
 
@@ -195,15 +212,17 @@ reopens this.
   only. `come home` arrives with a bare `home` while its refusals read
   `cannot reach home…` — a substring expect would verdict a refusal as
   delivered (fail-open), so Q0H-PIT expects `=home`.
-- JR-SLOPE is a slope bring (`bring me acacia_log 1`), not a build: a
-  `build here` order proved un-gateable — two identical runs stalled at
-  different points (92/99 inside the house, then below 80/99 east of
-  it) and paged every run (idkcraft-d7i), so neither a completion pin
-  nor a progress pin is deterministic. The bring spawns AT the jr2.4
-  site (-145 72 -78) and works the slope acacias (an ore bring ranged
-  20 blocks east off-terrain and was rejected in review). (The jr2.4
-  approach-loop fix itself is pinned by unit tests; the oracle guards
-  the terrain, not the bug.)
+- JR-SLOPE is a slope bring (`bring me acacia_log 1`): it spawns AT the
+  jr2.4 site (-145 72 -78) and works the slope acacias (an ore bring
+  ranged 20 blocks east off-terrain and was rejected in review). (The
+  jr2.4 approach-loop fix itself is pinned by unit tests; the oracle
+  guards the terrain, not the bug.)
+- JR-BUILD is the build gate (idkcraft-d7i): `build here` from scratch
+  on the same slope, expect `home done at` (gather, craft, station, the
+  partition before the door — ~9 min, so it runs last). Before d7i the
+  order stalled inside the house and paged every run; the fix made it
+  complete deterministically, so the completion pin holds (`reached:
+  true`, `maxCalls: 0`).
 - Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,
   idkcraft-6x7.8): the snapshot holds no adoptable house near the pit
   (measured: doors stand but the table cell + quorum reject every one),
@@ -211,6 +230,14 @@ reopens this.
   from the real blueprint) at the q0h rim site. Rest itself has no chat
   order and never wins the work menu deterministically, so the order
   walks the same trap terrain (pit → rim home) as a meet instead.
+- S6-LEAD (idkcraft-au4j) is the recover-budget order carrier (see
+  Sensitivity): a `find me` lead to a prep-planted block — the order
+  names a block nothing else within 48 is made of, so the lead target is
+  fixed. Markers: `here: emerald_block` delivers; `cannot reach `,
+  `giving up on `, the not-found and too-deep answers fail. A lead keeps
+  follow, so it may sit among the follow spots — it stays right after
+  S6-PIT, prep restoring the brow both dig (pinned in
+  `test/stuck-oracle.test.js`).
 - Follow-revoking orders (`build here`, `come home`) stay after all
   follow spots: they clear the live follow target with no per-spot
   re-arm (pinned in `test/stuck-oracle.test.js`).
