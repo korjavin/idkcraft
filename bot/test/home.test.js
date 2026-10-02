@@ -445,6 +445,23 @@ describe('idkcraft-1l9 gohome fails fast at a broken door', () => {
     })
   })
 
+  it('a skipped door cell is un-skipped so revalidation cannot flip built back', () => {
+    quiet(() => {
+      const build = require('../src/behaviours/build')
+      const h = ctxHome()
+      const di = build.blueprintFor(h).findIndex((c) => c.kind === 'door')
+      const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000, door: false })
+      const all = build.blueprintFor(h).map((_, i) => i)
+      const ctx = { home: h, step: 'gohome', stepStatus: 'running', buildSkip: all.slice(), buildSkipAt: { [di]: 1 } }
+      home.gohome(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:no-door')
+      assert.equal(ctx.home.built, false)
+      assert.ok(!ctx.buildSkip.includes(di), 'door re-probed by build')
+      assert.equal(ctx.buildSkipAt[di], undefined)
+      assert.notEqual(build.nextCellIdx(bot, h, ctx.buildSkip), -1, 'index.js revalidation keeps built=false')
+    })
+  })
+
   it('a dark door cell is unknown, not gone: no fail, built stays', () => {
     quiet(() => {
       const bot = mockBot({ at: { ...OUTSIDE }, door: false })

@@ -409,8 +409,10 @@ function freshGo() {
   return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
 }
 
-// idkcraft-1l9: the open phase had no cap (tryToggle every 2 s forever), so
-// a door that never reads open held the step all night. ~5 toggle windows.
+// idkcraft-1l9: the open phase had no cap (tryToggle every 2 s forever).
+// ~5 toggle windows, then fail. ponytail: the arbiter re-picks a failed
+// gohome (self-advancing, goal.js) at the same door, so a door that never
+// opens still costs the night — only now logged; the hold belongs in goal.js.
 const OPEN_TICKS = 10
 
 // A loaded door cell that holds no door (idkcraft-1l9). A dark cell
@@ -426,12 +428,18 @@ function doorGone(bot, home) {
 
 // No door = no shelter, and gohome never holds a failure (self-advancing):
 // failing alone re-picks gohome at the same hole every tick till dawn
-// (idkcraft-1l9). The house is genuinely unfinished, so built drops — the
-// exact inverse of the index.js revalidation (same nextCellIdx test, so a
-// skipped door cell never flaps) — and day build repairs the door.
+// (idkcraft-1l9). The house is genuinely unfinished, so built drops and
+// build repairs the door. A skipped door cell is un-skipped first (revmux
+// 01): else the index.js revalidation (nextCellIdx minus skips === -1)
+// flips built straight back and the hole loop returns.
 function failGoneDoor(bot, ctx, st, home, where) {
   failNoDoor(ctx, st, where)
-  try { if (buildMod.nextCellIdx(bot, home, ctx.buildSkip) !== -1) home.built = false } catch (_) { /* keep built */ }
+  try {
+    const di = buildMod.blueprintFor(home).findIndex((c) => c.kind === 'door')
+    if (Array.isArray(ctx.buildSkip)) ctx.buildSkip = ctx.buildSkip.filter((i) => i !== di)
+    if (ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object') delete ctx.buildSkipAt[di]
+    home.built = false
+  } catch (_) { /* keep built */ }
 }
 
 // One line per phase change (idkcraft-1l9): prod stood 8 minutes with
