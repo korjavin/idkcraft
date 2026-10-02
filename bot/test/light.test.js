@@ -14,9 +14,13 @@ function pos(x, y, z) {
   return { x, y, z }
 }
 
-function makeWorld() {
+// The interior spot (2,64,2) burns by default (33vm made it first in the
+// visit order): the ring tests below drive the outside spots; the
+// interior-first tests pass { darkInterior: true }.
+function makeWorld({ darkInterior = false } = {}) {
   const cells = new Map()
   const key = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
+  if (!darkInterior) cells.set(key(2, 64, 2), 'torch')
   return {
     set(x, y, z, name) { cells.set(key(x, y, z), name) },
     blockAt(p) {
@@ -91,7 +95,7 @@ describe('light spot plan (rw4.13)', () => {
     assert.equal(LIGHT_SPOTS.length, 10)
     assert.deepEqual(LIGHT_SPOTS[0], { dx: 1, dz: -2 }) // the mob door first
     assert.deepEqual(LIGHT_SPOTS[8], { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } }) // the air above the dark flat roof
-    assert.deepEqual(LIGHT_SPOTS[9], { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } }) // the dark interior, staged from the doorway
+    assert.deepEqual(LIGHT_SPOTS[9], { dx: 2, dz: 2, stage: { dx: 1, dz: -1 }, interior: true }) // the dark interior, staged from the doorway
     // atl.14 adopts the stockpile chest at table+1 east (table is (4,1)):
     // the plan must never take that cell.
     assert.ok(!LIGHT_SPOTS.some((s) => s.dx === 5 && s.dz === 1), 'chest cell not on the plan')
@@ -102,12 +106,12 @@ describe('light spot plan (rw4.13)', () => {
     const world = makeWorld()
     const h = home()
     const bot = mockBot(world)
-    assert.equal(countUnlit(bot, h, []), 10)
+    assert.equal(countUnlit(bot, h, []), 9) // the interior burns (makeWorld default)
     world.set(1, 64, -2, 'torch')
     world.set(-2, 64, -2, 'wall_torch')
     world.set(4, 64, -2, 'redstone_torch') // too dim to hold the ring
     world.set(1, 67, 1, 'wall_torch') // the roof spot burns too
-    assert.equal(countUnlit(bot, h, []), 7)
+    assert.equal(countUnlit(bot, h, []), 6)
     assert.equal(nextSpotIdx(bot, h, []), 2)
   })
   it('table/chest cells and skips read as done', () => {
@@ -115,7 +119,7 @@ describe('light spot plan (rw4.13)', () => {
     const bot = mockBot(world)
     // Table and chest adopted exactly on two planned spots.
     const h = { site: pos(0, 64, 0), built: true, table: pos(1, 64, -2), chest: pos(-2, 64, -2) }
-    assert.equal(countUnlit(bot, h, []), 8)
+    assert.equal(countUnlit(bot, h, []), 7)
     assert.equal(nextSpotIdx(bot, h, []), 2)
     assert.equal(countUnlit(bot, h, [2, 3, 4, 5, 6, 7, 8, 9]), 0)
     assert.equal(nextSpotIdx(bot, home(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), -1)
@@ -175,7 +179,7 @@ describe('MENU.light feasibility (rw4.13)', () => {
     assert.equal(why('light', F({}), null, {}, text), 'light: no home site')
     assert.equal(why('light', F({ home: 'site' }), null, ctx, text), 'light: home not built')
     assert.equal(why('light', F({ unlit: 0 }), null, ctx, text), 'light: yard lit')
-    assert.equal(why('light', F({ coal: 2 }), null, ctx, text), 'light: saving coal')
+    assert.equal(why('light', F({ coal: 2 }), null, ctx, text), 'light: no fuel and no furnace for charcoal')
     assert.equal(why('light', F({ coal: 9 }), null, ctx, text), 'light: no sticks or wood')
     assert.equal(why('light', F({ torches: 3 }), null, ctx, text), null, 'feasible explains nothing')
   })
@@ -264,7 +268,7 @@ describe('light behaviour ticks (rw4.13)', () => {
   })
   it('interior spot: staged from the door-front ground, torch inside', async () => {
     // nhb: no entry, no door phases — the place lands through the doorway.
-    const world = makeWorld()
+    const world = makeWorld({ darkInterior: true })
     const h = home()
     for (const s of LIGHT_SPOTS.slice(0, 9)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
     const bot = mockBot(world, { items: [{ name: 'torch', count: 1 }] })
@@ -328,7 +332,7 @@ describe('light behaviour ticks (rw4.13)', () => {
   it('a run closed by skipping still logs torches placed exactly once', async () => {
     // The unlit flip re-decides away before any done tick (revmux 01
     // minor) — the line must fire in the skip path.
-    const world = makeWorld()
+    const world = makeWorld({ darkInterior: true })
     const h = home()
     for (const s of LIGHT_SPOTS.slice(0, 9)) world.set(h.site.x + s.dx, h.site.y + (s.dy || 0), h.site.z + s.dz, 'torch')
     const bot = mockBot(world, { items: [{ name: 'torch', count: 8 }], failPlace: true })
@@ -528,7 +532,8 @@ describe('light goal wiring (rw4.13)', () => {
     const facts = goal.goalFacts(bot, { home: h })
     assert.equal(facts.coal, 5)
     assert.equal(facts.torches, 4)
-    assert.equal(facts.unlit, 10)
+    assert.equal(facts.charcoal, 2)
+    assert.equal(facts.unlit, 9) // the interior burns (makeWorld default)
     paintSpots(world, h)
     assert.equal(goal.goalFacts(bot, { home: h }).unlit, 0)
   })
@@ -861,3 +866,128 @@ describe('light place residuals (idkcraft-qxa batch P)', () => {
 // - still-progress `!bp` and both still/reach catches: dropping the null
 //   check throws into the same try that reports progress/attempt-anyway;
 //   no honest read throws, so the catches are defensive.
+
+describe('33vm: charcoal fuel and the interior torch first', () => {
+  const ids = { torch: 1, stick: 2, oak_planks: 3, oak_log: 4, coal: 5, charcoal: 6 }
+  const recipes = { torch: {}, stick: {}, oak_planks: {} }
+  const FURNACE = pos(1, 64, 1)
+  function furnaceWorld() {
+    const world = makeWorld({ darkInterior: true })
+    world.set(FURNACE.x, FURNACE.y, FURNACE.z, 'furnace')
+    return world
+  }
+  // A furnace window over three slots; put* fills them, takeOutput empties.
+  function withFurnace(bot) {
+    const slots = { input: null, fuel: null, output: null }
+    bot.slots = slots
+    bot.puts = []
+    bot.openFurnace = async () => ({
+      inputItem: () => slots.input,
+      fuelItem: () => slots.fuel,
+      outputItem: () => slots.output,
+      putInput: async (id, _m, n) => { bot.puts.push(['input', id, n]); slots.input = { name: 'oak_log', count: n } },
+      putFuel: async (id, _m, n) => { bot.puts.push(['fuel', id, n]); slots.fuel = { name: 'oak_planks', count: n } },
+      takeOutput: async () => { const o = slots.output; slots.output = null; return o },
+    })
+    bot.closeWindow = () => {}
+    return bot
+  }
+
+  it('spendable fuel: all charcoal, coal only above the reserve', () => {
+    assert.equal(light.spendableFuel(COAL_RESERVE, 0), 0)
+    assert.equal(light.spendableFuel(COAL_RESERVE + 1, 0), 1)
+    assert.equal(light.spendableFuel(0, 1), 1)
+    assert.equal(light.spendableFuel(3, 2), 2)
+  })
+
+  it('the interior spot is visited first, v1 and v2', () => {
+    const world = makeWorld({ darkInterior: true })
+    const bot = mockBot(world)
+    assert.equal(nextSpotIdx(bot, home(), []), 9)
+    const v2 = { site: pos(0, 64, 0), built: true, v: 2 }
+    assert.ok(light.LIGHT_SPOTS_V2[nextSpotIdx(bot, v2, [])].interior)
+    assert.equal(nextSpotIdx(bot, home(), [9]), 0, 'a skipped interior falls back to the ring order')
+  })
+
+  it('torchOp: no coal, logs and a furnace -> planks, then smelt; no furnace -> no-fuel', () => {
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    const logsOnly = mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 2 }], ids, recipes })
+    assert.equal(torchOp(logsOnly, ctx).item, 'oak_planks', 'planks for the fuel first')
+    const withPlanks = mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes })
+    assert.equal(torchOp(withPlanks, ctx).smelt, true)
+    assert.equal(torchOp(logsOnly, { home: home() }).fail, 'failed:no-fuel', 'no furnace')
+    const oneLog = mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }], ids, recipes })
+    assert.equal(torchOp(oneLog, ctx).fail, 'failed:no-fuel', 'one log: nothing to burn it with')
+  })
+
+  it('torchOp: charcoal under a coal reserve takes the charcoal recipe only', () => {
+    const coalRecipe = { delta: [{ id: 5, count: -1 }] }
+    const charRecipe = { delta: [{ id: 6, count: -1 }] }
+    const bot = mockBot(makeWorld(), { items: [{ name: 'coal', count: 3 }, { name: 'charcoal', count: 1 }, { name: 'stick', count: 1 }], ids, recipes })
+    bot.recipesFor = () => [coalRecipe, charRecipe]
+    assert.equal(torchOp(bot, {}).recipe, charRecipe)
+    bot.recipesFor = () => [coalRecipe]
+    assert.equal(torchOp(bot, {}).fail, 'failed:no-torch-recipe', 'never burns reserve coal')
+  })
+
+  it('feasible: coal 0, logs 2, furnace standing; not without the furnace or wood', () => {
+    const F = (o) => ({ time: 'day', logs: 0, planks: 0, maxPlanks: 0, sticks: 0, coal: 0, charcoal: 0, torches: 0, home: 'built', unlit: 9, ...o })
+    const feasible = goal.MENU.light.feasible
+    const bot = mockBot(furnaceWorld())
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    assert.equal(feasible(F({ logs: 2 }), bot, ctx), true)
+    assert.equal(feasible(F({ logs: 2 }), bot, { home: home() }), false, 'no furnace')
+    assert.equal(feasible(F({ logs: 1 }), bot, ctx), false, 'one log')
+    assert.equal(feasible(F({ coal: 1, charcoal: 1, sticks: 1 }), bot, { home: home() }), true, 'charcoal is spendable')
+    assert.equal(feasible(F({}), bot, { ...ctx, lightSmeltAt: Date.now() }), true, 'a log cooking holds the step')
+  })
+
+  it('a light tick loads a log on a plank, waits the cook, takes the charcoal', async () => {
+    const bot = withFurnace(mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes }))
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    light(bot, ctx)
+    await flush()
+    assert.deepEqual(bot.puts, [['input', 4, 1], ['fuel', 3, 1]])
+    assert.equal(typeof ctx.lightSmeltAt, 'number')
+    assert.equal(ctx.lightCraftInFlight, false)
+    light(bot, ctx) // cooking: no window
+    await flush()
+    assert.equal(bot.puts.length, 2)
+    bot.slots.input = null
+    bot.slots.output = { name: 'charcoal', count: 1 }
+    ctx.lightSmeltAt -= light.SMELT_WAIT_MS
+    light(bot, ctx)
+    await flush()
+    assert.equal(bot.slots.output, null, 'charcoal taken')
+    assert.equal(ctx.lightSmeltAt, null)
+    assert.equal(bot.puts.length, 2, 'the collect never loads a second log')
+  })
+
+  it('a far furnace: walks, re-sends the goal when the body stands idle, gives up on the budget', () => {
+    const bot = withFurnace(mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes, at: pos(20, 65, 0) }))
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    light(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1, 'walk sent')
+    for (let i = 0; i < 6; i++) light(bot, ctx) // idle far (preempted / short walk)
+    assert.ok(bot.calls.goals.length >= 2, 'the goal is re-sent, never left dead')
+    bot.pathfinder.isMoving = () => true
+    ctx.lastGoalKey = 'fight:7' // a leftover fight goal still moving the body
+    const sent = bot.calls.goals.length
+    light(bot, ctx)
+    assert.equal(bot.calls.goals.length, sent + 1, 'a foreign goal is overwritten at once')
+    bot.pathfinder.isMoving = () => false
+    for (let i = 0; i < 40; i++) light(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+    assert.equal(bot.puts.length, 0)
+  })
+
+  it('an iron job in the furnace is never touched', async () => {
+    const bot = withFurnace(mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes }))
+    bot.slots.input = { name: 'raw_iron', count: 3 }
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    light(bot, ctx)
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:furnace-busy')
+    assert.equal(bot.puts.length, 0)
+  })
+})

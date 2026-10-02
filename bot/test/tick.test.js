@@ -1976,6 +1976,47 @@ describe('work mode (epic rw4)', () => {
       ticker.destroy()
     }
   })
+
+  it('(j) 33vm: sheltered + zombie inside the interior box: fight dispatched, not shelter-idle', async () => {
+    const run = async (zx) => {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, zx) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      bot._tickerCtx.inShelter = true
+      bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+      try {
+        const r = await ticker.tick()
+        return { r, bot }
+      } finally {
+        ticker.destroy()
+      }
+    }
+    const inside = await run(3.5) // floored x=3: inside the box
+    assert.equal(inside.r.decision.action, 'fight')
+    assert.ok(inside.bot.calls.setGoal >= 1, 'pursues the intruder')
+    const outside = await run(6) // x=6: beyond the wall
+    assert.deepEqual(outside.r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(outside.bot.calls.setGoal, 0)
+  })
+
+  it('(k) 33vm: a nearer zombie outside the wall does not hide the one inside', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, -1.5), 2: zombie(2, 3.5) } // 1 outside (x=-2), nearer; 2 inside
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(bot._tickerCtx.fightId, 2, 'the intruder, not the nearer mob outside')
+    } finally {
+      ticker.destroy()
+    }
+  })
 })
 
 describe('stateKey', () => {
