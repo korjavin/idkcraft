@@ -106,6 +106,9 @@ async function main() {
   const ctx = bot._tickerCtx
   const steps = new Set()
   const tracker = setInterval(() => { if (ctx.step) steps.add(ctx.step) }, 500)
+  // Keep it day: the gamerule above does not hold on 26.1 (rig: dusk at
+  // ~550 s); this check is about materials, the night chain is g0z.3's.
+  const daylight = setInterval(() => { rcon('time set 1000').catch(() => {}) }, 60000)
   guide.chat('build castle')
   await until('castle order', 15000, () => ctx.castle)
   const st = ctx.castle
@@ -119,6 +122,7 @@ async function main() {
     return n >= WANT_STONE
   })
   clearInterval(tracker)
+  clearInterval(daylight)
   const torch = castleMod.progressByKind(bot, st).torch.done
   // Nothing dug on the castle ground: the site floor is intact grass.
   let holes = 0

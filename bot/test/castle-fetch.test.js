@@ -261,3 +261,89 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.equal(castleMod.findItem(makeBot({ items: [{ name: 'oak_planks', count: 20 }] }), 'planks').name, 'oak_planks')
   })
 })
+
+describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
+  const realCraft = fetch.deps.craftItem
+  const realGather = fetch.deps.gather
+  const realFact = castleMod.menuFact
+  afterEach(() => {
+    fetch.deps.craftItem = realCraft
+    fetch.deps.gather = realGather
+    castleMod.menuFact = realFact
+  })
+
+  it('a running fetch keeps the castle step off the model menu too', () => {
+    const items = [...TOOLS(), { name: 'cobblestone', count: 16 + 20 }]
+    const bot = makeBot({ items })
+    const running = { castle: castleState(), step: 'castlefetch', stepStatus: 'running' }
+    const facts = goal.goalFacts(bot, running)
+    assert.equal(facts.castle, 'stone-batch')
+    assert.equal(goal.MENU.castle.feasible(facts, bot, running), false)
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, running), true)
+    assert.equal(goal.MENU.castle.feasible(facts, bot, { castle: castleState() }), true, 'no fetch running: the castle lays')
+  })
+
+  it('a craft failure with a full log load fails (holds) instead of chopping into an instant done', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'door', left: 1 }; return 'door-none' }
+    fetch.deps.craftItem = () => ({ done: false, line: 'need a crafting table' })
+    let chopped = 0
+    fetch.deps.gather = () => { chopped++ }
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 14 }] })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.equal(chopped, 0)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
+  })
+
+  it('buried stone is never a target (no shaft digging)', () => {
+    const set = new Map([[`${SITE.x - 8},${SITE.y - 2},${SITE.z - 8}`, 'stone']]) // dirt all around
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    assert.equal(bot.calls.goals.length, 0)
+  })
+
+  it('the dig re-checks the stance rules at dig time: a submerged target is skipped, not dug', async () => {
+    const tx = SITE.x - 5
+    const tz = SITE.z - 5
+    const set = new Map([[`${tx},${SITE.y},${tz}`, 'stone'], [`${tx},${SITE.y + 1},${tz}`, 'water']])
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState(), castleFetch: { kind: 'stone', chestDone: true, skips: 0, noGain: 0, skip: new Set(), target: { x: tx, y: SITE.y, z: tz, k: `${tx},${SITE.y},${tz}`, waits: 0 } } }
+    fetch(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.ok(ctx.castleFetch.skip.has(`${tx},${SITE.y},${tz}`))
+  })
+
+  it('a stone the walk never closes in on is skipped; three skips fail unreachable', () => {
+    const set = new Map()
+    for (let i = 0; i < 3; i++) set.set(`${SITE.x - 10 - i * 2},${SITE.y},${SITE.z - 10}`, 'stone')
+    const bot = makeBot({ items: TOOLS(), set }) // never moves
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 200 && ctx.stepStatus == null; i++) fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-unreachable')
+    assert.equal(bot.calls.dig.length, 0)
+  })
+
+  it('digs that never grow the cobble count fail dig-stall', async () => {
+    const tx = SITE.x - 5
+    const tz = SITE.z - 5
+    const set = new Map([[`${tx},${SITE.y},${tz}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set })
+    bot.dig = async (b) => { bot.calls.dig.push(b.position) } // ghost dig: block stays, no drop
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 20 && ctx.stepStatus == null; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-dig-stall')
+    assert.equal(bot.calls.dig.length, 5)
+  })
+
+  it('a chest the walk never reaches falls through to the next source', () => {
+    const set = new Map([[`${SITE.x + 10},${SITE.y},${SITE.z + 10}`, 'chest'], [`${SITE.x - 5},${SITE.y},${SITE.z - 5}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set, chest: [{ name: 'cobblestone', count: 64 }] })
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 40 && !(ctx.castleFetch && ctx.castleFetch.chestDone); i++) fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.chestDone)
+    assert.equal(bot.calls.opens.length, 0)
+  })
+})

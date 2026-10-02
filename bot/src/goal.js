@@ -237,7 +237,10 @@ const MENU = {
     // leg keeps going on a partial batch ('some') — the word flips at the
     // batch line mid-leg, and dropping there would strand the remainder.
     // stay/gohome/equip outrank it, so the bot still sleeps and rearms.
-    feasible: (facts, bot, ctx) => castleGo(facts, ctx),
+    // A running fetch owns the body to its stack target (revmux 01): the
+    // model menu must not cut it at the batch line either.
+    feasible: (facts, bot, ctx) => castleGo(facts, ctx) &&
+      !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running' && castleFetchGo(facts, bot, ctx)),
     chat: () => 'on my own: building the castle',
     verb: 'building the castle',
   },

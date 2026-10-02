@@ -23,7 +23,7 @@ const castleMod = require('./castle')
 const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
-const { canBreak, clearGoal } = require('./util')
+const { canBreak, clearGoal, denyReason, logDeny } = require('./util')
 
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
 // >= castle BATCH (door: its remainder is 1), so a fetch picked on a
@@ -31,7 +31,8 @@ const { canBreak, clearGoal } = require('./util')
 const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16 }
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3 }
-const DIG_RADIUS = 24
+const DIG_RADIUS = 32
+const FIND_COUNT = 4096
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
@@ -135,15 +136,33 @@ function castleChest(bot, st) {
 }
 
 function finish(bot, ctx, status) {
+  if (status !== 'done') {
+    try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
+  }
   ctx.stepStatus = status
   ctx.castleFetch = null
   clearGoal(bot, ctx)
 }
 
+// (Re)issue the walk: a new key, or our goal was replaced/cleared (another
+// step ran in between and left lastGoalKey alone — rig: a second chest leg
+// after the light step never walked).
 function walkTo(bot, ctx, key, p, range) {
-  if (ctx.lastGoalKey === key) return
-  try { bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, range)) } catch (_) { /* retry next tick */ }
+  let ours = false
+  try { ours = !!ctx.castleFetchGoal && bot.pathfinder.goal === ctx.castleFetchGoal } catch (_) { ours = false }
+  if (ctx.lastGoalKey === key && ours) return
+  try {
+    ctx.castleFetchGoal = new goals.GoalNear(p.x, p.y, p.z, range)
+    bot.pathfinder.setGoal(ctx.castleFetchGoal)
+  } catch (_) { /* retry next tick */ }
   ctx.lastGoalKey = key
+}
+
+// Walk patience that only counts ticks without closing in (a far target
+// stays walkable while the bot approaches). True once spent.
+function stalled(w, dist, limit) {
+  if (dist < (w.best == null ? Infinity : w.best) - 1) { w.best = dist; w.waits = 0 }
+  return ++w.waits > limit
 }
 
 // One async op at a time under ctx.castleFetchInFlight, with a deadline:
@@ -173,8 +192,7 @@ function chestTick(bot, ctx, f, d) {
     // Stalled walk only (a far chest stays walkable while the bot closes in).
     const bp = bodyPos(bot)
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
-    if (dd < (f.chestDist == null ? Infinity : f.chestDist) - 1) { f.chestDist = dd; f.chestWaits = 0 }
-    if (++f.chestWaits > CHEST_WAITS) f.chestDone = true // unreachable: next source
+    if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) f.chestDone = true // unreachable: next source
     return true
   }
   f.chestDone = true // one withdraw per leg: an empty chest falls through
@@ -204,6 +222,39 @@ function craftTick(bot, ctx, f, d) {
   return false
 }
 
+// Exposed stone only (revmux 01): air above, or air on a side — surface
+// rock, cliffs, cave walls. Buried stone would make the walk dig a shaft
+// down to it. findBlocks collects every stone of the sections it visits,
+// so a wide count costs one sort, not a wider scan; the exposure filter
+// is two-ish blockAt per candidate. Nearest first, never the site, a
+// danger spot, or our own feet column.
+const EXPOSE = [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+const AIRISH = new Set(['air', 'cave_air'])
+function pickStone(bot, ctx, f, bp, stoneAt) {
+  const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.stone
+  let found = []
+  try { found = (e && bot.findBlocks({ matching: e.id, maxDistance: DIG_RADIUS, count: FIND_COUNT })) || [] } catch (_) { found = [] }
+  const fx = Math.floor(bp.x)
+  const fy = Math.floor(bp.y)
+  const fz = Math.floor(bp.z)
+  let best = null
+  for (const p of found) {
+    const k = `${p.x},${p.y},${p.z}`
+    if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p)) continue
+    if (p.x === fx && p.z === fz && p.y < fy) continue
+    const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
+    if (best && d >= best.d) continue
+    const open = EXPOSE.some(([x, y, z]) => {
+      try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && AIRISH.has(n.name) } catch (_) { return false }
+    })
+    if (!open) continue
+    const b = stoneAt(p)
+    if (!b || !canBreak(bot, b, ctx)) continue
+    best = { x: p.x, y: p.y, z: p.z, k, d, waits: 0 }
+  }
+  return best
+}
+
 // Source 3a: dig stone near the bot (equip digTick shape: walk into
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
 function digTick(bot, ctx, f) {
@@ -218,36 +269,29 @@ function digTick(bot, ctx, f) {
   let t = f.target
   if (t && !stoneAt(t)) t = f.target = null // dug (or gone): pick the next
   if (!t) {
-    const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.stone
-    let found = []
-    try { found = (e && bot.findBlocks({ matching: e.id, maxDistance: DIG_RADIUS, count: 64 })) || [] } catch (_) { found = [] }
-    const feet = `${Math.floor(bp.x)},${Math.floor(bp.y) - 1},${Math.floor(bp.z)}`
-    let best = null
-    for (const p of found) {
-      const k = `${p.x},${p.y},${p.z}`
-      if (skip.has(k) || k === feet || onSite(st, p) || danger.near(ctx, p)) continue
-      const b = stoneAt(p)
-      if (!b || !canBreak(bot, b, ctx)) continue
-      // Exposed stone first: buried stone means digging down to it.
-      const exposed = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => {
-        try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && n.name === 'air' } catch (_) { return false }
-      })
-      const score = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z) + (exposed ? 0 : 6)
-      if (!best || score < best.score) best = { p, k, score }
-    }
-    if (!best) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
-    t = f.target = { x: best.p.x, y: best.p.y, z: best.p.z, k: best.k, waits: 0 }
+    t = pickStone(bot, ctx, f, bp, stoneAt)
+    if (!t) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+    f.target = t
   }
   const b = stoneAt(t)
   const dist = Math.hypot(bp.x - (t.x + 0.5), bp.y - (t.y + 0.5), bp.z - (t.z + 0.5))
   if (dist > PICKUP_REACH + 0.5) {
     const range = dist > DIG_REACH ? 2 : 1
     walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
-    if (++t.waits > APPROACH_WAITS) {
+    if (stalled(t, dist, APPROACH_WAITS)) {
       skip.add(t.k)
       f.target = null
       if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
     }
+    return
+  }
+  // Stance rules (below-feet trap, gravity, submerged, protection) at dig
+  // time, not only at pick: the walk may end on or above the target.
+  const deny = denyReason(bot, b, ctx)
+  if (deny) {
+    logDeny(b, deny)
+    skip.add(t.k)
+    f.target = null
     return
   }
   const have = cobble(bot)
@@ -284,6 +328,13 @@ function castlefetch(bot, ctx, target, state) {
   if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence') {
     // Logs from the world: gather chops a load and ends the leg itself
     // ('done' at NEED_LOGS, or its own failure); the next pick crafts.
+    // A full load already on hand means the craft failed for another
+    // reason (table, reach): chopping more would finish 'done' at once
+    // and re-pick forever (revmux 01) — fail so the hold parks it.
+    if (countItems(bot, (n) => n.endsWith('_log')) >= require('../goal').NEED_LOGS) {
+      finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
+      return
+    }
     deps.gather(bot, ctx, target, state)
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
