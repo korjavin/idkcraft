@@ -59,6 +59,7 @@ const QUARRY_LEN = 40
 const QUARRY_W = 2
 const QUARRY_TOP = 3 // a hill is cut up to site.y + this
 const QUARRY_TRIES = 3 // digs on one quarry cell before it is skipped
+const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble picked up
 const LIQUID = new Set(['water', 'lava', 'bubble_column'])
 
 // Seams for unit tests (craftany and gather need a real recipe registry /
@@ -268,7 +269,7 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   let best = null
   for (const p of found) {
     const k = `${p.x},${p.y},${p.z}`
-    if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p)) continue
+    if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p) || inTrench(ctx.castle, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
     // Near the castle's ground level only (revmux 02/03): a cave wall far
     // below is 'exposed' too and the canDig walk would shaft down to it; a
@@ -308,15 +309,32 @@ function quarrySide(st, s) {
   return { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
 }
 
+function trenchFloor(st, i) {
+  return st.site.y - 1 - Math.min(i, QUARRY_DEPTH - 1)
+}
+
+// A trench cell or the block a trench stance stands on (revmux 01): the
+// exposed-stone pick must never undermine our own staircase.
+function inTrench(st, p) {
+  for (let s = 0; s < 4; s++) {
+    const o = quarrySide(st, s)
+    const i = (p.x - o.x) * o.dx + (p.z - o.z) * o.dz
+    const l = (p.x - o.x) * o.lx + (p.z - o.z) * o.lz
+    if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 && p.y <= st.site.y + QUARRY_TOP) return true
+  }
+  return false
+}
+
 // The next trench cell to dig: the first solid cell in dig order on the
-// first live side. A side dies on liquid at a cell, a hole under the floor,
-// or a protected block (house apron, castle) — the next side takes over;
-// stance rules are checked at dig time (they depend on where we stand).
-// Recomputed from the world every pick: a restart resumes the same trench.
+// first live side. A side dies for this leg on liquid at or by a cell, a
+// hole under the floor or a protected place (house apron, castle) — the
+// next side takes over; a protected block type (a path) is stepped
+// around. Stance rules are checked at dig time (they depend on where we
+// stand). Recomputed from the world every pick and per leg (revmux 01: no
+// session latch) — a restart or a retry resumes the same trench.
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
-  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
-  const q = ctx.castleQuarry && ctx.castleQuarry.key === key ? ctx.castleQuarry : (ctx.castleQuarry = { key, dead: [] })
+  const q = f.quarry || (f.quarry = { dead: [] })
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
@@ -325,7 +343,7 @@ function pickQuarry(bot, ctx, f) {
     const o = quarrySide(st, s)
     let dead = false
     for (let i = 0; i < QUARRY_LEN && !dead; i++) {
-      const floor = st.site.y - 1 - Math.min(i, QUARRY_DEPTH - 1)
+      const floor = trenchFloor(st, i)
       for (let l = 0; l < QUARRY_W && !dead; l++) {
         const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
         if (!below || open(below) || wet(below)) dead = true
@@ -338,7 +356,14 @@ function pickQuarry(bot, ctx, f) {
           const b = at(x, y, z)
           if (!b || wet(b)) { dead = true; break }
           if (open(b) || f.skip.has(k)) continue
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez))) || protectedReason(bot, b, ctx)) { dead = true; break }
+          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; break }
+          if (protectedReason(bot, b, ctx)) {
+            // Where (house apron, castle) kills the side; what (a path,
+            // a ruin block) is stepped around.
+            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; break }
+            f.skip.add(k)
+            continue
+          }
           return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0 }
         }
       }
@@ -372,6 +397,11 @@ function digTick(bot, ctx, f) {
     const c = siteCenter(st)
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
     if (far > DIG_RADIUS) {
+      // The castle chest is looked up again on arrival (revmux 01: a far
+      // leg's body-centred lookup found none and skipped the accelerator).
+      f.chestDone = false
+      f.chest = null
+      f.chestWalk = null
       walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2)
       if (stalled(f.siteWalk || (f.siteWalk = {}), far, APPROACH_WAITS)) finish(bot, ctx, 'failed:castlefetch-unreachable')
       return
@@ -417,6 +447,10 @@ function digTick(bot, ctx, f) {
     // Trench drops are collected a stance later, so no cobble-gain strike;
     // a cell that survives its digs is skipped instead.
     if (++t.tries > QUARRY_TRIES) { skip.add(t.k); f.target = null; return }
+    // Drops never reaching the pack (revmux 01): a trench's worth of stone
+    // dug with no cobble gained ends the leg instead of digging all day.
+    const have = cobble(bot)
+    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
   } else {
     const have = cobble(bot)
     if (f.lastCobble != null && have <= f.lastCobble) {

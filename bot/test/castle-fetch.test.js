@@ -517,6 +517,59 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 1; i < xs.length; i++) assert.ok(floor.get(xs[i - 1]) - floor.get(xs[i]) <= 1)
   })
 
+  it('revmux 01: a trench stance block is never an exposed-stone target; a dead side lives one leg only', () => {
+    const under = (y) => (y <= 62 ? 'stone' : y <= 63 ? 'dirt' : 'air') // one sod over stone
+    const set = new Map([[`${SITE.x - 4},63,${SITE.z + 2}`, 'air'], [`${SITE.x - 4},63,${SITE.z + 3}`, 'air'], [`${SITE.x - 4},62,${SITE.z + 2}`, 'stone']]) // column 0 dug, its stance floor exposed (findBlocks sees set only)
+    const bot = makeBot({ items: TOOLS(), set, under })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    const t = ctx.castleFetch.target
+    assert.ok(t.quarry, 'the exposed column-0 floor stone is the trench, not a pick')
+    assert.deepEqual([t.x, t.y, t.z], [SITE.x - 5, 63, SITE.z + 2], 'column 1 next')
+    // Side 0 under water this leg: the next leg looks again.
+    set.set(`${SITE.x - 5},64,${SITE.z + 2}`, 'water')
+    ctx.castleFetch.target = null
+    fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.target.x > SITE.x, 'side 0 dead this leg')
+    set.delete(`${SITE.x - 5},64,${SITE.z + 2}`)
+    ctx.castleFetch = null
+    fetch(bot, ctx)
+    assert.equal(ctx.castleFetch.target.x, SITE.x - 5, 'a new leg retries side 0')
+  })
+
+  it('revmux 01: a path block in the trench is stepped around, the side lives', () => {
+    const set = new Map([[`${SITE.x - 4},63,${SITE.z + 2}`, 'dirt_path']])
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    const t = ctx.castleFetch.target
+    assert.deepEqual([t.x, t.y, t.z], [SITE.x - 4, 63, SITE.z + 3])
+  })
+
+  it('revmux 01: trench stone that never reaches the pack fails dig-stall', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 63 ? 'stone' : 'air') })
+    const realDig = bot.dig
+    bot.dig = async (b) => { await realDig(b); const c = items.find((i) => i.name === 'cobblestone'); if (c) c.count = 0 } // drops lost
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 500 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-dig-stall')
+    assert.ok(bot.calls.dig.length <= 30)
+  })
+
+  it('a far leg looks for the castle chest again once at the site (revmux 01)', () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(SITE.x - 60, 64, SITE.z) })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    fetch(bot, ctx)
+    assert.equal(ctx.castleFetch.chestDone, false)
+  })
+
   it('the trench never digs the house apron: that side is skipped', () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
