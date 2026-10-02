@@ -9,7 +9,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
-const { canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA } = require('../src/behaviours/util')
+const { canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA } = require('../src/behaviours/util')
 
 function blk(name, x = 0, y = 64, z = 0) {
   return { name, position: new Vec3(x, y, z) }
@@ -126,6 +126,42 @@ describe('canBreak guard (idkcraft-drq)', () => {
     trackPlaced(failing, ctx2)
     await assert.rejects(failing.placeBlock({ position: new Vec3(0, 0, 0) }, new Vec3(0, 1, 0)))
     assert.equal(ctx2.placedByBot ? ctx2.placedByBot.size : 0, 0, 'failed place not recorded')
+  })
+
+  it('installPlaceTiming holds a jump-place until the rising feet clear the block (idkcraft-6x7.11)', async () => {
+    // Jump arc from feet y=63: the tower fires at 63.42, the block spans 63..64.
+    const arc = [63.42, 63.7532, 64.0013, 64.1662]
+    let t = 0
+    const sentAt = []
+    const bot = {
+      entity: { position: new Vec3(-44.5, arc[0], -226.5), velocity: new Vec3(0, 0.33, 0) },
+      waitForTicks: async () => { t++; bot.entity.position.y = arc[t] },
+      placeBlock: async () => { sentAt.push(bot.entity.position.y) },
+    }
+    installPlaceTiming(bot)
+    await bot.placeBlock({ position: new Vec3(-45, 62, -227) }, new Vec3(0, 1, 0))
+    assert.deepEqual(sentAt, [64.1662], 'placed one tick after the feet cleared y 64')
+    // Standing (not rising) or placing beside the body: no wait.
+    const still = { entity: { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }, waitForTicks: async () => { throw new Error('waited') }, placeBlock: async () => {} }
+    installPlaceTiming(still)
+    await still.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0))
+    const beside = { entity: { position: new Vec3(0.5, 64.2, 0.5), velocity: new Vec3(0, 0.3, 0) }, waitForTicks: async () => { throw new Error('waited') }, placeBlock: async () => {} }
+    installPlaceTiming(beside)
+    await beside.placeBlock({ position: new Vec3(2, 63, 0) }, new Vec3(0, 1, 0))
+    // A capped jump never clears: bounded wait, then places as before.
+    let n = 0
+    const capped = { entity: { position: new Vec3(0.5, 63.3, 0.5), velocity: new Vec3(0, 0.1, 0) }, waitForTicks: async () => { n++ }, placeBlock: async () => {} }
+    installPlaceTiming(capped)
+    await capped.placeBlock({ position: new Vec3(0, 62, 0) }, new Vec3(0, 1, 0))
+    assert.equal(n, 8, 'bounded wait')
+    // Before mineflayer injects placeBlock (createTicker runs first): deferred to spawn.
+    const early = { once: (ev, fn) => { early.ev = ev; early.fn = fn } }
+    installPlaceTiming(early)
+    assert.equal(early.ev, 'spawn')
+    early.placeBlock = async () => {}
+    const raw = early.placeBlock
+    early.fn()
+    assert.notEqual(early.placeBlock, raw, 'wrapped on spawn')
   })
 
   it('logDeny prints the protected line without throwing', () => {
