@@ -118,8 +118,8 @@ The 6x7.8 carrier hunt (idkcraft-6x7.8) found no such order — measured,
 not assumed. Q0H-PIT `come home` runs episode-free (18 s, the pit→rim
 walk never wedges: the q0h trap was rest-specific and is fixed), so the
 budget is never read there either (`MAX_FAILS=0` sabotage: exit 0, row
-identical — 17 s, `OK home`; JR-SLOPE likewise exit 0, 36 s, `here is
-1 raw_copper`). Rest itself has
+identical — 17 s, `OK home`; JR-SLOPE likewise exit 0, 31 s, `here
+is 1 acacia_log`). Rest itself has
 no chat order and never wins the work menu deterministically. Two
 constructed carriers failed green and were dropped, not committed: a
 come-home through the S6 brow (the brow noPaths canDig-false planning
@@ -174,12 +174,13 @@ reopens this.
   only. `come home` arrives with a bare `home` while its refusals read
   `cannot reach home…` — a substring expect would verdict a refusal as
   delivered (fail-open), so Q0H-PIT expects `=home`.
-- JR-SLOPE is a slope bring (`bring me copper_ore 1`), not a build: a
+- JR-SLOPE is a slope bring (`bring me acacia_log 1`), not a build: a
   `build here` order proved un-gateable — two identical runs stalled at
   different points (92/99 inside the house, then below 80/99 east of
   it) and paged every run (idkcraft-d7i), so neither a completion pin
-  nor a progress pin is deterministic. The bring replays the same slope
-  terrain under an order with a deterministic verdict. (The jr2.4
+  nor a progress pin is deterministic. The bring spawns AT the jr2.4
+  site (-145 72 -78) and works the slope acacias (an ore bring ranged
+  20 blocks east off-terrain and was rejected in review). (The jr2.4
   approach-loop fix itself is pinned by unit tests; the oracle guards
   the terrain, not the bug.)
 - Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,

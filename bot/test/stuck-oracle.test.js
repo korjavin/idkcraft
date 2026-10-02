@@ -390,28 +390,28 @@ describe('order corpus (idkcraft-6x7.8)', () => {
     // both the reached pin and strict maxCalls. The spot brings slope ore
     // instead: same terrain under an order, deterministic verdict.
     assert.equal(jr.mode, 'order')
-    assert.match(jr.order, /^bring me copper_ore/)
+    assert.match(jr.order, /^bring me acacia_log/)
     assert.ok(jr.expect.includes('here is ') && jr.expect.includes('here are '))
     assert.ok(jr.fail.includes('could not '))
-    assert.ok(jr.fail.includes('no copper_ore within'))
+    assert.ok(jr.fail.includes('no acacia_log within'))
   })
 
-  it('JR copper lines judge against the committed markers', () => {
-    assert.equal(matchOrderLine('here is 1 raw_copper', jr.expect, jr.fail), 'expect')
-    assert.equal(matchOrderLine('here are 2 copper_ore', jr.expect, jr.fail), 'expect')
+  it('JR acacia lines judge against the committed markers', () => {
+    assert.equal(matchOrderLine('here is 1 acacia_log', jr.expect, jr.fail), 'expect')
+    assert.equal(matchOrderLine('here are 2 acacia_log', jr.expect, jr.fail), 'expect')
     for (const line of [
-      'could not reach copper_ore safely',
-      'could not reach copper_ore (buried, no path in) at -139 67 -74',
-      'only got 1 copper_ore',
-      'no copper_ore within 48 blocks (loaded area)',
-      'searched 2 areas, no copper_ore',
+      'could not reach acacia_log safely',
+      'could not reach acacia_log (no path in) at -167 71 -71',
+      'only got 1 acacia_log',
+      'no acacia_log within 48 blocks (loaded area)',
+      'searched 2 areas, no acacia_log',
     ]) {
       assert.equal(matchOrderLine(line, jr.expect, jr.fail), 'fail', line)
     }
     for (const line of [
-      'going for 1 copper_ore, 8 blocks away (digging)',
-      'coming with 1 copper_ore',
-      "I can't see you — I'm at -139 70 -74 with your 1 copper_ore; come closer",
+      'going for 1 acacia_log, 5 blocks away (exposed)',
+      'coming with 1 acacia_log',
+      "I can't see you — I'm at -149 72 -77 with your 1 acacia_log; come closer",
       'building 45/99',
     ]) {
       assert.equal(matchOrderLine(line, jr.expect, jr.fail), null, line)
@@ -454,7 +454,7 @@ describe('order corpus (idkcraft-6x7.8)', () => {
       const list = loadSpots()
       const j = list.find((x) => x.name === 'JR-SLOPE')
       assert.equal(j.mode, 'order')
-      assert.match(j.order, /^bring me copper_ore/)
+      assert.match(j.order, /^bring me acacia_log/)
       assert.deepEqual(j.fail, jr.fail)
       const q = list.find((x) => x.name === 'Q0H-PIT')
       assert.equal(q.mode, 'order')
