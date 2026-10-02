@@ -56,6 +56,11 @@ const STATES = [
   ['pit-level-goal', F({ goalDy: 0, goalDist: 12, scaffold: 10, walls: 3, pit: true })],
   ['pit-bare-buckets', F({ goalDy: 3, goalDist: 6, bucket: 2, walls: 4, pit: true, combo: true, wall2: true })],
   ['pit-bare-nogoal', F({ goalDy: 0, goalDist: null, bucket: 2, walls: 4, pit: true, combo: true, wall2: true })],
+  // jsf.6: the states this bead opens — pit=yes with a LIVE far goal
+  // (prod: explore/gohome legs 240-320 out). scaffold=44 mirrors the
+  // 2026-09-25 gave-up row; one free side stays default (sidestep rival).
+  ['pit-far-goal-scaffold', F({ goalDy: 0, goalDist: 300, scaffold: 44, walls: 3, pit: true })],
+  ['pit-far-goal-buckets', F({ goalDy: 0, goalDist: 300, bucket: 2, scaffold: 0, walls: 4, pit: true, combo: true, wall2: true })],
 ]
 
 function feasibleNames(facts) {
