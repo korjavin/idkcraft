@@ -28,9 +28,11 @@ const { canBreak, clearGoal, denyReason, logDeny } = require('./util')
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
 // >= castle BATCH (door: its remainder is 1), so a fetch picked on a
 // none/some word always has work: the word and the target never disagree.
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16 }
+// frame (g0z.12): one gather load — gather stops at NEED_LOGS, so a bigger
+// target could never be met from the world (castle BATCH_OF.frame matches).
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1 }
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1 }
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
 const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
@@ -73,6 +75,8 @@ function chestNames(bot, kind) {
   if (kind === 'door') return [itemNames(bot, isDoor)]
   if (kind === 'fence') return [itemNames(bot, isFence)]
   if (kind === 'torch') return [['torch']]
+  if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
+  if (kind === 'chest') return [['chest']]
   return []
 }
 
@@ -81,6 +85,7 @@ function craftNames(bot, kind) {
   if (kind === 'door') return itemNames(bot, isDoor)
   if (kind === 'fence') return itemNames(bot, isFence)
   if (kind === 'torch') return ['torch']
+  if (kind === 'chest') return ['chest'] // 8 planks at a table (craftany crafts planks from logs)
   return []
 }
 
@@ -203,7 +208,7 @@ function chestTick(bot, ctx, f, d) {
     for (const names of chestNames(bot, d.kind)) {
       if (need <= 0 || names.length === 0) break
       // Planks' second list is logs: one log is four planks.
-      const logs = names.some((n) => n.endsWith('_log'))
+      const logs = d.kind === 'planks' && names.some((n) => n.endsWith('_log'))
       const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : need, at)
       need -= (r && r.got ? r.got : 0) * (logs ? 4 : 1)
     }
@@ -334,9 +339,10 @@ function castlefetch(bot, ctx, target, state) {
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
   if (d.kind === 'stone') { digTick(bot, ctx, f); return }
-  if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence') {
+  if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
     // Logs from the world: gather chops a load and ends the leg itself
-    // ('done' at NEED_LOGS, or its own failure); the next pick crafts.
+    // ('done' at NEED_LOGS, or its own failure); the next pick crafts
+    // (frame: the logs are the material, the next tick reads the target).
     // A full load already on hand means the craft failed for another
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.

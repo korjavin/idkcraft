@@ -164,7 +164,7 @@ describe('g0z.5 prep phase', () => {
       ctx.castleFlight.since = 0
       await run(bot, ctx, 1)
     }
-    assert.ok(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${idx}`], 'prep cell blocked')
+    assert.ok(ctx.castle.blocked[`${1}:${idx}`], 'prep cell blocked')
   })
 
   it('a log that refuses blocks and prep moves on to the body', async () => {
