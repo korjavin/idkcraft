@@ -793,9 +793,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
         }
       }
+      if (ctx.inShelter && !intruder) ctx.intruderFight = false
       if (intruder) {
         ctx.fightId = intruder.id
         state.hostile = intruder
+        // g9cj: no digging through our own walls while chasing it (no-dig stash, body.js).
+        ctx.intruderFight = true
+        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'shelter') } catch (_) { /* lease best-effort */ }
       }
       if (ctx.inShelter && decision.action === 'fight' && !intruder) {
         // Sheltered for the night: no pursuit through our own wall (the

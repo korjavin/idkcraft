@@ -2001,6 +2001,32 @@ describe('work mode (epic rw4)', () => {
     assert.equal(outside.bot.calls.setGoal, 0)
   })
 
+  it('(l) g9cj: intruder fight plans no-dig; outside mob leaves canDig alone', async () => {
+    const run = async (zx) => {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, zx) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      bot._tickerCtx.inShelter = true
+      bot._tickerCtx.movements = { canDig: true, allowSprinting: false, allowParkour: true }
+      bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+      try {
+        await ticker.tick()
+        return bot._tickerCtx.movements.canDig
+      } finally {
+        ticker.destroy()
+      }
+    }
+    assert.equal(await run(3.5), false)
+    assert.equal(await run(6), true)
+    // the tick-start claim keeps no-dig while the flag stands (sticky across resetTick when sheltered)
+    const body = require('../src/body')
+    const ctx = { inShelter: true, intruderFight: true, movements: { canDig: true, allowSprinting: false, allowParkour: true } }
+    body.resetTick(ctx); body.claimBody({}, ctx, 'shelter')
+    assert.equal(ctx.movements.canDig, false)
+  })
+
   it('(k) 33vm: a nearer zombie outside the wall does not hide the one inside', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
