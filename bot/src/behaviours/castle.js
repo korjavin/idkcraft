@@ -226,7 +226,7 @@ function peek(bot, st, now, ctx) {
 // cells hit. No levelling (a real slope is refused at the door).
 const MAX_DIP = 1 // ground may sit this far off site.y-1
 // Built things: someone's house, not terrain (the site check refuses them).
-const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|carpet|concrete|terracotta|bookshelf|_wall$|^cobblestone)/
+const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 
 function isLogName(n) { return typeof n === 'string' && (n.endsWith('_log') || n.endsWith('_stem')) && !n.startsWith('stripped_') }
 function isTreeBlock(n) { return isLogName(n) || (typeof n === 'string' && n.endsWith('_leaves')) }
@@ -241,11 +241,15 @@ function scanColumn(bot, x, z, sy) {
     const name = nameAt(bot, { x, y, z })
     if (name == null) return { unknown: true }
     if (FOREIGN.test(name)) return { foreign: name, y }
-    if (passes(name)) {
+    if (flat.isLiquidName(name)) return { liquid: name, y }
+    // Collision-free blocks (any flora, double-tall flowers included) are
+    // not ground; mineflayer reads water as empty too, hence liquid first.
+    let soft = false
+    try { soft = bot.blockAt(new Vec3(x, y, z)).boundingBox === 'empty' } catch (_) { soft = false }
+    if (passes(name) || soft) {
       if (isLogName(name)) logs.unshift(y)
       continue
     }
-    if (flat.isLiquidName(name)) return { liquid: name, y }
     return { top: y, logs }
   }
   return { top: sy - 4, logs }
@@ -282,8 +286,7 @@ function prepTargets(bot, ctx, st, now) {
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
   const c0 = ctx && ctx.castlePrep
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
-    const live = c0.list.filter((c) => !done(bot, c))
-    if (live.length) return live
+    return c0.list.filter((c) => !done(bot, c))
   }
   const { w, d } = blueprint.siteDimensions(st.rot | 0)
   const { x: sx, y: sy, z: sz } = st.site
@@ -476,7 +479,7 @@ function approach(bot, ctx, c, make) {
 function flight(ctx, kind, c, run) {
   const token = {}
   ctx[kind] = true
-  ctx.castleFlight = { token, kind, idx: c.idx, since: Date.now() }
+  ctx.castleFlight = { token, kind, idx: c.idx, cell: c, since: Date.now() }
   ;(async () => {
     try { await run(token) } finally {
       if (ctx.castleFlight && ctx.castleFlight.token === token) {
@@ -675,7 +678,7 @@ function castle(bot, ctx) {
     // settlement is ignored through the token.
     ctx[fl.kind] = false
     ctx.castleFlight = null
-    const c = blueprint.absPlan(st.site, st.rot).cells[fl.idx]
+    const c = fl.cell || blueprint.absPlan(st.site, st.rot).cells[fl.idx]
     if (c) strike(ctx, st, c, 'flight-hang', now)
   }
   if (ctx.placeInFlight || ctx.digInFlight) return

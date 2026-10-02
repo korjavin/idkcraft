@@ -11,7 +11,7 @@ const castle = require('../src/behaviours/castle')
 const { createTicker, handleChat } = require('../src/index')
 
 const SITE = { x: 100, y: 64, z: 200 }
-const EMPTY = new Set(['air', 'torch', 'wall_torch'])
+const EMPTY = new Set(['air', 'torch', 'wall_torch', 'rose_bush'])
 const KIT = [{ name: 'cobblestone', count: 64 }, { name: 'oak_planks', count: 64 }, { name: 'oak_door', count: 1 }, { name: 'torch', count: 8 }]
 
 // Ground is dirt up to y=63 (top block y=63 = site.y-1); `set` overrides.
@@ -78,6 +78,7 @@ describe('g0z.5 site check', () => {
     assert.equal(check((w) => { w.set(103, 63, 203, 'air') }), null)
     assert.equal(check((w) => { w.set(104, 64, 204, 'grass_block') }), null)
     assert.equal(check((w) => { w.set(101, 64, 201, 'short_grass') }), null)
+    assert.equal(check((w) => { w.set(101, 64, 201, 'rose_bush'); w.set(101, 65, 201, 'rose_bush') }), null, 'double-tall flora is not ground')
     assert.equal(check((w) => { for (let y = 64; y < 68; y++) w.set(102, y, 202, 'oak_log'); w.set(102, 68, 202, 'oak_leaves') }), null)
   })
   it('refuses water and lava in the footprint', () => {
