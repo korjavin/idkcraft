@@ -757,6 +757,53 @@ describe('gather target selection (idkcraft-m7ke)', () => {
     assert.equal(danger.near(ctx, { x: 4, y: 64, z: 0 }), false, 'no danger mark on open ground')
   })
 
+  it('three cliff trees struck in turn: failed:unreachable through the streak, no episode', () => {
+    const spots = [pos(20, 73, 0), pos(20, 73, 10), pos(20, 73, 20)]
+    const names = {}
+    for (const p of spots) names[`${p.x},${p.y},${p.z}`] = 'oak_log'
+    const bot = mockBot({ spots, names })
+    bot._moving = true
+    const ctx = freshCtx()
+    let x = 0
+    for (let i = 0; i < 12 && ctx.stepStatus === 'running'; i++) {
+      x += 1
+      bot.entity.position = pos(x, 64, 0)
+      quiet(() => gather(bot, ctx, null, {}))
+      ctx.lastPathStatus = 'timeout' // every climb times out
+    }
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+    assert.equal(ctx.gather.streak, 3, 'reached through the strike streak')
+    assert.ok(!ctx.stuck, 'cliff strikes request no recover episode')
+  })
+
+  it('an unloaded memory point keeps its walk on a timeout (stall backstop judges it)', () => {
+    const bot = mockBot({ spots: [], names: {} })
+    bot._moving = true
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 90, y: 75, z: 0, name: 'oak_log' }])
+    quiet(() => gather(bot, ctx, null, {}))
+    ctx.lastPathStatus = 'timeout'
+    bot.entity.position = pos(1, 64, 0)
+    quiet(() => gather(bot, ctx, null, {}))
+    assert.equal(ctx.gather.pos && ctx.gather.pos.x, 90)
+  })
+
+  it('a protected memory target refused at the dig stays refused past the drop-landed clear', () => {
+    // Memory targets skip the selection guard (not loaded when chosen):
+    // the dig-time refusal must still make it sticky (drq).
+    const bot = mockBot({ spots: [], names: { '2,64,0': 'oak_log' }, bare: true })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 2, y: 64, z: 0, name: 'oak_log' }])
+    for (let i = 0; i < 4 && !(ctx.gather && ctx.gather.gskip && ctx.gather.gskip.has('2,64,0')); i++) {
+      quiet(() => gather(bot, ctx, null, {}))
+    }
+    assert.ok(ctx.gather.gskip.has('2,64,0'), 'dig refusal is sticky')
+    ctx.gather.skip.clear() // drop-landed clear
+    bot._items = [{ name: 'oak_log', count: 1 }]
+    quiet(() => gather(bot, ctx, null, {}))
+    assert.ok(!/^gather:2,64,0$/.test(ctx.lastGoalKey), 'not re-walked')
+  })
+
   it('with scaffold the same timeout keeps the walk (the executor can pillar)', () => {
     const { ctx } = cliffRun([{ name: 'dirt', count: 16 }])
     assert.equal(ctx.gather.pos && ctx.gather.pos.y, 73)

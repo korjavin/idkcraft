@@ -298,7 +298,9 @@ function gather(bot, ctx, target, state) {
       // A place_error streak with no displacement counts as a stall too
       // (yvi): the streak is the central detector's, read via the verdict.
       const verdict = ctx.lastPathStatus
-      const cliff = (verdict === 'noPath' || verdict === 'timeout') &&
+      // An unloaded memory/far point times out by construction (A* sees no
+      // cells there): the stall backstop judges it, not the verdict.
+      const cliff = !unloadedFar && (verdict === 'noPath' || verdict === 'timeout') &&
         g.pos.y - bp.y >= CLIFF_DY && scaffoldCount(bot) === 0
       if (!cliff && bring.progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
