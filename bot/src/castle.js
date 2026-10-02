@@ -185,6 +185,48 @@ function isPlaceTarget(kind) {
   return kind !== 'dig' && kind !== 'air'
 }
 
+// World-block match per kind (idkcraft-g0z.2): the executor's done test
+// and the protection guard share it. 'air' accepts the door's upper half
+// (the server places it into the doorway hole with the lower half).
+const AIR_NAMES = new Set(['air', 'cave_air', 'void_air'])
+function matches(kind, name) {
+  if (typeof name !== 'string') return false
+  if (kind === 'stone') return name === 'cobblestone' || name === 'stone'
+  if (kind === 'planks') return name.endsWith('_planks')
+  if (kind === 'door') return name.endsWith('_door')
+  if (kind === 'torch') return name === 'torch' || name === 'wall_torch'
+  if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
+  if (kind === 'dig') return AIR_NAMES.has(name)
+  return false
+}
+
+// Absolute plan for a site+rot, cached by key: cells carry {x,y,z,kind,idx}
+// plus a coord -> cell map for the protection guard. Pure.
+let absCache = null
+function absPlan(site, rot) {
+  const key = `${site.x},${site.y},${site.z},${rot | 0}`
+  if (absCache && absCache.key === key) return absCache
+  const cells = rotatePlan(PLAN, rot | 0).map((c, idx) => ({
+    x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx,
+  }))
+  const at = new Map()
+  for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
+  absCache = { key, cells, at }
+  return absCache
+}
+
+// Protection (g0z.2 revision): a laid castle block — a positive cell whose
+// world block matches its kind — is never dug by any executor. Planned
+// air/dig cells and wrong occupants (grass in a wall cell) stay open.
+function protects(state, pos, name) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos) return false
+    const c = absPlan(site, state.rot).at.get(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)
+    return !!c && isPlaceTarget(c.kind) && matches(c.kind, name)
+  } catch (_) { return false }
+}
+
 function billOfMaterials(plan) {
   const bom = {}
   for (const c of plan) bom[c.kind] = (bom[c.kind] || 0) + 1
@@ -207,4 +249,7 @@ module.exports = {
   siteDimensions,
   isPlaceTarget,
   billOfMaterials,
+  matches,
+  absPlan,
+  protects,
 }

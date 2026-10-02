@@ -4,8 +4,10 @@
 // lived in six behaviour files, botPos in three (plus a home.js variant
 // without the try). One copy, so a latch fix lands everywhere at once.
 // Requires only the external vec3 leaf (real bot.blockAt calls pos.floored,
-// so plain {x,y,z} would throw) — still no repo import cycles.
+// so plain {x,y,z} would throw) and the pure castle data module (no
+// requires of its own) — still no repo import cycles.
 const { Vec3 } = require('vec3')
+const castle = require('../castle')
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
@@ -294,6 +296,10 @@ function protectedReason(bot, block, ctx) {
     // pop the bedroom. No behaviour digs beds (bring-bed crafts fresh, the
     // bed step fails loud on halves).
     if (name.endsWith('_bed')) return 'protected'
+    // Castle blocks (idkcraft-g0z.2): guarded for every executor BEFORE the
+    // placedByBot exemption — the bot laid them, and that must not license
+    // a recover/gather dig through the castle wall.
+    if (ctx && ctx.castle && castle.protects(ctx.castle, pos, name)) return 'protected'
     if (pos && ctx && ctx.placedByBot instanceof Set) {
       try {
         if (ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)) return null
