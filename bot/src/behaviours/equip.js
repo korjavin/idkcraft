@@ -552,6 +552,9 @@ function digTick(bot, ctx, st, bp) {
   for (const v of found) {
     if (!v || typeof v.x !== 'number') continue
     if (Math.floor(v.x) === feetX && Math.floor(v.y) === feetY && Math.floor(v.z) === feetZ) continue
+    // Never the castle's ground (g0z.4 rig: scaffold dirt dug out of the
+    // castle floor). Deferred require: castlefetch -> castle -> build chain.
+    if (ctx && ctx.castle && ctx.castle.site && require('./castlefetch').onSite(ctx.castle, v)) continue
     let name = typeof v.name === 'string' ? v.name : null
     let blk = null
     if (!name && bot.blockAt) {
