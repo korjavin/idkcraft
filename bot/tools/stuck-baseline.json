@@ -2,9 +2,9 @@
   "brain": "stub",
   "variant": "paper-base",
   "worldsha": "85a1422228ef",
-  "measuredAt": "2026-10-01T21:29:18Z",
-  "gitsha": "3489efb",
-  "note": "16/16 reached, 0 stuck everywhere, 0 calls everywhere. Ceilings carry slack over single-run observations (ik7 saw S6 stuck 0..3 across two opped runs on one build): maxStuck = observed + 2, maxEps = observed + 1 — except maxCalls = 0 strict (a page is a gave-up, a decision not physics; see README Sensitivity). S6-PIT measured 2/2 identical (wedge, dig_up fails, dig_step chain rescues, 39-42 s): eps 1, calls 0. ATL-SHAFT is order-driven since idkcraft-6x7.7 (bring me iron_ore 2; want=2: the pristine vein holds exactly 2): measured 2/2 identical (dig_buried verdict, atl.20 below-feet digs x2, 35 s): eps 0, calls 0. Re-measure, do not hand-tune.",
+  "measuredAt": "2026-10-01T23:58:55Z",
+  "gitsha": "cb70fa5",
+  "note": "16/16 reached, 0 stuck everywhere, 0 calls everywhere. Ceilings carry slack over single-run observations (ik7 saw S6 stuck 0..3 across two opped runs on one build): maxStuck = observed + 2, maxEps = observed + 1 — except maxCalls = 0 strict (a page is a gave-up, a decision not physics; see README Sensitivity). S6-PIT measured 2/2 identical (wedge, dig_up fails, dig_step chain rescues, 39-42 s): eps 1, calls 0. ATL-SHAFT is order-driven since idkcraft-6x7.7 (bring me iron_ore 2; want=2: the pristine vein holds exactly 2): measured 2/2 identical (dig_buried verdict, atl.20 below-feet digs x2, 35 s): eps 0, calls 0. JR-SLOPE is order-driven since idkcraft-6x7.8 (bring me copper_ore 1): measured 3/3 identical (dig_buried verdict, atl.20 below-feet dig at -118 68 -80, 35-36 s): eps 0, calls 0. Q0H-PIT is order-driven since idkcraft-6x7.8 (come home to rig-built rim house -25 65 -210): measured 3/3 identical (adopt, pit-rim walk, door phases, 16-18 s): eps 0, calls 0. Re-measure, do not hand-tune.",
   "spots": {
     "EP1": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "CLUSTER": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
