@@ -49,7 +49,7 @@ function mockBot(world, { items = KIT, refuse = () => false } = {}) {
     inventory: { items: () => items },
     blockAt: (p) => world.blockAt(p),
     pathfinder: {
-      movements: { exclusionAreasBreak: [] },
+      movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] },
       isMoving: () => false,
       // Teleport-arrival in reach, never in the target: place goals stand
       // two above it, dig goals (GoalNear) two beside it.
@@ -419,10 +419,17 @@ describe('g0z.2 castle protection', () => {
     assert.equal(list[0]({ name: 'dirt', position: c }), 0)
     ctx.castle = null
     assert.equal(list[0]({ name: 'cobblestone', position: c }), 0)
-    // Movements replaced: re-installed on the new object.
+    // Scaffolding on the site costs +100 per block (stairs, not pillars).
     ctx.castle = { site: SITE, rot: 0 }
-    bot.pathfinder.movements = { exclusionAreasBreak: [] }
+    const place = bot.pathfinder.movements.exclusionAreasPlace
+    assert.equal(place.length, 1)
+    assert.equal(place[0]({ position: { x: SITE.x + 5, y: SITE.y, z: SITE.z + 3 } }), 100) // doorway
+    assert.equal(place[0]({ position: { x: SITE.x + 5, y: SITE.y - 1, z: SITE.z + 3 } }), 0) // terrain below
+    assert.equal(place[0]({ position: { x: SITE.x - 1, y: SITE.y, z: SITE.z } }), 0) // off site
+    // Movements replaced: re-installed on the new object.
+    bot.pathfinder.movements = { exclusionAreasBreak: [], exclusionAreasPlace: [] }
     castle.guardCastle(bot, ctx)
     assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1)
+    assert.equal(bot.pathfinder.movements.exclusionAreasPlace.length, 1)
   })
 })

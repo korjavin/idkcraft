@@ -364,24 +364,46 @@ function digCell(bot, ctx, st, c, now) {
 }
 
 // Castle guard for the pathfinder (every executor): laid castle blocks are
-// never break candidates. Reads ctx.castle live, so a site change or a
-// cleared order needs no re-key; re-installed when Movements is replaced.
+// never break candidates, and scaffolding anywhere on the site costs +100
+// per block (rig: A* pillared in the interior and the doorway instead of
+// taking the stairs — litter, and a scaffolded doorway sealed the tower;
+// the epic's reach invariant exists so the bot never pillars). Reads
+// ctx.castle live, so a site change or a cleared order needs no re-key;
+// re-installed when Movements is replaced. ponytail: the place term is a
+// cost (the lib has no place veto); a site whose stance needs a pillar
+// still pillars, the reach invariant keeps that off the plan.
+const SITE_TOP = 16 // crenellation dy 13 + headroom
 function guardCastle(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
-    if (!ctx || !ctx.castle || !mov || !Array.isArray(mov.exclusionAreasBreak)) return
-    if (ctx.castleGuardMov === mov && mov.exclusionAreasBreak.includes(ctx.castleGuardFn)) return
-    const prev = ctx.castleGuardMov
-    if (prev && Array.isArray(prev.exclusionAreasBreak)) {
-      prev.exclusionAreasBreak = prev.exclusionAreasBreak.filter((f) => f !== ctx.castleGuardFn)
+    if (!ctx || !ctx.castle || !mov || !Array.isArray(mov.exclusionAreasBreak) || !Array.isArray(mov.exclusionAreasPlace)) return
+    if (ctx.castleGuardMov === mov && mov.exclusionAreasBreak.includes(ctx.castleGuardFn) &&
+      mov.exclusionAreasPlace.includes(ctx.castlePlaceFn)) return
+    for (const m of new Set([ctx.castleGuardMov, mov])) {
+      if (m && Array.isArray(m.exclusionAreasBreak)) m.exclusionAreasBreak = m.exclusionAreasBreak.filter((f) => f !== ctx.castleGuardFn)
+      if (m && Array.isArray(m.exclusionAreasPlace)) m.exclusionAreasPlace = m.exclusionAreasPlace.filter((f) => f !== ctx.castlePlaceFn)
     }
     const fn = (block) => {
       try {
         return ctx.castle && block && blueprint.protects(ctx.castle, block.position, block.name) ? 100 : 0
       } catch (_) { return 0 }
     }
+    const placeFn = (block) => {
+      try {
+        const st = ctx.castle
+        const q = block && block.position
+        if (!st || !st.site || !q) return 0
+        const { w, d } = blueprint.siteDimensions(st.rot | 0)
+        const dx = q.x - st.site.x
+        const dy = q.y - st.site.y
+        const dz = q.z - st.site.z
+        return dx >= 0 && dx < w && dz >= 0 && dz < d && dy >= 0 && dy <= SITE_TOP ? 100 : 0
+      } catch (_) { return 0 }
+    }
     mov.exclusionAreasBreak.push(fn)
+    mov.exclusionAreasPlace.push(placeFn)
     ctx.castleGuardFn = fn
+    ctx.castlePlaceFn = placeFn
     ctx.castleGuardMov = mov
   } catch (_) { /* best-effort: util.protectedReason still guards digs */ }
 }
