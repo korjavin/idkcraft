@@ -484,7 +484,9 @@ function castleChat(bot, ticker, playerName, cmd) {
     if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
     const { site, rot } = castleSite(pos, speaker.yaw)
     if (overlapsHome(ctx.home, site, rot)) return `that castle would sit on my house at ${at(ctx.home.site)} — step further away and ask again`
-    ticker.setCastle({ site, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'body', blocked: {}, parked: false })
+    const bad = castleMod.siteCheck(bot, site, rot)
+    if (bad) return `I can't build a castle here: ${bad}. Step to flatter, open ground and ask again`
+    ticker.setCastle({ site, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'prep', blocked: {}, parked: false })
     ticker.work()
     const n = blueprint.PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
     return `castle at ${at(site)}, ~${n} blocks, this will take many hours; I work while someone is online (or autonomous on)`
