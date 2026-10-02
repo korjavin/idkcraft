@@ -41,15 +41,18 @@ function worldBot() {
 function setup(marks, feet) {
   const bot = worldBot()
   if (feet) bot.entity.position = new Vec3(...feet)
-  const ctx = { danger: { spots: marks } }
+  const ctx = { danger: { spots: marks }, bot }
   ctx.movements = new Movements(bot)
   body.movementsFor('idle', bot, ctx)
   return ctx
 }
 
-function plan(ctx, from, to) {
+// The wrapper reads the live pathfinder goal, as in prod. Default budget
+// is generous; prod's is 5000 ms total.
+function plan(ctx, from, to, timeout = 30000) {
   const goal = new goals.GoalBlock(to[0], to[1], to[2])
-  return new AStar(new Move(from[0], from[1], from[2], 0, 0), ctx.movements, goal, 30000, 90000).compute()
+  ctx.bot.pathfinder.goal = goal
+  return new AStar(new Move(from[0], from[1], from[2], 0, 0), ctx.movements, goal, timeout, timeout).compute()
 }
 
 const closest = (path, s) => Math.min(...path.map((n) => Math.hypot(n.x + 0.5 - s.x, n.z + 0.5 - s.z)))
@@ -63,24 +66,25 @@ describe('danger path cost (zj2p)', () => {
     assert.ok(closest(r.path, mark) > danger.WATER_RADIUS, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
   })
 
-  it('still plans a target inside the disc (cost, not a ban)', () => {
+  it('a target deep inside the disc plans within the prod budget (cost, not a ban)', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
-    const r = plan(setup([mark], [-W + 0.5, 64, 0.5]), [-W, 64, 0], [-26, 64, 0])
+    const r = plan(setup([mark], [-59.5, 64, 0.5]), [-60, 64, 0], [-12, 64, 0], 5000)
     assert.equal(r.status, 'success')
+    assert.ok(r.path.every((n) => n.z === 0), 'straight leg expected: the goal disc costs nothing')
   })
 
-  it('a disc holding the feet past the rim band costs nothing (straight walk out)', () => {
+  it('feet inside: the walk out bends away from the centre, never across it', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
-    const r = plan(setup([mark], [-9.5, 64, 0.5]), [-10, 64, 0], [W, 64, 0])
+    const r = plan(setup([mark], [-9.5, 64, 0.5]), [-10, 64, 0], [W, 64, 0], 5000)
     assert.equal(r.status, 'success')
-    assert.ok(r.path.every((n) => n.z === 0), 'straight leg expected')
+    assert.ok(closest(r.path, mark) >= 8, `path crossed toward the centre: ${closest(r.path, mark).toFixed(1)}`)
   })
 
-  it('the rim band stays costed (a partial path one step in keeps the detour)', () => {
+  it('feet just inside the rim keep the detour along the rim', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
-    const r = plan(setup([mark], [-30.5, 64, 0.5]), [-W, 64, 0], [W, 64, 0])
+    const r = plan(setup([mark], [-30.5, 64, 0.5]), [-31, 64, 0], [W, 64, 0])
     assert.equal(r.status, 'success')
-    assert.ok(closest(r.path, mark) > danger.WATER_RADIUS, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
+    assert.ok(closest(r.path, mark) >= 29, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
   })
 
   it('ignores expired marks and narrow pit marks (straight line)', () => {

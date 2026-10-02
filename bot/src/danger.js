@@ -176,15 +176,18 @@ function clear(ctx) {
 // walked straight through it while the search went on (17k nodes, never
 // finished). At PATH_COST the frontier barely enters the disc (a step in
 // costs more than the whole detour around), so partial paths stop at the
-// rim. A disc holding the feet FEET_DEPTH or deeper costs nothing: the
-// body is already in it, and a steep cost there floods A* (heuristic off
-// by the cost) — the walk out, or the job by the water, plans plain. The
-// rim band stays costed: a partial path that stopped one step in must not
-// switch the cost off and send the bot straight across. A target inside
-// from outside pays one slow plan (the flood times out at the pathfinder's
-// thinkTimeout, the best node sits just past the rim), then plans plain.
+// rim.
+//
+// Two relaxations keep the steep cost from flooding A* (the heuristic is
+// off by the cost) where the disc cannot be avoided anyway:
+//   - the goal is inside the disc (home by the water): that disc does not
+//     cost this plan — read from the live pathfinder goal (x/z goals and
+//     GoalFollow's entity; other goal kinds keep the cost);
+//   - the feet are inside the disc: only moves deeper than the feet's own
+//     ring (minus one cell of grid slack) cost, so the walk out and the
+//     walk along stay cheap while a plan from inside still bends away from
+//     the centre instead of crossing it.
 const PATH_COST = 10
-const FEET_DEPTH = 4
 function addPathCost(movements, ctx, bot) {
   // Unit mocks carry flags only: wrap only a real Movements.
   if (!movements || typeof movements.getNeighbors !== 'function' || movements._dangerCostInstalled) return
@@ -192,21 +195,38 @@ function addPathCost(movements, ctx, bot) {
   const orig = movements.getNeighbors.bind(movements)
   movements.getNeighbors = (node) => {
     const ns = orig(node)
-    let feet = null
-    try { feet = bot && bot.entity && bot.entity.position } catch (_) { feet = null }
-    const discs = wideSpots(ctx, Date.now(), feet)
+    const discs = wideSpots(ctx, Date.now(), feetOf(bot), goalXZ(bot))
     if (discs.length === 0) return ns
     for (const m of ns) {
       if (!m || typeof m.cost !== 'number') continue
-      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) <= s.r)) m.cost += PATH_COST
+      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) <= s.lim)) m.cost += PATH_COST
     }
     return ns
   }
 }
 
-// Live water-wide marks not holding the feet past the rim band (hot path:
-// once per A* expansion, no copies of the store).
-function wideSpots(ctx, t, feet) {
+function feetOf(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    return p && typeof p.x === 'number' && typeof p.z === 'number' ? p : null
+  } catch (_) { return null }
+}
+
+// The xz the live goal aims at, or null when the goal kind has none.
+function goalXZ(bot) {
+  try {
+    const g = bot && bot.pathfinder && bot.pathfinder.goal
+    if (!g) return null
+    if (typeof g.x === 'number' && typeof g.z === 'number') return { x: g.x + 0.5, z: g.z + 0.5 }
+    const e = g.entity && g.entity.position
+    if (e && typeof e.x === 'number' && typeof e.z === 'number') return e
+  } catch (_) { /* unknown goal: keep the cost */ }
+  return null
+}
+
+// Live water-wide marks as { x, z, lim }: a landing within lim of the
+// centre costs. Hot path (once per A* expansion): no copies of the store.
+function wideSpots(ctx, t, feet, goal) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return []
   const out = []
@@ -214,8 +234,9 @@ function wideSpots(ctx, t, feet) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
     if (r < WATER_RADIUS) continue
-    if (feet && typeof feet.x === 'number' && Math.hypot(s.x - feet.x, s.z - feet.z) <= r - FEET_DEPTH) continue
-    out.push({ x: s.x, z: s.z, r })
+    if (goal && Math.hypot(s.x - goal.x, s.z - goal.z) <= r) continue
+    const fd = feet ? Math.hypot(s.x - feet.x, s.z - feet.z) : Infinity
+    out.push({ x: s.x, z: s.z, lim: fd <= r ? fd - 1 : r })
   }
   return out
 }
