@@ -399,6 +399,14 @@ function digCost(depthBelow) {
   return d * SOURCE_COST.digSecPerBlock + (d > SOURCE_COST.deepDigDepth ? SOURCE_COST.shaftPenaltySec : 0)
 }
 
+// The walk gate (8w0) as one predicate: an exposed vein more than
+// maxWalkDescent below the feet is no walk candidate. Shared by the live,
+// memory and far-shell (atl.22, scout opts.gate) reads, both twins.
+function descentGated(bp, q) {
+  return !!bp && !!q && typeof bp.y === 'number' && typeof q.y === 'number' &&
+    Math.floor(bp.y) - Math.floor(q.y) > SOURCE_COST.maxWalkDescent
+}
+
 // Scout results normalised to costed candidates. Exposed (live or memory)
 // always means walk; buried means walk-to plus the dig below the feet.
 // bot is optional (unit shorthand): without a world view no wet check runs
@@ -408,7 +416,7 @@ function liveExposed(bp, res, bot = null) {
   const p = res.position
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const dy = Math.floor(bp.y) - Math.floor(p.y) // +below, the buried depthBelow gauge
-  if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0)
+  if (descentGated(bp, p)) return null // gated descent: no-hike (8w0)
   const wet = !!bot && submergedAt(bot, p.x, p.y, p.z)
   return { kind: 'live', name: res.name, pos: p, distH, dist: res.distance, dy, wet, cost: walkCost(distH) + vertCost(dy) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
 }
@@ -448,13 +456,14 @@ function deepVeinOf(bp, res) {
     name: res.name,
     x: Math.floor(res.position.x), y: Math.floor(res.position.y), z: Math.floor(res.position.z),
     depth: Math.max(0, Math.floor(bp.y) - Math.floor(res.position.y)),
+    ...(res.exposed === true ? { walk: true } : {}), // a gated hike (atl.22), not a shaft
   }
 }
 
 function deepRefusal(o) {
   const v = o && o.deepVein
   if (!v) return null
-  return `${v.name} at ${v.x} ${v.y} ${v.z} is ${v.depth} down — too deep to dig`
+  return `${v.name} at ${v.x} ${v.y} ${v.z} is ${v.depth} down — too deep to ${v.walk ? 'walk to' : 'dig'}`
 }
 
 // Empty-find refusal text with the gated shaft preferred (chv): 'no X
@@ -505,9 +514,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     // The descent gate filters the nearest pick itself (revmux 01 core-2):
     // a deep nearest note must not mask a shallower remembered vein — the
     // pick skips past gated notes instead of nulling the whole call.
-    const gated = (it) => it && typeof it.y === 'number' && typeof bp.y === 'number' &&
-      Math.floor(bp.y) - Math.floor(it.y) > SOURCE_COST.maxWalkDescent
-    const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || gated(it) || (hasSkip && skip.has(skipKey(it))))
+    const item = resources.nearest(ctx, bp, names, (it) => it.exposed !== true || descentGated(bp, it) || (hasSkip && skip.has(skipKey(it))))
     if (!item || typeof item.x !== 'number') return null
     let now = false
     try { now = resources.exposedOf(bot, item) } catch (_) { now = false }
@@ -521,7 +528,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
     const dist = Math.hypot(item.x - bp.x, item.y - bp.y, item.z - bp.z)
     const dy = Math.floor(bp.y) - Math.floor(item.y) // +below, priced like the live leg
-    if (dy > SOURCE_COST.maxWalkDescent) return null // gated descent: no-hike (8w0, safety net past the pick filter)
+    if (descentGated(bp, item)) return null // gated descent: no-hike (8w0, safety net past the pick filter)
     const wet = submergedAt(bot, item.x, item.y, item.z)
     return {
       kind: 'memory', name: item.name, pos: { x: item.x, y: item.y, z: item.z },
@@ -1390,7 +1397,7 @@ async function bring(bot, ctx, target, state) {
       if (cachedEmpty !== undefined) {
         const exposedEmpty = bestExposed(cachedEmpty.far, o.memKnown || null)
         if (!exposedEmpty && !cachedEmpty.buried) {
-          await enterSearch(bot, ctx, o, emptyRefusal(o, loadedSearchRadius(bot)))
+          await enterSearch(bot, ctx, o, gatedOrEmptyRefusal(o, loadedSearchRadius(bot)))
           return
         }
         await verdictSource(bot, ctx, o, exposedEmpty, cachedEmpty.buried)
@@ -1474,7 +1481,12 @@ async function bring(bot, ctx, target, state) {
   if (o.phase === 'searchfar') {
     if (food) { await findFood(bot, ctx, o); return }
     if (!o.search) return // verdict already committed or asking: wait for it
-    const r = stepFarSearch(bot, o.search, o.skip ? { exclude: (q) => o.skip.has(skipKey(q)) } : undefined)
+    // The walk gate rides into the shells (atl.22): a deep exposed hit must
+    // neither close a shell nor shadow a walkable vein further out.
+    const r = stepFarSearch(bot, o.search, {
+      exclude: o.skip ? (q) => o.skip.has(skipKey(q)) : undefined,
+      gate: (q) => descentGated(bp, q),
+    })
     if (!r.done) return
     o.search = null
     if (r.result === 'unknown') {
@@ -1492,6 +1504,8 @@ async function bring(bot, ctx, target, state) {
     // A far shaft the gate dropped (chv): the nearer 48 stash — when one
     // passed — already stands, so only a missing dig remembers the vein.
     if (!buried && farBuried && !o.deepVein) o.deepVein = deepVeinOf(bp, farBuried)
+    // Only a gated hike out there (atl.22): the refusal names it too.
+    if (!o.deepVein && r.gated) o.deepVein = deepVeinOf(bp, r.gated)
     const exposed = bestExposed(far, o.memKnown || null)
     const edge = (r && typeof r.edge === 'number') ? r.edge : loadedSearchRadius(bot)
     try {
@@ -1768,6 +1782,7 @@ module.exports.buriedCand = buriedCand
 module.exports.skipKey = skipKey
 module.exports.bestExposed = bestExposed
 module.exports.deepVeinOf = deepVeinOf
+module.exports.descentGated = descentGated
 module.exports.deepRefusal = deepRefusal
 module.exports.goingForLine = goingForLine
 module.exports.sourceText = sourceText

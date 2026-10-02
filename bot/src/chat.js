@@ -109,7 +109,10 @@ async function advancePendingSearch(bot, ticker, ctx) {
   const p = ctx && ctx.pendingSearch
   if (!p || p.deciding) return
   if (ctx.lastHostileSnap && ctx.lastHostileSnap.count > 0) return
-  const r = stepFarSearch(bot, p.cursor)
+  // Bring shells carry the walk gate (atl.22), the searchfar twin's predicate.
+  const r = stepFarSearch(bot, p.cursor, p.kind === 'bring'
+    ? { gate: (q) => bringMod.descentGated(bot.entity && bot.entity.position, q) }
+    : undefined)
   if (!r.done) return
   ctx.pendingSearch = null
   if (r.result === 'unknown') {
@@ -145,8 +148,9 @@ async function advancePendingSearch(bot, ticker, ctx) {
         }
         homeMod.releaseMeet(bot, ctx)
         // A shaft the gate dropped (chv) rides along for the honest refusal:
-        // the stashed 48 hit when creation saw buried ore, else the far hit.
-        const gated = stash || farBuried
+        // the stashed 48 hit when creation saw buried ore, else the far hit,
+        // else a gated deep hike (atl.22).
+        const gated = stash || farBuried || r.gated
         ctx.bring = {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
