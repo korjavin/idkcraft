@@ -122,6 +122,17 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     assert.ok(!bot.controls.forward, 'no walk toward the drop')
   })
 
+  it('edge over a dip: steps onto the supporting cell, away from the drop', () => {
+    const bot = flatBot({ x: 0.2, y: 64, z: 0.5 })
+    bot.dig({ position: new Vec3(0, 63, 0) }) // a dip under the centre; the bbox stands on x=-1
+    bot.entity.position = pos(0.2, 64, 0.5)
+    let looked = null
+    bot.lookAt = (p) => { looked = p }
+    assert.equal(recover.digInRun(bot, {}, {}), 'running')
+    assert.equal(looked.x, -0.5, 'aims at the support cell centre')
+    assert.ok(bot.controls.forward)
+  })
+
   it('a server that reverts every break: bounded, fails', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     bot.dig = async () => {} // the block comes back

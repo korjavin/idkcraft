@@ -878,6 +878,7 @@ function issuePillarPlace(bot, st) {
 // descent where it is (cap attempt from there); refused at the top it fails.
 const DIG_IN_DEPTH = 3
 const DIG_IN_STEER_TICKS = 4 // edge-hanging (bbox on a neighbour): walk to the cell centre
+const DIG_IN_STEP_MS = 150 // forward pulse per steer tick (~0.3-0.5 block)
 const DIG_IN_CAP_WAIT_TICKS = 3 // dug drops reach the inventory ~0.5 s after the break
 function digInHazard(bot, dy) {
   for (let dx = -1; dx <= 1; dx++) {
@@ -887,6 +888,21 @@ function digInHazard(bot, dy) {
     }
   }
   return false
+}
+// The neighbour cell the body's 0.6 bbox overlaps and stands on: solid
+// below, two free cells to walk into. [dx, dz] or null.
+function digInSupport(bot, bp) {
+  const fx = Math.floor(bp.x)
+  const fz = Math.floor(bp.z)
+  for (let cx = Math.floor(bp.x - 0.3); cx <= Math.floor(bp.x + 0.3); cx++) {
+    for (let cz = Math.floor(bp.z - 0.3); cz <= Math.floor(bp.z + 0.3); cz++) {
+      const dx = cx - fx
+      const dz = cz - fz
+      if (dx === 0 && dz === 0) continue
+      if (solid(cellAt(bot, dx, -1, dz)) && !solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz))) return [dx, dz]
+    }
+  }
+  return null
 }
 function digInRun(bot, ctx, st) {
   const bp = botPos(bot)
@@ -902,20 +918,30 @@ function digInRun(bot, ctx, st) {
   const below = cellAt(bot, 0, -1, 0)
   if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
     if (!solid(below)) {
-      // Nothing dug yet: the body hangs over a ledge edge — walking to the
-      // centre would step off it, not into a pit.
-      if (!st.digs) return 'failed:edge'
       // Dug out but the body still stands on a neighbour's edge (or is mid
       // fall): walk to the cell centre, the walls stop the overshoot.
+      // Nothing dug yet: the body hangs over a ledge edge (rig: hilly spawn
+      // ground) — walk onto the supporting cell instead, never off the drop.
       if (bot.entity && bot.entity.onGround === false) return 'running'
+      let to = [0, 0]
+      if (!st.digs) {
+        to = digInSupport(bot, bp)
+        if (!to) { setForward(bot, false); return 'failed:edge' }
+      }
       if (++st.steer > DIG_IN_STEER_TICKS) { setForward(bot, false); return 'failed:no-fall' }
       try {
         if (typeof bot.lookAt === 'function') {
-          const p = bot.lookAt(new Vec3(Math.floor(bp.x) + 0.5, bp.y, Math.floor(bp.z) + 0.5), true)
+          const p = bot.lookAt(new Vec3(Math.floor(bp.x) + to[0] + 0.5, bp.y, Math.floor(bp.z) + to[1] + 0.5), true)
           if (p && typeof p.catch === 'function') p.catch(() => {})
         }
       } catch (_) { /* look best-effort */ }
+      // A short step, not a held walk: a 1 Hz tick of forward is ~4 blocks
+      // and would carry the body past the support cell.
       setForward(bot, true)
+      try {
+        const t = setTimeout(() => setForward(bot, false), DIG_IN_STEP_MS)
+        if (t && typeof t.unref === 'function') t.unref()
+      } catch (_) { /* release next tick */ }
       return 'running'
     }
     setForward(bot, false)
