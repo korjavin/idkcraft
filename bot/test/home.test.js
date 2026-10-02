@@ -422,6 +422,69 @@ describe('rw4.8 door failures fail loud', () => {
   })
 })
 
+describe('idkcraft-1l9 gohome fails fast at a broken door', () => {
+  const quiet = (fn) => {
+    const realLog = console.log
+    const lines = []
+    console.log = (m) => { lines.push(String(m)) }
+    try { fn(lines) } finally { console.log = realLog }
+    return lines
+  }
+
+  it('home=built, door gone, bot at the aim: fails in one tick and drops built', () => {
+    // Prod 2026-10-01: 8 minutes moving=false path=success at the door
+    // cell, re-picked silently (gohome never holds a failure).
+    quiet(() => {
+      const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000, door: false })
+      const ctx = { home: ctxHome(), step: 'gohome', stepStatus: 'running' }
+      home.gohome(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:no-door')
+      assert.equal(ctx.gohome.phase, 'failed')
+      assert.equal(ctx.home.built, false, 'facts flip to home=site: gohome infeasible, build repairs')
+      assert.equal(bot.calls.controls.length, 0, 'no doorway walk into a hole')
+    })
+  })
+
+  it('a dark door cell is unknown, not gone: no fail, built stays', () => {
+    quiet(() => {
+      const bot = mockBot({ at: { ...OUTSIDE }, door: false })
+      const air = bot.blockAt
+      bot.blockAt = (p) => (Math.floor(p.x) === DOOR.x && Math.floor(p.z) === DOOR.z ? null : air(p))
+      const ctx = { home: ctxHome() }
+      home.gohome(bot, ctx)
+      assert.equal(ctx.gohome.phase, 'enter')
+      assert.equal(ctx.home.built, true)
+    })
+  })
+
+  it('a door that never reads open fails within ~10 ticks', () => {
+    quiet(() => {
+      const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000 })
+      bot.activateBlock = async () => {} // the toggle never lands
+      const ctx = { home: ctxHome(), step: 'gohome', stepStatus: 'running' }
+      let ticks = 0
+      while (ctx.stepStatus === 'running' && ticks < 30) { home.gohome(bot, ctx); ticks++ }
+      assert.equal(ctx.stepStatus, 'failed:door-stuck')
+      assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+      assert.equal(ctx.home.built, true, 'a standing door keeps the house built')
+    })
+  })
+
+  it('logs one line per phase change with aim and pos', async () => {
+    const lines = quiet(() => {
+      const bot = mockBot({ at: { x: 16, y: 64, z: 14 } })
+      const ctx = { home: ctxHome() }
+      home.gohome(bot, ctx)
+      home.gohome(bot, ctx) // still walking: no new line
+      bot.entity.position = { ...OUTSIDE }
+      home.gohome(bot, ctx) // arrived -> open
+    }).filter((l) => l.startsWith('gohome phase='))
+    assert.equal(lines.length, 2)
+    assert.match(lines[0], /^gohome phase=walk aim=11,64,19 pos=16,64,14 /)
+    assert.match(lines[1], /^gohome phase=open aim=11,64,20 pos=11,64,19 /)
+  })
+})
+
 describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
   const FAR = { x: 20, y: 64, z: 10 } // ~13 from the door: past sprint distance
   const flatNodes = [{ x: 18, y: 64, z: 12 }, { x: 16, y: 64, z: 14 }]
