@@ -257,11 +257,27 @@ function cellDone(bot, home, cell) {
 function nextCellIdx(bot, home, skipped) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
   const plan = blueprintFor(home)
-  for (let i = 0; i < plan.length; i++) {
+  for (const i of (home && home.v === 2 ? v2Order(plan) : plan.keys())) {
     if (skip.has(i)) continue
     if (!cellDone(bot, home, plan[i])) return i
   }
   return -1
+}
+
+// v2 visit order (idkcraft-d7i): the partition is laid right before the
+// door, not after the roof. The pathfinder never opens doors, so once the
+// door stood the interior was sealed and the last 7-8 posts were never
+// reachable (rig: 92/99, TIMEOUT) — or the body got in first and wedged in
+// the roofed bedroom (page). Before the door the doorway is open and the
+// walls are one high. Indices stay the blueprint's (persisted skips key on
+// them); only the visiting order changes.
+function v2Order(plan) {
+  const isPartition = (c) => c.kind === 'planks' && c.dy <= 1 && c.dz >= 3 && c.dz <= 4 && c.dx >= 1 && c.dx <= 5
+  const idx = [...plan.keys()]
+  const part = idx.filter((i) => isPartition(plan[i]))
+  const rest = idx.filter((i) => !isPartition(plan[i]))
+  const door = rest.findIndex((i) => plan[i].kind === 'door')
+  return door < 0 ? idx : [...rest.slice(0, door), ...part, ...rest.slice(door)]
 }
 
 // Remaining loose planks to lay (door/table need items, not planks). Without
@@ -648,7 +664,15 @@ function build(bot, ctx, target, state) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
-    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE })) } catch (_) { /* retry next tick */ }
+    // The v2 door goes in from the doorstep side (d7i): after the partition
+    // the body stands inside, and a door set from in there seals it in (the
+    // pathfinder never opens doors). The north wall holds the door, so
+    // outside is -z.
+    try {
+      bot.pathfinder.setGoal(cell.kind === 'door' && ctx.home.v === 2
+        ? new goals.GoalNearXZ(p.x, p.z - 2, 1)
+        : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
+    } catch (_) { /* retry next tick */ }
     return
   }
   if (moving) return

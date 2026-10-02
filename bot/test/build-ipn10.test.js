@@ -625,6 +625,23 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.deepEqual(ctx.buildSkip, [doorIdx], 'refusals count: the cell skips instead of looping')
   })
 
+  it('the v2 door is approached from the doorstep side, never from inside', () => {
+    // After the partition the body stands inside; a door set from in there
+    // seals it in (the pathfinder never opens doors).
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const doorIdx = build.blueprintFor(home).findIndex((c) => c.kind === 'door')
+    const world = makeWorld()
+    paintHouse(world, home, [doorIdx])
+    const bot = mockBot(world, { items: [{ name: 'oak_door', count: 1 }], at: pos(3.5, 64, 1.5) }) // common room
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    const q = quiet()
+    try { build(bot, ctx, null, null) } finally { q.restore() }
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g && g.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g.x, z: g.z }, { x: 3, z: -2 }, 'two north of the doorway: outside')
+    assert.ok(!g.isEnd({ x: 3, y: 64, z: 1 }) && !g.isEnd({ x: 3, y: 64, z: 0 }), 'no inside or doorway end')
+  })
+
   it("another step's gave-up latch near the house never skips a build cell (revmux 01 minor)", () => {
     // An equip dig beside the house wedged and gave up: build never saw the
     // stall build up on its cell, so the fresh latch is not its wedge.
