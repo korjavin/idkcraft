@@ -150,6 +150,23 @@ describe('g0z.5 prep phase', () => {
     assert.equal(ctx.castle.phase, 'prep')
   })
 
+  it('a hung prep flight strikes its own cell (not the plan cell of the same index)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    world.set(SITE.x + 5, 64, SITE.z + 5, 'oak_log')
+    world.set(SITE.x + 5, 65, SITE.z + 5, 'oak_log')
+    world.set(SITE.x + 5, 66, SITE.z + 5, 'oak_leaves') // a tree, so the dig is allowed
+    bot.dig = () => new Promise(() => {})
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'prep', blocked: {} } }
+    await run(bot, ctx, 4)
+    const idx = ctx.castleFlight.cell.idx
+    for (let i = 0; i < castle.STRIKES; i++) {
+      ctx.castleFlight.since = 0
+      await run(bot, ctx, 1)
+    }
+    assert.ok(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${idx}`], 'prep cell blocked')
+  })
+
   it('a log that refuses blocks and prep moves on to the body', async () => {
     const world = makeWorld()
     const bot = mockBot(world)

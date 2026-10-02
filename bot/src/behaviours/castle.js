@@ -286,7 +286,8 @@ function prepTargets(bot, ctx, st, now) {
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
   const c0 = ctx && ctx.castlePrep
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
-    return c0.list.filter((c) => !done(bot, c))
+    const live = c0.list.filter((c) => !done(bot, c))
+    if (live.length || c0.list.length === 0) return live // a list that filtered to empty is rescanned once
   }
   const { w, d } = blueprint.siteDimensions(st.rot | 0)
   const { x: sx, y: sy, z: sz } = st.site
