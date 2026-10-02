@@ -235,6 +235,9 @@ describe('castle arbiter step (g0z.3)', () => {
     const ctx = { castle: castleState({ blueprintVersion: 2 }) }
     assert.equal(goal.goalFacts(bot, ctx).castle, 'clear', 'a moat dig, not torch-none')
     assert.equal(ctx.castleWord.word, 'clear')
+    // revmux 02: a few torches, no coal: the castle lays them (batch), never torch-some.
+    const few = makeBot({ set, items: [...KIT, { name: 'torch', count: 3 }] })
+    assert.equal(goal.goalFacts(few, { castle: castleState({ blueprintVersion: 2 }) }).castle, 'torch-batch')
     // Moat dug, fence up: only then the torch word (castlefetch retries it).
     for (const c of cells) {
       if (c.kind === 'dig') set.set(`${c.x},${c.y},${c.z}`, 'air')

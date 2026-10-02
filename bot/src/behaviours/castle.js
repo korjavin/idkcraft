@@ -425,7 +425,10 @@ const BATCH = 16
 // Per-kind batch (g0z.12): frame logs come from gather, which stops at
 // goal.NEED_LOGS (14) — a 16 batch would read frame-some forever with the
 // fetch already at its target. A test pins it to NEED_LOGS.
-const BATCH_OF = { frame: 14 }
+// torch (g0z.17, revmux 02): any torch is a batch — torches lay last, and a
+// torch-some word with no coal would hold the moat, fence and door; the
+// castle lays what it holds and the 0-torch cells step aside (torchOwed).
+const BATCH_OF = { frame: 14, torch: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
