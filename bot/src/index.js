@@ -1303,6 +1303,21 @@ function handleDeath(bot, ticker) {
     const ctx = bot && bot._tickerCtx
     if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
   } catch (_) { /* memory best-effort */ }
+  // ed88: night-step phase records belong to the dead body's position — a
+  // gohome 'enter' resumed from world spawn stood 60 s, then cannot-reach.
+  // Drop them so the step re-arms from the respawn (walk / hold / pillar);
+  // a shelter climb episode goes with its record.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (ctx) {
+      ctx.gohome = null
+      ctx.stay = null
+      ctx.shelter = null
+      ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
+      ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
+      if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
+    }
+  } catch (_) { /* reset best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {

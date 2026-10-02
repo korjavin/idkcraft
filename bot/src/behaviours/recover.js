@@ -20,7 +20,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
-const { botPos, denyReason, logDeny } = require('./util')
+const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
@@ -866,6 +866,216 @@ function issuePillarPlace(bot, st) {
     } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
   return null
+}
+
+// Dig in (idkcraft-ed88): the shelter fallback with no scaffold (respawn
+// at world spawn with an empty kit). Hand-dig DIG_IN_DEPTH cells straight
+// down, then cap the cell above the head with a dug dirt block — a closed
+// 1x1 pit in ~5 s with no items. Three deep, not two: the cap needs a solid
+// side neighbour as its placement reference, and on flat ground only the
+// ground layer (floor0-1) has one. Not a stuck-menu action — the shelter
+// step drives it and owns st. A dig the hazard/type checks refuse ends the
+// descent where it is (cap attempt from there); refused at the top it fails.
+const DIG_IN_DEPTH = 3
+const DIG_IN_STEER_TICKS = 4 // edge-hanging (bbox on a neighbour): walk to the cell centre
+const DIG_IN_STEP_MS = 150 // forward pulse per steer tick (~0.3-0.5 block)
+const DIG_IN_CAP_WAIT_TICKS = 3 // dug drops reach the inventory ~0.5 s after the break
+// Stone stance (rig: the world-spawn respawn stands on bare stone, grass
+// patches 6-8 blocks off and a few blocks up): nearest hand-dig column
+// within DIG_IN_SCAN_R, DIG_IN_SCAN_DY up or down.
+const DIG_IN_SCAN_R = 8
+const DIG_IN_SCAN_DY = 4
+const DIG_IN_WALK_TICKS = 15
+function digInHazard(bot, ox, dy, oz) {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const c = cellAt(bot, ox + dx, dy, oz + dz)
+      if (isLava(c) || isWater(c)) return true
+    }
+  }
+  return false
+}
+// Why the column whose feet cell sits at (ox, oy, oz) from the body's feet
+// cannot take the next dig, or null. fresh = nothing dug yet (water at the
+// body then means a riverbed: never dig in under water).
+// A fresh column must take the whole descent (rig: a grass skin over stone
+// dug 1 deep and capped nothing): all DIG_IN_DEPTH cells hand-dig. Deeper
+// steps re-check the next cell only. The reach check (canDigBlock) is for
+// the cell right under the body; scan cells are judged by name.
+function digInVeto(bot, ctx, ox, oy, oz, fresh) {
+  const n = fresh ? DIG_IN_DEPTH : 1
+  for (let k = 1; k <= n; k++) {
+    const c = cellAt(bot, ox, oy - k, oz)
+    const here = ox === 0 && oz === 0 && k === 1
+    const nameOk = !!c && typeof c.name === 'string' && (HAND_DIG.has(c.name) || c.name.endsWith('_leaves'))
+    if (!(here ? handDiggable(bot, c) : nameOk)) return 'undiggable:' + ((c && c.name) || 'none')
+    if (protectedReason(bot, c, ctx)) return 'protected'
+    if (digInHazard(bot, ox, oy - k, oz)) return 'fluid'
+  }
+  if (!solid(cellAt(bot, ox, oy - n - 1, oz))) return 'no-floor' // cave/water under: never drop into it
+  if (fresh) {
+    // The finished pit's walls (feet + head at the bottom) must stand:
+    // a hillside column opens sideways (rig: dug and capped, east side air).
+    for (const [dx, dz] of SIDES) {
+      if (!solid(cellAt(bot, ox + dx, oy - n, oz + dz)) || !solid(cellAt(bot, ox + dx, oy - n + 1, oz + dz))) return 'open-side'
+    }
+  }
+  if (digInHazard(bot, ox, oy - n - 1, oz) ||
+    (fresh && (digInHazard(bot, ox, oy, oz) || digInHazard(bot, ox, oy + 1, oz)))) return 'fluid' // riverbed: never dig in under water
+  return null
+}
+// Nearest standable column within DIG_IN_SCAN_R that takes a fresh dig:
+// [dx, dy, dz] of its feet cell, or null.
+function digInSpot(bot, ctx) {
+  let best = null
+  let bestD = Infinity
+  for (let dx = -DIG_IN_SCAN_R; dx <= DIG_IN_SCAN_R; dx++) {
+    for (let dz = -DIG_IN_SCAN_R; dz <= DIG_IN_SCAN_R; dz++) {
+      for (let dy = -DIG_IN_SCAN_DY; dy <= DIG_IN_SCAN_DY; dy++) {
+        const d = Math.hypot(dx, dy, dz)
+        if (d >= bestD || (dx === 0 && dz === 0)) continue
+        if (solid(cellAt(bot, dx, dy, dz)) || solid(cellAt(bot, dx, dy + 1, dz))) continue
+        if (!solid(cellAt(bot, dx, dy - 1, dz))) continue
+        if (digInVeto(bot, ctx, dx, dy, dz, true)) continue
+        best = [dx, dy, dz]
+        bestD = d
+      }
+    }
+  }
+  return best
+}
+// The neighbour cell the body's 0.6 bbox overlaps and stands on: solid
+// below, two free cells to walk into. [dx, dz] or null.
+function digInSupport(bot, bp) {
+  const fx = Math.floor(bp.x)
+  const fz = Math.floor(bp.z)
+  for (let cx = Math.floor(bp.x - 0.3); cx <= Math.floor(bp.x + 0.3); cx++) {
+    for (let cz = Math.floor(bp.z - 0.3); cz <= Math.floor(bp.z + 0.3); cz++) {
+      const dx = cx - fx
+      const dz = cz - fz
+      if (dx === 0 && dz === 0) continue
+      if (solid(cellAt(bot, dx, -1, dz)) && !solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz))) return [dx, dz]
+    }
+  }
+  return null
+}
+// The walk owns the goal key, so a later holdStill clears the goal
+// instead of trusting a stale 'stay'.
+function digInWalk(bot, ctx, w) {
+  bot.pathfinder.setGoal(new goals.GoalBlock(w.x, w.y, w.z))
+  if (ctx) ctx.lastGoalKey = 'dig-in-walk'
+}
+function digInRun(bot, ctx, st) {
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.floor0 == null) { st.floor0 = Math.floor(bp.y); st.waited = 0; st.steer = 0; st.capWait = 0; st.airborne = 0 }
+  if (st.capError) return 'failed:cap-error'
+  if (st.digError) return 'failed:dig-error'
+  if (st.digInFlight || st.capInFlight) {
+    if (++st.waited > DIG_TIMEOUT_TICKS) return 'failed:dig-timeout'
+    return 'running'
+  }
+  st.waited = 0
+  if (st.walk) {
+    // Walking to a hand-dig column (stone stance): arrival re-seeds the
+    // descent there; the pathfinder owns the body until then.
+    const w = st.walk
+    if (Math.floor(bp.x) === w.x && Math.floor(bp.y) === w.y && Math.floor(bp.z) === w.z) {
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+      st.walk = null
+      st.floor0 = Math.floor(bp.y)
+      return 'running'
+    }
+    if (++st.walkTicks > DIG_IN_WALK_TICKS) {
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+      return 'failed:no-walk'
+    }
+    // A fight interlude (or any owner switch) replaced the goal: re-issue.
+    try {
+      const g = bot.pathfinder.goal
+      if (!g || g.x !== w.x || g.y !== w.y || g.z !== w.z) digInWalk(bot, ctx, w)
+    } catch (_) { /* goal best-effort */ }
+    return 'running'
+  }
+  const below = cellAt(bot, 0, -1, 0)
+  if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
+    if (!solid(below)) {
+      // Dug out but the body still stands on a neighbour's edge (or is mid
+      // fall): walk to the cell centre, the walls stop the overshoot.
+      // Nothing dug yet: the body hangs over a ledge edge (rig: hilly spawn
+      // ground) — walk onto the supporting cell instead, never off the drop.
+      // Airborne is bounded too: floating in water (or on a ladder) never
+      // lands, and an unbounded wait would never reach the hold.
+      if (bot.entity && bot.entity.onGround === false) {
+        return ++st.airborne > DIG_IN_STEER_TICKS ? 'failed:airborne' : 'running'
+      }
+      st.airborne = 0
+      let to = [0, 0]
+      if (!st.digs) {
+        to = digInSupport(bot, bp)
+        if (!to) { setForward(bot, false); return 'failed:edge' }
+      }
+      if (++st.steer > DIG_IN_STEER_TICKS) { setForward(bot, false); return 'failed:no-fall' }
+      try {
+        if (typeof bot.lookAt === 'function') {
+          const p = bot.lookAt(new Vec3(Math.floor(bp.x) + to[0] + 0.5, bp.y, Math.floor(bp.z) + to[1] + 0.5), true)
+          if (p && typeof p.catch === 'function') p.catch(() => {})
+        }
+      } catch (_) { /* look best-effort */ }
+      // A short step, not a held walk: a 1 Hz tick of forward is ~4 blocks
+      // and would carry the body past the support cell.
+      setForward(bot, true)
+      try {
+        const t = setTimeout(() => setForward(bot, false), DIG_IN_STEP_MS)
+        if (t && typeof t.unref === 'function') t.unref()
+      } catch (_) { /* release next tick */ }
+      return 'running'
+    }
+    setForward(bot, false)
+    st.steer = 0
+    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs)
+    if (!veto) {
+      if (typeof bot.dig !== 'function') return 'failed:no-dig'
+      // A server that reverts the break (protection) would re-dig forever.
+      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + 2) return 'failed:dig-refused'
+      st.digInFlight = true
+      void (async () => {
+        try { await bot.dig(below) } catch (_) { st.digError = true } finally { st.digInFlight = false }
+      })()
+      return 'running'
+    }
+    if (Math.floor(bp.y) === st.floor0) {
+      // Refused at the top: walk once to the nearest column that digs.
+      const spot = !st.digs && !st.walked ? digInSpot(bot, ctx) : null
+      if (!spot || typeof goals.GoalBlock !== 'function') return 'failed:' + veto
+      st.walked = true
+      st.walkTicks = 0
+      st.walk = { x: Math.floor(bp.x) + spot[0], y: Math.floor(bp.y) + spot[1], z: Math.floor(bp.z) + spot[2] }
+      try { digInWalk(bot, ctx, st.walk) } catch (_) { return 'failed:' + veto }
+      return 'running'
+    }
+  }
+  // Cap: the cell above the head, placed against a solid side neighbour.
+  st.capping = true
+  setForward(bot, false)
+  if (solid(cellAt(bot, 0, 2, 0))) return 'done'
+  const item = findScaffoldItem(bot)
+  if (!item) return ++st.capWait > DIG_IN_CAP_WAIT_TICKS ? 'failed:no-cap' : 'running'
+  let ref = null
+  let face = null
+  for (const [dx, dz] of SIDES) {
+    const c = cellAt(bot, dx, 2, dz)
+    if (solid(c)) { ref = c; face = new Vec3(-dx, 0, -dz); break }
+  }
+  if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-cap-ref'
+  st.capInFlight = true
+  void (async () => {
+    try {
+      if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
+      await bot.placeBlock(ref, face)
+    } catch (_) { st.capError = true } finally { st.capInFlight = false }
+  })()
+  return 'running'
 }
 
 // Dig up: remove headroom (feet+1, then feet+2) with the pickaxe. Done needs
@@ -1847,4 +2057,5 @@ module.exports = {
   release,
   run,
   pillarUpRun,
+  digInRun,
 }
