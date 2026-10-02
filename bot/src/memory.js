@@ -150,6 +150,38 @@ function homeOf(h) {
   return out
 }
 
+// Castle project (idkcraft-g0z.3): { site, rot, blueprintVersion, phase,
+// blocked, parked } — progress lives in the world, so this is all a restart
+// needs. Sanitized both ways like the home record: integer site, rot 0..3,
+// a known phase, blocked entries '<v>:<idx>' -> { tries, until } only.
+const CASTLE_PHASES = new Set(['prep', 'body', 'moat', 'complete'])
+const CASTLE_BLOCKED_MAX = 4096
+function castleOf(c) {
+  try {
+    if (!c || typeof c !== 'object') return null
+    const site = pt(c.site)
+    if (!site || ![site.x, site.y, site.z].every(Number.isInteger)) return null
+    const rot = Number.isInteger(c.rot) && c.rot >= 0 && c.rot <= 3 ? c.rot : 0
+    const out = { site, rot, phase: CASTLE_PHASES.has(c.phase) ? c.phase : 'body', blocked: {}, parked: c.parked === true }
+    if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
+    if (c.blocked && typeof c.blocked === 'object') {
+      for (const k of Object.keys(c.blocked).slice(0, CASTLE_BLOCKED_MAX)) {
+        const e = c.blocked[k]
+        if (!/^\d+:\d+$/.test(k) || !e || typeof e !== 'object') continue
+        const tries = num(e.tries)
+        const until = num(e.until)
+        if (tries === null || until === null || tries < 1) continue
+        // Clamped to the executor's backoff cap (10 min): a hand-edited
+        // far-future stamp must not freeze a cell.
+        out.blocked[k] = { tries: Math.floor(tries), until: Math.min(until, Date.now() + 600000) }
+      }
+    }
+    return out
+  } catch (_) {
+    return null
+  }
+}
+
 function sameSite(a, b) {
   try {
     return !!a && !!b && !!a.site && !!b.site &&
@@ -252,7 +284,15 @@ function snapshot(bot, ctx, now) {
     } catch (_) { /* haul best-effort */ }
     if (gearCount(gm) > 0) gear = gm
   } catch (_) { /* gear best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear }
+  // Castle (g0z.3), tri-state like follow: a record, null for an explicit
+  // 'castle forget', undefined for a ctx that never restored (save keeps
+  // the file's record then).
+  let castle
+  try {
+    if (ctx.castle === null) castle = null
+    else if (ctx.castle) castle = castleOf(ctx.castle) || undefined
+  } catch (_) { /* castle best-effort */ }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -310,7 +350,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -326,7 +366,11 @@ function save(bot, ctx, file, now) {
     // stored target, but an unrestored ctx (undefined) never wipes the file
     // on a pre-spawn end/kicked/error save (p4s majors).
     const prevFollow = prev && typeof prev.follow === 'string' && prev.follow ? prev.follow : null
-    if (empty && !(prevFollow && doc.follow === null)) return false
+    // Castle: undefined keeps the same world's record, null drops it — and
+    // a drop is information like a follow revoke.
+    const prevCastle = prev && prev.v === VERSION && prev.world === doc.world ? castleOf(prev.castle) : null
+    if (doc.castle === undefined && prevCastle) doc.castle = prevCastle
+    if (empty && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)
@@ -353,7 +397,14 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0 }
+    // Castle (g0z.3): a restart resumes the project as stored — the
+    // order-time site checks never re-run over it.
+    const castle = castleOf(doc.castle)
+    if (castle) {
+      ctx.castle = castle
+      out.castle = 1
+    }
     if (typeof doc.follow === 'string' && doc.follow) {
       ctx.followName = doc.follow
       out.follow = 1

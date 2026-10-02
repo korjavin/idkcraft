@@ -251,6 +251,9 @@ function depositPlan(bot, ctx) {
   }
   const allow = {}
   const plan = []
+  const castleOpen = !!(ctx && ctx.castle && ctx.castle.phase !== 'complete')
+  // Deferred require (castle -> build -> ... chain).
+  const castleMaterial = (name) => { try { return require('./castle').isMaterial(name) } catch (_) { return false } }
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {
@@ -266,6 +269,9 @@ function depositPlan(bot, ctx) {
     }
     let n = typeof i.count === 'number' ? i.count : 1
     if (n <= 0) continue
+    // Castle reserve (g0z.3): an unfinished castle keeps every castle
+    // material packed — banking it would starve the next castle batch.
+    if (castleOpen && castleMaterial(i.name)) continue
     if (bedOwed && (i.name.endsWith('_wool') || i.name.endsWith('_bed'))) continue
     if (bedOwed && i.name.endsWith('_planks')) {
       const k = Math.min(woodKeep[i.name] || 0, n)

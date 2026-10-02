@@ -46,9 +46,33 @@ const ITEM = {
   torch: (n) => n === 'torch',
 }
 
+// Project-material reservation (g0z.3 design): the castle never lays the
+// bot's scaffold/tool stone (equip's SCAFFOLD_LOW mark — below it equip
+// would dig the same blocks back) nor the last planks a stick craft needs.
+// Deferred require: equip loads inside the craft->goal chain.
+function reserveOf(kind) {
+  if (kind === 'stone') {
+    try { return require('./equip').SCAFFOLD_LOW } catch (_) { return 16 }
+  }
+  return kind === 'planks' ? 2 : 0
+}
+
+// Items of the kind above the reserve (what the castle may spend).
+function usable(bot, kind) {
+  const want = ITEM[kind]
+  if (!want) return 0
+  let n = 0
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (it && typeof it.name === 'string' && want(it.name)) n += typeof it.count === 'number' ? it.count : 1
+    }
+  } catch (_) { /* no inventory: none */ }
+  return Math.max(0, n - reserveOf(kind))
+}
+
 function findItem(bot, kind) {
   const want = ITEM[kind]
-  if (!want) return null
+  if (!want || usable(bot, kind) <= 0) return null
   try {
     for (const it of bot.inventory.items() || []) {
       if (it && typeof it.name === 'string' && want(it.name)) return it
@@ -147,6 +171,79 @@ function pick(bot, ctx, st, cells, key, now) {
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
     return { idx: -1, waiting }
   }
+}
+
+// Read-only twin of pick() for the work arbiter (g0z.3): the next cell the
+// executor would work now, or why there is none — same work order, layer
+// gate and backoff, no cursor/scan/blocked-map writes. Full scan from 0.
+// ponytail: O(plan) blockAt per decide; cache per tick if g0z.11's ~2000
+// cells ever show in the tick timer.
+function peek(bot, st, now) {
+  const { cells, key } = blueprint.absPlan(st.site, st.rot)
+  const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
+  const complete = st.phase === 'complete'
+  let gateDy = Infinity
+  for (const k of Object.keys(blocked)) {
+    const [v, i] = k.split(':')
+    const c = cells[Number(i)]
+    if (Number(v) !== blueprint.BLUEPRINT_VERSION || !c || !blocked[k] || done(bot, c)) continue
+    if (blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+  }
+  let waiting = null
+  for (const idx of workOrder(cells, key)) {
+    const c = cells[idx]
+    if (clearing(c) && complete) continue
+    if (done(bot, c)) continue
+    const b = blocked[bkey(c.idx)]
+    if (b && b.until > now) { waiting = waiting || c; continue }
+    if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
+    return { cell: c, waiting: null, cells }
+  }
+  return { cell: null, waiting, cells }
+}
+
+// Batch gate (build precedent): a castle leg starts with BATCH of the next
+// kind on hand, or the whole remainder of that kind when less is left.
+const BATCH = 16
+
+// The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
+// 'done' | 'blocked' | 'clear' (next cell is a keep-clear dig, no
+// material) | '<kind>-<none|some|batch>' (the next cell's material on
+// hand, above the reserve). Restock, stop/go, completion and a demand-kind
+// change all move the word, so holds keyed on the text release on them.
+function menuFact(bot, ctx, now = Date.now()) {
+  const st = ctx && ctx.castle
+  if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
+  if (st.parked) return 'parked'
+  try {
+    const r = peek(bot, st, now)
+    if (!r.cell) return r.waiting ? 'blocked' : 'done'
+    const c = r.cell
+    if (clearing(c)) return 'clear'
+    const have = usable(bot, c.kind)
+    if (have <= 0) return `${c.kind}-none`
+    if (have >= BATCH) return `${c.kind}-batch`
+    let left = 0
+    for (const o of r.cells) {
+      if (o.kind === c.kind && !done(bot, o)) left++
+    }
+    return have >= left ? `${c.kind}-batch` : `${c.kind}-some`
+  } catch (_) {
+    return 'none'
+  }
+}
+
+// Owner-facing progress (chat 'castle'): laid/total per material kind,
+// read live from the world (blocked never counts as done).
+function progressByKind(bot, st) {
+  const out = {}
+  for (const c of blueprint.absPlan(st.site, st.rot).cells) {
+    if (clearing(c)) continue
+    const e = out[c.kind] || (out[c.kind] = { done: 0, total: 0 })
+    e.total++
+    if (done(bot, c)) e.done++
+  }
+  return out
 }
 
 function progress(bot, st, cells, ctx) {
@@ -468,3 +565,8 @@ module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES
 module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
+module.exports.isMaterial = (name) => typeof name === 'string' && Object.values(ITEM).some((want) => want(name))
+module.exports.menuFact = menuFact
+module.exports.progressByKind = progressByKind
+module.exports.usable = usable
+module.exports.BATCH = BATCH

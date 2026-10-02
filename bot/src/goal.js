@@ -218,6 +218,17 @@ const MENU = {
     chat: () => 'on my own: lighting the yard',
     verb: 'lighting torches',
   },
+  castle: {
+    // The castle project (g0z.3): a day job after the house chain. Feasible
+    // only when it progresses NOW: a keep-clear dig next, or the next
+    // cell's material on hand as a batch (castle.js menuFact). A running
+    // leg keeps going on a partial batch ('some') — the word flips at the
+    // batch line mid-leg, and dropping there would strand the remainder.
+    // stay/gohome/equip outrank it, so the bot still sleeps and rearms.
+    feasible: (facts, bot, ctx) => castleGo(facts, ctx),
+    chat: () => 'on my own: building the castle',
+    verb: 'building the castle',
+  },
   gather: {
     // Only while material is still missing: plank-equivalent on hand vs the
     // house budget (table 4 + door 6 + NEED_PLANKS planks), and never once
@@ -260,7 +271,9 @@ const MENU = {
   deliver: {
     // Unload first: a waiting haul goes to the nearest online player
     // before the next forage leg. Nobody online (dxl) -> infeasible.
-    feasible: (facts) => facts.haul === 'waiting' && facts.player !== 'none',
+    // The owner wants the castle (g0z.3): a workable castle leg goes first,
+    // for the model's menu too (the FSM already ranks castle above).
+    feasible: (facts, bot, ctx) => facts.haul === 'waiting' && facts.player !== 'none' && !castleGo(facts, ctx),
     chat: () => 'on my own: delivering the haul',
     verb: 'delivering',
   },
@@ -307,7 +320,7 @@ const MENU = {
   forage: {
     // Known valuable find nearby (planForage: value rank, pickaxe gate).
     // Nothing known -> explore finds more.
-    feasible: (facts) => facts.known === 'near' && !nightHurt(facts),
+    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -336,6 +349,18 @@ const MENU = {
     chat: (facts) => (facts.home === 'none' ? 'on my own: resting near spawn' : 'on my own: resting at the home site'),
     verb: 'resting',
   },
+}
+
+// Castle leg can progress now (g0z.3): day only, an unparked castle whose
+// next cell is a keep-clear dig or has its material batch on hand; a
+// running castle leg finishes a partial batch. Shared by MENU.castle and
+// the deliver/forage yield.
+function castleGo(facts, ctx) {
+  const w = facts && facts.castle
+  if (typeof w !== 'string' || facts.time !== 'day') return false
+  if (!registered('castle')) return false
+  if (w === 'clear' || w.endsWith('-batch')) return true
+  return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -484,7 +509,7 @@ function shelterOwns(bot, ctx) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'castle', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -888,6 +913,12 @@ function goalFacts(bot, ctx) {
     const gm = require('./behaviours/gear')
     gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
   } catch (_) { /* unreadable ladder */ }
+  // Castle project word (g0z.3, castle.js menuFact). Deferred require (the
+  // light precedent). Unreadable reads none: castle yields, nothing churns.
+  let castle = 'none'
+  try {
+    if (ctx && ctx.castle) castle = require('./behaviours/castle').menuFact(bot, ctx)
+  } catch (_) { /* no castle word */ }
   // Body state joins the facts so the model sees danger the FSM ignores.
   let health = 20
   try {
@@ -899,7 +930,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -939,7 +970,10 @@ function goalText(facts, home) {
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
-    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}`
+    `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}` +
+    // Castle word only while a castle exists (g0z.3): castle-less text
+    // stays byte-identical for the model and every pinned state string.
+    (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '')
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -1023,6 +1057,7 @@ const STEP_CRITERIA = {
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
+  castle: 'castle is clear, stone-batch, planks-batch, torch-batch or door-batch and time is day: lay the next castle blocks',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night and home is built and inside is no: stop marching and wait where you are till dawn',
@@ -1220,6 +1255,17 @@ function stepWhy(name, facts, bot, ctx, text) {
       if ((facts.coal || 0) <= reserve) return 'light: saving coal'
       return 'light: no sticks or wood'
     }
+    case 'castle': {
+      const w = facts.castle || 'none'
+      if (w === 'none') return 'castle: no castle ordered'
+      if (w === 'parked') return 'castle: parked'
+      if (w === 'done') return 'castle: complete'
+      if (facts.time !== 'day') return 'castle: daytime job'
+      if (w === 'blocked') return 'castle: next cell blocked, retrying later'
+      const kind = w.slice(0, w.lastIndexOf('-'))
+      if (w.endsWith('-none')) return `castle: need ${kind}`
+      return `castle: need a batch of ${kind}`
+    }
     case 'gather':
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
@@ -1273,6 +1319,8 @@ function restWhy(facts, bot, ctx, names) {
   const out = []
   for (const n of STEP_ORDER) {
     if (n === 'rest') continue
+    // No castle ordered: no castle reason (the rest line stays as it was).
+    if (n === 'castle' && (!facts || !facts.castle || facts.castle === 'none')) continue
     let on = false
     try {
       on = registered(n)

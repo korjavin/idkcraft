@@ -11,6 +11,9 @@ const bringMod = require('./behaviours/bring')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const { denyReason } = require('./behaviours/util')
+const blueprint = require('./castle')
+const castleMod = require('./behaviours/castle')
+const Vec3 = require('vec3')
 
 // Targets declined as too deep, held per player for an explicit 'lead
 // anyway'. Overwritten by the next deep decline, cleared on use.
@@ -324,6 +327,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
+  } else if (msg === 'build castle' || msg === 'castle' || msg.startsWith('castle ')) {
+    const reply = castleChat(bot, ticker, playerName, msg)
+    if (reply) bot.chat(reply)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else if (msg === 'brain' || msg.startsWith('brain ')) {
@@ -432,6 +438,90 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   }
 }
 
+// Castle order (idkcraft-g0z.3). The castle rises in front of the speaker
+// (the way they look) with its gate facing back at them: the entrance apron
+// lands two blocks ahead of their feet. Mineflayer yaw looks along
+// (-sin, -cos); rot r = gate facing north/east/south/west.
+function castleSite(pos, yaw) {
+  const y = typeof yaw === 'number' && Number.isFinite(yaw) ? yaw : 0
+  const lx = -Math.sin(y)
+  const lz = -Math.cos(y)
+  const [dx, dz, rot] = Math.abs(lx) > Math.abs(lz)
+    ? (lx > 0 ? [1, 0, 3] : [-1, 0, 1])
+    : (lz > 0 ? [0, 1, 0] : [0, -1, 2])
+  const e = blueprint.rotatePlan([{ ...blueprint.ENTRANCE, kind: 'air' }], rot)[0]
+  const site = {
+    x: Math.floor(pos.x) + 2 * dx - e.dx,
+    y: Math.floor(pos.y),
+    z: Math.floor(pos.z) + 2 * dz - e.dz,
+  }
+  return { site, rot }
+}
+
+// The house box plus a one-block yard (interior + walls + 1); a home
+// without an interior reads as the v2 7x6 footprint.
+function overlapsHome(home, site, rot) {
+  if (!home || !home.site) return false
+  const lo = home.interior && home.interior.min ? { x: home.interior.min.x - 2, z: home.interior.min.z - 2 } : { x: home.site.x - 1, z: home.site.z - 1 }
+  const hi = home.interior && home.interior.max ? { x: home.interior.max.x + 2, z: home.interior.max.z + 2 } : { x: home.site.x + 7, z: home.site.z + 6 }
+  const { w, d } = blueprint.siteDimensions(rot)
+  return site.x <= hi.x && site.x + w - 1 >= lo.x && site.z <= hi.z && site.z + d - 1 >= lo.z
+}
+
+const at = (p) => `${p.x} ${p.y} ${p.z}`
+
+// One castle per bot: 'build castle' starts it, 'castle' reports, 'castle
+// stop' / 'castle go' park and resume, 'castle forget' drops the project
+// (the laid blocks stay). Returns the reply line, or null for silence.
+function castleChat(bot, ticker, playerName, cmd) {
+  const ctx = bot && bot._tickerCtx
+  if (!ticker || !ctx || typeof ticker.setCastle !== 'function') return null
+  const st = ctx.castle
+  if (cmd === 'build castle') {
+    if (st) return `I already have a castle at ${at(st.site)} — say castle forget first`
+    const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
+    const pos = speaker && speaker.position
+    if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
+    const { site, rot } = castleSite(pos, speaker.yaw)
+    if (overlapsHome(ctx.home, site, rot)) return `that castle would sit on my house at ${at(ctx.home.site)} — step further away and ask again`
+    ticker.setCastle({ site, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'body', blocked: {}, parked: false })
+    ticker.work()
+    const n = blueprint.PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+    return `castle at ${at(site)}, ~${n} blocks, this will take many hours; I work while someone is online (or autonomous on)`
+  }
+  if (!st) return 'no castle yet — say build castle'
+  if (cmd === 'castle') {
+    const now = Date.now()
+    let loaded = false
+    try { loaded = !!bot.blockAt(new Vec3(st.site.x, st.site.y, st.site.z)) } catch (_) { loaded = false }
+    const blocked = Object.values(st.blocked || {}).filter((e) => e && e.until > now).length
+    const tail = `now: ${st.parked ? 'parked — say castle go' : (st.status || 'waiting for its turn')}; blocked ${blocked}`
+    if (!loaded) return `castle at ${at(st.site)}: too far to count; ${tail}`
+    const by = castleMod.progressByKind(bot, st)
+    let done = 0
+    let total = 0
+    for (const e of Object.values(by)) { done += e.done; total += e.total }
+    const parts = Object.entries(by).map(([k, e]) => `${k} ${e.done}/${e.total}`).join(', ')
+    return `castle at ${at(st.site)}: ${total ? Math.floor((100 * done) / total) : 100}% (${parts}); ${tail}`
+  }
+  if (cmd === 'castle stop') {
+    st.parked = true
+    ticker.saveMemory()
+    return 'castle parked — say castle go to resume'
+  }
+  if (cmd === 'castle go') {
+    st.parked = false
+    ticker.saveMemory()
+    ticker.work()
+    return 'castle resumed'
+  }
+  if (cmd === 'castle forget') {
+    ticker.setCastle(null)
+    return `castle at ${at(st.site)} forgotten — the blocks stay`
+  }
+  return 'try: castle, castle stop, castle go, castle forget'
+}
+
 // jr2.2: an order takes the body even at night — the server ignores
 // movement from a sleeping player until the client sends leave-bed, which
 // only bot.wake() sends (revmux 01-review). Awake bots pass through.
@@ -442,4 +532,4 @@ function wakeBody(bot) {
   void (async () => { try { await bot.wake() } catch (_) { /* already awake: the event won */ } })()
 }
 
-module.exports = { handleChat, advancePendingSearch, clearPendingSearch, startBlockOrder, answerFound, resSubmerged, wakeBody }
+module.exports = { handleChat, advancePendingSearch, clearPendingSearch, startBlockOrder, answerFound, resSubmerged, wakeBody, castleSite }
