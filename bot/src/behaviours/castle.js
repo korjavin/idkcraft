@@ -207,27 +207,54 @@ function peek(bot, st, now) {
 const BATCH = 16
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
-// 'done' | 'blocked' | 'clear' (next cell is a keep-clear dig, no
+// 'done' | 'finish' | 'blocked' | 'clear' (next cell is a keep-clear dig, no
 // material) | '<kind>-<none|some|batch>' (the next cell's material on
 // hand, above the reserve). Restock, stop/go, completion and a demand-kind
 // change all move the word, so holds keyed on the text release on them.
+function stockWord(bot, kind, left) {
+  const have = usable(bot, kind)
+  if (have <= 0) return `${kind}-none`
+  return have >= Math.min(BATCH, left) ? `${kind}-batch` : `${kind}-some`
+}
+
+// 'finish' (revmux 01): every cell matches but the executor has not yet
+// run its completion branch (phase, chat, keep-clear release) — one more
+// castle tick does that, then the word reads 'done'.
+// Unloaded site (revmux 01): null blocks read as undone, so a fresh peek
+// would call a far complete castle unfinished and yank the bot back. Far
+// away the word is the last one read on site (stock re-read for a material
+// word); a complete castle reads done; never seen this session -> the
+// first plan cell's kind (walk back and build).
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
   try {
+    let loaded = false
+    try { loaded = !!bot.blockAt(new Vec3(st.site.x, st.site.y, st.site.z)) } catch (_) { loaded = false }
+    if (!loaded) {
+      if (st.phase === 'complete') return 'done'
+      const last = ctx.castleWord
+      if (last && last.kind) return stockWord(bot, last.kind, last.left)
+      if (last && last.word) return last.word
+      const { cells, key } = blueprint.absPlan(st.site, st.rot)
+      return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
+    }
     const r = peek(bot, st, now)
-    if (!r.cell) return r.waiting ? 'blocked' : 'done'
-    const c = r.cell
-    if (clearing(c)) return 'clear'
-    const have = usable(bot, c.kind)
-    if (have <= 0) return `${c.kind}-none`
-    if (have >= BATCH) return `${c.kind}-batch`
+    let word = null
+    if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
+    else if (clearing(r.cell)) word = 'clear'
+    if (word) {
+      ctx.castleWord = { word }
+      return word
+    }
+    const kind = r.cell.kind
     let left = 0
     for (const o of r.cells) {
-      if (o.kind === c.kind && !done(bot, o)) left++
+      if (o.kind === kind && !done(bot, o)) left++
     }
-    return have >= left ? `${c.kind}-batch` : `${c.kind}-some`
+    ctx.castleWord = { kind, left }
+    return stockWord(bot, kind, left)
   } catch (_) {
     return 'none'
   }

@@ -85,7 +85,7 @@ function createOrders(box) {
     // executor's per-site scratch resets with it; null persists as a drop.
     setCastle: (st) => {
       ctx.castle = st || null
-      ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null
+      ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null; ctx.castleWord = null
       try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castle } catch (_) { /* hold best-effort */ }
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },

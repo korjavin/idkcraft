@@ -359,7 +359,7 @@ function castleGo(facts, ctx) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
   if (!registered('castle')) return false
-  if (w === 'clear' || w.endsWith('-batch')) return true
+  if (w === 'clear' || w === 'finish' || w.endsWith('-batch')) return true
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
 }
 
@@ -1057,7 +1057,7 @@ const STEP_CRITERIA = {
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
-  castle: 'castle is clear, stone-batch, planks-batch, torch-batch or door-batch and time is day: lay the next castle blocks',
+  castle: 'castle is clear, finish, stone-batch, planks-batch, torch-batch or door-batch and time is day: lay the next castle blocks',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night and home is built and inside is no: stop marching and wait where you are till dawn',

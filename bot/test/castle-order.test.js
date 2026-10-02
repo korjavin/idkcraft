@@ -311,6 +311,48 @@ describe('castle arbiter step (g0z.3)', () => {
     assert.equal(goal.stepWhy('castle', f, bot, ctx, ''), 'castle: complete')
   })
 
+  it("revmux 01: all laid but not yet complete reads 'finish'; one castle tick completes it", async () => {
+    const set = new Map()
+    for (const c of blueprint.absPlan(SITE, 0).cells) {
+      if (!blueprint.isPlaceTarget(c.kind)) continue
+      set.set(`${c.x},${c.y},${c.z}`, c.kind === 'stone' ? 'cobblestone' : c.kind === 'planks' ? 'oak_planks' : c.kind === 'door' ? 'oak_door' : 'torch')
+    }
+    const bot = makeBot({ set })
+    const ctx = { castle: castleState() }
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'finish')
+    assert.equal((await decide(bot, ctx)).action, 'castle')
+    castleMod(bot, ctx)
+    assert.equal(ctx.castle.phase, 'complete')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(bot.chats.some((m) => m.startsWith('castle done at')))
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'done')
+    assert.notEqual((await decide(bot, ctx)).action, 'castle')
+  })
+
+  it('revmux 01: an unloaded site never reads as all-undone', () => {
+    const bot = makeBot()
+    const real = bot.blockAt
+    bot.blockAt = () => null // chunks gone (bot far away)
+    assert.equal(goal.goalFacts(bot, { castle: castleState({ phase: 'complete' }) }).castle, 'done', 'complete stays done far away')
+    // Mid-build: the last on-site word holds (stock re-read), not a fresh stone guess.
+    const ctx = { castle: castleState() }
+    bot.blockAt = real
+    const set = new Map()
+    const near = makeBot({ set })
+    for (const c of blueprint.absPlan(SITE, 0).cells) {
+      if (c.kind === 'door') continue
+      if (c.kind !== 'stone') break
+      set.set(`${c.x},${c.y},${c.z}`, 'cobblestone')
+    }
+    const w = goal.goalFacts(near, ctx).castle
+    assert.match(w, /^(planks|torch)-none$/)
+    near.blockAt = () => null
+    assert.equal(goal.goalFacts(near, ctx).castle, w, 'far word = last on-site word')
+    // Never seen this session: the first plan cell's kind (walk back and build).
+    bot.blockAt = () => null
+    assert.equal(goal.goalFacts(bot, { castle: castleState() }).castle, 'stone-batch')
+  })
+
   it('deliver and forage yield to a workable castle leg', () => {
     const facts = { time: 'day', haul: 'waiting', player: 'near', known: 'near', health: 20, castle: 'stone-batch' }
     assert.equal(goal.MENU.deliver.feasible(facts, null, {}), false)
