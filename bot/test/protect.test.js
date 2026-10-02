@@ -688,3 +688,28 @@ describe('house footprint (idkcraft-e5ba)', () => {
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
 })
+
+describe('castle ground (idkcraft-g0z.14)', () => {
+  const blueprint = require('../src/castle')
+  const site = { x: 100, y: 64, z: 200 }
+  const castle = { site, rot: 0, blueprintVersion: 2 }
+  const bot = worldBot(new Map())
+  const d = (n, x, y, z) => denyReason(bot, blk(n, x, y, z), { castle })
+  const plan = blueprint.absPlan(site, 0, 2)
+  const wall = plan.cells.find((c) => c.kind === 'stone' && c.dy === 0)
+  const moat = plan.cells.find((c) => c.kind === 'dig' && c.dy === -1)
+  it('natural ground under the site is protected, deep too', () => {
+    assert.equal(d('stone', wall.x, site.y - 1, wall.z), 'protected')
+    assert.equal(d('dirt', site.x + 15, site.y - 1, site.z + 13), 'protected') // hall floor
+    assert.equal(d('deepslate', wall.x, site.y - 20, wall.z), 'protected')
+  })
+  it('moat dig cells, ground off the box, at site level and non-natural stay as before', () => {
+    assert.equal(d('stone', moat.x, moat.y, moat.z), null)
+    assert.equal(d('coal_ore', moat.x, moat.y, moat.z), null)
+    assert.equal(d('stone', site.x - 1, site.y - 1, site.z), null)
+    assert.equal(d('dirt', site.x + 15, site.y, site.z + 13), null)
+    assert.equal(d('coal_ore', wall.x, site.y - 3, wall.z), null)
+    assert.equal(d('snow', wall.x, site.y - 1, wall.z), null)
+    assert.equal(denyReason(bot, blk('stone', wall.x, site.y - 1, wall.z), {}), null, 'no castle')
+  })
+})

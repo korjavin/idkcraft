@@ -27,7 +27,7 @@ const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const build = require('./build')
 const flat = require('./flat')
-const { denyReason, logDeny } = require('./util')
+const { denyReason, logDeny, NATURAL_SOLID, castleProtects } = require('./util')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -89,6 +89,14 @@ function findItem(bot, kind) {
     }
   } catch (_) { /* no inventory: no item */ }
   return any
+}
+
+// Prep fill (g0z.16): castle stone above the reserve, else dirt (the cut
+// spoil of a grass hill).
+function fillItem(bot) {
+  const s = findItem(bot, 'stone')
+  if (s) return s
+  try { return (bot.inventory.items() || []).find((it) => it && it.name === 'dirt') || null } catch (_) { return null }
 }
 
 function nameAt(bot, c) {
@@ -171,8 +179,9 @@ function pick(bot, ctx, st, cells, key, now) {
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
-    if (Number(v) !== ver(st) || !c || done(bot, c)) { delete st.blocked[k]; continue }
-    if (st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+    // Off-plan entries (prep, litter) live until they expire (g0z.14).
+    if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
+    if (c && st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
   for (;;) {
@@ -238,11 +247,15 @@ function peek(bot, st, now, ctx) {
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
 // for the ground; before the plan starts the castle chops trees standing in
-// the footprint volume and fills 1-deep dips under the ground-floor cells.
-// Best effort: a target that refuses is blocked like any cell and the body
-// phase starts without it — the body executor still clears what its own
-// cells hit. No levelling (a real slope is refused at the door).
-const MAX_DIP = 1 // ground may sit this far off site.y-1
+// the footprint volume, then levels the footprint to site.y-1 (g0z.16):
+// cuts every solid block at or above site.y (top-down, spoil kept as castle
+// material) and fills holes up to site.y-1 (bottom-up, stone, else dirt).
+// Plan cells below site.y (the moat) are the plan's, never filled; a block
+// that already matches its plan cell stays. Best effort: a target that
+// refuses is blocked like any cell and the body phase starts without it —
+// the body executor still clears what its own cells hit.
+const MAX_DIP = 2 // ground may sit this far off site.y-1 (owner 2026-10-02)
+const SCAN_DOWN = 8 // holes are read this deep for the refusal's worst offset
 // Built things: someone's house, not terrain (the site check refuses them).
 const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 
@@ -255,7 +268,7 @@ function passes(n) { return AIR.has(n) || build.isReplaceable(n) || isTreeBlock(
 // disqualifies the column. Unloaded reads are 'unknown' (never a refusal).
 function scanColumn(bot, x, z, sy) {
   const logs = []
-  for (let y = sy + SITE_TOP; y >= sy - 3; y--) {
+  for (let y = sy + SITE_TOP; y >= sy - 1 - SCAN_DOWN; y--) {
     const name = nameAt(bot, { x, y, z })
     if (name == null) return { unknown: true }
     if (FOREIGN.test(name)) return { foreign: name, y }
@@ -270,12 +283,16 @@ function scanColumn(bot, x, z, sy) {
     }
     return { top: y, logs }
   }
-  return { top: sy - 4, logs }
+  return { top: sy - 2 - SCAN_DOWN, logs }
 }
 
 // Order-time check: null when the footprint is acceptable, else the reason.
+// Water/lava/foreign builds refuse at the first one; uneven ground counts
+// every column past MAX_DIP and names the worst offset (g0z.16).
 function siteCheck(bot, site, rot, version) {
   const { w, d } = blueprint.siteDimensions(rot | 0, version)
+  let n = 0
+  let worst = null
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
       const x = site.x + dx
@@ -284,20 +301,27 @@ function siteCheck(bot, site, rot, version) {
       if (r.unknown) continue
       if (r.liquid) return `there is ${r.liquid} at ${x} ${r.y} ${z}`
       if (r.foreign) return `somebody built there (${r.foreign} at ${x} ${r.y} ${z})`
-      if (Math.abs(r.top - (site.y - 1)) > MAX_DIP) return `the ground is too uneven at ${x} ${z}`
+      const off = r.top - (site.y - 1)
+      if (Math.abs(off) <= MAX_DIP) continue
+      n++
+      if (!worst || Math.abs(off) > Math.abs(worst.off)) worst = { off, x, z }
     }
   }
-  return null
+  if (!n) return null
+  const by = worst.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(worst.off)) // the scan floor
+  return `the ground is too uneven: ${n} spots are more than ${MAX_DIP} blocks off level, worst ${by} ${worst.off > 0 ? 'up' : 'down'} at ${worst.x} ${worst.z} (I level up to ${MAX_DIP})`
 }
 
 function prepDone(bot, c) {
   const n = nameAt(bot, c)
   if (c.prep === 'log') return !isLogName(n)
+  if (c.prep === 'cut') return n != null && (AIR.has(n) || build.isReplaceable(n))
   return n != null && !AIR.has(n) && !build.isReplaceable(n) && !flat.isLiquidName(n)
 }
 
-// Undone prep targets, bottom-up logs then dip fills; cached 30 s on ctx
-// (a full-volume scan per decide is too much once the site grows).
+// Undone prep targets: logs bottom-up, cuts top-down (their spoil feeds the
+// fills), then fills bottom-up; cached 30 s on ctx (a full-volume scan per
+// decide is too much once the site grows).
 // ponytail: full site volume; a tall tree's upper logs sit out of reach and
 // block after three strikes — add a pillar-free skip if prod shows churn.
 function prepTargets(bot, ctx, st, now) {
@@ -309,10 +333,10 @@ function prepTargets(bot, ctx, st, now) {
   }
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, y: sy, z: sz } = st.site
-  const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 2)
-  const floor = new Set(blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
-    .filter((c) => c.dy === 0 && !clearing(c)).map((c) => `${c.x},${c.z}`))
+  const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 4)
+  const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
   const logs = []
+  const cuts = []
   const fills = []
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
@@ -321,11 +345,56 @@ function prepTargets(bot, ctx, st, now) {
       const r = scanColumn(bot, x, z, sy)
       if (r.unknown || r.liquid || r.foreign) continue
       for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
-      if (r.top === sy - 2 && floor.has(`${x},${z}`)) fills.push({ x, y: sy - 1, z, kind: 'stone', prep: 'fill', idx: idx(x, sy - 1, z) })
+      // Past ±MAX_DIP the order refused it: a later change is not ours to level.
+      if (Math.abs(r.top - (sy - 1)) > MAX_DIP) continue
+      for (let y = r.top; y >= sy; y--) {
+        const c = { x, y, z, kind: 'air', prep: 'cut', idx: idx(x, y, z) }
+        const p = at.get(`${x},${y},${z}`)
+        if (prepDone(bot, c) || (p && blueprint.matches(p.kind, nameAt(bot, c)))) continue
+        cuts.push(c)
+      }
+      for (let y = r.top + 1; y <= sy - 1; y++) {
+        if (!at.has(`${x},${y},${z}`)) fills.push({ x, y, z, kind: 'stone', prep: 'fill', idx: idx(x, y, z) })
+      }
     }
   }
-  const list = logs.sort((a, b) => a.y - b.y).concat(fills)
+  const list = logs.sort((a, b) => a.y - b.y)
+    .concat(cuts.sort((a, b) => b.y - a.y), fills.sort((a, b) => a.y - b.y))
   if (ctx) ctx.castlePrep = { key, at: now, list }
+  return list
+}
+
+// Own litter (g0z.14): before 'complete', every off-plan block in the site
+// box (dy 0..SITE_TOP) that is our scaffold — cobblestone by name (digCell's
+// restart rule) or a placedByBot ground block — clears like a keep-clear
+// cell, bottom-up. Best effort like prep: a refusing one blocks and the
+// castle completes without it. Cached 30 s (a full-box scan).
+// ponytail: a pillar top out of reach blocks after three strikes; the reach
+// invariant keeps tall pillars off the site.
+function litterTargets(bot, ctx, st, now) {
+  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
+  const c0 = ctx.castleLitter
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+  const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
+  const list = []
+  for (let dy = 0; dy <= SITE_TOP; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      for (let dz = 0; dz < d; dz++) {
+        const x = st.site.x + dx
+        const y = st.site.y + dy
+        const z = st.site.z + dz
+        const k = `${x},${y},${z}`
+        if (at.has(k)) continue
+        const n = nameAt(bot, { x, y, z })
+        if (n === 'cobblestone' || (placed.has(k) && NATURAL_SOLID.has(n))) {
+          list.push({ x, y, z, kind: 'air', dy, idx: 2000000 + (dx * d + dz) * 40 + dy })
+        }
+      }
+    }
+  }
+  ctx.castleLitter = { key, at: now, list }
   return list
 }
 
@@ -381,7 +450,8 @@ function menuFact(bot, ctx, now = Date.now()) {
     const r = peek(bot, st, now, ctx)
     let word = null
     if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
-    else if (clearing(r.cell)) word = 'clear'
+    // A prep fill takes any filler on hand, no batch (g0z.16): works now.
+    else if (clearing(r.cell) || (r.cell.prep === 'fill' && fillItem(bot))) word = 'clear'
     if (word) {
       ctx.castleWord = { word }
       return word
@@ -564,7 +634,7 @@ function placeCell(bot, ctx, st, c, item, now) {
     } catch (_) {
       if (!live(ctx, token)) return
       const occ = nameAt(bot, c)
-      if (blueprint.matches(c.kind, occ)) { ctx.castleFails = null; return } // landed anyway
+      if (occ != null && done(bot, c)) { ctx.castleFails = null; return } // landed anyway (a prep fill: any filler)
       strike(ctx, st, c, occ || 'refused', Date.now()) // an occupant clears via digCell next tick
     }
   })
@@ -585,7 +655,13 @@ function digCell(bot, ctx, st, c, now) {
   // pillar would otherwise gate every layer above it forever.
   let ours = name === 'cobblestone'
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
-  if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name) && !isTreeBlock(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  // Air/dig cells (moat, keep-clear, prep logs) take any natural block —
+  // ores and every NATURAL_SOLID (idkcraft-g0z.13: an ore in a moat cell
+  // was kept forever and the castle never completed). flat's allowlist
+  // stays narrow for its own shaving; place-cell occupants keep it (g0z.2).
+  const natural = flat.isDiggable(name) || build.isReplaceable(name) || isTreeBlock(name) ||
+    (clearing(c) && typeof name === 'string' && (NATURAL_SOLID.has(name) || name.endsWith('_ore')))
+  if (!ours && !natural) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
@@ -645,7 +721,7 @@ const PICKUP_TICKS = 6
 // bridge column under the deck has none (A* would dig one), and a place
 // cell's occupant dig would walk the body into the cell it lays next.
 function spoilWalk(st, c) {
-  if (c.kind !== 'dig') return false
+  if (c.kind !== 'dig' && c.prep !== 'cut') return false // prep cut spoil is castle stone/filler too (g0z.16)
   const above = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${c.x},${c.y + 1},${c.z}`)
   return !(above && blueprint.isPlaceTarget(above.kind))
 }
@@ -690,7 +766,7 @@ function guardCastle(bot, ctx) {
     }
     const fn = (block) => {
       try {
-        return ctx.castle && block && blueprint.protects(ctx.castle, block.position, block.name) ? 100 : 0
+        return ctx.castle && block && castleProtects(ctx.castle, block.position, block.name) ? 100 : 0
       } catch (_) { return 0 }
     }
     const placeFn = (block) => {
@@ -718,7 +794,7 @@ function guardCastle(bot, ctx) {
 function work(bot, ctx, st, c, now, status) {
   let item = null
   if (!clearing(c)) {
-    item = findItem(bot, c.kind)
+    item = c.prep === 'fill' ? fillItem(bot) : findItem(bot, c.kind)
     if (!item) {
       // Material sourcing is g0z.4: report before walking anywhere.
       st.status = `need ${c.kind}`
@@ -758,8 +834,8 @@ function castle(bot, ctx) {
     if (c) {
       if (!ctx.castlePrepSaid) {
         ctx.castlePrepSaid = true
-        const n = list.filter((o) => o.prep === 'log').length
-        try { bot.chat(`preparing the castle site: ${n} logs to chop, ${list.length - n} dips to fill`) } catch (_) { /* chat best-effort */ }
+        const n = (p) => list.filter((o) => o.prep === p).length
+        try { bot.chat(`preparing the castle site: ${n('log')} logs to chop, ${n('cut')} blocks to cut, ${n('fill')} holes to fill`) } catch (_) { /* chat best-effort */ }
       }
       work(bot, ctx, st, c, now, 'preparing the site')
       return
@@ -780,6 +856,10 @@ function castle(bot, ctx) {
       st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
       ctx.stepStatus = 'failed:blocked'
       return
+    }
+    if (st.phase !== 'complete') {
+      const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
+      if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     }
     st.status = 'complete'
     ctx.stepStatus = 'done'
