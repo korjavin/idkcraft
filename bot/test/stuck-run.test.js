@@ -166,6 +166,101 @@ describe('stuck-run.sh parallel rigs (idkcraft-qd9s)', () => {
   })
 })
 
+// idkcraft-6x7.9: flake protocol. A regression gets ONE rerun of only the
+// regressed spots on a freshly reset world: repeats = exit 1, holds = FLAKY
+// exit 0. The script runs from a copy whose tools/stuck-replay.js is a fake
+// (judged by the REAL compareBaseline/gateCode it re-exports); docker and
+// START.sh are fakes too.
+describe('stuck-run.sh flake rerun (idkcraft-6x7.9)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const real = path.join(__dirname, '..', 'tools', 'stuck-replay.js')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flaky-'))
+  const tools = path.join(tmp, 'tree', 'bot', 'tools')
+  fs.mkdirSync(tools, { recursive: true })
+  fs.copyFileSync(path.join(__dirname, '..', 'tools', 'stuck-run.sh'), path.join(tools, 'stuck-run.sh'))
+  // Fake replay: call n fails the spots in FAKE_FAIL_<n> (reached=false), or
+  // exits FAKE_RC_<n> outright; logs the spots it was given per call.
+  fs.writeFileSync(path.join(tools, 'stuck-replay.js'), `
+const real = require(${JSON.stringify(real)})
+if (require.main !== module) { module.exports = real; return }
+const fs = require('fs'), dir = process.env.FAKE_DIR
+const n = fs.readdirSync(dir).filter((f) => f.startsWith('call')).length + 1
+const spots = JSON.parse(fs.readFileSync(process.env.REPLAY_SPOTS, 'utf8'))
+fs.writeFileSync(dir + '/call' + n, spots.map((s) => s.name).join(','))
+if (process.env['FAKE_RC_' + n]) process.exit(+process.env['FAKE_RC_' + n])
+const fail = (process.env['FAKE_FAIL_' + n] || '').split(',')
+const rows = spots.map((s) => ({ spot: s.name, reached: !fail.includes(s.name), stuck: 0, eps: 0, call: 0, note: '' }))
+fs.writeFileSync(process.env.REPLAY_OUT || __dirname + '/last-replay.json', JSON.stringify(rows))
+const diffs = real.compareBaseline(rows, real.loadBaseline().baseline)
+diffs.forEach((d) => d.verdict !== 'ok' && console.log('BASELINE ' + d.spot + ': ' + d.verdict))
+process.exit(real.gateCode(rows, diffs).code)
+`)
+  const bin = path.join(tmp, 'bin')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\ncase "$1" in ps) ;; *) echo ok ;; esac\n', { mode: 0o755 })
+  const pw = path.join(tmp, 'pw')
+  fs.mkdirSync(path.join(pw, 'replay-data', 'paper-base', 'world'), { recursive: true })
+  fs.writeFileSync(path.join(pw, 'START.sh'), '# --name idk-replay -p 25571:\nexec sleep 30\n', { mode: 0o755 })
+  spawnSync('tar', ['-cf', path.join(pw, 'world.tar'), '-C', path.join(pw, 'replay-data', 'paper-base'), 'world'])
+  const spotsFile = path.join(tmp, 'spots.json')
+  fs.writeFileSync(spotsFile, JSON.stringify(['A', 'B', 'C', 'D'].map((name) => ({ name, spawn: [0, 0, 0], goal: [1, 0, 0] }))))
+  const baseline = path.join(tmp, 'baseline.json')
+  const entry = { reached: true, maxStuck: 0, maxEps: 0, maxCalls: 0 }
+  fs.writeFileSync(baseline, JSON.stringify({ spots: { A: entry, B: entry, C: entry, D: entry } }))
+  let k = 0
+  const run = (env) => {
+    const dir = path.join(tmp, 'calls' + k++)
+    fs.mkdirSync(dir)
+    const r = spawnSync('sh', [path.join(tools, 'stuck-run.sh'), 'paper-base', spotsFile], { encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: pw, RIG_ID: 'z', RIG_LOCK: path.join(tmp, 'lock'),
+        REPLAY_BASELINE: baseline, REPLAY_OUT: path.join(tmp, 'out.json'), FAKE_DIR: dir, ...env } })
+    const calls = fs.readdirSync(dir).sort().map((f) => fs.readFileSync(path.join(dir, f), 'utf8'))
+    return { ...r, calls, resets: (r.stdout.match(/^reset:/gm) || []).length }
+  }
+
+  it('green corpus: one run, exit 0, no rerun', () => {
+    const r = run({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['A,B,C,D'])
+    assert.doesNotMatch(r.stdout, /RERUN|FLAKY/)
+  })
+
+  it('a flake (regressed once, held on the rerun) = FLAKY, exit 0; only the regressed spot reruns on a reset world', () => {
+    const r = run({ FAKE_FAIL_1: 'B' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['A,B,C,D', 'B'])
+    assert.equal(r.resets, 2)
+    assert.match(r.stdout, /^FLAKY B:/m)
+    assert.match(r.stdout, /verdict: FLAKY/)
+  })
+
+  it('a regression that repeats on the rerun (sabotage) = exit 1', () => {
+    const r = run({ FAKE_FAIL_1: 'A,C', FAKE_FAIL_2: 'C' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['A,B,C,D', 'A,C'])
+    assert.match(r.stdout, /verdict: REGRESSION \(repeated on the rerun\)/)
+    assert.doesNotMatch(r.stdout, /FLAKY/)
+  })
+
+  it('env failure (exit 2) is never rerun', () => {
+    for (const env of [{ FAKE_RC_1: '2' }, { FAKE_FAIL_1: 'A', FAKE_RC_2: '2' }]) {
+      const r = run(env)
+      assert.equal(r.status, 2, r.stdout + r.stderr)
+      assert.equal(r.calls.length, env.FAKE_RC_1 ? 1 : 2)
+    }
+  })
+
+  it('a spot without a baseline entry is deterministic: exit 1, no rerun', () => {
+    fs.writeFileSync(baseline, JSON.stringify({ spots: { A: entry, B: entry, C: entry } }))
+    const r = run({})
+    fs.writeFileSync(baseline, JSON.stringify({ spots: { A: entry, B: entry, C: entry, D: entry } }))
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['A,B,C,D'])
+    assert.match(r.stdout, /no rerun/)
+  })
+})
+
 // idkcraft-3ro root cause: every replay spot sits inside the
 // spawn-protection radius (r=16 around (-48,65,-208)), and Paper enforces
 // protection once ops.json is non-empty — one afternoon op armed it for
