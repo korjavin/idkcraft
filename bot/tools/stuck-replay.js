@@ -566,6 +566,10 @@ async function main() {
       // open one) would hijack the NEXT window's walk. Drop both at the cut.
       if (c.bring) { c.bring = null; try { bringMod.clearSearchLeg(c) } catch (_) { /* legs best-effort */ } }
       c.pendingSearch = null
+      // Lead hygiene (idkcraft-au4j): a find-me lead owns the body over
+      // follow too — one still waiting or mid-episode at a timed-out cut
+      // would walk the next spot back toward its block.
+      c.lead = null; c.leadStuck = 0; c.leadTargetGone = 0
       // Home-order hygiene (idkcraft-6x7.8): 'come home' adopts a home and
       // arms a meet, 'build here' would plant a home + a work episode — all
       // outlive the window and would hijack the NEXT one (a stale home sends

@@ -830,6 +830,11 @@ describe('recover-budget order carrier (idkcraft-au4j)', () => {
     assert.ok(names.indexOf('S6-PIT') >= 0 && names.indexOf('S6-LEAD') > names.indexOf('S6-PIT'))
   })
 
+  it('the window cut drops a live lead (a timed-out lead would own the next spot)', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    assert.ok(replay.includes('c.lead = null'), 'cut must clear ctx.lead')
+  })
+
   it('real lead lines judge against the committed markers', () => {
     const leadFn = require('../src/behaviours/lead')
     const said = []
