@@ -102,7 +102,10 @@ function entrance(st) {
   return { x: st.site.x + e.dx, y: st.site.y + e.dy, z: st.site.z + e.dz }
 }
 
-function done(bot, c) { return blueprint.matches(c.kind, nameAt(bot, c)) }
+function done(bot, c) {
+  if (c.prep) return prepDone(bot, c)
+  return blueprint.matches(c.kind, nameAt(bot, c))
+}
 function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
 function bkey(idx) { return `${blueprint.BLUEPRINT_VERSION}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
@@ -186,7 +189,12 @@ function pick(bot, ctx, st, cells, key, now) {
 // gate and backoff, no cursor/scan/blocked-map writes. Full scan from 0.
 // ponytail: O(plan) blockAt per decide; cache per tick if g0z.11's ~2000
 // cells ever show in the tick timer.
-function peek(bot, st, now) {
+function peek(bot, st, now, ctx) {
+  if (st.phase === 'prep') {
+    const list = prepTargets(bot, ctx, st, now)
+    const bl = st.blocked || {}
+    return { cell: list.find((c) => !done(bot, c) && !(bl[bkey(c.idx)] && bl[bkey(c.idx)].until > now)) || null, waiting: null, cells: list }
+  }
   const { cells, key } = blueprint.absPlan(st.site, st.rot)
   const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
   const complete = st.phase === 'complete'
@@ -208,6 +216,95 @@ function peek(bot, st, now) {
     return { cell: c, waiting: null, cells }
   }
   return { cell: null, waiting, cells }
+}
+
+// Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
+// for the ground; before the plan starts the castle chops trees standing in
+// the footprint volume and fills 1-deep dips under the ground-floor cells.
+// Best effort: a target that refuses is blocked like any cell and the body
+// phase starts without it — the body executor still clears what its own
+// cells hit. No levelling (a real slope is refused at the door).
+const MAX_DIP = 1 // ground may sit this far off site.y-1
+// Built things: someone's house, not terrain (the site check refuses them).
+const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|carpet|concrete|terracotta|bookshelf|_wall$|^cobblestone)/
+
+function isLogName(n) { return typeof n === 'string' && (n.endsWith('_log') || n.endsWith('_stem')) && !n.startsWith('stripped_') }
+function isTreeBlock(n) { return isLogName(n) || (typeof n === 'string' && n.endsWith('_leaves')) }
+// Pass-through for the ground scan: air, flora, trees (leaves stay, logs chop).
+function passes(n) { return AIR.has(n) || build.isReplaceable(n) || isTreeBlock(n) }
+
+// Top-down column read over the site volume: first ground block, or what
+// disqualifies the column. Unloaded reads are 'unknown' (never a refusal).
+function scanColumn(bot, x, z, sy) {
+  const logs = []
+  for (let y = sy + SITE_TOP; y >= sy - 3; y--) {
+    const name = nameAt(bot, { x, y, z })
+    if (name == null) return { unknown: true }
+    if (FOREIGN.test(name)) return { foreign: name, y }
+    if (passes(name)) {
+      if (isLogName(name)) logs.unshift(y)
+      continue
+    }
+    if (flat.isLiquidName(name)) return { liquid: name, y }
+    return { top: y, logs }
+  }
+  return { top: sy - 4, logs }
+}
+
+// Order-time check: null when the footprint is acceptable, else the reason.
+function siteCheck(bot, site, rot) {
+  const { w, d } = blueprint.siteDimensions(rot | 0)
+  for (let dx = 0; dx < w; dx++) {
+    for (let dz = 0; dz < d; dz++) {
+      const x = site.x + dx
+      const z = site.z + dz
+      const r = scanColumn(bot, x, z, site.y)
+      if (r.unknown) continue
+      if (r.liquid) return `there is ${r.liquid} at ${x} ${r.y} ${z}`
+      if (r.foreign) return `somebody built there (${r.foreign} at ${x} ${r.y} ${z})`
+      if (Math.abs(r.top - (site.y - 1)) > MAX_DIP) return `the ground is too uneven at ${x} ${z}`
+    }
+  }
+  return null
+}
+
+function prepDone(bot, c) {
+  const n = nameAt(bot, c)
+  if (c.prep === 'log') return !isLogName(n)
+  return n != null && !AIR.has(n) && !build.isReplaceable(n) && !flat.isLiquidName(n)
+}
+
+// Undone prep targets, bottom-up logs then dip fills; cached 30 s on ctx
+// (a full-volume scan per decide is too much once the site grows).
+// ponytail: full site volume; a tall tree's upper logs sit out of reach and
+// block after three strikes — add a pillar-free skip if prod shows churn.
+function prepTargets(bot, ctx, st, now) {
+  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
+  const c0 = ctx && ctx.castlePrep
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
+    const live = c0.list.filter((c) => !done(bot, c))
+    if (live.length) return live
+  }
+  const { w, d } = blueprint.siteDimensions(st.rot | 0)
+  const { x: sx, y: sy, z: sz } = st.site
+  const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 2)
+  const floor = new Set(blueprint.absPlan(st.site, st.rot).cells
+    .filter((c) => c.dy === 0 && !clearing(c)).map((c) => `${c.x},${c.z}`))
+  const logs = []
+  const fills = []
+  for (let dx = 0; dx < w; dx++) {
+    for (let dz = 0; dz < d; dz++) {
+      const x = sx + dx
+      const z = sz + dz
+      const r = scanColumn(bot, x, z, sy)
+      if (r.unknown || r.liquid || r.foreign) continue
+      for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
+      if (r.top === sy - 2 && floor.has(`${x},${z}`)) fills.push({ x, y: sy - 1, z, kind: 'stone', prep: 'fill', idx: idx(x, sy - 1, z) })
+    }
+  }
+  const list = logs.sort((a, b) => a.y - b.y).concat(fills)
+  if (ctx) ctx.castlePrep = { key, at: now, list }
+  return list
 }
 
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
@@ -253,7 +350,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       const { cells, key } = blueprint.absPlan(st.site, st.rot)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
-    const r = peek(bot, st, now)
+    const r = peek(bot, st, now, ctx)
     let word = null
     if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
     else if (clearing(r.cell)) word = 'clear'
@@ -460,7 +557,7 @@ function digCell(bot, ctx, st, c, now) {
   // pillar would otherwise gate every layer above it forever.
   let ours = name === 'cobblestone'
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
-  if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name) && !isTreeBlock(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
@@ -545,6 +642,28 @@ function guardCastle(bot, ctx) {
   } catch (_) { /* best-effort: util.protectedReason still guards digs */ }
 }
 
+// One tick on one cell (plan or prep): material check, budget, then place
+// into an open cell or dig a wrong occupant.
+function work(bot, ctx, st, c, now, status) {
+  let item = null
+  if (!clearing(c)) {
+    item = findItem(bot, c.kind)
+    if (!item) {
+      // Material sourcing is g0z.4: report before walking anywhere.
+      st.status = `need ${c.kind}`
+      ctx.stepStatus = `failed:no-${c.kind}`
+      return
+    }
+  }
+  st.status = status
+  const over = overBudget(bot, ctx, c.idx)
+  if (over) { blockCell(ctx, st, c, over, now); return }
+  const occ = nameAt(bot, c)
+  const open = occ == null || AIR.has(occ) || occ === 'water'
+  if (item && open) placeCell(bot, ctx, st, c, item, now)
+  else digCell(bot, ctx, st, c, now)
+}
+
 function castle(bot, ctx) {
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return
@@ -561,6 +680,24 @@ function castle(bot, ctx) {
   }
   if (ctx.placeInFlight || ctx.digInFlight) return
   guardCastle(bot, ctx)
+  if (st.phase === 'prep') {
+    const list = prepTargets(bot, ctx, st, now)
+    const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(o.idx)] && st.blocked[bkey(o.idx)].until > now))
+    if (c) {
+      if (!ctx.castlePrepSaid) {
+        ctx.castlePrepSaid = true
+        const n = list.filter((o) => o.prep === 'log').length
+        try { bot.chat(`preparing the castle site: ${n} logs to chop, ${list.length - n} dips to fill`) } catch (_) { /* chat best-effort */ }
+      }
+      work(bot, ctx, st, c, now, 'preparing the site')
+      return
+    }
+    st.phase = 'body'
+    if (ctx.castlePrepSaid) {
+      ctx.castlePrepSaid = false
+      try { bot.chat('castle site ready, starting to build') } catch (_) { /* chat best-effort */ }
+    }
+  }
   const { cells, key } = blueprint.absPlan(st.site, st.rot)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
@@ -580,24 +717,7 @@ function castle(bot, ctx) {
     }
     return
   }
-  const c = cells[r.idx]
-  let item = null
-  if (!clearing(c)) {
-    item = findItem(bot, c.kind)
-    if (!item) {
-      // Material sourcing is g0z.4: report before walking anywhere.
-      st.status = `need ${c.kind}`
-      ctx.stepStatus = `failed:no-${c.kind}`
-      return
-    }
-  }
-  st.status = 'building'
-  const over = overBudget(bot, ctx, c.idx)
-  if (over) { blockCell(ctx, st, c, over, now); return }
-  const occ = nameAt(bot, c)
-  const open = occ == null || AIR.has(occ) || occ === 'water'
-  if (item && open) placeCell(bot, ctx, st, c, item, now)
-  else digCell(bot, ctx, st, c, now)
+  work(bot, ctx, st, cells[r.idx], now, 'building')
 }
 
 module.exports = castle
@@ -607,6 +727,7 @@ module.exports.STRIKES = STRIKES
 module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
 module.exports.isMaterial = (name) => typeof name === 'string' && Object.values(ITEM).some((want) => want(name))
 module.exports.menuFact = menuFact
+module.exports.siteCheck = siteCheck
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
 module.exports.findItem = findItem
