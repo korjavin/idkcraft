@@ -280,7 +280,7 @@ function denyReason(bot, block, ctx) {
 }
 
 // Interior box + 1 ring (walls) (all the way down) to the roof, plus
-// the door-front column. Home shape: site, interior{min,max}, v (door dx 3 on v2, else 1).
+// the apron (yard ground around it, below the doorstep level). Home shape: site, interior{min,max}, v (door dx 3 on v2, else 1).
 function inHouseFootprint(home, pos) {
   try {
     const s = home && home.site
@@ -288,8 +288,26 @@ function inHouseFootprint(home, pos) {
     if (!s || !b || !b.min || !b.max || !pos) return false
     const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
     if (x >= b.min.x - 1 && x <= b.max.x + 1 && z >= b.min.z - 1 && z <= b.max.z + 1 && y <= b.max.y + 1) return true
-    return x === s.x + (home.v === 2 ? 3 : 1) && z === s.z - 1 && y <= s.y + 1
+    // Apron (idkcraft-0mlh): 2 cells of yard ground past the walls (3 on
+    // the door side: outsidePos and two cells in front of it), up to the
+    // doorstep level. Prod 2026-10-02: equip dug a 2-4 deep pit on the porch,
+    // gohome then arrived at y=69 and died at the door.
+    const apron = x >= b.min.x - 3 && x <= b.max.x + 3 && z >= Math.min(b.min.z - 3, s.z - 3) && z <= b.max.z + 3 && y <= s.y + 1
+    return apron ? 'apron' : false
   } catch (_) { return false }
+}
+
+// Pit escape (idkcraft-0mlh revmux 01 core-1): a recovering body standing
+// below the doorstep level (in an old porch pit) may still dig apron cells
+// beside it at body height and above — recover's stair/headroom digs —
+// never below. Recover only (ctx.recovery): equip in the pit must not
+// widen it (revmux 02).
+function apronEscape(bot, home, pos) {
+  const feet = botPos(bot)
+  if (!feet || !pos) return false
+  const fy = Math.floor(feet.y)
+  return fy < home.site.y && Math.floor(pos.y) >= fy &&
+    Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 && Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1
 }
 
 // The type-rules tail of denyReason, split out so bring's atl.20 exemption
@@ -318,7 +336,8 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
-    const fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
+    let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
+    if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
     if (fp && !(pos.y >= ctx.home.site.y && ctx.placedByBot instanceof Set &&
       ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))) return 'protected'
     if (pos && ctx && ctx.placedByBot instanceof Set && !(fp && pos.y < ctx.home.site.y)) {

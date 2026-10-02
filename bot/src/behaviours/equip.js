@@ -5,7 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const fightMod = require('./fight')
-const { canBreak, denyReason, logDeny } = require('./util')
+const { canBreak, denyReason, logDeny, protectedReason } = require('./util')
 
 // equip: rebuild the starter kit after death (idkcraft-atl.6, owner
 // 2026-09-24: stone_pickaxe, stone_sword, ~32 scaffold blocks). Order is
@@ -536,6 +536,9 @@ function digTick(bot, ctx, st, bp) {
       matching: (b) => !!b && typeof b.name === 'string' && names.includes(b.name),
       maxDistance: 12,
       count: 16, // the wet filter below shrinks the pool: scan wider
+      // idkcraft-0mlh: skip protected ground (house apron) in the scan, so
+      // 16 porch cells near the door never starve the pool into no-dirt.
+      useExtraInfo: (b) => protectedReason(bot, b, ctx) === null,
     })
   } catch (_) { found = null }
   if (!found || !found.length) {

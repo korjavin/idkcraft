@@ -619,10 +619,36 @@ describe('house footprint (idkcraft-e5ba)', () => {
     assert.equal(denyReason(bot, blk('dirt', 100, 71, -356), c), null)
   })
   it('leaves distant ground, flora and snow alone', () => {
-    assert.equal(d('grass_block', 100, 70, -350), null)
-    assert.equal(d('dirt', 107, 70, -355), null)
+    assert.equal(d('grass_block', 100, 70, -349), null)
+    assert.equal(d('dirt', 106, 70, -355), null)
+    assert.equal(d('grass_block', 100, 70, -366), null)
+    assert.equal(d('grass_block', 100, 73, -359), null, 'yard ground above the doorstep level')
     assert.equal(d('snow', 100, 71, -356), null)
     assert.equal(d('short_grass', 100, 71, -356), null)
+  })
+  it('apron (idkcraft-0mlh): porch, door approach and yard ring are protected', () => {
+    assert.equal(d('grass_block', 100, 70, -358), 'protected') // under outsidePos
+    assert.equal(d('grass_block', 98, 69, -360), 'protected') // two cells in front of it
+    assert.equal(d('dirt', 101, 68, -359), 'protected') // pit bottom on the porch
+    assert.equal(d('dirt', 105, 69, -355), 'protected') // east yard ring
+    assert.equal(d('dirt', 95, 72, -350), 'protected') // doorstep level + 1
+    assert.equal(d('stone', 100, 66, -361), null) // past the door-side apron
+    const c = { home, placedByBot: new Set(['104,71,-355']) }
+    assert.equal(denyReason(bot, blk('dirt', 104, 71, -355), c), null, 'our own patch on the yard stays diggable')
+  })
+  it('apron pit escape: a body in an old porch pit may stair out, never dig deeper (revmux 01 core-1)', () => {
+    const pit = worldBot(new Map())
+    pit.entity = { position: new Vec3(101.5, 69, -357.5), onGround: true } // feet cell 101 69 -358
+    const p = (n, x, y, z) => denyReason(pit, blk(n, x, y, z), { home, recovery: {} })
+    assert.equal(p('dirt', 102, 70, -358), null, 'step above the pit wall')
+    assert.equal(p('dirt', 100, 69, -359), null, 'pit wall at feet height')
+    assert.equal(p('dirt', 102, 68, -358), 'protected', 'never deeper')
+    assert.equal(p('dirt', 104, 70, -358), 'protected', 'not beside the body')
+    assert.equal(p('dirt', 101, 70, -357), 'protected', 'house wall ring is never an escape')
+    assert.equal(denyReason(pit, blk('dirt', 102, 70, -358), { home }), 'protected', 'not recovering (equip in the pit): no exemption')
+    const top = worldBot(new Map())
+    top.entity = { position: new Vec3(101.5, 71, -357.5), onGround: true } // on the porch
+    assert.equal(denyReason(top, blk('dirt', 102, 71, -358), { home, recovery: {} }), 'protected', 'standing on the porch: no exemption')
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
 })
