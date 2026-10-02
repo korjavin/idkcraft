@@ -647,6 +647,15 @@ describe('decide decision point', () => {
     assert.deepEqual(r, { step: 'rest', source: 'only-option', fsm: 'rest', model: null })
   })
 
+  it('chooseStep night stay/gohome is a rule: the model is not asked (bhz2)', async () => {
+    const boom = { source: 'jev', ask: async () => { throw new Error('asked at night') } }
+    const base = { logs: 20, planks: 50, maxPlanks: 50, table: 1, door: 1, home: 'built', tablePlaced: true, health: 20, food: 20 }
+    const inside = await chooseStep(boom, { ...base, time: 'night', inside: 'yes' }, ['stay', 'gather', 'explore', 'rest'])
+    assert.deepEqual(inside, { step: 'stay', source: 'night-rule', fsm: 'stay', model: null })
+    const out = await chooseStep(boom, { ...base, time: 'dusk', inside: 'no' }, ['gohome', 'gather', 'explore', 'rest'])
+    assert.deepEqual(out, { step: 'gohome', source: 'night-rule', fsm: 'gohome', model: null })
+  })
+
   it('chooseStep model answer flows through; disagreement logged on fsm split', async () => {
     // (b) craft answered by laya on a craft menu (fsm agrees here: craft tops
     // the order, so agreement is the honest expectation)...
