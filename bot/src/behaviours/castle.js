@@ -154,7 +154,10 @@ function strike(ctx, st, c, why, now) {
 // still needs the interior. Then the keep-clear cells, the moat digs (v2,
 // g0z.6: the bridge deck is an ordinary place cell, so it exists before
 // any dig) and the fence ring last. Indices stay plan indices (blocked keys).
-const RANK = { door: 1, air: 2, dig: 3, fence: 4 }
+// Torches (g0z.17) go after every other place cell, before the door: no
+// cell leans on a torch, and a torch-none word (no coal for the craft)
+// must never hold the stone and planks behind it.
+const RANK = { torch: 0.5, door: 1, air: 2, dig: 3, fence: 4 }
 function rank(c) { return RANK[c.kind] || 0 }
 // Interior work (g0z.6): an undone cell ranked before the moat. While one
 // is left — blocked, gated or not — no moat cell is dug, so the bot never
@@ -905,6 +908,7 @@ module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
 module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.entries(ITEM).some(([kind, want]) =>
   want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN)))
 module.exports.menuFact = menuFact
+module.exports.rank = rank
 module.exports.siteCheck = siteCheck
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable

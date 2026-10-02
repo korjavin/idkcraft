@@ -109,6 +109,29 @@ describe('movementsFor', () => {
     assert.equal(ctx.movements.allowParkour, true)
   })
 
+  it('g0z.18: castle step above the reserve scaffolds with dirt only; cobble returns at the reserve or off the step', () => {
+    const DIRT = 9
+    const COBBLE = 14
+    let cobble = 48
+    const b = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { itemsByName: { dirt: { id: DIRT }, cobblestone: { id: COBBLE } } },
+      inventory: { items: () => [{ name: 'cobblestone', count: cobble }, { name: 'dirt', count: 3 }] },
+    }
+    const ctx = ctxWithMov({ work: true, step: 'castle', castle: { site: { x: 0, y: 64, z: 0 } } })
+    ctx.movements.scafoldingBlocks = [DIRT, COBBLE]
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT], '48 cobble on the castle step: no cobble scaffold')
+    cobble = 16 // at the SCAFFOLD_LOW reserve: the reserve is scaffold again
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE])
+    cobble = 48
+    body.movementsFor('work', b, ctx)
+    ctx.step = 'forage'
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE], 'other steps keep the default')
+  })
+
   it('no-ops without movements', () => {
     assert.doesNotThrow(() => body.movementsFor('work', bot, {}))
   })
