@@ -9,6 +9,7 @@ const { botPos } = require('./util')
 const body = require('../body')
 const retreatMod = require('./retreat')
 const recover = require('./recover')
+const buildMod = require('./build')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -408,8 +409,69 @@ function freshGo() {
   return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
 }
 
+// idkcraft-1l9: the open phase had no cap (tryToggle every 2 s forever).
+// ~5 toggle windows, then fail. Repeat failures at the same door latch
+// gohome out for the night in goal.js (idkcraft-xhqv: gohomeLatched).
+const OPEN_TICKS = 10
+
+// A loaded door cell that holds no door (idkcraft-1l9). A dark cell
+// (blockAt null) is unknown, not gone.
+function doorGone(bot, home) {
+  try {
+    const b = bot.blockAt && bot.blockAt(doorPos(home))
+    return !!b && !(typeof b.name === 'string' && b.name.endsWith('_door'))
+  } catch (_) {
+    return false
+  }
+}
+
+// No door = no shelter, and gohome never holds a failure (self-advancing):
+// failing alone re-picks gohome at the same hole every tick till dawn
+// (idkcraft-1l9). The house is genuinely unfinished, so built drops and
+// build repairs the door. A skipped door cell is un-skipped first (revmux
+// 01): else the index.js revalidation (nextCellIdx minus skips === -1)
+// flips built straight back and the hole loop returns. Once per skip stamp
+// (revmux 02): a door build re-skipped after our re-probe cannot be placed,
+// so it keeps its skip window instead of cycling build -> 'home done' ->
+// gohome all night. That residual still fails gohome at the hole (no chat);
+// goal.js latches it out for the night after repeats (idkcraft-xhqv).
+function failGoneDoor(bot, ctx, st, home, where) {
+  failNoDoor(ctx, st, where)
+  try {
+    const di = buildMod.blueprintFor(home).findIndex((c) => c.kind === 'door')
+    const skipped = Array.isArray(ctx.buildSkip) && ctx.buildSkip.includes(di)
+    const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt[di] : undefined
+    if (skipped && typeof ctx.doorReprobeAt === 'number' && !(typeof at === 'number' && at < ctx.doorReprobeAt)) return
+    if (skipped) {
+      ctx.buildSkip = ctx.buildSkip.filter((i) => i !== di)
+      if (ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object') delete ctx.buildSkipAt[di]
+      ctx.doorReprobeAt = Date.now()
+    }
+    home.built = false
+  } catch (_) { /* keep built */ }
+}
+
+// One line per phase change (idkcraft-1l9): prod stood 8 minutes with
+// nothing but moving=false path=success to read.
+function logPhase(bot, ctx, st, home) {
+  if (!st || st.logged === st.phase) return
+  st.logged = st.phase
+  const f = (p) => (p ? `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10},${Math.round(p.z * 10) / 10}` : '?')
+  let aim = null
+  try {
+    if (st.phase === 'walk') aim = !st.viaDone && st.via ? st.via : outsidePos(home)
+    else if (st.phase === 'enter') aim = insidePos(home)
+    else aim = doorPos(home)
+  } catch (_) { /* aim unknown */ }
+  console.log(`gohome phase=${st.phase} aim=${f(aim)} pos=${f(botPos(bot))} status=${ctx.stepStatus} built=${!!home.built}`)
+}
 
 function gohome(bot, ctx, target, state) {
+  gohomeTick(bot, ctx, target, state)
+  if (ctx && ctx.home && ctx.home.site) logPhase(bot, ctx, ctx.gohome, ctx.home)
+}
+
+function gohomeTick(bot, ctx, target, state) {
   const home = ctx && ctx.home
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
@@ -490,9 +552,14 @@ function gohome(bot, ctx, target, state) {
   if (st.phase === 'open') {
     // No-dig released: the phase moved (the walk borrow is walk-scoped).
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
+    if (doorGone(bot, home)) { failGoneDoor(bot, ctx, st, home, 'gohome-open'); return }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'enter'
-    else {
+    else if ((st.openTicks = (st.openTicks || 0) + 1) > OPEN_TICKS) {
+      st.phase = 'failed'
+      ctx.stepStatus = 'failed:door-stuck'
+      return
+    } else {
       tryToggle(bot, st, door)
       return
     }
@@ -509,7 +576,7 @@ function gohome(bot, ctx, target, state) {
   }
   if (st.phase === 'close') {
     const door = doorBlock(bot, home)
-    if (!door) { failNoDoor(ctx, st, 'gohome-close'); return }
+    if (!door) { failGoneDoor(bot, ctx, st, home, 'gohome-close'); return }
     if (!doorOpen(door)) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
@@ -684,7 +751,11 @@ function stay(bot, ctx, target, state) {
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'exit'
-    else {
+    else if ((st.openTicks = (st.openTicks || 0) + 1) > OPEN_TICKS) {
+      st.phase = 'failed'
+      ctx.stepStatus = 'failed:door-stuck' // gohome's 1l9 cap (idkcraft-470s)
+      return
+    } else {
       tryToggle(bot, st, door)
       return
     }
@@ -886,9 +957,11 @@ function releaseMeet(bot, ctx) {
 // released to the standing mode. The console keeps the machine reason.
 function failMeet(bot, ctx, status) {
   const order = ctx && ctx.comehome
+  const exiting = !!(order && order.exiting)
   if (order) order.phase = 'failed'
   ctx.stepStatus = status
   ctx.comehome = null
+  if (exiting) ctx.inShelter = false // exit path: the shelter flag was armed by releaseMeet
   try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   ctx.shelterLeg = null
   try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
@@ -897,7 +970,12 @@ function failMeet(bot, ctx, status) {
     console.log(`comehome ${status}`)
     return
   }
-  const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : ''
+  if (exiting && status === 'failed:door-stuck') {
+    try { bot.chat('cannot get out: door stuck') } catch (_) { /* chat best-effort */ }
+    console.log(`comehome ${status}`)
+    return
+  }
+  const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : status === 'failed:door-stuck' ? ': door stuck' : ''
   try { bot.chat(`cannot reach home${why}`) } catch (_) { /* chat best-effort */ }
   console.log(`comehome ${status}`)
 }
@@ -963,7 +1041,10 @@ function exitMeet(bot, ctx, home, order) {
   if (order.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'exit'
-    else {
+    else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); the released body's A* may dig the wall (revmux 01 minor)
+      return
+    } else {
       tryToggle(bot, order, door)
       return
     }
@@ -1094,7 +1175,10 @@ function comehome(bot, ctx, target, state) {
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome') } catch (_) { /* lease best-effort */ }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'enter'
-    else {
+    else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-xhqv)
+      return
+    } else {
       tryToggle(bot, order, door)
       return
     }

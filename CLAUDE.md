@@ -151,7 +151,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - Stuck oracle gate (idkcraft-6x7.4): a PR touching risky files above attaches the
   `sh bot/tools/stuck-run.sh` output of the branch (judged against `stuck-baseline.json` —
   no master "before" run), and does not merge
-  while it exits 1 (regression) — exit 2 is an environment failure, fix the rig, not the code.
+  while it exits 1 (regression); the script holds its own rig lock (busy = exit 2, no manual
+  `mkdir` wrapper; `RIG_LOCK_WAIT=<secs>` to wait) — exit 2 is an environment failure, fix the rig, not the code.
   Every closed movement bead adds its prod coords to `bot/tools/stuck-spots.json` (with `bead`)
   plus the measured entry in `bot/tools/stuck-baseline.json`; one without the other fails
   the gate or `npm test`. Manual: `bot/tools/README.md`.

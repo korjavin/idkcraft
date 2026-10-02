@@ -235,7 +235,7 @@ describe('order spots (idkcraft-6x7.7)', () => {
       assert.ok(o.order.length > 0 && o.order.length <= 256, `${o.name}: bad order length`)
       for (const k of ['expect', 'fail']) {
         assert.ok(Array.isArray(o[k]) && o[k].length > 0 && o[k].length <= 16, `${o.name}: bad ${k}`)
-        for (const m of o[k]) assert.ok(typeof m === 'string' && m.length > 0 && m.length <= 80, `${o.name}: bad ${k} marker`)
+        for (const m of o[k]) assert.ok(typeof m === 'string' && m.length > 0 && m.length <= 80 && m !== '=', `${o.name}: bad ${k} marker`)
       }
     }
   })
@@ -324,6 +324,246 @@ describe('order spots (idkcraft-6x7.7)', () => {
       'Following StuckGuider123',
     ]) {
       assert.equal(matchOrderLine(line, EXP, FAIL), null, line)
+    }
+  })
+})
+
+describe('order markers (idkcraft-6x7.8)', () => {
+  it('exact markers match the full line only', () => {
+    const EXP = ['=home']
+    const FAIL = ['cannot reach home', 'cannot reach the common room', 'no home yet', 'home not built yet']
+    assert.equal(matchOrderLine('home', EXP, FAIL), 'expect')
+    for (const line of [
+      'cannot reach home',
+      'cannot reach home: no door',
+      'cannot reach home: no home',
+      'cannot reach the common room',
+      'no home yet — say build here',
+      'home not built yet — say go work',
+    ]) {
+      assert.equal(matchOrderLine(line, EXP, FAIL), 'fail', line)
+    }
+  })
+
+  it('exact markers do not fire on longer lines containing them', () => {
+    const EXP = ['=home']
+    const FAIL = ['cannot reach home']
+    for (const line of [
+      'coming home',
+      'my home is at -14 65 -217',
+      'home for the night',
+      'homeward bound',
+      'on my own: heading home',
+    ]) {
+      assert.equal(matchOrderLine(line, EXP, FAIL), null, line)
+    }
+  })
+
+  it('a bare = marker is rejected (it would match only the empty line)', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'order-exact-'))
+    const saved = process.argv[2]
+    try {
+      const f = path.join(dir, 'bare.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], mode: 'order', order: 'come home', expect: ['='], fail: ['cannot reach home'] }]))
+      process.argv[2] = f
+      assert.throws(() => loadSpots(), /bad expect marker/)
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+})
+
+describe('order corpus (idkcraft-6x7.8)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+  const jr = byName['JR-SLOPE']
+  const q0h = byName['Q0H-PIT']
+
+  it('JR-SLOPE is the order-driven slope bring spot', () => {
+    // A 'build here' order is un-gateable on the slope (idkcraft-d7i: two
+    // identical runs stalled at different points, 92/99 then below 80/99,
+    // and paged every run) — flaky progress plus a gave-up on green breaks
+    // both the reached pin and strict maxCalls. The spot brings slope ore
+    // instead: same terrain under an order, deterministic verdict.
+    assert.equal(jr.mode, 'order')
+    assert.match(jr.order, /^bring me acacia_log/)
+    assert.ok(jr.expect.includes('here is ') && jr.expect.includes('here are '))
+    assert.ok(jr.fail.includes('could not '))
+    assert.ok(jr.fail.includes('no acacia_log within'))
+  })
+
+  it('JR acacia lines judge against the committed markers', () => {
+    assert.equal(matchOrderLine('here is 1 acacia_log', jr.expect, jr.fail), 'expect')
+    assert.equal(matchOrderLine('here are 2 acacia_log', jr.expect, jr.fail), 'expect')
+    for (const line of [
+      'could not reach acacia_log safely',
+      'could not reach acacia_log (no path in) at -167 71 -71',
+      'only got 1 acacia_log',
+      'no acacia_log within 48 blocks (loaded area)',
+      'searched 2 areas, no acacia_log',
+    ]) {
+      assert.equal(matchOrderLine(line, jr.expect, jr.fail), 'fail', line)
+    }
+    for (const line of [
+      'going for 1 acacia_log, 5 blocks away (exposed)',
+      'coming with 1 acacia_log',
+      "I can't see you — I'm at -149 72 -77 with your 1 acacia_log; come closer",
+      'building 45/99',
+    ]) {
+      assert.equal(matchOrderLine(line, jr.expect, jr.fail), null, line)
+    }
+  })
+
+  it('Q0H-PIT is the order-driven come-home spot (rig-built house)', () => {
+    assert.equal(q0h.mode, 'order')
+    assert.equal(q0h.order, 'come home')
+    assert.deepEqual(q0h.expect, ['=home'])
+    assert.deepEqual(q0h.fail, ['cannot reach home', 'cannot reach the common room', 'no home yet', 'home not built yet'])
+    assert.deepEqual(q0h.house, [-25, 65, -210])
+  })
+
+  it('come-home lines judge against the committed markers', () => {
+    assert.equal(matchOrderLine('home', q0h.expect, q0h.fail), 'expect')
+    for (const line of [
+      'cannot reach home',
+      'cannot reach home: no door',
+      'cannot reach the common room',
+      'no home yet — say build here',
+      'home not built yet — say go work',
+    ]) {
+      assert.equal(matchOrderLine(line, q0h.expect, q0h.fail), 'fail', line)
+    }
+    for (const line of [
+      'coming home',
+      'my home is at -25 65 -210',
+      'building a home at -25 65 -210',
+      'on my own: heading home',
+    ]) {
+      assert.equal(matchOrderLine(line, q0h.expect, q0h.fail), null, line)
+    }
+  })
+
+  it('loadSpots accepts the converted corpus entries', () => {
+    const saved = process.argv[2]
+    process.argv[2] = path.join(TOOLS, 'stuck-spots.json')
+    try {
+      const list = loadSpots()
+      const j = list.find((x) => x.name === 'JR-SLOPE')
+      assert.equal(j.mode, 'order')
+      assert.match(j.order, /^bring me acacia_log/)
+      assert.deepEqual(j.fail, jr.fail)
+      const q = list.find((x) => x.name === 'Q0H-PIT')
+      assert.equal(q.mode, 'order')
+      assert.equal(q.order, 'come home')
+      assert.deepEqual(q.house, { x: -25, y: 65, z: -210 })
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+    }
+  })
+
+  it('follow-revoking orders stay after all follow spots', () => {
+    // 'build here'/'come home'/'go work' clear the live followName (index.js
+    // startWork, orders.js setComehome) with no per-spot re-arm — a follow
+    // spot after one would walk with no target. The corpus keeps that order.
+    let seenRevoke = false
+    for (const s of spots) {
+      const revokes = s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order)
+      if (revokes) seenRevoke = true
+      else if (s.mode !== 'order') assert.ok(!seenRevoke, `follow spot ${s.name} after a follow-revoking order`)
+    }
+  })
+})
+
+describe('raise-house (idkcraft-6x7.8)', () => {
+  const { houseCommands } = require('../tools/raise-house')
+  const buildMod = require('../src/behaviours/build')
+
+  // Expand fill runs back to cells: the generator must cover the plan.
+  function covered(cmds) {
+    const cells = new Map() // `x,y,z` -> block
+    for (const c of cmds) {
+      let m = c.match(/^setblock (-?\d+) (-?\d+) (-?\d+) (\S+)$/)
+      if (m) { cells.set(`${m[1]},${m[2]},${m[3]}`, m[4]); continue }
+      m = c.match(/^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (\S+)$/)
+      assert.ok(m, `unparseable command: ${c}`)
+      const [, x1, y1, z1, x2, y2, z2, block] = m
+      for (let x = Math.min(+x1, +x2); x <= Math.max(+x1, +x2); x++) {
+        for (let y = Math.min(+y1, +y2); y <= Math.max(+y1, +y2); y++) {
+          for (let z = Math.min(+z1, +z2); z <= Math.max(+z1, +z2); z++) {
+            cells.set(`${x},${y},${z}`, block)
+          }
+        }
+      }
+    }
+    return cells
+  }
+
+  it('covers every plan cell exactly once (fill cells read the slab)', () => {
+    const site = { x: -23, y: 64, z: -215 }
+    const cells = covered(houseCommands(site))
+    const plan = buildMod.blueprintFor({ v: 2 })
+    for (const c of plan) {
+      const k = `${site.x + c.dx},${site.y + c.dy},${site.z + c.dz}`
+      if (c.kind === 'fill') {
+        // Fill cells sit at dy=-1: the slab itself reads solid (their done).
+        assert.equal(cells.get(k), 'dirt', k)
+        continue
+      }
+      const want = c.kind === 'table' ? 'crafting_table' : c.kind === 'door' ? 'oak_door[facing=north,half=lower,hinge=left]' : 'oak_planks'
+      assert.equal(cells.get(k), want, k)
+    }
+    // The door upper half rides above the plan cell.
+    const door = plan.find((c) => c.kind === 'door')
+    assert.equal(cells.get(`${site.x + door.dx},${site.y + door.dy + 1},${site.z + door.dz}`), 'oak_door[facing=north,half=upper,hinge=left]')
+  })
+
+  it('levels the pad and grooms the doorstep', () => {
+    const cells = covered(houseCommands({ x: 0, y: 64, z: 0 }))
+    for (let ix = 0; ix < 7; ix++) {
+      for (let iz = 0; iz < 6; iz++) {
+        assert.equal(cells.get(`${ix},63,${iz}`), 'dirt', `slab ${ix},${iz}`)
+        assert.equal(cells.get(`${ix},64,${iz}`) === 'air' || cells.get(`${ix},64,${iz}`).startsWith('oak_') || cells.get(`${ix},64,${iz}`) === 'crafting_table', true, `room ${ix},${iz}`)
+      }
+    }
+    // Doorstep air + slab in front of the north-wall door (dx=3, z=-1..-2).
+    assert.equal(cells.get('3,63,-1'), 'dirt')
+    assert.equal(cells.get('3,64,-1'), 'air')
+    assert.equal(cells.get('3,66,-2'), 'air')
+  })
+
+  it('rejects a non-integer site', () => {
+    assert.throws(() => houseCommands({ x: 0.5, y: 64, z: 0 }), /integer/)
+    assert.throws(() => houseCommands(null), /integer/)
+  })
+
+  it('loadSpots passes house through and rejects malformed sites', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'order-house-'))
+    const saved = process.argv[2]
+    try {
+      const good = path.join(dir, 'good.json')
+      fs.writeFileSync(good, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], house: [-23, 64, -215] }]))
+      process.argv[2] = good
+      assert.deepEqual(loadSpots()[0].house, { x: -23, y: 64, z: -215 })
+      const nohouse = path.join(dir, 'nohouse.json')
+      fs.writeFileSync(nohouse, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0] }]))
+      process.argv[2] = nohouse
+      assert.equal(loadSpots()[0].house, null)
+      for (const house of [[0, 64], [0.5, 64, 0], 'x', [0, 64, 0, 1]]) {
+        const f = path.join(dir, `${Date.now()}-${Math.random()}.json`)
+        fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], house }]))
+        process.argv[2] = f
+        assert.throws(() => loadSpots(), /bad house/, `${JSON.stringify(house)} must throw`)
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 })
@@ -450,5 +690,96 @@ describe('stuck-run.sh oracle wiring (idkcraft-6x7.4)', () => {
   it('last-replay.json is gitignored', () => {
     const rootIgnore = fs.readFileSync(path.join(__dirname, '..', '..', '.gitignore'), 'utf8')
     assert.ok(rootIgnore.includes('bot/tools/last-replay.json'), 'results file must be gitignored')
+  })
+})
+
+describe('prep arenas (idkcraft-jsf.7)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+  const withPrep = spots.filter((s) => s.prep != null)
+  const ctl = { brain: 'stub', spots: { V: { reached: false, maxStuck: 2, maxEps: 2, maxCalls: 1, minCalls: 1 } } }
+
+  it('committed prep is fill/setblock strings only', () => {
+    assert.ok(withPrep.length >= 2, 'want the DUGPIT pair')
+    for (const s of withPrep) {
+      assert.ok(Array.isArray(s.prep) && s.prep.length > 0, `${s.name}: prep must be a non-empty array`)
+      for (const c of s.prep) {
+        assert.equal(typeof c, 'string', `${s.name}: prep entries are rcon strings`)
+        assert.match(c, /^(fill|setblock) /, `${s.name}: prep allows fill/setblock only: ${c}`)
+      }
+    }
+  })
+
+  it('every prep spot has a baseline entry', () => {
+    for (const s of withPrep) assert.ok(baseline.spots[s.name], `prep spot ${s.name} has no baseline entry`)
+  })
+
+  it('the water_up spot has its no-kit control on the identical arena', () => {
+    const bare = byName['DUGPIT-BARE']
+    const val = byName['DUGPIT-VALIDATE']
+    assert.ok(bare && val, 'missing DUGPIT-BARE / DUGPIT-VALIDATE')
+    assert.deepEqual(val.prep, bare.prep, 'control must rebuild the same arena')
+    assert.deepEqual([val.spawn, val.goal], [bare.spawn, bare.goal])
+    assert.equal(bare.bucket, true)
+    assert.equal(val.bucket, false)
+    for (const s of [bare, val]) {
+      assert.equal(s.pickaxe, false, `${s.name}: a pickaxe opens a dig path`)
+      assert.equal(s.scaffold, 0, `${s.name}: scaffold opens a pillar path`)
+      assert.ok((s.bead || '').includes('idkcraft-jsf.7'), `${s.name} must cite idkcraft-jsf.7`)
+    }
+    assert.equal(baseline.spots['DUGPIT-BARE'].reached, true)
+    const v = baseline.spots['DUGPIT-VALIDATE']
+    assert.equal(v.reached, false, 'the control trap holds')
+    assert.ok(Number.isInteger(v.minCalls) && v.minCalls >= 1, 'the control must page (minCalls >= 1)')
+  })
+
+  it('a control that pages is ok', () => {
+    assert.equal(compareBaseline([row('V', false, 0, 2, 1)], ctl)[0].verdict, 'ok')
+  })
+
+  it('a silent control trap regresses (detector broke)', () => {
+    const [d] = compareBaseline([row('V', false, 0, 0, 0)], ctl)
+    assert.equal(d.verdict, 'regressed')
+    assert.match(d.why, /calls 0 < 1/)
+  })
+
+  it('a leaking control trap regresses, not improves (its twin proves nothing)', () => {
+    const [d] = compareBaseline([row('V', true, 0, 0, 0)], ctl)
+    assert.equal(d.verdict, 'regressed')
+    const [p] = compareBaseline([row('V', true, 0, 1, 1)], ctl) // paged, then walked out
+    assert.equal(p.verdict, 'regressed')
+    assert.match(p.why, /leaked/)
+  })
+
+  it('loadSpots passes prep through and rejects non-world commands', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-spots-'))
+    const saved = process.argv[2]
+    const load = (prep) => {
+      const f = path.join(dir, 'p.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], prep }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      assert.deepEqual(load(['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])[0].prep, ['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])
+      assert.deepEqual(load(undefined)[0].prep, [])
+      for (const bad of [['give @a water_bucket 1'], ['op X'], ['tp X 0 0 0'], [' fill 0 0 0 1 1 1 air'], [7], 'fill 0 0 0 1 1 1 air']) {
+        assert.throws(() => load(bad), /bad prep|fill\/setblock only/, JSON.stringify(bad))
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prep runs after both tps and before the kit', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    const at = (needle) => { const i = replay.indexOf(needle); assert.ok(i >= 0, needle); return i }
+    const prep = at('for (const cmd of s.prep) await rcon(cmd)')
+    assert.ok(at('await rcon(`tp ${FOLLOWER}') < prep, 'prep must follow the tps (chunks loaded)')
+    assert.ok(prep < at('await rcon(`clear ${FOLLOWER}`)'), 'prep must precede the kit')
   })
 })

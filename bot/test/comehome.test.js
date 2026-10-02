@@ -427,6 +427,17 @@ describe('jr2.3 meet failures end out loud', () => {
     assert.deepEqual(bot.chats, ['cannot reach home'])
   })
 
+  it('a door that never reads open fails within ~10 ticks (xhqv, gohome 1l9 cap)', () => {
+    const bot = doorBot({ at: { ...OUT2 } })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ctx = { home: v2home(), comehome: home.startMeet('Steve', false, v2home()) }
+    let ticks = 0
+    while (ctx.comehome && ticks < 30) { home.comehome(bot, ctx); ticks++ }
+    assert.equal(ctx.stepStatus, 'failed:door-stuck')
+    assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+    assert.deepEqual(bot.chats, ['cannot reach home: door stuck'])
+  })
+
   it('no home fails loud without touching the door', () => {
     const bot = doorBot({ at: { ...OUT2 } })
     const ctx = { comehome: home.startMeet('Steve', false) }
@@ -530,6 +541,18 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     assert.equal(ctx.comehome.exiting, true)
     assert.equal(ctx.comehome.phase, 'open', 'fresh legs')
     assert.deepEqual(bot.chats, [], 'silent like stay')
+  })
+
+  it('exit: a door that never reads open fails within ~10 ticks (470s)', () => {
+    const bot = doorBot({ at: { ...MEET2 } })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'open', exiting: true }, inShelter: true }
+    let ticks = 0
+    while (ctx.comehome && ticks < 30) { home.comehome(bot, ctx); ticks++ }
+    assert.equal(ctx.stepStatus, 'failed:door-stuck')
+    assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, ['cannot get out: door stuck'])
   })
 
   it('already outside (died mid-exit) releases at once', () => {

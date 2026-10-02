@@ -217,6 +217,17 @@ function blockNameAt(bot, p) {
   }
 }
 
+// 45j: the chunk under the cell is loaded — mineflayer answers null for an
+// unloaded chunk. Unloaded cells read as undone, which is not the same as
+// known-missing. A throwing read stays on the old (loaded) path.
+function cellLoaded(bot, home, cell) {
+  try {
+    return bot.blockAt(cellAbs(home, cell)) !== null
+  } catch (_) {
+    return true
+  }
+}
+
 function cellDone(bot, home, cell) {
   const name = blockNameAt(bot, cellAbs(home, cell))
   if (name == null) return false
@@ -411,6 +422,27 @@ function pruneBuildSkips(ctx, now) {
   } catch (_) { /* prune best-effort */ }
 }
 
+function walkToSite(bot, ctx, p) {
+  const bp = bot.entity && bot.entity.position
+  if (!bp || typeof bp.x !== 'number') return
+  const w = ctx.buildSiteWalk
+  if (!w || Math.hypot(bp.x - w.x, bp.z - w.z) > CELL_PROGRESS) {
+    ctx.buildSiteWalk = { x: bp.x, z: bp.z, ticks: 0 }
+  } else if (++w.ticks >= CELL_TICK_BUDGET) {
+    ctx.buildSiteWalk = null
+    ctx.buildGoalIdx = -1
+    ctx.stepStatus = 'failed:cannot-reach-site'
+    return
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* re-issue */ }
+  // Re-issue on idle: A* toward unloaded ground ends on a partial path,
+  // each re-plan from the new stand gets further.
+  if (ctx.buildGoalIdx === 'site' && moving) return
+  ctx.buildGoalIdx = 'site'
+  try { bot.pathfinder.setGoal(new goals.GoalNearXZ(p.x, p.z, PLACE_RANGE)) } catch (_) { /* retry next tick */ }
+}
+
 function build(bot, ctx, target, state) {
   if (!ctx.buildSkip) ctx.buildSkip = []
   // First build step without a home: default the site to world spawn
@@ -470,6 +502,15 @@ function build(bot, ctx, target, state) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
   }
+  // Unloaded site (45j, e.g. respawn ~150 blocks away): the scan reads
+  // nothing out here, so walk toward the site and re-scan once it loads.
+  // No item check (the next cell is unknown) and no cell budget; a walk
+  // that stops getting anywhere fails the step instead.
+  if (!cellLoaded(bot, ctx.home, cell)) {
+    walkToSite(bot, ctx, p)
+    return
+  }
+  ctx.buildSiteWalk = null
   // Per-cell attempt budget (ipn.10): ticks on one cell without progress —
   // no advance past the max cell, no displacement past CELL_PROGRESS —
   // skip it like a refusal. Keyed by site, so a home move re-arms without
@@ -682,6 +723,7 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.cellLoaded = cellLoaded
 module.exports.pruneBuildSkips = pruneBuildSkips
 module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS
 module.exports.PLACE_RANGE = PLACE_RANGE
