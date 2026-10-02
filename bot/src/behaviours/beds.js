@@ -29,7 +29,10 @@ const { canBreak } = require('./util')
 // one bed at a time — a x2 plan would strand on 4 oak + 4 birch).
 const WANT_WOOL = 6
 const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:no-wool
-const NOWOOL_LATCH = 2 // failed wool hunts per MC day before beds latches off until tomorrow
+const NOWOOL_LATCH = 2 // failed/partial wool hunts before beds latches off (9qt0: real time, persisted)
+const LATCH_MS = 2 * 3600 * 1000 // a latch expires this long after its last failure
+const SIGHT_MIN_MS = 30 * 60 * 1000 // ponytail: a sheep in sight reopens only past this age (unreachable-sheep loop cap)
+const FAIL_BANK_MS = 3 * 60 * 1000 // a failing hunt's bank walk; past it the yield is stale
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -335,34 +338,51 @@ function shearsTick(bot, ctx, st, pack, craftsOwed) {
   try { console.log(`beds shears: ${(res && res.line) || 'crafting failed'}, hunting instead`) } catch (_) { /* logging best-effort */ }
 }
 
-// Day latch (idkcraft-9kd): the atl.4 stepFail hold releases on relocation —
-// and a death-respawn IS a relocation — so one sheepless morning re-hunted
-// after every death (prod: 9 guardian kills in a day). The second failed
-// wool hunt of the same MC day latches beds infeasible until tomorrow; the
-// menu feasible gate reads it, the step itself just counts failures.
-function dayOf(bot) {
-  try {
-    const d = bot && bot.time && bot.time.day
-    return typeof d === 'number' ? d : 0
-  } catch (_) { return 0 }
-}
-
-function noteNoWool(st, day) {
+// Sheepless latch (idkcraft-9kd, 9qt0): the atl.4 stepFail hold releases on
+// relocation — and a death-respawn IS a relocation. The 9kd per-MC-day latch
+// still allowed 2 hunts every 20 real minutes and died with every restart
+// (prod: 36% of all ticks hunting, ~50 of 61 deaths downstream). Now: the
+// second failed/partial hunt latches beds off until a woolly sheep is in
+// sight (and the last failure is SIGHT_MIN_MS old) or LATCH_MS passes.
+// {fails, at} lives in ctx.beds.noWool and memory.js persists it, so death
+// and restart both keep it. A sighting does not reset the count: the hunt
+// it opens re-latches on failure.
+function noteNoWool(st, now) {
   try {
     if (!st || typeof st !== 'object') return 0
+    const t = typeof now === 'number' ? now : Date.now()
     const cur = st.noWool && typeof st.noWool === 'object' ? st.noWool : null
-    const fails = cur && cur.day === day ? (cur.fails || 0) + 1 : 1
-    st.noWool = { day, fails }
+    const live = cur && typeof cur.at === 'number' && t - cur.at < LATCH_MS
+    const fails = live ? (cur.fails || 0) + 1 : 1
+    st.noWool = { fails, at: t }
     return fails
   } catch (_) { return 0 }
 }
 
-function sheepLatched(ctx, bot) {
+function sheepInSight(bot) {
+  try {
+    return !!bringMod.findAnimal(bot, null, { prey: ['sheep'], skipSheared: true })
+  } catch (_) { return false }
+}
+
+// Menu gate: the latch, except 4+ string (the string rung needs no sheep).
+function sheepLatched(ctx, bot, now) {
+  try {
+    const st = ctx && ctx.beds
+    if (st && !st.stringDry && (bedMod.packCounts(bot).string || 0) >= 4) return false
+  } catch (_) { /* unreadable pack: the latch decides */ }
+  return latchLive(ctx, bot, now)
+}
+
+function latchLive(ctx, bot, now) {
   try {
     const st = ctx && ctx.beds
     const cur = st && st.noWool
-    if (!cur || typeof cur !== 'object') return false
-    return cur.day === dayOf(bot) && (cur.fails || 0) >= NOWOOL_LATCH
+    if (!cur || typeof cur !== 'object' || typeof cur.at !== 'number') return false
+    if ((cur.fails || 0) < NOWOOL_LATCH) return false
+    const age = (typeof now === 'number' ? now : Date.now()) - cur.at
+    if (!(age < LATCH_MS)) return false
+    return !(age >= SIGHT_MIN_MS && sheepInSight(bot))
   } catch (_) { return false }
 }
 
@@ -379,6 +399,9 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
   if (craftsOwed <= 0 || (color && (pack[`${color}_wool`] || 0) >= need)) {
     st.reopens = 0
     st.planksDry = false // fresh craft episode: retry the chest
+    st.stringDry = false
+    st.failing = 0 // a new episode: no stale yield (revmux 02 core-3)
+    st.latchPulled = false
     st.phase = 'craft'
     if (color && craftsOwed > 0) {
       try { bot.chat(`got ${pack[`${color}_wool`]} ${color} wool`) } catch (_) { /* chat best-effort */ }
@@ -386,6 +409,17 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     return
   }
   if (ctx.bring) return // the ticker runs the hunt (ours or foreign) instead of this step
+  // A failing hunt banks its wool first, then yields (9qt0). The flag is a
+  // deadline: a bank walk a re-decide preempted must not fail the next
+  // (sighting-opened) pick (revmux 02 core-3).
+  if (st.failing && Date.now() > st.failing) st.failing = 0
+  if (st.failing) {
+    if (totalWool(pack) > 0 && bankWoolTick(bot, ctx, st)) return
+    st.failing = 0
+    st.woolBanked = false
+    ctx.stepStatus = 'failed:no-wool'
+    return
+  }
   const last = st.hunt
   if (last) {
     st.hunt = null
@@ -393,22 +427,55 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     let timedOut = false
     try { legs = (last.searchLegs && last.searchLegs.legs) || 0 } catch (_) { /* unreadable order: reopen */ }
     try { timedOut = !!(last.searchLegs && last.searchLegs.timedOut) } catch (_) { /* unreadable order: reopen */ }
+    let capped = false
+    try { capped = !!(last.searchLegs && last.searchLegs.capped) } catch (_) { /* unreadable order: reopen */ }
     const budget = (bringMod.SEARCH_BUDGET && bringMod.SEARCH_BUDGET.legs) || 24
-    if (legs >= budget || timedOut || (st.reopens || 0) >= HUNT_REOPENS) {
+    if (legs >= budget || timedOut || capped || (st.reopens || 0) >= HUNT_REOPENS) {
       st.reopens = 0
-      noteNoWool(st, dayOf(bot))
-      ctx.stepStatus = 'failed:no-wool'
+      noteNoWool(st)
+      st.failing = Date.now() + FAIL_BANK_MS
+      woolTick(bot, ctx, st, pack, craftsOwed)
       return
     }
     // Partial hunt (ipn.11): wool gained but the need still unmet — the old
     // code reopened forever ('searched 4 areas, only got 1', 7x a day) and
-    // the latch never armed. A partial counts toward the daily latch, so
-    // two thin hunts yield the rest of the day to gear.
+    // the latch never armed. A partial counts toward the latch, so two thin
+    // hunts yield to gear until a sheep shows up.
     try {
       const atOpen = typeof st.huntWool === 'number' ? st.huntWool : null
-      if (atOpen !== null && totalWool(pack) > atOpen) noteNoWool(st, dayOf(bot))
+      if (atOpen !== null && totalWool(pack) > atOpen) noteNoWool(st)
     } catch (_) { /* latch best-effort */ }
     st.reopens = (st.reopens || 0) + 1
+  }
+  // String rung (9qt0): 4 string -> 1 white wool (2x2, no table) before any
+  // hunt — the bot kills spiders far more often than it finds sheep. A
+  // failed craft goes dry until the next craft episode.
+  const fromString = Math.floor((pack.string || 0) / 4)
+  if (fromString > 0 && !st.stringDry) {
+    const res = craftItem(bot, ctx, 'white_wool', fromString)
+    if (res === 'running') return
+    if (!(res && res.done)) st.stringDry = true
+    return // recount next tick
+  }
+  // The latch armed (the second partial above) or was restored: the menu
+  // only re-reads feasible on a re-decide, so the running step must not
+  // reopen a hunt itself (revmux 01: the string exemption and a partial
+  // close both reached here latched). The string rung above already ran.
+  if (latchLive(ctx, bot)) {
+    // Banked wool needs no sheep: one chest pull before yielding (revmux 02
+    // core-2); a covered colour crafts next tick, a short one banks back.
+    if (!st.latchPulled) {
+      const busy = chestTick(bot, ctx, st, 'beds-pull', async () => {
+        try { await stockpileMod.withdrawAnyFromChest(bot, ctx, WOOL16, need) } catch (_) { /* pull best-effort */ }
+        st.latchPulled = true
+      })
+      if (busy) return
+    }
+    st.latchPulled = false
+    st.reopens = 0
+    st.failing = Date.now() + FAIL_BANK_MS
+    woolTick(bot, ctx, st, pack, craftsOwed)
+    return
   }
   // Chest-first while the pack is short overall (the did.1 ladder pulls
   // banked wool, then the mob rung hunts the rest); direct mob rung on mixed
@@ -462,6 +529,34 @@ function craftTick(bot, ctx, st, pack, placed, craftsOwed) {
 // chest, it is unreachable, or it holds no planks (caller yields to gather).
 function plankWithdrawTick(bot, ctx, st) {
   if (st.planksDry) return false
+  return chestTick(bot, ctx, st, 'beds-planks', async () => {
+    try {
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, PLANK_NAMES, WITHDRAW_NEED)
+      st.planksDry = !(r && r.got > 0)
+    } catch (_) {
+      st.planksDry = true // a failed fetch reads as dry: gather feeds
+    }
+  })
+}
+
+// Bank the pack's wool before the step yields (9qt0: prod lost every
+// partial to death, so 3 wool never accumulated; the next hunt is
+// chest-first and takes it back). True while walking/depositing; false
+// once banked, or when there is no reachable chest.
+function bankWoolTick(bot, ctx, st) {
+  if (st.woolBanked) return false
+  const busy = chestTick(bot, ctx, st, 'beds-bank', async () => {
+    try { await stockpileMod.depositToChest(bot, ctx, WOOL16) } catch (_) { /* banking best-effort */ }
+    st.woolBanked = true
+  })
+  if (!busy) st.woolBanked = true // no chest or unreachable: yield with the pack
+  return busy
+}
+
+// Walk to the home chest and run one async op there (one flight at a time).
+// True while walking or in flight; false when there is no chest or it is
+// unreachable.
+function chestTick(bot, ctx, st, key, op) {
   // Adopt-on-sight (stockpile mirror): a fresh session has no chest claim
   // until stockpile runs, and the withdraw must not instant-fail for that.
   try {
@@ -486,7 +581,6 @@ function plankWithdrawTick(bot, ctx, st) {
   if (!bp || typeof bp.x !== 'number') return true
   const reach = stockpileMod.INTERACT_REACH || 3.6
   if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > reach) {
-    const key = 'beds-planks'
     if (ctx.lastGoalKey !== key) {
       // Range 3 stops at through-wall reach (the chest sits a cell inside
       // the walls; the walk must not need entry).
@@ -501,7 +595,7 @@ function plankWithdrawTick(bot, ctx, st) {
       st.wdStalls = 0
       st.wdAnchor = { x: bp.x, z: bp.z }
     } else if (++st.wdStalls >= WITHDRAW_STALL_TICKS) {
-      return false // unreachable: gather feeds
+      return false // unreachable: the caller yields
     }
     return true
   }
@@ -509,12 +603,8 @@ function plankWithdrawTick(bot, ctx, st) {
   ctx.bedsWithdrawInFlight = true
   void (async () => {
     try {
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, PLANK_NAMES, WITHDRAW_NEED)
-      if (!r || !(r.got > 0)) st.planksDry = true
-      else st.planksDry = false
-    } catch (_) {
-      st.planksDry = true // a failed fetch reads as dry: gather feeds
-    } finally {
+      await op()
+    } catch (_) { /* op owns its outcome */ } finally {
       ctx.bedsWithdrawInFlight = false
     }
   })()
@@ -679,6 +769,8 @@ module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact
 module.exports.sheepLatched = sheepLatched
 module.exports.NOWOOL_LATCH = NOWOOL_LATCH
+module.exports.LATCH_MS = LATCH_MS
+module.exports.SIGHT_MIN_MS = SIGHT_MIN_MS
 module.exports.fillNeed = fillNeed
 module.exports.needsFillGround = needsFillGround
 module.exports.WANT_WOOL = WANT_WOOL

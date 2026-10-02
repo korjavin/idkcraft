@@ -182,6 +182,21 @@ function castleOf(c) {
   }
 }
 
+// Sheepless latch (idkcraft-9qt0): beds' ctx.beds.noWool {fails, at}.
+// Survives restart so the bot does not re-hunt after every deploy; strict
+// shape, and a far-future stamp clamps to now (it still expires on time).
+function sheepOf(v, now) {
+  try {
+    if (!v || typeof v !== 'object') return null
+    const fails = num(v.fails)
+    const at = num(v.at)
+    if (fails === null || at === null || fails < 1 || at <= 0) return null
+    return { fails: Math.min(Math.floor(fails), 99), at: Math.min(at, typeof now === 'number' ? now : Date.now()) }
+  } catch (_) {
+    return null
+  }
+}
+
 function sameSite(a, b) {
   try {
     return !!a && !!b && !!a.site && !!b.site &&
@@ -292,7 +307,9 @@ function snapshot(bot, ctx, now) {
     if (ctx.castle === null) castle = null
     else if (ctx.castle) castle = castleOf(ctx.castle) || undefined
   } catch (_) { /* castle best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle }
+  let sheep
+  try { sheep = sheepOf(ctx.beds && ctx.beds.noWool, t) || undefined } catch (_) { /* latch best-effort */ }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -350,7 +367,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -397,7 +414,13 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0 }
+    const sheep = sheepOf(doc.sheep, t)
+    if (sheep) {
+      if (!ctx.beds || typeof ctx.beds !== 'object') ctx.beds = {}
+      ctx.beds.noWool = sheep
+      out.sheep = 1
+    }
     // Castle (g0z.3): a restart resumes the project as stored — the
     // order-time site checks never re-run over it.
     const castle = castleOf(doc.castle)

@@ -69,7 +69,7 @@ describe('ipn.11 partial wool hunts latch beds for the day', () => {
     ctx.beds.hunt = { searchLegs: { legs: 4 } }
     beds(bot, ctx)
     assert.ok(ctx.bring && ctx.bring.self === 'beds', 'partial reopens (first of the day)')
-    assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 1 }, 'partial counts')
+    assert.equal(ctx.beds.noWool.fails, 1, 'partial counts')
     assert.equal(F(FACTS, bot, ctx), true, 'one partial still retries')
 
     // Hunt 2: opens with 1, closes with 2 — still short.
@@ -78,11 +78,13 @@ describe('ipn.11 partial wool hunts latch beds for the day', () => {
     ctx.bring = undefined
     ctx.beds.hunt = { searchLegs: { legs: 4 } }
     beds(bot, ctx)
-    assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 2 }, 'second partial counts')
+    assert.equal(ctx.beds.noWool.fails, 2, 'second partial counts')
     assert.equal(F(FACTS, bot, ctx), false, 'two thin hunts latch the day')
     assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: no sheep today')
-    bot.time.day = 6
-    assert.equal(F(FACTS, bot, ctx), true, 'tomorrow retries')
+    bot.time.day = 6 // 9qt0: a new MC day no longer releases
+    assert.equal(F(FACTS, bot, ctx), false, 'next MC day stays latched')
+    ctx.beds.noWool.at -= beds.LATCH_MS
+    assert.equal(F(FACTS, bot, ctx), true, 'expired latch retries')
   })
 
   it('a short hunt that gained nothing reopens without counting', () => {
@@ -264,12 +266,12 @@ describe('ipn.11 driven latches let a ready gear take the body', () => {
       ctx.bring = undefined
       ctx.beds.hunt = { searchLegs: { legs: 4 } }
       beds(bot, ctx) // thin close: reopens AND counts (the fix)
-      assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 1 })
+      assert.equal(ctx.beds.noWool.fails, 1)
       pack.push({ name: 'brown_wool', count: 1 })
       ctx.bring = undefined
       ctx.beds.hunt = { searchLegs: { legs: 4 } }
       beds(bot, ctx)
-      assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 2 }, 'two driven partials latch')
+      assert.equal(ctx.beds.noWool.fails, 2, 'two driven partials latch')
       ctx.bring = undefined // the hunt closed; the step ended
       ctx.beds.hunt = null
       ctx.step = 'explore'
