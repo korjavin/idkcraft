@@ -802,3 +802,65 @@ describe('prep arenas (idkcraft-jsf.7)', () => {
     assert.ok(prep < at('await rcon(`clear ${FOLLOWER}`)'), 'prep must precede the kit')
   })
 })
+
+describe('recover-budget order carrier (idkcraft-au4j)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const names = spots.map((s) => s.name)
+  const lead = spots.find((s) => s.name === 'S6-LEAD')
+
+  it('S6-LEAD is a find-me lead to a prep-placed block, pinned reached with no page', () => {
+    // A lead gave-up (recover release, by=lead) drops the order silently:
+    // with MAX_FAILS=0 the failed dig_up pages and 'here:' never comes.
+    assert.ok(lead, 'S6-LEAD in the corpus')
+    assert.equal(lead.mode, 'order')
+    assert.equal(lead.order, 'find me emerald_block')
+    assert.equal(lead.bead, 'idkcraft-au4j')
+    // The prep restores the pristine brow (S6/S6-PIT dig it earlier in the
+    // run) and plants the target last, so the lead wedges in any corpus order.
+    assert.ok(lead.prep.length >= 2)
+    assert.match(lead.prep[0], /^fill -50 61 -232 -43 66 -224 /)
+    assert.equal(lead.prep[lead.prep.length - 1], 'setblock -47 63 -231 emerald_block')
+    const e = baseline.spots['S6-LEAD']
+    assert.equal(e.reached, true, 'the reached pin is the sabotage flip')
+    assert.equal(e.maxCalls, 0, 'a page is the sabotage signature, no slack')
+  })
+
+  it('S6-LEAD runs after S6-PIT (its lead dig would walk S6-PIT out of the wedge)', () => {
+    assert.ok(names.indexOf('S6-PIT') >= 0 && names.indexOf('S6-LEAD') > names.indexOf('S6-PIT'))
+  })
+
+  it('real lead lines judge against the committed markers', () => {
+    const leadFn = require('../src/behaviours/lead')
+    const said = []
+    const pos = { x: -47, y: 63, z: -231 }
+    const mkBot = (p) => ({
+      entity: { position: p, onGround: true },
+      chat: (m) => said.push(m),
+      pathfinder: { isMoving: () => false, goal: null, setGoal() {}, stop() {} },
+    })
+    // arrival, then the wait-budget give-up — the shipped finish() lines
+    leadFn(mkBot({ x: -46.5, y: 63, z: -229.5 }), { lead: { name: 'emerald_block', pos }, lastGoalKey: '' }, null, {})
+    leadFn(mkBot({ x: -40, y: 63, z: -220 }), { lead: { name: 'emerald_block', pos, waiting: true, waitTicks: leadFn.WAIT_BUDGET_TICKS }, lastGoalKey: '' }, null, { distance_to_player: 99 })
+    assert.equal(said.length, 2, said.join(' | '))
+    assert.equal(matchOrderLine(said[0], lead.expect, lead.fail), 'expect', said[0])
+    assert.equal(matchOrderLine(said[1], lead.expect, lead.fail), 'fail', said[1])
+    for (const line of [
+      'cannot reach emerald_block at -47 63 -231; following you again',
+      'no emerald_block within 48 blocks (loaded area)',
+      'unknown block: emerald_block',
+      'emerald_block is 9 blocks down, dig carefully',
+    ]) {
+      assert.equal(matchOrderLine(line, lead.expect, lead.fail), 'fail', line)
+    }
+    for (const line of [
+      'leading you to emerald_block, 5 blocks, follow me',
+      'waiting for you, come to me (13 blocks)',
+      'going on, 3 blocks left',
+      'emerald_block: 3 blocks left',
+      "I'm stuck at -47 61 -227, /tp StuckReplayr1 StuckGuider1",
+    ]) {
+      assert.equal(matchOrderLine(line, lead.expect, lead.fail), null, line)
+    }
+  })
+})
