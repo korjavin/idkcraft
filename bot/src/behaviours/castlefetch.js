@@ -39,7 +39,8 @@ const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const NOGAIN_STRIKES = 5 // digs without the cobble count growing
 const DIG_TIMEOUT_MS = 10000
 const CHEST_REACH = stockpileMod.INTERACT_REACH
-const CHEST_WAITS = 30
+const CHEST_WAITS = 30 // ticks without closing in on the chest
+const CHEST_TIMEOUT_MS = 15000
 const SITE_TOP = 16
 
 // Seams for unit tests (craftany and gather need a real recipe registry /
@@ -145,6 +146,18 @@ function walkTo(bot, ctx, key, p, range) {
   ctx.lastGoalKey = key
 }
 
+// One async op at a time under ctx.castleFetchInFlight, with a deadline:
+// a hung window or dig must never wedge the flag (the step would read
+// feasible and never move). Settles quietly; the sync tick decides.
+function flight(ctx, run, ms, onFail) {
+  ctx.castleFetchInFlight = true
+  const timeout = new Promise((_, reject) => {
+    const tm = setTimeout(() => reject(new Error('timeout')), ms)
+    if (tm && typeof tm.unref === 'function') tm.unref()
+  })
+  Promise.race([run(), timeout]).catch(() => { if (onFail) onFail() }).finally(() => { ctx.castleFetchInFlight = false })
+}
+
 function near(bot, p, reach) {
   const bp = bodyPos(bot)
   return !!bp && Math.hypot(bp.x - (p.x + 0.5), bp.y - (p.y + 0.5), bp.z - (p.z + 0.5)) <= reach
@@ -157,11 +170,15 @@ function chestTick(bot, ctx, f, d) {
   if (!at) { f.chestDone = true; return false }
   if (!near(bot, at, CHEST_REACH)) {
     walkTo(bot, ctx, `castlefetch-chest:${at.x},${at.y},${at.z}`, at, 2)
+    // Stalled walk only (a far chest stays walkable while the bot closes in).
+    const bp = bodyPos(bot)
+    const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
+    if (dd < (f.chestDist == null ? Infinity : f.chestDist) - 1) { f.chestDist = dd; f.chestWaits = 0 }
     if (++f.chestWaits > CHEST_WAITS) f.chestDone = true // unreachable: next source
     return true
   }
-  ctx.castleFetchInFlight = true
-  ;(async () => {
+  f.chestDone = true // one withdraw per leg: an empty chest falls through
+  flight(ctx, async () => {
     let need = d.short
     for (const names of chestNames(bot, d.kind)) {
       if (need <= 0 || names.length === 0) break
@@ -170,10 +187,7 @@ function chestTick(bot, ctx, f, d) {
       const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : need, at)
       need -= (r && r.got ? r.got : 0) * (logs ? 4 : 1)
     }
-  })().catch(() => { /* empty or refused: next source */ }).finally(() => {
-    ctx.castleFetchInFlight = false
-    f.chestDone = true // one withdraw per leg: an empty chest falls through
-  })
+  }, CHEST_TIMEOUT_MS)
   return true
 }
 
@@ -227,7 +241,8 @@ function digTick(bot, ctx, f) {
   const b = stoneAt(t)
   const dist = Math.hypot(bp.x - (t.x + 0.5), bp.y - (t.y + 0.5), bp.z - (t.z + 0.5))
   if (dist > PICKUP_REACH + 0.5) {
-    walkTo(bot, ctx, `castlefetch-dig:${t.k}`, t, dist > DIG_REACH ? 2 : 1)
+    const range = dist > DIG_REACH ? 2 : 1
+    walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
     if (++t.waits > APPROACH_WAITS) {
       skip.add(t.k)
       f.target = null
@@ -240,21 +255,15 @@ function digTick(bot, ctx, f) {
     if (++f.noGain >= NOGAIN_STRIKES) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
   } else f.noGain = 0
   f.lastCobble = have
-  ctx.castleFetchInFlight = true
-  const run = (async () => {
+  flight(ctx, async () => {
     const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
     if (pick) await bot.equip(pick, 'hand')
     await bot.dig(b)
-  })()
-  const timeout = new Promise((_, reject) => {
-    const tm = setTimeout(() => reject(new Error('dig-timeout')), DIG_TIMEOUT_MS)
-    if (tm && typeof tm.unref === 'function') tm.unref()
-  })
-  Promise.race([run, timeout]).catch(() => {
+  }, DIG_TIMEOUT_MS, () => {
     // A refused/hung dig skips the block; the no-gain strike counts it.
     skip.add(t.k)
     if (f.target === t) f.target = null
-  }).finally(() => { ctx.castleFetchInFlight = false })
+  })
 }
 
 function castlefetch(bot, ctx, target, state) {
