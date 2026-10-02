@@ -21,6 +21,12 @@ anti-noise, pre-op, replay, tear down, judge. Exit codes:
 | 2 | environment failure: no START.sh/snapshot, rig never came up, anti-noise rejected, pristine `world.tar` changed mid-run, guide setup failed (`GUIDE-BURIED`/`GUIDE-DIED`), follower dropped mid-run |
 | 130 | interrupted (never a pass) |
 
+**One rig run at a time, no manual wrapper needed.** The script takes an atomic
+lock (`/tmp/idkcraft-rig.lock`, override `RIG_LOCK`; holder pid inside, dead
+holder = stale, reclaimed; released on every exit). A second caller exits 2
+(`rig busy`) before touching the world; `RIG_LOCK_WAIT=<secs>` polls instead.
+A caller that already holds the lock itself sets `RIG_LOCK_HELD=1`.
+
 Results land in `bot/tools/last-replay.json` (gitignored); the run table
 prints to stdout with a `BASELINE <spot>: was … | now …` diff per changed spot.
 

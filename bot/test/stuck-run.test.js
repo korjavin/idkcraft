@@ -34,6 +34,51 @@ describe('stuck-run.sh anti-noise (idkcraft-3ro)', () => {
   })
 })
 
+// idkcraft-3on: the script holds the rig lock itself (atomic mkdir, pid file,
+// stale reclaim, released on every exit) — behavioural, no docker needed: the
+// run dies at "no START.sh" right after the lock is taken.
+describe('stuck-run.sh rig lock (idkcraft-3on)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const sh = path.join(__dirname, '..', 'tools', 'stuck-run.sh')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-'))
+  const lock = path.join(tmp, 'lock')
+  const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, RIG_LOCK: lock, ...env } })
+
+  it('busy lock (live holder) = exit 2 before touching anything, lock left intact', () => {
+    fs.mkdirSync(lock)
+    fs.writeFileSync(path.join(lock, 'pid'), String(process.pid))
+    const r = run()
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /rig busy/)
+    assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid))
+    fs.rmSync(lock, { recursive: true })
+  })
+
+  it('lock dir without a pid (manual wrapper) counts as held', () => {
+    fs.mkdirSync(lock)
+    assert.match(run().stdout, /rig busy/)
+    fs.rmdirSync(lock)
+  })
+
+  it('dead holder is reclaimed and the lock is released on exit', () => {
+    fs.mkdirSync(lock)
+    fs.writeFileSync(path.join(lock, 'pid'), '999999')
+    const r = run()
+    assert.match(r.stdout, /stale/)
+    assert.match(r.stdout, /no START\.sh/) // got past the lock
+    assert.equal(fs.existsSync(lock), false, 'lock leaked after exit')
+  })
+
+  it("RIG_LOCK_HELD=1 skips the lock and never removes the caller's", () => {
+    fs.mkdirSync(lock)
+    const r = run({ RIG_LOCK_HELD: '1' })
+    assert.match(r.stdout, /no START\.sh/)
+    assert.equal(fs.existsSync(lock), true)
+    fs.rmdirSync(lock)
+  })
+})
+
 // idkcraft-3ro root cause: every replay spot sits inside the
 // spawn-protection radius (r=16 around (-48,65,-208)), and Paper enforces
 // protection once ops.json is non-empty — one afternoon op armed it for
