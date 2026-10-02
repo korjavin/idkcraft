@@ -84,8 +84,8 @@ describe('castle v2 shape', () => {
     }
   })
 
-  it('work order = plan order: places, then the door, then keep-clear, then the moat', () => {
-    const rank = (c) => (c.kind === 'dig' ? 3 : c.kind === 'air' ? 2 : c.kind === 'door' ? 1 : 0)
+  it('work order = plan order: places, then the door, keep-clear, the moat, the fence', () => {
+    const rank = (c) => (c.kind === 'fence' ? 4 : c.kind === 'dig' ? 3 : c.kind === 'air' ? 2 : c.kind === 'door' ? 1 : 0)
     for (let i = 1; i < V2.PLAN.length; i++) {
       assert.ok(rank(V2.PLAN[i - 1]) <= rank(V2.PLAN[i]), `cell ${i} ${JSON.stringify(V2.PLAN[i])} out of rank`)
     }
@@ -99,6 +99,18 @@ describe('castle v2 shape', () => {
       if (!castle.isPlaceTarget(c.kind)) continue
       assert.ok(Math.abs(c.dx - ch.dx) + Math.abs(c.dy - ch.dy) + Math.abs(c.dz - ch.dz) > 1, `${key(c)} touches the chest`)
     }
+  })
+
+  it('g0z.6: dig ground -> place deck -> dig the bridge columns, which go last', () => {
+    const deck = V2.PLAN.map((c, i) => ({ c, i })).filter(({ c }) => c.kind === 'planks' && c.dy === -1)
+    assert.equal(deck.length, 6)
+    const digs = V2.PLAN.map((c, i) => ({ c, i })).filter(({ c }) => c.kind === 'dig')
+    const firstDig = digs[0].i
+    const cols = digs.filter(({ c }) => deck.some(({ c: d }) => d.dx === c.dx && d.dz === c.dz))
+    assert.equal(cols.length, 6, 'the moat is dug under every deck cell')
+    assert.ok(cols.every(({ c }) => c.dy === -2), 'never the deck cell itself')
+    assert.ok(deck.every(({ i }) => i < firstDig), 'the deck is laid before any moat dig')
+    assert.deepEqual(digs.slice(-6).map(({ c }) => key(c)), cols.map(({ c }) => key(c)), 'bridge columns last')
   })
 
   it('the fence gap lines up with the bridge deck in every rotation', () => {

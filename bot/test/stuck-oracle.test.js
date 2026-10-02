@@ -869,3 +869,25 @@ describe('recover-budget order carrier (idkcraft-au4j)', () => {
     }
   })
 })
+
+describe('dry-moat exit spot (idkcraft-g0z.6)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const moat = spots.find((s) => s.name === 'MOAT-EXIT')
+
+  it('MOAT-EXIT: castle moat geometry in obsidian, no tool or scaffold — the corner step is the only way out', () => {
+    // Rig control (not committed): the same arena without the step pages
+    // (call_player from the trench), so reaching proves the step.
+    assert.ok(moat, 'MOAT-EXIT in the corpus')
+    assert.equal(moat.mode, 'order')
+    assert.equal(moat.bead, 'idkcraft-g0z.6')
+    assert.equal(moat.scaffold, 0)
+    assert.equal(moat.pickaxe, false)
+    assert.equal(moat.bucket, false)
+    assert.ok(moat.prep.includes('setblock -15 28 -265 obsidian'), 'the 1-deep corner exit step')
+    assert.equal(moat.prep[moat.prep.length - 1], 'setblock -18 30 -258 lapis_block')
+    const e = baseline.spots['MOAT-EXIT']
+    assert.equal(e.reached, true)
+    assert.equal(e.maxCalls, 0)
+  })
+})
