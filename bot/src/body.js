@@ -102,6 +102,8 @@ function meetDig(ctx) {
 // sprint-jump can wedge against the step face (3nt.24). Planning rides
 // the same movements object, so an open gate also holds parkour off — a
 // maxD=4 plan would strand the next sprint-off tick.
+const danger = require('./danger')
+
 const SPRINT_DIST = 8
 const SPRINT_LOOKAHEAD = 6
 
@@ -182,6 +184,7 @@ function movementsFor(owner, bot, ctx, extra) {
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
+      danger.addPathCost(mov, ctx) // zj2p: once per Movements, reads ctx live
     } catch (_) { /* apply best-effort */ }
   }
 }

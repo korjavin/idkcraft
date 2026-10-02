@@ -159,4 +159,51 @@ function clear(ctx) {
   if (ctx && ctx.danger && Array.isArray(ctx.danger.spots)) ctx.danger.spots.length = 0
 }
 
-module.exports = { mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
+// Path cost (idkcraft-zj2p): water-death discs steer A* itself, so every
+// walker (gohome, equip, castlefetch, forage, explore legs, homing, follow)
+// routes around the drowned lake instead of re-walking its shore — the
+// marks used to steer target picks only. A cost, never a ban: a target
+// inside the disc (home by the water) still plans, just leaves it soon.
+// Wide marks only (r >= WATER_RADIUS): pit marks belong to recover/detour,
+// and a 6-block cost would only re-route around holes A* already avoids.
+// Measured on the landing cell centre, xz like near(). Same getNeighbors
+// wrap shape as jumpcost.js; installed once per Movements by movementsFor
+// (body.js), reading ctx live, so a fresh mark steers the next plan.
+// PATH_COST 1 doubles a disc move: enough to bend an 80-block open-ground
+// leg around the disc (tangent detours are short), while a target inside
+// the disc floods A* least (flat fake world, goal 5 past the centre:
+// 5.2k nodes at 1 vs 17.9k at 2 — the heuristic underestimates by the cost).
+const PATH_COST = 1
+function addPathCost(movements, ctx) {
+  // Unit mocks carry flags only: wrap only a real Movements.
+  if (!movements || typeof movements.getNeighbors !== 'function' || movements._dangerCostInstalled) return
+  movements._dangerCostInstalled = true
+  const orig = movements.getNeighbors.bind(movements)
+  movements.getNeighbors = (node) => {
+    const ns = orig(node)
+    const discs = wideSpots(ctx, Date.now())
+    if (discs.length === 0) return ns
+    for (const m of ns) {
+      if (!m || typeof m.cost !== 'number') continue
+      const x = m.x + 0.5
+      const z = m.z + 0.5
+      if (discs.some((s) => Math.hypot(s.x - x, s.z - z) <= s.r)) m.cost += PATH_COST
+    }
+    return ns
+  }
+}
+
+// Live water-wide marks, no copies (hot path: once per A* expansion).
+function wideSpots(ctx, t) {
+  const mem = ctx && ctx.danger
+  if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return []
+  const out = []
+  for (const s of mem.spots) {
+    if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
+    const r = spotRadius(s)
+    if (r >= WATER_RADIUS) out.push({ x: s.x, z: s.z, r })
+  }
+  return out
+}
+
+module.exports = { addPathCost, PATH_COST, mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }

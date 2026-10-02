@@ -891,3 +891,38 @@ describe('dry-moat exit spot (idkcraft-g0z.6)', () => {
     assert.equal(e.maxCalls, 0)
   })
 })
+
+describe('danger-seeded spots (idkcraft-zj2p)', () => {
+  const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0, minDanger: 30 } } }
+  const drow = (minDanger) => ({ ...row('A', true, 0, 0), ...(minDanger === undefined ? {} : { minDanger }) })
+
+  it('minDanger floors the closest approach to the seeded mark', () => {
+    assert.equal(compareBaseline([drow(31.2)], base)[0].verdict, 'ok')
+    const [d] = compareBaseline([drow(5.4)], base)
+    assert.equal(d.verdict, 'regressed')
+    assert.match(d.why, /entered the danger disc/)
+    assert.equal(compareBaseline([drow()], base)[0].verdict, 'regressed', 'a row without the measure fails closed')
+  })
+
+  it('loadSpots passes danger through and rejects malformed marks', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'danger-spots-'))
+    const saved = process.argv[2]
+    const load = (danger) => {
+      const f = path.join(dir, 'd.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], danger }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      assert.deepEqual(load([[3, 61, -268, 32]])[0].danger, [[3, 61, -268, 32]])
+      for (const bad of [[], [[3, 61, -268]], [[3, 61, -268, 0]], [[3, 'x', -268, 32]], 'x']) {
+        assert.throws(() => load(bad), /bad danger/, JSON.stringify(bad))
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
