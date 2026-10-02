@@ -19,6 +19,19 @@ function pos(x, y, z) {
 
 const LOGREG = { oak_log: 17, birch_log: 18, stone: 1 }
 
+// Every named log tops out as a tree (m7ke: gather refuses protected logs
+// at selection): an unnamed cell above a log's column reads one more log,
+// then leaves — lone fixture logs stay trees for the guard.
+function treeCell(names, x, y, z) {
+  const n = names[`${x},${y},${z}`]
+  if (n) return n
+  const b1 = names[`${x},${y - 1},${z}`]
+  if (b1 && b1.endsWith('_log')) return 'oak_log'
+  const b2 = names[`${x},${y - 2},${z}`]
+  if (!b1 && b2 && b2.endsWith('_log')) return 'oak_leaves'
+  return undefined
+}
+
 function mockBot({ spots = [], names = {}, items = [], at = pos(0, 64, 0), moving = false } = {}) {
   const blocksByName = {}
   for (const [name, id] of Object.entries(LOGREG)) blocksByName[name] = { id }
@@ -45,7 +58,7 @@ function mockBot({ spots = [], names = {}, items = [], at = pos(0, 64, 0), movin
       })
     },
     blockAt(p) {
-      const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+      const n = treeCell(names, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
       return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
     },
     canDigBlock: () => true,

@@ -18,8 +18,21 @@ function pos(x, y, z) {
 
 const LOGREG = { oak_log: 17, birch_log: 18, stone: 1 }
 
+// Every named log tops out as a tree (m7ke: gather refuses protected logs
+// at selection): an unnamed cell above a log's column reads one more log,
+// then leaves — lone fixture logs stay trees for the guard. bare: off.
+function treeCell(names, x, y, z) {
+  const n = names[`${x},${y},${z}`]
+  if (n) return n
+  const b1 = names[`${x},${y - 1},${z}`]
+  if (b1 && b1.endsWith('_log')) return 'oak_log'
+  const b2 = names[`${x},${y - 2},${z}`]
+  if (!b1 && b2 && b2.endsWith('_log')) return 'oak_leaves'
+  return undefined
+}
+
 // registry: { name: id }, spots: [pos], names: { 'x,y,z': blockName }
-function mockBot({ registry = LOGREG, spots = [], names = {}, items = [] } = {}) {
+function mockBot({ registry = LOGREG, spots = [], names = {}, items = [], bare = false } = {}) {
   const lines = []
   const blocksByName = {}
   for (const [name, id] of Object.entries(registry)) blocksByName[name] = { id }
@@ -47,8 +60,9 @@ function mockBot({ registry = LOGREG, spots = [], names = {}, items = [] } = {})
       })
     },
     blockAt(p) {
-      const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
-      return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
+      const k = [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)]
+      const n = bare ? names[k.join(',')] : treeCell(names, k[0], k[1], k[2])
+      return n ?{ name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
     },
     canDigBlock: () => true,
     dig: async () => { bot.digCalls++ },
@@ -78,7 +92,8 @@ describe('gather step', () => {
   it('drq a trap denial stays in skip, not the sticky set (stance may change)', () => {
     const bot = mockBot({
       spots: [pos(1, 63, 0)],
-      names: { '1,63,0': 'oak_log', '1,64,0': 'dirt', '-1,64,0': 'dirt', '0,64,1': 'dirt' },
+      // A tree (its column reads on up into leaves) beside a walled stance.
+      names: { '1,63,0': 'oak_log', '0,64,-1': 'dirt', '-1,64,0': 'dirt', '0,64,1': 'dirt' },
     })
     const ctx = freshCtx()
     const lines = []
@@ -98,6 +113,7 @@ describe('gather step', () => {
     const bot = mockBot({
       spots: [pos(2, 64, 0), pos(8, 64, 0)],
       names: { '2,64,0': 'oak_log', '8,64,0': 'oak_log', '8,65,0': 'oak_log', '9,65,0': 'oak_leaves' },
+      bare: true,
     })
     const ctx = freshCtx()
     for (let i = 0; i < 6 && !(ctx.gather && ctx.gather.gskip && ctx.gather.gskip.has('2,64,0')); i++) {
@@ -692,6 +708,58 @@ describe('gather edges (idkcraft-l71)', () => {
     gather(bot, ctx, null, {})
     assert.equal(ctx.gather.pos, null)
     assert.equal(ctx.gather.phase, 'walk')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+})
+
+describe('gather target selection (idkcraft-m7ke)', () => {
+  const quiet = (fn) => {
+    const orig = console.log
+    console.log = () => {}
+    try { return fn() } finally { console.log = orig }
+  }
+
+  it('a protected log in range is never walked to: the tree further on wins', () => {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(8, 64, 0)],
+      // 2,64,0: a lone log on the ground (decor / acacia branch) — protected.
+      names: { '2,64,0': 'acacia_log', '8,64,0': 'oak_log', '8,65,0': 'oak_log', '9,65,0': 'oak_leaves' },
+      registry: { ...LOGREG, acacia_log: 19 },
+      bare: true,
+    })
+    const ctx = freshCtx()
+    quiet(() => gather(bot, ctx, null, {}))
+    assert.match(ctx.lastGoalKey, /^gather:8,64,0$/, 'first walk goes to the real tree')
+    assert.ok(ctx.gather.gskip.has('2,64,0'), 'protected log stays refused')
+  })
+
+  function cliffRun(items) {
+    // One tree 9 up on a cliff; the body keeps displacing (a partial path),
+    // so only the planner verdict can strike it.
+    const bot = mockBot({ spots: [pos(20, 73, 0)], names: { '20,73,0': 'oak_log' }, items })
+    bot._moving = true
+    const ctx = freshCtx()
+    let x = 0
+    const tick = () => { x += 1; bot.entity.position = pos(x, 64, 0); quiet(() => gather(bot, ctx, null, {})) }
+    tick() // issue
+    ctx.lastPathStatus = 'timeout' // first planner timeout on the climb
+    tick()
+    return { bot, ctx, tick }
+  }
+
+  it('scaffold 0, tree +9, first path timeout: dropped at once, step fails without an episode', () => {
+    const { ctx, tick } = cliffRun([])
+    assert.equal(ctx.gather.pos, null, 'struck on the first timeout, not after STALL_TICKS')
+    assert.ok(ctx.gather.skip.has('20,73,0'))
+    for (let i = 0; i < 4 && ctx.stepStatus === 'running'; i++) tick()
+    assert.match(ctx.stepStatus, /^failed:/)
+    assert.ok(!ctx.stuck, 'no recover episode requested')
+    assert.equal(danger.near(ctx, { x: 4, y: 64, z: 0 }), false, 'no danger mark on open ground')
+  })
+
+  it('with scaffold the same timeout keeps the walk (the executor can pillar)', () => {
+    const { ctx } = cliffRun([{ name: 'dirt', count: 16 }])
+    assert.equal(ctx.gather.pos && ctx.gather.pos.y, 73)
     assert.equal(ctx.stepStatus, 'running')
   })
 })
