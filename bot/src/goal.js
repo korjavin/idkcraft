@@ -1026,6 +1026,8 @@ async function chooseStep(brain, facts, feasible, home) {
   const fsm = goalFsm(facts, names)
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  // bhz2: the night safety steps are a rule, not a preference — the model never overrides them.
+  if (fsm === 'stay' || fsm === 'gohome') return { step: fsm, source: 'night-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
