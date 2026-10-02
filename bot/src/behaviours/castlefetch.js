@@ -117,7 +117,7 @@ function cobble(bot) {
 // Site box with a one-block margin, foundation layers included: never dig
 // the castle's own ground or walls for its stone.
 function onSite(st, p, margin = 1, below = 3) {
-  const { w, d } = blueprint.siteDimensions(st.rot | 0)
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const dx = Math.floor(p.x) - st.site.x
   const dy = Math.floor(p.y) - st.site.y
   const dz = Math.floor(p.z) - st.site.z

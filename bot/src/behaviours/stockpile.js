@@ -189,6 +189,17 @@ function depositPlan(bot, ctx) {
     const fact = require('./beds').bedsFact(bot, ctx && ctx.home)
     bedOwed = fact === 'none' || fact === 'one'
   } catch (_) { bedOwed = false }
+  // Partial wool banks (9qt0): only a craft-ready colour (3+ of one) keeps;
+  // prod lost every partial to death, so 3 wool never accumulated. The beds
+  // hunt is chest-first, so banked partials come back on the next hunt.
+  let woolReady = false
+  if (bedOwed) {
+    const wool = {}
+    for (const j of list) {
+      if (j && typeof j.name === 'string' && j.name.endsWith('_wool')) wool[j.name] = (wool[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+    woolReady = Object.values(wool).some((n) => n >= 3) // bed.js BED_WOOL (no import: require cycle)
+  }
   // + ground patches under unplaced beds (floorless-house terrain dips eat
   // a plank each — banking them strands the place between picks).
   let keepBedPlanks = 6
@@ -272,7 +283,7 @@ function depositPlan(bot, ctx) {
     // Castle reserve (g0z.3): an unfinished castle keeps every castle
     // material packed — banking it would starve the next castle batch.
     if (castleOpen && castleMaterial(i.name)) continue
-    if (bedOwed && (i.name.endsWith('_wool') || i.name.endsWith('_bed'))) continue
+    if (bedOwed && (i.name.endsWith('_bed') || i.name === 'string' || (woolReady && i.name.endsWith('_wool')))) continue
     if (bedOwed && i.name.endsWith('_planks')) {
       const k = Math.min(woodKeep[i.name] || 0, n)
       woodKeep[i.name] = (woodKeep[i.name] || 0) - k
@@ -520,6 +531,28 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
     return { got: 0, name: null }
+  }
+}
+
+// Deposit every pack stack named in names (9qt0: beds banks partial wool
+// before yielding). { put } — 0 when the chest is gone, full or unopenable.
+async function depositToChest(bot, ctx, names) {
+  const want = new Set(Array.isArray(names) ? names : [])
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      let put = 0
+      for (const i of invItems(bot)) {
+        if (!i || !want.has(i.name) || !(i.count > 0)) continue
+        try {
+          await window.deposit(i.type, null, i.count)
+          put += i.count
+        } catch (_) { /* full or unmovable: keep the rest */ }
+      }
+      return put
+    })
+    return { put: res && res.status === 'ok' ? res.value : 0 }
+  } catch (_) {
+    return { put: 0 }
   }
 }
 
@@ -922,6 +955,7 @@ module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.chestCounts = chestCounts
+module.exports.depositToChest = depositToChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2

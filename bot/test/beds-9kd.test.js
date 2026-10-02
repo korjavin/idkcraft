@@ -295,14 +295,16 @@ describe('9kd sheepless day latch', () => {
     const F = goal.MENU.beds.feasible
     assert.equal(F(FACTS, bot, ctx), true, 'unlatched up front')
     failedEpisode(ctx)
-    assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 1 })
+    assert.equal(ctx.beds.noWool.fails, 1)
     assert.equal(F(FACTS, bot, ctx), true, 'first failure still retries (stepFail holds the day)')
     failedEpisode(ctx)
-    assert.deepEqual(ctx.beds.noWool, { day: 5, fails: 2 })
+    assert.equal(ctx.beds.noWool.fails, 2)
     assert.equal(F(FACTS, bot, ctx), false, 'second failure latches')
     assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: no sheep today')
-    bot.time.day = 6
-    assert.equal(F(FACTS, bot, ctx), true, 'tomorrow retries')
+    bot.time.day = 6 // 9qt0: a new MC day no longer releases
+    assert.equal(F(FACTS, bot, ctx), false, 'next MC day stays latched')
+    ctx.beds.noWool.at -= beds.LATCH_MS
+    assert.equal(F(FACTS, bot, ctx), true, 'expired latch retries')
   })
 
   it('short reopened hunts do not count, latch input never throws', () => {

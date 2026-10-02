@@ -279,6 +279,19 @@ function denyReason(bot, block, ctx) {
   } catch (_) { return 'protected' }
 }
 
+// Interior box + 1 ring (walls) (all the way down) to the roof, plus
+// the door-front column. Home shape: site, interior{min,max}, v (door dx 3 on v2, else 1).
+function inHouseFootprint(home, pos) {
+  try {
+    const s = home && home.site
+    const b = home && home.interior
+    if (!s || !b || !b.min || !b.max || !pos) return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    if (x >= b.min.x - 1 && x <= b.max.x + 1 && z >= b.min.z - 1 && z <= b.max.z + 1 && y <= b.max.y + 1) return true
+    return x === s.x + (home.v === 2 ? 3 : 1) && z === s.z - 1 && y <= s.y + 1
+  } catch (_) { return false }
+}
+
 // The type-rules tail of denyReason, split out so bring's atl.20 exemption
 // can unmask what the trap rules hide: denyReason returns 'below-feet'
 // before it checks protection (pinned: trap fires before type rules), so
@@ -300,7 +313,15 @@ function protectedReason(bot, block, ctx) {
     // placedByBot exemption — the bot laid them, and that must not license
     // a recover/gather dig through the castle wall.
     if (ctx && ctx.castle && castle.protects(ctx.castle, pos, name)) return 'protected'
-    if (pos && ctx && ctx.placedByBot instanceof Set) {
+    // House footprint (idkcraft-e5ba): natural ground under/around our own
+    // house is its floor and door support, never scaffold. Solid ground only:
+    // build's own clears (flora, snow) stay legal.
+    // The whole column below the roof is covered (equip would otherwise dig
+    // under the floor). Bot-placed patches above the floor layer stay diggable.
+    const fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
+    if (fp && !(pos.y >= ctx.home.site.y && ctx.placedByBot instanceof Set &&
+      ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))) return 'protected'
+    if (pos && ctx && ctx.placedByBot instanceof Set && !(fp && pos.y < ctx.home.site.y)) {
       try {
         if (ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)) return null
       } catch (_) { /* fall through to type rules */ }

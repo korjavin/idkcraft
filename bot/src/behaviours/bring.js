@@ -53,6 +53,7 @@ const RETURN_RANGE = 2
 // Plain constants — the values never change at runtime (not forwarded in
 // compose); tests stub them through the module export below.
 const SEARCH_BUDGET = { legs: 24, minutes: 5 }
+const SELF_SEARCH_RADIUS = 96 // 9qt0: self-order legs stay this close to the anchor
 function searchLegs() {
   return SEARCH_BUDGET.legs
 }
@@ -896,6 +897,25 @@ async function enterSearch(bot, ctx, o, legacy) {
   if (s.legs >= searchLegs() || s.timedOut) {
     refuseExhausted(bot, ctx, o)
     return
+  }
+  // Self hunts (9qt0) stay within SELF_SEARCH_RADIUS of home: prod legs ran
+  // 129-256 blocks out and the night caught the bot there (~50 of 61
+  // deaths). No unvisited ground in reach is an exhausted search.
+  if (o.self) {
+    const t = exploreMod.nextTarget(bot, ctx, SELF_SEARCH_RADIUS)
+    if (!t) {
+      s.capped = true
+      refuseExhausted(bot, ctx, o)
+      return
+    }
+    // A far leg the explore step left pending (dusk re-decide) yields to
+    // the near pick (revmux 01 core-4).
+    const e = ctx.explore
+    if (e && e.target && e.target !== t) {
+      e.target = t
+      e.issuedKey = null
+      e.markStart = e.visited instanceof Set ? e.visited.size : 0
+    }
   }
   const text = searchText(o, s)
   const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs() - s.legs)
@@ -1759,6 +1779,7 @@ module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
+module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
 module.exports.toWoolHunt = itemMod.toWoolHunt
