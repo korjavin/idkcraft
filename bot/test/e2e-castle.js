@@ -96,8 +96,6 @@ async function main() {
   // Flat world surface: grass at y=-61, feet y=-60 on 1.18+ superflat.
   const site = { x: 40, y: parseInt(process.env.SITE_Y || '-60', 10), z: 40 }
   const { w, d } = blueprint.siteDimensions(0)
-  await rcon(`fill ${site.x - 3} ${site.y} ${site.z - 3} ${site.x + w + 2} ${site.y + 16} ${site.z + d + 2} air`)
-  await rcon(`fill ${site.x - 3} ${site.y - 1} ${site.z - 3} ${site.x + w + 2} ${site.y - 1} ${site.z + d + 2} grass_block`)
   const state = { site, rot: 0 }
   const kit = async () => {
     await rcon(`clear ${NAME}`)
@@ -105,6 +103,15 @@ async function main() {
       await rcon(`give ${NAME} ${item} ${n}`)
     }
     await rcon(`tp ${NAME} ${site.x + 5} ${site.y} ${site.z - 2}`)
+    // Clear the site once the bot's chunks are loaded (a fill into unloaded
+    // chunks fails, and flat worldgen can drop a village on the site).
+    await sleep(3000)
+    const out = [
+      await rcon(`fill ${site.x - 3} ${site.y} ${site.z - 3} ${site.x + w + 2} ${site.y + 16} ${site.z + d + 2} air`),
+      await rcon(`fill ${site.x - 3} ${site.y - 1} ${site.z - 3} ${site.x + w + 2} ${site.y - 1} ${site.z + d + 2} grass_block`),
+    ]
+    console.log(`site fill: ${out.join(' | ')}`)
+    if (out.some((o) => /not loaded|error|Unknown/i.test(o))) throw new Error('site fill failed')
   }
   const first = await session(state, RESTART_AT, kit)
   console.log(`session 1: ${first}`)
