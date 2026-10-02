@@ -267,3 +267,16 @@ for evals (owner direction). It measures menu choice, not just the FSM.
   into rock or dead) skip the comparison and force exit 2 — the bot was
   never measured, so judging them as regressions would block PRs on rig
   luck; a bucket spot's flood is wiped before the next trial.
+
+## Parallel rigs (`RIG_ID`)
+
+One run per rig; the default rig is unchanged. `RIG_ID=a` (any letter
+a-z) is a second rig: container `idk-replay-<id>`, host port 25571 + letter
+index (a=25572, b=25573), lock `$RIG_LOCK-<id>`, data under
+`$PRODWORLD/rigs/<id>/` (seeded once from the default rig minus `world/`
+and `logs/`; `rm -rf` it to reseed). Its `START.sh` is derived from the
+real one each run (container and port renamed only), so image and flags
+never drift. `RIG_ID=auto` takes the first free of `RIG_SLOTS` (default
+`0 a b`, `0` = default rig) — use it when several agents share the box.
+Each Paper takes ~1.5 GB; three fit Docker's 8 GB next to the stand. Runs
+from one worktree in parallel need distinct `REPLAY_OUT`.
