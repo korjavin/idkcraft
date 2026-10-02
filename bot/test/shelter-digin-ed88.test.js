@@ -49,7 +49,7 @@ function flatBot(at, opts = {}) {
     blockAt(p) {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
       const s = solidAt(x, y, z)
-      const name = s ? (opts.ground || (y === 63 ? 'grass_block' : 'dirt')) : 'air'
+      const name = s ? ((opts.groundAt && opts.groundAt(x, y, z)) || opts.ground || (y === 63 ? 'grass_block' : 'dirt')) : 'air'
       return { name, position: new Vec3(x, y, z), boundingBox: s ? 'block' : 'empty' }
     },
     async dig(b) {
@@ -142,6 +142,25 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     assert.equal(r, 'failed:airborne')
   })
 
+  it('stone stance (rig: world spawn): walks once to the nearest dirt column, digs there', async () => {
+    // Stone everywhere except a grass/dirt column 3 blocks east.
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 }, { groundAt: (x, y, z) => (x === 3 && z === 0 ? null : 'stone') })
+    let goal = null
+    bot.pathfinder.setGoal = (g) => { goal = g }
+    const st = {}
+    assert.equal(recover.digInRun(bot, {}, st), 'running')
+    assert.ok(goal && goal.x === 3 && goal.y === 64 && goal.z === 0, `walk goal ${JSON.stringify(goal)}`)
+    bot.entity.position = pos(3.5, 64, 0.5) // the pathfinder walked it
+    let r = 'running'
+    for (let t = 0; t < 15 && r === 'running'; t++) {
+      r = recover.digInRun(bot, {}, st)
+      await flush()
+    }
+    assert.equal(goal, null, 'walk goal cleared on arrival')
+    assert.equal(r, 'done')
+    assert.ok(closedIn(bot), 'closed pit at the dirt column')
+  })
+
   it('a server that reverts every break: bounded, fails', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     bot.dig = async () => {} // the block comes back
@@ -176,7 +195,7 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     const logs = await quiet(() => home.shelter(bot, ctx, null, null))
     assert.equal(ctx.inShelter, true)
     assert.equal(ctx.shelter.pillared, true)
-    assert.ok(logs.includes('shelter dig-in failed:undiggable'), JSON.stringify(logs))
+    assert.ok(logs.includes('shelter dig-in failed:undiggable:stone'), JSON.stringify(logs))
   })
 })
 

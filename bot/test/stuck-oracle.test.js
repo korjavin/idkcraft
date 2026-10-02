@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -470,7 +470,8 @@ describe('order corpus (idkcraft-6x7.8)', () => {
     // spot after one would walk with no target. The corpus keeps that order.
     let seenRevoke = false
     for (const s of spots) {
-      const revokes = s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order)
+      // Shelter spots chat 'go work' (idkcraft-ed88): revoking too.
+      const revokes = s.mode === 'shelter' || (s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order))
       if (revokes) seenRevoke = true
       else if (s.mode !== 'order') assert.ok(!seenRevoke, `follow spot ${s.name} after a follow-revoking order`)
     }
@@ -613,6 +614,65 @@ describe('windowReached (idkcraft-6x7.7 revmux 01 core-2)', () => {
     assert.equal(windowReached('follow', true, null, null, null), null)
     assert.equal(windowReached('follow', true, 1.0, null, null), true) // partial sample still judges
     assert.equal(windowReached('follow', true, null, 5, null), true)
+  })
+})
+
+describe('shelter spots (idkcraft-ed88)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const sb = spots.find((s) => s.name === 'SPAWN-BARE')
+
+  it('SPAWN-BARE is the world-spawn empty-kit night shelter spot', () => {
+    assert.equal(sb.mode, 'shelter')
+    assert.equal(sb.bead, 'idkcraft-ed88')
+    assert.deepEqual(sb.spawn, [-57.5, 61, -213.5], 'prod respawn body (bead log 04:13:54), on bare stone')
+    assert.equal(sb.scaffold, 0, 'empty kit: the pillar cannot run')
+    assert.equal(sb.pickaxe, false)
+    assert.ok(Math.hypot(sb.home[0] - sb.spawn[0], sb.home[2] - sb.spawn[2]) > 96, 'home past the night walk range')
+    assert.ok(Math.hypot(sb.goal[0] - sb.spawn[0], sb.goal[2] - sb.spawn[2]) > 128, 'guide out of entity range: the bot works alone')
+    assert.ok(sb.secs >= 90, 'alive at 90 s is part of the verdict')
+    assert.deepEqual(baseline.spots['SPAWN-BARE'], { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0 })
+  })
+
+  it('loadSpots validates the shelter contract', () => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ed88-'))
+    const saved = process.argv[2]
+    const load = (list) => {
+      const f = path.join(dir, 'spots.json')
+      fs.writeFileSync(f, JSON.stringify(list))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    const base = { name: 'X', mode: 'shelter', spawn: [0, 64, 0], goal: [0, 90, 150], home: [300, 64, 0] }
+    try {
+      assert.deepEqual(load([base])[0].home, { x: 300, y: 64, z: 0 })
+      assert.throws(() => load([{ ...base, home: null }]), /integer home/)
+      assert.throws(() => load([{ ...base, home: [1.5, 64, 0] }]), /integer home/)
+      assert.throws(() => load([{ ...base, mode: undefined }]), /home needs mode=shelter/)
+      assert.throws(() => load([{ ...base, order: 'go work' }]), /need mode=order/)
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('enclosed needs floor, cap and all four sides at feet and head', () => {
+    const pit = (missing) => (dx, dy, dz) => !(dx === 0 && dz === 0 && (dy === 0 || dy === 1)) && `${dx},${dy},${dz}` !== missing
+    assert.equal(enclosed(pit(null)), true)
+    for (const m of ['0,-1,0', '0,2,0', '1,0,0', '-1,1,0', '0,0,1', '0,1,-1']) {
+      assert.equal(enclosed(pit(m)), false, `open at ${m}`)
+    }
+  })
+
+  it('shelterReached: closed within the limit and alive at the end', () => {
+    assert.equal(SHELTER_CLOSE_SECS, 15)
+    assert.equal(shelterReached(9, false), true)
+    assert.equal(shelterReached(15, false), true)
+    assert.equal(shelterReached(15.5, false), false, 'too slow')
+    assert.equal(shelterReached(null, false), false, 'never closed (the ground hold)')
+    assert.equal(shelterReached(9, true), false, 'died in the pit')
+    assert.equal(windowReached('shelter', true, 0, 0, null), null, 'position never ends a shelter window')
   })
 })
 

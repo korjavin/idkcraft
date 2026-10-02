@@ -848,7 +848,10 @@ function shelter(bot, ctx, target, state) {
   try {
     const bp = botPos(bot)
     const pa = st.pillarAt
-    if (bp && pa && typeof pa.x === 'number' &&
+    // Not while digging in: the dig may walk to a dirt column (stone
+    // stance); it re-anchors at the pit when it ends. Death drops the
+    // whole record (index.js handleDeath), so no respawn hides behind this.
+    if (!st.dig && bp && pa && typeof pa.x === 'number' &&
       Math.hypot(bp.x - pa.x, bp.z - pa.z) > SHELTER_DISPLACE_XZ) {
       // Displaced past the anchor: drop the hold and the stale climb, and
       // re-pillar below. A foreign non-pillar episode is never touched.
@@ -904,6 +907,7 @@ function shelter(bot, ctx, target, state) {
       try { r = recover.digInRun(bot, ctx, st.dig) } catch (_) { /* fail into the hold */ }
       if (r === 'running') return
       st.dig = null
+      st.pillarAt = null // re-anchored below, at the pit
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
     // Anchor the hold (revmux 02): a foreign live episode skips beginPillar

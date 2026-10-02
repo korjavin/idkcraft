@@ -135,6 +135,12 @@ exemption digs below-feet ore onto solid without ever asking the recover
 menu, so the budget is never read. An order spot proves recover-sensitivity
 only where its green path fails a primitive and rescues.
 
+The shelter spot (SPAWN-BARE, idkcraft-ed88) sees the night shelter with
+an empty kit. Green runs read `CLOSED 11s` (3/3). With `digInRun`
+sabotaged to fail at once, the bot holds on the bare stone (`OPEN at
+-58 61 -214`, maxDisp 0.0) and the run exits 1 (`BASELINE SPAWN-BARE …
+REGRESSION (unreached (was reached))`).
+
 The 6x7.8 carrier hunt (idkcraft-6x7.8) found no such order — measured,
 not assumed. Q0H-PIT `come home` runs episode-free (18 s, the pit→rim
 walk never wedges: the q0h trap was rest-specific and is fixed), so the
@@ -268,6 +274,17 @@ S6-LEAD by the lost order (`reached`).
   would still pass. Both stay before the follow-revoking orders; the
   arena persists in the world for the later spots (they sit outside the
   ring).
+- SPAWN-BARE (idkcraft-ed88) is a shelter spot (`mode: "shelter"`):
+  the prod respawn body by world spawn (bare stone), empty kit,
+  `time set 18000`, a built home injected as `ctx.home` at `home` (far
+  past the night walk range, never raised), the guide parked out of entity
+  range on `goal`, then `go work` from the guide. Shelter picks the night-far
+  step, the pillar fails no-scaffold, and dig-in walks to the nearest
+  hand-dig column and closes itself in. `reached` = floor, 4 sides at feet
+  and head, and a cap, all solid within 15 s, and alive at the window end
+  (the window always runs its full `secs`). The row note reads
+  `CLOSED <s>s` or `OPEN at <x y z>`. It chats `go work` (follow-revoking),
+  so it stays after every follow spot.
 
 ## `REPLAY_BRAIN=laya`
 

@@ -880,14 +880,69 @@ const DIG_IN_DEPTH = 3
 const DIG_IN_STEER_TICKS = 4 // edge-hanging (bbox on a neighbour): walk to the cell centre
 const DIG_IN_STEP_MS = 150 // forward pulse per steer tick (~0.3-0.5 block)
 const DIG_IN_CAP_WAIT_TICKS = 3 // dug drops reach the inventory ~0.5 s after the break
-function digInHazard(bot, dy) {
+// Stone stance (rig: the world-spawn respawn stands on bare stone, grass
+// patches 6-8 blocks off and a few blocks up): nearest hand-dig column
+// within DIG_IN_SCAN_R, DIG_IN_SCAN_DY up or down.
+const DIG_IN_SCAN_R = 8
+const DIG_IN_SCAN_DY = 4
+const DIG_IN_WALK_TICKS = 15
+function digInHazard(bot, ox, dy, oz) {
   for (let dx = -1; dx <= 1; dx++) {
     for (let dz = -1; dz <= 1; dz++) {
-      const c = cellAt(bot, dx, dy, dz)
+      const c = cellAt(bot, ox + dx, dy, oz + dz)
       if (isLava(c) || isWater(c)) return true
     }
   }
   return false
+}
+// Why the column whose feet cell sits at (ox, oy, oz) from the body's feet
+// cannot take the next dig, or null. fresh = nothing dug yet (water at the
+// body then means a riverbed: never dig in under water).
+// A fresh column must take the whole descent (rig: a grass skin over stone
+// dug 1 deep and capped nothing): all DIG_IN_DEPTH cells hand-dig. Deeper
+// steps re-check the next cell only. The reach check (canDigBlock) is for
+// the cell right under the body; scan cells are judged by name.
+function digInVeto(bot, ctx, ox, oy, oz, fresh) {
+  const n = fresh ? DIG_IN_DEPTH : 1
+  for (let k = 1; k <= n; k++) {
+    const c = cellAt(bot, ox, oy - k, oz)
+    const here = ox === 0 && oz === 0 && k === 1
+    const nameOk = !!c && typeof c.name === 'string' && (HAND_DIG.has(c.name) || c.name.endsWith('_leaves'))
+    if (!(here ? handDiggable(bot, c) : nameOk)) return 'undiggable:' + ((c && c.name) || 'none')
+    if (protectedReason(bot, c, ctx)) return 'protected'
+    if (digInHazard(bot, ox, oy - k, oz)) return 'fluid'
+  }
+  if (!solid(cellAt(bot, ox, oy - n - 1, oz))) return 'no-floor' // cave/water under: never drop into it
+  if (fresh) {
+    // The finished pit's walls (feet + head at the bottom) must stand:
+    // a hillside column opens sideways (rig: dug and capped, east side air).
+    for (const [dx, dz] of SIDES) {
+      if (!solid(cellAt(bot, ox + dx, oy - n, oz + dz)) || !solid(cellAt(bot, ox + dx, oy - n + 1, oz + dz))) return 'open-side'
+    }
+  }
+  if (digInHazard(bot, ox, oy - n - 1, oz) ||
+    (fresh && (digInHazard(bot, ox, oy, oz) || digInHazard(bot, ox, oy + 1, oz)))) return 'fluid' // riverbed: never dig in under water
+  return null
+}
+// Nearest standable column within DIG_IN_SCAN_R that takes a fresh dig:
+// [dx, dy, dz] of its feet cell, or null.
+function digInSpot(bot, ctx) {
+  let best = null
+  let bestD = Infinity
+  for (let dx = -DIG_IN_SCAN_R; dx <= DIG_IN_SCAN_R; dx++) {
+    for (let dz = -DIG_IN_SCAN_R; dz <= DIG_IN_SCAN_R; dz++) {
+      for (let dy = -DIG_IN_SCAN_DY; dy <= DIG_IN_SCAN_DY; dy++) {
+        const d = Math.hypot(dx, dy, dz)
+        if (d >= bestD || (dx === 0 && dz === 0)) continue
+        if (solid(cellAt(bot, dx, dy, dz)) || solid(cellAt(bot, dx, dy + 1, dz))) continue
+        if (!solid(cellAt(bot, dx, dy - 1, dz))) continue
+        if (digInVeto(bot, ctx, dx, dy, dz, true)) continue
+        best = [dx, dy, dz]
+        bestD = d
+      }
+    }
+  }
+  return best
 }
 // The neighbour cell the body's 0.6 bbox overlaps and stands on: solid
 // below, two free cells to walk into. [dx, dz] or null.
@@ -915,6 +970,22 @@ function digInRun(bot, ctx, st) {
     return 'running'
   }
   st.waited = 0
+  if (st.walk) {
+    // Walking to a hand-dig column (stone stance): arrival re-seeds the
+    // descent there; the pathfinder owns the body until then.
+    const w = st.walk
+    if (Math.floor(bp.x) === w.x && Math.floor(bp.y) === w.y && Math.floor(bp.z) === w.z) {
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+      st.walk = null
+      st.floor0 = Math.floor(bp.y)
+      return 'running'
+    }
+    if (++st.walkTicks > DIG_IN_WALK_TICKS) {
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+      return 'failed:no-walk'
+    }
+    return 'running'
+  }
   const below = cellAt(bot, 0, -1, 0)
   if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
     if (!solid(below)) {
@@ -951,12 +1022,7 @@ function digInRun(bot, ctx, st) {
     }
     setForward(bot, false)
     st.steer = 0
-    let veto = null
-    if (!handDiggable(bot, below)) veto = 'undiggable'
-    else if (protectedReason(bot, below, ctx)) veto = 'protected'
-    else if (!solid(cellAt(bot, 0, -2, 0))) veto = 'no-floor' // cave/water under: never drop into it
-    else if (digInHazard(bot, -1) || digInHazard(bot, -2) ||
-      (!st.digs && (digInHazard(bot, 0) || digInHazard(bot, 1)))) veto = 'fluid' // riverbed: never dig in under water
+    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs)
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
       // A server that reverts the break (protection) would re-dig forever.
@@ -967,7 +1033,16 @@ function digInRun(bot, ctx, st) {
       })()
       return 'running'
     }
-    if (Math.floor(bp.y) === st.floor0) return 'failed:' + veto
+    if (Math.floor(bp.y) === st.floor0) {
+      // Refused at the top: walk once to the nearest column that digs.
+      const spot = !st.digs && !st.walked ? digInSpot(bot, ctx) : null
+      if (!spot || typeof goals.GoalBlock !== 'function') return 'failed:' + veto
+      st.walked = true
+      st.walkTicks = 0
+      st.walk = { x: Math.floor(bp.x) + spot[0], y: Math.floor(bp.y) + spot[1], z: Math.floor(bp.z) + spot[2] }
+      try { bot.pathfinder.setGoal(new goals.GoalBlock(st.walk.x, st.walk.y, st.walk.z)) } catch (_) { return 'failed:' + veto }
+      return 'running'
+    }
   }
   // Cap: the cell above the head, placed against a solid side neighbour.
   st.capping = true
