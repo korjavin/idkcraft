@@ -1918,6 +1918,95 @@ describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
   })
 })
 
+describe('equip own table when the home table is far (idkcraft-ajoe)', () => {
+  // Prod: home table 113 blocks off at the castle, table-unreachable for
+  // 1.5 h with no pickaxe; the pack could fund a table of its own.
+  function farRig(items, homeTable = { x: 120, y: 64, z: 0 }) {
+    let placed = null
+    const bot = mockBot({
+      items,
+      ids: IDS,
+      recipes: {
+        oak_planks: recipeFor('oak_planks', 4),
+        crafting_table: recipeFor('crafting_table'),
+        wooden_pickaxe: recipeFor('wooden_pickaxe'),
+      },
+      blockAtImpl: (p) => {
+        if (p.x === homeTable.x && p.y === homeTable.y && p.z === homeTable.z) return TABLE
+        if (placed && p.x === placed.x && p.y === placed.y && p.z === placed.z) return { name: 'crafting_table', position: { ...placed } }
+        if (p.y === 63) return { name: 'dirt', position: { x: p.x, y: p.y, z: p.z } }
+        return { name: 'air' }
+      },
+      placeBlockImpl: async (ref, face) => {
+        bot.calls.placeBlock.push({ ref, face })
+        placed = { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z }
+      },
+    })
+    bot.craft = landingCraft(bot)
+    return bot
+  }
+  const PACK = () => [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }]
+
+  it('home table 120 blocks off, one log in the pack: crafts and places its own table, then the pickaxe', async () => {
+    const bot = farRig(PACK())
+    const ctx = freshCtx({ table: { x: 120, y: 64, z: 0 } })
+    for (let n = 1; n <= 3; n++) {
+      equip(bot, ctx, null, {})
+      await untilCrafts(bot, n)
+    }
+    assert.deepEqual(bot.calls.craft.map((c) => c.recipe.result.name), ['oak_planks', 'crafting_table', 'wooden_pickaxe'])
+    assert.equal(bot.calls.craft[1].table, null) // the table itself is a 2x2 craft
+    assert.equal(bot.calls.placeBlock.length, 1)
+    assert.equal(bot.calls.craft[2].table.name, 'crafting_table')
+    assert.equal(bot.calls.setGoal, 0) // never walked to the far table
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(!bot.errs.some((e) => e.includes('table-unreachable')))
+    assert.equal(ctx.equipTableDay, 0)
+    bot.restoreError()
+  })
+
+  it('one own table per day: today\'s spent, the far table is walked to as before', async () => {
+    const bot = farRig(PACK())
+    const ctx = freshCtx({ table: { x: 120, y: 64, z: 0 } })
+    ctx.equipTableDay = 0
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot.calls.setGoal, 1)
+    bot.restoreError()
+  })
+
+  it('a near table that failed table-unreachable today counts as far on the next pick', async () => {
+    const bot = farRig(PACK(), { x: 10, y: 64, z: 0 })
+    const ctx = freshCtx({ table: { x: 10, y: 64, z: 0 } })
+    ctx.equipTableUnreachable = { day: 0, x: 10, y: 64, z: 0 }
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.equal(bot.calls.craft[0].recipe.result.name, 'oak_planks')
+    assert.equal(bot.calls.setGoal, 0)
+    bot.restoreError()
+  })
+
+  it('too little wood for table + tool keeps the old walk', async () => {
+    const bot = farRig([{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }])
+    const ctx = freshCtx({ table: { x: 120, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot.calls.setGoal, 1)
+    bot.restoreError()
+  })
+
+  it('a failed walk marks the table unreachable for the day', async () => {
+    const bot = farRig([{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }], { x: 10, y: 64, z: 0 })
+    const ctx = freshCtx({ table: { x: 10, y: 64, z: 0 } })
+    for (let i = 0; i < 21 && ctx.stepStatus === 'running'; i++) { equip(bot, ctx, null, {}); await flush() }
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.deepEqual(ctx.equipTableUnreachable, { day: 0, x: 10, y: 64, z: 0 })
+    bot.restoreError()
+  })
+})
+
 describe('equip wet-dig guard (idkcraft-dj3)', () => {
   const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
 
