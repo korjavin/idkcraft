@@ -131,10 +131,24 @@ describe('g0z.5 prep phase', () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0, phase: 'prep', blocked: {} } }
-    assert.equal(castle.menuFact(bot, ctx), 'finish')
+    assert.equal(castle.menuFact(bot, ctx), 'stone-batch', 'the body word, never finish at 0/N (g0z.15)')
     await run(bot, ctx, 2)
     assert.equal(ctx.castle.phase, 'body')
     assert.deepEqual(bot.chats, [])
+  })
+
+  it('an unloaded site column keeps prep open (g0z.15): never skipped for good', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const blockAt = bot.blockAt
+    let unloaded = true
+    bot.blockAt = (p) => (unloaded && Math.floor(p.x) === SITE.x + 9 ? null : blockAt(p))
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'prep', blocked: {} } }
+    await run(bot, ctx, 2)
+    assert.equal(ctx.castle.phase, 'prep')
+    unloaded = false
+    await run(bot, ctx, 1)
+    assert.equal(ctx.castle.phase, 'body')
   })
 
   it('a dip with no stone to fill reads a stone word and fails no-stone', async () => {

@@ -31,11 +31,12 @@ function count(items, name) {
 
 // set: "x,y,z" -> block name; below y 64 reads dirt. chest: stacks in the
 // one chest (any chest block opens it).
-function makeBot({ items = [], set = new Map(), at = pos(SITE.x - 4, 64, SITE.z - 4), chest = [], timeOfDay = 6000 } = {}) {
+// under(y): the default column (g0z.15 quarry worlds).
+function makeBot({ items = [], set = new Map(), at = pos(SITE.x - 4, 64, SITE.z - 4), chest = [], timeOfDay = 6000, under = (y) => (y <= 63 ? 'dirt' : 'air') } = {}) {
   const calls = { goals: [], withdraw: [], dig: [], opens: [] }
   const nameAt = (p) => {
     const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
-    return set.has(k) ? set.get(k) : (Math.floor(p.y) <= 63 ? 'dirt' : 'air')
+    return set.has(k) ? set.get(k) : under(Math.floor(p.y))
   }
   const bot = {
     username: 'IdkBot',
@@ -82,7 +83,7 @@ function makeBot({ items = [], set = new Map(), at = pos(SITE.x - 4, 64, SITE.z 
     dig: async (b) => {
       calls.dig.push(b.position)
       set.set(`${b.position.x},${b.position.y},${b.position.z}`, 'air')
-      add(items, 'cobblestone', 1)
+      add(items, b.name === 'stone' ? 'cobblestone' : b.name, 1)
     },
     pathfinder: { isMoving: () => false, setGoal(g) { calls.goals.push(g) }, stop() {}, goal: null, movements: null, setMovements() {} },
     clearControlStates() {},
@@ -184,23 +185,44 @@ describe('castlefetch sources (g0z.4)', () => {
     await settle(); await settle()
     assert.deepEqual(bot.calls.dig.map((p) => [p.x, p.y, p.z]), [[SITE.x - 5, SITE.y, SITE.z - 5]])
     assert.equal(count(items, 'cobblestone'), 1)
-    fetch(bot, ctx) // the only off-site stone is gone: nothing reachable
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    fetch(bot, ctx) // the only off-site stone is gone: the quarry takes over (g0z.15)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.ok(ctx.castleFetch.target.quarry)
+    assert.equal(fetch.onSite(ctx.castle, ctx.castleFetch.target, 2), false, 'the trench is off the site')
   })
 
   it('no stone reachable -> failed + hold: the arbiter moves on, then retries after the bound', async () => {
     const items = TOOLS()
-    const bot = makeBot({ items })
+    const bot = makeBot({ items, under: (y) => (y <= 63 ? 'water' : 'air') }) // a lake: no quarry side either
     const ctx = { castle: castleState() }
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    const asks = () => bot.chats.filter((m) => /no stone/.test(m))
+    assert.equal(asks().length, 1, 'one line to the owner')
+    assert.match(asks()[0], /no stone near the castle at 100 200.*cobblestone into a chest/)
     assert.notEqual((await goal.decide(bot, ctx)).action, 'castlefetch', 'held: no churn')
     ctx.stepStatus = 'done'
     assert.notEqual((await goal.decide(bot, ctx)).action, 'castlefetch', 'still held')
     ctx.stepFail.castlefetch.at -= goal.CASTLEFETCH_RETRY_MS + 1
     ctx.stepStatus = 'running' // whatever took over is still running, text unchanged
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch', 'bounded: an owner restock gets looked at')
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    assert.equal(asks().length, 1, 'the retry never repeats the line')
+  })
+
+  it('a moving facts text never releases the fetch hold before the bound (g0z.12 rig churn)', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 63 ? 'water' : 'air') })
+    const ctx = { castle: castleState() }
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
+    fetch(bot, ctx)
+    await goal.decide(bot, ctx)
+    ctx.stepFail.castlefetch.text = 'known=none flipped' // text-keyed hold no longer matches
+    ctx.stepStatus = 'done'
+    assert.notEqual((await goal.decide(bot, ctx)).action, 'castlefetch')
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
   })
 
   it('missing fence: crafts it from planks + sticks', () => {
@@ -295,13 +317,16 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
   })
 
+  // Buried / deep stone is never an exposed-stone target: the trench (g0z.15)
+  // is the only way down.
+  const quarrying = (ctx) => ctx.stepStatus === undefined && ctx.castleFetch.target && ctx.castleFetch.target.quarry === true
+
   it('buried stone is never a target (no shaft digging)', () => {
     const set = new Map([[`${SITE.x - 8},${SITE.y - 2},${SITE.z - 8}`, 'stone']]) // dirt all around
     const bot = makeBot({ items: TOOLS(), set })
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
-    assert.equal(bot.calls.goals.length, 0)
+    assert.ok(quarrying(ctx))
   })
 
   it('an exposed cave wall far below the feet is never a target (revmux 02)', () => {
@@ -309,7 +334,7 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const bot = makeBot({ items: TOOLS(), set })
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    assert.ok(quarrying(ctx))
   })
 
   it('the stone window is anchored on the site, not the feet: a bot down in its pit never picks deeper (revmux 03)', () => {
@@ -318,7 +343,7 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const bot = makeBot({ items: TOOLS(), set, at: pos(SITE.x - 6.5, SITE.y - 3, SITE.z - 7.5) }) // standing 3 down
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+    assert.ok(quarrying(ctx))
   })
 
   it('the dig re-checks the stance rules at dig time: a submerged target is skipped, not dug', async () => {
@@ -446,5 +471,83 @@ describe('castle v2 materials: frame logs and the chest (g0z.12)', () => {
     const set = upTo('chest')
     const bot = makeBot({ items: [{ name: 'chest', count: 1 }], set })
     assert.equal(goal.goalFacts(bot, { castle: castleState({ blueprintVersion: 2 }) }).castle, 'chest-batch')
+  })
+})
+
+describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)', () => {
+  it('a far body walks to the site and digs the exposed stone there (prod: instant no-stone)', async () => {
+    const site = { x: 100, y: 80, z: 200 }
+    const sx = site.x - 5
+    const sz = site.z - 5
+    const set = new Map([[`${sx},80,${sz}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set, at: pos(site.x - 40, 64, site.z) })
+    const ctx = { castle: castleState({ site }) }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined, 'no instant failure')
+    assert.equal(bot.calls.dig.length, 0)
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.ok(g && Math.hypot(g.x - (site.x + 5), g.z - (site.z + 5)) < 1, 'walks to the site')
+    bot.entity.position = pos(sx + 1.5, 80, sz + 0.5)
+    fetch(bot, ctx)
+    await settle(); await settle()
+    assert.deepEqual(bot.calls.dig.map((p) => [p.x, p.y, p.z]), [[sx, 80, sz]])
+  })
+
+  it('stone under 3 dirt: a trench beside the site, staircase down, one chat line, batch met', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 2000 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5) // the walk lands next to it
+      await settle(); await settle()
+    }
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(count(items, 'cobblestone') >= 64 + 16)
+    assert.equal(bot.chats.length, 1)
+    const digs = bot.calls.dig
+    assert.ok(digs.every((p) => !fetch.onSite(ctx.castle, p, 2)), 'never the castle or its margin')
+    assert.ok(digs.every((p) => p.y >= SITE.y - 6), 'never deeper than the trench floor')
+    assert.deepEqual([digs[0].x, digs[0].y, digs[0].z], [SITE.x - 4, SITE.y - 1, SITE.z + 2], 'side 0, column 0, the sod first')
+    // A staircase: each column's floor is at most one below the previous.
+    const floor = new Map()
+    for (const p of digs) floor.set(p.x, Math.min(floor.has(p.x) ? floor.get(p.x) : Infinity, p.y))
+    const xs = [...floor.keys()].sort((a, b) => b - a)
+    for (let i = 1; i < xs.length; i++) assert.ok(floor.get(xs[i - 1]) - floor.get(xs[i]) <= 1)
+  })
+
+  it('the trench never digs the house apron: that side is skipped', () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    // A house right where side 0 starts.
+    const ctx = { castle: castleState(), home: { site: pos(SITE.x - 8, 64, SITE.z), interior: { min: pos(SITE.x - 10, 64, SITE.z), max: pos(SITE.x - 7, 67, SITE.z + 4) } } }
+    fetch(bot, ctx)
+    const t = ctx.castleFetch.target
+    assert.ok(t && t.quarry)
+    assert.ok(t.x > SITE.x, `side 0 skipped, got ${t.x} ${t.z}`)
+  })
+
+  it('prep with nothing to prep reads the body word: stone-none, castlefetch on the menu', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState({ phase: 'prep' }) }
+    assert.equal(castleMod.menuFact(bot, ctx), 'stone-none')
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
+  })
+
+  it('planks fetch stops at the next Fachwerk beam: held frame logs are not crafted away', () => {
+    const { cells } = blueprint.absPlan(SITE, 0, 2)
+    const i = cells.findIndex((c, j) => c.kind === 'planks' && j > 0 && cells[j - 1].kind === 'frame' && cells[j + 4].kind === 'frame')
+    assert.ok(i > 0)
+    const set = new Map()
+    const LAID = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log' }
+    for (const c of cells.slice(0, i)) if (LAID[c.kind]) set.set(`${c.x},${c.y},${c.z}`, LAID[c.kind])
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 10 }], set })
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    const d = fetch.demand(bot, ctx)
+    assert.equal(d.kind, 'planks')
+    assert.equal(ctx.castleWord.left, 4)
+    assert.equal(d.short, 4 + castleMod.reserveOf('planks'), 'one infill run, not a 32 stack')
   })
 })
