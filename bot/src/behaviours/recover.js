@@ -902,6 +902,9 @@ function digInRun(bot, ctx, st) {
   const below = cellAt(bot, 0, -1, 0)
   if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
     if (!solid(below)) {
+      // Nothing dug yet: the body hangs over a ledge edge — walking to the
+      // centre would step off it, not into a pit.
+      if (!st.digs) return 'failed:edge'
       // Dug out but the body still stands on a neighbour's edge (or is mid
       // fall): walk to the cell centre, the walls stop the overshoot.
       if (bot.entity && bot.entity.onGround === false) return 'running'
@@ -924,6 +927,8 @@ function digInRun(bot, ctx, st) {
     else if (digInHazard(bot, -1) || digInHazard(bot, -2)) veto = 'fluid'
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
+      // A server that reverts the break (protection) would re-dig forever.
+      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + 2) return 'failed:dig-refused'
       st.digInFlight = true
       void (async () => {
         try { await bot.dig(below) } catch (_) { st.digError = true } finally { st.digInFlight = false }

@@ -116,6 +116,24 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     assert.ok(closedIn(bot), 'walled on all sides, floored and capped')
   })
 
+  it('ledge edge (air under the centre, nothing dug): fails, never steps off', () => {
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }) // one block above the ground: below reads air
+    assert.equal(recover.digInRun(bot, {}, {}), 'failed:edge')
+    assert.ok(!bot.controls.forward, 'no walk toward the drop')
+  })
+
+  it('a server that reverts every break: bounded, fails', async () => {
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
+    bot.dig = async () => {} // the block comes back
+    const st = {}
+    let r = 'running'
+    for (let t = 0; t < 20 && r === 'running'; t++) {
+      r = recover.digInRun(bot, {}, st)
+      await flush()
+    }
+    assert.equal(r, 'failed:dig-refused')
+  })
+
   it('shelter, scaffold=0, night, outside: digs in and holds sheltered', async () => {
     const bot = flatBot({ x: -47.5, y: 64, z: -207.5 })
     const ctx = { home: v2home({ x: 100, y: 71, z: -356 }), step: 'shelter', stepStatus: 'running' }
