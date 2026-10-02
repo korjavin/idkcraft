@@ -125,6 +125,24 @@ describe('xhqv per-night gohome latch', () => {
     })
   })
 
+  it('a latch from a night the work loop never saw end is stale (revmux 01)', async () => {
+    // Latched on day 5, then follow mode across dawn: decide never saw day.
+    const bot = menuBot({ x: 195, y: 64, z: 195 })
+    const ctx = menuCtx()
+    await quiet(async () => {
+      await failGohome(bot, ctx)
+      await failGohome(bot, ctx)
+      assert.equal(ctx.step, 'shelter')
+      bot.time.day = 6
+      bot.time.timeOfDay = 12500
+      ctx.stepStatus = 'done'
+      assert.equal((await goal.decide(bot, ctx)).action, 'gohome', 'the next dusk walks home')
+      // One failure tonight is one, not yesterday's two plus one.
+      assert.equal((await failGohome(bot, ctx)).action, 'gohome')
+      assert.equal(ctx.gohomeLatch.fails, 1)
+    })
+  })
+
   it('the model is not asked once latched: shelter is a night rule', async () => {
     const bot = menuBot({ x: 195, y: 64, z: 195 })
     const ctx = menuCtx()
