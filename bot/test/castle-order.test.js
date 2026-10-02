@@ -226,6 +226,26 @@ describe('castle arbiter step (g0z.3)', () => {
     assert.equal(goal.goalFacts(bot, ctx).castle, 'torch-none')
   })
 
+  it('g0z.17 (revmux 01): torchless, the moat and fence go on; the door waits with the torches', () => {
+    const set = new Map()
+    const { cells } = blueprint.absPlan(SITE, 0, 2)
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest' }
+    for (const c of cells) if (NAME[c.kind]) set.set(`${c.x},${c.y},${c.z}`, NAME[c.kind])
+    const bot = makeBot({ set })
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'clear', 'a moat dig, not torch-none')
+    assert.equal(ctx.castleWord.word, 'clear')
+    // Moat dug, fence up: only then the torch word (castlefetch retries it).
+    for (const c of cells) {
+      if (c.kind === 'dig') set.set(`${c.x},${c.y},${c.z}`, 'air')
+      if (c.kind === 'fence') set.set(`${c.x},${c.y},${c.z}`, 'oak_fence')
+    }
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'torch-none')
+    // Torches laid: the door is next.
+    for (const c of cells) if (c.kind === 'torch') set.set(`${c.x},${c.y},${c.z}`, 'torch')
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'door-none')
+  })
+
   it('never at dusk or night (no castle step after dark)', async () => {
     for (const tod of [12500, 18000]) {
       const bot = makeBot({ timeOfDay: tod })

@@ -172,6 +172,16 @@ function workOrder(cells, key) {
   return order
 }
 
+// Torchless (g0z.17): with no torch on hand a torch cell steps aside —
+// the moat and fence go on — and the door waits with it (A* never opens
+// it, the torches still need the way in). Neither counts as interior work.
+// Only when nothing else is workable does the torch cell come back, so the
+// word reads torch-none and castlefetch retries.
+function torchOwed(bot, c, owed) {
+  if (c.kind === 'torch') return usable(bot, 'torch') <= 0
+  return c.kind === 'door' && !!owed
+}
+
 // Next cell to work in work order, or why there is none.
 function pick(bot, ctx, st, cells, key, now) {
   const order = workOrder(cells, key)
@@ -192,11 +202,13 @@ function pick(bot, ctx, st, cells, key, now) {
     let first = -1
     let waiting = null
     let inside = false
+    let owed = null
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
+      if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
       const b = st.blocked[bkey(st, c.idx)]
@@ -207,6 +219,7 @@ function pick(bot, ctx, st, cells, key, now) {
     }
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
+    if (owed) return { idx: owed.idx }
     return { idx: -1, waiting }
   }
 }
@@ -234,10 +247,12 @@ function peek(bot, st, now, ctx) {
   }
   let waiting = null
   let inside = false
+  let owed = null
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
+    if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
     const b = blocked[bkey(st, c.idx)]
@@ -245,7 +260,7 @@ function peek(bot, st, now, ctx) {
     if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
     return { cell: c, waiting: null, cells }
   }
-  return { cell: null, waiting, cells }
+  return { cell: owed, waiting: owed ? null : waiting, cells }
 }
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
