@@ -192,7 +192,23 @@ function explore(bot, ctx, target, state) {
   }
 }
 
+// Next leg target within cap feet of the anchor (9qt0: self wool hunts stay
+// near home) — the pending target, else explore's own pick. Null: none.
+function nextTarget(bot, ctx, cap) {
+  try {
+    const anchor = anchorOf(bot, ctx)
+    if (!anchor) return null
+    const e = ctx && ctx.explore
+    const t = e && e.target ? e.target
+      : pickTarget(e && e.visited instanceof Set ? e.visited : new Set(), anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
+    return t && Math.hypot(t.x - anchor.x, t.z - anchor.z) <= cap ? t : null
+  } catch (_) {
+    return null
+  }
+}
+
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
+module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
 module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target

@@ -41,7 +41,7 @@ const ITEMS = {
   oak_planks: 205, birch_planks: 206, iron_ingot: 207, shears: 208,
   crafting_table: 209, stick: 210, oak_log: 211,
   iron_pickaxe: 212, iron_sword: 213, diamond_pickaxe: 214, diamond_sword: 215,
-  dirt: 216,
+  dirt: 216, string: 217,
 }
 
 // Fake recipe with the real shape (bring-craft.test.js pattern).
@@ -58,6 +58,7 @@ function RECIPES() {
       R('white_bed', [['white_wool', 3], ['birch_planks', 3]], 1, true),
     ],
     shears: [R('shears', [['iron_ingot', 2]], 1, false)],
+    white_wool: [R('white_wool', [['string', 4]], 1, false)],
     crafting_table: [R('crafting_table', [['oak_planks', 4]], 1, false)],
     stick: [R('stick', [['oak_planks', 2]], 4, false)],
     oak_planks: [R('oak_planks', [['oak_log', 1]], 4, false)],
@@ -1165,5 +1166,140 @@ describe('jr2.2 done branch', () => {
     beds(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.chats.includes('both beds are in'))
+  })
+})
+
+describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, near legs', () => {
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  const memory = require('../src/memory')
+  const exploreMod = require('../src/behaviours/explore')
+  const FACTS = { time: 'day', home: 'built', beds: 'none' }
+  const F = (bot, ctx) => goal.MENU.beds.feasible(FACTS, bot, ctx)
+
+  function failHunt(bot, ctx) {
+    ctx.stepStatus = null
+    ctx.bring = undefined
+    ctx.beds.hunt = { searchLegs: { legs: 24 } }
+    beds(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-wool')
+  }
+
+  it('acceptance: two failed hunts latch through death and restart until a sheep is sighted', () => {
+    const bot = mockBot()
+    const ctx = { home: v2home(), beds: { phase: 'wool' } }
+    failHunt(bot, ctx)
+    assert.equal(F(bot, ctx), true, 'one failure still retries')
+    failHunt(bot, ctx)
+    assert.equal(F(bot, ctx), false, 'second failure latches')
+    bot.time.day = 6
+    assert.equal(F(bot, ctx), false, 'a new MC day does not release (the 9kd hole)')
+    // Death: ctx survives, the stepFail hold does not matter — still latched.
+    ctx.bring = null
+    assert.equal(F(bot, ctx), false, 'death keeps it')
+    // Restart: a fresh ctx from disk.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), '9qt0-'))
+    try {
+      const file = path.join(dir, 'bot.json')
+      assert.equal(memory.save(bot, ctx, file), true)
+      const fresh = {}
+      const out = memory.restore(bot, fresh, file)
+      assert.equal(out.sheep, 1)
+      assert.equal(F(bot, fresh), false, 'restart keeps it')
+      // A sheep in sight right after the latch: still latched (unreachable-sheep loop cap).
+      bot.entities[7] = { id: 7, name: 'sheep', position: pos(6, 65, 0) }
+      assert.equal(F(bot, fresh), false, 'fresh latch ignores a sighting')
+      fresh.beds.noWool.at -= beds.SIGHT_MIN_MS
+      assert.equal(F(bot, fresh), true, 'sighting past the min age reopens')
+      delete bot.entities[7]
+      assert.equal(F(bot, fresh), false, 'no sheep: still latched')
+      fresh.beds.noWool.at -= beds.LATCH_MS
+      assert.equal(F(bot, fresh), true, 'expired after LATCH_MS')
+      // The step's own tick reads the restored {noWool} without a phase.
+      beds(bot, fresh) // shears tick: nothing to craft, on to wool
+      beds(bot, fresh)
+      assert.ok(fresh.bring && fresh.bring.self === 'beds', 'restored ctx hunts after expiry')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('memory drops a malformed latch and clamps a future stamp', () => {
+    const bot = mockBot()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), '9qt0-'))
+    try {
+      const file = path.join(dir, 'bot.json')
+      const now = Date.now()
+      const world = memory.worldKey(bot)
+      fs.writeFileSync(file, JSON.stringify({ v: 1, world, homes: [], sheep: { fails: 'x', at: now } }))
+      const a = {}
+      assert.equal(memory.restore(bot, a, file, now).sheep, 0)
+      assert.equal(a.beds, undefined)
+      fs.writeFileSync(file, JSON.stringify({ v: 1, world, homes: [], sheep: { fails: 2, at: now + 1e9 } }))
+      const b = {}
+      memory.restore(bot, b, file, now)
+      assert.deepEqual(b.beds.noWool, { fails: 2, at: now })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('acceptance: a partial 2 wool banks in the chest; a craft-ready colour and string stay', () => {
+    const partial = mockBot({ items: [{ name: 'white_wool', count: 2 }, { name: 'string', count: 4 }, ...LADDER_PICKS] })
+    const plan = stockpileMod.depositPlan(partial, { home: v2home(), ...LADDER_DONE })
+    assert.deepEqual(plan.filter((p) => p.name.endsWith('_wool')), [{ name: 'white_wool', count: 2 }])
+    assert.ok(!plan.some((p) => p.name === 'string'), 'string stays for the wool rung')
+    const ready = mockBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'gray_wool', count: 1 }, ...LADDER_PICKS] })
+    const planR = stockpileMod.depositPlan(ready, { home: v2home(), ...LADDER_DONE })
+    assert.ok(!planR.some((p) => p.name.endsWith('_wool')), 'a craft-ready colour keeps all wool')
+  })
+
+  it('acceptance: 12 string make the bed wool without a hunt, even when latched', async () => {
+    // Bedroom A stands: one craft owed, 3 wool needed.
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
+    const bot = mockBot({ items: [{ name: 'string', count: 12 }], cells })
+    const ctx = { home: v2home(), beds: { phase: 'wool', noWool: { fails: 2, at: Date.now() } } }
+    assert.equal(F(bot, ctx), true, 'string lifts the latch')
+    for (let i = 0; i < 10 && ctx.beds.phase === 'wool'; i++) {
+      beds(bot, ctx)
+      if (ctx.gearInFlight) await rest(650)
+      await flush()
+    }
+    assert.equal(ctx.bring, undefined, 'no hunt opened')
+    assert.equal(ctx.beds.phase, 'craft')
+    assert.equal(bot._items.filter((i) => i.name === 'white_wool').reduce((n, i) => n + i.count, 0), 3)
+  })
+
+  it('a failed string craft goes dry and hunts', () => {
+    const bot = mockBot({ items: [{ name: 'string', count: 4 }], recipes: {} })
+    const ctx = { home: v2home(), beds: { phase: 'wool' } }
+    beds(bot, ctx)
+    assert.equal(ctx.beds.stringDry, true)
+    beds(bot, ctx)
+    assert.ok(ctx.bring && ctx.bring.self === 'beds')
+  })
+
+  it('self search legs stay within SELF_SEARCH_RADIUS of home; a capped search fails the hunt', () => {
+    const bot = mockBot()
+    const ctx = { home: v2home() }
+    assert.ok(exploreMod.nextTarget(bot, ctx, bring.SELF_SEARCH_RADIUS), 'fresh ground in reach')
+    // Every spiral point within 96 already walked (prod: earlier hunts).
+    const visited = new Set()
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(SITE.x + r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(SITE.z - r * Math.cos(a * Math.PI / 4))
+        visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+    ctx.explore = { visited, target: null }
+    assert.equal(exploreMod.nextTarget(bot, ctx, bring.SELF_SEARCH_RADIUS), null)
+    assert.ok(exploreMod.nextTarget(bot, ctx, 256), 'the outer rings remain for owner orders')
+    const st = { phase: 'wool', hunt: { searchLegs: { legs: 1, capped: true } } }
+    const c2 = { home: v2home(), beds: st }
+    beds(bot, c2)
+    assert.equal(c2.stepStatus, 'failed:no-wool', 'a capped search counts as a failed hunt')
+    assert.equal(st.noWool.fails, 1)
   })
 })

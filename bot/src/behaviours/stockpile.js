@@ -189,6 +189,17 @@ function depositPlan(bot, ctx) {
     const fact = require('./beds').bedsFact(bot, ctx && ctx.home)
     bedOwed = fact === 'none' || fact === 'one'
   } catch (_) { bedOwed = false }
+  // Partial wool banks (9qt0): only a craft-ready colour (3+ of one) keeps;
+  // prod lost every partial to death, so 3 wool never accumulated. The beds
+  // hunt is chest-first, so banked partials come back on the next hunt.
+  let woolReady = false
+  if (bedOwed) {
+    const wool = {}
+    for (const j of list) {
+      if (j && typeof j.name === 'string' && j.name.endsWith('_wool')) wool[j.name] = (wool[j.name] || 0) + (typeof j.count === 'number' ? j.count : 1)
+    }
+    woolReady = Object.values(wool).some((n) => n >= 3) // bed.js BED_WOOL (no import: require cycle)
+  }
   // + ground patches under unplaced beds (floorless-house terrain dips eat
   // a plank each — banking them strands the place between picks).
   let keepBedPlanks = 6
@@ -272,7 +283,7 @@ function depositPlan(bot, ctx) {
     // Castle reserve (g0z.3): an unfinished castle keeps every castle
     // material packed — banking it would starve the next castle batch.
     if (castleOpen && castleMaterial(i.name)) continue
-    if (bedOwed && (i.name.endsWith('_wool') || i.name.endsWith('_bed'))) continue
+    if (bedOwed && (i.name.endsWith('_bed') || i.name === 'string' || (woolReady && i.name.endsWith('_wool')))) continue
     if (bedOwed && i.name.endsWith('_planks')) {
       const k = Math.min(woodKeep[i.name] || 0, n)
       woodKeep[i.name] = (woodKeep[i.name] || 0) - k

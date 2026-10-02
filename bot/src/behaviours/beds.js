@@ -29,7 +29,9 @@ const { canBreak } = require('./util')
 // one bed at a time — a x2 plan would strand on 4 oak + 4 birch).
 const WANT_WOOL = 6
 const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:no-wool
-const NOWOOL_LATCH = 2 // failed wool hunts per MC day before beds latches off until tomorrow
+const NOWOOL_LATCH = 2 // failed/partial wool hunts before beds latches off (9qt0: real time, persisted)
+const LATCH_MS = 2 * 3600 * 1000 // a latch expires this long after its last failure
+const SIGHT_MIN_MS = 30 * 60 * 1000 // ponytail: a sheep in sight reopens only past this age (unreachable-sheep loop cap)
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -335,34 +337,43 @@ function shearsTick(bot, ctx, st, pack, craftsOwed) {
   try { console.log(`beds shears: ${(res && res.line) || 'crafting failed'}, hunting instead`) } catch (_) { /* logging best-effort */ }
 }
 
-// Day latch (idkcraft-9kd): the atl.4 stepFail hold releases on relocation —
-// and a death-respawn IS a relocation — so one sheepless morning re-hunted
-// after every death (prod: 9 guardian kills in a day). The second failed
-// wool hunt of the same MC day latches beds infeasible until tomorrow; the
-// menu feasible gate reads it, the step itself just counts failures.
-function dayOf(bot) {
-  try {
-    const d = bot && bot.time && bot.time.day
-    return typeof d === 'number' ? d : 0
-  } catch (_) { return 0 }
-}
-
-function noteNoWool(st, day) {
+// Sheepless latch (idkcraft-9kd, 9qt0): the atl.4 stepFail hold releases on
+// relocation — and a death-respawn IS a relocation. The 9kd per-MC-day latch
+// still allowed 2 hunts every 20 real minutes and died with every restart
+// (prod: 36% of all ticks hunting, ~50 of 61 deaths downstream). Now: the
+// second failed/partial hunt latches beds off until a woolly sheep is in
+// sight (and the last failure is SIGHT_MIN_MS old) or LATCH_MS passes.
+// {fails, at} lives in ctx.beds.noWool and memory.js persists it, so death
+// and restart both keep it. A sighting does not reset the count: the hunt
+// it opens re-latches on failure.
+function noteNoWool(st, now) {
   try {
     if (!st || typeof st !== 'object') return 0
+    const t = typeof now === 'number' ? now : Date.now()
     const cur = st.noWool && typeof st.noWool === 'object' ? st.noWool : null
-    const fails = cur && cur.day === day ? (cur.fails || 0) + 1 : 1
-    st.noWool = { day, fails }
+    const live = cur && typeof cur.at === 'number' && t - cur.at < LATCH_MS
+    const fails = live ? (cur.fails || 0) + 1 : 1
+    st.noWool = { fails, at: t }
     return fails
   } catch (_) { return 0 }
 }
 
-function sheepLatched(ctx, bot) {
+function sheepInSight(bot) {
+  try {
+    return !!bringMod.findAnimal(bot, null, { prey: ['sheep'], skipSheared: true })
+  } catch (_) { return false }
+}
+
+function sheepLatched(ctx, bot, now) {
   try {
     const st = ctx && ctx.beds
     const cur = st && st.noWool
-    if (!cur || typeof cur !== 'object') return false
-    return cur.day === dayOf(bot) && (cur.fails || 0) >= NOWOOL_LATCH
+    if (!cur || typeof cur !== 'object' || typeof cur.at !== 'number') return false
+    if ((cur.fails || 0) < NOWOOL_LATCH) return false
+    if (!st.stringDry && (bedMod.packCounts(bot).string || 0) >= 4) return false // the string rung needs no sheep
+    const age = (typeof now === 'number' ? now : Date.now()) - cur.at
+    if (!(age < LATCH_MS)) return false
+    return !(age >= SIGHT_MIN_MS && sheepInSight(bot))
   } catch (_) { return false }
 }
 
@@ -379,6 +390,7 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
   if (craftsOwed <= 0 || (color && (pack[`${color}_wool`] || 0) >= need)) {
     st.reopens = 0
     st.planksDry = false // fresh craft episode: retry the chest
+    st.stringDry = false
     st.phase = 'craft'
     if (color && craftsOwed > 0) {
       try { bot.chat(`got ${pack[`${color}_wool`]} ${color} wool`) } catch (_) { /* chat best-effort */ }
@@ -393,22 +405,34 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     let timedOut = false
     try { legs = (last.searchLegs && last.searchLegs.legs) || 0 } catch (_) { /* unreadable order: reopen */ }
     try { timedOut = !!(last.searchLegs && last.searchLegs.timedOut) } catch (_) { /* unreadable order: reopen */ }
+    let capped = false
+    try { capped = !!(last.searchLegs && last.searchLegs.capped) } catch (_) { /* unreadable order: reopen */ }
     const budget = (bringMod.SEARCH_BUDGET && bringMod.SEARCH_BUDGET.legs) || 24
-    if (legs >= budget || timedOut || (st.reopens || 0) >= HUNT_REOPENS) {
+    if (legs >= budget || timedOut || capped || (st.reopens || 0) >= HUNT_REOPENS) {
       st.reopens = 0
-      noteNoWool(st, dayOf(bot))
+      noteNoWool(st)
       ctx.stepStatus = 'failed:no-wool'
       return
     }
     // Partial hunt (ipn.11): wool gained but the need still unmet — the old
     // code reopened forever ('searched 4 areas, only got 1', 7x a day) and
-    // the latch never armed. A partial counts toward the daily latch, so
-    // two thin hunts yield the rest of the day to gear.
+    // the latch never armed. A partial counts toward the latch, so two thin
+    // hunts yield to gear until a sheep shows up.
     try {
       const atOpen = typeof st.huntWool === 'number' ? st.huntWool : null
-      if (atOpen !== null && totalWool(pack) > atOpen) noteNoWool(st, dayOf(bot))
+      if (atOpen !== null && totalWool(pack) > atOpen) noteNoWool(st)
     } catch (_) { /* latch best-effort */ }
     st.reopens = (st.reopens || 0) + 1
+  }
+  // String rung (9qt0): 4 string -> 1 white wool (2x2, no table) before any
+  // hunt — the bot kills spiders far more often than it finds sheep. A
+  // failed craft goes dry until the next craft episode.
+  const fromString = Math.floor((pack.string || 0) / 4)
+  if (fromString > 0 && !st.stringDry) {
+    const res = craftItem(bot, ctx, 'white_wool', fromString)
+    if (res === 'running') return
+    if (!(res && res.done)) st.stringDry = true
+    return // recount next tick
   }
   // Chest-first while the pack is short overall (the did.1 ladder pulls
   // banked wool, then the mob rung hunts the rest); direct mob rung on mixed
@@ -679,6 +703,8 @@ module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact
 module.exports.sheepLatched = sheepLatched
 module.exports.NOWOOL_LATCH = NOWOOL_LATCH
+module.exports.LATCH_MS = LATCH_MS
+module.exports.SIGHT_MIN_MS = SIGHT_MIN_MS
 module.exports.fillNeed = fillNeed
 module.exports.needsFillGround = needsFillGround
 module.exports.WANT_WOOL = WANT_WOOL

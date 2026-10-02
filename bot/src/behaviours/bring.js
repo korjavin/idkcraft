@@ -53,6 +53,7 @@ const RETURN_RANGE = 2
 // Plain constants — the values never change at runtime (not forwarded in
 // compose); tests stub them through the module export below.
 const SEARCH_BUDGET = { legs: 24, minutes: 5 }
+const SELF_SEARCH_RADIUS = 96 // 9qt0: self-order legs stay this close to the anchor
 function searchLegs() {
   return SEARCH_BUDGET.legs
 }
@@ -894,6 +895,14 @@ async function enterSearch(bot, ctx, o, legacy) {
   // 01-review): self wool hunts must fail, never reopen 3 more searches.
   if (Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) s.timedOut = true
   if (s.legs >= searchLegs() || s.timedOut) {
+    refuseExhausted(bot, ctx, o)
+    return
+  }
+  // Self hunts (9qt0) stay within SELF_SEARCH_RADIUS of home: prod legs ran
+  // 129-256 blocks out and the night caught the bot there (~50 of 61
+  // deaths). No unvisited ground in reach is an exhausted search.
+  if (o.self && !exploreMod.nextTarget(bot, ctx, SELF_SEARCH_RADIUS)) {
+    s.capped = true
     refuseExhausted(bot, ctx, o)
     return
   }
@@ -1759,6 +1768,7 @@ module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
+module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
 module.exports.toWoolHunt = itemMod.toWoolHunt
