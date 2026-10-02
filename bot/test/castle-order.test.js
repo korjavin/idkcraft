@@ -425,13 +425,12 @@ describe('castle v2 default for new orders (g0z.12)', () => {
     assert.equal(st.blueprintVersion, 2)
     const n = blueprint.BLUEPRINTS[2].PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
     assert.match(bot.chats.pop(), new RegExp(`~${n} blocks`))
-    // Water in the far corner of the v2 site (outside any v1 11x11 box)
-    // refuses the same spot.
-    const { w, d } = blueprint.siteDimensions(st.rot, 2)
-    const wet = makeBot({ set: new Map([[`${st.site.x + w - 1},63,${st.site.z + d - 1}`, 'water']]) })
+    // Water in a v2 hall column (outside any v1 11x11 box) refuses the
+    // same spot (g0z.20: water in the ring is filled, in the core never).
+    const wet = makeBot({ set: new Map([[`${st.site.x + 15},63,${st.site.z + 14}`, 'water']]) })
     const t2 = createTicker({ bot: wet, brain: null, tickMs: 10, idleTickMs: 10 })
     handleChat(wet, t2, 'Steve', 'build castle')
-    assert.match(wet.chats.pop(), /can't build a castle here: there is water/)
+    assert.match(wet.chats.pop(), /not right here \(there is water/)
     assert.ok(!wet._tickerCtx.castle)
   })
 
