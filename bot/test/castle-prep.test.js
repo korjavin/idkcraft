@@ -89,9 +89,24 @@ describe('g0z.5 site check', () => {
     assert.match(check((w) => { w.set(101, 64, 201, 'oak_planks') }), /somebody built there/)
     assert.match(check((w) => { w.set(106, 65, 206, 'white_bed') }), /somebody built there/)
   })
-  it('refuses a 2-deep hole and a 2-high step', () => {
-    assert.match(check((w) => { w.set(103, 63, 203, 'air'); w.set(103, 62, 203, 'air') }), /too uneven/)
-    assert.match(check((w) => { w.set(104, 64, 204, 'dirt'); w.set(104, 65, 204, 'dirt') }), /too uneven/)
+  it('g0z.16: accepts a 2-deep hole and a 2-high step (prep levels them)', () => {
+    assert.equal(check((w) => { w.set(103, 63, 203, 'air'); w.set(103, 62, 203, 'air') }), null)
+    assert.equal(check((w) => { w.set(104, 64, 204, 'dirt'); w.set(104, 65, 204, 'stone') }), null)
+  })
+  it('g0z.16: refuses past ±2 with the spot count and the worst offset', () => {
+    assert.equal(check((w) => { for (let y = 61; y <= 63; y++) w.set(103, y, 203, 'air') }),
+      'the ground is too uneven: 1 spots are more than 2 blocks off level, worst 3 down at 103 203 (I level up to 2)')
+    const r = check((w) => {
+      for (const x of [101, 102, 103]) for (let y = 64; y <= 66; y++) w.set(x, y, 201, 'dirt')
+      for (let y = 64; y <= 67; y++) w.set(105, y, 205, 'stone')
+    })
+    assert.match(r, /too uneven: 4 spots are more than 2 blocks off level, worst 4 up at 105 205/)
+    assert.match(check((w) => { for (let y = 50; y <= 63; y++) w.set(103, y, 203, 'air') }), /worst 9\+ down at 103 203/)
+  })
+  it('g0z.16: the v2 footprint (31x27) levels ±2 and refuses ±3 at its far corner', () => {
+    const v2 = (mutate) => { const w = makeWorld(); mutate(w); return castle.siteCheck(mockBot(w), SITE, 0, 2) }
+    assert.equal(v2((w) => { w.set(130, 64, 226, 'dirt'); w.set(130, 65, 226, 'dirt') }), null)
+    assert.match(v2((w) => { for (let y = 64; y <= 66; y++) w.set(130, y, 226, 'dirt') }), /1 spots .* worst 3 up at 130 226/)
   })
   it('an unloaded column is never a refusal', () => {
     const w = makeWorld()
@@ -120,7 +135,7 @@ describe('g0z.5 prep phase', () => {
     for (let y = 64; y < 68; y++) assert.equal(world.get(tx, y, tz), 'air', `log at ${y} chopped`)
     assert.equal(world.get(d.x, 63, d.z), 'cobblestone', 'dip filled')
     assert.equal(ctx.castle.phase, 'body')
-    assert.ok(bot.chats.some((m) => /preparing the castle site: 4 logs to chop, 1 dips to fill/.test(m)), bot.chats.join('|'))
+    assert.ok(bot.chats.some((m) => /preparing the castle site: 4 logs to chop, 0 blocks to cut, 1 holes to fill/.test(m)), bot.chats.join('|'))
     assert.ok(bot.chats.includes('castle site ready, starting to build'))
     // The same ticks went on to lay the plan.
     const first = blueprint.absPlan(SITE, 0).cells.find((c) => c.dy === 0 && c.kind === 'stone')
@@ -201,5 +216,69 @@ describe('g0z.5 order refusal', () => {
     handleChat(bot, ticker, 'Steve', 'build castle')
     assert.equal(bot._tickerCtx.castle, undefined)
     assert.match(bot.chats.pop(), /can't build a castle here: there is water at .*flatter/)
+  })
+})
+
+describe('g0z.16 levelling prep (±2)', () => {
+  const ctxOf = (version) => ({ castle: { site: SITE, rot: 0, blueprintVersion: version, phase: 'prep', blocked: {} } })
+
+  it('cuts a 2-high bump, keeps a matching natural block, fills a 2-deep hole, then builds', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const wall = blueprint.absPlan(SITE, 0).cells.find((c) => c.dy === 0 && c.kind === 'stone')
+    const bx = SITE.x + 1
+    const bz = SITE.z + 1
+    assert.ok(!blueprint.absPlan(SITE, 0).at.has(`${bx},64,${bz}`), 'bump off the plan')
+    world.set(bx, 64, bz, 'dirt'); world.set(bx, 65, bz, 'grass_block') // 2-high bump
+    world.set(wall.x, 64, wall.z, 'stone'); world.set(wall.x, 65, wall.z, 'dirt') // natural stone in a wall cell
+    const hx = SITE.x + 8
+    const hz = SITE.z + 2
+    world.set(hx, 63, hz, 'air'); world.set(hx, 62, hz, 'air') // 2-deep hole
+    assert.equal(castle.siteCheck(bot, SITE, 0), null)
+    const ctx = ctxOf(1)
+    await run(bot, ctx, 80)
+    assert.equal(world.get(bx, 64, bz), 'air')
+    assert.equal(world.get(bx, 65, bz), 'air')
+    assert.equal(world.get(wall.x, 64, wall.z), 'stone', 'a block that matches its plan cell stays')
+    assert.equal(world.get(hx, 62, hz), 'cobblestone')
+    assert.equal(world.get(hx, 63, hz), 'cobblestone')
+    assert.equal(ctx.castle.phase, 'body')
+    assert.ok(bot.chats.some((m) => /preparing the castle site: 0 logs to chop, 3 blocks to cut, 2 holes to fill/.test(m)), bot.chats.join('|'))
+    const laid = blueprint.absPlan(SITE, 0).cells.filter((c) => blueprint.isPlaceTarget(c.kind) && c.dy === 0 && world.get(c.x, c.y, c.z) === 'cobblestone')
+    assert.ok(laid.length > 0, 'the body started')
+  })
+
+  it('a 1-deep dip and a 1-high bump level too; fills take dirt when no stone is spare', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    bot.inventory = { items: () => [{ name: 'dirt', count: 5 }] }
+    world.set(SITE.x + 3, 63, SITE.z + 6, 'air')
+    world.set(SITE.x + 9, 64, SITE.z + 3, 'dirt')
+    const ctx = ctxOf(1)
+    assert.equal(castle.menuFact(bot, ctx), 'clear', 'the cut first')
+    await run(bot, ctx, 40)
+    assert.equal(world.get(SITE.x + 9, 64, SITE.z + 3), 'air')
+    assert.equal(world.get(SITE.x + 3, 63, SITE.z + 6), 'dirt')
+    assert.equal(ctx.castle.phase, 'body')
+  })
+
+  it('v2: a hole in a moat column is the plan\'s (never filled), one beside it is', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const plan = blueprint.absPlan(SITE, 0, 2)
+    const m = plan.cells.find((c) => c.kind === 'dig' && c.dy === -1 && plan.at.has(`${c.x},${c.y - 1},${c.z}`))
+    world.set(m.x, 63, m.z, 'air'); world.set(m.x, 62, m.z, 'air')
+    const hx = SITE.x + 15
+    const hz = SITE.z + 13
+    assert.ok(!plan.at.has(`${hx},63,${hz}`))
+    world.set(hx, 63, hz, 'air'); world.set(hx, 62, hz, 'air')
+    assert.equal(castle.siteCheck(bot, SITE, 0, 2), null)
+    const ctx = ctxOf(2)
+    await run(bot, ctx, 40)
+    assert.equal(world.get(hx, 62, hz), 'cobblestone')
+    assert.equal(world.get(hx, 63, hz), 'cobblestone')
+    assert.equal(ctx.castle.phase, 'body')
+    assert.equal(world.get(m.x, 63, m.z), 'air', 'moat cell left to the plan')
+    assert.equal(world.get(m.x, 62, m.z), 'air')
   })
 })
