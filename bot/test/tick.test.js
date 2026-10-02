@@ -2620,8 +2620,14 @@ describe('nobody-online leave', () => {
       }).then(() => { done = true }, () => { done = true })
       // merge seam (3nt.11 x 3nt.14): both listeners must survive in runOnce
       assert.equal(bot.listenerCount('playerLeft'), 1, 'playerLeft wired')
-      // +1: installPlaceTiming defers its wrap to the first spawn (idkcraft-6x7.11)
-      assert.equal(bot.listeners('spawn').length, 3, 'spawn kit tap wired')
+      // +2: trackPlaced and installPlaceTiming defer their wraps to the first
+      // spawn (idkcraft-dahd, idkcraft-6x7.11)
+      assert.equal(bot.listeners('spawn').length, 4, 'spawn kit tap wired')
+      const raw = bot.placeBlock
+      bot.placeBlock = async () => {}
+      bot.emit('spawn')
+      assert.ok(bot._placedTrackInstalled && bot._placeTimingInstalled, 'both wraps installed on spawn')
+      bot.placeBlock = raw
       bot.emit('spawn')
       await new Promise((r) => setTimeout(r, 50))
       assert.ok(lines.some((l) => l.includes('spawned as IdkBot')), 'spawn logged')

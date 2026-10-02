@@ -126,6 +126,18 @@ describe('canBreak guard (idkcraft-drq)', () => {
     trackPlaced(failing, ctx2)
     await assert.rejects(failing.placeBlock({ position: new Vec3(0, 0, 0) }, new Vec3(0, 1, 0)))
     assert.equal(ctx2.placedByBot ? ctx2.placedByBot.size : 0, 0, 'failed place not recorded')
+    // Before mineflayer injects placeBlock (createTicker runs first, idkcraft-dahd):
+    // deferred to spawn, and composes with installPlaceTiming in call order.
+    const spawns = []
+    const early = { once: (ev, fn) => { assert.equal(ev, 'spawn'); spawns.push(fn) }, entity: { position: new Vec3(0, 64, 0), velocity: new Vec3(0, 0, 0) }, waitForTicks: async () => {} }
+    const ctx3 = {}
+    trackPlaced(early, ctx3)
+    installPlaceTiming(early)
+    assert.equal(spawns.length, 2, 'both deferred')
+    early.placeBlock = async () => {}
+    for (const fn of spawns) fn()
+    await early.placeBlock({ position: new Vec3(5, 63, 5) }, new Vec3(0, 1, 0))
+    assert.ok(ctx3.placedByBot && ctx3.placedByBot.has('5,64,5'), 'tracked after spawn')
   })
 
   it('installPlaceTiming holds a jump-place until the rising feet clear the block (idkcraft-6x7.11)', async () => {
@@ -685,6 +697,33 @@ describe('house footprint (idkcraft-e5ba)', () => {
     const top = worldBot(new Map())
     top.entity = { position: new Vec3(101.5, 71, -357.5), onGround: true } // on the porch
     assert.equal(denyReason(top, blk('dirt', 102, 71, -358), { home, recovery: {} }), 'protected', 'standing on the porch: no exemption')
+  })
+  it('own placements are scaffold/litter only, never the home (idkcraft-dahd)', () => {
+    const own = (n, x, y, z, c = {}) => denyReason(bot, blk(n, x, y, z), { home, placedByBot: new Set([`${x},${y},${z}`]), ...c })
+    // The house we built: walls, roof, door, table, chest, furnace, torch.
+    assert.equal(own('oak_planks', 97, 71, -357), 'protected', 'wall')
+    assert.equal(own('oak_planks', 100, 73, -355), 'protected', 'roof')
+    assert.equal(own('oak_door', 100, 71, -357), 'protected', 'door')
+    assert.equal(own('crafting_table', 102, 71, -356), 'protected', 'table')
+    assert.equal(own('chest', 99, 71, -356), 'protected', 'chest')
+    assert.equal(own('furnace', 101, 71, -355), 'protected', 'furnace')
+    assert.equal(own('wall_torch', 105, 72, -355), 'protected', 'apron torch')
+    assert.equal(own('oak_planks', 100, 70, -356), 'protected', 'v2 fill patch')
+    assert.equal(own('oak_planks', 100, 71, -356, { recovery: {} }), 'protected', 'recover too')
+    // Scaffold in/over the house box and litter away from home: ours to dig.
+    assert.equal(own('cobblestone', 100, 71, -356), null, 'pillar inside the box')
+    assert.equal(own('cobblestone', 104, 72, -355), null, 'pillar on the apron')
+    assert.equal(own('cobblestone', 100, 70, -358), 'protected', 'porch support below the floor level')
+    assert.equal(own('cobblestone', 120, 75, -340), null, 'pillar far away')
+    assert.equal(own('crafting_table', 120, 71, -340), null, 'roadside table')
+    assert.equal(own('torch', 120, 71, -340), null, 'roadside torch')
+    // Containers and doors stay ours for keeps anywhere.
+    assert.equal(own('chest', 120, 71, -340), 'protected')
+    assert.equal(own('furnace', 120, 71, -340), 'protected')
+    assert.equal(own('oak_door', 120, 71, -340), 'protected')
+    assert.equal(own('white_bed', 120, 71, -340), 'protected')
+    // Not ours: unchanged.
+    assert.equal(d('cobblestone', 120, 75, -340), 'protected')
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
 })

@@ -324,6 +324,8 @@ function castleProtects(state, pos, name) {
     (name !== 'snow' && NATURAL_SOLID.has(name) && castle.groundCell(state, pos))
 }
 
+const KEEP_OWN = /(chest|furnace|_door)$/
+
 function protectedReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
@@ -344,15 +346,20 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
+    const own = !!(pos && ctx && ctx.placedByBot instanceof Set &&
+      ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))
     let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
     if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
-    if (fp && !(pos.y >= ctx.home.site.y && ctx.placedByBot instanceof Set &&
-      ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))) return 'protected'
-    if (pos && ctx && ctx.placedByBot instanceof Set && !(fp && pos.y < ctx.home.site.y)) {
-      try {
-        if (ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)) return null
-      } catch (_) { /* fall through to type rules */ }
-    }
+    if (fp && !(pos.y >= ctx.home.site.y && own)) return 'protected'
+    // Own placements (idkcraft-dahd, live in prod since trackPlaced defers to
+    // spawn): only scaffold and litter. Containers and doors stay ours for
+    // keeps anywhere; inside the house footprint (box + apron) only scaffold
+    // material (natural above the floor, or cobblestone) is exempt — the walls, door, table, chest, furnace
+    // and torches of the home keep the type rules (prod behaviour before).
+    // Cobblestone is the scaffold item (equip scaffoldCount), not terrain;
+    // below the floor level it is ground support like the e5ba rule.
+    if (own && !KEEP_OWN.test(name) && (fp || !inHouseFootprint(ctx.home, pos) ||
+      (name === 'cobblestone' && pos.y >= ctx.home.site.y))) return null
     if (CLEAR_FLORA.has(name) || NATURAL_SOLID.has(name)) return null
     if (name.endsWith('_ore') || name.endsWith('_leaves')) return null
     const woody = (name.endsWith('_log') && !name.startsWith('stripped_')) ||
@@ -433,8 +440,16 @@ function installPlaceTiming(bot) {
 // Record every successful placement in ctx.placedByBot ("x,y,z", capped).
 // Installed once per bot in createTicker; covers all place sites plus the
 // pathfinder executor's own placements, so future code is tracked too.
+// Deferred to the first spawn like installPlaceTiming (idkcraft-dahd: it
+// silently never installed in prod). createTicker calls this one first, so
+// both orders compose the same: timing(track(raw)) — the hold runs, then the
+// tracked place.
 function trackPlaced(bot, ctx) {
-  if (!bot || typeof bot.placeBlock !== 'function' || bot._placedTrackInstalled) return
+  if (!bot || bot._placedTrackInstalled) return
+  if (typeof bot.placeBlock !== 'function') {
+    if (typeof bot.once === 'function') bot.once('spawn', () => trackPlaced(bot, ctx))
+    return
+  }
   bot._placedTrackInstalled = true
   const orig = bot.placeBlock.bind(bot)
   bot.placeBlock = async (ref, face, opts) => {

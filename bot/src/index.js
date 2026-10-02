@@ -133,7 +133,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   if (bot) {
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
-    trackPlaced(bot, ctx) // idkcraft-drq: record own placements for the dig guard
+    // Both wrap bot.placeBlock on the first spawn (mineflayer injects it
+    // after createTicker); call order is wrap order: timing(track(raw)).
+    trackPlaced(bot, ctx) // idkcraft-drq/dahd: record own placements for the dig guard
     installPlaceTiming(bot) // idkcraft-6x7.11: jump-place waits for the feet to clear
   }
   let inFlight = false
