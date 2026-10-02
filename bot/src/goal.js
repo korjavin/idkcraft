@@ -65,7 +65,7 @@ const MENU = {
     // Night-far (ipn.12): at night a far march is a death march — shelter
     // owns it (see nightFarFromHome). Dusk marches at any distance.
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
-      !(facts.time === 'night' && nightFarFromHome(bot, ctx)),
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -73,7 +73,7 @@ const MENU = {
     // Night shelter (ipn.12): the night-far complement of gohome — pillar
     // up and hold where you are till dawn instead of marching the dark.
     feasible: (facts, bot, ctx) => facts.time === 'night' && facts.home === 'built' && facts.inside === 'no' &&
-      nightFarFromHome(bot, ctx),
+      shelterOwns(bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -444,6 +444,33 @@ function nightFarFromHome(bot, ctx) {
   } catch (_) {
     return false
   }
+}
+
+// Per-night gohome latch (idkcraft-xhqv): gohome is self-advancing (never
+// held by failHolds), so a door that will not open or a hole it cannot
+// reach failed and re-picked at the same spot till dawn. GOHOME_LATCH_FAILS
+// failures within REFAIL_DIST of each other latch gohome out until day;
+// shelter takes the night near home too. Cleared at day in decide().
+const GOHOME_LATCH_FAILS = 2
+function gohomeLatched(ctx) {
+  const gl = ctx && ctx.gohomeLatch
+  return !!gl && gl.fails >= GOHOME_LATCH_FAILS
+}
+function noteGohomeFail(ctx, bot, status) {
+  const bp = bot && bot.entity && bot.entity.position
+  const pos = bp && typeof bp.x === 'number' ? { x: bp.x, y: bp.y, z: bp.z } : null
+  const gl = ctx.gohomeLatch
+  // Unreadable position counts as the same spot (holds, like failHolds).
+  const same = !!gl && (!gl.pos || !pos || Math.hypot(pos.x - gl.pos.x, pos.z - gl.pos.z) <= REFAIL_DIST)
+  ctx.gohomeLatch = same ? { fails: gl.fails + 1, pos: gl.pos || pos } : { fails: 1, pos }
+  if (ctx.gohomeLatch.fails === GOHOME_LATCH_FAILS) {
+    const f = (p) => (p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : '?')
+    console.log(`goal gohome latched for the night fails=${ctx.gohomeLatch.fails} status=${status} pos=${f(pos)}`)
+  }
+}
+// Shelter owns the night when home is too far to walk or gohome is latched.
+function shelterOwns(bot, ctx) {
+  return nightFarFromHome(bot, ctx) || gohomeLatched(ctx)
 }
 
 // Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
@@ -1027,7 +1054,9 @@ async function chooseStep(brain, facts, feasible, home) {
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
   // bhz2: the night safety steps are a rule, not a preference — the model never overrides them.
-  if (fsm === 'stay' || fsm === 'gohome') return { step: fsm, source: 'night-rule', fsm, model: null }
+  // xhqv: shelter too — a latched gohome hands the night to shelter, and a
+  // model re-pick to a day step would undo the latch.
+  if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return { step: fsm, source: 'night-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -1118,6 +1147,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'dusk' && facts.time !== 'night') return 'gohome: daytime'
       if (facts.home !== 'built') return 'gohome: home not built'
       if (facts.inside !== 'no') return 'gohome: already inside'
+      if (gohomeLatched(ctx)) return 'gohome: failed at the same spot tonight'
       return 'gohome: too far to walk at night'
     case 'shelter':
       if (facts.time !== 'night') return 'shelter: daytime'
@@ -1287,7 +1317,10 @@ async function decide(bot, ctx) {
   // Shelter is a night concept: a sticky gohome that finishes after sunrise
   // leaves inShelter true with no stay step to clear it, suppressing fight
   // all day (revmux 01-review loop+goal-3).
-  if (ctx && facts.time === 'day') ctx.inShelter = false
+  if (ctx && facts.time === 'day') {
+    ctx.inShelter = false
+    ctx.gohomeLatch = null // the latch lasts one night (xhqv)
+  }
   const text = goalText(facts, ctx && ctx.home)
   const prev = (ctx && ctx.step) || null
   let status = (ctx && ctx.stepStatus) || null
@@ -1349,6 +1382,7 @@ async function decide(bot, ctx) {
       if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
       const bp = bot && bot.entity && bot.entity.position
       ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
+      if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
     } catch (_) { /* guard best-effort */ }
   } else if (finished && prev && status === 'done') {
     if (ctx.goalText === text && doneHoldable(prev)) {
@@ -1393,14 +1427,14 @@ async function decide(bot, ctx) {
   // keepInventory respawn by the house moves no bucket, so without the
   // force the askedKey shortcut below would re-issue shelter all night.
   const nightNearShelter = !finished && prev === 'shelter' &&
-    facts.time === 'night' && !nightFarFromHome(bot, ctx)
+    facts.time === 'night' && !shelterOwns(bot, ctx)
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
   // shelter is night-infeasible — and through the behaviour's own done.
   // Near home the hold releases too (revmux 02): a death that respawns by
   // the house must walk in (gohome/stay), not pillar outside it all night.
-  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night' && nightFarFromHome(bot, ctx)))) {
+  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night' && shelterOwns(bot, ctx)))) {
     if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
@@ -1420,7 +1454,9 @@ async function decide(bot, ctx) {
     // prod stood 8-10 min with 'going to dig' until the facts moved. The
     // fresh menu pick below keeps gear out via the said-latch until a new
     // need arrives; no hold is recorded (gear yields are never holds).
-    if (prev && ctx.askedKey === askKey && !chainOwns && !nightFarWalk && !nightNearShelter && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    // A latched gohome never rides it either (xhqv): the same text and the
+    // same failure re-issue the gohome the latch just retired.
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx)) && !chainOwns && !nightFarWalk && !nightNearShelter && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {

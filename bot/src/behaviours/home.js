@@ -410,9 +410,8 @@ function freshGo() {
 }
 
 // idkcraft-1l9: the open phase had no cap (tryToggle every 2 s forever).
-// ~5 toggle windows, then fail. ponytail: the arbiter re-picks a failed
-// gohome (self-advancing, goal.js) at the same door, so a door that never
-// opens still costs the night — only now logged; the hold belongs in goal.js.
+// ~5 toggle windows, then fail. Repeat failures at the same door latch
+// gohome out for the night in goal.js (idkcraft-xhqv: gohomeLatched).
 const OPEN_TICKS = 10
 
 // A loaded door cell that holds no door (idkcraft-1l9). A dark cell
@@ -434,8 +433,8 @@ function doorGone(bot, home) {
 // flips built straight back and the hole loop returns. Once per skip stamp
 // (revmux 02): a door build re-skipped after our re-probe cannot be placed,
 // so it keeps its skip window instead of cycling build -> 'home done' ->
-// gohome all night. ponytail: that residual still fails gohome at the hole
-// (no chat); the per-night hold belongs in goal.js.
+// gohome all night. That residual still fails gohome at the hole (no chat);
+// goal.js latches it out for the night after repeats (idkcraft-xhqv).
 function failGoneDoor(bot, ctx, st, home, where) {
   failNoDoor(ctx, st, where)
   try {
@@ -965,7 +964,7 @@ function failMeet(bot, ctx, status) {
     console.log(`comehome ${status}`)
     return
   }
-  const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : ''
+  const why = status === 'failed:no-door' ? ': no door' : status === 'failed:no-home' ? ': no home' : status === 'failed:door-stuck' ? ': door stuck' : ''
   try { bot.chat(`cannot reach home${why}`) } catch (_) { /* chat best-effort */ }
   console.log(`comehome ${status}`)
 }
@@ -1162,7 +1161,10 @@ function comehome(bot, ctx, target, state) {
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome') } catch (_) { /* lease best-effort */ }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'enter'
-    else {
+    else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-xhqv)
+      return
+    } else {
       tryToggle(bot, order, door)
       return
     }
