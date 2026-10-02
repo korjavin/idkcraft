@@ -505,3 +505,74 @@ describe('ipn.10 revmux 01: hard cap and skip retry', () => {
     assert.deepEqual(ctx3.buildSkipAt, { 7: ts })
   })
 })
+
+// Bead idkcraft-d7i: the v2 partition wedged the body inside the house; the
+// recover menu gave up (page), the release latch then held every re-wedge
+// out of the menu, and the cell burned the stall budget for minutes. A
+// gave-up latch born on the current cell skips it at once.
+describe('d7i gave-up wedge skips the cell', () => {
+  const latchAt = (at) => ({ by: 'no-displacement', key: 'ticker', goal: null, at })
+  // Partition post (1,3,0): the first of the 8 cells laid last.
+  function partitionSetup(open = []) {
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const plan = build.blueprintFor(home)
+    const find = (dx, dz) => plan.findIndex((c) => c.dx === dx && c.dy === 0 && c.dz === dz && c.kind === 'planks')
+    const idx = find(1, 3)
+    const world = makeWorld()
+    paintHouse(world, home, [idx, ...open.map(([dx, dz]) => find(dx, dz))])
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_planks', count: 64 }],
+      at: pos(2.5, 64, 4.5), // the west bedroom, the rig's wedge point
+      moving: true,
+    })
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    return { idx, find, bot, ctx }
+  }
+  const run = (bot, ctx, n) => { for (let t = 0; t < n; t++) build(bot, ctx, null, null) }
+
+  it('a gave-up latch born on the cell skips it on the next tick', () => {
+    const { idx, bot, ctx } = partitionSetup()
+    const q = quiet()
+    try {
+      run(bot, ctx, 2)
+      assert.deepEqual(ctx.buildSkip, [], 'no latch: no skip')
+      // recover.release(gave-up) on a no-displacement wedge anchors here.
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 1)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [idx], 'the wedged cell skips at once, not after the stall budget')
+    assert.ok(q.lines.some((m) => m.includes('(wedged)')), `wedged skip logged: ${JSON.stringify(q.lines)}`)
+  })
+
+  it('the next cell does not inherit the latch (one skip per gave-up)', () => {
+    const { idx, find, bot, ctx } = partitionSetup([[3, 3]])
+    const q = quiet()
+    try {
+      run(bot, ctx, 1)
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 10)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [idx], `only the wedged cell skipped (next ${find(3, 3)} keeps its budget)`)
+    assert.equal(ctx.buildCellIdx, find(3, 3))
+  })
+
+  it('a latch standing from before the cell, or anchored far away, never skips', () => {
+    for (const [pre, at] of [[true, { x: 2.5, y: 64, z: 4.5 }], [false, { x: 40, y: 64, z: 40 }]]) {
+      const { bot, ctx } = partitionSetup()
+      if (pre) ctx.recoverLatch = latchAt(at)
+      const q = quiet()
+      try {
+        run(bot, ctx, 1)
+        if (!pre) ctx.recoverLatch = latchAt(at)
+        run(bot, ctx, 10)
+      } finally {
+        q.restore()
+      }
+      assert.deepEqual(ctx.buildSkip, [], pre ? 'pre-existing latch' : 'far latch')
+    }
+  })
+})

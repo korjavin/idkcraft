@@ -395,6 +395,7 @@ function skipCell(ctx, idx, p, why) {
   ctx.buildAnchor = null
   if (why === 'cell-budget') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_TICK_BUDGET} ticks without progress (${why})`)
   else if (why === 'cell-hard-cap') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_HARD_CAP} ticks on one cell (${why})`)
+  else if (why === 'wedged') console.log(`build skip ${p.x} ${p.y} ${p.z} after a gave-up recover episode (${why})`)
   else console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
 }
 
@@ -420,6 +421,20 @@ function pruneBuildSkips(ctx, now) {
     }
     ctx.buildSkipAt = keep
   } catch (_) { /* prune best-effort */ }
+}
+
+// A release latch born while this cell was current (not the one seen at
+// cell start) and anchored near it (d7i): a latch from another step's
+// wedge far away never skips a house cell. ponytail: 8 blocks ≈ the house
+// diagonal plus reach; a wedge on a long approach walk farther out keeps
+// the stall budget.
+const WEDGE_RADIUS = 8
+function wedgeLatched(ctx, p) {
+  try {
+    const L = ctx.recoverLatch
+    if (!L || L === ctx.buildLatchSeen || !L.at || typeof L.at.x !== 'number') return false
+    return Math.hypot(L.at.x - (p.x + 0.5), L.at.z - (p.z + 0.5)) <= WEDGE_RADIUS
+  } catch (_) { return false }
 }
 
 function walkToSite(bot, ctx, p) {
@@ -536,8 +551,18 @@ function build(bot, ctx, target, state) {
       ctx.buildCellIdx = idx
       ctx.buildStallTicks = 0
       ctx.buildHardTicks = 0
+      ctx.buildLatchSeen = ctx.recoverLatch || null
       const bpc = bot.entity && bot.entity.position
       ctx.buildAnchor = bpc && typeof bpc.x === 'number' ? { x: bpc.x, y: bpc.y, z: bpc.z } : null
+    }
+    // Gave-up wedge (idkcraft-d7i): a recover episode on this cell ended
+    // gave-up (the release latch is new since the cell started and anchored
+    // at the cell) — the menu already spent its budget here, and the latch
+    // now holds every re-wedge out of the menu, so the stall budget would
+    // only burn minutes more. Skip it like 3 refusals.
+    if (wedgeLatched(ctx, p)) {
+      skipCell(ctx, idx, p, 'wedged')
+      return
     }
     if (idx > (typeof ctx.buildMaxIdx === 'number' ? ctx.buildMaxIdx : -1)) {
       ctx.buildMaxIdx = idx
