@@ -41,7 +41,7 @@ if [ "${RIG_LOCK_HELD:-}" != 1 ]; then
       continue
     fi
     if [ "$_waited" -ge "${RIG_LOCK_WAIT:-0}" ]; then
-      echo "rig busy: $RIG_LOCK held by pid ${_hp:-?} — one rig run at a time (RIG_LOCK_WAIT=<secs> to wait)"; exit 2
+      echo "rig busy: $RIG_LOCK held by pid ${_hp:-?} — one rig run at a time (RIG_LOCK_WAIT=<secs> to wait; if YOUR wrapper holds it, drop the wrapper or set RIG_LOCK_HELD=1)"; exit 2
     fi
     sleep 5; _waited=$((_waited + 5))
   done
