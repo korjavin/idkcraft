@@ -12,9 +12,9 @@
 // Note the lib's openable set is gate-named blocks plus the hand doors
 // (doors.js extends it so the fork's postProcessPath centres doorway nodes;
 // canOpenDoors stays false): openable side cells are skipped here, so a
-// diagonal grazing a door panel is allowed — the thin panel slides, and no
-// diagonal INTO a door cell exists anyway (unbreakable, straight-only
-// edges). Iron doors and trapdoors stay solid and their diagonals stay dropped.
+// diagonal grazing a door panel is allowed; no diagonal INTO a door cell
+// exists anyway (unbreakable, straight-only edges). Iron doors and
+// trapdoors stay solid and their diagonals stay dropped.
 function addNoCornerCut(movements) {
   // setMovements also accepts plain movement-like objects (unit mocks carry
   // only flags): wrap only a real Movements with getNeighbors.
