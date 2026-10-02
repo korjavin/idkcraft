@@ -1287,6 +1287,7 @@ function handleDeath(bot, ticker) {
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
+      ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
       if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
     }
   } catch (_) { /* reset best-effort */ }

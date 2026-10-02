@@ -133,6 +133,15 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     assert.ok(bot.controls.forward)
   })
 
+  it('floating (never lands, e.g. in water): bounded, fails into the hold', () => {
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 })
+    bot.entity.onGround = false
+    const st = {}
+    let r = 'running'
+    for (let t = 0; t < 10 && r === 'running'; t++) r = recover.digInRun(bot, {}, st)
+    assert.equal(r, 'failed:airborne')
+  })
+
   it('a server that reverts every break: bounded, fails', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     bot.dig = async () => {} // the block comes back
@@ -178,6 +187,7 @@ describe('ed88 death drops the night-step phase records', () => {
       stay: { phase: 'hold' },
       shelter: { pillared: true, pillarAt: { x: 0, z: 0 } },
       recovery: { action: 'pillar_up', source: 'shelter', status: 'running' },
+      inShelter: true,
     }
     const bot = { _tickerCtx: ctx, health: 0, entity: { position: pos(0, 64, 0) }, entities: {} }
     quiet(() => handleDeath(bot))
@@ -185,6 +195,7 @@ describe('ed88 death drops the night-step phase records', () => {
     assert.equal(ctx.stay, null)
     assert.equal(ctx.shelter, null)
     assert.equal(ctx.recovery, null)
+    assert.equal(ctx.inShelter, false, 'fight works on the walk back')
   })
 
   it('a foreign recovery episode survives the death reset', () => {

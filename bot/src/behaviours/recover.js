@@ -907,7 +907,7 @@ function digInSupport(bot, bp) {
 function digInRun(bot, ctx, st) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
-  if (st.floor0 == null) { st.floor0 = Math.floor(bp.y); st.waited = 0; st.steer = 0; st.capWait = 0 }
+  if (st.floor0 == null) { st.floor0 = Math.floor(bp.y); st.waited = 0; st.steer = 0; st.capWait = 0; st.airborne = 0 }
   if (st.capError) return 'failed:cap-error'
   if (st.digError) return 'failed:dig-error'
   if (st.digInFlight || st.capInFlight) {
@@ -922,7 +922,12 @@ function digInRun(bot, ctx, st) {
       // fall): walk to the cell centre, the walls stop the overshoot.
       // Nothing dug yet: the body hangs over a ledge edge (rig: hilly spawn
       // ground) — walk onto the supporting cell instead, never off the drop.
-      if (bot.entity && bot.entity.onGround === false) return 'running'
+      // Airborne is bounded too: floating in water (or on a ladder) never
+      // lands, and an unbounded wait would never reach the hold.
+      if (bot.entity && bot.entity.onGround === false) {
+        return ++st.airborne > DIG_IN_STEER_TICKS ? 'failed:airborne' : 'running'
+      }
+      st.airborne = 0
       let to = [0, 0]
       if (!st.digs) {
         to = digInSupport(bot, bp)
@@ -950,7 +955,8 @@ function digInRun(bot, ctx, st) {
     if (!handDiggable(bot, below)) veto = 'undiggable'
     else if (protectedReason(bot, below, ctx)) veto = 'protected'
     else if (!solid(cellAt(bot, 0, -2, 0))) veto = 'no-floor' // cave/water under: never drop into it
-    else if (digInHazard(bot, -1) || digInHazard(bot, -2)) veto = 'fluid'
+    else if (digInHazard(bot, -1) || digInHazard(bot, -2) ||
+      (!st.digs && (digInHazard(bot, 0) || digInHazard(bot, 1)))) veto = 'fluid' // riverbed: never dig in under water
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
       // A server that reverts the break (protection) would re-dig forever.
