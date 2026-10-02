@@ -268,6 +268,58 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-chest')
   })
 
+  it('g0z.6: v2 moat waits for the interior; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const world = makeWorld()
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch' }
+    const held = v2.find((c) => c.kind === 'planks' && c.dy === 11) // a roof cap cell: the gate above it is empty
+    for (const c of v2) if (c !== held && c.dy >= 0 && NAME[c.kind]) world.set(c.x, c.y, c.z, NAME[c.kind])
+    const bot = mockBot(world, { items: [...KIT, { name: 'oak_fence', count: 200 }] })
+    const log = []
+    const dig0 = bot.dig
+    bot.dig = async (b) => { log.push({ op: 'dig', p: b.position, above: world.get(b.position.x, b.position.y + 1, b.position.z) }); return dig0(b) }
+    const place0 = bot.placeBlock
+    bot.placeBlock = async (ref, face) => { await place0(ref, face); log.push({ op: 'place', p: bot.calls.places[bot.calls.places.length - 1], what: bot.held }) }
+    const k = (p) => `${p.x},${p.y},${p.z}`
+    const moat = new Set(v2.filter((c) => c.kind === 'dig').map(k))
+    const deck = v2.filter((c) => c.kind === 'planks' && c.dy === -1)
+    const fence = v2.filter((c) => c.kind === 'fence')
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, blocked: { [`2:${held.idx}`]: { tries: 1, until: Date.now() + 3600000 } } } }
+
+    // Interior work left (a blocked roof cell): bridge, gate and fence go
+    // in, the moat stays undug.
+    await run(bot, ctx, 600)
+    assert.ok(!log.some((e) => e.op === 'dig' && moat.has(k(e.p))), 'no moat dig while interior work is left')
+    for (const c of deck) assert.equal(world.get(c.x, c.y, c.z), 'oak_planks', 'deck laid (ground dug, then placed)')
+    for (const c of fence) assert.equal(world.get(c.x, c.y, c.z), 'oak_fence')
+    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.equal(castle.menuFact(bot, ctx), 'blocked', 'peek holds the moat too')
+
+    // The interior completes: the moat is dug, the bridge columns last and
+    // under the laid deck; every dig walks onto its drop.
+    world.set(held.x, held.y, held.z, 'oak_planks')
+    for (const c of fence) world.set(c.x, c.y, c.z, 'air') // fence ring knocked down: it re-lays after the moat
+    const before = log.length
+    for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
+    assert.equal(ctx.stepStatus, 'done')
+    for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c}`) }
+    const digs = log.slice(before).filter((e) => e.op === 'dig' && moat.has(k(e.p)))
+    assert.equal(digs.length, moat.size)
+    const cols = digs.slice(-deck.length)
+    for (const e of cols) {
+      assert.ok(deck.some((c) => c.x === e.p.x && c.z === e.p.z), `${k(e.p)} is a bridge column`)
+      assert.equal(e.above, 'oak_planks', 'the deck stands while its column is dug')
+    }
+    const fences = log.slice(before).map((e, i) => ({ ...e, i })).filter((e) => e.op === 'place' && e.what === 'oak_fence')
+    assert.equal(fences.length, fence.length)
+    const lastDig = log.slice(before).findLastIndex((e) => e.op === 'dig' && moat.has(k(e.p)))
+    assert.ok(fences[0].i > lastDig, 'fence ring after the moat')
+    const near1 = new Set(bot.calls.goals.filter((g) => g && g.constructor.name === 'GoalNear' && g.rangeSq === 1).map(k))
+    const isCol = (e) => deck.some((c) => c.x === e.p.x && c.z === e.p.z)
+    assert.ok(digs.every((e) => isCol(e) !== near1.has(k(e.p))), 'every moat dig but a bridge column walks onto its drop')
+    assert.ok(deck.every((c) => !near1.has(k(c))), 'no pickup walk into a deck cell')
+  })
+
   it('an unreachable cell blocks after three stands that get no closer', async () => {
     const world = makeWorld()
     const bot = mockBot(world)

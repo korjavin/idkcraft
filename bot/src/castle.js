@@ -34,7 +34,7 @@
 // terrain below (same rule as the build.js header); the reach invariant
 // (test/castle-reach.js) holds for every plan prefix.
 
-// What a NEW order gets. v2 waits for its moat/bridge executor (g0z.6) and
+// What a NEW order gets. v2 waits for its frame/chest sourcing (g0z.12) and
 // the owner's preview approval (before g0z.7).
 const BLUEPRINT_VERSION = 1
 const FULL_VERSION = 2
@@ -306,15 +306,9 @@ function buildFullPlan() {
   }
   lay(cap)
 
-  // Outside: fence ring with the bridge gap, the bridge deck (it replaces
-  // the ground cell: the executor digs the occupant, then places).
-  const fence = []
-  for (let x = 0; x < FULL_W; x++) {
-    if (x < 14 || x > 16) fence.push({ x, y: 0, z: 0, kind: 'fence' })
-    fence.push({ x, y: 0, z: FULL_D - 1, kind: 'fence' })
-  }
-  for (let z = 1; z < FULL_D - 1; z++) fence.push({ x: 0, y: 0, z, kind: 'fence' }, { x: FULL_W - 1, y: 0, z, kind: 'fence' })
-  lay(fence)
+  // Outside (g0z.6 order: body, bridge, moat, fence): the bridge deck (it
+  // replaces the ground cell: the executor digs the occupant, then places)
+  // before any moat dig, so a way across exists before the moat does.
   const deck = (x, z) => x >= 14 && x <= 16 && z >= 3 && z <= 4
   const deckCells = []
   for (let z = 3; z <= 4; z++) for (let x = 14; x <= 16; x++) deckCells.push({ x, y: -1, z, kind: 'planks' })
@@ -326,14 +320,25 @@ function buildFullPlan() {
   add({ x: FULL_DOOR.dx, y: FULL_DOOR.dy, z: FULL_DOOR.dz, kind: 'door' })
   for (const c of air) plan.push(c)
 
-  // The moat, last of all: the top layer, then the bottom.
+  // The moat: the top layer, then the bottom, the bridge columns under the
+  // laid deck last (dig ground -> place deck -> dig the column below).
   const moat = []
   for (let z = 3; z <= 23; z++) {
     for (let x = 3; x <= 27; x++) if (!(x >= 5 && x <= 25 && z >= 5 && z <= 21)) moat.push([x, z])
   }
   const exitStep = (x, z) => (x === 3 || x === 27) && (z === 3 || z === 23)
   for (const [x, z] of moat) if (!deck(x, z)) plan.push({ dx: x, dy: -1, dz: z, kind: 'dig' })
-  for (const [x, z] of moat) if (!exitStep(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+  for (const [x, z] of moat) if (!exitStep(x, z) && !deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+  for (const [x, z] of moat) if (deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+
+  // Fence ring last, outside the moat, its gap in line with the bridge.
+  const fence = []
+  for (let x = 0; x < FULL_W; x++) {
+    if (x < 14 || x > 16) fence.push({ x, y: 0, z: 0, kind: 'fence' })
+    fence.push({ x, y: 0, z: FULL_D - 1, kind: 'fence' })
+  }
+  for (let z = 1; z < FULL_D - 1; z++) fence.push({ x: 0, y: 0, z, kind: 'fence' }, { x: FULL_W - 1, y: 0, z, kind: 'fence' })
+  for (const c of fence) plan.push({ dx: c.x, dy: c.y, dz: c.z, kind: c.kind })
   return plan
 }
 
