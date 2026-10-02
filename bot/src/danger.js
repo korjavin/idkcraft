@@ -159,4 +159,89 @@ function clear(ctx) {
   if (ctx && ctx.danger && Array.isArray(ctx.danger.spots)) ctx.danger.spots.length = 0
 }
 
-module.exports = { mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
+// Path cost (idkcraft-zj2p): water-death discs steer A* itself, so every
+// walker (gohome, equip, castlefetch, forage, explore legs, homing, follow)
+// routes around the drowned lake instead of re-walking its shore — the
+// marks used to steer target picks only. A cost, never a ban: a target
+// inside the disc (home by the water) still plans. Wide marks only
+// (r >= WATER_RADIUS): pit marks belong to recover/detour. Measured on the
+// landing cell centre, xz like near(). Same getNeighbors wrap shape as
+// jumpcost.js; installed once per Movements by movementsFor (body.js),
+// reading ctx live, so a fresh mark steers the next plan.
+//
+// Steep on purpose (rig, DROWNED-SHORE): a 100-block leg never finishes
+// inside one 40 ms pathfinder tick, and the executor walks each PARTIAL
+// path — A*'s best node is the discovered node nearest the goal. At a
+// gentle cost (1/move) that node sat deep inside the disc and the bot
+// walked straight through it while the search went on (17k nodes, never
+// finished). At PATH_COST the frontier barely enters the disc (a step in
+// costs more than the whole detour around), so partial paths stop at the
+// rim.
+//
+// Feet or goal inside the disc (the job by the water, home on the shore):
+// the costed core shrinks to the deeper of the two rings — only landings
+// closer to the centre than the feet's (or the goal's) own whole-block
+// ring cost. The walk out, the walk along and the walk in to a shore
+// target stay cheap, so the steep cost never floods A* (the heuristic is
+// off by the cost) where the disc cannot be avoided, while a plan still
+// bends around the centre instead of crossing it. Whole-block rings, no
+// slack: the free band is under one block deep. ponytail: a body that
+// still steps across a ring boundary (off-centre feet, a partial path's
+// best node) re-reads the ring one block deeper on the next plan — inward
+// creep is slowed, not latched; latch the ring per live goal if prod shows
+// walks spiralling in. The goal is read from the live pathfinder goal (x/z
+// goals and GoalFollow's entity; other goal kinds keep the full disc).
+const PATH_COST = 10
+function addPathCost(movements, ctx, bot) {
+  // Unit mocks carry flags only: wrap only a real Movements.
+  if (!movements || typeof movements.getNeighbors !== 'function' || movements._dangerCostInstalled) return
+  movements._dangerCostInstalled = true
+  const orig = movements.getNeighbors.bind(movements)
+  movements.getNeighbors = (node) => {
+    const ns = orig(node)
+    const discs = wideSpots(ctx, Date.now(), feetOf(bot), goalXZ(bot))
+    if (discs.length === 0) return ns
+    for (const m of ns) {
+      if (!m || typeof m.cost !== 'number') continue
+      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) < s.lim)) m.cost += PATH_COST
+    }
+    return ns
+  }
+}
+
+function feetOf(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    return p && typeof p.x === 'number' && typeof p.z === 'number' ? p : null
+  } catch (_) { return null }
+}
+
+// The xz the live goal aims at, or null when the goal kind has none.
+function goalXZ(bot) {
+  try {
+    const g = bot && bot.pathfinder && bot.pathfinder.goal
+    if (!g) return null
+    if (typeof g.x === 'number' && typeof g.z === 'number') return { x: g.x + 0.5, z: g.z + 0.5 }
+    const e = g.entity && g.entity.position
+    if (e && typeof e.x === 'number' && typeof e.z === 'number') return e
+  } catch (_) { /* unknown goal: keep the cost */ }
+  return null
+}
+
+// Live water-wide marks as { x, z, lim }: a landing closer than lim to the
+// centre costs. Hot path (once per A* expansion): no copies of the store.
+function wideSpots(ctx, t, feet, goal) {
+  const ring = (s, p) => (p ? Math.floor(Math.hypot(s.x - p.x, s.z - p.z)) : Infinity)
+  const mem = ctx && ctx.danger
+  if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return []
+  const out = []
+  for (const s of mem.spots) {
+    if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
+    const r = spotRadius(s)
+    if (r < WATER_RADIUS) continue
+    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
+  }
+  return out
+}
+
+module.exports = { addPathCost, PATH_COST, mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
