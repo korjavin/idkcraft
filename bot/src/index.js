@@ -792,6 +792,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
         }
       }
+      if (ctx.inShelter && !intruder) ctx.intruderFight = false
       if (intruder) {
         ctx.fightId = intruder.id
         state.hostile = intruder

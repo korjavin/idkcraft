@@ -2020,6 +2020,11 @@ describe('work mode (epic rw4)', () => {
     }
     assert.equal(await run(3.5), false)
     assert.equal(await run(6), true)
+    // the tick-start claim keeps no-dig while the flag stands (sticky across resetTick when sheltered)
+    const body = require('../src/body')
+    const ctx = { inShelter: true, intruderFight: true, movements: { canDig: true, allowSprinting: false, allowParkour: true } }
+    body.resetTick(ctx); body.claimBody({}, ctx, 'shelter')
+    assert.equal(ctx.movements.canDig, false)
   })
 
   it('(k) 33vm: a nearer zombie outside the wall does not hide the one inside', async () => {
