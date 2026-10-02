@@ -1288,6 +1288,7 @@ function handleDeath(bot, ticker) {
       ctx.stay = null
       ctx.shelter = null
       ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
+      ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
       if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
     }
   } catch (_) { /* reset best-effort */ }

@@ -847,11 +847,15 @@ function shelter(bot, ctx, target, state) {
   const st = ctx.shelter
   try {
     const bp = botPos(bot)
+    // Not while the dig-in walks to a dirt column (stone stance): arrival
+    // re-anchors at the pit column below, and from then on a fight that
+    // drags the body off the pit resets the record like any displacement.
+    if (st.dig && st.dig.walked && !st.dig.walk && !st.dig.anchored && bp) {
+      st.pillarAt = { x: bp.x, z: bp.z }
+      st.dig.anchored = true
+    }
     const pa = st.pillarAt
-    // Not while digging in: the dig may walk to a dirt column (stone
-    // stance); it re-anchors at the pit when it ends. Death drops the
-    // whole record (index.js handleDeath), so no respawn hides behind this.
-    if (!st.dig && bp && pa && typeof pa.x === 'number' &&
+    if (!(st.dig && st.dig.walk) && bp && pa && typeof pa.x === 'number' &&
       Math.hypot(bp.x - pa.x, bp.z - pa.z) > SHELTER_DISPLACE_XZ) {
       // Displaced past the anchor: drop the hold and the stale climb, and
       // re-pillar below. A foreign non-pillar episode is never touched.
@@ -894,8 +898,14 @@ function shelter(bot, ctx, target, state) {
         // Empty kit (ed88: world-spawn respawn, 7 deaths in 3 min holding
         // on the ground): dig in instead. Stop any live path first so the
         // walk cannot drag the body off the pit column.
+        // setGoal(null), never stop(): stop() on a live path only latches,
+        // and the latch would swallow a same-tick dig-in walk goal (revmux 03).
         st.dig = {}
-        holdStill(bot, ctx)
+        try {
+          bot.pathfinder.setGoal(null)
+          bot.clearControlStates()
+        } catch (_) { /* body best-effort */ }
+        ctx.lastGoalKey = 'stay'
       } else if (rec !== 'done' && !st.pillarLogged) {
         st.pillarLogged = true
         try { console.log(`shelter pillar ${rec}, holding on the ground`) } catch (_) { /* log best-effort */ }

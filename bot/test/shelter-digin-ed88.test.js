@@ -161,6 +161,40 @@ describe('ed88 shelter dig-in: no scaffold still closes the bot in', () => {
     assert.ok(closedIn(bot), 'closed pit at the dirt column')
   })
 
+  it('shelter on stone with a live path: the walk goal survives (no stop latch), re-issues after a fight, anchors at the pit', async () => {
+    // Revmux 03: holdStill's stop() on a live path only latches, and the
+    // latch swallowed the same-tick walk goal.
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 }, { groundAt: (x, y, z) => (x === 3 && z === 0 ? null : 'stone') })
+    let latched = false
+    bot.pathfinder = {
+      goal: { kind: 'stale-walk' },
+      isMoving: () => true,
+      stop() { latched = true },
+      setGoal(g) { if (latched) { latched = false; return } this.goal = g },
+    }
+    const ctx = { home: v2home({ x: 200, y: 64, z: 200 }), step: 'shelter', stepStatus: 'running', lastGoalKey: 'gohome' }
+    await quiet(() => home.shelter(bot, ctx, null, null))
+    const g = bot.pathfinder.goal
+    assert.ok(g && g.x === 3 && g.y === 64 && g.z === 0, `walk goal live: ${JSON.stringify(g)}`)
+    assert.equal(ctx.lastGoalKey, 'dig-in-walk')
+    // A fight interlude clears the goal and drags the body 3 blocks: the
+    // walk is not a displacement, and the goal comes back.
+    bot.pathfinder.goal = null
+    bot.entity.position = pos(-2.5, 64, 0.5)
+    await quiet(() => home.shelter(bot, ctx, null, null))
+    assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, 'still walking, not reset')
+    assert.equal(bot.pathfinder.goal && bot.pathfinder.goal.x, 3, 'walk goal re-issued')
+    // Arrival: the next tick anchors the hold at the pit column.
+    bot.entity.position = pos(3.5, 64, 0.5)
+    for (let t = 0; t < 15 && ctx.shelter.dig; t++) {
+      await quiet(() => home.shelter(bot, ctx, null, null))
+      await flush()
+    }
+    assert.ok(closedIn(bot), 'closed pit at the dirt column')
+    assert.equal(ctx.inShelter, true)
+    assert.ok(Math.abs(ctx.shelter.pillarAt.x - 3.5) < 0.01, `anchored at the pit: ${JSON.stringify(ctx.shelter.pillarAt)}`)
+  })
+
   it('a server that reverts every break: bounded, fails', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     bot.dig = async () => {} // the block comes back
@@ -207,6 +241,7 @@ describe('ed88 death drops the night-step phase records', () => {
       shelter: { pillared: true, pillarAt: { x: 0, z: 0 } },
       recovery: { action: 'pillar_up', source: 'shelter', status: 'running' },
       inShelter: true,
+      lastGoalKey: 'stay',
     }
     const bot = { _tickerCtx: ctx, health: 0, entity: { position: pos(0, 64, 0) }, entities: {} }
     quiet(() => handleDeath(bot))
@@ -215,6 +250,7 @@ describe('ed88 death drops the night-step phase records', () => {
     assert.equal(ctx.shelter, null)
     assert.equal(ctx.recovery, null)
     assert.equal(ctx.inShelter, false, 'fight works on the walk back')
+    assert.equal(ctx.lastGoalKey, '', 'next holdStill clears a dead walk goal')
   })
 
   it('a foreign recovery episode survives the death reset', () => {

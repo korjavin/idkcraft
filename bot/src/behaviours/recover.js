@@ -959,6 +959,12 @@ function digInSupport(bot, bp) {
   }
   return null
 }
+// The walk owns the goal key, so a later holdStill clears the goal
+// instead of trusting a stale 'stay'.
+function digInWalk(bot, ctx, w) {
+  bot.pathfinder.setGoal(new goals.GoalBlock(w.x, w.y, w.z))
+  if (ctx) ctx.lastGoalKey = 'dig-in-walk'
+}
 function digInRun(bot, ctx, st) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
@@ -984,6 +990,11 @@ function digInRun(bot, ctx, st) {
       try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
       return 'failed:no-walk'
     }
+    // A fight interlude (or any owner switch) replaced the goal: re-issue.
+    try {
+      const g = bot.pathfinder.goal
+      if (!g || g.x !== w.x || g.y !== w.y || g.z !== w.z) digInWalk(bot, ctx, w)
+    } catch (_) { /* goal best-effort */ }
     return 'running'
   }
   const below = cellAt(bot, 0, -1, 0)
@@ -1040,7 +1051,7 @@ function digInRun(bot, ctx, st) {
       st.walked = true
       st.walkTicks = 0
       st.walk = { x: Math.floor(bp.x) + spot[0], y: Math.floor(bp.y) + spot[1], z: Math.floor(bp.z) + spot[2] }
-      try { bot.pathfinder.setGoal(new goals.GoalBlock(st.walk.x, st.walk.y, st.walk.z)) } catch (_) { return 'failed:' + veto }
+      try { digInWalk(bot, ctx, st.walk) } catch (_) { return 'failed:' + veto }
       return 'running'
     }
   }
