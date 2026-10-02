@@ -751,7 +751,11 @@ function stay(bot, ctx, target, state) {
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'exit'
-    else {
+    else if ((st.openTicks = (st.openTicks || 0) + 1) > OPEN_TICKS) {
+      st.phase = 'failed'
+      ctx.stepStatus = 'failed:door-stuck' // gohome's 1l9 cap (idkcraft-470s)
+      return
+    } else {
       tryToggle(bot, st, door)
       return
     }
@@ -1030,7 +1034,10 @@ function exitMeet(bot, ctx, home, order) {
   if (order.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'exit'
-    else {
+    else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s)
+      return
+    } else {
       tryToggle(bot, order, door)
       return
     }

@@ -495,6 +495,18 @@ describe('idkcraft-1l9 gohome fails fast at a broken door', () => {
     })
   })
 
+  it('stay: a door that never reads open at dawn fails within ~10 ticks (470s)', () => {
+    quiet(() => {
+      const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 1000, doorOpen: false })
+      bot.activateBlock = async () => {} // the toggle never lands
+      const ctx = { home: ctxHome(), step: 'stay', stepStatus: 'running' }
+      let ticks = 0
+      while (ctx.stepStatus === 'running' && ticks < 30) { home.stay(bot, ctx); ticks++ }
+      assert.equal(ctx.stepStatus, 'failed:door-stuck')
+      assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+    })
+  })
+
   it('logs one line per phase change with aim and pos', async () => {
     const lines = quiet(() => {
       const bot = mockBot({ at: { x: 16, y: 64, z: 14 } })
