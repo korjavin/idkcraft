@@ -178,7 +178,19 @@ function loadSpots() {
       }
       prep = s.prep.slice()
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep }
+    // Danger memory (idkcraft-zj2p): [x, y, z, r] marks seeded into the
+    // follower's ctx.danger at the window cut (a water death the day
+    // before), dropped after the window. The row reports minDanger, the
+    // closest xz approach to a mark centre, judged by the baseline floor.
+    let danger = []
+    if (s.danger != null) {
+      if (!Array.isArray(s.danger) || s.danger.length === 0 || s.danger.length > 8 ||
+        !s.danger.every((d) => Array.isArray(d) && d.length === 4 && d.every(Number.isFinite) && d[3] > 0)) {
+        throw new Error(`spots[${i}]: bad danger (want [[x, y, z, r]], <=8)`)
+      }
+      danger = s.danger.map((d) => d.slice())
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger }
   })
 }
 
@@ -248,6 +260,9 @@ function compareBaseline(rows, baseline) {
     if (r.stuck > e.maxStuck) return { spot: r.spot, verdict: 'regressed', was, now, why: `stuck ${r.stuck} > ${e.maxStuck}` }
     if (r.eps > e.maxEps) return { spot: r.spot, verdict: 'regressed', was, now, why: `episodes ${r.eps} > ${e.maxEps}` }
     if (r.call > e.maxCalls) return { spot: r.spot, verdict: 'regressed', was, now, why: `calls ${r.call} > ${e.maxCalls}` }
+    // Danger spots (idkcraft-zj2p): minDanger floors the closest approach
+    // to a seeded mark — a walk back into the drowned disc regresses.
+    if (typeof e.minDanger === 'number' && !(r.minDanger >= e.minDanger)) return { spot: r.spot, verdict: 'regressed', was, now, why: `minDanger ${r.minDanger} < ${e.minDanger} (entered the danger disc)` }
     // Control spots (idkcraft-jsf.7): minCalls pins the page a trap MUST
     // raise — a silent trap (detector broke) or a leaking one (the bot
     // walked out, so its twin's reached proves nothing) regresses.
@@ -586,6 +601,7 @@ async function main() {
       c.gohome = null; c.stay = null; c.inShelter = false
       c.restGaveUps = 0; c.restGaveUpAt = null; c.restGaveUpCalled = false
       try { if (c.movements && typeof c.movements.canDig === 'boolean') c.movements.canDig = true } catch (_) { /* reset best-effort */ }
+      if (s.danger.length > 0) c.danger = { spots: s.danger.map(([x, y, z, r]) => ({ x, y, z, r, at: Date.now() })) }
     }
     stuckEps = []
     resets = {}
@@ -611,6 +627,7 @@ async function main() {
     let minDist = Infinity
     let minGuide = Infinity
     let maxDisp = 0
+    let minDanger = Infinity
     let reached = false
     // Order-spot verdict (idkcraft-6x7.7): the first expect/fail marker in
     // windowed follower chat. scannedChats cursors the shared array so each
@@ -640,6 +657,7 @@ async function main() {
         if (gd < minGuide) minGuide = gd
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
+        for (const [mx, , mz] of s.danger) minDanger = Math.min(minDanger, Math.hypot(p.x - mx, p.z - mz))
       } catch (_) { /* sampling best-effort */ }
       scanOrderChat()
       // Reached ends the window: post-goal walking is outside the spot.
@@ -658,8 +676,9 @@ async function main() {
     const onote = s.mode === 'order'
       ? (orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
       : ''
-    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : onote)
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
+    if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
