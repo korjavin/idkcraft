@@ -708,9 +708,16 @@ function build(bot, ctx, target, state) {
       if (ctx.buildFailIdx !== flightIdx) return
       ctx.buildFails = fails() + 1
       const occupier = blockNameAt(bot, p)
-      if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
+      // Landed only when the occupier is THIS cell's kind (d7i): the equip
+      // step's station table landed in the doorway and read as 'landed'
+      // forever — every refusal forgiven, no skip, the body wedged into a
+      // recover page. A stray table in a non-table cell clears like flora
+      // (denyReason still guards a player's table); any other wrong-kind
+      // occupier counts as a refusal.
+      if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
-      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell))) {
+      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
+        (occupier === 'crafting_table' && cell.kind !== 'table'))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)

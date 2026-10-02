@@ -560,6 +560,66 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.equal(ctx.buildCellIdx, find(3, 3))
   })
 
+  // Rig root cause: the equip step's station table landed in the doorway
+  // (3,0,0); the door refusal read the table as 'landed' and reset the
+  // strikes forever, so neither the skip nor the place ever came.
+  function strayTableSetup(placedByBot) {
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const plan = build.blueprintFor(home)
+    const doorIdx = plan.findIndex((c) => c.kind === 'door')
+    const world = makeWorld()
+    paintHouse(world, home, [doorIdx])
+    world.set(3, 64, 0, 'crafting_table')
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_door', count: 1 }, { name: 'oak_planks', count: 64 }],
+      at: pos(3.5, 64, -1.5), // the doorstep, in reach
+      place: async (ref, face) => {
+        const rp = ref.position
+        const t = { x: rp.x + face.x, y: rp.y + face.y, z: rp.z + face.z }
+        const cur = world.get(t.x, t.y, t.z) || 'air'
+        if (cur !== 'air') throw new Error(`Server refused to place ${bot.held}: the block is still ${cur}`)
+        world.set(t.x, t.y, t.z, bot.held)
+      },
+    })
+    const ctx = {
+      home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now(),
+      placedByBot: placedByBot ? new Set(['3,64,0']) : new Set(),
+    }
+    return { doorIdx, world, bot, ctx }
+  }
+
+  it('our stray table in the doorway is cleared and the door lands', async () => {
+    const { world, bot, ctx } = strayTableSetup(true)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 10 && world.get(3, 64, 0) !== 'oak_door'; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, ['crafting_table'], 'the stray table is dug')
+    assert.equal(world.get(3, 64, 0), 'oak_door', 'the door lands in the doorway')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  it("a table that is not ours never resets the strikes: the door skips after 3", async () => {
+    const { doorIdx, world, bot, ctx } = strayTableSetup(false)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 20 && ctx.buildSkip.length === 0; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, [], 'a protected table is never dug')
+    assert.equal(world.get(3, 64, 0), 'crafting_table')
+    assert.deepEqual(ctx.buildSkip, [doorIdx], 'refusals count: the cell skips instead of looping')
+  })
+
   it('a latch standing from before the cell, or anchored far away, never skips', () => {
     for (const [pre, at] of [[true, { x: 2.5, y: 64, z: 4.5 }], [false, { x: 40, y: 64, z: 40 }]]) {
       const { bot, ctx } = partitionSetup()
