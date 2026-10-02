@@ -751,7 +751,11 @@ function stay(bot, ctx, target, state) {
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'exit'
-    else {
+    else if ((st.openTicks = (st.openTicks || 0) + 1) > OPEN_TICKS) {
+      st.phase = 'failed'
+      ctx.stepStatus = 'failed:door-stuck' // gohome's 1l9 cap (idkcraft-470s)
+      return
+    } else {
       tryToggle(bot, st, door)
       return
     }
@@ -953,14 +957,21 @@ function releaseMeet(bot, ctx) {
 // released to the standing mode. The console keeps the machine reason.
 function failMeet(bot, ctx, status) {
   const order = ctx && ctx.comehome
+  const exiting = !!(order && order.exiting)
   if (order) order.phase = 'failed'
   ctx.stepStatus = status
   ctx.comehome = null
+  if (exiting) ctx.inShelter = false // exit path: the shelter flag was armed by releaseMeet
   try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   ctx.shelterLeg = null
   try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
   if (status === 'failed:cannot-seat') {
     try { bot.chat('cannot reach the common room') } catch (_) { /* chat best-effort */ }
+    console.log(`comehome ${status}`)
+    return
+  }
+  if (exiting && status === 'failed:door-stuck') {
+    try { bot.chat('cannot get out: door stuck') } catch (_) { /* chat best-effort */ }
     console.log(`comehome ${status}`)
     return
   }
@@ -1030,7 +1041,10 @@ function exitMeet(bot, ctx, home, order) {
   if (order.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'exit'
-    else {
+    else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); the released body's A* may dig the wall (revmux 01 minor)
+      return
+    } else {
       tryToggle(bot, order, door)
       return
     }

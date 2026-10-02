@@ -543,6 +543,18 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     assert.deepEqual(bot.chats, [], 'silent like stay')
   })
 
+  it('exit: a door that never reads open fails within ~10 ticks (470s)', () => {
+    const bot = doorBot({ at: { ...MEET2 } })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'open', exiting: true }, inShelter: true }
+    let ticks = 0
+    while (ctx.comehome && ticks < 30) { home.comehome(bot, ctx); ticks++ }
+    assert.equal(ctx.stepStatus, 'failed:door-stuck')
+    assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, ['cannot get out: door stuck'])
+  })
+
   it('already outside (died mid-exit) releases at once', () => {
     const bot = doorBot({ at: { x: 0, y: 64, z: 0 } })
     const ctx = { home: v2home(), comehome: { ...home.startMeet('Steve', true, v2home()), phase: 'open', exiting: true }, inShelter: true }
