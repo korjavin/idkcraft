@@ -208,6 +208,19 @@ function isDoorwayOrInterior(cell, home) {
   return cell.dx >= 1 && cell.dx <= 2 && cell.dz >= 1 && cell.dz <= 2 && cell.dy <= 1
 }
 
+// A wall/door/partition/roof cell of the home's plan (d7i): the equip step
+// never drops its station there (rig: it landed in the doorway and the door
+// could never be placed). The table cell is excluded — any table there IS
+// the home table — and fill cells sit below ground.
+function isPlanCell(home, x, y, z) {
+  try {
+    if (!home || !home.site) return false
+    const s = home.site
+    return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' &&
+      s.x + c.dx === x && s.y + c.dy === y && s.z + c.dz === z)
+  } catch (_) { return false }
+}
+
 function blockNameAt(bot, p) {
   try {
     const b = bot.blockAt(p)
@@ -752,6 +765,7 @@ module.exports.PLANK_COUNT = PLANK_COUNT
 module.exports.PLANK_COUNT_V2 = PLANK_COUNT_V2
 module.exports.blueprintFor = blueprintFor
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
+module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone

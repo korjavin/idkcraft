@@ -281,6 +281,9 @@ function tableFor(bot, ctx) {
     // (beds->craftany->equip cycle); unreadable reads as placeable.
     try {
       if (require('./beds').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
+      // Nor any wall/door cell of the plan (idkcraft-d7i: a station in the
+      // doorway left the house doorless).
+      if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
     } catch (_) { /* untestable home: place as before */ }
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)

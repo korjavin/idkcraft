@@ -86,13 +86,28 @@ describe('idkcraft-4nx: furniture avoids bedroom cells', () => {
       placed.push({ x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z })
       bot.world.set(key(ref.position.x + face.x, ref.position.y + face.y, ref.position.z + face.z), 'crafting_table')
     }
+    // The other two, (9,64,5) back wall and (9,64,3) partition post, are
+    // plan cells (idkcraft-d7i): no spot here at all, never a bed cell.
     const ctx = { home: v2home() }
-    const t = await equip.tableFor(bot, ctx)
-    assert.ok(t, 'table placed')
-    assert.deepEqual({ x: t.pos.x, y: t.pos.y, z: t.pos.z }, { x: 9, y: 64, z: 5 })
-    for (const c of [A_FOOT, A_HEAD, B_FOOT, B_HEAD]) {
-      assert.notDeepEqual({ x: t.pos.x, y: t.pos.y, z: t.pos.z }, c, 'never on a bed cell')
+    const t = await equip.tableFor(bot, ctx).catch(() => null)
+    assert.ok(!t, 'no table spot beside the body')
+    assert.deepEqual(placed, [])
+  })
+
+  it('roadside table skips the plan cells too (idkcraft-d7i)', async () => {
+    // Doorstep body (9,64,-1): (9,64,0) is the doorway — the rig station
+    // landed there and the door could never be placed. East/west are taken,
+    // so the scan reaches the doorway before the free (9,64,-2).
+    const bot = worldBot({ [key(10, 64, -1)]: 'stone', [key(8, 64, -1)]: 'stone' }, { x: 9, y: 64, z: -1 })
+    bot.inventory = { items: () => [{ name: 'crafting_table', count: 1 }] }
+    bot.pathfinder = { setGoal: () => {} }
+    bot.equip = async () => {}
+    bot.placeBlock = async (ref, face) => {
+      bot.world.set(key(ref.position.x + face.x, ref.position.y + face.y, ref.position.z + face.z), 'crafting_table')
     }
+    const t = await equip.tableFor(bot, { home: v2home() })
+    assert.ok(t, 'table placed')
+    assert.deepEqual({ x: t.pos.x, y: t.pos.y, z: t.pos.z }, { x: 9, y: 64, z: -2 })
   })
 
   it('chest spots never cover a bedroom cell', () => {
