@@ -901,10 +901,21 @@ async function enterSearch(bot, ctx, o, legacy) {
   // Self hunts (9qt0) stay within SELF_SEARCH_RADIUS of home: prod legs ran
   // 129-256 blocks out and the night caught the bot there (~50 of 61
   // deaths). No unvisited ground in reach is an exhausted search.
-  if (o.self && !exploreMod.nextTarget(bot, ctx, SELF_SEARCH_RADIUS)) {
-    s.capped = true
-    refuseExhausted(bot, ctx, o)
-    return
+  if (o.self) {
+    const t = exploreMod.nextTarget(bot, ctx, SELF_SEARCH_RADIUS)
+    if (!t) {
+      s.capped = true
+      refuseExhausted(bot, ctx, o)
+      return
+    }
+    // A far leg the explore step left pending (dusk re-decide) yields to
+    // the near pick (revmux 01 core-4).
+    const e = ctx.explore
+    if (e && e.target && e.target !== t) {
+      e.target = t
+      e.issuedKey = null
+      e.markStart = e.visited instanceof Set ? e.visited.size : 0
+    }
   }
   const text = searchText(o, s)
   const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs() - s.legs)

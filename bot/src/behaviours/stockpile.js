@@ -534,6 +534,28 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
   }
 }
 
+// Deposit every pack stack named in names (9qt0: beds banks partial wool
+// before yielding). { put } — 0 when the chest is gone, full or unopenable.
+async function depositToChest(bot, ctx, names) {
+  const want = new Set(Array.isArray(names) ? names : [])
+  try {
+    const res = await withChest(bot, ctx, async (window) => {
+      let put = 0
+      for (const i of invItems(bot)) {
+        if (!i || !want.has(i.name) || !(i.count > 0)) continue
+        try {
+          await window.deposit(i.type, null, i.count)
+          put += i.count
+        } catch (_) { /* full or unmovable: keep the rest */ }
+      }
+      return put
+    })
+    return { put: res && res.status === 'ok' ? res.value : 0 }
+  } catch (_) {
+    return { put: 0 }
+  }
+}
+
 // Count stacks in the adopted chest without withdrawing (did.4: the bed
 // colour/wood argmax needs chest counts before it draws). One window;
 // {name: count} over names (all stacks when names is null). A vanished
@@ -933,6 +955,7 @@ module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.chestCounts = chestCounts
+module.exports.depositToChest = depositToChest
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2

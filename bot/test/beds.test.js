@@ -1271,6 +1271,44 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
     assert.equal(bot._items.filter((i) => i.name === 'white_wool').reduce((n, i) => n + i.count, 0), 3)
   })
 
+  it('revmux 01: the second partial yields at once (no reopen) and banks its wool in the chest first', async () => {
+    const CH = { x: 15, y: 64, z: 22 }
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 1, type: ITEMS.white_wool }], cells: { '15,64,22': 'chest' }, at: { x: 15, y: 64, z: 21 } })
+    const chest = []
+    bot.openChest = async () => ({
+      deposit: async (type, meta, n) => {
+        const s = bot._items.find((i) => i.type === type)
+        s.count -= n
+        chest.push({ name: s.name, count: n })
+        bot._items = bot._items.filter((i) => i.count > 0)
+      },
+      close: () => {},
+    })
+    const ctx = { home: v2home({ chest: { ...CH } }), beds: { phase: 'wool', huntWool: 0, noWool: { fails: 1, at: Date.now() }, hunt: { searchLegs: { legs: 4 } } } }
+    bot._items[0].count = 2 // the hunt closed with 2 of 6
+    beds(bot, ctx)
+    assert.equal(ctx.beds.noWool.fails, 2)
+    assert.equal(ctx.bring, undefined, 'latched: no third hunt')
+    assert.equal(ctx.stepStatus, undefined, 'banking first')
+    await flush()
+    assert.deepEqual(chest, [{ name: 'white_wool', count: 2 }], 'partial wool is in the chest')
+    beds(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-wool')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('revmux 01: string too short for the need does not open a latched hunt', async () => {
+    const bot = mockBot({ items: [{ name: 'string', count: 4 }] }) // 1 wool of 6
+    const ctx = { home: v2home(), beds: { phase: 'wool', noWool: { fails: 2, at: Date.now() } } }
+    for (let i = 0; i < 10 && !ctx.stepStatus; i++) {
+      beds(bot, ctx)
+      if (ctx.gearInFlight) await rest(650)
+      await flush()
+    }
+    assert.equal(ctx.stepStatus, 'failed:no-wool')
+    assert.equal(ctx.bring, undefined, 'no sheepless hunt')
+  })
+
   it('a failed string craft goes dry and hunts', () => {
     const bot = mockBot({ items: [{ name: 'string', count: 4 }], recipes: {} })
     const ctx = { home: v2home(), beds: { phase: 'wool' } }
@@ -1296,6 +1334,10 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
     ctx.explore = { visited, target: null }
     assert.equal(exploreMod.nextTarget(bot, ctx, bring.SELF_SEARCH_RADIUS), null)
     assert.ok(exploreMod.nextTarget(bot, ctx, 256), 'the outer rings remain for owner orders')
+    // revmux 01 core-4: a far pending leg does not read as capped while near ground is open.
+    const c3 = { home: v2home(), explore: { visited: new Set(), target: { x: SITE.x, z: SITE.z - 128 } } }
+    const near = exploreMod.nextTarget(bot, c3, bring.SELF_SEARCH_RADIUS)
+    assert.ok(near && Math.hypot(near.x - SITE.x, near.z - SITE.z) <= 96, 'near pick wins over a far pending leg')
     const st = { phase: 'wool', hunt: { searchLegs: { legs: 1, capped: true } } }
     const c2 = { home: v2home(), beds: st }
     beds(bot, c2)
