@@ -62,6 +62,20 @@ function freshCtx() {
 }
 
 describe('gather step', () => {
+  it('(g0z.12) never targets a laid castle beam, even when it is the nearest log', () => {
+    const blueprint = require('../src/castle')
+    const site = { x: -20, y: 64, z: -20 }
+    const beam = blueprint.absPlan(site, 0, 2).cells.find((c) => c.kind === 'frame')
+    const bot = mockBot({
+      spots: [pos(beam.x, beam.y, beam.z), pos(40, 64, 0)],
+      names: { [`${beam.x},${beam.y},${beam.z}`]: 'oak_log', '40,64,0': 'oak_log' },
+    })
+    bot.entity.position = pos(beam.x, beam.y - 3, beam.z - 1)
+    const ctx = { ...freshCtx(), castle: { site, rot: 0, blueprintVersion: 2 } }
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:40,64,0$/)
+  })
+
   it('(mnx) skips logs within a gave-up spot', () => {
     // Acceptance: gave-up at X -> no target within R of X.
     const bot = mockBot({

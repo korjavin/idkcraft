@@ -5,6 +5,7 @@ const stuck = require('../stuck')
 const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
+const blueprint = require('../castle')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS, gatherFailedHolds } = require('../goal')
 const { countItems } = require('../perception')
@@ -25,7 +26,7 @@ const Vec3 = require('vec3')
 // ponytail: if the pathfinder ever starts chewing through its own future
 // house, gate the blueprint blocks via movements.blocksCantBreak (bead .4).
 const FIND_RADIUS = 48
-const FIND_COUNT = 64
+const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest real trees
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
@@ -148,7 +149,17 @@ function gather(bot, ctx, target, state) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   // mnx pit memory: no target within a gave-up spot's radius.
-  const banned = (p) => danger.near(ctx, p)
+  // g0z.12: laid castle beams (v2 frame cells) are logs the castle owns —
+  // never a tree target (dig-time protection would refuse them only after
+  // the walk, and a castle frame fetch starts right next to them).
+  const castleBeam = (p) => {
+    if (!ctx.castle) return false
+    try {
+      const b = bot.blockAt(new Vec3(p.x, p.y, p.z))
+      return blueprint.protects(ctx.castle, p, b && b.name)
+    } catch (_) { return false }
+  }
+  const banned = (p) => danger.near(ctx, p) || castleBeam(p)
   if (!g.pos) {
     // A running staged search resolves before any new sync scan: the 48
     // below stays empty while the 96/160 shells stream in across ticks.
