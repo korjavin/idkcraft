@@ -327,7 +327,7 @@ function prepDone(bot, c) {
 function prepTargets(bot, ctx, st, now) {
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
   const c0 = ctx && ctx.castlePrep
-  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS && !c0.unknown) {
     const live = c0.list.filter((c) => !done(bot, c))
     if (live.length || c0.list.length === 0) return live // a list that filtered to empty is rescanned once
   }
@@ -338,11 +338,13 @@ function prepTargets(bot, ctx, st, now) {
   const logs = []
   const cuts = []
   const fills = []
+  let unknown = 0
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
       const x = sx + dx
       const z = sz + dz
       const r = scanColumn(bot, x, z, sy)
+      if (r.unknown) unknown++
       if (r.unknown || r.liquid || r.foreign) continue
       for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
       // Past ±MAX_DIP the order refused it: a later change is not ours to level.
@@ -360,7 +362,8 @@ function prepTargets(bot, ctx, st, now) {
   }
   const list = logs.sort((a, b) => a.y - b.y)
     .concat(cuts.sort((a, b) => b.y - a.y), fills.sort((a, b) => a.y - b.y))
-  if (ctx) ctx.castlePrep = { key, at: now, list }
+  // unknown (g0z.15): unloaded columns — no cache, and prep stays open.
+  if (ctx) ctx.castlePrep = { key, at: now, list, unknown }
   return list
 }
 
@@ -447,7 +450,10 @@ function menuFact(bot, ctx, now = Date.now()) {
       const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
-    const r = peek(bot, st, now, ctx)
+    let r = peek(bot, st, now, ctx)
+    // Prep with nothing left to prep (g0z.15): the next castle tick starts
+    // the body, so the word is the body's — never 'finish' at 0/240.
+    if (st.phase === 'prep' && !r.cell && !r.waiting) r = peek(bot, { ...st, phase: 'body' }, now, ctx)
     let word = null
     if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
     // A prep fill takes any filler on hand, no batch (g0z.16): works now.
@@ -458,8 +464,21 @@ function menuFact(bot, ctx, now = Date.now()) {
     }
     const kind = r.cell.kind
     let left = 0
-    for (const o of r.cells) {
-      if (o.kind === kind && !done(bot, o)) left++
+    if (kind === 'planks') {
+      // Infill run (g0z.15): planks up to the next Fachwerk beam only, so
+      // the planks fetch never crafts the held frame logs away.
+      const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
+      const order = workOrder(cells, key)
+      for (let i = order.indexOf(r.cell.idx); i >= 0 && i < order.length; i++) {
+        const o = cells[order[i]]
+        if (done(bot, o)) continue
+        if (o.kind === 'frame') break
+        if (o.kind === kind) left++
+      }
+    } else {
+      for (const o of r.cells) {
+        if (o.kind === kind && !done(bot, o)) left++
+      }
     }
     ctx.castleWord = { kind, left }
     return stockWord(bot, kind, left)
@@ -840,10 +859,14 @@ function castle(bot, ctx) {
       work(bot, ctx, st, c, now, 'preparing the site')
       return
     }
-    st.phase = 'body'
-    if (ctx.castlePrepSaid) {
-      ctx.castlePrepSaid = false
-      try { bot.chat('castle site ready, starting to build') } catch (_) { /* chat best-effort */ }
+    // An unloaded column is not a prepared one (g0z.15): work the body this
+    // tick (the walk loads the site) without skipping prep for good.
+    if (!(ctx.castlePrep && ctx.castlePrep.unknown)) {
+      st.phase = 'body'
+      if (ctx.castlePrepSaid) {
+        ctx.castlePrepSaid = false
+        try { bot.chat('castle site ready, starting to build') } catch (_) { /* chat best-effort */ }
+      }
     }
   }
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
