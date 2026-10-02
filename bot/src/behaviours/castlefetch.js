@@ -33,7 +33,7 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16 }
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3 }
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
-const STONE_BELOW = 2 // target y window around the feet (no shafts, no pillars)
+const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
 const STONE_ABOVE = 3
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
@@ -237,17 +237,20 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   let found = []
   try { found = (e && bot.findBlocks({ matching: e.id, maxDistance: DIG_RADIUS, count: FIND_COUNT })) || [] } catch (_) { found = [] }
   const fx = Math.floor(bp.x)
-  const fy = Math.floor(bp.y)
+  const fy = Math.floor(bp.y) // own feet column only
   const fz = Math.floor(bp.z)
   let best = null
   for (const p of found) {
     const k = `${p.x},${p.y},${p.z}`
     if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
-    // Near the stance's level only (revmux 02): a cave wall far below is
-    // 'exposed' too, and the canDig walk would shaft down to it; a cliff
-    // face far above means pillaring. Surface rock and walk-in faces stay.
-    if (p.y < fy - STONE_BELOW || p.y > fy + STONE_ABOVE) continue
+    // Near the castle's ground level only (revmux 02/03): a cave wall far
+    // below is 'exposed' too and the canDig walk would shaft down to it; a
+    // cliff face far above means pillaring. Anchored on the site, never the
+    // live feet — a pick made from inside our own quarry pit would ratchet
+    // the window down a layer per pick.
+    const gy = ctx.castle.site.y
+    if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) continue
     const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
     if (best && d >= best.d) continue
     const open = EXPOSE.some(([x, y, z]) => {

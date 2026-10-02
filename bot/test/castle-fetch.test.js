@@ -312,6 +312,15 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
+  it('the stone window is anchored on the site, not the feet: a bot down in its pit never picks deeper (revmux 03)', () => {
+    const deep = `${SITE.x - 8},${SITE.y - 4},${SITE.z - 8}`
+    const set = new Map([[deep, 'stone'], [`${SITE.x - 8},${SITE.y - 3},${SITE.z - 8}`, 'air']])
+    const bot = makeBot({ items: TOOLS(), set, at: pos(SITE.x - 6.5, SITE.y - 3, SITE.z - 7.5) }) // standing 3 down
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+  })
+
   it('the dig re-checks the stance rules at dig time: a submerged target is skipped, not dug', async () => {
     const tx = SITE.x - 5
     const tz = SITE.z - 5
