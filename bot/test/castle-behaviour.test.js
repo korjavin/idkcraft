@@ -253,6 +253,21 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'kept-chest')
   })
 
+  it('g0z.11: a v2 castle lays the full plan and keys its blocks by v2', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
+    await run(bot, ctx, 30)
+    const ring = v2.filter((c) => blueprint.isPlaceTarget(c.kind)).slice(0, 5).map((c) => `${c.x},${c.y},${c.z}`)
+    assert.deepEqual(bot.calls.places.slice(0, 5).map((p) => `${p.x},${p.y},${p.z}`), ring)
+    const w2 = makeWorld()
+    w2.set(v2[0].x, v2[0].y, v2[0].z, 'chest')
+    const ctx2 = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
+    await run(mockBot(w2), ctx2, 2)
+    assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-chest')
+  })
+
   it('an unreachable cell blocks after three stands that get no closer', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
