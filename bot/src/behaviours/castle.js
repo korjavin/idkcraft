@@ -618,7 +618,7 @@ function digCell(bot, ctx, st, c, now) {
       await bot.dig(b)
       if (live(ctx, token)) {
         ctx.castleFails = null
-        ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
+        if (spoilWalk(st, c)) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
       }
     } catch (_) {
       if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
@@ -626,13 +626,22 @@ function digCell(bot, ctx, st, c, now) {
   })
 }
 
-// Spoil pickup (g0z.6, flat's shave-pickup pattern): after a dig, walk
+// Spoil pickup (g0z.6, flat's shave-pickup pattern): after a moat dig, walk
 // onto the drop so it lands in the inventory. A drop 2+ above the feet
 // would need a tower, one out of dig reach is stale (the bot left between
 // ticks) — both left. True while the walk owns the tick.
 // ponytail: the drop is assumed at the dug cell (moat digs: it is); a drop
 // that rolled away stays as litter after PICKUP_TICKS.
 const PICKUP_TICKS = 6
+// Moat digs only, and never a cell under a planned block (revmux 01 core-1):
+// the dug cell itself is then the standable node GoalNear(.., 1) needs. A
+// bridge column under the deck has none (A* would dig one), and a place
+// cell's occupant dig would walk the body into the cell it lays next.
+function spoilWalk(st, c) {
+  if (c.kind !== 'dig') return false
+  const above = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${c.x},${c.y + 1},${c.z}`)
+  return !(above && blueprint.isPlaceTarget(above.kind))
+}
 function pickup(bot, ctx) {
   const p = ctx.castlePickup
   const bp = bodyPos(bot)

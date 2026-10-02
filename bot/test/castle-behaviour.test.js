@@ -298,6 +298,7 @@ describe('g0z.2 castle executor', () => {
     // The interior completes: the moat is dug, the bridge columns last and
     // under the laid deck; every dig walks onto its drop.
     world.set(held.x, held.y, held.z, 'oak_planks')
+    for (const c of fence) world.set(c.x, c.y, c.z, 'air') // fence ring knocked down: it re-lays after the moat
     const before = log.length
     for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
     assert.equal(ctx.stepStatus, 'done')
@@ -309,8 +310,14 @@ describe('g0z.2 castle executor', () => {
       assert.ok(deck.some((c) => c.x === e.p.x && c.z === e.p.z), `${k(e.p)} is a bridge column`)
       assert.equal(e.above, 'oak_planks', 'the deck stands while its column is dug')
     }
-    const near1 = bot.calls.goals.filter((g) => g && g.constructor.name === 'GoalNear' && g.rangeSq === 1).map(k)
-    assert.ok(digs.every((e) => near1.includes(k(e.p))), 'every moat dig walks onto its drop')
+    const fences = log.slice(before).map((e, i) => ({ ...e, i })).filter((e) => e.op === 'place' && e.what === 'oak_fence')
+    assert.equal(fences.length, fence.length)
+    const lastDig = log.slice(before).findLastIndex((e) => e.op === 'dig' && moat.has(k(e.p)))
+    assert.ok(fences[0].i > lastDig, 'fence ring after the moat')
+    const near1 = new Set(bot.calls.goals.filter((g) => g && g.constructor.name === 'GoalNear' && g.rangeSq === 1).map(k))
+    const isCol = (e) => deck.some((c) => c.x === e.p.x && c.z === e.p.z)
+    assert.ok(digs.every((e) => isCol(e) !== near1.has(k(e.p))), 'every moat dig but a bridge column walks onto its drop')
+    assert.ok(deck.every((c) => !near1.has(k(c))), 'no pickup walk into a deck cell')
   })
 
   it('an unreachable cell blocks after three stands that get no closer', async () => {
