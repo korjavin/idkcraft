@@ -71,6 +71,12 @@ describe('45j build stays on the menu while the site is unloaded', () => {
     assert.equal(r.action, 'build')
   })
 
+  it('a built home far away is not pulled back into build (revmux 01)', () => {
+    const bot = workBot()
+    const ctx = { home: { ...siteHome(), built: true }, buildSkip: [] }
+    assert.equal(goal.MENU.build.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
+  })
+
   it('unloaded site still needs a plank batch', () => {
     const bot = workBot({ items: [{ name: 'oak_planks', count: 10 }] })
     const ctx = { home: siteHome(), buildSkip: [] }

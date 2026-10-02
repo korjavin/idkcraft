@@ -167,8 +167,9 @@ const MENU = {
         // 45j: an unloaded site (respawn far away) reads every cell as
         // undone, so the next cell is the long-placed table — the table
         // gate would drop build for good. Batch on planks only: the build
-        // step walks to the site and re-scans there.
-        if (!buildMod.cellLoaded(bot, home, cell)) return facts.planks >= Math.min(PLANK_COUNT, 16)
+        // step walks to the site and re-scans there. A built house far
+        // away is not unfinished work (revmux 01): no walk home to repair.
+        if (!buildMod.cellLoaded(bot, home, cell)) return !home.built && facts.planks >= Math.min(PLANK_COUNT, 16)
         const kind = cell.kind
         if (kind === 'table' && !(facts.table > 0)) return false
         if (kind === 'door' && !(facts.door > 0)) return false
