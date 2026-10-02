@@ -309,11 +309,13 @@ describe('equip step', () => {
 
   it('never digs the porch: apron ground is skipped in the scan (idkcraft-0mlh)', async () => {
     const home = { v: 2, site: { x: 97, y: 71, z: -357 }, interior: { min: { x: 98, y: 71, z: -356 }, max: { x: 102, y: 72, z: -353 } } }
-    const porch = [{ x: 100, y: 70, z: -359 }, { x: 101, y: 70, z: -358 }, { x: 98, y: 69, z: -360 }]
+    const porch = [{ x: 98, y: 69, z: -360 }]
+    for (let x = 95; x <= 104; x++) for (const z of [-359, -358]) porch.push({ x, y: 70, z }) // > count 16
     const far = { x: 100, y: 70, z: -366 }
-    // Mirrors mineflayer: a useExtraInfo function filters full blocks.
+    // Mirrors mineflayer: a useExtraInfo function filters full blocks, then
+    // the nearest `count` survive — porch cells must not starve the pool.
     const scan = (cells) => (o) => cells.map((v) => ({ ...v, name: 'grass_block' }))
-      .filter((v) => !o.useExtraInfo || o.useExtraInfo({ name: v.name, position: v }))
+      .filter((v) => !o.useExtraInfo || o.useExtraInfo({ name: v.name, position: v })).slice(0, o.count)
     const kit = [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }]
     let bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([...porch, far]) })
     bot.entity.position = { x: 100.5, y: 71, z: -357.5 } // at the door

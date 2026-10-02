@@ -292,8 +292,20 @@ function inHouseFootprint(home, pos) {
     // the door side: outsidePos and two cells in front of it), up to the
     // doorstep level. Prod 2026-10-02: equip dug a 2-4 deep pit on the porch,
     // gohome then arrived at y=69 and died at the door.
-    return x >= b.min.x - 3 && x <= b.max.x + 3 && z >= Math.min(b.min.z - 3, s.z - 3) && z <= b.max.z + 3 && y <= s.y + 1
+    const apron = x >= b.min.x - 3 && x <= b.max.x + 3 && z >= Math.min(b.min.z - 3, s.z - 3) && z <= b.max.z + 3 && y <= s.y + 1
+    return apron ? 'apron' : false
   } catch (_) { return false }
+}
+
+// Pit escape (idkcraft-0mlh revmux 01 core-1): a body standing below the
+// doorstep level (in an old porch pit) may still dig apron cells beside it
+// at body height and above — recover's stair/headroom digs — never below.
+function apronEscape(bot, home, pos) {
+  const feet = botPos(bot)
+  if (!feet || !pos) return false
+  const fy = Math.floor(feet.y)
+  return fy < home.site.y && Math.floor(pos.y) >= fy &&
+    Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 && Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1
 }
 
 // The type-rules tail of denyReason, split out so bring's atl.20 exemption
@@ -322,7 +334,8 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
-    const fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
+    let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
+    if (fp === 'apron' && apronEscape(bot, ctx.home, pos)) fp = false
     if (fp && !(pos.y >= ctx.home.site.y && ctx.placedByBot instanceof Set &&
       ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))) return 'protected'
     if (pos && ctx && ctx.placedByBot instanceof Set && !(fp && pos.y < ctx.home.site.y)) {
