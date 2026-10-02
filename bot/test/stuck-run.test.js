@@ -102,15 +102,31 @@ describe('stuck-run.sh parallel rigs (idkcraft-qd9s)', () => {
     fs.rmSync(lock, { recursive: true })
   })
 
+  const fakeDocker = (name, ps) => { // a `docker` whose ps lists `ps`
+    const bin = path.join(tmp, name)
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\necho "${ps}"\n`, { mode: 0o755 })
+    return `${bin}:${process.env.PATH}`
+  }
+
   it('RIG_ID=auto takes the first free slot and is busy only when all are held', () => {
+    const PATH = fakeDocker('bin-none', '')
     hold(lock)
-    assert.match(run({ RIG_ID: 'auto', RIG_SLOTS: '0 a' }).stdout, /no START\.sh/)
+    assert.match(run({ RIG_ID: 'auto', RIG_SLOTS: '0 a', PATH }).stdout, /no START\.sh/)
     hold(lock + '-a')
-    const b = run({ RIG_ID: 'auto', RIG_SLOTS: '0 a' })
+    const b = run({ RIG_ID: 'auto', RIG_SLOTS: '0 a', PATH })
     assert.equal(b.status, 2)
     assert.match(b.stdout, /rig busy/)
     fs.rmSync(lock + '-a', { recursive: true })
     fs.rmSync(lock, { recursive: true })
+  })
+
+  it('RIG_ID=auto skips a free slot whose container still runs', () => {
+    const r = run({ RIG_ID: 'auto', RIG_SLOTS: 'a b', PATH: fakeDocker('bin-orphan', 'idk-replay-a') })
+    assert.match(r.stdout, /rig a: idk-replay-a still running without a lock — next slot/)
+    assert.match(r.stdout, /no START\.sh/) // took b
+    assert.equal(fs.existsSync(lock + '-a'), false, 'skipped slot lock leaked')
+    assert.equal(fs.existsSync(lock + '-b'), false, 'rig b lock leaked')
   })
 
   it('derives the rig from START.sh: seeded data minus world, renamed container and port', () => {
@@ -120,10 +136,8 @@ describe('stuck-run.sh parallel rigs (idkcraft-qd9s)', () => {
     fs.writeFileSync(path.join(tmp, 'world.tar'), '')
     fs.writeFileSync(path.join(tmp, 'START.sh'),
       'D="$(dirname "$0")/replay-data/$V"\nexec docker run --rm --name idk-replay -v "$D:/data" \\\n  -p 25571:25565 img\n', { mode: 0o755 })
-    const bin = path.join(tmp, 'bin')
-    fs.mkdirSync(bin)
-    fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\necho idk-replay-b\n', { mode: 0o755 })
-    const r = run({ RIG_ID: 'b', PATH: `${bin}:${process.env.PATH}` })
+    fs.mkdirSync(path.join(tmp, 'rigs', 'b', 'replay-data', '.paper-base.tmp', 'junk'), { recursive: true }) // killed half-seed
+    const r = run({ RIG_ID: 'b', PATH: fakeDocker('bin-b', 'idk-replay-b') })
     assert.equal(r.status, 2)
     assert.match(r.stdout, /rig b: container idk-replay-b, port 25573/)
     assert.match(r.stdout, /idk-replay-b already running/) // the guard checks the rig's container
@@ -133,6 +147,8 @@ describe('stuck-run.sh parallel rigs (idkcraft-qd9s)', () => {
     assert.match(start, /-p 25573:25565/)
     assert.ok(fs.existsSync(path.join(rig, 'replay-data', 'paper-base', 'server.properties')), 'not seeded')
     assert.equal(fs.existsSync(path.join(rig, 'replay-data', 'paper-base', 'world')), false, 'seed copied world/')
+    assert.equal(fs.existsSync(path.join(rig, 'replay-data', 'paper-base', 'junk')), false, 'stale half-seed leaked in')
+    assert.equal(fs.existsSync(path.join(rig, 'replay-data', '.paper-base.tmp')), false, 'seed tmp left behind')
     assert.equal(fs.existsSync(lock + '-b'), false, 'rig b lock leaked')
   })
 

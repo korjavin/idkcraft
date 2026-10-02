@@ -51,13 +51,19 @@ rig_try() { # $1 = lock dir; 0 = taken (a dead holder's lock is reclaimed)
   return 1
 }
 if [ "${RIG_LOCK_HELD:-}" != 1 ]; then
-  if [ "$RIG_ID" = auto ]; then _slots="${RIG_SLOTS:-0 a b}"; else _slots="${RIG_ID:-0}"; fi
+  _auto=; if [ "$RIG_ID" = auto ]; then _auto=1; _slots="${RIG_SLOTS:-0 a b}"; else _slots="${RIG_ID:-0}"; fi
   _waited=0
   while :; do
     for _s in $_slots; do
       [ "$_s" = 0 ] && _s=
       RIG_ID="$_s"; RIG_LOCK="$LOCKBASE${RIG_ID:+-$RIG_ID}"
-      rig_try "$RIG_LOCK" && break 2
+      rig_try "$RIG_LOCK" || continue
+      # auto: a slot whose container outlived its lock would only exit 2 below — try the next one
+      if [ -n "$_auto" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "idk-replay${_s:+-$_s}"; then
+        echo "rig ${_s:-0}: idk-replay${_s:+-$_s} still running without a lock — next slot"
+        rmdir "$RIG_LOCK"; continue
+      fi
+      break 2
     done
     if [ "$_waited" -ge "${RIG_LOCK_WAIT:-0}" ]; then
       echo "rig busy: $RIG_LOCK held by pid ${_hp:-?} (slots: $_slots) — one run per rig (RIG_LOCK_WAIT=<secs> to wait, RIG_ID=auto|<a-z> for another rig; if YOUR wrapper holds it, drop the wrapper or set RIG_LOCK_HELD=1)"; exit 2
@@ -90,7 +96,9 @@ if [ -n "$RIG_ID" ]; then
   if [ ! -d "$RIGDIR/replay-data/$VARIANT" ]; then
     echo "seed: $RIGDIR/replay-data/$VARIANT <- $D (minus world/, logs/)"
     mkdir -p "$RIGDIR/replay-data"
-    rsync -a --exclude /world --exclude /logs "$D/" "$RIGDIR/replay-data/$VARIANT/"
+    rm -rf "$RIGDIR/replay-data/.$VARIANT.tmp" # a half-seeded copy from a killed run
+    rsync -a --exclude /world --exclude /logs "$D/" "$RIGDIR/replay-data/.$VARIANT.tmp/"
+    mv "$RIGDIR/replay-data/.$VARIANT.tmp" "$RIGDIR/replay-data/$VARIANT"
   fi
   # START.sh stays the single source of image/flags: the rig copy only renames
   # the container and the host port; its dirname $0 points it at the rig data.
