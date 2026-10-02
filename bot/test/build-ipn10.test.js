@@ -534,9 +534,12 @@ describe('d7i gave-up wedge skips the cell', () => {
     const { idx, bot, ctx } = partitionSetup()
     const q = quiet()
     try {
-      run(bot, ctx, 2)
+      run(bot, ctx, 1)
+      ctx.stuckState = 'SUSPECT' // the detector counts the stall under build
+      run(bot, ctx, 1)
       assert.deepEqual(ctx.buildSkip, [], 'no latch: no skip')
       // recover.release(gave-up) on a no-displacement wedge anchors here.
+      ctx.stuckState = 'COOLDOWN'
       ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
       run(bot, ctx, 1)
     } finally {
@@ -550,7 +553,9 @@ describe('d7i gave-up wedge skips the cell', () => {
     const { idx, find, bot, ctx } = partitionSetup([[3, 3]])
     const q = quiet()
     try {
+      ctx.stuckState = 'SUSPECT'
       run(bot, ctx, 1)
+      ctx.stuckState = 'COOLDOWN'
       ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
       run(bot, ctx, 10)
     } finally {
@@ -620,10 +625,27 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.deepEqual(ctx.buildSkip, [doorIdx], 'refusals count: the cell skips instead of looping')
   })
 
+  it("another step's gave-up latch near the house never skips a build cell (revmux 01 minor)", () => {
+    // An equip dig beside the house wedged and gave up: build never saw the
+    // stall build up on its cell, so the fresh latch is not its wedge.
+    const { bot, ctx } = partitionSetup()
+    const q = quiet()
+    try {
+      run(bot, ctx, 1)
+      ctx.stuckState = 'COOLDOWN'
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 10)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
   it('a latch standing from before the cell, or anchored far away, never skips', () => {
     for (const [pre, at] of [[true, { x: 2.5, y: 64, z: 4.5 }], [false, { x: 40, y: 64, z: 40 }]]) {
       const { bot, ctx } = partitionSetup()
       if (pre) ctx.recoverLatch = latchAt(at)
+      ctx.stuckState = 'SUSPECT' // build saw a stall: only the latch decides
       const q = quiet()
       try {
         run(bot, ctx, 1)

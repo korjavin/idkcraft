@@ -38,6 +38,7 @@
 const Vec3 = require('vec3')
 const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
+const stuck = require('../stuck')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -437,14 +438,17 @@ function pruneBuildSkips(ctx, now) {
 }
 
 // A release latch born while this cell was current (not the one seen at
-// cell start) and anchored near it (d7i): a latch from another step's
-// wedge far away never skips a house cell. ponytail: 8 blocks ≈ the house
-// diagonal plus reach; a wedge on a long approach walk farther out keeps
-// the stall budget.
+// cell start), anchored near it, after build itself saw the stall build up
+// on this cell (d7i): the detector counts 30 still ticks before it raises,
+// and build ticks through them, so a latch from another step's wedge (an
+// equip dig beside the house) never skips a house cell. ponytail: 8
+// blocks ≈ the house diagonal plus reach; a wedge on a long approach walk
+// farther out keeps the stall budget.
 const WEDGE_RADIUS = 8
-function wedgeLatched(ctx, p) {
+function wedgeLatched(ctx, p, idx) {
   try {
     const L = ctx.recoverLatch
+    if (ctx.buildSuspectIdx !== idx) return false
     if (!L || L === ctx.buildLatchSeen || !L.at || typeof L.at.x !== 'number') return false
     return Math.hypot(L.at.x - (p.x + 0.5), L.at.z - (p.z + 0.5)) <= WEDGE_RADIUS
   } catch (_) { return false }
@@ -565,6 +569,7 @@ function build(bot, ctx, target, state) {
       ctx.buildStallTicks = 0
       ctx.buildHardTicks = 0
       ctx.buildLatchSeen = ctx.recoverLatch || null
+      ctx.buildSuspectIdx = -1
       const bpc = bot.entity && bot.entity.position
       ctx.buildAnchor = bpc && typeof bpc.x === 'number' ? { x: bpc.x, y: bpc.y, z: bpc.z } : null
     }
@@ -573,7 +578,9 @@ function build(bot, ctx, target, state) {
     // at the cell) — the menu already spent its budget here, and the latch
     // now holds every re-wedge out of the menu, so the stall budget would
     // only burn minutes more. Skip it like 3 refusals.
-    if (wedgeLatched(ctx, p)) {
+    const sv = stuck.verdict(ctx).state
+    if (sv === 'SUSPECT' || sv === 'STUCK') ctx.buildSuspectIdx = idx
+    if (wedgeLatched(ctx, p, idx)) {
       skipCell(ctx, idx, p, 'wedged')
       return
     }
