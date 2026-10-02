@@ -375,12 +375,16 @@ function craft(bot, ctx, target, state) {
     try { b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z)) } catch (_) { b = null }
     if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
   }
-  let op = null
+  // 8cx: every wood converts in one step — the batch gate (logs >=
+  // NEED_LOGS) closes after the first wood, so a second-wood remainder
+  // otherwise never converts and holds gather feasible forever.
+  const ops = []
   for (const [wood, n] of sortedWoods(logs)) {
     const name = `${wood}_planks`
     const found = recipes(bot, name, null)
-    if (found.length > 0) { op = { item: name, recipe: found[0], count: n + strandedCount(bot, `${wood}_log`), table: null }; break } // batch = visible stack + stranded (run() still calls bot.craft with count=1)
+    if (found.length > 0) ops.push({ item: name, recipe: found[0], count: n + strandedCount(bot, `${wood}_log`), table: null }) // batch = visible stack + stranded (run() still calls bot.craft with count=1)
   }
+  let op = ops[0] || null
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
     if (tableCount === 0 && !tableBlock) {
@@ -431,31 +435,33 @@ function craft(bot, ctx, target, state) {
   }
   ctx.craftInFlight = true
   const run = async () => {
-    // The planks batch sizes from the model at selection; a ghost grid entry
-    // (counted, then wiped by a server correction) would over-count. Stop at
-    // exhaustion instead of failing the fully converted load as missing
-    // ingredient (revmux round-2). Single ops (table/door) loop once.
-    const batchWood = op.item.endsWith('_planks') ? op.item.slice(0, -'_planks'.length) : null
-    let done = 0
-    try {
-      // Batch at step level, one log per call: a single bot.craft(count=n)
-      // dies on the first silent click and strands the rest, while one op per
-      // log re-decides to gather at 13 logs. craftInFlight holds the step for
-      // the whole batch (goal.js), so mid-batch churn never re-decides.
-      for (let i = 0; i < op.count; i++) {
-        if (i > 0 && batchWood && (tally(bot, '_log').get(batchWood) || 0) === 0) break
-        await safeCraft(bot, op.recipe, 1, op.table)
-        done++
+    for (const o of (ops.length > 0 ? ops : [op])) {
+      // The planks batch sizes from the model at selection; a ghost grid entry
+      // (counted, then wiped by a server correction) would over-count. Stop at
+      // exhaustion instead of failing the fully converted load as missing
+      // ingredient (revmux round-2). Single ops (table/door) loop once.
+      const batchWood = o.item.endsWith('_planks') ? o.item.slice(0, -'_planks'.length) : null
+      let done = 0
+      try {
+        // Batch at step level, one log per call: a single bot.craft(count=n)
+        // dies on the first silent click and strands the rest, while one op per
+        // log re-decides to gather at 13 logs. craftInFlight holds the step for
+        // the whole batch (goal.js), so mid-batch churn never re-decides.
+        for (let i = 0; i < o.count; i++) {
+          if (i > 0 && batchWood && (tally(bot, '_log').get(batchWood) || 0) === 0) break
+          await safeCraft(bot, o.recipe, 1, o.table)
+          done++
+        }
+      } catch (err) {
+        ctx.craftInFlight = false
+        fail(ctx, o.item, err)
+        return
       }
-    } catch (err) {
-      ctx.craftInFlight = false
-      fail(ctx, op.item, err)
-      return
+      const t = totals(bot)
+      const made = done * ((o.recipe.result && o.recipe.result.count) || 1)
+      try { bot.chat(`crafted ${made} ${o.item} (planks ${t.planks}, logs ${t.logs})`) } catch (_) { /* chat best-effort */ }
     }
     ctx.craftInFlight = false
-    const t = totals(bot)
-    const made = done * ((op.recipe.result && op.recipe.result.count) || 1)
-    try { bot.chat(`crafted ${made} ${op.item} (planks ${t.planks}, logs ${t.logs})`) } catch (_) { /* chat best-effort */ }
   }
   void run()
 }

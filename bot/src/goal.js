@@ -36,6 +36,16 @@ function needPlanks(home) {
   return NEED_PLANKS
 }
 
+// Night-hurt hold (ck3): low health (the goalText 'health=low' bucket) at
+// night keeps the bot off the outdoor work — prod died twice at the site
+// building at 2 hp next to zombies. Both inputs are in goalText, so the
+// first hurt night tick re-decides a sticky build/gather.
+// ponytail: no hostile check — night spawns them anyway; add one if
+// hurt-night idling ever costs real work.
+function nightHurt(facts) {
+  return facts.time === 'night' && facts.health < 6
+}
+
 // Step menu: feasible(facts, bot, ctx) means the step can make progress NOW
 // (not just ever). Most steps read facts only; build also scans the home
 // site through the bot. Registration (BEHAVIOURS[name]) is checked
@@ -117,6 +127,7 @@ const MENU = {
     // plank remainder passes with any plank count. Skipped (given-up) cells
     // count as done, the same as in the build behaviour.
     feasible: (facts, bot, ctx) => {
+      if (nightHurt(facts)) return false
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
       // Skip retry (revmux 01 core-4): re-probe stamped skips past the
@@ -152,7 +163,14 @@ const MENU = {
       try {
         const next = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
         if (next < 0) return false
-        const kind = buildMod.blueprintFor(home)[next].kind
+        const cell = buildMod.blueprintFor(home)[next]
+        // 45j: an unloaded site (respawn far away) reads every cell as
+        // undone, so the next cell is the long-placed table — the table
+        // gate would drop build for good. Batch on planks only: the build
+        // step walks to the site and re-scans there. A built house far
+        // away is not unfinished work (revmux 01): no walk home to repair.
+        if (!buildMod.cellLoaded(bot, home, cell)) return !home.built && facts.planks >= Math.min(PLANK_COUNT, 16)
+        const kind = cell.kind
         if (kind === 'table' && !(facts.table > 0)) return false
         if (kind === 'door' && !(facts.door > 0)) return false
       } catch (_) {
@@ -212,6 +230,7 @@ const MENU = {
     // is the menu-wide twin of this gate). gyw: relocation past the
     // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
+      if (nightHurt(facts)) return false
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
@@ -230,7 +249,10 @@ const MENU = {
       }
       const total = facts.planks + facts.logs * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
-      return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS)
+      // 8cx: the started load finishes only while loose planks alone are
+      // short — with the budget covered a sub-batch remainder is no reason
+      // to chop (prod: 136 -> 276 planks over 7 laps on 7 leftover logs).
+      return total < need || (facts.logs > 0 && facts.logs < NEED_LOGS && facts.planks < need)
     },
     chat: () => 'on my own: gathering logs',
     verb: 'chopping wood',
@@ -285,7 +307,7 @@ const MENU = {
   forage: {
     // Known valuable find nearby (planForage: value rank, pickaxe gate).
     // Nothing known -> explore finds more.
-    feasible: (facts) => facts.known === 'near',
+    feasible: (facts) => facts.known === 'near' && !nightHurt(facts),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -1120,6 +1142,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
+      if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
       // Facts-level wording; the exact remainder gate lives in the rule.
       // Item gates run first (the rule yields on a missing item first),
       // on the next cell only (xoj) — a missing door for a later cell is
@@ -1130,7 +1153,8 @@ function stepWhy(name, facts, bot, ctx, text) {
         const home = ctx && ctx.home
         if (home && home.site) {
           const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
-          if (ni >= 0) kind = buildMod.blueprintFor(home)[ni].kind
+          // Unloaded next cell (45j): only the plank batch gates, as in feasible.
+          if (ni >= 0) kind = buildMod.cellLoaded(bot, home, buildMod.blueprintFor(home)[ni]) ? buildMod.blueprintFor(home)[ni].kind : 'unloaded'
         }
       } catch (_) { kind = null }
       if ((kind === 'table' && facts.table === 0) || (kind === 'door' && facts.door === 0) ||
@@ -1158,6 +1182,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'light: no sticks or wood'
     }
     case 'gather':
+      if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
       return 'gather: load full'
     case 'deliver':
@@ -1189,6 +1214,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return `gear: ${plan.line || plan.key}`
     }
     case 'forage':
+      if (nightHurt(facts)) return 'forage: hurt at night, waiting for dawn'
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
     case 'explore':
