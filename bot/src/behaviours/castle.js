@@ -310,8 +310,10 @@ function digCell(bot, ctx, st, c, now) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
-  if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
+  // Self first: bot.players lists the bot too, so the player test alone
+  // would strike our own stance on the cell (rig: standing on own scaffold).
   if (flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
+  if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
   if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
   try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }

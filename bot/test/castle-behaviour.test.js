@@ -157,6 +157,24 @@ describe('g0z.2 castle executor', () => {
     assert.equal(world.get(land.x, land.y, land.z), 'oak_planks')
   })
 
+  it('standing on our own dig target steps aside (bot.players lists the bot too)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'dirt')
+    bot.players = { Me: { entity: bot.entity } }
+    bot.pathfinder.setGoal = (g) => {
+      bot.calls.goals.push(g)
+      // The approach parks ON the dig target; the sidestep moves off it.
+      if (g && typeof g.x === 'number' && bot.calls.goals.length === 1) bot.entity.position = { x: c.x + 0.5, y: c.y + 1, z: c.z + 0.5 }
+      else if (g && typeof g.x === 'number') bot.entity.position = { x: c.x + 2.5, y: c.y, z: c.z + 0.5 }
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 4)
+    assert.deepEqual(ctx.castle.blocked, {})
+    assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
+  })
+
   it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
