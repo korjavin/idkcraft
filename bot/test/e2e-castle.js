@@ -15,6 +15,8 @@ const { waitFor, sleep } = require('./e2e-util')
 const blueprint = require('../src/castle')
 const castle = require('../src/behaviours/castle')
 const { trackPlaced } = require('../src/behaviours/util')
+const unpin = require('../src/unpin')
+const decontact = require('../src/decontact')
 const { addSwimExits, addSwimPrune } = require('../src/swim')
 const { addNoCornerCut } = require('../src/nocorner')
 const { addSnowGround } = require('../src/snow')
@@ -51,10 +53,16 @@ async function session(state, stopAt, onSpawn) {
   await sleep(2000)
   const ctx = { castle: state }
   trackPlaced(bot, ctx) // prod tracks every placement, incl. pathfinder scaffolds
+  // Prod contact taps (index.js runOnce): without them a body touching a
+  // stair-slab face exactly is pinned by Paper's move rejection (1cj/ik7)
+  // and the F1->L1 jump wedges forever (rig, 6568016).
+  unpin.installUnpinTap(bot, ctx)
+  decontact.installFaceEpsilon(bot)
   const end = Date.now() + DEADLINE_MS
   let lastLog = ''
   try {
     for (;;) {
+      try { unpin.unpinTick(bot, ctx, Date.now()) } catch (_) { /* best-effort, like the ticker */ }
       castle(bot, ctx)
       const line = `${state.progress ? state.progress.done + '/' + state.progress.total : '?'} ${state.status} ${ctx.stepStatus || ''}`
       if (line !== lastLog) { console.log(line); lastLog = line }
