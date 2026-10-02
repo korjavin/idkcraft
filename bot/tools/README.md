@@ -101,6 +101,14 @@ news, not noise — investigate first, re-record only when the new behavior
 is the intended one. `npm test` pins S6-PIT's `maxCalls: 0`: any slack
 there would un-flip the sabotage.
 
+It sees water_up breakage via DUGPIT-BARE (idkcraft-jsf.7): healthy code
+climbs out in 58-59 s with both buckets back (5/5); with
+`BUCKETS_NEEDED=3` water_up refuses `failed:no-bucket`, the bot pages from
+the pit, and the run exits 1 (`BASELINE DUGPIT-BARE … REGRESSION
+(unreached (was reached))`). DUGPIT-VALIDATE, its no-bucket twin on the
+same arena, holds 5/5 (one page, never reached) — so BARE's `reached` is
+the water climb, not a walk.
+
 What it does NOT see: recover breakage that changes neither the walk nor
 the paging (a first-try rescue needs no budget — `MAX_FAILS=0` is silent
 on every spot whose green run never fails a primitive).
