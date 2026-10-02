@@ -89,6 +89,19 @@ describe('perception hostile facts', () => {
     assert.equal(state.nearby_hostiles, 1) // compatibility count kept
   })
 
+  it('ignores endermen: no hostile, no swing; zombie beside one still targeted (3lfs)', () => {
+    const bot = mockBot()
+    bot.entities = { 8: mobEntity(8, 'enderman', 3) }
+    assert.equal(isFightTarget(bot.entities[8], pos(0, 64, 0), null), false)
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.hostile, null)
+    assert.equal(require('../src/reflexes').meleeReflex(bot, {}, state), false)
+    assert.equal(bot.calls.attack, 0)
+    const zombie = mobEntity(1, 'zombie', 5)
+    bot.entities[1] = zombie
+    assert.equal(buildState(bot, playerEntity(10), null).hostile, zombie)
+  })
+
   it('never ranks players or passive mobs as hostiles', () => {
     const bot = mockBot()
     const zombie = mobEntity(1, 'zombie', 5)

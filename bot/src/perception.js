@@ -13,13 +13,15 @@ const HOSTILE_NAMES = new Set([
 const FIGHT_RANGE_BOT = 8
 const FIGHT_RANGE_PLAYER = 6
 
+// ponytail: endermen are excluded too (3lfs): neutral until hit or stared at,
+// one lookAt+attack provokes a 7-heart hit that kills the unarmoured bot.
 // ponytail: creepers are excluded from fight targets — hitting one near the
 // player makes it explode next to the player. Fleeing is a tick-level reflex
 // instead (fleeReflex in index.js), never a brain action or an attack.
 function isFightTarget(entity, botPos, playerPos) {
   if (!entity || entity.type === 'player' || !entity.position) return false
   const name = entity.name || ''
-  if (!HOSTILE_NAMES.has(name) || name === 'creeper') return false
+  if (!HOSTILE_NAMES.has(name) || name === 'creeper' || name === 'enderman') return false
   if (entity.position.distanceTo(botPos) <= FIGHT_RANGE_BOT) return true
   return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
 }

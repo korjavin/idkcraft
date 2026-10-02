@@ -98,7 +98,8 @@ function nameAt(bot, c) {
 
 // Entrance apron stance (blueprint ENTRANCE) in world coords for the site.
 function entrance(st) {
-  const e = blueprint.rotatePlan([{ ...blueprint.ENTRANCE, kind: 'air' }], st.rot | 0)[0]
+  const bp = blueprint.blueprintOf(st.blueprintVersion)
+  const e = blueprint.rotatePlan([{ ...bp.ENTRANCE, kind: 'air' }], st.rot | 0, bp.version)[0]
   return { x: st.site.x + e.dx, y: st.site.y + e.dy, z: st.site.z + e.dz }
 }
 
@@ -107,7 +108,8 @@ function done(bot, c) {
   return blueprint.matches(c.kind, nameAt(bot, c))
 }
 function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
-function bkey(idx) { return `${blueprint.BLUEPRINT_VERSION}:${idx}` }
+function ver(st) { return blueprint.blueprintOf(st && st.blueprintVersion).version }
+function bkey(st, idx) { return `${ver(st)}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
 
 function bodyPos(bot) {
@@ -116,7 +118,7 @@ function bodyPos(bot) {
 }
 
 function blockCell(ctx, st, c, why, now) {
-  const k = bkey(c.idx)
+  const k = bkey(st, c.idx)
   const e = st.blocked[k] || { tries: 0, until: 0 }
   e.tries++
   e.until = now + backoffMs(e.tries)
@@ -139,11 +141,19 @@ function strike(ctx, st, c, why, now) {
 // Work order = plan order with the door deferred past every other place
 // cell (revmux 01): A* never opens doors (canOpenDoors=false) and the laid
 // door is break-vetoed, so the doorway stays an open passage while the bot
-// still needs the interior. Indices stay plan indices (blocked keys).
+// still needs the interior. Then the keep-clear cells, the moat digs (v2,
+// g0z.6: the bridge deck is an ordinary place cell, so it exists before
+// any dig) and the fence ring last. Indices stay plan indices (blocked keys).
+const RANK = { door: 1, air: 2, dig: 3, fence: 4 }
+function rank(c) { return RANK[c.kind] || 0 }
+// Interior work (g0z.6): an undone cell ranked before the moat. While one
+// is left — blocked, gated or not — no moat cell is dug, so the bot never
+// has to cross a dug moat to finish the castle; later repairs cross the
+// bridge, which is laid before any dig.
+function interior(c) { return rank(c) < RANK.dig }
 let orderCache = null
 function workOrder(cells, key) {
   if (orderCache && orderCache.key === key) return orderCache.order
-  const rank = (c) => (clearing(c) ? 2 : c.kind === 'door' ? 1 : 0)
   const order = cells.map((c) => c.idx).sort((a, b) => rank(cells[a]) - rank(cells[b]) || a - b)
   orderCache = { key, order }
   return order
@@ -159,7 +169,7 @@ function pick(bot, ctx, st, cells, key, now) {
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
-    if (Number(v) !== blueprint.BLUEPRINT_VERSION || !c || done(bot, c)) { delete st.blocked[k]; continue }
+    if (Number(v) !== ver(st) || !c || done(bot, c)) { delete st.blocked[k]; continue }
     if (st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
@@ -167,12 +177,15 @@ function pick(bot, ctx, st, cells, key, now) {
     if (full) { ctx.castleScanKey = key; ctx.castleScanAt = now }
     let first = -1
     let waiting = null
+    let inside = false
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
-      const b = st.blocked[bkey(c.idx)]
+      if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
+      if (interior(c)) inside = true
+      const b = st.blocked[bkey(st, c.idx)]
       if (b && b.until > now) { waiting = waiting || c; continue }
       if (!clearing(c) && c.dy > gateDy) { waiting = waiting || c; break }
       ctx.castleCursor = first
@@ -193,24 +206,27 @@ function peek(bot, st, now, ctx) {
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
     const bl = st.blocked || {}
-    return { cell: list.find((c) => !done(bot, c) && !(bl[bkey(c.idx)] && bl[bkey(c.idx)].until > now)) || null, waiting: null, cells: list }
+    return { cell: list.find((c) => !done(bot, c) && !(bl[bkey(st, c.idx)] && bl[bkey(st, c.idx)].until > now)) || null, waiting: null, cells: list }
   }
-  const { cells, key } = blueprint.absPlan(st.site, st.rot)
+  const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
   const complete = st.phase === 'complete'
   let gateDy = Infinity
   for (const k of Object.keys(blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
-    if (Number(v) !== blueprint.BLUEPRINT_VERSION || !c || !blocked[k] || done(bot, c)) continue
+    if (Number(v) !== ver(st) || !c || !blocked[k] || done(bot, c)) continue
     if (blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
   }
   let waiting = null
+  let inside = false
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
-    const b = blocked[bkey(c.idx)]
+    if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
+    if (interior(c)) inside = true
+    const b = blocked[bkey(st, c.idx)]
     if (b && b.until > now) { waiting = waiting || c; continue }
     if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
     return { cell: c, waiting: null, cells }
@@ -256,8 +272,8 @@ function scanColumn(bot, x, z, sy) {
 }
 
 // Order-time check: null when the footprint is acceptable, else the reason.
-function siteCheck(bot, site, rot) {
-  const { w, d } = blueprint.siteDimensions(rot | 0)
+function siteCheck(bot, site, rot, version) {
+  const { w, d } = blueprint.siteDimensions(rot | 0, version)
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
       const x = site.x + dx
@@ -289,10 +305,10 @@ function prepTargets(bot, ctx, st, now) {
     const live = c0.list.filter((c) => !done(bot, c))
     if (live.length || c0.list.length === 0) return live // a list that filtered to empty is rescanned once
   }
-  const { w, d } = blueprint.siteDimensions(st.rot | 0)
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, y: sy, z: sz } = st.site
   const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 2)
-  const floor = new Set(blueprint.absPlan(st.site, st.rot).cells
+  const floor = new Set(blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
     .filter((c) => c.dy === 0 && !clearing(c)).map((c) => `${c.x},${c.z}`))
   const logs = []
   const fills = []
@@ -339,11 +355,12 @@ function menuFact(bot, ctx, now = Date.now()) {
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
   try {
-    // Loaded = all four footprint corners read (revmux 02): the site spans
-    // at most 2x2 chunks, so the corners cover every chunk it touches.
+    // Loaded = all four footprint corners read (revmux 02): the v1 site
+    // spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
+    // chunks lie inside the corners' hull — the loaded area is convex.
     let loaded = false
     try {
-      const { w, d } = blueprint.siteDimensions(st.rot | 0)
+      const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
       loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
     } catch (_) { loaded = false }
     if (!loaded) {
@@ -351,7 +368,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
       if (last && last.word) return last.word
-      const { cells, key } = blueprint.absPlan(st.site, st.rot)
+      const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
     const r = peek(bot, st, now, ctx)
@@ -378,7 +395,7 @@ function menuFact(bot, ctx, now = Date.now()) {
 // read live from the world (blocked never counts as done).
 function progressByKind(bot, st) {
   const out = {}
-  for (const c of blueprint.absPlan(st.site, st.rot).cells) {
+  for (const c of blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells) {
     if (clearing(c)) continue
     const e = out[c.kind] || (out[c.kind] = { done: 0, total: 0 })
     e.total++
@@ -593,12 +610,55 @@ function digCell(bot, ctx, st, c, now) {
   }
   flight(ctx, 'digInFlight', c, async (token) => {
     try {
+      // Harvest tool first (flat digFlight): stone by hand drops nothing,
+      // and the spoil is kept — cobble counts for the castle (g0z.6).
+      let tool = null
+      try { tool = typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { tool = null }
+      if (tool) await bot.equip(tool, 'hand')
       await bot.dig(b)
-      if (live(ctx, token)) ctx.castleFails = null
+      if (live(ctx, token)) {
+        ctx.castleFails = null
+        if (spoilWalk(st, c)) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
+      }
     } catch (_) {
       if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
     }
   })
+}
+
+// Spoil pickup (g0z.6, flat's shave-pickup pattern): after a moat dig, walk
+// onto the drop so it lands in the inventory. A drop 2+ above the feet
+// would need a tower, one out of dig reach is stale (the bot left between
+// ticks) — both left. True while the walk owns the tick.
+// ponytail: the drop is assumed at the dug cell (moat digs: it is); a drop
+// that rolled away stays as litter after PICKUP_TICKS.
+const PICKUP_TICKS = 6
+// Moat digs only, and never a cell under a planned block (revmux 01 core-1):
+// the dug cell itself is then the standable node GoalNear(.., 1) needs. A
+// bridge column under the deck has none (A* would dig one), and a place
+// cell's occupant dig would walk the body into the cell it lays next.
+function spoilWalk(st, c) {
+  if (c.kind !== 'dig') return false
+  const above = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${c.x},${c.y + 1},${c.z}`)
+  return !(above && blueprint.isPlaceTarget(above.kind))
+}
+function pickup(bot, ctx) {
+  const p = ctx.castlePickup
+  const bp = bodyPos(bot)
+  const far = bp && Math.hypot(bp.x - p.x - 0.5, bp.z - p.z - 0.5) > flat.REACH_DIG
+  if (!bp || far || p.y - Math.floor(bp.y) >= 2 || ++p.ticks > PICKUP_TICKS) { ctx.castlePickup = null; return false }
+  if (p.ticks === 1) {
+    try {
+      ctx.castleGoal = new goals.GoalNear(p.x, p.y, p.z, 1)
+      ctx.castleGoalIdx = -1
+      bot.pathfinder.setGoal(ctx.castleGoal)
+    } catch (_) { ctx.castlePickup = null; return false }
+    return true
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (!moving) ctx.castlePickup = null
+  return moving
 }
 
 // Castle guard for the pathfinder (every executor): laid castle blocks are
@@ -631,7 +691,7 @@ function guardCastle(bot, ctx) {
         const st = ctx.castle
         const q = block && block.position
         if (!st || !st.site || !q) return 0
-        const { w, d } = blueprint.siteDimensions(st.rot | 0)
+        const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
         const dx = q.x - st.site.x
         const dy = q.y - st.site.y
         const dz = q.z - st.site.z
@@ -679,14 +739,15 @@ function castle(bot, ctx) {
     // settlement is ignored through the token.
     ctx[fl.kind] = false
     ctx.castleFlight = null
-    const c = fl.cell || blueprint.absPlan(st.site, st.rot).cells[fl.idx]
+    const c = fl.cell || blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells[fl.idx]
     if (c) strike(ctx, st, c, 'flight-hang', now)
   }
   if (ctx.placeInFlight || ctx.digInFlight) return
   guardCastle(bot, ctx)
+  if (ctx.castlePickup && pickup(bot, ctx)) return
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
-    const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(o.idx)] && st.blocked[bkey(o.idx)].until > now))
+    const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
     if (c) {
       if (!ctx.castlePrepSaid) {
         ctx.castlePrepSaid = true
@@ -702,7 +763,7 @@ function castle(bot, ctx) {
       try { bot.chat('castle site ready, starting to build') } catch (_) { /* chat best-effort */ }
     }
   }
-  const { cells, key } = blueprint.absPlan(st.site, st.rot)
+  const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
   if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
