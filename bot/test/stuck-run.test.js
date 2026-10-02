@@ -79,6 +79,77 @@ describe('stuck-run.sh rig lock (idkcraft-3on)', () => {
   })
 })
 
+// idkcraft-qd9s: parallel rigs. RIG_ID=<letter> suffixes lock, container,
+// port and data dir; RIG_ID=auto takes the first free slot. A fake `docker`
+// that reports the rig's container as running stops the run right after the
+// rig is derived — no real docker needed.
+describe('stuck-run.sh parallel rigs (idkcraft-qd9s)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const sh = path.join(__dirname, '..', 'tools', 'stuck-run.sh')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rigs-'))
+  const lock = path.join(tmp, 'lock')
+  const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, RIG_LOCK: lock, ...env } })
+  const hold = (p) => { fs.mkdirSync(p); fs.writeFileSync(path.join(p, 'pid'), String(process.pid)) }
+
+  it('RIG_ID=a locks its own path, not the default rig', () => {
+    hold(lock)
+    assert.match(run({ RIG_ID: 'a' }).stdout, /no START\.sh/) // got past the lock
+    assert.equal(fs.existsSync(lock + '-a'), false, 'rig a lock leaked')
+    hold(lock + '-a')
+    assert.match(run({ RIG_ID: 'a' }).stdout, /rig busy: .*lock-a/)
+    fs.rmSync(lock + '-a', { recursive: true })
+    fs.rmSync(lock, { recursive: true })
+  })
+
+  it('RIG_ID=auto takes the first free slot and is busy only when all are held', () => {
+    hold(lock)
+    assert.match(run({ RIG_ID: 'auto', RIG_SLOTS: '0 a' }).stdout, /no START\.sh/)
+    hold(lock + '-a')
+    const b = run({ RIG_ID: 'auto', RIG_SLOTS: '0 a' })
+    assert.equal(b.status, 2)
+    assert.match(b.stdout, /rig busy/)
+    fs.rmSync(lock + '-a', { recursive: true })
+    fs.rmSync(lock, { recursive: true })
+  })
+
+  it('derives the rig from START.sh: seeded data minus world, renamed container and port', () => {
+    const src = path.join(tmp, 'replay-data', 'paper-base')
+    fs.mkdirSync(path.join(src, 'world'), { recursive: true })
+    fs.writeFileSync(path.join(src, 'server.properties'), 'x')
+    fs.writeFileSync(path.join(tmp, 'world.tar'), '')
+    fs.writeFileSync(path.join(tmp, 'START.sh'),
+      'D="$(dirname "$0")/replay-data/$V"\nexec docker run --rm --name idk-replay -v "$D:/data" \\\n  -p 25571:25565 img\n', { mode: 0o755 })
+    const bin = path.join(tmp, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\necho idk-replay-b\n', { mode: 0o755 })
+    const r = run({ RIG_ID: 'b', PATH: `${bin}:${process.env.PATH}` })
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /rig b: container idk-replay-b, port 25573/)
+    assert.match(r.stdout, /idk-replay-b already running/) // the guard checks the rig's container
+    const rig = path.join(tmp, 'rigs', 'b')
+    const start = fs.readFileSync(path.join(rig, 'START.sh'), 'utf8')
+    assert.match(start, /--name idk-replay-b -v/)
+    assert.match(start, /-p 25573:25565/)
+    assert.ok(fs.existsSync(path.join(rig, 'replay-data', 'paper-base', 'server.properties')), 'not seeded')
+    assert.equal(fs.existsSync(path.join(rig, 'replay-data', 'paper-base', 'world')), false, 'seed copied world/')
+    assert.equal(fs.existsSync(lock + '-b'), false, 'rig b lock leaked')
+  })
+
+  it('a START.sh without the expected tokens fails loud instead of booting the default rig', () => {
+    fs.writeFileSync(path.join(tmp, 'START.sh'), 'exec docker run --name other -p 1:1 img\n', { mode: 0o755 })
+    const r = run({ RIG_ID: 'c' })
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /cannot derive rig c/)
+  })
+
+  it('rejects a RIG_ID that is not one letter', () => {
+    const r = run({ RIG_ID: 'ab' })
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /RIG_ID must be one letter/)
+  })
+})
+
 // idkcraft-3ro root cause: every replay spot sits inside the
 // spawn-protection radius (r=16 around (-48,65,-208)), and Paper enforces
 // protection once ops.json is non-empty — one afternoon op armed it for
