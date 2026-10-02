@@ -95,6 +95,7 @@ describe('perception hostile facts', () => {
     assert.equal(isFightTarget(bot.entities[8], pos(0, 64, 0), null), false)
     const state = buildState(bot, playerEntity(10), null)
     assert.equal(state.hostile, null)
+    assert.equal(require('../src/reflexes').meleeReflex(bot, {}, state), false)
     assert.equal(bot.calls.attack, 0)
     const zombie = mobEntity(1, 'zombie', 5)
     bot.entities[1] = zombie

@@ -477,7 +477,9 @@ const CREEPER_FLEE_RANGE = 6
 const CREEPER_FLEE_DIST = 6
 function fleeReflex(bot, ctx) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
-  if (ctx.inShelter) return false
+  // inShelter alone is not enough (home.js sets it on the open-air night pillar
+  // too), so require the body to be inside the home box.
+  if (ctx.inShelter && ctx.home && require('./behaviours/home').isInside(bot, ctx.home)) return false // deferred: home loads reflexes
   let creeper = null
   try { creeper = findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
   if (!creeper) { ctx.fleeTargetId = null; return false }
