@@ -14,9 +14,10 @@
 // danger being fixed. done when every planned spot burns or is skipped,
 // with the placed count on the `torches placed N` line.
 //
-// Torch economy: fuel is coal + charcoal with COAL_RESERVE kept back —
-// never spend the last coal (a furnace load stays for whoever burns
-// next). Sticks come from sticks, planks, then logs (equip toolOp order).
+// Torch economy: charcoal plus coal above COAL_RESERVE — never spend the
+// last coal (a furnace load stays for whoever burns next). No fuel and a
+// home furnace: smelt a log into charcoal (33vm). Sticks come from sticks,
+// planks, then logs (equip toolOp order).
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
@@ -33,6 +34,9 @@ const REFUSALS_TO_SKIP = 3
 const STILL_TICKS = 10 // no-progress watchdog: moving but stationary this long re-paths
 const STILL_RADIUS = 1 // anchor radius: leaving it (XZ) reads as progress
 const CRAFT_TIMEOUT_MS = 30000
+const SMELT_WAIT_MS = 12000 // one log cooks in 10 s, plus slop
+const SMELT_TRIES = 3 // dry collects before failed:smelt-stalled
+const SMELT_WALK_TICKS = 30 // furnace walk give-up
 
 // Spot plan: offsets from home.site (ground level unless dy). Door-front
 // first (the mob door), then a ring around the 4x4 shell, then the roof,
@@ -59,7 +63,7 @@ const LIGHT_SPOTS = [
   { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } },
   // Interior: the torch goes through the doorway from the staged ground
   // (no entry, no door phases). The door cell itself is never taken.
-  { dx: 2, dz: 2, stage: { dx: 1, dz: -1 } },
+  { dx: 2, dz: 2, stage: { dx: 1, dz: -1 }, interior: true },
 ]
 
 // v2 house (jr2.1): door-front first, a ring around the 7x6 shell, the roof
@@ -73,7 +77,7 @@ const LIGHT_SPOTS_V2 = [
   { dx: -2, dz: 4 }, { dx: 8, dz: 4 },
   { dx: 3, dz: 7 },
   { dx: 3, dy: 3, dz: 1, stage: { dx: 3, dz: -1 } },
-  { dx: 1, dz: 1, stage: { dx: 3, dz: -1 } },
+  { dx: 1, dz: 1, stage: { dx: 3, dz: -1 }, interior: true },
 ]
 
 // Spot plan by home version: v2 homes light the 7x6 ring, anything else
@@ -139,10 +143,14 @@ function countUnlit(bot, home, skipped) {
   return n
 }
 
+// Interior spots first (33vm: mobs spawned in the dark room and killed the
+// bot in stay six times a night), then the plan order. Indices stay the
+// plan's, so skip lists and the place flow are untouched.
 function nextSpotIdx(bot, home, skipped) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
   const spots = spotsFor(home)
-  for (let i = 0; i < spots.length; i++) {
+  const order = spots.map((_, i) => i).sort((a, b) => (spots[b].interior ? 1 : 0) - (spots[a].interior ? 1 : 0))
+  for (const i of order) {
     if (skip.has(i) || spotSkipped(home, spots[i])) continue
     try {
       if (!spotLit(bot, home, spots[i])) return i
@@ -169,15 +177,54 @@ function fail(ctx, reason) {
   ctx.stepStatus = reason
 }
 
+// Spendable torch fuel (33vm): charcoal always — the bot smelts it from
+// logs for exactly this — plus coal above COAL_RESERVE (smelting's share,
+// never torched). Pure: goal.js feasible feeds it the facts.
+function spendableFuel(coal, charcoal) {
+  return (charcoal || 0) + Math.max(0, (coal || 0) - COAL_RESERVE)
+}
+
+// Charcoal path wood rule (33vm), shared with goal.js feasible: a log to
+// burn plus a plank of fuel (or a second log to cut planks from); the
+// leftover planks make the sticks.
+function charcoalWood(logs, planks, maxPlanks, sticks) {
+  if (logs >= 2) return true
+  return logs >= 1 && planks >= 1 && (sticks > 0 || maxPlanks >= 3)
+}
+
+function furnaceSpotFor(bot, ctx) {
+  try { return require('./furnace').furnaceReady(bot, ctx) } catch (_) { return null } // deferred: furnace.js requires this module
+}
+
 // One torch op, equip toolOp order: torches from fuel+sticks, else sticks
-// from planks, else planks from logs. Fuel below the reserve fails — the
-// step yields and forage may bring coal (goal.js feasible mirrors this).
-function torchOp(bot) {
-  const fuel = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
-  if (fuel - COAL_RESERVE <= 0) return { fail: 'failed:no-fuel' }
+// from planks, else planks from logs. No spendable fuel: the charcoal path
+// (smelt, or planks for its fuel) when a home furnace stands, else fail —
+// the step yields and forage may bring coal (goal.js feasible mirrors this).
+function torchOp(bot, ctx) {
+  const coal = countItems(bot, (n) => n === 'coal')
+  if (spendableFuel(coal, countItems(bot, (n) => n === 'charcoal')) <= 0) {
+    if (ctx && typeof ctx.lightSmeltAt === 'number') return { smelt: true } // a log is cooking: collect it
+    const logs = craftMod.tally(bot, '_log')
+    const planks = craftMod.tally(bot, '_planks')
+    const logN = [...logs.values()].reduce((a, b) => a + b, 0)
+    const plankN = [...planks.values()].reduce((a, b) => a + b, 0)
+    const maxPlanks = plankN > 0 ? craftMod.sortedWoods(planks)[0][1] : 0
+    const sticks = countItems(bot, (n) => n === 'stick')
+    if (!ctx || !charcoalWood(logN, plankN, maxPlanks, sticks) || !furnaceSpotFor(bot, ctx)) return { fail: 'failed:no-fuel' }
+    if (plankN > 0) return { smelt: true }
+    const [wood] = craftMod.sortedWoods(logs)[0]
+    const found = craftMod.recipes(bot, `${wood}_planks`, null)
+    if (found.length > 0) return { item: `${wood}_planks`, recipe: found[0], count: 1, table: null }
+    return { fail: 'failed:no-planks-recipe' }
+  }
   const sticks = countItems(bot, (n) => n === 'stick')
   if (sticks > 0) {
-    const found = craftMod.recipes(bot, 'torch', null)
+    let found = craftMod.recipes(bot, 'torch', null)
+    if (coal <= COAL_RESERVE) {
+      // Only charcoal is spendable: never take a coal recipe.
+      const charId = craftMod.itemId(bot, 'charcoal')
+      found = found.filter((r) => !Array.isArray(r && r.delta) || r.delta.some((d) => d && d.id === charId))
+    }
     if (found.length > 0) return { item: 'torch', recipe: found[0], count: 1, table: null }
     return { fail: 'failed:no-torch-recipe' }
   }
@@ -197,11 +244,105 @@ function torchOp(bot) {
   return { fail: 'failed:no-sticks' }
 }
 
+function plankId(bot) {
+  const planks = craftMod.sortedWoods(craftMod.tally(bot, '_planks'))
+  return planks.length > 0 ? craftMod.itemId(bot, `${planks[0][0]}_planks`) : null
+}
+
+// One charcoal op (33vm), furnace.js window shape: walk into reach, then
+// one flight — take any output; nothing taken and an empty input loads one
+// log plus (empty fuel slot) one plank and stamps lightSmeltAt; collects
+// wait a cook (SMELT_WAIT_MS). A log that never cooks fails after
+// SMELT_TRIES collects; an input slot busy with another job (iron) is
+// never touched (failed:furnace-busy).
+function smeltTick(bot, ctx) {
+  const spot = furnaceSpotFor(bot, ctx)
+  if (!spot) {
+    ctx.lightSmeltAt = null
+    fail(ctx, 'failed:no-furnace')
+    return
+  }
+  if (typeof ctx.lightSmeltAt === 'number' && Date.now() - ctx.lightSmeltAt < SMELT_WAIT_MS) return // cooking
+  const reach = require('./furnace').FURNACE_REACH
+  const bp = bot.entity && bot.entity.position
+  if (bp && Math.hypot(bp.x - spot.x, bp.y - spot.y, bp.z - spot.z) > reach) {
+    if (ctx.lightGoalIdx !== 'furnace') {
+      ctx.lightGoalIdx = 'furnace' // placeTick re-aims its spot after this leg
+      ctx.lightSmeltWalk = 0
+      try { bot.pathfinder.setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 3)) } catch (_) { /* retry next tick */ }
+    }
+    ctx.lightSmeltWalk = (ctx.lightSmeltWalk || 0) + 1
+    if (ctx.lightSmeltWalk > SMELT_WALK_TICKS) {
+      ctx.lightGoalIdx = -1
+      fail(ctx, 'failed:furnace-unreachable')
+    }
+    return
+  }
+  let block = null
+  try { block = bot.blockAt(new Vec3(spot.x, spot.y, spot.z)) } catch (_) { block = null }
+  if (!block || typeof bot.openFurnace !== 'function') return // unloaded: wait
+  ctx.lightCraftInFlight = true
+  void (async () => {
+    let win = null
+    try {
+      win = await bot.openFurnace(block)
+      const out = win.outputItem()
+      let took = false
+      if (out && out.count > 0) {
+        await win.takeOutput()
+        took = true
+      }
+      const inp = win.inputItem()
+      if (inp && !String(inp.name).endsWith('_log')) {
+        ctx.lightSmeltAt = null
+        fail(ctx, 'failed:furnace-busy')
+      } else if (took) {
+        ctx.lightSmeltAt = null
+        ctx.lightSmeltTries = 0
+        metrics.light.inc({ op: 'charcoal' })
+      } else if (!inp) {
+        const logs = craftMod.sortedWoods(craftMod.tally(bot, '_log'))
+        if (logs.length === 0) throw new Error('no-log')
+        await win.putInput(craftMod.itemId(bot, `${logs[0][0]}_log`), null, 1)
+        if (!win.fuelItem()) {
+          const pid = plankId(bot)
+          if (pid == null) throw new Error('no-plank')
+          await win.putFuel(pid, null, 1)
+        }
+        ctx.lightSmeltAt = Date.now()
+        ctx.lightSmeltTries = 0
+      } else {
+        // A log in the slot, nothing out yet: a cold furnace gets a plank,
+        // a few dry collects give up.
+        ctx.lightSmeltTries = (ctx.lightSmeltTries || 0) + 1
+        if (ctx.lightSmeltTries > SMELT_TRIES) {
+          ctx.lightSmeltAt = null
+          fail(ctx, 'failed:smelt-stalled')
+        } else {
+          const pid = plankId(bot)
+          if (!win.fuelItem() && pid != null) await win.putFuel(pid, null, 1)
+          ctx.lightSmeltAt = Date.now()
+        }
+      }
+    } catch (_) {
+      ctx.lightSmeltAt = null
+      fail(ctx, 'failed:smelt')
+    } finally {
+      try { if (win && typeof bot.closeWindow === 'function') bot.closeWindow(win) } catch (_) { /* close best-effort */ }
+      ctx.lightCraftInFlight = false
+    }
+  })()
+}
+
 // Async craft flight, equip craftOne shape: exactly-once settlement on a
 // deadline (a hung window fails loudly, never freezes the menu with the
 // flag stuck). decide() holds the step while the flag flies.
 function craftTick(bot, ctx) {
-  const op = torchOp(bot)
+  const op = torchOp(bot, ctx)
+  if (op && op.smelt) {
+    smeltTick(bot, ctx)
+    return
+  }
   if (!op || op.fail) {
     fail(ctx, (op && op.fail) || 'failed:no-op')
     return
@@ -447,6 +588,8 @@ function light(bot, ctx) {
     ctx.lightGoalIdx = -1
     ctx.lightPlaced = 0
     ctx.lightLineDone = false
+    ctx.lightSmeltAt = null
+    ctx.lightSmeltTries = 0
   }
   if (!Array.isArray(ctx.lightSkip)) ctx.lightSkip = []
   const idx = nextSpotIdx(bot, home, ctx.lightSkip)
@@ -476,3 +619,6 @@ module.exports.countUnlit = countUnlit
 module.exports.nextSpotIdx = nextSpotIdx
 module.exports.spotLit = spotLit
 module.exports.torchOp = torchOp
+module.exports.spendableFuel = spendableFuel
+module.exports.charcoalWood = charcoalWood
+module.exports.SMELT_WAIT_MS = SMELT_WAIT_MS

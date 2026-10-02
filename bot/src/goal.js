@@ -211,7 +211,14 @@ const MENU = {
       if (facts.home !== 'built') return false
       if (!(facts.unlit > 0)) return false
       if ((facts.torches || 0) > 0) return true
-      if ((facts.coal || 0) <= require('./behaviours/light').COAL_RESERVE) return false
+      const lm = require('./behaviours/light')
+      if (lm.spendableFuel((facts.coal || 0) - (facts.charcoal || 0), facts.charcoal) <= 0) {
+        // 33vm charcoal path: a log cooking, or wood plus a standing home
+        // furnace (light.js torchOp mirror) — never coal below the reserve.
+        if (ctx && typeof ctx.lightSmeltAt === 'number') return true
+        if (!lm.charcoalWood(facts.logs || 0, facts.planks || 0, facts.maxPlanks || 0, facts.sticks || 0)) return false
+        try { return !!require('./behaviours/furnace').furnaceReady(bot, ctx) } catch (_) { return false }
+      }
       // maxPlanks, not planks: stick recipes cannot mix woods (01 minor).
       return (facts.sticks || 0) > 0 || (facts.maxPlanks || 0) >= 2 || (facts.logs || 0) >= 1
     },
@@ -797,6 +804,7 @@ function goalFacts(bot, ctx) {
   const cobble = countItems(bot, (n) => n === 'cobblestone')
   const sticks = countItems(bot, (n) => n === 'stick')
   const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
+  const charcoal = countItems(bot, (n) => n === 'charcoal') // 33vm: coal above holds both; light spends charcoal past the reserve
   const torches = countItems(bot, (n) => n === 'torch')
   const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
   const ironOre = countItems(bot, (n) => n === 'raw_iron')
@@ -967,7 +975,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -1296,9 +1304,9 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (!(facts.unlit > 0)) return 'light: yard lit'
       // Torches on hand with a dark yard is feasible (null above), so only
       // the fuel branches remain.
-      let reserve = 4
-      try { reserve = require('./behaviours/light').COAL_RESERVE } catch (_) { /* mirror default */ }
-      if ((facts.coal || 0) <= reserve) return 'light: saving coal'
+      let spendable = 0
+      try { spendable = require('./behaviours/light').spendableFuel((facts.coal || 0) - (facts.charcoal || 0), facts.charcoal) } catch (_) { /* reads no fuel */ }
+      if (spendable <= 0) return ctx && ctx.home && ctx.home.furnace ? 'light: no fuel, too little wood for charcoal' : 'light: no fuel and no furnace for charcoal'
       return 'light: no sticks or wood'
     }
     case 'castle': {

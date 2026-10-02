@@ -780,7 +780,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log('shelter-run: holding fight preemption, walking home')
         ctx.shelterRunLogged = true
       }
-      if (ctx.inShelter && decision.action === 'fight') {
+      // 33vm: a hostile already INSIDE the interior box is fought (prod: six
+      // deaths standing idle in stay with a zombie at 0.7); the pin keeps
+      // fight's sticky target off an incumbent outside the wall.
+      const intruder = ctx.inShelter && decision.action === 'fight' && state.hostile && ctx.home &&
+        homeMod.isInside({ entity: state.hostile }, ctx.home)
+      if (intruder) ctx.fightId = state.hostile.id
+      if (ctx.inShelter && decision.action === 'fight' && !intruder) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
