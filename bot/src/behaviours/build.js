@@ -38,6 +38,7 @@
 const Vec3 = require('vec3')
 const { denyReason, logDeny } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
+const stuck = require('../stuck')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -208,6 +209,19 @@ function isDoorwayOrInterior(cell, home) {
   return cell.dx >= 1 && cell.dx <= 2 && cell.dz >= 1 && cell.dz <= 2 && cell.dy <= 1
 }
 
+// A wall/door/partition/roof cell of the home's plan (d7i): the equip step
+// never drops its station there (rig: it landed in the doorway and the door
+// could never be placed). The table cell is excluded — any table there IS
+// the home table — and fill cells sit below ground.
+function isPlanCell(home, x, y, z) {
+  try {
+    if (!home || !home.site) return false
+    const s = home.site
+    return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' &&
+      s.x + c.dx === x && s.y + c.dy === y && s.z + c.dz === z)
+  } catch (_) { return false }
+}
+
 function blockNameAt(bot, p) {
   try {
     const b = bot.blockAt(p)
@@ -243,11 +257,27 @@ function cellDone(bot, home, cell) {
 function nextCellIdx(bot, home, skipped) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
   const plan = blueprintFor(home)
-  for (let i = 0; i < plan.length; i++) {
+  for (const i of (home && home.v === 2 ? v2Order(plan) : plan.keys())) {
     if (skip.has(i)) continue
     if (!cellDone(bot, home, plan[i])) return i
   }
   return -1
+}
+
+// v2 visit order (idkcraft-d7i): the partition is laid right before the
+// door, not after the roof. The pathfinder never opens doors, so once the
+// door stood the interior was sealed and the last 7-8 posts were never
+// reachable (rig: 92/99, TIMEOUT) — or the body got in first and wedged in
+// the roofed bedroom (page). Before the door the doorway is open and the
+// walls are one high. Indices stay the blueprint's (persisted skips key on
+// them); only the visiting order changes.
+function v2Order(plan) {
+  const isPartition = (c) => c.kind === 'planks' && c.dy <= 1 && c.dz >= 3 && c.dz <= 4 && c.dx >= 1 && c.dx <= 5
+  const idx = [...plan.keys()]
+  const part = idx.filter((i) => isPartition(plan[i]))
+  const rest = idx.filter((i) => !isPartition(plan[i]))
+  const door = rest.findIndex((i) => plan[i].kind === 'door')
+  return door < 0 ? idx : [...rest.slice(0, door), ...part, ...rest.slice(door)]
 }
 
 // Remaining loose planks to lay (door/table need items, not planks). Without
@@ -395,6 +425,7 @@ function skipCell(ctx, idx, p, why) {
   ctx.buildAnchor = null
   if (why === 'cell-budget') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_TICK_BUDGET} ticks without progress (${why})`)
   else if (why === 'cell-hard-cap') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_HARD_CAP} ticks on one cell (${why})`)
+  else if (why === 'wedged') console.log(`build skip ${p.x} ${p.y} ${p.z} after a gave-up recover episode (${why})`)
   else console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
 }
 
@@ -420,6 +451,25 @@ function pruneBuildSkips(ctx, now) {
     }
     ctx.buildSkipAt = keep
   } catch (_) { /* prune best-effort */ }
+}
+
+// A release latch born while this cell was current (not the one seen at
+// cell start), anchored near it, after build itself saw the stall build up
+// on this cell (d7i): the detector counts 30 still ticks before it raises,
+// and build ticks through them, so a latch from another step's wedge (an
+// equip dig beside the house) never skips a house cell. ponytail: 8
+// blocks ≈ the house diagonal plus reach; a wedge on a long approach walk
+// farther out keeps the stall budget.
+const WEDGE_RADIUS = 8
+const WEDGE_STILLS = 10
+const WEDGE_WINDOW_MS = 120000
+function wedgeLatched(ctx, p, idx) {
+  try {
+    const L = ctx.recoverLatch
+    if (ctx.buildSuspectIdx !== idx || !(Date.now() - (ctx.buildSuspectAt || 0) < WEDGE_WINDOW_MS)) return false
+    if (!L || L === ctx.buildLatchSeen || !L.at || typeof L.at.x !== 'number') return false
+    return Math.hypot(L.at.x - (p.x + 0.5), L.at.z - (p.z + 0.5)) <= WEDGE_RADIUS
+  } catch (_) { return false }
 }
 
 function walkToSite(bot, ctx, p) {
@@ -536,8 +586,28 @@ function build(bot, ctx, target, state) {
       ctx.buildCellIdx = idx
       ctx.buildStallTicks = 0
       ctx.buildHardTicks = 0
+      ctx.buildLatchSeen = ctx.recoverLatch || null
+      ctx.buildSuspectIdx = -1
       const bpc = bot.entity && bot.entity.position
       ctx.buildAnchor = bpc && typeof bpc.x === 'number' ? { x: bpc.x, y: bpc.y, z: bpc.z } : null
+    }
+    // Gave-up wedge (idkcraft-d7i): a recover episode on this cell ended
+    // gave-up (the release latch is new since the cell started and anchored
+    // at the cell) — the menu already spent its budget here, and the latch
+    // now holds every re-wedge out of the menu, so the stall budget would
+    // only burn minutes more. Skip it like 3 refusals.
+    // Armed by a real stall only (revmux 02 minor): 10+ still ticks seen
+    // under build on this cell, recently — the episode follows the 30th
+    // still tick and runs well under the window, so a stall build saw long
+    // before another step's wedge never arms it.
+    const sv = stuck.verdict(ctx)
+    if ((sv.state === 'SUSPECT' || sv.state === 'STUCK') && sv.stills >= WEDGE_STILLS) {
+      ctx.buildSuspectIdx = idx
+      ctx.buildSuspectAt = Date.now()
+    }
+    if (wedgeLatched(ctx, p, idx)) {
+      skipCell(ctx, idx, p, 'wedged')
+      return
     }
     if (idx > (typeof ctx.buildMaxIdx === 'number' ? ctx.buildMaxIdx : -1)) {
       ctx.buildMaxIdx = idx
@@ -603,7 +673,15 @@ function build(bot, ctx, target, state) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
-    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE })) } catch (_) { /* retry next tick */ }
+    // The v2 door goes in from the doorstep side (d7i): after the partition
+    // the body stands inside, and a door set from in there seals it in (the
+    // pathfinder never opens doors). The north wall holds the door, so
+    // outside is -z.
+    try {
+      bot.pathfinder.setGoal(cell.kind === 'door' && ctx.home.v === 2
+        ? new goals.GoalNearXZ(p.x, p.z - 2, 1)
+        : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
+    } catch (_) { /* retry next tick */ }
     return
   }
   if (moving) return
@@ -683,9 +761,16 @@ function build(bot, ctx, target, state) {
       if (ctx.buildFailIdx !== flightIdx) return
       ctx.buildFails = fails() + 1
       const occupier = blockNameAt(bot, p)
-      if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
+      // Landed only when the occupier is THIS cell's kind (d7i): the equip
+      // step's station table landed in the doorway and read as 'landed'
+      // forever — every refusal forgiven, no skip, the body wedged into a
+      // recover page. A stray table in a non-table cell clears like flora
+      // (denyReason still guards a player's table); any other wrong-kind
+      // occupier counts as a refusal.
+      if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
-      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell))) {
+      } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
+        (occupier === 'crafting_table' && cell.kind !== 'table'))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)
@@ -720,6 +805,7 @@ module.exports.PLANK_COUNT = PLANK_COUNT
 module.exports.PLANK_COUNT_V2 = PLANK_COUNT_V2
 module.exports.blueprintFor = blueprintFor
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
+module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone

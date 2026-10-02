@@ -172,7 +172,40 @@ describe('jr2.1 adopt tells the v2 house from the v1 hut', () => {
     assert.ok(home)
     assert.equal(home.v, 2)
     assert.equal(home.built, false)
-    assert.equal(build.nextCellIdx(bot, home, []), BLUEPRINT_V2.findIndex((c) => c.kind === 'planks' && c.dy === 1))
+    // Posts before the upper ring (d7i): the partition goes in while the
+    // walls are one high, so a door-first mid-build resumes with the posts.
+    assert.equal(build.nextCellIdx(bot, home, []), BLUEPRINT_V2.findIndex((c) => isPost(c) && c.dy === 0))
+  })
+
+  it('d7i: the partition is visited before the door, indices unchanged', () => {
+    // Every cell but the posts and the door stands: the posts come first,
+    // the door last (once the door stood the pathfinder, which never opens
+    // doors, could not reach the interior: rig 92/99 TIMEOUT).
+    const world = makeWorld()
+    const site = { x: 10, y: 64, z: 10 }
+    const isPost = (c) => c.kind === 'planks' && c.dy <= 1 && c.dz >= 3 && c.dz <= 4 && c.dx >= 1 && c.dx <= 5
+    for (const cell of BLUEPRINT_V2) {
+      if (cell.dy === 1 && cell.dz === 0) continue // upper front ring: after the door
+      if (isPost(cell) || cell.kind === 'door') continue
+      const name = cell.kind === 'table' ? 'crafting_table' : 'oak_planks'
+      world.set(site.x + cell.dx, site.y + cell.dy, site.z + cell.dz, name)
+    }
+    const bot = mockBot(world, {})
+    const home = { site, v: 2 }
+    const posts = BLUEPRINT_V2.map((c, i) => (isPost(c) ? i : -1)).filter((i) => i >= 0)
+    assert.equal(posts.length, 8)
+    const door = BLUEPRINT_V2.findIndex((c) => c.kind === 'door')
+    assert.ok(posts.every((i) => i > door), 'blueprint indices unchanged: posts still listed last')
+    const seen = []
+    for (let n = 0; n < 9; n++) {
+      const i = build.nextCellIdx(bot, home, [])
+      seen.push(i)
+      const c = BLUEPRINT_V2[i]
+      world.set(site.x + c.dx, site.y + c.dy, site.z + c.dz, c.kind === 'door' ? 'oak_door' : 'oak_planks')
+    }
+    assert.deepEqual(seen, [...posts, door], 'all eight posts, then the door')
+    assert.ok(BLUEPRINT_V2[build.nextCellIdx(bot, home, [])].dy === 1, 'then the upper ring')
+    assert.equal(build.nextCellIdx(bot, { site, v: 1 }, []) >= 0, true, 'v1 keeps its plan order')
   })
 
   it('one missing front column still adopts v2 (revmux core-1)', () => {

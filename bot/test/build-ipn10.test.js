@@ -505,3 +505,194 @@ describe('ipn.10 revmux 01: hard cap and skip retry', () => {
     assert.deepEqual(ctx3.buildSkipAt, { 7: ts })
   })
 })
+
+// Bead idkcraft-d7i: the v2 partition wedged the body inside the house; the
+// recover menu gave up (page), the release latch then held every re-wedge
+// out of the menu, and the cell burned the stall budget for minutes. A
+// gave-up latch born on the current cell skips it at once.
+describe('d7i gave-up wedge skips the cell', () => {
+  const latchAt = (at) => ({ by: 'no-displacement', key: 'ticker', goal: null, at })
+  // Partition post (1,3,0): the first of the 8 cells laid last.
+  function partitionSetup(open = []) {
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const plan = build.blueprintFor(home)
+    const find = (dx, dz) => plan.findIndex((c) => c.dx === dx && c.dy === 0 && c.dz === dz && c.kind === 'planks')
+    const idx = find(1, 3)
+    const world = makeWorld()
+    paintHouse(world, home, [idx, ...open.map(([dx, dz]) => find(dx, dz))])
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_planks', count: 64 }],
+      at: pos(2.5, 64, 4.5), // the west bedroom, the rig's wedge point
+      moving: true,
+    })
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    return { idx, find, bot, ctx }
+  }
+  const run = (bot, ctx, n) => { for (let t = 0; t < n; t++) build(bot, ctx, null, null) }
+
+  it('a gave-up latch born on the cell skips it on the next tick', () => {
+    const { idx, bot, ctx } = partitionSetup()
+    const q = quiet()
+    try {
+      run(bot, ctx, 1)
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20 // the detector counts the stall under build
+      run(bot, ctx, 1)
+      assert.deepEqual(ctx.buildSkip, [], 'no latch: no skip')
+      // recover.release(gave-up) on a no-displacement wedge anchors here.
+      ctx.stuckState = 'COOLDOWN'
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 1)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [idx], 'the wedged cell skips at once, not after the stall budget')
+    assert.ok(q.lines.some((m) => m.includes('(wedged)')), `wedged skip logged: ${JSON.stringify(q.lines)}`)
+  })
+
+  it('the next cell does not inherit the latch (one skip per gave-up)', () => {
+    const { idx, find, bot, ctx } = partitionSetup([[3, 3]])
+    const q = quiet()
+    try {
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20
+      run(bot, ctx, 1)
+      ctx.stuckState = 'COOLDOWN'
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 10)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [idx], `only the wedged cell skipped (next ${find(3, 3)} keeps its budget)`)
+    assert.equal(ctx.buildCellIdx, find(3, 3))
+  })
+
+  // Rig root cause: the equip step's station table landed in the doorway
+  // (3,0,0); the door refusal read the table as 'landed' and reset the
+  // strikes forever, so neither the skip nor the place ever came.
+  function strayTableSetup(placedByBot) {
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const plan = build.blueprintFor(home)
+    const doorIdx = plan.findIndex((c) => c.kind === 'door')
+    const world = makeWorld()
+    paintHouse(world, home, [doorIdx])
+    world.set(3, 64, 0, 'crafting_table')
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_door', count: 1 }, { name: 'oak_planks', count: 64 }],
+      at: pos(3.5, 64, -1.5), // the doorstep, in reach
+      place: async (ref, face) => {
+        const rp = ref.position
+        const t = { x: rp.x + face.x, y: rp.y + face.y, z: rp.z + face.z }
+        const cur = world.get(t.x, t.y, t.z) || 'air'
+        if (cur !== 'air') throw new Error(`Server refused to place ${bot.held}: the block is still ${cur}`)
+        world.set(t.x, t.y, t.z, bot.held)
+      },
+    })
+    const ctx = {
+      home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now(),
+      placedByBot: placedByBot ? new Set(['3,64,0']) : new Set(),
+    }
+    return { doorIdx, world, bot, ctx }
+  }
+
+  it('our stray table in the doorway is cleared and the door lands', async () => {
+    const { world, bot, ctx } = strayTableSetup(true)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 10 && world.get(3, 64, 0) !== 'oak_door'; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, ['crafting_table'], 'the stray table is dug')
+    assert.equal(world.get(3, 64, 0), 'oak_door', 'the door lands in the doorway')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  it("a table that is not ours never resets the strikes: the door skips after 3", async () => {
+    const { doorIdx, world, bot, ctx } = strayTableSetup(false)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 20 && ctx.buildSkip.length === 0; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, [], 'a protected table is never dug')
+    assert.equal(world.get(3, 64, 0), 'crafting_table')
+    assert.deepEqual(ctx.buildSkip, [doorIdx], 'refusals count: the cell skips instead of looping')
+  })
+
+  it('the v2 door is approached from the doorstep side, never from inside', () => {
+    // After the partition the body stands inside; a door set from in there
+    // seals it in (the pathfinder never opens doors).
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const doorIdx = build.blueprintFor(home).findIndex((c) => c.kind === 'door')
+    const world = makeWorld()
+    paintHouse(world, home, [doorIdx])
+    const bot = mockBot(world, { items: [{ name: 'oak_door', count: 1 }], at: pos(3.5, 64, 1.5) }) // common room
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    const q = quiet()
+    try { build(bot, ctx, null, null) } finally { q.restore() }
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g && g.constructor.name, 'GoalNearXZ')
+    assert.deepEqual({ x: g.x, z: g.z }, { x: 3, z: -2 }, 'two north of the doorway: outside')
+    assert.ok(!g.isEnd({ x: 3, y: 64, z: 1 }) && !g.isEnd({ x: 3, y: 64, z: 0 }), 'no inside or doorway end')
+  })
+
+  it('a one-tick stall or a stale one never arms the wedge skip (revmux 02 minor)', () => {
+    for (const stale of [false, true]) {
+      const { bot, ctx } = partitionSetup()
+      const q = quiet()
+      try {
+        run(bot, ctx, 1)
+        ctx.stuckState = 'SUSPECT'
+        ctx.stuckTicks = stale ? 20 : 1
+        run(bot, ctx, 1)
+        if (stale) ctx.buildSuspectAt = Date.now() - 10 * 60000 // build saw it long ago
+        ctx.stuckState = 'COOLDOWN'
+        ctx.stuckTicks = 0
+        ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 }) // another step's wedge
+        run(bot, ctx, 5)
+      } finally {
+        q.restore()
+      }
+      assert.deepEqual(ctx.buildSkip, [], stale ? 'stale stall' : 'one still tick')
+    }
+  })
+
+  it("another step's gave-up latch near the house never skips a build cell (revmux 01 minor)", () => {
+    // An equip dig beside the house wedged and gave up: build never saw the
+    // stall build up on its cell, so the fresh latch is not its wedge.
+    const { bot, ctx } = partitionSetup()
+    const q = quiet()
+    try {
+      run(bot, ctx, 1)
+      ctx.stuckState = 'COOLDOWN'
+      ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
+      run(bot, ctx, 10)
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  it('a latch standing from before the cell, or anchored far away, never skips', () => {
+    for (const [pre, at] of [[true, { x: 2.5, y: 64, z: 4.5 }], [false, { x: 40, y: 64, z: 40 }]]) {
+      const { bot, ctx } = partitionSetup()
+      if (pre) ctx.recoverLatch = latchAt(at)
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20 // build saw a stall: only the latch decides
+      const q = quiet()
+      try {
+        run(bot, ctx, 1)
+        if (!pre) ctx.recoverLatch = latchAt(at)
+        run(bot, ctx, 10)
+      } finally {
+        q.restore()
+      }
+      assert.deepEqual(ctx.buildSkip, [], pre ? 'pre-existing latch' : 'far latch')
+    }
+  })
+})

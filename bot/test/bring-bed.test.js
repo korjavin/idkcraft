@@ -693,7 +693,7 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     const bot = mockBot({
       items: [{ name: 'white_wool', count: 3 }],
       playerPos: pos(30, 64, 0),
-      cells: { '1,63,0': 'dirt', ...treeCells(20, 64, 0) },
+      cells: { '-1,63,0': 'dirt', ...treeCells(20, 64, 0) },
     })
     // Prod-faithful (revmux 02 core-1/body-1): real recipesFor hides the
     // table while the pack holds logs but no planks. The make-path must
@@ -796,7 +796,7 @@ describe("'bring me bed' (idkcraft-did.4)", () => {
     const bot = mockBot({
       items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 8 }],
       playerPos: pos(30, 64, 0),
-      cells: { '1,63,0': 'dirt', '20,64,0': 'crafting_table' },
+      cells: { '-1,63,0': 'dirt', '20,64,0': 'crafting_table' },
       recipes,
     })
     const ticker = tickerFor(bot)
@@ -894,7 +894,7 @@ describe('stranded lock release (idkcraft-did.4 rig)', () => {
       items: [{ name: 'white_wool', count: 3 }],
       chest: [{ name: 'oak_planks', count: 20 }],
       playerPos: pos(30, 64, 0),
-      cells: { '1,63,0': 'dirt', '5,64,1': 'chest' },
+      cells: { '-1,63,0': 'dirt', '5,64,1': 'chest' },
     })
     const ticker = tickerFor(bot)
     bot._tickerCtx.home = { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 5, y: 64, z: 1 } }

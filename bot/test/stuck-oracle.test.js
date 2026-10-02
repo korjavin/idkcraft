@@ -384,11 +384,9 @@ describe('order corpus (idkcraft-6x7.8)', () => {
   const q0h = byName['Q0H-PIT']
 
   it('JR-SLOPE is the order-driven slope bring spot', () => {
-    // A 'build here' order is un-gateable on the slope (idkcraft-d7i: two
-    // identical runs stalled at different points, 92/99 then below 80/99,
-    // and paged every run) — flaky progress plus a gave-up on green breaks
-    // both the reached pin and strict maxCalls. The spot brings slope ore
-    // instead: same terrain under an order, deterministic verdict.
+    // The slope bring predates the build-here spot (JR-BUILD, below): a
+    // 'build here' order stalled and paged every run until idkcraft-d7i.
+    // The bring stays: same terrain, a short deterministic verdict.
     assert.equal(jr.mode, 'order')
     assert.match(jr.order, /^bring me acacia_log/)
     assert.ok(jr.expect.includes('here is ') && jr.expect.includes('here are '))
@@ -475,6 +473,27 @@ describe('order corpus (idkcraft-6x7.8)', () => {
       const revokes = s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order)
       if (revokes) seenRevoke = true
       else if (s.mode !== 'order') assert.ok(!seenRevoke, `follow spot ${s.name} after a follow-revoking order`)
+    }
+  })
+
+  it('JR-BUILD is the slope build-here spot (idkcraft-d7i)', () => {
+    // From scratch on the jr2.4 slope: gather, craft, station, build until
+    // 'home done at'. Pre-d7i the standing door sealed the interior (the
+    // pathfinder never opens doors) and the partition was never reached.
+    const b = byName['JR-BUILD']
+    assert.ok(b, 'JR-BUILD in the corpus')
+    assert.equal(b.mode, 'order')
+    assert.equal(b.order, 'build here')
+    assert.equal(b.bead, 'idkcraft-d7i')
+    assert.equal(matchOrderLine('home done at -144 72 -77', b.expect, b.fail), 'expect')
+    assert.equal(matchOrderLine("I can't see you, come closer", b.expect, b.fail), 'fail')
+    for (const line of [
+      'building a home at -144 72 -77',
+      'building 92/99',
+      'crafted 4 acacia_planks (planks 4, logs 0)',
+      "I'm stuck at -138 72 -75, /tp StuckReplayr1 StuckGuider1",
+    ]) {
+      assert.equal(matchOrderLine(line, b.expect, b.fail), null, line)
     }
   })
 })
