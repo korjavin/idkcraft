@@ -459,6 +459,14 @@ describe('idkcraft-1l9 gohome fails fast at a broken door', () => {
       assert.ok(!ctx.buildSkip.includes(di), 'door re-probed by build')
       assert.equal(ctx.buildSkipAt[di], undefined)
       assert.notEqual(build.nextCellIdx(bot, h, ctx.buildSkip), -1, 'index.js revalidation keeps built=false')
+      // Build re-skips the door after the re-probe: the skip window stands.
+      ctx.buildSkip.push(di)
+      ctx.buildSkipAt[di] = ctx.doorReprobeAt + 1
+      h.built = true
+      home.gohome(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:no-door')
+      assert.ok(ctx.buildSkip.includes(di), 'once per skip stamp: no build/gohome cycle')
+      assert.equal(h.built, true)
     })
   })
 

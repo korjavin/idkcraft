@@ -431,13 +431,23 @@ function doorGone(bot, home) {
 // (idkcraft-1l9). The house is genuinely unfinished, so built drops and
 // build repairs the door. A skipped door cell is un-skipped first (revmux
 // 01): else the index.js revalidation (nextCellIdx minus skips === -1)
-// flips built straight back and the hole loop returns.
+// flips built straight back and the hole loop returns. Once per skip stamp
+// (revmux 02): a door build re-skipped after our re-probe cannot be placed,
+// so it keeps its skip window instead of cycling build -> 'home done' ->
+// gohome all night. ponytail: that residual still fails gohome at the hole
+// (no chat); the per-night hold belongs in goal.js.
 function failGoneDoor(bot, ctx, st, home, where) {
   failNoDoor(ctx, st, where)
   try {
     const di = buildMod.blueprintFor(home).findIndex((c) => c.kind === 'door')
-    if (Array.isArray(ctx.buildSkip)) ctx.buildSkip = ctx.buildSkip.filter((i) => i !== di)
-    if (ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object') delete ctx.buildSkipAt[di]
+    const skipped = Array.isArray(ctx.buildSkip) && ctx.buildSkip.includes(di)
+    const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt[di] : undefined
+    if (skipped && typeof ctx.doorReprobeAt === 'number' && !(typeof at === 'number' && at < ctx.doorReprobeAt)) return
+    if (skipped) {
+      ctx.buildSkip = ctx.buildSkip.filter((i) => i !== di)
+      if (ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object') delete ctx.buildSkipAt[di]
+      ctx.doorReprobeAt = Date.now()
+    }
     home.built = false
   } catch (_) { /* keep built */ }
 }
