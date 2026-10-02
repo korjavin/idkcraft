@@ -967,3 +967,51 @@ describe('dry-moat exit spot (idkcraft-g0z.6)', () => {
     assert.equal(e.maxCalls, 0)
   })
 })
+
+describe('danger-seeded spots (idkcraft-zj2p)', () => {
+  const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0, minDanger: 30 } } }
+  const drow = (minDanger) => ({ ...row('A', true, 0, 0), ...(minDanger === undefined ? {} : { minDanger }) })
+
+  it('DROWNED-SHORE seeds the prod water-death disc and floors the approach', () => {
+    // Rig (2026-10-02): no path cost walks through the disc (minDanger 5.0),
+    // the cost walks around (32.5); the floor sits between with sampling slack.
+    const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+    const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+    const s = spots.find((x) => x.name === 'DROWNED-SHORE')
+    assert.ok(s, 'DROWNED-SHORE in the corpus')
+    assert.equal(s.bead, 'idkcraft-zj2p')
+    assert.deepEqual(s.danger, [[3, 61, -268, 32]])
+    assert.equal(s.mode, undefined, 'a follow walk')
+    assert.equal(baseline.spots['DROWNED-SHORE'].minDanger, 30)
+  })
+
+  it('minDanger floors the closest approach to the seeded mark', () => {
+    assert.equal(compareBaseline([drow(31.2)], base)[0].verdict, 'ok')
+    const [d] = compareBaseline([drow(5.4)], base)
+    assert.equal(d.verdict, 'regressed')
+    assert.match(d.why, /entered the danger disc/)
+    assert.equal(compareBaseline([drow()], base)[0].verdict, 'regressed', 'a row without the measure fails closed')
+  })
+
+  it('loadSpots passes danger through and rejects malformed marks', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'danger-spots-'))
+    const saved = process.argv[2]
+    const load = (danger) => {
+      const f = path.join(dir, 'd.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], danger }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      assert.deepEqual(load([[3, 61, -268, 32]])[0].danger, [[3, 61, -268, 32]])
+      for (const bad of [[], [[3, 61, -268]], [[3, 61, -268, 0]], [[3, 'x', -268, 32]], 'x']) {
+        assert.throws(() => load(bad), /bad danger/, JSON.stringify(bad))
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

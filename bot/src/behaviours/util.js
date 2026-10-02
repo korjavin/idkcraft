@@ -316,6 +316,14 @@ function apronEscape(bot, home, pos) {
 // a 'below-feet' denial over solid may sit on a build. Returns null when
 // the block itself is diggable, else 'protected'. Never returns trap
 // reasons (revmux 01 core-1).
+// Castle guard (shared with behaviours/castle.js guardCastle): a laid plan
+// block, or natural ground under the site (idkcraft-g0z.14). Solid ground
+// only, like the house footprint: snow layers stay build's clears.
+function castleProtects(state, pos, name) {
+  return castle.protects(state, pos, name) ||
+    (name !== 'snow' && NATURAL_SOLID.has(name) && castle.groundCell(state, pos))
+}
+
 function protectedReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
@@ -330,7 +338,7 @@ function protectedReason(bot, block, ctx) {
     // Castle blocks (idkcraft-g0z.2): guarded for every executor BEFORE the
     // placedByBot exemption — the bot laid them, and that must not license
     // a recover/gather dig through the castle wall.
-    if (ctx && ctx.castle && castle.protects(ctx.castle, pos, name)) return 'protected'
+    if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name)) return 'protected'
     // House footprint (idkcraft-e5ba): natural ground under/around our own
     // house is its floor and door support, never scaffold. Solid ground only:
     // build's own clears (flora, snow) stay legal.
@@ -397,4 +405,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, submergedAt, solidBelow, protectedReason }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects }

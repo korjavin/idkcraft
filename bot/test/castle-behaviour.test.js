@@ -253,6 +253,86 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-chest')
   })
 
+  it('g0z.13: a moat cell holding ore/tuff is dug; planks in it and ore in a place cell stay kept', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch', door: 'oak_door', fence: 'oak_fence' }
+    const moat = v2.find((c) => c.kind === 'dig' && c.dy === -1)
+    for (const ore of ['coal_ore', 'deepslate_copper_ore', 'iron_ore', 'tuff', 'oak_planks']) {
+      const world = makeWorld()
+      for (const c of v2) world.set(c.x, c.y, c.z, NAME[c.kind] || 'air')
+      world.set(moat.x, moat.y, moat.z, ore)
+      const bot = mockBot(world)
+      const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
+      await run(bot, ctx, 6)
+      if (ore === 'oak_planks') {
+        assert.equal(world.get(moat.x, moat.y, moat.z), 'oak_planks')
+        assert.equal(ctx.castle.blocked[`2:${moat.idx}`].why, 'kept-oak_planks')
+        continue
+      }
+      assert.equal(world.get(moat.x, moat.y, moat.z), 'air', ore)
+      assert.deepEqual(ctx.castle.blocked, {}, ore)
+      assert.equal(ctx.stepStatus, 'done', ore)
+    }
+    // Place cells keep flat's narrow allowlist (pinned, g0z.2).
+    const world = makeWorld()
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'coal_ore')
+    const bot = mockBot(world)
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 2)
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(ctx.castle.blocked['1:0'].why, 'kept-coal_ore')
+  })
+
+  it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {
+    const world = makeWorld()
+    const plan = cells()
+    paint(world, plan.length)
+    const at = blueprint.absPlan(SITE, 0).at
+    const { w, d } = blueprint.siteDimensions(0)
+    let spot = null
+    for (let dx = 1; dx < w - 1 && !spot; dx++) {
+      for (let dz = 1; dz < d - 1 && !spot; dz++) {
+        const x = SITE.x + dx, z = SITE.z + dz
+        if (!at.has(`${x},${SITE.y},${z}`) && !at.has(`${x},${SITE.y + 1},${z}`)) spot = { x, z }
+      }
+    }
+    assert.ok(spot, 'an off-plan interior column')
+    world.set(spot.x, SITE.y, spot.z, 'cobblestone')
+    world.set(spot.x, SITE.y + 1, spot.z, 'dirt')
+    const bot = mockBot(world)
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'body' }, placedByBot: new Set([`${spot.x},${SITE.y + 1},${spot.z}`]) }
+    await run(bot, ctx, 12)
+    assert.equal(world.get(spot.x, SITE.y, spot.z), 'air')
+    assert.equal(world.get(spot.x, SITE.y + 1, spot.z), 'air')
+    assert.equal(ctx.castle.phase, 'complete')
+    assert.equal(bot.calls.digs.length, 2)
+    for (const c of plan) if (blueprint.isPlaceTarget(c.kind)) assert.ok(blueprint.matches(c.kind, world.get(c.x, c.y, c.z)), `${c.kind} at ${c.x},${c.y},${c.z}`)
+    // After complete the owner's cobblestone inside is kept.
+    world.set(spot.x, SITE.y, spot.z, 'cobblestone')
+    ctx.castleScanAt = 0
+    ctx.castleLitter = null
+    await run(bot, ctx, 4)
+    assert.equal(world.get(spot.x, SITE.y, spot.z), 'cobblestone')
+  })
+
+  it('g0z.14: a refusing litter block is skipped (blocked) and the castle completes', async () => {
+    const world = makeWorld()
+    paint(world, cells().length)
+    const at = blueprint.absPlan(SITE, 0).at
+    const x = SITE.x + 1
+    let z = SITE.z + 1
+    while (at.has(`${x},${SITE.y},${z}`)) z++
+    world.set(x, SITE.y, z, 'cobblestone')
+    const bot = mockBot(world)
+    bot.dig = async () => { throw new Error('refused') }
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'body' } }
+    await run(bot, ctx, 20)
+    assert.equal(ctx.castle.phase, 'complete')
+    assert.equal(world.get(x, SITE.y, z), 'cobblestone')
+    assert.ok(Object.values(ctx.castle.blocked).some((e) => e.why === 'dig-refused'))
+  })
+
   it('g0z.11: a v2 castle lays the full plan and keys its blocks by v2', async () => {
     const v2 = blueprint.absPlan(SITE, 0, 2).cells
     const world = makeWorld()
@@ -484,6 +564,7 @@ describe('g0z.2 castle protection', () => {
     const c = cells()[0]
     assert.equal(list[0]({ name: 'cobblestone', position: c }), 100)
     assert.equal(list[0]({ name: 'dirt', position: c }), 0)
+    assert.equal(list[0]({ name: 'dirt', position: { x: c.x, y: SITE.y - 1, z: c.z } }), 100, 'ground under the site (g0z.14)')
     ctx.castle = null
     assert.equal(list[0]({ name: 'cobblestone', position: c }), 0)
     // Scaffolding on the site costs +100 per block (stairs, not pillars).
