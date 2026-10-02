@@ -8,6 +8,7 @@
 // no blocked cells. Order/arbiter wiring (dusk return) is g0z.3.
 //   MC_HOST=localhost MC_PORT=25565 MC_CONTAINER=idk-mc node test/e2e-castle.js
 const mineflayer = require('mineflayer')
+const { Vec3 } = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
@@ -77,6 +78,21 @@ async function session(state, stopAt, onSpawn) {
         const inside = bp.x >= state.site.x + t.x0 && bp.x < state.site.x + t.x0 + t.size &&
           bp.z >= state.site.z + t.z0 && bp.z < state.site.z + t.z0 + t.size
         console.log(`finished at ${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} ${inside ? 'INSIDE' : 'outside'} the tower`)
+        // g0z.14: no own scaffold left in the site box off the plan.
+        const { w, d } = blueprint.siteDimensions(state.rot | 0, state.blueprintVersion)
+        const at = blueprint.absPlan(state.site, state.rot, state.blueprintVersion).at
+        const litter = []
+        for (let dy = 0; dy <= 16; dy++) {
+          for (let dx = 0; dx < w; dx++) {
+            for (let dz = 0; dz < d; dz++) {
+              const p = new Vec3(state.site.x + dx, state.site.y + dy, state.site.z + dz)
+              const b = bot.blockAt(p)
+              if (b && b.name === 'cobblestone' && !at.has(`${p.x},${p.y},${p.z}`)) litter.push(`${p.x},${p.y},${p.z}`)
+            }
+          }
+        }
+        console.log(`off-plan cobblestone in the site box: ${litter.length}${litter.length ? ' ' + litter.join(' ') : ''}`)
+        if (litter.length) return 'litter'
         return inside ? 'sealed-inside' : 'done'
       }
       if (stopAt && state.progress && state.progress.done >= stopAt) return 'stopped'
