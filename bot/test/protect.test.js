@@ -639,15 +639,16 @@ describe('house footprint (idkcraft-e5ba)', () => {
   it('apron pit escape: a body in an old porch pit may stair out, never dig deeper (revmux 01 core-1)', () => {
     const pit = worldBot(new Map())
     pit.entity = { position: new Vec3(101.5, 69, -357.5), onGround: true } // feet cell 101 69 -358
-    const p = (n, x, y, z) => denyReason(pit, blk(n, x, y, z), { home })
+    const p = (n, x, y, z) => denyReason(pit, blk(n, x, y, z), { home, recovery: {} })
     assert.equal(p('dirt', 102, 70, -358), null, 'step above the pit wall')
     assert.equal(p('dirt', 100, 69, -359), null, 'pit wall at feet height')
     assert.equal(p('dirt', 102, 68, -358), 'protected', 'never deeper')
     assert.equal(p('dirt', 104, 70, -358), 'protected', 'not beside the body')
     assert.equal(p('dirt', 101, 70, -357), 'protected', 'house wall ring is never an escape')
+    assert.equal(denyReason(pit, blk('dirt', 102, 70, -358), { home }), 'protected', 'not recovering (equip in the pit): no exemption')
     const top = worldBot(new Map())
     top.entity = { position: new Vec3(101.5, 71, -357.5), onGround: true } // on the porch
-    assert.equal(denyReason(top, blk('dirt', 102, 71, -358), { home }), 'protected', 'standing on the porch: no exemption')
+    assert.equal(denyReason(top, blk('dirt', 102, 71, -358), { home, recovery: {} }), 'protected', 'standing on the porch: no exemption')
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
 })

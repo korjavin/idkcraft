@@ -297,9 +297,11 @@ function inHouseFootprint(home, pos) {
   } catch (_) { return false }
 }
 
-// Pit escape (idkcraft-0mlh revmux 01 core-1): a body standing below the
-// doorstep level (in an old porch pit) may still dig apron cells beside it
-// at body height and above — recover's stair/headroom digs — never below.
+// Pit escape (idkcraft-0mlh revmux 01 core-1): a recovering body standing
+// below the doorstep level (in an old porch pit) may still dig apron cells
+// beside it at body height and above — recover's stair/headroom digs —
+// never below. Recover only (ctx.recovery): equip in the pit must not
+// widen it (revmux 02).
 function apronEscape(bot, home, pos) {
   const feet = botPos(bot)
   if (!feet || !pos) return false
@@ -335,7 +337,7 @@ function protectedReason(bot, block, ctx) {
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
     let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
-    if (fp === 'apron' && apronEscape(bot, ctx.home, pos)) fp = false
+    if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
     if (fp && !(pos.y >= ctx.home.site.y && ctx.placedByBot instanceof Set &&
       ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))) return 'protected'
     if (pos && ctx && ctx.placedByBot instanceof Set && !(fp && pos.y < ctx.home.site.y)) {

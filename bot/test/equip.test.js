@@ -334,6 +334,15 @@ describe('equip step', () => {
     assert.equal(bot.calls.dig.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'only porch ground: no-dirt, never the pit')
     bot.restoreError()
+    // Standing in an old porch pit (feet y=69): the walls beside it stay put.
+    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([{ x: 102, y: 69, z: -358 }, { x: 101, y: 70, z: -359 }]) })
+    bot.entity.position = { x: 101.5, y: 69, z: -357.5 }
+    ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'equip in the pit never widens it')
+    bot.restoreError()
   })
 
   it('stone holds the pickaxe first: no hand-mining, no lost drops', async () => {
