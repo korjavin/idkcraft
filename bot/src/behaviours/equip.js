@@ -223,8 +223,15 @@ function ownTableOp(bot, ctx, op) {
       if (!t || typeof t.x !== 'number' || typeof bot.blockAt !== 'function') continue
       let block = null
       try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
-      if (!block || block.name !== 'crafting_table') continue
-      if (!tableFar(bot, ctx, bp, t)) return null
+      // Unreadable (unloaded chunk) is standing for the menu (goal.js
+      // stationStanding), so craft never rebuilds: a far one counts here
+      // too, else tableFor drops it and fails no-table daily (revmux 01).
+      // A verified other block is a ghost: skipped.
+      if (block && block.name !== 'crafting_table') continue
+      if (!tableFar(bot, ctx, bp, t)) {
+        if (block) return null
+        continue
+      }
       far = true
     }
     if (!far) return null

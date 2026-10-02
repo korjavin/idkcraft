@@ -1965,6 +1965,21 @@ describe('equip own table when the home table is far (idkcraft-ajoe)', () => {
     bot.restoreError()
   })
 
+  it('an unloaded far home table (null read) still gets its own table, not no-table', async () => {
+    const bot = farRig(PACK(), { x: 999, y: 0, z: 999 }) // home cell never reads as a table
+    const base = bot.blockAt
+    bot.blockAt = (p) => (p.x === 120 && p.y === 64 && p.z === 0 ? null : base(p))
+    const ctx = freshCtx({ table: { x: 120, y: 64, z: 0 } })
+    for (let n = 1; n <= 3; n++) {
+      equip(bot, ctx, null, {})
+      await untilCrafts(bot, n)
+    }
+    assert.deepEqual(bot.calls.craft.map((c) => c.recipe.result.name), ['oak_planks', 'crafting_table', 'wooden_pickaxe'])
+    assert.equal(bot.calls.placeBlock.length, 1)
+    assert.ok(!bot.errs.some((e) => e.includes('no-table')))
+    bot.restoreError()
+  })
+
   it('one own table per day: today\'s spent, the far table is walked to as before', async () => {
     const bot = farRig(PACK())
     const ctx = freshCtx({ table: { x: 120, y: 64, z: 0 } })
