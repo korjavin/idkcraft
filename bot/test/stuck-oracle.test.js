@@ -896,6 +896,19 @@ describe('danger-seeded spots (idkcraft-zj2p)', () => {
   const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0, minDanger: 30 } } }
   const drow = (minDanger) => ({ ...row('A', true, 0, 0), ...(minDanger === undefined ? {} : { minDanger }) })
 
+  it('DROWNED-SHORE seeds the prod water-death disc and floors the approach', () => {
+    // Rig (2026-10-02): no path cost walks through the disc (minDanger 5.0),
+    // the cost walks around (32.5); the floor sits between with sampling slack.
+    const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+    const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+    const s = spots.find((x) => x.name === 'DROWNED-SHORE')
+    assert.ok(s, 'DROWNED-SHORE in the corpus')
+    assert.equal(s.bead, 'idkcraft-zj2p')
+    assert.deepEqual(s.danger, [[3, 61, -268, 32]])
+    assert.equal(s.mode, undefined, 'a follow walk')
+    assert.equal(baseline.spots['DROWNED-SHORE'].minDanger, 30)
+  })
+
   it('minDanger floors the closest approach to the seeded mark', () => {
     assert.equal(compareBaseline([drow(31.2)], base)[0].verdict, 'ok')
     const [d] = compareBaseline([drow(5.4)], base)

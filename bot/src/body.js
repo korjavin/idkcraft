@@ -184,7 +184,7 @@ function movementsFor(owner, bot, ctx, extra) {
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
-      danger.addPathCost(mov, ctx) // zj2p: once per Movements, reads ctx live
+      danger.addPathCost(mov, ctx, bot) // zj2p: once per Movements, reads ctx live
     } catch (_) { /* apply best-effort */ }
   }
 }

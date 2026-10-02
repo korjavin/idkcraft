@@ -38,8 +38,9 @@ function worldBot() {
 }
 
 // Movements wired the production way: the lease installs the cost.
-function setup(marks) {
+function setup(marks, feet) {
   const bot = worldBot()
+  if (feet) bot.entity.position = new Vec3(...feet)
   const ctx = { danger: { spots: marks } }
   ctx.movements = new Movements(bot)
   body.movementsFor('idle', bot, ctx)
@@ -64,8 +65,22 @@ describe('danger path cost (zj2p)', () => {
 
   it('still plans a target inside the disc (cost, not a ban)', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
-    const r = plan(setup([mark]), [-W, 64, 0], [5, 64, 0])
+    const r = plan(setup([mark], [-W + 0.5, 64, 0.5]), [-W, 64, 0], [-26, 64, 0])
     assert.equal(r.status, 'success')
+  })
+
+  it('a disc holding the feet past the rim band costs nothing (straight walk out)', () => {
+    const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
+    const r = plan(setup([mark], [-9.5, 64, 0.5]), [-10, 64, 0], [W, 64, 0])
+    assert.equal(r.status, 'success')
+    assert.ok(r.path.every((n) => n.z === 0), 'straight leg expected')
+  })
+
+  it('the rim band stays costed (a partial path one step in keeps the detour)', () => {
+    const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
+    const r = plan(setup([mark], [-30.5, 64, 0.5]), [-W, 64, 0], [W, 64, 0])
+    assert.equal(r.status, 'success')
+    assert.ok(closest(r.path, mark) > danger.WATER_RADIUS, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
   })
 
   it('ignores expired marks and narrow pit marks (straight line)', () => {

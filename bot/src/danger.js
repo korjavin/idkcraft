@@ -163,45 +163,59 @@ function clear(ctx) {
 // walker (gohome, equip, castlefetch, forage, explore legs, homing, follow)
 // routes around the drowned lake instead of re-walking its shore — the
 // marks used to steer target picks only. A cost, never a ban: a target
-// inside the disc (home by the water) still plans, just leaves it soon.
-// Wide marks only (r >= WATER_RADIUS): pit marks belong to recover/detour,
-// and a 6-block cost would only re-route around holes A* already avoids.
-// Measured on the landing cell centre, xz like near(). Same getNeighbors
-// wrap shape as jumpcost.js; installed once per Movements by movementsFor
-// (body.js), reading ctx live, so a fresh mark steers the next plan.
-// PATH_COST 1 doubles a disc move: enough to bend an 80-block open-ground
-// leg around the disc (tangent detours are short), while a target inside
-// the disc floods A* least (flat fake world, goal 5 past the centre:
-// 5.2k nodes at 1 vs 17.9k at 2 — the heuristic underestimates by the cost).
-const PATH_COST = 1
-function addPathCost(movements, ctx) {
+// inside the disc (home by the water) still plans. Wide marks only
+// (r >= WATER_RADIUS): pit marks belong to recover/detour. Measured on the
+// landing cell centre, xz like near(). Same getNeighbors wrap shape as
+// jumpcost.js; installed once per Movements by movementsFor (body.js),
+// reading ctx live, so a fresh mark steers the next plan.
+//
+// Steep on purpose (rig, DROWNED-SHORE): a 100-block leg never finishes
+// inside one 40 ms pathfinder tick, and the executor walks each PARTIAL
+// path — A*'s best node is the discovered node nearest the goal. At a
+// gentle cost (1/move) that node sat deep inside the disc and the bot
+// walked straight through it while the search went on (17k nodes, never
+// finished). At PATH_COST the frontier barely enters the disc (a step in
+// costs more than the whole detour around), so partial paths stop at the
+// rim. A disc holding the feet FEET_DEPTH or deeper costs nothing: the
+// body is already in it, and a steep cost there floods A* (heuristic off
+// by the cost) — the walk out, or the job by the water, plans plain. The
+// rim band stays costed: a partial path that stopped one step in must not
+// switch the cost off and send the bot straight across. A target inside
+// from outside pays one slow plan (the flood times out at the pathfinder's
+// thinkTimeout, the best node sits just past the rim), then plans plain.
+const PATH_COST = 10
+const FEET_DEPTH = 4
+function addPathCost(movements, ctx, bot) {
   // Unit mocks carry flags only: wrap only a real Movements.
   if (!movements || typeof movements.getNeighbors !== 'function' || movements._dangerCostInstalled) return
   movements._dangerCostInstalled = true
   const orig = movements.getNeighbors.bind(movements)
   movements.getNeighbors = (node) => {
     const ns = orig(node)
-    const discs = wideSpots(ctx, Date.now())
+    let feet = null
+    try { feet = bot && bot.entity && bot.entity.position } catch (_) { feet = null }
+    const discs = wideSpots(ctx, Date.now(), feet)
     if (discs.length === 0) return ns
     for (const m of ns) {
       if (!m || typeof m.cost !== 'number') continue
-      const x = m.x + 0.5
-      const z = m.z + 0.5
-      if (discs.some((s) => Math.hypot(s.x - x, s.z - z) <= s.r)) m.cost += PATH_COST
+      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) <= s.r)) m.cost += PATH_COST
     }
     return ns
   }
 }
 
-// Live water-wide marks, no copies (hot path: once per A* expansion).
-function wideSpots(ctx, t) {
+// Live water-wide marks not holding the feet past the rim band (hot path:
+// once per A* expansion, no copies of the store).
+function wideSpots(ctx, t, feet) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return []
   const out = []
   for (const s of mem.spots) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
-    if (r >= WATER_RADIUS) out.push({ x: s.x, z: s.z, r })
+    if (r < WATER_RADIUS) continue
+    if (feet && typeof feet.x === 'number' && Math.hypot(s.x - feet.x, s.z - feet.z) <= r - FEET_DEPTH) continue
+    out.push({ x: s.x, z: s.z, r })
   }
   return out
 }
