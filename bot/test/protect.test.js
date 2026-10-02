@@ -140,6 +140,23 @@ describe('canBreak guard (idkcraft-drq)', () => {
     assert.ok(ctx3.placedByBot && ctx3.placedByBot.has('5,64,5'), 'tracked after spawn')
   })
 
+  it('trackPlaced forgets a cell once it changes kind (idkcraft-dahd revmux 01)', async () => {
+    const { EventEmitter } = require('node:events')
+    const bot = new EventEmitter()
+    bot.placeBlock = async () => {}
+    const ctx = {}
+    trackPlaced(bot, ctx)
+    await bot.placeBlock({ position: new Vec3(1, 63, 1) }, new Vec3(0, 1, 0))
+    const at = (type) => ({ type, position: new Vec3(1, 64, 1) })
+    bot.emit('blockUpdate', at(5), at(5)) // same kind (door swing, state change)
+    assert.ok(ctx.placedByBot.has('1,64,1'), 'state change keeps ownership')
+    bot.emit('blockUpdate', at(5), at(0)) // dug
+    assert.ok(!ctx.placedByBot.has('1,64,1'), 'dug: no longer ours')
+    // A player's planks in that cell later are not ours.
+    bot.emit('blockUpdate', at(0), at(13))
+    assert.equal(canBreak(worldBot(new Map()), blk('oak_planks', 1, 64, 1), ctx), false)
+  })
+
   it('installPlaceTiming holds a jump-place until the rising feet clear the block (idkcraft-6x7.11)', async () => {
     // Jump arc from feet y=63: the tower fires at 63.42, the block spans 63..64.
     const arc = [63.42, 63.7532, 64.0013, 64.1662]

@@ -442,8 +442,9 @@ function installPlaceTiming(bot) {
 // pathfinder executor's own placements, so future code is tracked too.
 // Deferred to the first spawn like installPlaceTiming (idkcraft-dahd: it
 // silently never installed in prod). createTicker calls this one first, so
-// both orders compose the same: timing(track(raw)) — the hold runs, then the
-// tracked place.
+// the wraps compose as timing(track(raw)): the hold runs, then the tracked
+// place. Ownership ends when the cell changes kind (dug, or a player swapped
+// it), so a stale key never licenses someone else's block (revmux 01).
 function trackPlaced(bot, ctx) {
   if (!bot || bot._placedTrackInstalled) return
   if (typeof bot.placeBlock !== 'function') {
@@ -451,6 +452,18 @@ function trackPlaced(bot, ctx) {
     return
   }
   bot._placedTrackInstalled = true
+  if (typeof bot.on === 'function') {
+    bot.on('blockUpdate', (oldB, newB) => {
+      try {
+        const set = ctx && ctx.placedByBot
+        const p = (newB && newB.position) || (oldB && oldB.position)
+        if (!(set instanceof Set) || !set.size || !p) return
+        if (oldB && newB && oldB.type === newB.type) return // a door swinging stays ours
+        set.delete(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`)
+      } catch (_) { /* tracking never breaks the world view */ }
+    })
+  }
+  try { console.log('trackPlaced: installed') } catch (_) { /* log best-effort */ }
   const orig = bot.placeBlock.bind(bot)
   bot.placeBlock = async (ref, face, opts) => {
     const out = await orig(ref, face, opts)
@@ -463,6 +476,9 @@ function trackPlaced(bot, ctx) {
           ctx.placedByBot.delete(oldest)
         }
         ctx.placedByBot.add(`${Math.floor(rp.x + face.x)},${Math.floor(rp.y + face.y)},${Math.floor(rp.z + face.z)}`)
+        // Prod acceptance grep (dahd): the set grows after an hour of work.
+        ctx.placedTotal = (ctx.placedTotal || 0) + 1
+        if (ctx.placedTotal % 100 === 0) console.log(`trackPlaced: placed=${ctx.placedTotal} placedByBot=${ctx.placedByBot.size}`)
       }
     } catch (_) { /* tracking never breaks a place */ }
     return out
