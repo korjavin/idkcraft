@@ -65,6 +65,9 @@ function pickOwner(ctx) {
 //     manual work step never sprints on a stale one.
 //   ctx.shelterLeg: { x, y, z } anchor (the door-out or meet cell) when
 //     a shelter leg (gohome walk, comehome walk/seat) dispatched.
+//   ctx.intruderFight: g9cj, fighting a mob inside our own home box: no-dig,
+//     the pursuit must never open a wall or partition. Sticky while
+//     inShelter (index.js sets/clears it each fight/non-fight tick).
 //   ctx.deepRan: deep() dispatched this tick. Deep runs inside
 //     applyDecision (via gear), so an extra would die at the pre-claim
 //     and the post-dispatch refresh would reopen the drill (revmux
@@ -74,6 +77,7 @@ function resetTick(ctx) {
   ctx.followRan = false
   ctx.shelterLeg = null
   ctx.deepRan = false
+  if (!ctx.inShelter) ctx.intruderFight = false // sticky while sheltered: the tick-start claim must keep no-dig across the brain await
 }
 
 // No-dig borrows. The gohome walk and the comehome walk/seat never dig:
@@ -163,7 +167,7 @@ function movementsFor(owner, bot, ctx, extra) {
   let sprint = false
   let parkour = true
   try {
-    if ((extra && extra.walk) || ctx.deepRan || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
+    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes
