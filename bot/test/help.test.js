@@ -17,15 +17,21 @@ function chatBot() {
 }
 
 describe("help command (idkcraft-kae)", () => {
-  it("'help' fits one line of <= 256 chars and names every command", () => {
+  // g0z.3: the castle commands outgrew one line — 'help' is page 1 and
+  // the pages together name every command.
+  it("'help' pages are <= 256 chars each and name every command", () => {
     const bot = chatBot()
     handleChat(bot, null, 'Steve', 'help')
     assert.equal(bot.chats.length, 1)
-    assert.ok(bot.chats[0].length <= CHAT_LIMIT, `help is ${bot.chats[0].length} chars`)
+    assert.equal(bot.chats[0], helpReply(1))
+    const pages = helpPages()
+    for (const p of pages) assert.ok(p.length <= CHAT_LIMIT, `help page is ${p.length} chars`)
+    const all = pages.join('\n')
     for (const cmd of COMMANDS) {
-      for (const n of cmd.names) assert.ok(bot.chats[0].includes(n), `help lists ${n}`)
+      for (const n of cmd.names) assert.ok(all.includes(n), `help lists ${n}`)
     }
-    assert.ok(bot.chats[0].includes('help <command>'))
+    assert.ok(pages[pages.length - 1].includes('help <command>'))
+    if (pages.length > 1) assert.ok(pages[0].includes('say help 2'))
   })
 
   it("'help find me' explains find me; aliases resolve", () => {

@@ -46,9 +46,33 @@ const ITEM = {
   torch: (n) => n === 'torch',
 }
 
+// Project-material reservation (g0z.3 design): the castle never lays the
+// bot's scaffold/tool stone (equip's SCAFFOLD_LOW mark — below it equip
+// would dig the same blocks back) nor the last planks a stick craft needs.
+// Deferred require: equip loads inside the craft->goal chain.
+function reserveOf(kind) {
+  if (kind === 'stone') {
+    try { return require('./equip').SCAFFOLD_LOW } catch (_) { return 16 }
+  }
+  return kind === 'planks' ? 2 : 0
+}
+
+// Items of the kind above the reserve (what the castle may spend).
+function usable(bot, kind) {
+  const want = ITEM[kind]
+  if (!want) return 0
+  let n = 0
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (it && typeof it.name === 'string' && want(it.name)) n += typeof it.count === 'number' ? it.count : 1
+    }
+  } catch (_) { /* no inventory: none */ }
+  return Math.max(0, n - reserveOf(kind))
+}
+
 function findItem(bot, kind) {
   const want = ITEM[kind]
-  if (!want) return null
+  if (!want || usable(bot, kind) <= 0) return null
   try {
     for (const it of bot.inventory.items() || []) {
       if (it && typeof it.name === 'string' && want(it.name)) return it
@@ -147,6 +171,111 @@ function pick(bot, ctx, st, cells, key, now) {
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
     return { idx: -1, waiting }
   }
+}
+
+// Read-only twin of pick() for the work arbiter (g0z.3): the next cell the
+// executor would work now, or why there is none — same work order, layer
+// gate and backoff, no cursor/scan/blocked-map writes. Full scan from 0.
+// ponytail: O(plan) blockAt per decide; cache per tick if g0z.11's ~2000
+// cells ever show in the tick timer.
+function peek(bot, st, now) {
+  const { cells, key } = blueprint.absPlan(st.site, st.rot)
+  const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
+  const complete = st.phase === 'complete'
+  let gateDy = Infinity
+  for (const k of Object.keys(blocked)) {
+    const [v, i] = k.split(':')
+    const c = cells[Number(i)]
+    if (Number(v) !== blueprint.BLUEPRINT_VERSION || !c || !blocked[k] || done(bot, c)) continue
+    if (blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+  }
+  let waiting = null
+  for (const idx of workOrder(cells, key)) {
+    const c = cells[idx]
+    if (clearing(c) && complete) continue
+    if (done(bot, c)) continue
+    const b = blocked[bkey(c.idx)]
+    if (b && b.until > now) { waiting = waiting || c; continue }
+    if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
+    return { cell: c, waiting: null, cells }
+  }
+  return { cell: null, waiting, cells }
+}
+
+// Batch gate (build precedent): a castle leg starts with BATCH of the next
+// kind on hand, or the whole remainder of that kind when less is left.
+const BATCH = 16
+
+// The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
+// 'done' | 'finish' | 'blocked' | 'clear' (next cell is a keep-clear dig, no
+// material) | '<kind>-<none|some|batch>' (the next cell's material on
+// hand, above the reserve). Restock, stop/go, completion and a demand-kind
+// change all move the word, so holds keyed on the text release on them.
+function stockWord(bot, kind, left) {
+  const have = usable(bot, kind)
+  if (have <= 0) return `${kind}-none`
+  return have >= Math.min(BATCH, left) ? `${kind}-batch` : `${kind}-some`
+}
+
+// 'finish' (revmux 01): every cell matches but the executor has not yet
+// run its completion branch (phase, chat, keep-clear release) — one more
+// castle tick does that, then the word reads 'done'.
+// Unloaded site (revmux 01): null blocks read as undone, so a fresh peek
+// would call a far complete castle unfinished and yank the bot back. Far
+// away the word is the last one read on site (stock re-read for a material
+// word); a complete castle reads done; never seen this session -> the
+// first plan cell's kind (walk back and build).
+function menuFact(bot, ctx, now = Date.now()) {
+  const st = ctx && ctx.castle
+  if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
+  if (st.parked) return 'parked'
+  try {
+    // Loaded = all four footprint corners read (revmux 02): the site spans
+    // at most 2x2 chunks, so the corners cover every chunk it touches.
+    let loaded = false
+    try {
+      const { w, d } = blueprint.siteDimensions(st.rot | 0)
+      loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+    } catch (_) { loaded = false }
+    if (!loaded) {
+      if (st.phase === 'complete') return 'done'
+      const last = ctx.castleWord
+      if (last && last.kind) return stockWord(bot, last.kind, last.left)
+      if (last && last.word) return last.word
+      const { cells, key } = blueprint.absPlan(st.site, st.rot)
+      return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
+    }
+    const r = peek(bot, st, now)
+    let word = null
+    if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
+    else if (clearing(r.cell)) word = 'clear'
+    if (word) {
+      ctx.castleWord = { word }
+      return word
+    }
+    const kind = r.cell.kind
+    let left = 0
+    for (const o of r.cells) {
+      if (o.kind === kind && !done(bot, o)) left++
+    }
+    ctx.castleWord = { kind, left }
+    return stockWord(bot, kind, left)
+  } catch (_) {
+    return 'none'
+  }
+}
+
+// Owner-facing progress (chat 'castle'): laid/total per material kind,
+// read live from the world (blocked never counts as done).
+function progressByKind(bot, st) {
+  const out = {}
+  for (const c of blueprint.absPlan(st.site, st.rot).cells) {
+    if (clearing(c)) continue
+    const e = out[c.kind] || (out[c.kind] = { done: 0, total: 0 })
+    e.total++
+    if (done(bot, c)) e.done++
+  }
+  return out
 }
 
 function progress(bot, st, cells, ctx) {
@@ -468,3 +597,8 @@ module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES
 module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
+module.exports.isMaterial = (name) => typeof name === 'string' && Object.values(ITEM).some((want) => want(name))
+module.exports.menuFact = menuFact
+module.exports.progressByKind = progressByKind
+module.exports.usable = usable
+module.exports.BATCH = BATCH

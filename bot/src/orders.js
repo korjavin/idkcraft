@@ -81,6 +81,14 @@ function createOrders(box) {
       } catch (_) { keepAt = {} }
       ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     },
+    // Castle project (g0z.3): a new order or 'castle forget' (null). The
+    // executor's per-site scratch resets with it; null persists as a drop.
+    setCastle: (st) => {
+      ctx.castle = st || null
+      ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null; ctx.castleWord = null
+      try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castle } catch (_) { /* hold best-effort */ }
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
     loadMemory: () => { try { return memory.restore(bot, ctx) } catch (_) { return null } },
