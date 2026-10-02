@@ -129,10 +129,14 @@ terrain persists across spots); results go to `/tmp/stuck-rerun-<variant>.json`.
 Repeats → `verdict: REGRESSION (repeated on the rerun)`, exit 1. Holds →
 a `FLAKY <spot>` line per spot plus `verdict: FLAKY`, exit 0 — paste it
 with the table; a spot that keeps showing up FLAKY is a bead, not noise.
-A missing baseline entry is deterministic (exit 1, no rerun); env exits
-(2) are never rerun. The sabotages above are deterministic (they fail 2/2)
-and still exit 1 after the rerun (proven on S6-LEAD `MAX_FAILS=0`, see the
-6x7.9 PR).
+FLAKY means "held in isolation": the rerun has a fresh follower (no ctx
+latches/counters from earlier spots) and pristine terrain, so a spot
+FLAKY again and again behind the same predecessor points to cross-spot
+state carry-over, not physics. A missing baseline entry is deterministic
+(exit 1, no rerun); env exits (2) are never rerun. The sabotages above are
+deterministic (they fail 2/2) and still exit 1 after the rerun (proven:
+S6-LEAD with `MAX_FAILS=0` regressed `unreached (was reached)` on both
+runs, `verdict: REGRESSION (repeated on the rerun)`, exit 1).
 
 What it does NOT see: recover breakage that changes neither the walk nor
 the paging (a first-try rescue needs no budget — `MAX_FAILS=0` is silent
