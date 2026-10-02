@@ -970,6 +970,12 @@ describe('33vm: charcoal fuel and the interior torch first', () => {
     assert.equal(bot.calls.goals.length, 1, 'walk sent')
     for (let i = 0; i < 6; i++) light(bot, ctx) // idle far (preempted / short walk)
     assert.ok(bot.calls.goals.length >= 2, 'the goal is re-sent, never left dead')
+    bot.pathfinder.isMoving = () => true
+    ctx.lastGoalKey = 'fight:7' // a leftover fight goal still moving the body
+    const sent = bot.calls.goals.length
+    light(bot, ctx)
+    assert.equal(bot.calls.goals.length, sent + 1, 'a foreign goal is overwritten at once')
+    bot.pathfinder.isMoving = () => false
     for (let i = 0; i < 40; i++) light(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
     assert.equal(bot.puts.length, 0)

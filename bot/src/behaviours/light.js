@@ -272,9 +272,13 @@ function smeltTick(bot, ctx) {
     // Far and idle (a preemption carried the body off, or the walk ended
     // short): re-send the goal, spaced (fight.js lesson: a re-send every
     // tick tears down a search still computing); the budget keeps counting.
-    if (ctx.lightGoalIdx !== 'furnace' || (!moving && (ctx.lightSmeltWalk || 0) % SMELT_RESEND_TICKS === 0)) {
+    // A foreign goal (fight's GoalFollow left running) shows in the shared
+    // lastGoalKey: re-send at once.
+    if (ctx.lightGoalIdx !== 'furnace' || ctx.lastGoalKey !== 'light:furnace' ||
+      (!moving && (ctx.lightSmeltWalk || 0) % SMELT_RESEND_TICKS === 0)) {
       if (ctx.lightGoalIdx !== 'furnace') ctx.lightSmeltWalk = 0
       ctx.lightGoalIdx = 'furnace' // placeTick re-aims its spot after this leg
+      ctx.lastGoalKey = 'light:furnace'
       try { bot.pathfinder.setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 3)) } catch (_) { /* retry next tick */ }
     }
     ctx.lightSmeltWalk = (ctx.lightSmeltWalk || 0) + 1
