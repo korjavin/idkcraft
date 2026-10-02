@@ -611,11 +611,16 @@ describe('house footprint (idkcraft-e5ba)', () => {
     assert.equal(d('grass_block', 100, 70, -357), 'protected')
     assert.equal(d('dirt', 100, 70, -358), 'protected')
     assert.equal(d('dirt', 103, 70, -352), 'protected')
+    assert.equal(d('dirt', 100, 69, -356), 'protected') // under the floor
+  })
+  it('placedByBot: floor patch stays protected, air-box dirt is diggable', () => {
+    const c = { home, placedByBot: new Set(['100,70,-356', '100,71,-356']) }
+    assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), c), 'protected')
+    assert.equal(denyReason(bot, blk('dirt', 100, 71, -356), c), null)
   })
   it('leaves distant ground, flora and snow alone', () => {
     assert.equal(d('grass_block', 100, 70, -350), null)
     assert.equal(d('dirt', 107, 70, -355), null)
-    assert.equal(d('dirt', 100, 69, -356), null)
     assert.equal(d('snow', 100, 71, -356), null)
     assert.equal(d('short_grass', 100, 71, -356), null)
   })
