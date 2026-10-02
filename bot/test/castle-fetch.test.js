@@ -565,7 +565,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
 
   it('a far leg looks for the castle chest again once at the site (revmux 01/02)', async () => {
     const set = new Map()
-    const chest = [{ name: 'cobblestone', count: 128 }]
+    const chest = [{ name: 'cobblestone', count: 10 }] // short of the target: the leg goes on
     const items = TOOLS()
     const bot = makeBot({ items, set, chest, at: pos(SITE.x - 60, 64, SITE.z) })
     bot.findBlocks = ({ matching }) => (matching === BLOCK_IDS.chest && Math.abs(bot.entity.position.x - SITE.x) < 20 ? [pos(SITE.x, SITE.y, SITE.z)] : [])
@@ -579,7 +579,14 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     fetch(bot, ctx)
     await settle(); await settle()
     assert.equal(bot.calls.opens.length, 1)
-    assert.equal(count(items, 'cobblestone'), 64 + 16)
+    assert.equal(count(items, 'cobblestone'), 10)
+    // Out past DIG_RADIUS and back in the same leg: no second chest trip.
+    bot.entity.position = pos(SITE.x - 60, 64, SITE.z)
+    fetch(bot, ctx); fetch(bot, ctx)
+    bot.entity.position = pos(SITE.x + 1.5, 64, SITE.z - 0.5)
+    fetch(bot, ctx); fetch(bot, ctx)
+    await settle(); await settle()
+    assert.equal(bot.calls.opens.length, 1, 'the chest re-look is once per leg')
   })
 
   it('a quarrying leg past DIG_RADIUS keeps digging, never walks back to the site (revmux 02)', async () => {
