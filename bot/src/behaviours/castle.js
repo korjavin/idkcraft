@@ -141,11 +141,19 @@ function strike(ctx, st, c, why, now) {
 // Work order = plan order with the door deferred past every other place
 // cell (revmux 01): A* never opens doors (canOpenDoors=false) and the laid
 // door is break-vetoed, so the doorway stays an open passage while the bot
-// still needs the interior. Indices stay plan indices (blocked keys).
+// still needs the interior. Then the keep-clear cells, the moat digs (v2,
+// g0z.6: the bridge deck is an ordinary place cell, so it exists before
+// any dig) and the fence ring last. Indices stay plan indices (blocked keys).
+const RANK = { door: 1, air: 2, dig: 3, fence: 4 }
+function rank(c) { return RANK[c.kind] || 0 }
+// Interior work (g0z.6): an undone cell ranked before the moat. While one
+// is left — blocked, gated or not — no moat cell is dug, so the bot never
+// has to cross a dug moat to finish the castle; later repairs cross the
+// bridge, which is laid before any dig.
+function interior(c) { return rank(c) < RANK.dig }
 let orderCache = null
 function workOrder(cells, key) {
   if (orderCache && orderCache.key === key) return orderCache.order
-  const rank = (c) => (clearing(c) ? 2 : c.kind === 'door' ? 1 : 0)
   const order = cells.map((c) => c.idx).sort((a, b) => rank(cells[a]) - rank(cells[b]) || a - b)
   orderCache = { key, order }
   return order
@@ -169,11 +177,14 @@ function pick(bot, ctx, st, cells, key, now) {
     if (full) { ctx.castleScanKey = key; ctx.castleScanAt = now }
     let first = -1
     let waiting = null
+    let inside = false
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
+      if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
+      if (interior(c)) inside = true
       const b = st.blocked[bkey(st, c.idx)]
       if (b && b.until > now) { waiting = waiting || c; continue }
       if (!clearing(c) && c.dy > gateDy) { waiting = waiting || c; break }
@@ -208,10 +219,13 @@ function peek(bot, st, now, ctx) {
     if (blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
   }
   let waiting = null
+  let inside = false
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
+    if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
+    if (interior(c)) inside = true
     const b = blocked[bkey(st, c.idx)]
     if (b && b.until > now) { waiting = waiting || c; continue }
     if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
@@ -596,12 +610,46 @@ function digCell(bot, ctx, st, c, now) {
   }
   flight(ctx, 'digInFlight', c, async (token) => {
     try {
+      // Harvest tool first (flat digFlight): stone by hand drops nothing,
+      // and the spoil is kept — cobble counts for the castle (g0z.6).
+      let tool = null
+      try { tool = typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { tool = null }
+      if (tool) await bot.equip(tool, 'hand')
       await bot.dig(b)
-      if (live(ctx, token)) ctx.castleFails = null
+      if (live(ctx, token)) {
+        ctx.castleFails = null
+        ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
+      }
     } catch (_) {
       if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
     }
   })
+}
+
+// Spoil pickup (g0z.6, flat's shave-pickup pattern): after a dig, walk
+// onto the drop so it lands in the inventory. A drop 2+ above the feet
+// would need a tower, one out of dig reach is stale (the bot left between
+// ticks) — both left. True while the walk owns the tick.
+// ponytail: the drop is assumed at the dug cell (moat digs: it is); a drop
+// that rolled away stays as litter after PICKUP_TICKS.
+const PICKUP_TICKS = 6
+function pickup(bot, ctx) {
+  const p = ctx.castlePickup
+  const bp = bodyPos(bot)
+  const far = bp && Math.hypot(bp.x - p.x - 0.5, bp.z - p.z - 0.5) > flat.REACH_DIG
+  if (!bp || far || p.y - Math.floor(bp.y) >= 2 || ++p.ticks > PICKUP_TICKS) { ctx.castlePickup = null; return false }
+  if (p.ticks === 1) {
+    try {
+      ctx.castleGoal = new goals.GoalNear(p.x, p.y, p.z, 1)
+      ctx.castleGoalIdx = -1
+      bot.pathfinder.setGoal(ctx.castleGoal)
+    } catch (_) { ctx.castlePickup = null; return false }
+    return true
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (!moving) ctx.castlePickup = null
+  return moving
 }
 
 // Castle guard for the pathfinder (every executor): laid castle blocks are
@@ -687,6 +735,7 @@ function castle(bot, ctx) {
   }
   if (ctx.placeInFlight || ctx.digInFlight) return
   guardCastle(bot, ctx)
+  if (ctx.castlePickup && pickup(bot, ctx)) return
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
     const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
