@@ -49,6 +49,7 @@ const BEHAVIOURS = {
   stay: homeMod.stay,
   shelter: homeMod.shelter,
   comehome: homeMod.comehome,
+  gocastle: require('./behaviours/gocastle'),
   build: require('./behaviours/build'),
   castle: castleMod,
   castlefetch: require('./behaviours/castlefetch'),
@@ -252,6 +253,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     clearStuck()
     resetNightStep()
     homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first work path (jr2.3)
+    ctx.gocastle = null
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
     ctx.flat = null
     ctx.work = true
@@ -423,7 +425,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; ctx.gocastle = null; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
     // after the far-search await (a setLead mid-await takes the body this
     // tick) and before any dispatch. A switch runs the single cleanup and
@@ -531,7 +533,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
         }
-      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome) {
+      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome && !ctx.gocastle) {
         ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
       } else ctx.unseenTicks = 0
       const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
@@ -540,7 +542,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // not park it and the homing walk must not steal it mid-order. The
       // come-home meet rides the same way (jr2.3): the owner waits at home,
       // out of tracking range while the bot walks.
-      const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked) || ctx.comehome) && !target && (rosterOnline || ctx.autonomous) && !homing
+      const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked) || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous) && !homing
       if (workAlone) workTickFast = true
       if (!target && !workAlone) {
         // Cost fix: nobody online => no brain call at all, decide idle
@@ -722,6 +724,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'comehome' }, calledBrain }
+      }
+      if (ctx.gocastle && decision.action !== 'fight') {
+        const handler = BEHAVIOURS.gocastle
+        if (typeof handler === 'function') handler(bot, ctx, target, state)
+        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { sprint: true }) } catch (_) { /* lease best-effort */ }
+        const castleDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=${decision.source} action=gocastle sprint=${decision.sprint} dist=${castleDist} ${pathSuffix()}`)
+        return { decision: { ...decision, action: 'gocastle' }, calledBrain }
       }
       if (ctx.lead && decision.action !== 'fight') {
         // Lead is an explicit player order: it overrides the brain like
