@@ -496,6 +496,22 @@ describe('order corpus (idkcraft-6x7.8)', () => {
       assert.equal(matchOrderLine(line, b.expect, b.fail), null, line)
     }
   })
+
+  it('GATHER-CLIFF judges the gather step of a build-here (idkcraft-m7ke)', () => {
+    // No scaffold under acacias whose upper logs are 7+ up: gather chops what
+    // it reaches, drops the rest on the first planner timeout, and refuses
+    // honestly — the ceilings (eps, calls 0) catch the old recover detour.
+    const g = byName['GATHER-CLIFF']
+    assert.ok(g, 'GATHER-CLIFF in the corpus')
+    assert.equal(g.order, 'build here')
+    assert.equal(g.scaffold, 0)
+    assert.equal(matchOrderLine(`got ${require('../src/goal').NEED_LOGS} logs`, g.expect, g.fail), 'expect')
+    assert.equal(matchOrderLine('cannot reach the trees', g.expect, g.fail), 'fail')
+    assert.equal(matchOrderLine('no trees within 48 blocks', g.expect, g.fail), 'fail')
+    for (const line of ['building a home at -19 64 -248', 'chopping acacia_log 4/14', 'going for acacia_log, 20 blocks away']) {
+      assert.equal(matchOrderLine(line, g.expect, g.fail), null, line)
+    }
+  })
 })
 
 describe('raise-house (idkcraft-6x7.8)', () => {

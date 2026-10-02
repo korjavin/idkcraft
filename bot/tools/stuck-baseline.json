@@ -27,6 +27,7 @@
     "DUGPIT-BARE": { "reached": true, "maxStuck": 2, "maxEps": 2, "maxCalls": 0 },
     "JR-BUILD": { "reached": true, "maxStuck": 5, "maxEps": 1, "maxCalls": 0 },
     "MOAT-EXIT": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
-    "HOME-PIT": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 }
+    "HOME-PIT": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
+    "GATHER-CLIFF": { "reached": false, "maxStuck": 3, "maxEps": 1, "maxCalls": 0 }
   }
 }

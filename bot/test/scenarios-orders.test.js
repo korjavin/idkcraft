@@ -212,7 +212,7 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
     // answered) and checked goal.decide directly. E2E: the ticks after the
     // chat really dispatch the work loop — gather first on an empty
     // inventory, then rest with reasons when the only column skips.
-    const bot = orderBot({ '20,64,0': 'oak_log', '20,65,0': 'oak_log' }, { oak_log: { id: 17 } })
+    const bot = orderBot({ '20,64,0': 'oak_log', '20,65,0': 'oak_log', '20,66,0': 'oak_leaves' }, { oak_log: { id: 17 } })
     bot.players = { Steve: visiblePlayer('Steve', 10) }
     const ticker = createTicker({
       bot,
