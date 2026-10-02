@@ -34,7 +34,9 @@ const MC_CONTAINER = process.env.MC_CONTAINER || 'idk-mc'
 const TAG = Math.floor(Math.random() * 10000)
 const NAME = `Vtwo${TAG}`
 const GUIDE = `Guide${TAG}`
-const WANT_FRAME = castleMod.batchOf('frame') // one full gather load laid
+// The whole first Fachwerk sill (dy 3): more than one gather load, so the
+// second load is chopped beside standing beams.
+const WANT_FRAME = blueprint.BLUEPRINTS[2].PLAN.filter((c) => c.kind === 'frame' && c.dy === 3).length
 const BLOCK = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log', chest: 'chest' }
 
 async function rcon(cmd) {
@@ -78,15 +80,15 @@ async function main() {
   const at = { x: Math.floor(sp.x) - 8, z: Math.floor(sp.z) }
   const { site, rot } = castleSite({ x: at.x + 0.5, y: gy, z: at.z + 0.5 }, 0)
   const { w, d } = blueprint.siteDimensions(rot, blueprint.BLUEPRINT_VERSION)
-  // Trees west of the fence, outside the site: 5 short oaks, 4 logs each.
+  // Trees west of the fence, outside the site: 12 short oaks, 4 logs each.
   const tx = site.x - 6
   log(`spawn ${sp.x} ${sp.y} ${sp.z}, house ${home.x} ${home.y} ${home.z}, castle ${site.x} ${site.y} ${site.z} rot ${rot} (${w}x${d}), trees x=${tx}`)
   const out = [
     await rcon(`fill ${site.x - 10} ${gy} ${site.z - 2} ${site.x + w + 1} ${gy + 16} ${site.z + d + 3} air`),
     await rcon(`fill ${site.x - 10} ${gy - 1} ${site.z - 2} ${site.x + w + 1} ${gy - 1} ${site.z + d + 3} grass_block`),
   ]
-  for (let i = 0; i < 5; i++) {
-    const z = site.z + 3 + i * 5
+  for (let i = 0; i < 12; i++) {
+    const z = site.z + 1 + i * 2
     out.push(await rcon(`fill ${tx - 1} ${gy + 3} ${z - 1} ${tx + 1} ${gy + 4} ${z + 1} oak_leaves[persistent=true]`))
     out.push(await rcon(`fill ${tx} ${gy} ${z} ${tx} ${gy + 3} ${z} oak_log`))
   }
@@ -165,7 +167,7 @@ async function main() {
   })
   clearInterval(tracker)
   clearInterval(daylight)
-  console.log(`PASS castle v2: new order v2, ${progress('frame')} frame cells from chopped logs, storeroom chest crafted and placed`)
+  console.log(`PASS castle v2: new order v2, the ${WANT_FRAME}-beam sill from chopped logs, storeroom chest crafted and placed`)
   process.exit(0)
 }
 
