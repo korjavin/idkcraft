@@ -38,7 +38,6 @@ function createOrders(box) {
       if (!real || seen) ctx.work = false
       ctx.lastGoalKey = ''
       ctx.lead = null
-      ctx.leadStuck = 0
       ctx.leadTargetGone = 0
       if (real) ctx.paused = false
     },
@@ -106,11 +105,10 @@ function createOrders(box) {
       ctx.paused = true
       ctx.work = false
       ctx.lead = null
-      ctx.leadStuck = 0
       ctx.leadTargetGone = 0
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); resetNightStep(); homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
+    setLead: (order) => { clearStuck(); resetNightStep(); homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
@@ -120,7 +118,6 @@ function createOrders(box) {
       if (ctx.lead && !player) bot.chat('following you again')
       clearStuck()
       ctx.lead = null
-      ctx.leadStuck = 0
       ctx.leadTargetGone = 0
     },
     getLead: () => ctx.lead,
@@ -160,7 +157,7 @@ function createOrders(box) {
       const plan = bringMod.sharePlan(items)
       if (plan.length === 0) return 'nothing to share'
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the return walk (jr2.3)
-      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       clearStuck()
@@ -175,7 +172,7 @@ function createOrders(box) {
       clearPendingSearch(ctx)
       resetNightStep()
       if (bringMod.isFoodRequest(name)) {
-        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
         const n = want || bringMod.WANT_FOOD
@@ -209,7 +206,7 @@ function createOrders(box) {
       const plan = resolved ? bringMod.planItemGive(bot, resolved, need) : null
       const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
       const openPackOrder = () => {
-        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
         clearStuck()
@@ -232,7 +229,7 @@ function createOrders(box) {
       // form — including exact block names like white_wool, dirt or torch.
       const keptName = plan && plan.keptOnly ? resolved.family : null
       if (resolved && !worldFallback && ctx.home && ctx.home.chest) {
-        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
         clearStuck()
@@ -249,7 +246,7 @@ function createOrders(box) {
       // from sheep — after the chest rung, before the block path (wool
       // blocks are never diggable, so the block rung cannot serve wool).
       if (resolved && woolMod.isWoolFamily(resolved)) {
-        if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
         clearStuck()
@@ -269,7 +266,7 @@ function createOrders(box) {
       if (resolved && !worldFallback) {
         const cPlan = craftanyMod.planCraft(bot, ctx, bringMod.orderCraftNames(resolved.names), 1)
         if (cPlan.ok) {
-          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
           ctx.resumeWork = false
           clearStuck()
@@ -298,7 +295,7 @@ function createOrders(box) {
             if (gap) sub = { gap, target: cPlan.target, color: woolMod.dropColor(gap.name) }
           }
           if (sub) {
-            if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+            if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
             ctx.unseenTicks = 0
             ctx.resumeWork = false
             clearStuck()
@@ -339,7 +336,7 @@ function createOrders(box) {
             return `no ${name} within ${loadedSearchRadius(bot)} blocks (loaded area)`
           }
           if (!bringMod.canBringName(bot, name)) return `can't bring ${name} — ores and logs only`
-          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
           ctx.resumeWork = false
           clearStuck()
@@ -381,7 +378,7 @@ function createOrders(box) {
           // the order opens in find so the legs hunt diggable ground (or
           // refuse honestly with the vein coords when anchorless).
           if (!mem && !buried) {
-            if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+            if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
             ctx.unseenTicks = 0
             ctx.resumeWork = false
             clearStuck()
@@ -405,7 +402,7 @@ function createOrders(box) {
             if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
             return answer
           }
-          if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
           ctx.resumeWork = false
           clearStuck()
@@ -434,7 +431,7 @@ function createOrders(box) {
       clearStuck()
       resetNightStep()
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first flat walk (jr2.3)
-      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
       // Center: the player who gave the command, or the bot itself when the
       // speaker is out of tracking range (same honest fallback as build here).
@@ -497,7 +494,7 @@ function createOrders(box) {
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
-      if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+      if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
       if (ctx.flat) ctx.flat.parked = true
       // A mode change away from follow revokes the held order with its disk
       // copy (startWork precedent): a restart must not resurrect a follow

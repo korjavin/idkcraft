@@ -37,7 +37,7 @@ const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held
 const HOP_RETRY_BACK_MS = 100 // short back-off to leap stance: gap 0.25-0.5 off the face (wqt assay)
 const HOP_PRESS_DIST = 1.0 // pressed: closer than this to the anchor a leap goes into the face (flush is 0.8)
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
-const STUCK_TICKS_ENTRY = 30 // generic backstop: still + moving this long (canonical home: the recoverText buckets below need it too, and stuck.js reads it — one number, not two)
+const STUCK_TICKS_ENTRY = 30 // slow stuck entry (stuck.js reads it; recoverText buckets use it)
 const PROGRESS_TOLERANCE = 0.5
 const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
 const PILLAR_FAST_DY = 0.9 // fast-path issue height (round-3: see below)
@@ -1398,20 +1398,12 @@ const RECOVER_MENU = {
 
 // --- episode ---
 
-// The single detector (stuck.js) calls this instead of moving the body
-// itself. True on the transition (fact raised), false when an episode
-// already runs, the fact is already set, or the latch holds for the same
-// situation (a just-finished episode: re-firing without new information
-// would ask+chat every few seconds). A moved goal clears the latch and
-// raises fresh.
 function goalClose(a, b) {
   if (!a || !b) return !a && !b
   if (typeof a.x !== 'number' || typeof b.x !== 'number') return false
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= 2
 }
-// Rest gave-up marker (q0h): while the rest step keeps failing at one
-// point, detectors hold their fire there — relocation re-arms them. Lazy: a
-// far sample clears the marker and reports no hold.
+
 function anyPlayerOnline(bot) {
   try {
     const players = (bot && bot.players) || {}
@@ -1422,11 +1414,10 @@ function anyPlayerOnline(bot) {
   return false
 }
 
+// Rest gave-up marker (q0h): while the rest step keeps failing at one
+// point, raises hold their fire there. Relocation clears it in any step or
+// mode (core-1): called every tick (stuck.update) and from the gate.
 const REST_GIVE_UP_DIST = 2
-// Relocation ends the hold in any step or mode (core-1 follow-up): the
-// detectors consult the gate only when firing, so a clean /tp out would
-// otherwise leave a stale mark behind. Called every tick (stuck.update)
-// and from the gate itself.
 function clearRelocatedRestMark(ctx, bot) {
   try {
     const at = ctx && ctx.restGaveUpAt
@@ -1460,12 +1451,10 @@ function restGaveUpHolds(ctx, bot) {
   } catch (_) { return false }
 }
 
-// Latch consults (were tickerLatched/clearStaleRoamLatch plus the walkHomeTick
-// inline check, with three copies of the radius): since 6x7.2 the one
-// release latch lives in stuck.js COOLDOWN — one radius (LATCH_CLEAR), one
-// consult covering every owner. The backstop raises through setStuck like
-// every other owner, so a noPath trap re-fires only past the latch radius
-// (rra round 1), never every ~45 s.
+// Raise the stuck fact (stuck.js is the only caller). True on the
+// transition; false when an episode runs, the fact is set, or the release
+// latch holds the same situation (by+key, and a close goal unless spot:).
+// A moved goal clears the latch and raises fresh.
 function setStuck(ctx, by, goal, key) {
   if (!ctx || ctx.recovery || ctx.stuck) return false
   const g = goal && typeof goal.x === 'number' ? { x: goal.x, y: goal.y, z: goal.z } : null
@@ -1487,9 +1476,6 @@ function blockNameOf(b) {
   } catch (_) { return '?' }
 }
 
-// Chosen lines (fja) carry the facts text plus feet/head/next block names
-// (b50 wedge-line style), so a pit, water and a wall read apart in prod
-// logs. facts is null on terminal/continue lines: pos alone there.
 // Hop diagnostics (ak4): why the mount does or does not fire — ground
 // contact, vertical speed, the step column and the own column above the
 // head. Best-effort: unknown sides read '?'.
@@ -1513,6 +1499,9 @@ function hopDetail(bot, ctx) {
   return `hop=og:${og},vy:${vy},step:${step},above:${above},head:${head},col2:${nm(0, 2, 0)}`
 }
 
+// Chosen lines (fja) carry the facts text plus feet/head/next block names,
+// so a pit, water and a wall read apart in prod logs. facts is null on
+// terminal/continue lines: pos alone there.
 function logRecover(bot, ctx, action, source, outcome, facts) {
   let extra = ''
   if (facts) {
@@ -1608,26 +1597,19 @@ function release(bot, ctx, how) {
     // On gave-up the step's failed:* final stands and the arbiter moves on.
     if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
-  if (by === 'follow') ctx.followStalls = 0
-  // The ticker latch anchors on gave-up only (rra round 2): a 'done' episode
-  // may be a partial climb (REPEATS cap, single-shot climbers) that leaves
-  // the body in the pit — latching that would end all further escape
-  // attempts with no page. Progress clears the old anchor instead, so the
-  // next trap gets a fresh episode.
-  // Lead anchors like the other owned walks (6x7.2): without a latch the
-  // central detector re-fires every slow threshold through a mining stall
-  // (episodes reset both budgets) and the order never gives up. Anchored
-  // like home/roam (the order goal is static), plus the no-gain mark: real
-  // gain past it re-arms for a second, different wedge (M3, core-4).
+  // Release latch (consulted by stuck.js COOLDOWN). The ticker latch
+  // anchors on gave-up only (rra round 2): a 'done' may be a partial climb
+  // still in the pit, and latching it would end all escapes with no page.
+  // Lead latches too (6x7.2), or a mining stall re-fires every slow
+  // threshold and the order never gives up.
   if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && how === 'gave-up')) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
     if (by === 'home' || by === 'roam' || by === 'no-displacement' || by === 'lead') {
-      // Static goals never move, so goal-closeness cannot tell one wedge
-      // from the next: anchor the release point instead. The stuck.js
-      // COOLDOWN consult re-arms once the body relocated past the latch
-      // radius (was walkHomeTick/roam-back/tickerLatched, rra round 1).
+      // Static goals: goal-closeness cannot tell one wedge from the next,
+      // so anchor the release point (re-arms past the latch radius); lead
+      // also keeps its no-gain mark (M3, core-4).
       const bp = botPos(bot)
       if (bp) ctx.recoverLatch.at = { x: bp.x, y: bp.y, z: bp.z }
       if (by === 'lead' && ctx.lead) ctx.recoverLatch.mark = ctx.lead.nudgedAt

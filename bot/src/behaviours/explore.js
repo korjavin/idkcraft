@@ -10,9 +10,7 @@
 // a few blocks out — failing there would mark every forest ring
 // unreachable without ever scanning it.
 //
-// Stuck is the central machinery: a no-displacement stall fails the target
-// (give-up, below) and stuck.js raises the fact off the explore key when
-// the body itself wedges; the ef3 menu owns the escape.
+// A no-displacement stall fails the target; body wedges are stuck.js's.
 
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
@@ -189,9 +187,7 @@ function explore(bot, ctx, target, state) {
     ctx.stepStatus = 'failed:unreachable'
     // The target is the goal: without it dig_through has no direction and
     // goalDy/goalDist describe a bystander player (revmux round 1). One
-    // escape per failed leg through stuck.request (core-1: give-ups reset
-    // the central stills, so a pit would cycle targets forever with no
-    // episode otherwise).
+    // escape per failed leg (core-1: else a pit cycles targets forever).
     stuck.request(bot, ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
   }
 }

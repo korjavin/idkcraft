@@ -90,16 +90,12 @@ function madeProgress(order, bp, grounded) {
 function finish(bot, ctx, message) {
   bot.chat(`${message}; following you again`)
   ctx.lead = null
-  ctx.leadStuck = 0
 }
 
-// Two-strike give-up (M3, ef3 shape): the first strike asks the menu for
-// one escape through stuck.request — the same choke point as the central
-// raise (latch, nudge line, STUCK state), not body detection. release()
-// marks the order nudged, so a still-stuck order gives up next instead of
-// looping episodes; real gain past the mark re-arms below. An episode
-// already running or waiting holds the order. A refused request (the latch
-// holds the same situation) gives up too — the escape was already tried.
+// Two-strike give-up (M3, ef3 shape): the first strike asks for one escape
+// through stuck.request; release() marks the order nudged, so a still-stuck
+// order gives up next (real gain past the mark re-arms). A running episode
+// holds the order; a refused request gives up — the escape was tried.
 function stalled(bot, ctx, order, bp) {
   if (stuck.verdict(ctx).episode) return
   if (!order.nudged) {
@@ -149,7 +145,6 @@ function lead(bot, ctx, target, state) {
     order.lastProgressAt = Date.now()
     bot.chat(`waiting for you, come to me (${Math.round(dp)} blocks)`)
     holdGoal(bot, ctx)
-    ctx.leadStuck = 0
     return
   }
   const key = `lead:${order.pos.x},${order.pos.y},${order.pos.z}`

@@ -9,11 +9,8 @@ const stuck = require('../stuck')
 // alive. Ranked last: any fight/follow answer owns the body instead.
 //
 // ponytail: random point, no reachability check — the pathfinder just fails
-// and the next tick picks another. One function, same shape as follow.js.
-//
-// No stuck detector here (6x7.2): the walk-back wedge belongs to the single
-// detector in stuck.js (fast entry off the roam-back key, gated on the rest
-// hold like every raise); the stroll below only ever takes another point.
+// and the next tick picks another. The walk-back wedge is stuck.js's (fast
+// entry off the roam-back key); the stroll only ever takes another point.
 const ROAM_RADIUS = 6
 const HAND_BACK_DIST = 6
 
@@ -42,13 +39,9 @@ function roam(bot, ctx, target, state) {
     return
   }
   // Already strolling: keep walking until the pathfinder stops. A wedged
-  // executor (isMoving with piling stuck resets and no displacement) just
-  // takes another point below — p4s: handing the body to recover here turned
-  // every 3.5 s pathfinder stop into 10-20 s of sidestep/dig/call menus that
-  // walk back into the same trap. No stuck fact from the stroll, ever. The
-  // central detector counts the resets; roam re-issues on each new one past
-  // the entry (seen-marker, like follow's replan knock — the counter itself
-  // clears on displacement inside stuck.js).
+  // executor just takes another point on each new reset past the entry
+  // (seen-marker, like follow's knock) — p4s: no stuck fact from the
+  // stroll, ever (recover menus walked back into the same trap).
   if (bot.pathfinder.isMoving()) {
     const resets = stuck.verdict(ctx).resets
     if (resets < (ctx.roamSeenResets || 0)) ctx.roamSeenResets = resets
