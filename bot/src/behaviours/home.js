@@ -854,6 +854,7 @@ function shelter(bot, ctx, target, state) {
       // re-pillar below. A foreign non-pillar episode is never touched.
       st.pillared = false
       st.pillarAt = null
+      st.dig = null
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -869,14 +870,14 @@ function shelter(bot, ctx, target, state) {
     ctx.inShelter = false
     // A foreign live episode (a stuck flow's non-pillar prim) is never
     // touched: the hold is the point, the pillar best-effort.
-    if (!ctx.recovery) {
+    if (!ctx.recovery && !st.dig) {
       try { retreatMod.beginPillar(ctx, 'shelter', null) } catch (_) { /* episode best-effort */ }
       try {
         const bp0 = botPos(bot)
         if (bp0) st.pillarAt = { x: bp0.x, z: bp0.z }
       } catch (_) { /* anchor best-effort */ }
     }
-    if (!ctx.recovery || ctx.recovery.action === 'pillar_up') {
+    if (!st.dig && (!ctx.recovery || ctx.recovery.action === 'pillar_up')) {
       const before = ctx.recovery && ctx.recovery.status
       if (before === 'running' || before === 'starting' || before == null) {
         try { recover.run(bot, ctx) } catch (_) { /* prim best-effort */ }
@@ -886,11 +887,24 @@ function shelter(bot, ctx, target, state) {
       // Terminal verdict (pillar-wrapper mirror): pillared or not, the hold
       // starts — even a failed pillar beats the march. Release the episode
       // so a later stuck flow never adopts this stale record.
-      if (rec !== 'done' && !st.pillarLogged) {
+      if (rec === 'failed:no-scaffold') {
+        // Empty kit (ed88: world-spawn respawn, 7 deaths in 3 min holding
+        // on the ground): dig in instead. Stop any live path first so the
+        // walk cannot drag the body off the pit column.
+        st.dig = {}
+        holdStill(bot, ctx)
+      } else if (rec !== 'done' && !st.pillarLogged) {
         st.pillarLogged = true
         try { console.log(`shelter pillar ${rec}, holding on the ground`) } catch (_) { /* log best-effort */ }
       }
       try { ctx.recovery = null } catch (_) { /* release best-effort */ }
+    }
+    if (st.dig) {
+      let r = 'failed:error'
+      try { r = recover.digInRun(bot, ctx, st.dig) } catch (_) { /* fail into the hold */ }
+      if (r === 'running') return
+      st.dig = null
+      try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
     // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
     // above, so holding here would leave pillarAt null and the death/
