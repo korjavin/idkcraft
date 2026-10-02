@@ -59,7 +59,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   // refusal when the seeded skip empties the find.
   if (resSubmerged(bot, ctx, res)) {
     homeMod.releaseMeet(bot, ctx)
-    if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+    if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
     ctx.unseenTicks = 0
     ctx.resumeWork = false
     ctx.bring = {
@@ -70,7 +70,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     return `nearest ${res.name} is underwater, checking for a dry one…`
   }
   homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the fetch walk (jr2.3)
-  if (ctx.lead) { ctx.lead = null; ctx.leadStuck = 0; ctx.leadTargetGone = 0 }
+  if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
   // A fresh explicit order restarts homing math (a tripped counter would
   // starve the order) and supersedes a pending spawn work-resume (which
   // would otherwise cancel the order on the next sighted tick).

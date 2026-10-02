@@ -235,9 +235,7 @@ function gather(bot, ctx, target, state) {
         // Another trunk (or an explicit fresh start): fresh stall budget.
         // The SAME trunk retaken after a fight/bring tick stole the body
         // (68p) only re-issues the stolen goal above — stalls and lastPos
-        // survive, and the walk continues below this same tick. The
-        // place_error streak is the central detector's (read, never
-        // written, via the verdict below).
+        // survive, and the walk continues below this same tick.
         g.issuedKey = key
         g.stalls = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -292,12 +290,9 @@ function gather(bot, ctx, target, state) {
           ctx.stepStatus = g.final
           say(bot, 'cannot reach the trees')
           clearGoal(bot, ctx)
-          // One escape at the final through stuck.request (core-1): skips
-          // reset the central stills every leg, so a trunk wedge would
-          // otherwise fail with no episode. Per-tree key (not the old
-          // global 'gather'): the release latch scopes per situation, so
-          // the old manual latch clears stay deleted. Transition only —
-          // re-asserts of the same final stay quiet (early return above).
+          // One escape at the final through stuck.request (core-1: skips
+          // reset the central stills, so a trunk wedge got no episode).
+          // Per-tree key: the release latch scopes per situation.
           stuck.request(bot, ctx, 'gather',
             g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null,
             key)

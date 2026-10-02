@@ -1588,13 +1588,9 @@ async function bring(bot, ctx, target, state) {
         return
       }
       // atl.17: below-feet is a property of the PLACE — find re-picks the
-      // same nearest block and the stance never changes, so the dig
-      // refuses with the bot standing still (prod 2026-09-28). Ask the menu
-      // for one escape through stuck.request (a target event, not body
-      // detection — same choke point as the central raise); release()
-      // resumes ctx.bring untouched, find re-picks the same block from the
-      // new stance, and the dig passes. One episode per strike at most (the
-      // fact refuses while one runs); denyStrikes stays the ceiling.
+      // same block from the same stance forever. One escape per strike via
+      // stuck.request moves the stance; release() resumes ctx.bring.
+      // denyStrikes stays the ceiling.
       if (bDeny === 'below-feet') {
         try { stuck.request(bot, ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }

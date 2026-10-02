@@ -122,7 +122,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
-  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, leadStuck: 0, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
+  const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
   ctx.greeter = greet // deliver greets arrivals through the same latch
   ctx.autonomous = !!autonomous
   ctx.manualBrain = null
@@ -254,7 +254,6 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.work = true
     ctx.paused = false
     ctx.lead = null
-    ctx.leadStuck = 0
     ctx.leadTargetGone = 0
     // p4s: 'go work'/'free'/'build here' revoke a HELD follow order — the
     // disk copy goes with it, or a restart resurrects an order the owner
@@ -421,7 +420,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
-    try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadStuck = 0; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
     // after the far-search await (a setLead mid-await takes the body this
     // tick) and before any dispatch. A switch runs the single cleanup and
@@ -510,28 +509,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // sighting is the normal end of the homing walk, arrival the other.
       if (target && ctx.resumeWork && !followName) startWork()
       if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') {
-        // Sighting ends the homing walk: the spawn goal is moot, and so is
-        // the still streak that raised it — without the reset the streak
-        // re-raises by=home on this same tick (the stale return-spawn key
-        // flips to follow: only when follow dispatches below).
+        // Sighting ends the homing walk: drop the fact AND its still streak,
+        // or it re-raises by=home this same tick (the key flips later).
         ctx.stuck = null
         ctx.stuckTicks = 0
         ctx.stuckState = 'MOVING'
       }
       if (homeReached()) {
         // Arrived means the homing goal is met, not stuck: pin the still
-        // streak at zero while standing at spawn (was the walkHomeTick
-        // arrival reset) so a parked bot never wedges here.
+        // streak at zero and drop a stale home fact/latch (2oe).
         ctx.stuckTicks = 0
         if (!ctx.recovery) ctx.stuckState = 'MOVING'
-        // At spawn there is nothing to walk for — unless a follow order is
-        // pending: then keep the latch (counter tripped, no work) and stand
-        // until the player is visible, instead of oscillating work-vs-home.
-        // Arrived means the homing goal is met, not stuck: drop a stale home
-        // fact (2oe) so the next sighting does not open a pointless episode.
-        // (walkHomeTick never runs past arrival — unseen resets below.)
         if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
         if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') ctx.recoverLatch = null
+        // A pending follow order keeps the unseen latch: stand until the
+        // player is visible instead of oscillating work-vs-home.
         if (!followWaiting) {
           if (ctx.resumeWork && !followName) startWork()
           ctx.unseenTicks = 0
@@ -602,7 +594,6 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
             bot.chat(`giving up on ${ctx.lead.name}; following you again`)
             ctx.lead = null
-            ctx.leadStuck = 0
             ctx.leadTargetGone = 0
           }
         }
@@ -620,7 +611,6 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (typeof bot.health === 'number' && bot.health <= 0) {
         if (ctx.lead) bot.chat('following you again')
         ctx.lead = null
-        ctx.leadStuck = 0
       }
       const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
       lastTargetPos = state._lastTargetPos
