@@ -16,7 +16,39 @@
 # mismatch so runs stay comparable.
 # Refuses when an idk-replay container already runs: two rig runs share
 # one world and invalidate each other.
+# Rig lock (idkcraft-3on): the guard above and the reset below are not atomic,
+# so the whole run holds an atomic mkdir lock (RIG_LOCK, default
+# /tmp/idkcraft-rig.lock — the path the old manual `until mkdir ...` wrapper
+# used). Busy = exit 2 BEFORE touching the world (fail loud; RIG_LOCK_WAIT=<secs>
+# polls instead). The holder pid lives in $RIG_LOCK/pid; a dead holder is
+# stale and reclaimed. Released on every exit path (trap). A caller that
+# already holds RIG_LOCK itself (old wrapper) sets RIG_LOCK_HELD=1 to skip it —
+# new callers need no wrapper at all.
 set -e
+RIG_LOCK="${RIG_LOCK:-/tmp/idkcraft-rig.lock}"
+rig_release() { # only ever remove a lock this process wrote
+  [ "$(cat "$RIG_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$RIG_LOCK"
+  return 0
+}
+if [ "${RIG_LOCK_HELD:-}" != 1 ]; then
+  _waited=0
+  until mkdir "$RIG_LOCK" 2>/dev/null; do
+    _hp="$(cat "$RIG_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$_hp" ] && ! kill -0 "$_hp" 2>/dev/null; then
+      echo "rig lock: stale (holder pid $_hp dead) — reclaiming"
+      # ponytail: mv-then-rm narrows but does not close a two-reclaimer race; flock if it ever bites
+      mv "$RIG_LOCK" "$RIG_LOCK.stale.$$" 2>/dev/null && rm -rf "$RIG_LOCK.stale.$$"
+      continue
+    fi
+    if [ "$_waited" -ge "${RIG_LOCK_WAIT:-0}" ]; then
+      echo "rig busy: $RIG_LOCK held by pid ${_hp:-?} — one rig run at a time (RIG_LOCK_WAIT=<secs> to wait; if YOUR wrapper holds it, drop the wrapper or set RIG_LOCK_HELD=1)"; exit 2
+    fi
+    sleep 5; _waited=$((_waited + 5))
+  done
+  echo $$ > "$RIG_LOCK/pid"
+  trap rig_release EXIT
+  trap 'exit 130' INT TERM
+fi
 VARIANT="${1:-paper-base}"
 SPOTS="$2"
 SECS="$3"
@@ -55,6 +87,7 @@ teardown() {
 on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay 2
   rc=$?
   teardown
+  rig_release
   SHA_AFTER="$(sha_of "$PRODWORLD/world.tar")"
   if [ "$SHA_AFTER" = "$SHA_BEFORE" ]; then
     echo "pristine world.tar untouched ($SHA_AFTER)"
