@@ -112,10 +112,31 @@ Honest limit, measured: `MAX_FAILS=0` is silent on ATL-SHAFT too (exit 0,
 byte-identical row). The green order runs episode-free — the atl.20
 exemption digs below-feet ore onto solid without ever asking the recover
 menu, so the budget is never read. An order spot proves recover-sensitivity
-only where its green path fails a primitive and rescues; the budget guard
-stays S6-PIT `maxCalls` until such an order spot exists (idkcraft-6x7.8:
-the Q0H-PIT rest conversion is the natural carrier — the q0h escalation fails the step on
-consecutive gave-ups by design).
+only where its green path fails a primitive and rescues.
+
+The 6x7.8 carrier hunt (idkcraft-6x7.8) found no such order — measured,
+not assumed. Q0H-PIT `come home` runs episode-free (18 s, the pit→rim
+walk never wedges: the q0h trap was rest-specific and is fixed), so the
+budget is never read there either (`MAX_FAILS=0` sabotage: exit 0, row
+identical — 17 s, `OK home`; JR-SLOPE likewise exit 0, 31 s, `here
+is 1 acacia_log`). Rest itself has
+no chat order and never wins the work menu deterministically. Two
+constructed carriers failed green and were dropped, not committed: a
+come-home through the S6 brow (the brow noPaths canDig-false planning
+— no wedge, the walk stalls at 0 displacement and refuses in 31 s) and
+a bring across it (bring picks the nearer east source and noPath-refuses
+in 11 s). `build here` orders are un-gateable: two identical runs
+stalled at different points (92/99 inside the house, then below 80/99
+east of it) and paged every run (1 then 2) — flaky progress plus a
+gave-up on green breaks both the reached pin and strict `maxCalls`
+(idkcraft-d7i; JR-SLOPE brings slope ore instead).
+The mechanism analysis says why: the only deterministic fail-then-rescue
+shape (S6: `dig_up` fails, `dig_step` rescues) OPENS its wedge — the
+failed dig digs the void the post-gave-up plan walks — so sabotage
+reaches for every order kind; wedges that fail closed (sidestep against
+a wide wall) are either routed around by A* or noPath green-red. The
+budget guard stays S6-PIT `maxCalls` until a bot or terrain change
+reopens this.
 
 ## Corpus rules
 
@@ -147,11 +168,31 @@ consecutive gave-ups by design).
   window). Markers are per-order-kind data: every one must be terminal
   for THAT order — a bring's `here are` delivers, but its `I can't see
   you` only waits and must never be a `fail` marker (the committed
-  markers are pinned against the real bring.js lines in
+  markers are pinned against the real behaviour chat lines in
   `test/stuck-oracle.test.js`).
-- The remaining work-bug terrains (build slope, rest pit) still replay
-  through the follow driver until their order conversions land (build
-  needs a home/plan, rest needs autonomous + a far home).
+- Exact markers (idkcraft-6x7.8): a `=` prefix matches the full line
+  only. `come home` arrives with a bare `home` while its refusals read
+  `cannot reach home…` — a substring expect would verdict a refusal as
+  delivered (fail-open), so Q0H-PIT expects `=home`.
+- JR-SLOPE is a slope bring (`bring me acacia_log 1`), not a build: a
+  `build here` order proved un-gateable — two identical runs stalled at
+  different points (92/99 inside the house, then below 80/99 east of
+  it) and paged every run (idkcraft-d7i), so neither a completion pin
+  nor a progress pin is deterministic. The bring spawns AT the jr2.4
+  site (-145 72 -78) and works the slope acacias (an ore bring ranged
+  20 blocks east off-terrain and was rejected in review). (The jr2.4
+  approach-loop fix itself is pinned by unit tests; the oracle guards
+  the terrain, not the bug.)
+- Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,
+  idkcraft-6x7.8): the snapshot holds no adoptable house near the pit
+  (measured: doors stand but the table cell + quorum reject every one),
+  so the setup raises a plan-driven v2 house (`raise-house.js`, cells
+  from the real blueprint) at the q0h rim site. Rest itself has no chat
+  order and never wins the work menu deterministically, so the order
+  walks the same trap terrain (pit → rim home) as a meet instead.
+- Follow-revoking orders (`build here`, `come home`) stay after all
+  follow spots: they clear the live follow target with no per-spot
+  re-arm (pinned in `test/stuck-oracle.test.js`).
 - ATL-SHAFT orders `bring me iron_ore 2`, not the bare order: the pristine
   shaft vein holds exactly 2 (probed from `world.tar`), and want=3 would
   send the bot hunting a second vein 15+ blocks off-terrain — slower and

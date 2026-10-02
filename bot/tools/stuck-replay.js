@@ -142,7 +142,7 @@ function loadSpots() {
           throw new Error(`spots[${i}]: order spots need non-empty ${k} markers (<=16)`)
         }
         for (const m of v) {
-          if (typeof m !== 'string' || !m || m.length > 80) throw new Error(`spots[${i}]: bad ${k} marker`)
+          if (typeof m !== 'string' || !m || m.length > 80 || m === '=') throw new Error(`spots[${i}]: bad ${k} marker`)
         }
       }
       expect = s.expect.slice()
@@ -150,7 +150,17 @@ function loadSpots() {
     } else if (s.order != null || s.expect != null || s.fail != null) {
       throw new Error(`spots[${i}]: order/expect/fail need mode=order`)
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail }
+    // Rig-built home (idkcraft-6x7.8): integer v2 site raised in the
+    // disposable world at setup, so a come-home spot has a house to walk
+    // to (adoption reads the world, never memory — see raise-house.js).
+    let house = null
+    if (s.house != null) {
+      if (!Array.isArray(s.house) || s.house.length !== 3 || !s.house.every(Number.isInteger)) {
+        throw new Error(`spots[${i}]: bad house (want integer [x, y, z] site)`)
+      }
+      house = { x: s.house[0], y: s.house[1], z: s.house[2] }
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house }
   })
 }
 
@@ -161,10 +171,16 @@ function loadSpots() {
 // order (a bring's 'here are' delivers; its 'I can't see you' waits and is
 // NOT a fail marker). Expect wins when one line matches both (no shipped
 // line does — the order keeps the matcher total, not opinionated).
+// Exact markers (idkcraft-6x7.8): a '=' prefix matches the full line only.
+// 'come home' arrives with a bare 'home' while its refusals read 'cannot
+// reach home…' — every substring of the arrival is inside the refusal, so a
+// substring expect would verdict a refusal as delivered (fail-open). '=home'
+// matches the arrival and nothing else.
 function matchOrderLine(line, expect, fail) {
   const s = String(line)
-  if (expect.some((m) => s.includes(m))) return 'expect'
-  if (fail.some((m) => s.includes(m))) return 'fail'
+  const hit = (m) => (m.startsWith('=') ? s === m.slice(1) : s.includes(m))
+  if (expect.some(hit)) return 'expect'
+  if (fail.some(hit)) return 'fail'
   return null
 }
 
@@ -336,6 +352,7 @@ async function main() {
   const brain = picked.make()
   const recover = require('../src/behaviours/recover')
   const bringMod = require('../src/behaviours/bring')
+  const { raiseHouse } = require('./raise-house')
 
   // Windowed counters (reset per spot): stuck declarations, path resets by
   // reason, follower-sent chats. Patched once — the ticker reads them live.
@@ -473,6 +490,9 @@ async function main() {
       await rcon(`give ${FOLLOWER} water_bucket 1`)
       await rcon(`give ${FOLLOWER} water_bucket 1`)
     }
+    // Rig-built home before the settle: the walls must stand (and their
+    // chunks stream) before the window opens.
+    if (s.house) await raiseHouse(rcon, s.house)
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
     for (const who of [GUIDE, FOLLOWER]) {
@@ -516,6 +536,22 @@ async function main() {
       // open one) would hijack the NEXT window's walk. Drop both at the cut.
       if (c.bring) { c.bring = null; try { bringMod.clearSearchLeg(c) } catch (_) { /* legs best-effort */ } }
       c.pendingSearch = null
+      // Home-order hygiene (idkcraft-6x7.8): 'come home' adopts a home and
+      // arms a meet, 'build here' would plant a home + a work episode — all
+      // outlive the window and would hijack the NEXT one (a stale home sends
+      // the next meet walking to the wrong house). Drop them at the cut,
+      // mirroring a fresh episode; follow survives the cut on its own (no
+      // follow spot revokes it — the revoking orders stay last per the
+      // corpus rule) and work re-decides, but a stale home never self-heals.
+      // canDig too: a timed-out meet walk leaks its
+      // borrowed no-dig onto the shared Movements (resetNightStep precedent).
+      c.home = null; c.comehome = null
+      c.buildSkip = []; c.buildFails = 0; c.buildFailIdx = -1; c.buildGoalIdx = -1; c.buildFarIdx = -1; c.buildFarFails = 0
+      c.step = ''; c.stepStatus = null; c.stepFail = {}
+      c.gather = null; c.forage = null; c.forageSkip = null; c.forageFinal = null
+      c.gohome = null; c.stay = null; c.inShelter = false
+      c.restGaveUps = 0; c.restGaveUpAt = null; c.restGaveUpCalled = false
+      try { if (c.movements && typeof c.movements.canDig === 'boolean') c.movements.canDig = true } catch (_) { /* reset best-effort */ }
     }
     stuckEps = []
     resets = {}
