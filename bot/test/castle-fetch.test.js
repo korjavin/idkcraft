@@ -304,6 +304,14 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(bot.calls.goals.length, 0)
   })
 
+  it('an exposed cave wall far below the feet is never a target (revmux 02)', () => {
+    const set = new Map([[`${SITE.x - 8},${SITE.y - 10},${SITE.z - 8}`, 'stone'], [`${SITE.x - 7},${SITE.y - 10},${SITE.z - 8}`, 'cave_air']])
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+  })
+
   it('the dig re-checks the stance rules at dig time: a submerged target is skipped, not dug', async () => {
     const tx = SITE.x - 5
     const tz = SITE.z - 5

@@ -33,6 +33,8 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16 }
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3 }
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
+const STONE_BELOW = 2 // target y window around the feet (no shafts, no pillars)
+const STONE_ABOVE = 3
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
@@ -223,7 +225,7 @@ function craftTick(bot, ctx, f, d) {
 }
 
 // Exposed stone only (revmux 01): air above, or air on a side — surface
-// rock, cliffs, cave walls. Buried stone would make the walk dig a shaft
+// rock, cliffs, walk-in cave mouths, within a few blocks of the feet level. Buried stone would make the walk dig a shaft
 // down to it. findBlocks collects every stone of the sections it visits,
 // so a wide count costs one sort, not a wider scan; the exposure filter
 // is two-ish blockAt per candidate. Nearest first, never the site, a
@@ -242,6 +244,10 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
     const k = `${p.x},${p.y},${p.z}`
     if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
+    // Near the stance's level only (revmux 02): a cave wall far below is
+    // 'exposed' too, and the canDig walk would shaft down to it; a cliff
+    // face far above means pillaring. Surface rock and walk-in faces stay.
+    if (p.y < fy - STONE_BELOW || p.y > fy + STONE_ABOVE) continue
     const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
     if (best && d >= best.d) continue
     const open = EXPOSE.some(([x, y, z]) => {
