@@ -488,6 +488,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     const g = bot.calls.goals[bot.calls.goals.length - 1]
     assert.ok(g && Math.hypot(g.x - (site.x + 5), g.z - (site.z + 5)) < 1, 'walks to the site')
     bot.entity.position = pos(sx + 1.5, 80, sz + 0.5)
+    fetch(bot, ctx) // arrival: the castle chest is looked up first
     fetch(bot, ctx)
     await settle(); await settle()
     assert.deepEqual(bot.calls.dig.map((p) => [p.x, p.y, p.z]), [[sx, 80, sz]])
@@ -562,12 +563,38 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.ok(bot.calls.dig.length <= 30)
   })
 
-  it('a far leg looks for the castle chest again once at the site (revmux 01)', () => {
-    const bot = makeBot({ items: TOOLS(), at: pos(SITE.x - 60, 64, SITE.z) })
+  it('a far leg looks for the castle chest again once at the site (revmux 01/02)', async () => {
+    const set = new Map()
+    const chest = [{ name: 'cobblestone', count: 128 }]
+    const items = TOOLS()
+    const bot = makeBot({ items, set, chest, at: pos(SITE.x - 60, 64, SITE.z) })
+    bot.findBlocks = ({ matching }) => (matching === BLOCK_IDS.chest && Math.abs(bot.entity.position.x - SITE.x) < 20 ? [pos(SITE.x, SITE.y, SITE.z)] : [])
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
     fetch(bot, ctx)
-    assert.equal(ctx.castleFetch.chestDone, false)
+    assert.ok(ctx.castleFetch.chestDone, 'no chest seen from afar')
+    set.set(`${SITE.x},${SITE.y},${SITE.z}`, 'chest')
+    bot.entity.position = pos(SITE.x + 1.5, 64, SITE.z - 0.5)
+    fetch(bot, ctx) // arrival: re-arm the chest source
+    fetch(bot, ctx)
+    await settle(); await settle()
+    assert.equal(bot.calls.opens.length, 1)
+    assert.equal(count(items, 'cobblestone'), 64 + 16)
+  })
+
+  it('a quarrying leg past DIG_RADIUS keeps digging, never walks back to the site (revmux 02)', async () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(SITE.x - 4, 64, SITE.z + 2) })
+    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.target.quarry)
+    await settle(); await settle()
+    const far = { x: SITE.x - 40, y: 58, z: SITE.z + 2 }
+    ctx.castleFetch.target = null
+    bot.entity.position = pos(far.x + 0.5, far.y, far.z + 0.5)
+    const goalsBefore = bot.calls.goals.length
+    fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.target && ctx.castleFetch.target.quarry, 'picks the next trench cell')
+    assert.ok(bot.calls.goals.slice(goalsBefore).every((g) => !(g.x === SITE.x + 15 && g.z === SITE.z + 13)), 'no walk back to the site centre')
   })
 
   it('the trench never digs the house apron: that side is skipped', () => {

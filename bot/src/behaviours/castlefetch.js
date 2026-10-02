@@ -396,15 +396,23 @@ function digTick(bot, ctx, f) {
     // Far from the castle: walk there first, the stone is searched there.
     const c = siteCenter(st)
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
-    if (far > DIG_RADIUS) {
-      // The castle chest is looked up again on arrival (revmux 01: a far
-      // leg's body-centred lookup found none and skipped the accelerator).
-      f.chestDone = false
-      f.chest = null
-      f.chestWalk = null
+    // A leg already quarrying stays out: the trench runs past DIG_RADIUS
+    // (revmux 02), and its own target walks have their own patience.
+    if (far > DIG_RADIUS && !f.quarry) {
+      // The castle chest is looked up again on arrival, once per leg
+      // (revmux 01: a far leg's body-centred lookup found none).
+      if (f.chestRelook == null) f.chestRelook = true
       walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2)
       if (stalled(f.siteWalk || (f.siteWalk = {}), far, APPROACH_WAITS)) finish(bot, ctx, 'failed:castlefetch-unreachable')
       return
+    }
+    f.siteWalk = null
+    if (f.chestRelook) {
+      f.chestRelook = false
+      f.chestDone = false
+      f.chest = null
+      f.chestWalk = null
+      return // the chest source goes first next tick
     }
     t = pickStone(bot, ctx, f, bp, stoneAt)
     if (!t) {
