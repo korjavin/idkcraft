@@ -292,6 +292,21 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  it('never digs scaffold out of the castle ground (g0z.4)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }],
+      ids: IDS,
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 1, name: 'dirt' }],
+    })
+    const ctx = { ...freshCtx(), castle: { site: { x: -2, y: 64, z: -2 }, rot: 0, blocked: {} } }
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    bot.restoreError()
+  })
+
   it('stone holds the pickaxe first: no hand-mining, no lost drops', async () => {
     const pick = { name: 'stone_pickaxe', count: 1 }
     const bot = mockBot({

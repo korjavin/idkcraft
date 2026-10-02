@@ -218,6 +218,18 @@ const MENU = {
     chat: () => 'on my own: lighting the yard',
     verb: 'lighting torches',
   },
+  castlefetch: {
+    // Castle material (g0z.4): fetch the next castle batch — castle chest,
+    // craft, then dig/chop (behaviours/castlefetch.js). Day only, after the
+    // house chain, before the castle step itself: a running fetch keeps
+    // going to its stack target (no shuttle per 16 cells); a fresh one
+    // starts only while the castle has nothing to lay now. Nothing
+    // reachable fails it and failHolds parks it (bounded, see
+    // CASTLEFETCH_RETRY_MS) — never feasible-but-no-progress.
+    feasible: (facts, bot, ctx) => castleFetchGo(facts, bot, ctx),
+    chat: () => 'on my own: fetching castle material',
+    verb: 'fetching castle material',
+  },
   castle: {
     // The castle project (g0z.3): a day job after the house chain. Feasible
     // only when it progresses NOW: a keep-clear dig next, or the next
@@ -225,7 +237,10 @@ const MENU = {
     // leg keeps going on a partial batch ('some') — the word flips at the
     // batch line mid-leg, and dropping there would strand the remainder.
     // stay/gohome/equip outrank it, so the bot still sleeps and rearms.
-    feasible: (facts, bot, ctx) => castleGo(facts, ctx),
+    // A running fetch owns the body to its stack target (revmux 01): the
+    // model menu must not cut it at the batch line either.
+    feasible: (facts, bot, ctx) => castleGo(facts, ctx) &&
+      !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running' && castleFetchGo(facts, bot, ctx)),
     chat: () => 'on my own: building the castle',
     verb: 'building the castle',
   },
@@ -361,6 +376,28 @@ function castleGo(facts, ctx) {
   if (!registered('castle')) return false
   if (w === 'clear' || w === 'finish' || w.endsWith('-batch')) return true
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
+}
+
+// Castle fetch can progress now (g0z.4): day, a material word, the batch
+// still short (castlefetch.demand — the behaviour's own done test), and
+// the castle unable to lay now unless this fetch is the running leg.
+// Stone needs a pickaxe: without one equip rearms first (it only replaces
+// an absent pick), so a pick broken mid-batch hands over and comes back.
+// ponytail: a castle chest full of cobble still waits for the pickaxe;
+// add a chest probe here if a pickless owner-fed castle ever matters.
+function castleFetchGo(facts, bot, ctx) {
+  const w = facts && facts.castle
+  if (typeof w !== 'string' || facts.time !== 'day') return false
+  if (!/-(none|some|batch)$/.test(w)) return false
+  if (!registered('castlefetch') || !registered('castle')) return false
+  if (w.startsWith('stone-') && !((facts.pickaxe || 0) > 0)) return false
+  if (castleGo(facts, ctx) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
+  try {
+    const d = require('./behaviours/castlefetch').demand(bot, ctx)
+    return !!d && d.short > 0
+  } catch (_) {
+    return false
+  }
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -509,7 +546,7 @@ function shelterOwns(bot, ctx) {
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'castle', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'castlefetch', 'castle', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -973,7 +1010,11 @@ function goalText(facts, home) {
     `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}` +
     // Castle word only while a castle exists (g0z.3): castle-less text
     // stays byte-identical for the model and every pinned state string.
-    (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '')
+    (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '') +
+    // No pickaxe while a castle wants stone (g0z.4): a pick broken mid-fetch
+    // must re-decide into equip, and the rearm must re-decide back — the
+    // pickaxe is otherwise invisible to the text (and to its replays).
+    (typeof facts.castle === 'string' && facts.castle.startsWith('stone-') && !((facts.pickaxe || 0) > 0) ? ' pickaxe=no' : '')
 }
 
 // atl.4 livelock guard: a recorded step failure holds while the facts text
@@ -988,6 +1029,10 @@ const REFAIL_DIST = 32
 // spiral after one river and strand the night walk. The guard bars the
 // steps that would otherwise replay the failure identically.
 const SELF_ADVANCING = { explore: true, gohome: true, stay: true }
+// Bounded holds (g0z.4): a castle fetch that found nothing holds like any
+// failure, but expires — an owner restock of the castle chest moves no
+// fact, so without the expiry an idle bot by the castle never re-looks.
+const CASTLEFETCH_RETRY_MS = 5 * 60 * 1000
 // Done-holdable steps (h9z, revmux 01 major): ONLY steps whose every
 // productive path moves the facts text, so a same-text done proves no
 // effect. craft consumes its logs / flips table/door; gather crosses the
@@ -1057,6 +1102,7 @@ const STEP_CRITERIA = {
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
+  castlefetch: 'castle is stone-none, planks-none, torch-none, door-none or a -some word and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, torch-batch or door-batch and time is day: lay the next castle blocks',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -1266,6 +1312,13 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (w.endsWith('-none')) return `castle: need ${kind}`
       return `castle: need a batch of ${kind}`
     }
+    case 'castlefetch': {
+      const w = facts.castle || 'none'
+      if (facts.time !== 'day') return 'castlefetch: daytime job'
+      if (!/-(none|some|batch)$/.test(w)) return 'castlefetch: no material owed'
+      if (w.startsWith('stone-') && !((facts.pickaxe || 0) > 0)) return 'castlefetch: no pickaxe'
+      return 'castlefetch: batch on hand'
+    }
     case 'gather':
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
@@ -1320,7 +1373,7 @@ function restWhy(facts, bot, ctx, names) {
   for (const n of STEP_ORDER) {
     if (n === 'rest') continue
     // No castle ordered: no castle reason (the rest line stays as it was).
-    if (n === 'castle' && (!facts || !facts.castle || facts.castle === 'none')) continue
+    if ((n === 'castle' || n === 'castlefetch') && (!facts || !facts.castle || facts.castle === 'none')) continue
     let on = false
     try {
       on = registered(n)
@@ -1436,7 +1489,7 @@ async function decide(bot, ctx) {
     try {
       if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
       const bp = bot && bot.entity && bot.entity.position
-      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null }
+      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
       if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
     } catch (_) { /* guard best-effort */ }
   } else if (finished && prev && status === 'done') {
@@ -1499,7 +1552,18 @@ async function decide(bot, ctx) {
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
   const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter) {
+  // Bounded castlefetch hold (g0z.4): an expired hold retires and forces
+  // one fresh pick — with the text standing, the replay paths would keep
+  // the step that took over and the owner's chest restock never gets seen.
+  let fetchRetry = false
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (sf && typeof sf.at === 'number' && Date.now() - sf.at > CASTLEFETCH_RETRY_MS) {
+      delete ctx.stepFail.castlefetch
+      fetchRetry = true
+    }
+  } catch (_) { /* retry best-effort */ }
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
@@ -1511,7 +1575,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
@@ -1532,6 +1596,7 @@ async function decide(bot, ctx) {
     // and survive. Same-name re-picks were already reset by done/failed.
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
+    if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
     // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
     // an order-interrupted night would otherwise hold on open ground. The
     // interrupted gohome walk resets too, so the next march starts from the
@@ -1576,4 +1641,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS }

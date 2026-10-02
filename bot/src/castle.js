@@ -195,6 +195,7 @@ function matches(kind, name) {
   if (kind === 'planks') return name.endsWith('_planks')
   if (kind === 'door') return name.endsWith('_door')
   if (kind === 'torch') return name === 'torch' || name === 'wall_torch'
+  if (kind === 'fence') return name.endsWith('_fence')
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false

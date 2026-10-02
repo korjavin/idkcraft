@@ -51,6 +51,7 @@ const BEHAVIOURS = {
   comehome: homeMod.comehome,
   build: require('./behaviours/build'),
   castle: castleMod,
+  castlefetch: require('./behaviours/castlefetch'),
   beds: require('./behaviours/beds'),
   light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),

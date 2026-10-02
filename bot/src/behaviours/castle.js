@@ -44,6 +44,7 @@ const ITEM = {
   planks: (n) => n.endsWith('_planks'),
   door: (n) => n.endsWith('_door') && n !== 'iron_door', // iron needs redstone
   torch: (n) => n === 'torch',
+  fence: (n) => n.endsWith('_fence') && n !== 'nether_brick_fence', // g0z.4 sourcing; g0z.11 plans it
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -58,7 +59,7 @@ function reserveOf(kind) {
 }
 
 // Items of the kind above the reserve (what the castle may spend).
-function usable(bot, kind) {
+function held(bot, kind) {
   const want = ITEM[kind]
   if (!want) return 0
   let n = 0
@@ -67,18 +68,25 @@ function usable(bot, kind) {
       if (it && typeof it.name === 'string' && want(it.name)) n += typeof it.count === 'number' ? it.count : 1
     }
   } catch (_) { /* no inventory: none */ }
-  return Math.max(0, n - reserveOf(kind))
+  return n
+}
+function usable(bot, kind) {
+  return Math.max(0, held(bot, kind) - reserveOf(kind))
 }
 
+// Birch first (g0z.4: the Fachwerk infill prefers light wood), else any.
 function findItem(bot, kind) {
   const want = ITEM[kind]
   if (!want || usable(bot, kind) <= 0) return null
+  let any = null
   try {
     for (const it of bot.inventory.items() || []) {
-      if (it && typeof it.name === 'string' && want(it.name)) return it
+      if (!it || typeof it.name !== 'string' || !want(it.name)) continue
+      if (it.name.startsWith('birch_')) return it
+      any = any || it
     }
   } catch (_) { /* no inventory: no item */ }
-  return null
+  return any
 }
 
 function nameAt(bot, c) {
@@ -601,4 +609,7 @@ module.exports.isMaterial = (name) => typeof name === 'string' && Object.values(
 module.exports.menuFact = menuFact
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
+module.exports.findItem = findItem
+module.exports.held = held
+module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
