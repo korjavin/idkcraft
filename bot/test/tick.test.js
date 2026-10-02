@@ -3017,6 +3017,17 @@ describe('creeper flee reflex', () => {
     assert.deepEqual(fleeLines(), ['reflex flee creeper dist=4.0']) // logged once per creeper
   })
 
+  it('inShelter: creeper at 5 blocks does not flee (rqdj); outside it still does', () => {
+    const { fleeReflex } = require('../src/reflexes')
+    const bot = creeperBot()
+    bot.entities = { 9: creeper(9, 5) }
+    const ctx = { inShelter: true }
+    assert.equal(fleeReflex(bot, ctx), false)
+    assert.equal(bot.calls.setGoal, 0)
+    assert.ok(fleeReflex(bot, { inShelter: false }))
+    assert.equal(bot.calls.setGoal, 1)
+  })
+
   it('creeper beyond 6 blocks: normal follow dispatch, brain called', async () => {
     const bot = creeperBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
