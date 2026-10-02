@@ -37,6 +37,7 @@ const CRAFT_TIMEOUT_MS = 30000
 const SMELT_WAIT_MS = 12000 // one log cooks in 10 s, plus slop
 const SMELT_TRIES = 3 // dry collects before failed:smelt-stalled
 const SMELT_WALK_TICKS = 30 // furnace walk give-up
+const SMELT_RESEND_TICKS = 5 // idle-far ticks between furnace goal re-sends
 
 // Spot plan: offsets from home.site (ground level unless dy). Door-front
 // first (the mob door), then a ring around the 4x4 shell, then the roof,
@@ -266,18 +267,27 @@ function smeltTick(bot, ctx) {
   const reach = require('./furnace').FURNACE_REACH
   const bp = bot.entity && bot.entity.position
   if (bp && Math.hypot(bp.x - spot.x, bp.y - spot.y, bp.z - spot.z) > reach) {
-    if (ctx.lightGoalIdx !== 'furnace') {
+    let moving = false
+    try { moving = bot.pathfinder.isMoving() } catch (_) { /* reads idle */ }
+    // Far and idle (a preemption carried the body off, or the walk ended
+    // short): re-send the goal, spaced (fight.js lesson: a re-send every
+    // tick tears down a search still computing); the budget keeps counting.
+    if (ctx.lightGoalIdx !== 'furnace' || (!moving && (ctx.lightSmeltWalk || 0) % SMELT_RESEND_TICKS === 0)) {
+      if (ctx.lightGoalIdx !== 'furnace') ctx.lightSmeltWalk = 0
       ctx.lightGoalIdx = 'furnace' // placeTick re-aims its spot after this leg
-      ctx.lightSmeltWalk = 0
       try { bot.pathfinder.setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 3)) } catch (_) { /* retry next tick */ }
     }
     ctx.lightSmeltWalk = (ctx.lightSmeltWalk || 0) + 1
     if (ctx.lightSmeltWalk > SMELT_WALK_TICKS) {
       ctx.lightGoalIdx = -1
+      ctx.lightSmeltWalk = 0
+      ctx.lightSmeltAt = null
       fail(ctx, 'failed:furnace-unreachable')
     }
     return
   }
+  if (ctx.lightGoalIdx === 'furnace') ctx.lightGoalIdx = -1 // arrived: the next far leg starts a fresh budget
+  ctx.lightSmeltWalk = 0
   let block = null
   try { block = bot.blockAt(new Vec3(spot.x, spot.y, spot.z)) } catch (_) { block = null }
   if (!block || typeof bot.openFurnace !== 'function') return // unloaded: wait

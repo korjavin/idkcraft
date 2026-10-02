@@ -781,11 +781,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         ctx.shelterRunLogged = true
       }
       // 33vm: a hostile already INSIDE the interior box is fought (prod: six
-      // deaths standing idle in stay with a zombie at 0.7); the pin keeps
-      // fight's sticky target off an incumbent outside the wall.
-      const intruder = ctx.inShelter && decision.action === 'fight' && state.hostile && ctx.home &&
-        homeMod.isInside({ entity: state.hostile }, ctx.home)
-      if (intruder) ctx.fightId = state.hostile.id
+      // deaths standing idle in stay with a zombie at 0.7). Scanned, not
+      // state.hostile: the nearest may stand outside the wall. The pin and
+      // the state swap keep fight's sticky target on the intruder.
+      let intruder = null
+      if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
+        const bp = bot.entity && bot.entity.position
+        for (const e of Object.values(bot.entities || {})) {
+          if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
+          if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
+        }
+      }
+      if (intruder) {
+        ctx.fightId = intruder.id
+        state.hostile = intruder
+      }
       if (ctx.inShelter && decision.action === 'fight' && !intruder) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above

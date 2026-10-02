@@ -963,6 +963,18 @@ describe('33vm: charcoal fuel and the interior torch first', () => {
     assert.equal(bot.puts.length, 2, 'the collect never loads a second log')
   })
 
+  it('a far furnace: walks, re-sends the goal when the body stands idle, gives up on the budget', () => {
+    const bot = withFurnace(mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes, at: pos(20, 65, 0) }))
+    const ctx = { home: { ...home(), furnace: FURNACE } }
+    light(bot, ctx)
+    assert.equal(bot.calls.goals.length, 1, 'walk sent')
+    for (let i = 0; i < 6; i++) light(bot, ctx) // idle far (preempted / short walk)
+    assert.ok(bot.calls.goals.length >= 2, 'the goal is re-sent, never left dead')
+    for (let i = 0; i < 40; i++) light(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+    assert.equal(bot.puts.length, 0)
+  })
+
   it('an iron job in the furnace is never touched', async () => {
     const bot = withFurnace(mockBot(furnaceWorld(), { items: [{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 4 }], ids, recipes }))
     bot.slots.input = { name: 'raw_iron', count: 3 }
