@@ -747,6 +747,9 @@ describe('prep arenas (idkcraft-jsf.7)', () => {
   it('a leaking control trap regresses, not improves (its twin proves nothing)', () => {
     const [d] = compareBaseline([row('V', true, 0, 0, 0)], ctl)
     assert.equal(d.verdict, 'regressed')
+    const [p] = compareBaseline([row('V', true, 0, 1, 1)], ctl) // paged, then walked out
+    assert.equal(p.verdict, 'regressed')
+    assert.match(p.why, /leaked/)
   })
 
   it('loadSpots passes prep through and rejects non-world commands', () => {

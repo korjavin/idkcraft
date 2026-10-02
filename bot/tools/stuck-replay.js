@@ -252,6 +252,7 @@ function compareBaseline(rows, baseline) {
     // raise — a silent trap (detector broke) or a leaking one (the bot
     // walked out, so its twin's reached proves nothing) regresses.
     if (Number.isInteger(e.minCalls) && r.call < e.minCalls) return { spot: r.spot, verdict: 'regressed', was, now, why: `calls ${r.call} < ${e.minCalls} (control trap went silent)` }
+    if (Number.isInteger(e.minCalls) && r.reached && !e.reached) return { spot: r.spot, verdict: 'regressed', was, now, why: 'control trap leaked (reached)' }
     if (r.reached && !e.reached) return { spot: r.spot, verdict: 'improved', was, now }
     return { spot: r.spot, verdict: 'ok', was, now }
   })

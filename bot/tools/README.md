@@ -73,8 +73,8 @@ The baseline is data, not aspiration: `spot → { reached, maxStuck, maxEps, max
   `reached: false, maxCalls: 1, minCalls: 1`. `minCalls` (optional, any
   entry) regresses a run that pages less — a silent trap (the no-path
   detector broke) or a leaking one (the bot walked out, and BARE's
-  `reached` stops proving water_up), so a control that walks out
-  silently regresses instead of reading `IMPROVED`.
+  `reached` stops proving water_up). An entry with `minCalls` is a
+  control: reaching regresses (`control trap leaked`), never `IMPROVED`.
 
 A `laya` run never judges against the stub baseline (different menu policy):
 it records and exits 0 until a laya baseline ships.
