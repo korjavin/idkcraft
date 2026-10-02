@@ -1276,6 +1276,7 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
     const bot = mockBot({ items: [{ name: 'white_wool', count: 1, type: ITEMS.white_wool }], cells: { '15,64,22': 'chest' }, at: { x: 15, y: 64, z: 21 } })
     const chest = []
     bot.openChest = async () => ({
+      containerItems: () => [],
       deposit: async (type, meta, n) => {
         const s = bot._items.find((i) => i.type === type)
         s.count -= n
@@ -1289,12 +1290,54 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
     beds(bot, ctx)
     assert.equal(ctx.beds.noWool.fails, 2)
     assert.equal(ctx.bring, undefined, 'latched: no third hunt')
-    assert.equal(ctx.stepStatus, undefined, 'banking first')
+    assert.equal(ctx.stepStatus, undefined, 'one chest pull first (empty chest)')
+    await flush()
+    beds(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined, 'banking next')
     await flush()
     assert.deepEqual(chest, [{ name: 'white_wool', count: 2 }], 'partial wool is in the chest')
     beds(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:no-wool')
     assert.equal(ctx.bring, undefined)
+  })
+
+  it('revmux 02 core-2: latched, banked chest wool still funds the bed (no sheep needed)', async () => {
+    const bot = mockBot({ items: [{ name: 'white_wool', count: 1, type: ITEMS.white_wool }], cells: { '15,64,22': 'chest', [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }, at: { x: 15, y: 64, z: 21 } })
+    const stacks = [{ name: 'white_wool', type: ITEMS.white_wool, metadata: 0, count: 2 }]
+    bot.openChest = async () => ({
+      containerItems: () => stacks,
+      withdraw: async (type, meta, n) => { stacks[0].count -= n; bot._items.push({ name: 'white_wool', count: n, type }) },
+      close: () => {},
+    })
+    const ctx = { home: v2home({ chest: { x: 15, y: 64, z: 22 } }), beds: { phase: 'wool', noWool: { fails: 2, at: Date.now() } } }
+    beds(bot, ctx)
+    await flush()
+    beds(bot, ctx)
+    assert.equal(ctx.beds.phase, 'craft', 'pack 1 + chest 2 covers one bed')
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('revmux 02 core-3: a stale failing flag (preempted bank walk) does not fail a fresh pick', () => {
+    const bot = mockBot()
+    const ctx = { home: v2home(), beds: { phase: 'wool', failing: Date.now() - 1 } }
+    beds(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.ok(ctx.bring && ctx.bring.self === 'beds', 'the sighting-opened pick hunts')
+  })
+
+  it('revmux 02 core-1: a far pending explore leg is replaced by the near pick before a self search walks', async () => {
+    const bot = mockBot({ at: { x: SITE.x, y: 64, z: SITE.z } })
+    const far = { x: SITE.x, z: SITE.z - 128 }
+    const o = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['white_wool'], want: 3, by: null, drop: null, have: 0 })
+    o.self = 'beds'
+    const ctx = { home: v2home(), bring: o, explore: { visited: new Set(), target: { ...far } } }
+    for (let i = 0; i < 4 && o.phase !== 'searchwalk'; i++) {
+      await bring(bot, ctx)
+      await flush()
+    }
+    assert.equal(o.phase, 'searchwalk', `phase ${o.phase}`)
+    const t = ctx.explore.target
+    assert.ok(t && Math.hypot(t.x - SITE.x, t.z - SITE.z) <= bring.SELF_SEARCH_RADIUS, `leg target ${JSON.stringify(t)}`)
   })
 
   it('revmux 01: string too short for the need does not open a latched hunt', async () => {

@@ -32,6 +32,7 @@ const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:
 const NOWOOL_LATCH = 2 // failed/partial wool hunts before beds latches off (9qt0: real time, persisted)
 const LATCH_MS = 2 * 3600 * 1000 // a latch expires this long after its last failure
 const SIGHT_MIN_MS = 30 * 60 * 1000 // ponytail: a sheep in sight reopens only past this age (unreachable-sheep loop cap)
+const FAIL_BANK_MS = 3 * 60 * 1000 // a failing hunt's bank walk; past it the yield is stale
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -399,6 +400,8 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     st.reopens = 0
     st.planksDry = false // fresh craft episode: retry the chest
     st.stringDry = false
+    st.failing = 0 // a new episode: no stale yield (revmux 02 core-3)
+    st.latchPulled = false
     st.phase = 'craft'
     if (color && craftsOwed > 0) {
       try { bot.chat(`got ${pack[`${color}_wool`]} ${color} wool`) } catch (_) { /* chat best-effort */ }
@@ -406,10 +409,13 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     return
   }
   if (ctx.bring) return // the ticker runs the hunt (ours or foreign) instead of this step
-  // A failing hunt banks its wool first, then yields (9qt0).
+  // A failing hunt banks its wool first, then yields (9qt0). The flag is a
+  // deadline: a bank walk a re-decide preempted must not fail the next
+  // (sighting-opened) pick (revmux 02 core-3).
+  if (st.failing && Date.now() > st.failing) st.failing = 0
   if (st.failing) {
     if (totalWool(pack) > 0 && bankWoolTick(bot, ctx, st)) return
-    st.failing = false
+    st.failing = 0
     st.woolBanked = false
     ctx.stepStatus = 'failed:no-wool'
     return
@@ -427,7 +433,7 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     if (legs >= budget || timedOut || capped || (st.reopens || 0) >= HUNT_REOPENS) {
       st.reopens = 0
       noteNoWool(st)
-      st.failing = true
+      st.failing = Date.now() + FAIL_BANK_MS
       woolTick(bot, ctx, st, pack, craftsOwed)
       return
     }
@@ -456,8 +462,18 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
   // reopen a hunt itself (revmux 01: the string exemption and a partial
   // close both reached here latched). The string rung above already ran.
   if (latchLive(ctx, bot)) {
+    // Banked wool needs no sheep: one chest pull before yielding (revmux 02
+    // core-2); a covered colour crafts next tick, a short one banks back.
+    if (!st.latchPulled) {
+      const busy = chestTick(bot, ctx, st, 'beds-pull', async () => {
+        try { await stockpileMod.withdrawAnyFromChest(bot, ctx, WOOL16, need) } catch (_) { /* pull best-effort */ }
+        st.latchPulled = true
+      })
+      if (busy) return
+    }
+    st.latchPulled = false
     st.reopens = 0
-    st.failing = true
+    st.failing = Date.now() + FAIL_BANK_MS
     woolTick(bot, ctx, st, pack, craftsOwed)
     return
   }
