@@ -97,7 +97,11 @@ async function rcon(cmd) {
   const out = String(stdout)
   if ((cmd.startsWith('tp ') && !out.includes('Teleported')) ||
       (cmd.startsWith('op ') && !out.toLowerCase().includes('operator')) ||
-      ((cmd.startsWith('clear ') || cmd.startsWith('give ') || cmd.startsWith('effect ')) && /No entity was found|Unknown|incorrect/i.test(out))) {
+      ((cmd.startsWith('clear ') || cmd.startsWith('give ') || cmd.startsWith('effect ')) && /No entity was found|Unknown|incorrect/i.test(out)) ||
+      // fill/setblock: an unchanged region ("No blocks were filled" / "Could
+      // not set the block") is the idempotent re-run, not a failure; an
+      // unloaded chunk or an oversized box is.
+      ((cmd.startsWith('fill ') || cmd.startsWith('setblock ')) && !/Successfully filled|No blocks were filled|Changed the block|Could not set the block/.test(out))) {
     throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
   return String(stdout)
@@ -160,7 +164,21 @@ function loadSpots() {
       }
       house = { x: s.house[0], y: s.house[1], z: s.house[2] }
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house }
+    // Rig-built arena (idkcraft-jsf.7): rcon commands run after both tps
+    // (chunks loaded) and before the kit, every trial, on the disposable
+    // copy. World edits only — fill/setblock; a give/op/tp here would
+    // smuggle kit or state past the per-spot contract.
+    let prep = []
+    if (s.prep != null) {
+      if (!Array.isArray(s.prep) || s.prep.length > 32) throw new Error(`spots[${i}]: bad prep (want <=32 commands)`)
+      for (const c of s.prep) {
+        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock) /.test(c)) {
+          throw new Error(`spots[${i}]: prep allows fill/setblock only`)
+        }
+      }
+      prep = s.prep.slice()
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep }
   })
 }
 
@@ -230,6 +248,11 @@ function compareBaseline(rows, baseline) {
     if (r.stuck > e.maxStuck) return { spot: r.spot, verdict: 'regressed', was, now, why: `stuck ${r.stuck} > ${e.maxStuck}` }
     if (r.eps > e.maxEps) return { spot: r.spot, verdict: 'regressed', was, now, why: `episodes ${r.eps} > ${e.maxEps}` }
     if (r.call > e.maxCalls) return { spot: r.spot, verdict: 'regressed', was, now, why: `calls ${r.call} > ${e.maxCalls}` }
+    // Control spots (idkcraft-jsf.7): minCalls pins the page a trap MUST
+    // raise — a silent trap (detector broke) or a leaking one (the bot
+    // walked out, so its twin's reached proves nothing) regresses.
+    if (Number.isInteger(e.minCalls) && r.call < e.minCalls) return { spot: r.spot, verdict: 'regressed', was, now, why: `calls ${r.call} < ${e.minCalls} (control trap went silent)` }
+    if (Number.isInteger(e.minCalls) && r.reached && !e.reached) return { spot: r.spot, verdict: 'regressed', was, now, why: 'control trap leaked (reached)' }
     if (r.reached && !e.reached) return { spot: r.spot, verdict: 'improved', was, now }
     return { spot: r.spot, verdict: 'ok', was, now }
   })
@@ -482,6 +505,13 @@ async function main() {
       const [sx, sy, sz] = s.spawn.map(Math.floor)
       await rcon(`fill ${sx - 12} ${sy - 6} ${sz - 12} ${sx + 12} ${sy + 12} ${sz + 12} air replace water`)
     }
+    // Rig-built arena (idkcraft-jsf.7): rebuilt every trial — a previous
+    // trial's pours, digs and climbs never leak into this one. rcon throws
+    // on a failed fill (exit 2: the arena is the fixture, not the verdict).
+    if (s.prep.length > 0) {
+      for (const cmd of s.prep) await rcon(cmd)
+      console.log(`prep ${s.name}: ${s.prep.length} cmds`)
+    }
     // Fresh kit per spot (repeatability: drops picked up mid-run reset).
     await rcon(`clear ${FOLLOWER}`)
     if (s.scaffold > 0) await rcon(`give ${FOLLOWER} dirt ${s.scaffold}`)
@@ -628,6 +658,14 @@ async function main() {
     rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
+    // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
+    // (scoop after the climb). Informational — the gate judges the walk.
+    if (s.bucket) {
+      let n = -1
+      try { n = follower.inventory.items().filter((it) => it.name === 'water_bucket').length } catch (_) { /* unreadable: -1 */ }
+      rows[rows.length - 1].buckets = n
+      console.log(`KIT-CHECK ${s.name}: water_bucket ${n}/2`)
+    }
   }
   const path = require('node:path')
   const outFile = process.env.REPLAY_OUT || path.join(__dirname, 'last-replay.json')
