@@ -346,8 +346,12 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
-    const own = !!(pos && ctx && ctx.placedByBot instanceof Set &&
-      ctx.placedByBot.has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`))
+    const pkey = pos && `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
+    // Same kind as we laid it (revmux 02 minor: a swap while the chunk was
+    // unloaded fires no blockUpdate); no recorded name = trust the key.
+    const laid = pkey && ctx && ctx.placedNames instanceof Map ? ctx.placedNames.get(pkey) : undefined
+    const own = !!(pkey && ctx && ctx.placedByBot instanceof Set && ctx.placedByBot.has(pkey) &&
+      (laid === undefined || laid === name))
     let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
     if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
     if (fp && !(pos.y >= ctx.home.site.y && own)) return 'protected'
@@ -459,7 +463,9 @@ function trackPlaced(bot, ctx) {
         const p = (newB && newB.position) || (oldB && oldB.position)
         if (!(set instanceof Set) || !set.size || !p) return
         if (oldB && newB && oldB.type === newB.type) return // a door swinging stays ours
-        set.delete(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`)
+        const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+        set.delete(k)
+        if (ctx.placedNames instanceof Map) ctx.placedNames.delete(k)
       } catch (_) { /* tracking never breaks the world view */ }
     })
   }
@@ -471,11 +477,18 @@ function trackPlaced(bot, ctx) {
       const rp = ref && ref.position
       if (rp && face && typeof face.x === 'number' && ctx) {
         if (!(ctx.placedByBot instanceof Set)) ctx.placedByBot = new Set()
+        if (!(ctx.placedNames instanceof Map)) ctx.placedNames = new Map()
         if (ctx.placedByBot.size >= 5000) {
           const oldest = ctx.placedByBot.values().next().value
           ctx.placedByBot.delete(oldest)
+          ctx.placedNames.delete(oldest)
         }
-        ctx.placedByBot.add(`${Math.floor(rp.x + face.x)},${Math.floor(rp.y + face.y)},${Math.floor(rp.z + face.z)}`)
+        const k = `${Math.floor(rp.x + face.x)},${Math.floor(rp.y + face.y)},${Math.floor(rp.z + face.z)}`
+        ctx.placedByBot.add(k)
+        let laid = null
+        try { laid = typeof bot.blockAt === 'function' && bot.blockAt(new Vec3(rp.x + face.x, rp.y + face.y, rp.z + face.z)) } catch (_) { laid = null }
+        if (laid && typeof laid.name === 'string') ctx.placedNames.set(k, laid.name)
+        else ctx.placedNames.delete(k)
         // Prod acceptance grep (dahd): the set grows after an hour of work.
         ctx.placedTotal = (ctx.placedTotal || 0) + 1
         if (ctx.placedTotal % 100 === 0) console.log(`trackPlaced: placed=${ctx.placedTotal} placedByBot=${ctx.placedByBot.size}`)

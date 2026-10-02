@@ -155,6 +155,16 @@ describe('canBreak guard (idkcraft-drq)', () => {
     // A player's planks in that cell later are not ours.
     bot.emit('blockUpdate', at(0), at(13))
     assert.equal(canBreak(worldBot(new Map()), blk('oak_planks', 1, 64, 1), ctx), false)
+    // Swapped while the chunk was unloaded (no blockUpdate): the laid name
+    // no longer matches (revmux 02 minor).
+    const world = worldBot(new Map([['2,64,2', 'cobblestone']]))
+    world.placeBlock = async () => {}
+    const c2 = {}
+    trackPlaced(world, c2)
+    await world.placeBlock({ position: new Vec3(2, 63, 2) }, new Vec3(0, 1, 0))
+    assert.equal(c2.placedNames.get('2,64,2'), 'cobblestone')
+    assert.equal(canBreak(world, blk('cobblestone', 2, 64, 2), c2), true, 'still our pillar')
+    assert.equal(canBreak(world, blk('oak_planks', 2, 64, 2), c2), false, 'someone swapped it')
   })
 
   it('installPlaceTiming holds a jump-place until the rising feet clear the block (idkcraft-6x7.11)', async () => {
