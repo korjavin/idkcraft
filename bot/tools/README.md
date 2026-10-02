@@ -16,8 +16,8 @@ anti-noise, pre-op, replay, tear down, judge. Exit codes:
 
 | code | meaning |
 | ---- | ------- |
-| 0 | baseline holds (or comparison skipped — see below) |
-| 1 | REGRESSION vs `stuck-baseline.json`: a spot flipped reached→unreached, overran its stuck/episode ceiling, or has no baseline entry |
+| 0 | baseline holds (or comparison skipped — see below), including `FLAKY`: the regressed spots held on the automatic rerun (see Sensitivity, flakes) |
+| 1 | REGRESSION vs `stuck-baseline.json`, repeated on the rerun: a spot flipped reached→unreached, overran its stuck/episode ceiling, or has no baseline entry (never rerun) |
 | 2 | environment failure: no START.sh/snapshot, rig never came up, anti-noise rejected, pristine `world.tar` changed mid-run, guide setup failed (`GUIDE-BURIED`/`GUIDE-DIED`), follower dropped mid-run |
 | 130 | interrupted (never a pass) |
 
@@ -114,6 +114,25 @@ the pit, and the run exits 1 (`BASELINE DUGPIT-BARE … REGRESSION
 (unreached (was reached))`). DUGPIT-VALIDATE, its no-bucket twin on the
 same arena, holds 5/5 (one page, never reached) — so BARE's `reached` is
 the water climb, not a walk.
+
+Flakes (idkcraft-6x7.9): the corpus is not deterministic by construction,
+and that is prod behavior, not a rig bug — so it is neither seeded nor
+absorbed by wider ceilings. Two observed false REGRESSIONs (~1 in 15 full
+runs, 2026-10-02): CLUSTER `calls 1 > 0` — recover's sidestep picks a free
+side at random (`pickSidestepDir`), one side leads the `dig_step` into
+prod-era cobblestone the bot did not place this session (`protected`) and
+it pages; three single reruns of the same code were 0 eps / 0 calls.
+DUGPIT-BARE unreached once — `water_up failed:no-rise` (swim stall/timeout
+counted in real Paper ticks plus water physics). So a run that exits 1
+reruns ONLY the regressed spots, once, on a freshly reset world (dug
+terrain persists across spots); results go to `/tmp/stuck-rerun-<variant>.json`.
+Repeats → `verdict: REGRESSION (repeated on the rerun)`, exit 1. Holds →
+a `FLAKY <spot>` line per spot plus `verdict: FLAKY`, exit 0 — paste it
+with the table; a spot that keeps showing up FLAKY is a bead, not noise.
+A missing baseline entry is deterministic (exit 1, no rerun); env exits
+(2) are never rerun. The sabotages above are deterministic (they fail 2/2)
+and still exit 1 after the rerun (proven on S6-LEAD `MAX_FAILS=0`, see the
+6x7.9 PR).
 
 What it does NOT see: recover breakage that changes neither the walk nor
 the paging (a first-try rescue needs no budget — `MAX_FAILS=0` is silent
