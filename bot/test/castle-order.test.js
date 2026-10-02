@@ -346,6 +346,9 @@ describe('castle arbiter step (g0z.3)', () => {
     }
     const w = goal.goalFacts(near, ctx).castle
     assert.match(w, /^(planks|torch)-none$/)
+    const nearAt = near.blockAt
+    near.blockAt = (p) => (p.x >= SITE.x + 8 ? null : nearAt(p)) // revmux 02: east chunk gone, origin still loaded
+    assert.equal(goal.goalFacts(near, ctx).castle, w, 'partly loaded site = last on-site word')
     near.blockAt = () => null
     assert.equal(goal.goalFacts(near, ctx).castle, w, 'far word = last on-site word')
     // Never seen this session: the first plan cell's kind (walk back and build).

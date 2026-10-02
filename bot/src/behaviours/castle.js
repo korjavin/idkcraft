@@ -230,8 +230,13 @@ function menuFact(bot, ctx, now = Date.now()) {
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
   try {
+    // Loaded = all four footprint corners read (revmux 02): the site spans
+    // at most 2x2 chunks, so the corners cover every chunk it touches.
     let loaded = false
-    try { loaded = !!bot.blockAt(new Vec3(st.site.x, st.site.y, st.site.z)) } catch (_) { loaded = false }
+    try {
+      const { w, d } = blueprint.siteDimensions(st.rot | 0)
+      loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+    } catch (_) { loaded = false }
     if (!loaded) {
       if (st.phase === 'complete') return 'done'
       const last = ctx.castleWord
