@@ -76,11 +76,58 @@ function v3(p) {
   return q ? new Vec3(q.x, q.y, q.z) : null
 }
 
+// Given-up build cells (idkcraft-ipn.10): blueprint indices, sanitized both
+// ways (a hand-edited file must not inject shapes). Cap 256 — the v2 plan
+// holds 99; anything longer is garbage, not a plan.
+const BUILD_SKIP_MAX = 256
+// Verdict stamps for the skip retry (revmux 01 core-4): { idx: epochMs }.
+// Same sanitize-and-cap discipline as skipOf — a hand-edited file must not
+// inject shapes, and a far-future stamp must not freeze a cell past its
+// retry window. Only skips already accepted by skipOf keep their stamps.
+function skipAtOf(v, skip) {
+  const out = {}
+  try {
+    if (v && typeof v === 'object' && Array.isArray(skip) && skip.length) {
+      const keep = new Set(skip)
+      for (const k of Object.keys(v)) {
+        const n = Number(k)
+        const t = v[k]
+        if (!Number.isInteger(n) || n < 0 || n >= BUILD_SKIP_MAX) continue
+        if (!keep.has(n)) continue
+        if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0 || t > Date.now() + 86400000) continue
+        out[n] = t
+      }
+    }
+  } catch (_) { /* stamps best-effort */ }
+  return out
+}
+function skipOf(v) {
+  const out = []
+  try {
+    if (Array.isArray(v)) {
+      const seen = new Set()
+      for (const n of v) {
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n >= BUILD_SKIP_MAX) continue
+        if (seen.has(n)) continue
+        seen.add(n)
+        out.push(n)
+      }
+    }
+  } catch (_) { /* skip best-effort */ }
+  return out
+}
+
 function homeOf(h) {
   if (!h || !h.site) return null
   const site = v3(h.site)
   if (!site) return null
   const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true, v: h && h.v === 2 ? 2 : 1 }
+  try {
+    const skip = skipOf(h.skip)
+    if (skip.length) out.skip = skip
+    const at = skipAtOf(h.skipAt, skip)
+    if (skip.length && Object.keys(at).length) out.skipAt = at
+  } catch (_) { /* skip best-effort */ }
   // Bedroom bed claims (idkcraft-ybt): without these a restart drops sleptA
   // until the next sleep, and the respawn log under-claims (plain instead of
   // (bed)) for the window. Additive like gear: old docs simply lack the keys;
@@ -118,7 +165,19 @@ function snapshot(bot, ctx, now) {
   const t = typeof now === 'number' ? now : Date.now()
   const homes = []
   const cur = homeOf(ctx.home)
-  if (cur) homes.push(cur)
+  if (cur) {
+    // The live ctx.buildSkip is the current home's truth (ipn.10): the
+    // deploy that used to drop it now carries it in the home record.
+    try {
+      const skip = skipOf(ctx.buildSkip)
+      if (skip.length) cur.skip = skip
+      else delete cur.skip
+      const at = skipAtOf(ctx.buildSkipAt, skip)
+      if (skip.length && Object.keys(at).length) cur.skipAt = at
+      else delete cur.skipAt
+    } catch (_) { /* skip best-effort */ }
+    homes.push(cur)
+  }
   let items = []
   try {
     const mem = ctx.resources
@@ -321,6 +380,12 @@ function restore(bot, ctx, file, now) {
       const h = homeOf(doc.homes[doc.homes.length - 1])
       if (h) {
         ctx.home = h
+        // The record's skips are this home's (ipn.10): a deploy mid-build
+        // resumes past the given-up cells instead of re-looping them.
+        try {
+          ctx.buildSkip = skipOf(h.skip)
+          ctx.buildSkipAt = skipAtOf(h.skipAt, ctx.buildSkip)
+        } catch (_) { /* skip best-effort */ }
         out.homes = Math.min(doc.homes.length, HOMES_MAX)
       }
     }

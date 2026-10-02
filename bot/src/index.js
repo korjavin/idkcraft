@@ -46,6 +46,7 @@ const BEHAVIOURS = {
   rest: require('./behaviours/rest'),
   gohome: homeMod.gohome,
   stay: homeMod.stay,
+  shelter: homeMod.shelter,
   comehome: homeMod.comehome,
   build: require('./behaviours/build'),
   beds: require('./behaviours/beds'),
@@ -232,6 +233,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.stepStatus = null
     ctx.gohome = null
     ctx.stay = null
+    ctx.shelter = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
     // canDig is the body's (body.js): clearing ctx.gohome above ends the
@@ -830,7 +832,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           if (foundEarly) {
             ctx.adoptDone = true
             // Same resets as setHome below (no ticker handle in this scope).
-            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
             try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
           } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
             // Give up to build: a mock that never streams, patience out

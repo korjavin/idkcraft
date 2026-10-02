@@ -7,6 +7,8 @@ const detour = require('../detour')
 const stuck = require('../stuck')
 const { botPos } = require('./util')
 const body = require('../body')
+const retreatMod = require('./retreat')
+const recover = require('./recover')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -726,6 +728,115 @@ function stay(bot, ctx, target, state) {
 
 }
 
+// Night shelter (idkcraft-ipn.12): the night-far step — without a bed the
+// respawn is world spawn, and marching home through the dark dies on repeat
+// (prod: 53 of 62 deaths in gohome). Instead the bot pillars up once where
+// it stands and holds till dawn. A failed pillar still holds on the ground:
+// standing beats marching. inShelter once the pillar stands (stay rule): no
+// fight pursuit off the pillar — the melee reflex still swings at climbers.
+// The dawn report mirrors stay's close (same night tally).
+// Pillar anchor (revmux 01 core-2): death respawns (or teleports) the body
+// far from the pillar while the step survives — holding there would camp
+// open ground at world spawn. XZ only: the climb itself is vertical.
+const SHELTER_DISPLACE_XZ = 2
+function shelter(bot, ctx, target, state) {
+  const home = ctx && ctx.home
+  if (!home || !home.site) {
+    ctx.stepStatus = 'failed:no-home'
+    return
+  }
+  if (isInside(bot, home)) {
+    // Walked in by hand (or a lagged first tick): stay owns the inside.
+    ctx.stepStatus = 'done'
+    return
+  }
+  let time = 'night'
+  try {
+    time = goalFacts(bot, ctx).time || 'night'
+  } catch (_) { /* hold on unknown time */ }
+  if (time === 'day') {
+    ctx.stepStatus = 'done'
+    ctx.inShelter = false
+    // Compose before snapshotting (stay-close mirror): the line reads the
+    // opening, then the report becomes the next opening.
+    let line = ''
+    try { line = nightLine(bot, ctx, home) } catch (_) { /* report best-effort */ }
+    try {
+      if (ctx.night) {
+        ctx.night.deaths = ctx.deaths || 0
+        ctx.night.haul = { ...(ctx.haul || {}) }
+        ctx.night.reported = true
+      }
+    } catch (_) { /* tally best-effort */ }
+    try { if (line) bot.chat(line) } catch (_) { /* chat best-effort */ }
+    return
+  }
+  ensureNight(bot, ctx) // idempotent: the tally opens once, like gohome/stay
+  if (!ctx.shelter || typeof ctx.shelter !== 'object') ctx.shelter = {}
+  const st = ctx.shelter
+  try {
+    const bp = botPos(bot)
+    const pa = st.pillarAt
+    if (bp && pa && typeof pa.x === 'number' &&
+      Math.hypot(bp.x - pa.x, bp.z - pa.z) > SHELTER_DISPLACE_XZ) {
+      // Displaced past the anchor: drop the hold and the stale climb, and
+      // re-pillar below. A foreign non-pillar episode is never touched.
+      st.pillared = false
+      st.pillarAt = null
+      if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
+        try { ctx.recovery = null } catch (_) { /* release best-effort */ }
+      }
+      try { console.log('shelter displaced, re-pillaring') } catch (_) { /* log best-effort */ }
+    }
+  } catch (_) { /* anchor best-effort */ }
+  if (!st.pillared) {
+    // Climbing unsheltered (revmux 01 core-1): arming inShelter before the
+    // pillar stands turns every fight tick idle at the ticker gate — and
+    // stopOnce kills the pillar jump — freezing the climb on the first
+    // hostile. Fight and the retreat chain run during the climb; the
+    // shelter arms once the pillar stands.
+    ctx.inShelter = false
+    // A foreign live episode (a stuck flow's non-pillar prim) is never
+    // touched: the hold is the point, the pillar best-effort.
+    if (!ctx.recovery) {
+      try { retreatMod.beginPillar(ctx, 'shelter', null) } catch (_) { /* episode best-effort */ }
+      try {
+        const bp0 = botPos(bot)
+        if (bp0) st.pillarAt = { x: bp0.x, z: bp0.z }
+      } catch (_) { /* anchor best-effort */ }
+    }
+    if (!ctx.recovery || ctx.recovery.action === 'pillar_up') {
+      const before = ctx.recovery && ctx.recovery.status
+      if (before === 'running' || before === 'starting' || before == null) {
+        try { recover.run(bot, ctx) } catch (_) { /* prim best-effort */ }
+      }
+      const rec = ctx.recovery && ctx.recovery.status
+      if (rec === 'running' || rec === 'starting' || rec == null) return // still climbing
+      // Terminal verdict (pillar-wrapper mirror): pillared or not, the hold
+      // starts — even a failed pillar beats the march. Release the episode
+      // so a later stuck flow never adopts this stale record.
+      if (rec !== 'done' && !st.pillarLogged) {
+        st.pillarLogged = true
+        try { console.log(`shelter pillar ${rec}, holding on the ground`) } catch (_) { /* log best-effort */ }
+      }
+      try { ctx.recovery = null } catch (_) { /* release best-effort */ }
+    }
+    // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
+    // above, so holding here would leave pillarAt null and the death/
+    // respawn displacement check dead — the round-1 open-ground camp on
+    // another path. Anchor at the current body instead.
+    if (!st.pillarAt) {
+      try {
+        const bp2 = botPos(bot)
+        if (bp2) st.pillarAt = { x: bp2.x, z: bp2.z }
+      } catch (_) { /* anchor best-effort */ }
+    }
+    st.pillared = true
+  }
+  ctx.inShelter = true
+  holdStill(bot, ctx)
+}
+
 // Meet target (jr2.3 'come home'): the common-room cell behind the door on a
 // v2 house, the inside cell on a v1 hut. Named separately from insidePos so
 // the jr2.2 bedroom/sleep targeting cannot hijack the meeting: the owner is
@@ -1076,4 +1187,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, comehome, releaseMeet, startMeet, isInside, meetPos, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, SHELTER_RUN_FRESH_MS }

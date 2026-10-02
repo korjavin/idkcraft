@@ -158,6 +158,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         ctx.stepStatus = null
         ctx.gohome = null
         ctx.stay = null
+        ctx.shelter = null
         ctx.inShelter = false
         wakeBody(bot)
         ctx.paused = false
@@ -190,6 +191,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.stepStatus = null
       ctx.gohome = null
       ctx.stay = null
+      ctx.shelter = null
       ctx.inShelter = false
       wakeBody(bot) // jr2.2: an order takes the body even at night
       const pick = c.action === 'dig_buried' ? 'buried' : 'exposed'
@@ -232,6 +234,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.stepStatus = null
       ctx.gohome = null
       ctx.stay = null
+      ctx.shelter = null
       ctx.inShelter = false
       wakeBody(bot)
       ctx.paused = false
@@ -245,6 +248,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
     ctx.stepStatus = null
     ctx.gohome = null
     ctx.stay = null
+    ctx.shelter = null
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
     bot.chat(startBlockOrder(bot, ctx, p, r.result))
@@ -316,7 +320,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     // b2o: then the same transition as 'go work' — follow drops the body
     // and the goal loop starts building instead of trailing the owner.
     const site = goal.siteFor(bot, pos)
-    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site)
+    if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site, { fresh: true })
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)

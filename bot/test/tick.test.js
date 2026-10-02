@@ -1015,7 +1015,8 @@ describe('work mode (epic rw4)', () => {
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
     const ctx = bot._tickerCtx
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+    ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 }
@@ -1075,7 +1076,8 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.movements = movements
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+    ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
@@ -1103,7 +1105,8 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.movements = movements
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+    ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
@@ -1137,7 +1140,9 @@ describe('work mode (epic rw4)', () => {
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.movements = movements
-    ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+    // Near the bot (ipn.12): a night-far gohome now shelters instead of
+    // walking. The bot stays far from spawn, so homing still takes over.
+    ctx.home = { site: { x: 190, y: 64, z: 190 }, built: true, interior: { min: { x: 191, y: 64, z: 191 }, max: { x: 192, y: 65, z: 192 } } }
     ctx.step = 'gohome'
     ctx.stepStatus = 'running'
     ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
@@ -1175,7 +1180,8 @@ describe('work mode (epic rw4)', () => {
     }
     function nightWalkCtx(bot) {
       const ctx = bot._tickerCtx
-      ctx.home = { site: { x: 100, y: 64, z: 100 }, built: true, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 102, y: 65, z: 102 } } }
+      // Near home (ipn.12): a night-far gohome now shelters instead of walking.
+      ctx.home = { site: { x: 10, y: 64, z: 10 }, built: true, interior: { min: { x: 11, y: 64, z: 11 }, max: { x: 12, y: 65, z: 12 } } }
       ctx.step = 'gohome'
       ctx.stepStatus = 'running'
       ctx.gohome = { phase: 'walk', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
@@ -1343,6 +1349,37 @@ describe('work mode (epic rw4)', () => {
         assert.equal(i, 3, 'all three scripted decisions ran (idle was not cached away)')
         assert.equal(fightRan, 0)
         assert.equal(lines.filter((l) => l.includes('shelter-run: holding')).length, 1, 'one edge log per walk')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('climbing shelter fights instead of idling (inShelter arms only on the pillar)', async () => {
+      // Revmux ipn 01 core-1: arming inShelter before the pillar stands turns
+      // every fight tick idle at the ticker gate, and stopOnce kills the
+      // pillar jump — freezing the climb on the first hostile. The climb
+      // state comes from the real first shelter tick, not hand-set: pre-fix
+      // it armed inShelter and this fight tick idled.
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 2) }
+      bot._items = [{ name: 'cobblestone', count: 64 }] // scaffold: the climb stays running
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.step = 'shelter'
+      ctx.shelter = {}
+      homeMod.shelter(bot, ctx, null, null) // the real first climb tick
+      assert.equal(ctx.recovery && ctx.recovery.status, 'running', 'mid-climb state')
+      assert.equal(ctx.inShelter || false, false, 'unsheltered until the pillar stands')
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'fight')
+        assert.equal(fightRan, 1, 'the climb does not idle fight ticks')
+        assert.equal(ctx.recovery && ctx.recovery.action, 'pillar_up', 'the climb episode survives the fight tick')
       } finally {
         BEHAVIOURS.fight = origFight
         ticker.destroy()

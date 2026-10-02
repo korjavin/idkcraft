@@ -98,20 +98,23 @@ function nearestHostile(bot, bp) {
   return best
 }
 
+// One-prim pillar episode (recover.decide shape), shared by the chain pick
+// below and the goal shelter step (ipn.12): the driver (pillar wrapper /
+// shelter) owns rec.status, and a later stuck flow adopts the episode
+// coherently instead of meeting foreign state.
+function beginPillar(ctx, source, model) {
+  ctx.recovery = {
+    action: 'pillar_up', source, model, status: 'running', st: null,
+    attempts: 1, fails: 0, repeats: 0, last: null, calledPlayer: false,
+    endEpisode: true, lastDy: null, placeError: (ctx.placeErrors || 0) > 0,
+  }
+}
+
 function pick(bot, ctx, action, source, model) {
   ctx.retreat = { action, source, model }
   ctx.retreatFailed = null
   ctx.stepStatus = 'running'
-  if (action === 'pillar') {
-    // A one-prim recovery episode (recover.decide shape): the pillar
-    // wrapper below drives rec.status, and a later stuck flow adopts the
-    // episode coherently instead of meeting foreign state.
-    ctx.recovery = {
-      action: 'pillar_up', source, model, status: 'running', st: null,
-      attempts: 1, fails: 0, repeats: 0, last: null, calledPlayer: false,
-      endEpisode: true, lastDy: null, placeError: (ctx.placeErrors || 0) > 0,
-    }
-  }
+  if (action === 'pillar') beginPillar(ctx, source, model)
   try { bot.chat(`retreating: ${RETREAT_VERBS[action]} (${source})`) } catch (_) { /* chat best-effort */ }
   return { action, source, model }
 }
@@ -259,4 +262,4 @@ function pillar(bot, ctx) {
   if (ctx && ctx.retreat) ctx.recovery = null
 }
 
-module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, feasibleRetreat, chooseRetreat, retreat, pillar }
+module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar }

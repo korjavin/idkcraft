@@ -41,6 +41,27 @@ const { goals } = require('mineflayer-pathfinder')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
+// Per-cell attempt budget (idkcraft-ipn.10): refusals are not the only way a
+// cell stalls — a wedged executor (moving forever), a hung place flight, or
+// a success-without-effect cycle never touch buildFails, and prod looped one
+// fill cell 316 min ('building 98/99'). Ticks on one cell without progress
+// (no advance past the max cell, no displacement past CELL_PROGRESS) skip it
+// like a refusal. 120 ticks ≈ 2 min — a healthy cell places in <30 (A*
+// replan gaps ~20, flights settle in seconds); genuine approach walks
+// displace and never trip it.
+const CELL_TICK_BUDGET = 120
+const CELL_PROGRESS = 1
+// Hard per-cell cap (revmux 01 core-3): displacement forgiveness cannot tell
+// an approach from an oscillation, and a back-and-forth re-approach would
+// reset the stall budget forever. 600 ticks ≈ 10 min bound every shape of
+// the loop — a 230-block death-walkback (~4 min) still fits — and with the
+// 1h skip retry a false skip re-probes instead of fossilizing.
+const CELL_HARD_CAP = 600
+// Hung own-flight deadline (craft-timeout precedent): a place flight that
+// never settles wedges every later tick on the placeInFlight early-return.
+// Only build's own flights carry the stamp — a foreign (beds/light) flight
+// holds the step as today.
+const FLIGHT_TIMEOUT_MS = 30000
 // Reach check: head (eyes) to cell CENTRE. GoalPlaceBlock.isEnd measures
 // head-to-face-centre <= PLACE_RANGE; the clicked face centre sits up to
 // ~1 off the cell centre and the float head up to ~0.9 off the
@@ -347,8 +368,47 @@ function guardOwnWalls(bot, ctx) {
 function skipCell(ctx, idx, p, why) {
   if (!Array.isArray(ctx.buildSkip)) ctx.buildSkip = []
   if (!ctx.buildSkip.includes(idx)) ctx.buildSkip.push(idx)
+  // Wall-clock verdict stamp (revmux 01 core-4): a skip is retried after
+  // BUILD_SKIP_RETRY_MS — transient refusals heal, structural cells
+  // re-skip budget-capped — so persistence can never fossilize a hole.
+  try {
+    if (!ctx.buildSkipAt || typeof ctx.buildSkipAt !== 'object') ctx.buildSkipAt = {}
+    ctx.buildSkipAt[idx] = Date.now()
+  } catch (_) { /* stamp best-effort */ }
+  // The next cell starts its own budget (revmux 02): without this a skip
+  // below a fully-traversed max hands the next lower cell the exhausted
+  // remainder and skips it on its first tick.
   ctx.buildFails = 0
-  console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
+  ctx.buildStallTicks = 0
+  ctx.buildHardTicks = 0
+  ctx.buildAnchor = null
+  if (why === 'cell-budget') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_TICK_BUDGET} ticks without progress (${why})`)
+  else if (why === 'cell-hard-cap') console.log(`build skip ${p.x} ${p.y} ${p.z} after ${CELL_HARD_CAP} ticks on one cell (${why})`)
+  else console.log(`build skip ${p.x} ${p.y} ${p.z} after 3 refusals (${why})`)
+}
+
+// Skip retry (revmux 01 core-4): re-probe skips older than the window —
+// transient refusals (a mob in the cell) lay on retry, structural cells
+// re-skip budget-capped. Unstamped skips (pre-fix sessions, hand-set tests)
+// never prune: only verdicts this code stamped may expire. Called from the
+// build menu gate (the live re-probe; restored stale skips drop on the
+// first decide, so a deploy heals stale holes like the pre-persistence
+// code did).
+const BUILD_SKIP_RETRY_MS = 3600000
+function pruneBuildSkips(ctx, now) {
+  try {
+    if (!ctx || !Array.isArray(ctx.buildSkip) || ctx.buildSkip.length === 0) return
+    const t = typeof now === 'number' ? now : Date.now()
+    const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt : {}
+    const fresh = ctx.buildSkip.filter((i) => typeof at[i] !== 'number' || t - at[i] < BUILD_SKIP_RETRY_MS)
+    if (fresh.length === ctx.buildSkip.length) return
+    ctx.buildSkip = fresh
+    const keep = {}
+    for (const i of fresh) {
+      if (typeof at[i] === 'number') keep[i] = at[i]
+    }
+    ctx.buildSkipAt = keep
+  } catch (_) { /* prune best-effort */ }
 }
 
 function build(bot, ctx, target, state) {
@@ -363,9 +423,27 @@ function build(bot, ctx, target, state) {
       ctx.home = null
     }
     ctx.buildSkip = []
+    ctx.buildSkipAt = {}
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1
+  }
+  // Hung own flight (ipn.10): drop the flag so the cell re-attempts; the
+  // strike counts like a refusal, so three hangs skip the cell. A late
+  // settlement lands through the flightIdx guard in the flight below.
+  if (ctx.placeInFlight && ctx.buildFlightSince != null && ctx.home &&
+    Date.now() - ctx.buildFlightSince > FLIGHT_TIMEOUT_MS) {
+    ctx.placeInFlight = false
+    ctx.buildFlightSince = null
+    const hIdx = nextCellIdx(bot, ctx.home, ctx.buildSkip)
+    if (hIdx >= 0) {
+      if (ctx.buildFailIdx !== hIdx) {
+        ctx.buildFailIdx = hIdx
+        ctx.buildFails = 0
+      }
+      ctx.buildFails = (ctx.buildFails || 0) + 1
+      if (ctx.buildFails >= 3) skipCell(ctx, hIdx, cellAbs(ctx.home, blueprintFor(ctx.home)[hIdx]), 'flight-hang')
+    }
   }
   if (ctx.placeInFlight) return
   if (!ctx.home) return
@@ -392,6 +470,68 @@ function build(bot, ctx, target, state) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
   }
+  // Per-cell attempt budget (ipn.10): ticks on one cell without progress —
+  // no advance past the max cell, no displacement past CELL_PROGRESS —
+  // skip it like a refusal. Keyed by site, so a home move re-arms without
+  // touching the setHome/adopt reset lists. An unreadable body counts:
+  // two minutes of unknown position is broken by any definition. The hard
+  // cap below counts every non-advancing tick unforgiven, so an
+  // oscillation that keeps displacing still ends (revmux 01 core-3). Both
+  // counters are keyed to the cell (revmux 02): once the house is fully
+  // traversed a later lower cell must get its own budget, not the
+  // remainder of a shared one.
+  try {
+    const site = ctx.home.site
+    const siteKey = `${site.x},${site.y},${site.z},v${ctx.home.v === 2 ? 2 : 1}`
+    if (ctx.buildCellSite !== siteKey) {
+      ctx.buildCellSite = siteKey
+      ctx.buildMaxIdx = -1
+      ctx.buildCellIdx = -1
+      ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
+      ctx.buildAnchor = null
+    }
+    if (ctx.buildCellIdx !== idx) {
+      ctx.buildCellIdx = idx
+      ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
+      const bpc = bot.entity && bot.entity.position
+      ctx.buildAnchor = bpc && typeof bpc.x === 'number' ? { x: bpc.x, y: bpc.y, z: bpc.z } : null
+    }
+    if (idx > (typeof ctx.buildMaxIdx === 'number' ? ctx.buildMaxIdx : -1)) {
+      ctx.buildMaxIdx = idx
+      ctx.buildStallTicks = 0
+      ctx.buildHardTicks = 0
+      const bp0 = bot.entity && bot.entity.position
+      ctx.buildAnchor = bp0 && typeof bp0.x === 'number' ? { x: bp0.x, y: bp0.y, z: bp0.z } : null
+    } else {
+      ctx.buildHardTicks = (ctx.buildHardTicks || 0) + 1
+      if (ctx.buildHardTicks >= CELL_HARD_CAP) {
+        skipCell(ctx, idx, p, 'cell-hard-cap')
+        return
+      }
+      let moved = false
+      try {
+        const bp = bot.entity && bot.entity.position
+        const a = ctx.buildAnchor
+        if (bp && typeof bp.x === 'number' && a && typeof a.x === 'number' &&
+          Math.hypot(bp.x - a.x, bp.y - a.y, bp.z - a.z) > CELL_PROGRESS) moved = true
+      } catch (_) { moved = false }
+      if (moved) {
+        ctx.buildStallTicks = 0
+        try {
+          const bp1 = bot.entity.position
+          ctx.buildAnchor = { x: bp1.x, y: bp1.y, z: bp1.z }
+        } catch (_) { /* anchor best-effort */ }
+      } else {
+        ctx.buildStallTicks = (ctx.buildStallTicks || 0) + 1
+        if (ctx.buildStallTicks >= CELL_TICK_BUDGET) {
+          skipCell(ctx, idx, p, 'cell-budget')
+          return
+        }
+      }
+    }
+  } catch (_) { /* budget best-effort: the refusal counters still guard */ }
 
   // Progress line, at most one per 10 s.
   const total = plan.length
@@ -487,13 +627,19 @@ function build(bot, ctx, target, state) {
   }
 
   ctx.placeInFlight = true
+  ctx.buildFlightSince = Date.now()
+  const flightIdx = idx
   const fails = () => ctx.buildFails || 0
   ;(async () => {
     try {
       await bot.equip(item, 'hand')
       await bot.placeBlock(ref.ref, ref.face)
-      ctx.buildFails = 0
+      if (ctx.buildFailIdx === flightIdx) ctx.buildFails = 0
     } catch (err) {
+      // Stale flight (ipn.10): the cell moved on (budget skip) while this
+      // verdict was in the air — it must neither strike nor clear for the
+      // new cell, and must not dig for the dead one.
+      if (ctx.buildFailIdx !== flightIdx) return
       ctx.buildFails = fails() + 1
       const occupier = blockNameAt(bot, p)
       if (occupier != null && (occupier === 'crafting_table' || occupier.endsWith('_door') || occupier.endsWith('_planks'))) {
@@ -518,8 +664,9 @@ function build(bot, ctx, target, state) {
       if (fails() >= 3) skipCell(ctx, idx, p, occupier || 'refused')
     } finally {
       ctx.placeInFlight = false
+      ctx.buildFlightSince = null
     }
-  })().catch(() => { ctx.placeInFlight = false })
+  })().catch(() => { ctx.placeInFlight = false; ctx.buildFlightSince = null })
 }
 
 module.exports = build
@@ -535,5 +682,11 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.nextCellIdx = nextCellIdx
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.pruneBuildSkips = pruneBuildSkips
+module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS
 module.exports.PLACE_RANGE = PLACE_RANGE
 module.exports.PLACE_REACH = PLACE_REACH
+module.exports.CELL_TICK_BUDGET = CELL_TICK_BUDGET
+module.exports.CELL_PROGRESS = CELL_PROGRESS
+module.exports.CELL_HARD_CAP = CELL_HARD_CAP
+module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS

@@ -52,9 +52,20 @@ const MENU = {
     verb: 'staying inside',
   },
   gohome: {
-    feasible: (facts) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no',
+    // Night-far (ipn.12): at night a far march is a death march — shelter
+    // owns it (see nightFarFromHome). Dusk marches at any distance.
+    feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
+  },
+  shelter: {
+    // Night shelter (ipn.12): the night-far complement of gohome — pillar
+    // up and hold where you are till dawn instead of marching the dark.
+    feasible: (facts, bot, ctx) => facts.time === 'night' && facts.home === 'built' && facts.inside === 'no' &&
+      nightFarFromHome(bot, ctx),
+    chat: () => 'on my own: sheltering here till dawn',
+    verb: 'sheltering till dawn',
   },
   craft: {
     // Batch gate: a full NEED_LOGS load crafts at once. Starting on the first
@@ -76,6 +87,9 @@ const MENU = {
     // claim only digs scaffold (or reads kit-complete) instead of
     // diverting into an instant-done re-pick loop (revmux 01).
     feasible: (facts, bot, ctx) => {
+      // Same-reason day latch (ipn.11, beds sheepLatched mirror): a repeated
+      // identical failure yields the rest of the day (gear starves otherwise).
+      try { if (require('./behaviours/equip').equipLatched(ctx, bot)) return false } catch (_) { /* unlatched */ }
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
         if (!upgrade && !equipWant(facts)) return false
@@ -105,6 +119,10 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
+      // Skip retry (revmux 01 core-4): re-probe stamped skips past the
+      // window — a restored stale skip drops on the first decide, so a
+      // deploy heals stale holes like the pre-persistence code did.
+      try { buildMod.pruneBuildSkips(ctx) } catch (_) { /* prune best-effort */ }
       // No scannable origin (no home yet, or a home without site): nothing
       // is verifiable, so the whole wall+roof count counts.
       if (!home || !home.site) return facts.planks >= Math.min(PLANK_COUNT, 16)
@@ -385,11 +403,32 @@ function tableYieldToBuild(facts, bot, ctx) {
   }
 }
 
+// Night death-march guard (idkcraft-ipn.12): without a bed the respawn is
+// world spawn (~230 blocks from home in prod), and a night gohome march
+// through the dark dies again and again (prod: 53 of 62 deaths in gohome).
+// At night the bot only walks home when close; far from home it shelters in
+// place till dawn. Dusk still marches at any distance (the going-home
+// window) — nightfall forces a still-far march into shelter past the
+// gohome stickiness (nightFarWalk in decide). Range is the retreat chain's
+// (single source: beyond it a walk through mobs is a death march).
+// Unreadable position reads near: the old march, never a new hold.
+function nightFarFromHome(bot, ctx) {
+  try {
+    const range = require('./behaviours/retreat').HOME_WALK_RANGE || 96
+    const site = ctx && ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!site || typeof site.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - site.x, bp.z - site.z) > range
+  } catch (_) {
+    return false
+  }
+}
+
 // Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
 // rearm (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -911,6 +950,7 @@ function goalFsm(facts, feasibleNames) {
     if (!ok.has(name)) continue
     if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
+    if (name === 'shelter' && t !== 'night') continue // shelter is the night-far step; dusk marches
     return name
   }
   return 'rest'
@@ -929,6 +969,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
+  shelter: 'time is night and home is built and inside is no: stop marching and wait where you are till dawn',
   deliver: 'haul is waiting: carry it to the player',
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
@@ -1052,7 +1093,13 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'gohome':
       if (facts.time !== 'dusk' && facts.time !== 'night') return 'gohome: daytime'
       if (facts.home !== 'built') return 'gohome: home not built'
-      return 'gohome: already inside'
+      if (facts.inside !== 'no') return 'gohome: already inside'
+      return 'gohome: too far to walk at night'
+    case 'shelter':
+      if (facts.time !== 'night') return 'shelter: daytime'
+      if (facts.home !== 'built') return 'shelter: home not built'
+      if (facts.inside !== 'no') return 'shelter: already inside'
+      return 'shelter: home is close'
     case 'craft':
       if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
@@ -1062,6 +1109,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,
       // scaffold blocks only once geared, the house-table yield last (h9z).
       // x15: a due stone upgrade is an unfinished kit, not 'kit complete'.
+      try { if (require('./behaviours/equip').equipLatched(ctx, bot)) return 'equip: same failure again today' } catch (_) { /* wording best-effort */ }
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0 && !upgrade) return 'equip: kit complete'
       if (!upgrade && !equipWant(facts)) return 'equip: no materials'
@@ -1305,7 +1353,27 @@ async function decide(bot, ctx) {
   if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  if (!finished && (prev === 'gohome' || prev === 'stay')) {
+  // Night-far gohome does not stick (ipn.12): a dusk march that is still far
+  // at nightfall — or a respawn far from home — must re-decide into shelter
+  // instead of marching the dark, even with unchanged facts (a keepInventory
+  // death moves no bucket). Door phases only run near home, so the far check
+  // never breaks a doorway. Like a chain handoff it forces a real re-decide
+  // past the askedKey shortcut, not just a release.
+  const nightFarWalk = !finished && prev === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk' &&
+    facts.time === 'night' && nightFarFromHome(bot, ctx)
+  // Night-near shelter does not hold (revmux 03): the mirror force — a
+  // keepInventory respawn by the house moves no bucket, so without the
+  // force the askedKey shortcut below would re-issue shelter all night.
+  const nightNearShelter = !finished && prev === 'shelter' &&
+    facts.time === 'night' && !nightFarFromHome(bot, ctx)
+  // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
+  // step would walk off the pillar and work the dark with inShelter still
+  // armed (no fight, no retreat, till dawn). Day exits through the menu —
+  // shelter is night-infeasible — and through the behaviour's own done.
+  // Near home the hold releases too (revmux 02): a death that respawns by
+  // the house must walk in (gohome/stay), not pillar outside it all night.
+  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night' && nightFarFromHome(bot, ctx)))) {
+    if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
@@ -1314,7 +1382,7 @@ async function decide(bot, ctx) {
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
   const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
-  if (!prev || finished || ctx.goalText !== text || chainOwns) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
@@ -1324,7 +1392,7 @@ async function decide(bot, ctx) {
     // prod stood 8-10 min with 'going to dig' until the facts moved. The
     // fresh menu pick below keeps gear out via the said-latch until a new
     // need arrives; no hold is recorded (gear yields are never holds).
-    if (prev && ctx.askedKey === askKey && !chainOwns && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !chainOwns && !nightFarWalk && !nightNearShelter && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
@@ -1334,7 +1402,7 @@ async function decide(bot, ctx) {
       }
       return !failHolds(ctx, n, text, bot)
     })
-    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : 'facts-changed'
+    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     const ms = Date.now() - t0
@@ -1345,6 +1413,15 @@ async function decide(bot, ctx) {
     // and survive. Same-name re-picks were already reset by done/failed.
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
+    // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
+    // an order-interrupted night would otherwise hold on open ground. The
+    // interrupted gohome walk resets too, so the next march starts from the
+    // current body with a fresh stall record (and drops the walk's no-dig
+    // borrow at the next lease refresh) instead of resuming stale legs.
+    if (choice.step === 'shelter' && choice.step !== prev) {
+      ctx.shelter = {}
+      ctx.gohome = null
+    }
     ctx.stepStatus = 'running'
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
