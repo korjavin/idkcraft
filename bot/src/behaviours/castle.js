@@ -27,7 +27,7 @@ const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const build = require('./build')
 const flat = require('./flat')
-const { denyReason, logDeny } = require('./util')
+const { denyReason, logDeny, NATURAL_SOLID, castleProtects } = require('./util')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -171,8 +171,9 @@ function pick(bot, ctx, st, cells, key, now) {
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
-    if (Number(v) !== ver(st) || !c || done(bot, c)) { delete st.blocked[k]; continue }
-    if (st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+    // Off-plan entries (prep, litter) live until they expire (g0z.14).
+    if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
+    if (c && st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
   for (;;) {
@@ -326,6 +327,40 @@ function prepTargets(bot, ctx, st, now) {
   }
   const list = logs.sort((a, b) => a.y - b.y).concat(fills)
   if (ctx) ctx.castlePrep = { key, at: now, list }
+  return list
+}
+
+// Own litter (g0z.14): before 'complete', every off-plan block in the site
+// box (dy 0..SITE_TOP) that is our scaffold — cobblestone by name (digCell's
+// restart rule) or a placedByBot ground block — clears like a keep-clear
+// cell, bottom-up. Best effort like prep: a refusing one blocks and the
+// castle completes without it. Cached 30 s (a full-box scan).
+// ponytail: a pillar top out of reach blocks after three strikes; the reach
+// invariant keeps tall pillars off the site.
+function litterTargets(bot, ctx, st, now) {
+  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
+  const c0 = ctx.castleLitter
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+  const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
+  const list = []
+  for (let dy = 0; dy <= SITE_TOP; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      for (let dz = 0; dz < d; dz++) {
+        const x = st.site.x + dx
+        const y = st.site.y + dy
+        const z = st.site.z + dz
+        const k = `${x},${y},${z}`
+        if (at.has(k)) continue
+        const n = nameAt(bot, { x, y, z })
+        if (n === 'cobblestone' || (placed.has(k) && NATURAL_SOLID.has(n))) {
+          list.push({ x, y, z, kind: 'air', dy, idx: 2000000 + (dx * d + dz) * 40 + dy })
+        }
+      }
+    }
+  }
+  ctx.castleLitter = { key, at: now, list }
   return list
 }
 
@@ -585,7 +620,13 @@ function digCell(bot, ctx, st, c, now) {
   // pillar would otherwise gate every layer above it forever.
   let ours = name === 'cobblestone'
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
-  if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name) && !isTreeBlock(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  // Air/dig cells (moat, keep-clear, prep logs) take any natural block —
+  // ores and every NATURAL_SOLID (idkcraft-g0z.13: an ore in a moat cell
+  // was kept forever and the castle never completed). flat's allowlist
+  // stays narrow for its own shaving; place-cell occupants keep it (g0z.2).
+  const natural = flat.isDiggable(name) || build.isReplaceable(name) || isTreeBlock(name) ||
+    (clearing(c) && typeof name === 'string' && (NATURAL_SOLID.has(name) || name.endsWith('_ore')))
+  if (!ours && !natural) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
@@ -690,7 +731,7 @@ function guardCastle(bot, ctx) {
     }
     const fn = (block) => {
       try {
-        return ctx.castle && block && blueprint.protects(ctx.castle, block.position, block.name) ? 100 : 0
+        return ctx.castle && block && castleProtects(ctx.castle, block.position, block.name) ? 100 : 0
       } catch (_) { return 0 }
     }
     const placeFn = (block) => {
@@ -780,6 +821,10 @@ function castle(bot, ctx) {
       st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
       ctx.stepStatus = 'failed:blocked'
       return
+    }
+    if (st.phase !== 'complete') {
+      const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
+      if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     }
     st.status = 'complete'
     ctx.stepStatus = 'done'
