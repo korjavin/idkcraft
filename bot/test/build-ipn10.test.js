@@ -535,7 +535,7 @@ describe('d7i gave-up wedge skips the cell', () => {
     const q = quiet()
     try {
       run(bot, ctx, 1)
-      ctx.stuckState = 'SUSPECT' // the detector counts the stall under build
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20 // the detector counts the stall under build
       run(bot, ctx, 1)
       assert.deepEqual(ctx.buildSkip, [], 'no latch: no skip')
       // recover.release(gave-up) on a no-displacement wedge anchors here.
@@ -553,7 +553,7 @@ describe('d7i gave-up wedge skips the cell', () => {
     const { idx, find, bot, ctx } = partitionSetup([[3, 3]])
     const q = quiet()
     try {
-      ctx.stuckState = 'SUSPECT'
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20
       run(bot, ctx, 1)
       ctx.stuckState = 'COOLDOWN'
       ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 })
@@ -642,6 +642,27 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.ok(!g.isEnd({ x: 3, y: 64, z: 1 }) && !g.isEnd({ x: 3, y: 64, z: 0 }), 'no inside or doorway end')
   })
 
+  it('a one-tick stall or a stale one never arms the wedge skip (revmux 02 minor)', () => {
+    for (const stale of [false, true]) {
+      const { bot, ctx } = partitionSetup()
+      const q = quiet()
+      try {
+        run(bot, ctx, 1)
+        ctx.stuckState = 'SUSPECT'
+        ctx.stuckTicks = stale ? 20 : 1
+        run(bot, ctx, 1)
+        if (stale) ctx.buildSuspectAt = Date.now() - 10 * 60000 // build saw it long ago
+        ctx.stuckState = 'COOLDOWN'
+        ctx.stuckTicks = 0
+        ctx.recoverLatch = latchAt({ x: 2.5, y: 64, z: 4.5 }) // another step's wedge
+        run(bot, ctx, 5)
+      } finally {
+        q.restore()
+      }
+      assert.deepEqual(ctx.buildSkip, [], stale ? 'stale stall' : 'one still tick')
+    }
+  })
+
   it("another step's gave-up latch near the house never skips a build cell (revmux 01 minor)", () => {
     // An equip dig beside the house wedged and gave up: build never saw the
     // stall build up on its cell, so the fresh latch is not its wedge.
@@ -662,7 +683,7 @@ describe('d7i gave-up wedge skips the cell', () => {
     for (const [pre, at] of [[true, { x: 2.5, y: 64, z: 4.5 }], [false, { x: 40, y: 64, z: 40 }]]) {
       const { bot, ctx } = partitionSetup()
       if (pre) ctx.recoverLatch = latchAt(at)
-      ctx.stuckState = 'SUSPECT' // build saw a stall: only the latch decides
+      ctx.stuckState = 'SUSPECT'; ctx.stuckTicks = 20 // build saw a stall: only the latch decides
       const q = quiet()
       try {
         run(bot, ctx, 1)

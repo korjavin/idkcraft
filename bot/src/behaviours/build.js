@@ -461,10 +461,12 @@ function pruneBuildSkips(ctx, now) {
 // blocks ≈ the house diagonal plus reach; a wedge on a long approach walk
 // farther out keeps the stall budget.
 const WEDGE_RADIUS = 8
+const WEDGE_STILLS = 10
+const WEDGE_WINDOW_MS = 120000
 function wedgeLatched(ctx, p, idx) {
   try {
     const L = ctx.recoverLatch
-    if (ctx.buildSuspectIdx !== idx) return false
+    if (ctx.buildSuspectIdx !== idx || !(Date.now() - (ctx.buildSuspectAt || 0) < WEDGE_WINDOW_MS)) return false
     if (!L || L === ctx.buildLatchSeen || !L.at || typeof L.at.x !== 'number') return false
     return Math.hypot(L.at.x - (p.x + 0.5), L.at.z - (p.z + 0.5)) <= WEDGE_RADIUS
   } catch (_) { return false }
@@ -594,8 +596,15 @@ function build(bot, ctx, target, state) {
     // at the cell) — the menu already spent its budget here, and the latch
     // now holds every re-wedge out of the menu, so the stall budget would
     // only burn minutes more. Skip it like 3 refusals.
-    const sv = stuck.verdict(ctx).state
-    if (sv === 'SUSPECT' || sv === 'STUCK') ctx.buildSuspectIdx = idx
+    // Armed by a real stall only (revmux 02 minor): 10+ still ticks seen
+    // under build on this cell, recently — the episode follows the 30th
+    // still tick and runs well under the window, so a stall build saw long
+    // before another step's wedge never arms it.
+    const sv = stuck.verdict(ctx)
+    if ((sv.state === 'SUSPECT' || sv.state === 'STUCK') && sv.stills >= WEDGE_STILLS) {
+      ctx.buildSuspectIdx = idx
+      ctx.buildSuspectAt = Date.now()
+    }
     if (wedgeLatched(ctx, p, idx)) {
       skipCell(ctx, idx, p, 'wedged')
       return
