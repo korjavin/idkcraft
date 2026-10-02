@@ -80,7 +80,7 @@ describe('ipn.11 partial wool hunts latch beds for the day', () => {
     beds(bot, ctx)
     assert.equal(ctx.beds.noWool.fails, 2, 'second partial counts')
     assert.equal(F(FACTS, bot, ctx), false, 'two thin hunts latch the day')
-    assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: no sheep today')
+    assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: sheep hunt latched')
     bot.time.day = 6 // 9qt0: a new MC day no longer releases
     assert.equal(F(FACTS, bot, ctx), false, 'next MC day stays latched')
     ctx.beds.noWool.at -= beds.LATCH_MS

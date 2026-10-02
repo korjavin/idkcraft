@@ -781,7 +781,23 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log('shelter-run: holding fight preemption, walking home')
         ctx.shelterRunLogged = true
       }
-      if (ctx.inShelter && decision.action === 'fight') {
+      // 33vm: a hostile already INSIDE the interior box is fought (prod: six
+      // deaths standing idle in stay with a zombie at 0.7). Scanned, not
+      // state.hostile: the nearest may stand outside the wall. The pin and
+      // the state swap keep fight's sticky target on the intruder.
+      let intruder = null
+      if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
+        const bp = bot.entity && bot.entity.position
+        for (const e of Object.values(bot.entities || {})) {
+          if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
+          if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
+        }
+      }
+      if (intruder) {
+        ctx.fightId = intruder.id
+        state.hostile = intruder
+      }
+      if (ctx.inShelter && decision.action === 'fight' && !intruder) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
@@ -1087,12 +1103,15 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       console.log(`spawned as ${bot.username}${verSuffix}`)
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
-      // instead of standing through N more ticks.
+      // instead of standing through N more ticks. Not when autonomous on an
+      // empty server (9ldm): spawn is where players show up, and with none
+      // online the walk only throws away the work — start working here.
       const tickCtx = bot._tickerCtx
       try {
         const bp = bot.entity && bot.entity.position
         const sp = bot.spawnPoint
-        if (tickCtx && bp && sp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
+        const alone = tickCtx && tickCtx.autonomous && !Object.keys(bot.players || {}).some((n) => n !== bot.username)
+        if (tickCtx && bp && sp && !alone && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
           tickCtx.unseenTicks = UNSEEN_HOME_TICKS
         }
       } catch (_) { /* best-effort */ }
