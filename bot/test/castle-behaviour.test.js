@@ -101,13 +101,106 @@ describe('g0z.2 castle executor', () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0 } }
-    const ring = cells().filter((c) => c.dy === 0 && blueprint.isPlaceTarget(c.kind)).slice(0, 16)
+    // The door is deferred (revmux 01): the doorway stays open for A*.
+    const ring = cells().filter((c) => c.dy === 0 && blueprint.isPlaceTarget(c.kind) && c.kind !== 'door').slice(0, 15)
     await run(bot, ctx, 80)
-    const laid = bot.calls.places.slice(0, 16).map((p) => `${p.x},${p.y},${p.z}`)
+    const laid = bot.calls.places.slice(0, 15).map((p) => `${p.x},${p.y},${p.z}`)
     assert.deepEqual(laid, ring.map((c) => `${c.x},${c.y},${c.z}`))
     assert.equal(world.get(ring[0].x, 64, ring[0].z), 'cobblestone')
-    const door = ring.find((c) => c.kind === 'door')
+    const door = cells().find((c) => c.kind === 'door')
+    assert.equal(world.get(door.x, door.y, door.z), 'air')
+  })
+
+  it('lays the door last, from the entrance apron outside', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const plan = cells()
+    const door = plan.find((c) => c.kind === 'door')
+    paint(world, plan.length)
+    world.set(door.x, door.y, door.z, 'air')
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 4)
+    const g = bot.calls.goals[0]
+    const e = blueprint.ENTRANCE
+    assert.deepEqual([g.x, g.y, g.z], [SITE.x + e.dx, SITE.y + e.dy, SITE.z + e.dz])
     assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('digs a wrong natural occupant out of a place cell, then lays it', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'grass_block')
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 6)
+    assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
+    assert.equal(world.get(c.x, c.y, c.z), 'cobblestone')
+  })
+
+  it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'chest')
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 2)
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'kept-chest')
+  })
+
+  it('an unreachable cell blocks after three stands that get no closer', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) } // never arrives
+    bot.entity.position = { x: SITE.x - 30, y: 64, z: SITE.z - 30 }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 5)
+    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`], undefined, 'approach ticks never strike')
+    await run(bot, ctx, 5)
+    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'unreachable')
+    assert.equal(bot.calls.places.length, 0)
+  })
+
+  it('standing in the target steps aside, then blocks past SELF_OCC_LIMIT', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) }
+    bot.entity.position = { x: c.x + 0.5, y: c.y, z: c.z + 0.5 }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 12)
+    assert.ok(bot.calls.goals.length >= 3, 'sidestep goals issued')
+    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'occupied')
+    assert.ok(!bot.calls.places.some((p) => p.x === c.x && p.y === c.y && p.z === c.z), 'never placed into its own body')
+  })
+
+  it('a hung place flight is released after FLIGHT_TIMEOUT_MS and strikes', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    bot.placeBlock = () => new Promise(() => {}) // never settles
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 3)
+    assert.equal(ctx.placeInFlight, true)
+    ctx.castleFlight.since -= 31000
+    await run(bot, ctx, 1)
+    assert.equal(ctx.castleFails.n, 1)
+    assert.ok(ctx.placeInFlight) // a fresh flight, not the hung one
+  })
+
+  it('re-issues the approach when a borrower replaced the goal', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    bot.pathfinder.isMoving = () => true
+    bot.pathfinder.goal = null
+    const set = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { bot.pathfinder.goal = g; set(g) }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 2)
+    assert.equal(bot.calls.goals.length, 1)
+    bot.pathfinder.goal = { borrowed: true } // fight took the body for a tick
+    await run(bot, ctx, 1)
+    assert.equal(bot.calls.goals.length, 2)
   })
 
   it('a missing material reports failed:no-stone without walking', async () => {
@@ -191,6 +284,9 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(ctx.castle.blocked, {})
     for (const c of places) assert.ok(blueprint.matches(c.kind, world.get(c.x, c.y, c.z)), `${c.kind} at ${c.x},${c.y},${c.z}`)
+    const door = places.find((c) => c.kind === 'door')
+    const last = bot.calls.places[bot.calls.places.length - 1]
+    assert.deepEqual([last.x, last.y, last.z], [door.x, door.y, door.z], 'door laid last')
     assert.deepEqual(bot.chats, [`castle done at ${SITE.x} ${SITE.y} ${SITE.z}`])
   })
 })

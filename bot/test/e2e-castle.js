@@ -43,6 +43,11 @@ async function session(state, stopAt, onSpawn) {
       castle(bot, ctx)
       const line = `${state.progress ? state.progress.done + '/' + state.progress.total : '?'} ${state.status} ${ctx.stepStatus || ''}`
       if (line !== lastLog) { console.log(line); lastLog = line }
+      if (process.env.E2E_VERBOSE) {
+        const bp = bot.entity.position
+        console.log(`  tick idx=${ctx.castleGoalIdx} moving=${bot.pathfinder.isMoving()} pos=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} ` +
+          `fails=${JSON.stringify(ctx.castleFails)} far=${JSON.stringify(ctx.castleFar)} flight=${ctx.castleFlight ? ctx.castleFlight.kind : '-'}`)
+      }
       if (ctx.stepStatus === 'done') return 'done'
       if (stopAt && state.progress && state.progress.done >= stopAt) return 'stopped'
       if (Date.now() > end) return 'timeout'

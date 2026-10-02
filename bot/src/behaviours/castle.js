@@ -37,6 +37,7 @@ const BACKOFF_MAX_MS = 600000
 const FULL_RESCAN_MS = 30000
 const DIG_APPROACH = 2 // GoalNear range: stops inside REACH_DIG (flat round-2 lesson)
 const SIDESTEPS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
+const AIR = new Set(['air', 'cave_air', 'void_air'])
 
 const ITEM = {
   stone: (n) => n === 'cobblestone' || n === 'stone',
@@ -61,6 +62,12 @@ function nameAt(bot, c) {
     const b = bot.blockAt(new Vec3(c.x, c.y, c.z))
     return b && typeof b.name === 'string' ? b.name : null
   } catch (_) { return null }
+}
+
+// Entrance apron stance (blueprint ENTRANCE) in world coords for the site.
+function entrance(st) {
+  const e = blueprint.rotatePlan([{ ...blueprint.ENTRANCE, kind: 'air' }], st.rot | 0)[0]
+  return { x: st.site.x + e.dx, y: st.site.y + e.dy, z: st.site.z + e.dz }
 }
 
 function done(bot, c) { return blueprint.matches(c.kind, nameAt(bot, c)) }
@@ -94,8 +101,22 @@ function strike(ctx, st, c, why, now) {
   if (f.n >= STRIKES) blockCell(ctx, st, c, why, now)
 }
 
-// Next cell to work in plan order, or why there is none.
+// Work order = plan order with the door deferred past every other place
+// cell (revmux 01): A* never opens doors (canOpenDoors=false) and the laid
+// door is break-vetoed, so the doorway stays an open passage while the bot
+// still needs the interior. Indices stay plan indices (blocked keys).
+let orderCache = null
+function workOrder(cells, key) {
+  if (orderCache && orderCache.key === key) return orderCache.order
+  const rank = (c) => (clearing(c) ? 2 : c.kind === 'door' ? 1 : 0)
+  const order = cells.map((c) => c.idx).sort((a, b) => rank(cells[a]) - rank(cells[b]) || a - b)
+  orderCache = { key, order }
+  return order
+}
+
+// Next cell to work in work order, or why there is none.
 function pick(bot, ctx, st, cells, key, now) {
+  const order = workOrder(cells, key)
   const complete = st.phase === 'complete'
   // Structural gate: an actively blocked place cell stops everything above
   // its layer. Done or stale-version entries drop here.
@@ -111,18 +132,18 @@ function pick(bot, ctx, st, cells, key, now) {
     if (full) { ctx.castleScanKey = key; ctx.castleScanAt = now }
     let first = -1
     let waiting = null
-    for (let i = full ? 0 : (ctx.castleCursor | 0); i < cells.length; i++) {
-      const c = cells[i]
+    for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
+      const c = cells[order[i]]
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
-      const b = st.blocked[bkey(i)]
+      const b = st.blocked[bkey(c.idx)]
       if (b && b.until > now) { waiting = waiting || c; continue }
       if (!clearing(c) && c.dy > gateDy) { waiting = waiting || c; break }
       ctx.castleCursor = first
-      return { idx: i }
+      return { idx: c.idx }
     }
-    ctx.castleCursor = first < 0 ? cells.length : first
+    ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
     return { idx: -1, waiting }
   }
@@ -176,14 +197,39 @@ function sidestep(bot, ctx, st, c, now) {
 }
 
 // Out of reach after the approach ended: re-approach; only a stand that
-// stops getting closer strikes (build revmux 01 major: long walks cross
-// idle ticks between A* segments).
-function far(ctx, st, c, dist, now) {
-  const f = ctx.castleFar
-  const closer = f && f.idx === c.idx && dist < f.dist - build.CELL_PROGRESS
-  ctx.castleFar = { idx: c.idx, dist }
+// stops getting closer counts, on its own streak that proven reach resets
+// (build buildFarFails: long walks cross idle ticks between A* segments,
+// and preemptions with returns in between must never add up).
+function far(bot, ctx, st, c, reach, now) {
+  const bp = bodyPos(bot)
+  if (!bp) return false
+  const dist = Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5))
+  if (dist <= reach) {
+    if (ctx.castleFar && ctx.castleFar.idx === c.idx) ctx.castleFar.n = 0
+    return false
+  }
+  const f = ctx.castleFar && ctx.castleFar.idx === c.idx ? ctx.castleFar : { idx: c.idx, dist: Infinity, n: 0 }
+  if (dist < f.dist - build.CELL_PROGRESS) f.n = 0
+  else f.n++
+  f.dist = dist
+  ctx.castleFar = f
   ctx.castleGoalIdx = -1
-  if (!closer) strike(ctx, st, c, 'unreachable', now)
+  if (f.n >= STRIKES) blockCell(ctx, st, c, 'unreachable', now)
+  return true
+}
+
+// (Re)issue the approach for this cell: a new cell, or a borrower (fight,
+// lead, a reflex) replaced our goal while the cell stayed the same.
+function approach(bot, ctx, c, make) {
+  let foreign = false
+  try { foreign = bot.pathfinder.goal != null && bot.pathfinder.goal !== ctx.castleGoal } catch (_) { foreign = false }
+  if (ctx.castleGoalIdx === c.idx && !foreign) return false
+  ctx.castleGoalIdx = c.idx
+  try {
+    ctx.castleGoal = make()
+    bot.pathfinder.setGoal(ctx.castleGoal)
+  } catch (_) { /* retry next tick */ }
+  return true
 }
 
 function flight(ctx, kind, c, run) {
@@ -204,21 +250,18 @@ function live(ctx, token) { return ctx.castleFlight && ctx.castleFlight.token ==
 
 function placeCell(bot, ctx, st, c, item, now) {
   const p = new Vec3(c.x, c.y, c.z)
-  if (ctx.castleGoalIdx !== c.idx) {
-    ctx.castleGoalIdx = c.idx
-    try { bot.pathfinder.setGoal(new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE })) } catch (_) { /* retry next tick */ }
-    return
-  }
+  // The door is placed from the entrance apron, so the bot ends OUTSIDE
+  // the closed tower instead of sealing itself in.
+  const ent = c.kind === 'door' ? entrance(st) : null
+  if (approach(bot, ctx, c, () => ent
+    ? new goals.GoalBlock(ent.x, ent.y, ent.z)
+    : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE }))) return
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
   if (flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
-  const bp = bodyPos(bot)
-  if (bp) {
-    const d = Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5))
-    if (d > build.PLACE_REACH) { far(ctx, st, c, d, now); return }
-  }
+  if (far(bot, ctx, st, c, build.PLACE_REACH, now)) return
   let ref = null
   if (c.kind === 'door') {
     try {
@@ -242,48 +285,26 @@ function placeCell(bot, ctx, st, c, item, now) {
       if (!live(ctx, token)) return
       const occ = nameAt(bot, c)
       if (blueprint.matches(c.kind, occ)) { ctx.castleFails = null; return } // landed anyway
-      if (occ && build.isReplaceable(occ)) {
-        let b = null
-        try { b = bot.blockAt(p) } catch (_) { b = null }
-        const deny = b && denyReason(bot, b, ctx)
-        if (deny) logDeny(b, deny)
-        else {
-          try {
-            await bot.dig(b)
-            await bot.equip(item, 'hand')
-            await bot.placeBlock(ref.ref, ref.face)
-            ctx.castleFails = null
-            return
-          } catch (_) { /* counts as a refusal */ }
-        }
-      }
-      if (live(ctx, token)) strike(ctx, st, c, occ || 'refused', Date.now())
+      strike(ctx, st, c, occ || 'refused', Date.now()) // an occupant clears via digCell next tick
     }
   })
 }
 
-// Planned air/dig cell holding something: natural terrain or flora only
+// Air/dig cell holding something, or a place cell holding a wrong
+// occupant (grass, dirt, leftover scaffold — revmux 01): natural terrain or flora only
 // (flat allowlist + build REPLACEABLE), never under anyone's feet, and
 // the shared denyReason gates (trap, gravity, submerged, protected).
 function digCell(bot, ctx, st, c, now) {
   const name = nameAt(bot, c)
   if (flat.isLiquidName(name)) { blockCell(ctx, st, c, 'liquid', now); return }
   if (!flat.isDiggable(name) && !build.isReplaceable(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
-  if (ctx.castleGoalIdx !== c.idx) {
-    ctx.castleGoalIdx = c.idx
-    try { bot.pathfinder.setGoal(new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH)) } catch (_) { /* retry next tick */ }
-    return
-  }
+  if (approach(bot, ctx, c, () => new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
   if (flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
-  const bp = bodyPos(bot)
-  if (bp) {
-    const d = Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5))
-    if (d > flat.REACH_DIG) { far(ctx, st, c, d, now); return }
-  }
+  if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
   try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
   const deny = b ? denyReason(bot, b, ctx) : 'unreadable'
@@ -297,7 +318,7 @@ function digCell(bot, ctx, st, c, now) {
       await bot.dig(b)
       if (live(ctx, token)) ctx.castleFails = null
     } catch (_) {
-      if (live(ctx, token) && !done(bot, c)) strike(ctx, st, c, 'dig-refused', Date.now())
+      if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
     }
   })
 }
@@ -374,7 +395,9 @@ function castle(bot, ctx) {
   st.status = 'building'
   const over = overBudget(bot, ctx, c.idx)
   if (over) { blockCell(ctx, st, c, over, now); return }
-  if (item) placeCell(bot, ctx, st, c, item, now)
+  const occ = nameAt(bot, c)
+  const open = occ == null || AIR.has(occ) || occ === 'water'
+  if (item && open) placeCell(bot, ctx, st, c, item, now)
   else digCell(bot, ctx, st, c, now)
 }
 
