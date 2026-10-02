@@ -30,6 +30,7 @@ const bringMod = require('./behaviours/bring')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const buildMod = require('./behaviours/build')
+const castleMod = require('./behaviours/castle')
 const goal = require('./goal')
 const memory = require('./memory')
 const recover = require('./behaviours/recover')
@@ -49,6 +50,7 @@ const BEHAVIOURS = {
   shelter: homeMod.shelter,
   comehome: homeMod.comehome,
   build: require('./behaviours/build'),
+  castle: castleMod,
   beds: require('./behaviours/beds'),
   light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
@@ -424,6 +426,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // tick) and before any dispatch. A switch runs the single cleanup and
     // applies movementsFor; otherwise this only re-applies the flags.
     try { body.resetTick(ctx); body.claimBody(bot, ctx, body.pickOwner(ctx)) } catch (_) { /* lease best-effort */ }
+    // Castle guard (idkcraft-g0z.2): laid castle blocks are never break
+    // candidates for ANY executor; re-installs after a Movements swap.
+    castleMod.guardCastle(bot, ctx)
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
     let calledBrain = false
     // Fast cadence while the reflex swings with nobody online: those ticks
