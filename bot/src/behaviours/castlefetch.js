@@ -1,0 +1,289 @@
+'use strict'
+
+// castlefetch: source the next castle batch (idkcraft-g0z.4, design
+// revision 2026-10-02). The castle step only runs with material on hand
+// (g0z.3 menuFact word); this step fetches it, in source order:
+//   1. the castle chest — a chest the owner placed on the castle site
+//      (withdraw what he dropped there; never deposit castle stock in it);
+//   2. inventory conversions through craftany (logs -> planks, planks ->
+//      sticks -> fence, door, coal + stick -> torch);
+//   3. the world — stone dug with the pickaxe (drop: cobblestone), logs
+//      through the gather behaviour (planks/door/fence all start at logs).
+// Batch, not per cell: a fetch runs until the kind's FETCH target (or the
+// castle's whole remainder of it) is usable above the castle reserve, so
+// the bot never shuttles per block. Nothing reachable fails the step: the
+// goal hold parks it (bounded retry, goal.js CASTLEFETCH_RETRY_MS) so an
+// owner restock resumes. A missing pickaxe ends the leg 'done' and equip
+// (which only replaces an ABSENT pick) rearms before the next stone leg.
+
+const Vec3 = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
+const blueprint = require('../castle')
+const castleMod = require('./castle')
+const stockpileMod = require('./stockpile')
+const danger = require('../danger')
+const { countItems } = require('../perception')
+const { canBreak, clearGoal } = require('./util')
+
+// Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
+// >= castle BATCH (door: its remainder is 1), so a fetch picked on a
+// none/some word always has work: the word and the target never disagree.
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16 }
+// One craft op per call; the next tick re-checks the target.
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3 }
+const DIG_RADIUS = 24
+const DIG_REACH = 4
+const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
+const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
+const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
+const NOGAIN_STRIKES = 5 // digs without the cobble count growing
+const DIG_TIMEOUT_MS = 10000
+const CHEST_REACH = stockpileMod.INTERACT_REACH
+const CHEST_WAITS = 30
+const SITE_TOP = 16
+
+// Seams for unit tests (craftany and gather need a real recipe registry /
+// a world); production reads the real modules lazily (gather -> goal cycle).
+const deps = {
+  craftItem: (...a) => require('./craftany')(...a),
+  gather: (...a) => require('./gather')(...a),
+}
+
+function birchFirst(names) {
+  return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
+}
+
+function itemNames(bot, test) {
+  const by = (bot && bot.registry && bot.registry.itemsByName) || {}
+  return birchFirst(Object.keys(by).filter(test))
+}
+
+const isDoor = (n) => n.endsWith('_door') && n !== 'iron_door'
+const isFence = (n) => n.endsWith('_fence') && n !== 'nether_brick_fence'
+
+// What the chest yields for a kind, finished items first; planks also
+// take logs (converted by the craft source next tick).
+function chestNames(bot, kind) {
+  if (kind === 'stone') return [['cobblestone', 'stone']]
+  if (kind === 'planks') return [itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
+  if (kind === 'door') return [itemNames(bot, isDoor)]
+  if (kind === 'fence') return [itemNames(bot, isFence)]
+  if (kind === 'torch') return [['torch']]
+  return []
+}
+
+function craftNames(bot, kind) {
+  if (kind === 'planks') return itemNames(bot, (n) => n.endsWith('_planks'))
+  if (kind === 'door') return itemNames(bot, isDoor)
+  if (kind === 'fence') return itemNames(bot, isFence)
+  if (kind === 'torch') return ['torch']
+  return []
+}
+
+// The castle's open demand for a kind: { kind, short } where short is how
+// many more usable items the batch needs. Null when the castle word is not
+// a material word (none/parked/done/clear/blocked). Shared by the goal
+// gate and the behaviour, so the two never disagree.
+function demand(bot, ctx) {
+  let w = 'none'
+  try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
+  const m = /^([a-z]+)-(none|some|batch)$/.exec(w)
+  if (!m || !(m[1] in FETCH)) return null
+  const kind = m[1]
+  const cw = ctx && ctx.castleWord
+  const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
+  const target = Math.min(FETCH[kind], left)
+  // Raw items: below the reserve the reserve refills first (never laid).
+  return { kind, word: m[2], short: Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) }
+}
+
+function bodyPos(bot) {
+  const p = bot && bot.entity && bot.entity.position
+  return p && typeof p.x === 'number' ? p : null
+}
+
+function hasPickaxe(bot) {
+  return countItems(bot, (n) => n.endsWith('_pickaxe')) > 0
+}
+
+function cobble(bot) {
+  return countItems(bot, (n) => n === 'cobblestone')
+}
+
+// Site box with a one-block margin, foundation layers included: never dig
+// the castle's own ground or walls for its stone.
+function onSite(st, p, margin = 1, below = 3) {
+  const { w, d } = blueprint.siteDimensions(st.rot | 0)
+  const dx = Math.floor(p.x) - st.site.x
+  const dy = Math.floor(p.y) - st.site.y
+  const dz = Math.floor(p.z) - st.site.z
+  return dx >= -margin && dx < w + margin && dz >= -margin && dz < d + margin && dy >= -below && dy <= SITE_TOP
+}
+
+// The castle chest: a chest standing on the castle site.
+// ponytail: any chest in the footprint; g0z.11's storeroom 'chest' cell is
+// one of those, so it needs no second lookup.
+function castleChest(bot, st) {
+  try {
+    const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.chest
+    if (!e || typeof bot.findBlocks !== 'function') return null
+    const hits = bot.findBlocks({ matching: e.id, maxDistance: 64, count: 16 }) || []
+    const p = hits.find((q) => q && onSite(st, q, 0, 0))
+    return p ? new Vec3(p.x, p.y, p.z) : null
+  } catch (_) { return null }
+}
+
+function finish(bot, ctx, status) {
+  ctx.stepStatus = status
+  ctx.castleFetch = null
+  clearGoal(bot, ctx)
+}
+
+function walkTo(bot, ctx, key, p, range) {
+  if (ctx.lastGoalKey === key) return
+  try { bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, range)) } catch (_) { /* retry next tick */ }
+  ctx.lastGoalKey = key
+}
+
+function near(bot, p, reach) {
+  const bp = bodyPos(bot)
+  return !!bp && Math.hypot(bp.x - (p.x + 0.5), bp.y - (p.y + 0.5), bp.z - (p.z + 0.5)) <= reach
+}
+
+// Source 1: the castle chest. Returns true while it owns the tick.
+function chestTick(bot, ctx, f, d) {
+  if (f.chestDone) return false
+  const at = f.chest || (f.chest = castleChest(bot, ctx.castle))
+  if (!at) { f.chestDone = true; return false }
+  if (!near(bot, at, CHEST_REACH)) {
+    walkTo(bot, ctx, `castlefetch-chest:${at.x},${at.y},${at.z}`, at, 2)
+    if (++f.chestWaits > CHEST_WAITS) f.chestDone = true // unreachable: next source
+    return true
+  }
+  ctx.castleFetchInFlight = true
+  ;(async () => {
+    let need = d.short
+    for (const names of chestNames(bot, d.kind)) {
+      if (need <= 0 || names.length === 0) break
+      // Planks' second list is logs: one log is four planks.
+      const logs = names.some((n) => n.endsWith('_log'))
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs ? 4 : 1)
+    }
+  })().catch(() => { /* empty or refused: next source */ }).finally(() => {
+    ctx.castleFetchInFlight = false
+    f.chestDone = true // one withdraw per leg: an empty chest falls through
+  })
+  return true
+}
+
+// Source 2: craft from the pack. Returns true while it owns the tick.
+function craftTick(bot, ctx, f, d) {
+  const names = craftNames(bot, d.kind)
+  if (names.length === 0 || f.craftOut) return false
+  if (d.kind === 'torch' && countItems(bot, (n) => n === 'coal' || n === 'charcoal') <= require('./light').COAL_RESERVE) return false // smelting's coal floor
+  let r = null
+  try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
+  if (r === 'running') return true
+  if (r && r.done) return true // re-check the target next tick
+  f.craftOut = true // the pack cannot fund it: fall through to the world
+  return false
+}
+
+// Source 3a: dig stone near the bot (equip digTick shape: walk into
+// pickup reach, pickaxe in hand, one dig at a time with a deadline).
+function digTick(bot, ctx, f) {
+  const bp = bodyPos(bot)
+  if (!bp) return
+  if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
+  const st = ctx.castle
+  const skip = f.skip || (f.skip = new Set())
+  const stoneAt = (q) => {
+    try { const b = bot.blockAt(new Vec3(q.x, q.y, q.z)); return b && b.name === 'stone' ? b : null } catch (_) { return null }
+  }
+  let t = f.target
+  if (t && !stoneAt(t)) t = f.target = null // dug (or gone): pick the next
+  if (!t) {
+    const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.stone
+    let found = []
+    try { found = (e && bot.findBlocks({ matching: e.id, maxDistance: DIG_RADIUS, count: 64 })) || [] } catch (_) { found = [] }
+    const feet = `${Math.floor(bp.x)},${Math.floor(bp.y) - 1},${Math.floor(bp.z)}`
+    let best = null
+    for (const p of found) {
+      const k = `${p.x},${p.y},${p.z}`
+      if (skip.has(k) || k === feet || onSite(st, p) || danger.near(ctx, p)) continue
+      const b = stoneAt(p)
+      if (!b || !canBreak(bot, b, ctx)) continue
+      // Exposed stone first: buried stone means digging down to it.
+      const exposed = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => {
+        try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && n.name === 'air' } catch (_) { return false }
+      })
+      const score = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z) + (exposed ? 0 : 6)
+      if (!best || score < best.score) best = { p, k, score }
+    }
+    if (!best) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+    t = f.target = { x: best.p.x, y: best.p.y, z: best.p.z, k: best.k, waits: 0 }
+  }
+  const b = stoneAt(t)
+  const dist = Math.hypot(bp.x - (t.x + 0.5), bp.y - (t.y + 0.5), bp.z - (t.z + 0.5))
+  if (dist > PICKUP_REACH + 0.5) {
+    walkTo(bot, ctx, `castlefetch-dig:${t.k}`, t, dist > DIG_REACH ? 2 : 1)
+    if (++t.waits > APPROACH_WAITS) {
+      skip.add(t.k)
+      f.target = null
+      if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
+    }
+    return
+  }
+  const have = cobble(bot)
+  if (f.lastCobble != null && have <= f.lastCobble) {
+    if (++f.noGain >= NOGAIN_STRIKES) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+  } else f.noGain = 0
+  f.lastCobble = have
+  ctx.castleFetchInFlight = true
+  const run = (async () => {
+    const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
+    if (pick) await bot.equip(pick, 'hand')
+    await bot.dig(b)
+  })()
+  const timeout = new Promise((_, reject) => {
+    const tm = setTimeout(() => reject(new Error('dig-timeout')), DIG_TIMEOUT_MS)
+    if (tm && typeof tm.unref === 'function') tm.unref()
+  })
+  Promise.race([run, timeout]).catch(() => {
+    // A refused/hung dig skips the block; the no-gain strike counts it.
+    skip.add(t.k)
+    if (f.target === t) f.target = null
+  }).finally(() => { ctx.castleFetchInFlight = false })
+}
+
+function castlefetch(bot, ctx, target, state) {
+  if (ctx.castleFetchInFlight) return
+  const st = ctx.castle
+  if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
+  const d = demand(bot, ctx)
+  if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
+  let f = ctx.castleFetch
+  if (!f || f.kind !== d.kind) {
+    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0 }
+    try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
+  }
+  st.status = `fetching ${d.kind}`
+  if (chestTick(bot, ctx, f, d)) return
+  if (craftTick(bot, ctx, f, d)) return
+  if (d.kind === 'stone') { digTick(bot, ctx, f); return }
+  if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence') {
+    // Logs from the world: gather chops a load and ends the leg itself
+    // ('done' at NEED_LOGS, or its own failure); the next pick crafts.
+    deps.gather(bot, ctx, target, state)
+    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
+    return
+  }
+  finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal
+}
+
+module.exports = castlefetch
+module.exports.demand = demand
+module.exports.castleChest = castleChest
+module.exports.deps = deps
+module.exports.FETCH = FETCH

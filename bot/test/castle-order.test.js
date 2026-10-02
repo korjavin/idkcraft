@@ -187,7 +187,7 @@ describe('castle arbiter step (g0z.3)', () => {
 
   it('sits after the house chain, before gather/deliver/forage', () => {
     const o = goal.STEP_ORDER
-    assert.equal(o.indexOf('castle'), o.indexOf('light') + 1)
+    assert.equal(o.indexOf('castle'), o.indexOf('light') + 2) // castlefetch (g0z.4) between
     assert.ok(o.indexOf('castle') < o.indexOf('gather'))
     assert.ok(goal.STEP_CRITERIA.castle.includes('stone-batch'))
   })

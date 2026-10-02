@@ -435,14 +435,15 @@ function adopted(ctx, spot) {
   ctx.chestNoSpotAt = null
 }
 
-// Open the adopted chest, run fn(window), always close.
+// Open the adopted chest (or the explicit chest at `at` — g0z.4 castle
+// chest; ctx.home is never swapped), run fn(window), always close.
 // { status: 'ok', value } | 'gone' | 'unknown' | 'error'.
 // Unknown (blockAt null: unloaded chunk) is NOT gone — the caller walks
 // closer and retries instead of dropping the adoption. An open throw on a
 // LOADED chest (blocked lid, cat, lag) is an error, never unknown: the
 // caller fails loud so failHolds parks the step (revmux 02-review).
-async function withChest(bot, ctx, fn) {
-  const c = ctx && ctx.home && ctx.home.chest
+async function withChest(bot, ctx, fn, at = null) {
+  const c = at || (ctx && ctx.home && ctx.home.chest)
   if (!c || typeof bot.openChest !== 'function') return { status: 'gone' }
   let block = null
   let unknown = false
@@ -493,8 +494,8 @@ async function withdrawFromChest(bot, ctx, name, count) {
 
 // Withdraw up to count across several names in one window (did.1: a whole
 // item family without one open per name). { got, name } — name is the first
-// withdrawn concrete name, null when nothing came out.
-async function withdrawAnyFromChest(bot, ctx, names, count) {
+// withdrawn concrete name, null when nothing came out. `at`: see withChest.
+async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
   const want = new Set(Array.isArray(names) ? names : [])
   try {
     const res = await withChest(bot, ctx, async (window) => {
@@ -515,7 +516,7 @@ async function withdrawAnyFromChest(bot, ctx, names, count) {
         }
       }
       return { got, name: first }
-    })
+    }, at)
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
     return { got: 0, name: null }
