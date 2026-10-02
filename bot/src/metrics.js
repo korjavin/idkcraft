@@ -118,7 +118,7 @@ const escalation = new client.Counter({
 })
 const light = new client.Counter({
   name: 'idkcraft_bot_light_total',
-  help: 'Torch lighting by op (crafted batches|placed torches)',
+  help: 'Torch lighting by op (crafted batches|placed torches|charcoal smelted)',
   labelNames: ['op']
 })
 const recover = new client.Counter({
