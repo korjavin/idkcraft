@@ -264,7 +264,7 @@ function depositPlan(bot, ctx) {
   const plan = []
   const castleOpen = !!(ctx && ctx.castle && ctx.castle.phase !== 'complete')
   // Deferred require (castle -> build -> ... chain).
-  const castleMaterial = (name) => { try { return require('./castle').isMaterial(name) } catch (_) { return false } }
+  const castleMaterial = (name) => { try { return require('./castle').isMaterial(name, ctx.castle) } catch (_) { return false } }
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {

@@ -65,11 +65,11 @@ async function main() {
   await sleep(3000)
   const sp = guide.spawnPoint
   const gy = Math.floor(guide.entity.position.y)
-  const home = { x: Math.floor(sp.x) + 8, y: gy, z: Math.floor(sp.z) - 3 }
+  const home = { x: Math.floor(sp.x) + 12, y: gy, z: Math.floor(sp.z) - 3 } // clear of the v2 site (g0z.12)
   const at = { x: Math.floor(sp.x) - 8, z: Math.floor(sp.z) }
   // Guide looks north: the castle rises to -z with its gate facing south.
   const { site, rot } = castleSite({ x: at.x + 0.5, y: gy, z: at.z + 0.5 }, 0)
-  const { w, d } = blueprint.siteDimensions(rot)
+  const { w, d } = blueprint.siteDimensions(rot, blueprint.BLUEPRINT_VERSION) // the order's version (g0z.12: v2)
   log(`spawn ${sp.x} ${sp.y} ${sp.z}, house at ${home.x} ${home.y} ${home.z}, castle site ${site.x} ${site.y} ${site.z} rot ${rot}`)
   const fills = [
     await rcon(`fill ${site.x - 2} ${gy} ${site.z - 2} ${site.x + w + 1} ${gy + 16} ${site.z + d + 3} air`),

@@ -18,8 +18,8 @@ const V2 = castle.BLUEPRINTS[castle.FULL_VERSION]
 const key = (c) => `${c.dx},${c.dy},${c.dz}`
 
 describe('castle blueprint versions', () => {
-  it('new orders stay on v1; v2 is the full castle', () => {
-    assert.equal(castle.BLUEPRINT_VERSION, 1)
+  it('new orders get v2 (g0z.12); a stored v1 castle keeps v1', () => {
+    assert.equal(castle.BLUEPRINT_VERSION, 2)
     assert.equal(castle.FULL_VERSION, 2)
     assert.equal(castle.blueprintOf(undefined).version, 1, 'a pre-versioned castle reads v1')
     assert.equal(castle.blueprintOf(99).version, 1, 'an unknown version falls back to v1')
