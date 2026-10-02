@@ -186,11 +186,11 @@ function overBudget(bot, ctx, idx) {
 
 // Self-occupancy (flat SELF_OCC_LIMIT): standing in our own target steps
 // aside; a body that cannot get out blocks the cell instead of orbiting.
-function sidestep(bot, ctx, st, c, now) {
+function sidestep(bot, ctx, st, c, now, why = 'occupied') {
   const so = ctx.castleSelfOcc && ctx.castleSelfOcc.idx === c.idx ? ctx.castleSelfOcc : { idx: c.idx, n: 0 }
   so.n++
   ctx.castleSelfOcc = so
-  if (so.n > flat.SELF_OCC_LIMIT) { blockCell(ctx, st, c, 'occupied', now); return }
+  if (so.n > flat.SELF_OCC_LIMIT) { blockCell(ctx, st, c, why, now); return }
   const bp = bodyPos(bot)
   const s = SIDESTEPS[so.n % SIDESTEPS.length]
   // GoalBlock, not GoalNear(.., 1): a range-1 goal one step away is already
@@ -324,7 +324,12 @@ function digCell(bot, ctx, st, c, now) {
   let ours = name === 'cobblestone'
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
   if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
-  if (approach(bot, ctx, c, () => new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
+  // The doorway clears from the apron like the door places (rig: scaffold
+  // in the doorway, dug from the inner stair step = walled below-feet).
+  const ent = c.kind === 'door' ? entrance(st) : null
+  if (approach(bot, ctx, c, () => ent
+    ? new goals.GoalBlock(ent.x, ent.y, ent.z)
+    : new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
@@ -342,7 +347,10 @@ function digCell(bot, ctx, st, c, now) {
   const deny = b ? denyReason(bot, b, dctx) : 'unreadable'
   if (deny) {
     if (b) logDeny(b, deny)
-    strike(ctx, st, c, deny, now)
+    // Stance rules (trap, gravity) change with the stance: step elsewhere,
+    // since the approach goal is already satisfied where we stand (rig).
+    if (deny === 'below-feet' || deny === 'gravity') sidestep(bot, ctx, st, c, now, deny)
+    else strike(ctx, st, c, deny, now)
     return
   }
   flight(ctx, 'digInFlight', c, async (token) => {

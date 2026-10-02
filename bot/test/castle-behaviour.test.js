@@ -206,6 +206,42 @@ describe('g0z.2 castle executor', () => {
     assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
   })
 
+  it('scaffold in the doorway clears from the apron, then the door lands', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const plan = cells()
+    const door = plan.find((c) => c.kind === 'door')
+    paint(world, plan.length)
+    world.set(door.x, door.y, door.z, 'cobblestone')
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 6)
+    const e = blueprint.ENTRANCE
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalBlock')
+    assert.deepEqual([bot.calls.goals[0].x, bot.calls.goals[0].z], [SITE.x + e.dx, SITE.z + e.dz])
+    assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
+  })
+
+  it('a trap-denied dig steps to another stance instead of striking in place', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'dirt')
+    // Walled pit one above, diagonal to the target: below-feet refuses.
+    const fx = c.x + 1
+    const fz = c.z + 1
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.set(fx + dx, c.y + 1, fz + dz, 'stone')
+    bot.pathfinder.setGoal = (g) => {
+      bot.calls.goals.push(g)
+      if (bot.calls.goals.length === 1) bot.entity.position = { x: fx + 0.5, y: c.y + 1, z: fz + 0.5 }
+      else bot.entity.position = { x: c.x - 1.5, y: c.y, z: c.z + 0.5 } // the sidestep lands on open ground
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 4)
+    assert.equal(bot.calls.goals[1].constructor.name, 'GoalBlock', 'sidestep issued')
+    assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
+    assert.deepEqual(ctx.castle.blocked, {})
+  })
+
   it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
