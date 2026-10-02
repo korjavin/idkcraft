@@ -551,6 +551,8 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     while (ctx.comehome && ticks < 30) { home.comehome(bot, ctx); ticks++ }
     assert.equal(ctx.stepStatus, 'failed:door-stuck')
     assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
+    assert.equal(ctx.inShelter, false)
+    assert.deepEqual(bot.chats, ['cannot get out: door stuck'])
   })
 
   it('already outside (died mid-exit) releases at once', () => {
