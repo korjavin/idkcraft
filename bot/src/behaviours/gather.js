@@ -5,10 +5,11 @@ const stuck = require('../stuck')
 const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
+const blueprint = require('../castle')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS, gatherFailedHolds } = require('../goal')
 const { countItems } = require('../perception')
-const { say, clearGoal, denyReason, logDeny } = require('./util')
+const { say, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
 const Vec3 = require('vec3')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
@@ -25,13 +26,24 @@ const Vec3 = require('vec3')
 // ponytail: if the pathfinder ever starts chewing through its own future
 // house, gate the blueprint blocks via movements.blocksCantBreak (bead .4).
 const FIND_RADIUS = 48
-const FIND_COUNT = 64
+const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest real trees
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
 // not per column — acacia crowns branch into neighbouring x,z-columns, while
 // trunks a full 3 blocks apart still count as different trees
 const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
+// idkcraft-m7ke: a log this far above the feet needs a climb; with no
+// scaffold a terminal planner verdict (noPath/timeout) on it is a cliff,
+// not a long walk — strike the tree at once instead of stalling into a
+// recover episode (sidestep/wait cannot raise the body).
+// ponytail: a +3 tree up a long walkable slope that times out is dropped
+// too; it only costs that tree (scaffold=0 only), the next one is tried.
+const CLIFF_DY = 3
+
+function scaffoldCount(bot) {
+  return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+}
 
 
 function dist(a, b) {
@@ -148,7 +160,17 @@ function gather(bot, ctx, target, state) {
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   // mnx pit memory: no target within a gave-up spot's radius.
-  const banned = (p) => danger.near(ctx, p)
+  // g0z.12: laid castle beams (v2 frame cells) are logs the castle owns —
+  // never a tree target (dig-time protection would refuse them only after
+  // the walk, and a castle frame fetch starts right next to them).
+  const castleBeam = (p) => {
+    if (!ctx.castle) return false
+    try {
+      const b = bot.blockAt(new Vec3(p.x, p.y, p.z))
+      return blueprint.protects(ctx.castle, p, b && b.name)
+    } catch (_) { return false }
+  }
+  const banned = (p) => danger.near(ctx, p) || castleBeam(p)
   if (!g.pos) {
     // A running staged search resolves before any new sync scan: the 48
     // below stays empty while the 96/160 shells stream in across ticks.
@@ -173,18 +195,32 @@ function gather(bot, ctx, target, state) {
       found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
     } catch (_) { found = [] }
     const open = found.filter((p) => !g.skip.has(keyOf(p)) && !(g.gskip && g.gskip.has(keyOf(p))) && !banned(p))
-    if (open.length > 0) {
-      let best = open[0]
-      for (const p of open) {
-        if (dist(p, bp) < dist(best, bp)) best = p
+    // Nearest log the guard allows (idkcraft-m7ke): a protected log (decor,
+    // an acacia branch with no column) is never walked to — it joins the
+    // sticky gskip here instead of after the trip, when the dig refuses it.
+    // ponytail: protectedReason per candidate nearest-first, stopping at the
+    // first allowed one; each decor log costs one check, once (gskip).
+    open.sort((a, b) => dist(a, bp) - dist(b, bp))
+    let best = null
+    let name = 'log'
+    for (const p of open) {
+      let b = null
+      try { b = bot.blockAt && bot.blockAt(p) } catch (_) { b = null }
+      if (b && protectedReason(bot, b, ctx) === 'protected') {
+        logDeny(b, 'protected')
+        if (!g.gskip) g.gskip = new Set()
+        g.gskip.add(keyOf(p))
+        continue
       }
-      let name = 'log'
-      try {
-        const b = bot.blockAt && bot.blockAt(best)
-        name = (b && b.name) || 'log'
-      } catch (_) { /* name best-effort */ }
+      best = p
+      name = (b && b.name) || 'log'
+      break
+    }
+    if (best) {
       commitTarget(g, bp, best, name, false)
-      g.lastFound = open
+      g.lastFound = open.filter((p) => !(g.gskip && g.gskip.has(keyOf(p))))
+    } else if (open.length > 0) {
+      return // all protected, now in gskip: the next tick takes memory/far
     } else {
       // atl.5: the sync 48 is empty — next tree from resource memory
       // (atl.1) or the amb staged far search, before any final.
@@ -229,6 +265,9 @@ function gather(bot, ctx, target, state) {
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
+      // Only a verdict that arrives AFTER this issue judges this target
+      // (forage.js attribution).
+      ctx.lastPathStatus = 'none'
       const prevKey = ctx.lastGoalKey
       ctx.lastGoalKey = key
       if (key !== g.issuedKey || prevKey === '' || prevKey === 'idle') {
@@ -269,10 +308,16 @@ function gather(bot, ctx, target, state) {
       const grounded = !bot.entity || bot.entity.onGround !== false
       // A place_error streak with no displacement counts as a stall too
       // (yvi): the streak is the central detector's, read via the verdict.
-      if (bring.progressed(bp, g.lastPos, grounded)) {
+      const verdict = ctx.lastPathStatus
+      // An unloaded memory/far point times out by construction (A* sees no
+      // cells there): the stall backstop judges it, not the verdict.
+      const cliff = !unloadedFar && (verdict === 'noPath' || verdict === 'timeout') &&
+        g.pos.y - bp.y >= CLIFF_DY && scaffoldCount(bot) === 0
+      if (!cliff && bring.progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
-      } else if (++g.stalls >= STALL_TICKS || stuck.verdict(ctx).placeErrors >= stuck.PLACE_ERRORS_ENTRY) {
+      } else if (cliff || ++g.stalls >= STALL_TICKS || stuck.verdict(ctx).placeErrors >= stuck.PLACE_ERRORS_ENTRY) {
+        if (cliff) console.log(`gather: ${g.name} at ${g.pos.x} ${g.pos.y} ${g.pos.z} is ${Math.round(g.pos.y - bp.y)} up, no scaffold (${verdict}): next tree`)
         // One strike per tree, not per log or column: a stalled trunk's
         // mates would each burn 10 ticks and a strike, failing the step with
         // reachable trees nearby — and an acacia crown branches into
@@ -292,8 +337,10 @@ function gather(bot, ctx, target, state) {
           clearGoal(bot, ctx)
           // One escape at the final through stuck.request (core-1: skips
           // reset the central stills, so a trunk wedge got no episode).
-          // Per-tree key: the release latch scopes per situation.
-          stuck.request(bot, ctx, 'gather',
+          // Per-tree key: the release latch scopes per situation. A cliff
+          // strike is no wedge (m7ke): the body is free, the trees are up —
+          // no episode, no danger mark on open ground.
+          if (!cliff) stuck.request(bot, ctx, 'gather',
             g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null,
             key)
         }

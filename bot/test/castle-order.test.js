@@ -51,7 +51,7 @@ function makeBot({ items = KIT, timeOfDay = 6000, set = new Map(), at = pos(SITE
 }
 
 function castleState(extra) {
-  return { site: { ...SITE }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'body', blocked: {}, parked: false, ...extra }
+  return { site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false, ...extra }
 }
 
 describe('castle order chat (g0z.3)', () => {
@@ -60,9 +60,10 @@ describe('castle order chat (g0z.3)', () => {
     for (const [yaw, rot, ax, az] of [[Math.PI, 0, 0, 2], [0, 2, 0, -2], [-Math.PI / 2, 3, 2, 0], [Math.PI / 2, 1, -2, 0]]) {
       const { site, rot: r } = castleSite({ x: 10.5, y: 64, z: 20.5 }, yaw)
       assert.equal(r, rot, `yaw ${yaw}`)
-      const e = blueprint.rotatePlan([{ ...blueprint.ENTRANCE, kind: 'air' }], r)[0]
+      const bp = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION)
+      const e = blueprint.rotatePlan([{ ...bp.ENTRANCE, kind: 'air' }], r, bp.version)[0]
       assert.deepEqual({ x: site.x + e.dx, z: site.z + e.dz }, { x: 10 + ax, z: 20 + az }, `apron for yaw ${yaw}`)
-      const door = blueprint.rotatePlan([{ ...blueprint.DOOR, kind: 'door' }], r)[0]
+      const door = blueprint.rotatePlan([{ ...bp.DOOR, kind: 'door' }], r, bp.version)[0]
       // The door is further from the speaker than the apron: the gate opens toward them.
       const dApron = Math.hypot(site.x + e.dx - 10, site.z + e.dz - 20)
       const dDoor = Math.hypot(site.x + door.dx - 10, site.z + door.dz - 20)
@@ -151,7 +152,7 @@ describe('castle persistence (g0z.3)', () => {
     const ctx = {}
     const out = memory.restore(bot, ctx, f, now)
     assert.equal(out.castle, 1)
-    assert.deepEqual(ctx.castle, { site: SITE, rot: 2, phase: 'body', blocked: { '1:7': { tries: 2, until: now + 60000 } }, parked: true, blueprintVersion: blueprint.BLUEPRINT_VERSION })
+    assert.deepEqual(ctx.castle, { site: SITE, rot: 2, phase: 'body', blocked: { '1:7': { tries: 2, until: now + 60000 } }, parked: true, blueprintVersion: 1 })
   })
 
   it('undefined keeps the stored castle; forget (null) drops it', () => {
@@ -373,5 +374,53 @@ describe('castle arbiter step (g0z.3)', () => {
     assert.ok(open.includes('raw_iron'))
     const done = stockpile.depositPlan(bot, { castle: castleState({ phase: 'complete' }) }).map((p) => p.name)
     assert.ok(done.includes('cobblestone'))
+  })
+})
+
+describe('castle v2 default for new orders (g0z.12)', () => {
+  it('a new order is v2: the 31x27 footprint is site-checked and the reply counts the v2 plan', () => {
+    const bot = makeBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'build castle')
+    const st = bot._tickerCtx.castle
+    assert.equal(st.blueprintVersion, 2)
+    const n = blueprint.BLUEPRINTS[2].PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+    assert.match(bot.chats.pop(), new RegExp(`~${n} blocks`))
+    // Water in the far corner of the v2 site (outside any v1 11x11 box)
+    // refuses the same spot.
+    const { w, d } = blueprint.siteDimensions(st.rot, 2)
+    const wet = makeBot({ set: new Map([[`${st.site.x + w - 1},63,${st.site.z + d - 1}`, 'water']]) })
+    const t2 = createTicker({ bot: wet, brain: null, tickMs: 10, idleTickMs: 10 })
+    handleChat(wet, t2, 'Steve', 'build castle')
+    assert.match(wet.chats.pop(), /can't build a castle here: there is water/)
+    assert.ok(!wet._tickerCtx.castle)
+  })
+
+  it('a castle already ordered on v1 keeps v1 (status counts the v1 plan)', () => {
+    const bot = makeBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.castle = castleState({ blueprintVersion: undefined })
+    handleChat(bot, ticker, 'Steve', 'castle')
+    const stone = blueprint.BLUEPRINTS[1].PLAN.filter((c) => c.kind === 'stone').length
+    assert.match(bot.chats.pop(), new RegExp(`stone 0/${stone},`))
+  })
+
+  it("'castle' status reads 'too far' while a far v2 corner is unloaded", () => {
+    const bot = makeBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.castle = castleState({ blueprintVersion: 2 })
+    const real = bot.blockAt
+    bot.blockAt = (p) => (p.x >= SITE.x + 20 ? null : real(p))
+    handleChat(bot, ticker, 'Steve', 'castle')
+    assert.match(bot.chats.pop(), /too far to count/)
+  })
+
+  it('stockpile reserves logs and chests for a v2 castle only', () => {
+    const items = [{ name: 'oak_log', count: 20 }, { name: 'chest', count: 1 }, { name: 'raw_iron', count: 20 }]
+    const bot = makeBot({ items })
+    const v1 = stockpile.depositPlan(bot, { castle: castleState() }).map((p) => p.name)
+    assert.ok(v1.includes('oak_log') && v1.includes('chest'), `v1 banked ${v1}`)
+    const v2 = stockpile.depositPlan(bot, { castle: castleState({ blueprintVersion: 2 }) }).map((p) => p.name)
+    assert.ok(!v2.includes('oak_log') && !v2.includes('chest'), `v2 banked ${v2}`)
   })
 })

@@ -94,7 +94,7 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       },
       blockAt(p) {
         const n = names[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
-        return n ? { name: n } : null
+        return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
       },
       canDigBlock: () => true,
       dig: async () => {},
@@ -114,6 +114,7 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
         names[`${cx},${cy},0`] = 'oak_log'
         spots.push(pos(cx, cy, 0))
       }
+      names[`${cx},66,0`] = 'oak_leaves' // a crown: trees, not decor (m7ke selection guard)
     }
     const bot = gatherBot(spots, names)
     const ticker = createTicker({ bot, brain: workBrain(), tickMs: 10, idleTickMs: 10 })

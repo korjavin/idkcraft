@@ -252,8 +252,56 @@ describe('bring walk gate (idkcraft-8w0)', () => {
     delete bot.spawnPoint
     await bring(bot, bot._tickerCtx, null, {})
     assert.equal(bot._tickerCtx.bring, null, 'order refused')
-    assert.ok(bot.lines.includes('no iron within 160 blocks (loaded area)'), `lines: ${bot.lines}`)
+    // atl.22 (8w0 revmux core-4): the gated hike is named, never 'no iron'.
+    assert.ok(bot.lines.includes('iron_ore at 60 -26 10 is 90 down — too deep to walk to'), `lines: ${bot.lines}`)
     assert.equal(bot.calls.setGoal, 0, 'never hiked to the deep vein')
+  })
+
+  // atl.22 (8w0 revmux core-3): a gated deep exposed hit inside 96 must
+  // neither close the shells nor confine the pool to <=96 — the walkable
+  // vein in the outer shell wins, in both twins.
+  const INNER = { x: 30, y: 0, z: 0 } // dy 64, 3D ~71: inside 96, gated
+  const OUTER = { x: 130, y: 62, z: 0 } // dy 2, 3D ~130: the (96..160] shell
+  const pairNames = {
+    [`${INNER.x},${INNER.y},${INNER.z}`]: 'iron_ore', [`${INNER.x + 1},${INNER.y},${INNER.z}`]: 'air',
+    [`${OUTER.x},${OUTER.y},${OUTER.z}`]: 'iron_ore', [`${OUTER.x + 1},${OUTER.y},${OUTER.z}`]: 'air',
+    ...PROBES,
+  }
+  const pairSpots = () => [pos(INNER.x, INNER.y, INNER.z), pos(OUTER.x, OUTER.y, OUTER.z)]
+
+  it('find phase: a gated deep hit inside 96 does not hide the walkable outer vein', async () => {
+    const bot = mockBot({ spots: pairSpots(), names: pairNames, items: PICK, playerPos: pos(30, 64, 0) })
+    centerAware(bot)
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    for (let i = 0; i < 200 && ctx.bring && ctx.bring.phase !== 'walk'; i++) await bring(bot, ctx, null, {})
+    assert.ok(ctx.bring, `order alive, lines: ${bot.lines}`)
+    assert.equal(ctx.bring.phase, 'walk')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [OUTER.x, OUTER.y, OUTER.z])
+  })
+
+  it('creation: the same pair commits the walkable outer vein', async () => {
+    const bot = mockBot({ spots: pairSpots(), names: pairNames, items: PICK, playerPos: pos(30, 64, 0) })
+    centerAware(bot)
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    const o = bot._tickerCtx.bring
+    assert.ok(o, `order opened, lines: ${bot.lines}`)
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [OUTER.x, OUTER.y, OUTER.z])
+  })
+
+  it('find phase: only a gated deep hike refuses naming its depth', async () => {
+    const bot = mockBot({ spots: [pos(VEIN.x, VEIN.y, VEIN.z)], names: { ...VEIN_NAMES, ...PROBES }, items: PICK, playerPos: pos(30, 64, 0) })
+    centerAware(bot)
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    for (let i = 0; i < 200 && ctx.bring; i++) await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring, null, 'order refused (anchorless)')
+    assert.ok(bot.lines.includes('iron_ore at 60 -26 10 is 90 down — too deep to walk to'), `lines: ${bot.lines}`)
+    assert.equal(bot.calls.setGoal, 0)
   })
 
   it('a dy-48 descent still direct-commits at the boundary', async () => {

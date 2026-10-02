@@ -1086,12 +1086,15 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       console.log(`spawned as ${bot.username}${verSuffix}`)
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
-      // instead of standing through N more ticks.
+      // instead of standing through N more ticks. Not when autonomous on an
+      // empty server (9ldm): spawn is where players show up, and with none
+      // online the walk only throws away the work — start working here.
       const tickCtx = bot._tickerCtx
       try {
         const bp = bot.entity && bot.entity.position
         const sp = bot.spawnPoint
-        if (tickCtx && bp && sp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
+        const alone = tickCtx && tickCtx.autonomous && !Object.keys(bot.players || {}).some((n) => n !== bot.username)
+        if (tickCtx && bp && sp && !alone && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
           tickCtx.unseenTicks = UNSEEN_HOME_TICKS
         }
       } catch (_) { /* best-effort */ }
