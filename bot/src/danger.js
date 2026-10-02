@@ -178,15 +178,16 @@ function clear(ctx) {
 // costs more than the whole detour around), so partial paths stop at the
 // rim.
 //
-// Two relaxations keep the steep cost from flooding A* (the heuristic is
-// off by the cost) where the disc cannot be avoided anyway:
-//   - the goal is inside the disc (home by the water): that disc does not
-//     cost this plan — read from the live pathfinder goal (x/z goals and
-//     GoalFollow's entity; other goal kinds keep the cost);
-//   - the feet are inside the disc: only moves deeper than the feet's own
-//     ring (minus one cell of grid slack) cost, so the walk out and the
-//     walk along stay cheap while a plan from inside still bends away from
-//     the centre instead of crossing it.
+// Feet or goal inside the disc (the job by the water, home on the shore):
+// the costed core shrinks to the deeper of the two rings — only landings
+// closer to the centre than the feet's (or the goal's) own whole-block
+// ring cost. The walk out, the walk along and the walk in to a shore
+// target stay cheap, so the steep cost never floods A* (the heuristic is
+// off by the cost) where the disc cannot be avoided, while a plan still
+// bends around the centre instead of crossing it. Whole-block rings, no
+// slack: a replan one step in sees the same ring, so walks cannot creep
+// inward plan by plan. The goal is read from the live pathfinder goal (x/z
+// goals and GoalFollow's entity; other goal kinds keep the full disc).
 const PATH_COST = 10
 function addPathCost(movements, ctx, bot) {
   // Unit mocks carry flags only: wrap only a real Movements.
@@ -199,7 +200,7 @@ function addPathCost(movements, ctx, bot) {
     if (discs.length === 0) return ns
     for (const m of ns) {
       if (!m || typeof m.cost !== 'number') continue
-      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) <= s.lim)) m.cost += PATH_COST
+      if (discs.some((s) => Math.hypot(s.x - (m.x + 0.5), s.z - (m.z + 0.5)) < s.lim)) m.cost += PATH_COST
     }
     return ns
   }
@@ -224,9 +225,10 @@ function goalXZ(bot) {
   return null
 }
 
-// Live water-wide marks as { x, z, lim }: a landing within lim of the
+// Live water-wide marks as { x, z, lim }: a landing closer than lim to the
 // centre costs. Hot path (once per A* expansion): no copies of the store.
 function wideSpots(ctx, t, feet, goal) {
+  const ring = (s, p) => (p ? Math.floor(Math.hypot(s.x - p.x, s.z - p.z)) : Infinity)
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots) || mem.spots.length === 0) return []
   const out = []
@@ -234,9 +236,7 @@ function wideSpots(ctx, t, feet, goal) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
     if (r < WATER_RADIUS) continue
-    if (goal && Math.hypot(s.x - goal.x, s.z - goal.z) <= r) continue
-    const fd = feet ? Math.hypot(s.x - feet.x, s.z - feet.z) : Infinity
-    out.push({ x: s.x, z: s.z, lim: fd <= r ? fd - 1 : r })
+    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
   }
   return out
 }

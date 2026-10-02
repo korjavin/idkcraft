@@ -63,14 +63,21 @@ describe('danger path cost (zj2p)', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
     const r = plan(setup([mark]), [-W, 64, 0], [W, 64, 0])
     assert.equal(r.status, 'success')
-    assert.ok(closest(r.path, mark) > danger.WATER_RADIUS, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
+    assert.ok(closest(r.path, mark) >= danger.WATER_RADIUS, `path entered the disc: ${closest(r.path, mark).toFixed(1)}`)
   })
 
   it('a target deep inside the disc plans within the prod budget (cost, not a ban)', () => {
     const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
     const r = plan(setup([mark], [-59.5, 64, 0.5]), [-60, 64, 0], [-12, 64, 0], 5000)
     assert.equal(r.status, 'success')
-    assert.ok(r.path.every((n) => n.z === 0), 'straight leg expected: the goal disc costs nothing')
+    assert.ok(r.path.every((n) => n.z === 0), 'straight leg expected: only the core deeper than the goal costs')
+  })
+
+  it('a shore target past the centre is reached around the core, not across it', () => {
+    const mark = { x: 0.5, y: 63, z: 0.5, at: Date.now(), r: danger.WATER_RADIUS }
+    const r = plan(setup([mark], [-59.5, 64, 0.5]), [-60, 64, 0], [20, 64, 0], 5000)
+    assert.equal(r.status, 'success')
+    assert.ok(closest(r.path, mark) >= 17.5, `path crossed the core: ${closest(r.path, mark).toFixed(1)}`)
   })
 
   it('feet inside: the walk out bends away from the centre, never across it', () => {
