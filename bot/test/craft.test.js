@@ -298,9 +298,9 @@ describe('craft decision residuals (idkcraft-zaw)', () => {
       recipes: { oak_planks: recipeFor('oak_planks'), birch_planks: recipeFor('birch_planks') },
     })
     craft(bot, freshCtx(), null, {})
-    await untilCrafts(bot, 5)
-    assert.equal(bot.calls.craft.length, 5)
-    assert.ok(bot.lines.join(' ').match(/crafted 5 birch_planks/))
+    await untilCrafts(bot, 7) // 8cx: both woods convert in one step, birch first
+    assert.equal(bot.calls.craft.length, 7)
+    assert.ok(bot.lines.join(' ').match(/crafted 5 birch_planks.*crafted 2 oak_planks/))
     bot.restoreError()
     const tie = mockBot({
       items: [{ name: 'oak_log', count: 3 }, { name: 'birch_log', count: 3 }],
