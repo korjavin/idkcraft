@@ -63,7 +63,14 @@ async function session(state, stopAt, onSpawn) {
         console.log(`  tick idx=${ctx.castleGoalIdx} moving=${bot.pathfinder.isMoving()} pos=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} ` +
           `fails=${JSON.stringify(ctx.castleFails)} far=${JSON.stringify(ctx.castleFar)} flight=${ctx.castleFlight ? ctx.castleFlight.kind : '-'}`)
       }
-      if (ctx.stepStatus === 'done') return 'done'
+      if (ctx.stepStatus === 'done') {
+        const bp = bot.entity.position
+        const t = blueprint.TOWER
+        const inside = bp.x >= state.site.x + t.x0 && bp.x < state.site.x + t.x0 + t.size &&
+          bp.z >= state.site.z + t.z0 && bp.z < state.site.z + t.z0 + t.size
+        console.log(`finished at ${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} ${inside ? 'INSIDE' : 'outside'} the tower`)
+        return inside ? 'sealed-inside' : 'done'
+      }
       if (stopAt && state.progress && state.progress.done >= stopAt) return 'stopped'
       if (Date.now() > end) return 'timeout'
       await sleep(1000)

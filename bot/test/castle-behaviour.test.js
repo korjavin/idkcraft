@@ -56,6 +56,7 @@ function mockBot(world, { items = KIT, refuse = () => false } = {}) {
       setGoal: (g) => {
         calls.goals.push(g)
         if (g && g.pos) bot.entity.position = { x: g.pos.x + 0.5, y: g.pos.y + 2, z: g.pos.z + 0.5 }
+        else if (g && g.constructor.name === 'GoalBlock') bot.entity.position = { x: g.x + 0.5, y: g.y, z: g.z + 0.5 }
         else if (g && typeof g.x === 'number') bot.entity.position = { x: g.x + 2.5, y: g.y, z: g.z + 0.5 }
       },
     },
@@ -125,6 +126,22 @@ describe('g0z.2 castle executor', () => {
     assert.deepEqual([g.x, g.y, g.z], [SITE.x + e.dx, SITE.y + e.dy, SITE.z + e.dz])
     assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
     assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('never places the door from inside: off the apron re-walks, then blocks', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const plan = cells()
+    const door = plan.find((c) => c.kind === 'door')
+    paint(world, plan.length)
+    world.set(door.x, door.y, door.z, 'air')
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) } // the walk never lands
+    bot.entity.position = { x: SITE.x + 5.5, y: SITE.y, z: SITE.z + 5.5 } // ground floor, in reach
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 8)
+    assert.equal(world.get(door.x, door.y, door.z), 'air')
+    assert.ok(bot.calls.goals.length >= 3, 're-issues the apron walk')
+    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${door.idx}`].why, 'off-apron')
   })
 
   it('digs a wrong natural occupant out of a place cell, then lays it', async () => {

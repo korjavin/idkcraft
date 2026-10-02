@@ -266,6 +266,16 @@ function placeCell(bot, ctx, st, c, item, now) {
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
+  if (ent) {
+    // Door only from the apron itself (revmux 02): reach alone would let a
+    // body inside the ground floor close the tower on itself.
+    const bp = bodyPos(bot)
+    if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.abs(Math.floor(bp.y) - ent.y) > 0) {
+      ctx.castleGoalIdx = -1
+      strike(ctx, st, c, 'off-apron', now)
+      return
+    }
+  }
   if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
   if (flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
   if (far(bot, ctx, st, c, build.PLACE_REACH, now)) return
