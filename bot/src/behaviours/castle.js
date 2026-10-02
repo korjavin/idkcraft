@@ -268,9 +268,10 @@ function placeCell(bot, ctx, st, c, item, now) {
   if (moving) return
   if (ent) {
     // Door only from the apron itself (revmux 02): reach alone would let a
-    // body inside the ground floor close the tower on itself.
+    // body inside the ground floor close the tower on itself. y rounds, not
+    // floors: on a soul sand/mud/path apron the feet sit ~0.1 low (revmux 03).
     const bp = bodyPos(bot)
-    if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.abs(Math.floor(bp.y) - ent.y) > 0) {
+    if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.round(bp.y) !== ent.y) {
       ctx.castleGoalIdx = -1
       strike(ctx, st, c, 'off-apron', now)
       return

@@ -144,6 +144,20 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${door.idx}`].why, 'off-apron')
   })
 
+  it('a sunken apron floor (soul sand, feet ~0.125 low) still counts as on the apron', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const plan = cells()
+    const door = plan.find((c) => c.kind === 'door')
+    paint(world, plan.length)
+    world.set(door.x, door.y, door.z, 'air')
+    const set = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { set(g); bot.entity.position.y -= 0.125 }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 4)
+    assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
+  })
+
   it('digs a wrong natural occupant out of a place cell, then lays it', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
