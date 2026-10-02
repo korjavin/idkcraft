@@ -34,9 +34,9 @@
 // terrain below (same rule as the build.js header); the reach invariant
 // (test/castle-reach.js) holds for every plan prefix.
 
-// What a NEW order gets. v2 waits for its frame/chest sourcing (g0z.12) and
-// the owner's preview approval (before g0z.7).
-const BLUEPRINT_VERSION = 1
+// What a NEW order gets (g0z.12: v2, its frame/chest now sourced). Castles
+// already ordered keep their stored version.
+const BLUEPRINT_VERSION = 2
 const FULL_VERSION = 2
 
 const SITE_W = 11

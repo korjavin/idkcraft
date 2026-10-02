@@ -45,6 +45,8 @@ const ITEM = {
   door: (n) => n.endsWith('_door') && n !== 'iron_door', // iron needs redstone
   torch: (n) => n === 'torch',
   fence: (n) => n.endsWith('_fence') && n !== 'nether_brick_fence', // g0z.4 sourcing; g0z.11 plans it
+  frame: (n) => n.endsWith('_log'), // v2 Fachwerk beams (castle.matches)
+  chest: (n) => n === 'chest', // v2 storeroom chest
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -330,6 +332,11 @@ function prepTargets(bot, ctx, st, now) {
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
 // kind on hand, or the whole remainder of that kind when less is left.
 const BATCH = 16
+// Per-kind batch (g0z.12): frame logs come from gather, which stops at
+// goal.NEED_LOGS (14) — a 16 batch would read frame-some forever with the
+// fetch already at its target. A test pins it to NEED_LOGS.
+const BATCH_OF = { frame: 14 }
+function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
 // 'done' | 'finish' | 'blocked' | 'clear' (next cell is a keep-clear dig, no
@@ -339,7 +346,7 @@ const BATCH = 16
 function stockWord(bot, kind, left) {
   const have = usable(bot, kind)
   if (have <= 0) return `${kind}-none`
-  return have >= Math.min(BATCH, left) ? `${kind}-batch` : `${kind}-some`
+  return have >= Math.min(batchOf(kind), left) ? `${kind}-batch` : `${kind}-some`
 }
 
 // 'finish' (revmux 01): every cell matches but the executor has not yet
@@ -790,7 +797,10 @@ module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES
 module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
-module.exports.isMaterial = (name) => typeof name === 'string' && Object.values(ITEM).some((want) => want(name))
+// Castle material for the stockpile reserve. With the castle state, only
+// the kinds its plan uses (g0z.12: a v1 castle never hoards logs/chests).
+module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.entries(ITEM).some(([kind, want]) =>
+  want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN)))
 module.exports.menuFact = menuFact
 module.exports.siteCheck = siteCheck
 module.exports.progressByKind = progressByKind
@@ -799,3 +809,5 @@ module.exports.findItem = findItem
 module.exports.held = held
 module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
+module.exports.BATCH_OF = BATCH_OF
+module.exports.batchOf = batchOf

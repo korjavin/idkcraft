@@ -1758,6 +1758,63 @@ describe('work mode (epic rw4)', () => {
       assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued on first ticks')
       assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
     })
+
+    // 9ldm: an autonomous restart with nobody online works where it stands;
+    // with a player online but unseen the 3a7 pre-arm walk stays.
+    async function autonomousRestart(players) {
+      const { runOnce } = require('../src/index')
+      const { EventEmitter } = require('node:events')
+      const b = new EventEmitter()
+      b.username = 'IdkBot'
+      b.players = players
+      b.entities = {}
+      b.health = 20
+      b.food = 20
+      b.entity = { position: pos(-13, 80, -150), onGround: true }
+      b.spawnPoint = pos(-48, 65, -350)
+      b.registry = require('minecraft-data')('1.21.1')
+      b.inventory = { items: () => [] }
+      b.goals = []
+      b.pathfinder = { isMoving: () => false, stop: () => {}, setGoal: (goal) => { b.goals.push(goal) }, setMovements: (m) => { b.movements = m } }
+      b.setControlState = () => {}
+      b.clearControlStates = () => {}
+      b.loadPlugin = () => {}
+      b.quit = () => {}
+      b.chat = () => {}
+      const logs = []
+      const origLog = console.log
+      console.log = (m) => logs.push(String(m))
+      try {
+        runOnce({
+          host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+          brain: mockBrain(), leaveAfterMs: 0, followName: '', autonomous: true,
+          createBot: () => b, pingFn: async () => ({ players: { online: 0 } }),
+        }).then(() => {}, () => {})
+        b.emit('spawn')
+        await new Promise((r) => setTimeout(r, 60))
+      } finally {
+        console.log = origLog
+        b._ticker && b._ticker.destroy && b._ticker.destroy()
+      }
+      return { b, logs }
+    }
+
+    it('autonomous restart on an empty server works at once, no spawn walk (9ldm)', async () => {
+      const { b, logs } = await autonomousRestart({})
+      const c = b._tickerCtx
+      assert.ok((c.unseenTicks || 0) < 10, `not pre-armed (unseenTicks=${c.unseenTicks})`)
+      assert.equal(c.work, true, 'work mode started at spawn')
+      assert.ok(!logs.some((l) => l.includes('returning to spawn')), `no homing walk: ${logs.join(' | ')}`)
+      assert.ok(!/^return-spawn:/.test(c.lastGoalKey || ''), `goal key ${c.lastGoalKey}`)
+      const first = logs.find((l) => l.includes('decision source='))
+      assert.ok(first && first.includes("source=goal-fsm"), `first decision: ${first} logs: ${logs.join(" | ")}`)
+    })
+
+    it('autonomous restart with a player online but unseen still walks to spawn (3a7)', async () => {
+      const { b } = await autonomousRestart({ P: { username: 'P', entity: null } })
+      assert.ok(b._tickerCtx.unseenTicks >= 10, `pre-armed (unseenTicks=${b._tickerCtx.unseenTicks})`)
+      assert.match(b._tickerCtx.lastGoalKey, /^return-spawn:/)
+    })
   })
 
   it('(e2) go work clears the menu-wide hold for the ordered retry', async () => {

@@ -60,10 +60,10 @@ async function main() {
   await sleep(3000)
   const sp = guide.spawnPoint
   const gy = Math.floor(guide.entity.position.y)
-  const home = { x: Math.floor(sp.x) + 8, y: gy, z: Math.floor(sp.z) - 3 }
+  const home = { x: Math.floor(sp.x) + 12, y: gy, z: Math.floor(sp.z) - 3 } // clear of the v2 site (g0z.12)
   const at = { x: Math.floor(sp.x) - 8, z: Math.floor(sp.z) }
   const { site, rot } = castleSite({ x: at.x + 0.5, y: gy, z: at.z + 0.5 }, 0)
-  const { w, d } = blueprint.siteDimensions(rot)
+  const { w, d } = blueprint.siteDimensions(rot, blueprint.BLUEPRINT_VERSION) // the order's version (g0z.12: v2)
   // Stone field west of the site (outside the castle's dig margin): two
   // layers above ground plus the ground layer — ~190 stone, no ore.
   const fx = site.x - 13

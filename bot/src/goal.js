@@ -82,7 +82,9 @@ const MENU = {
     // picked-up log would preempt gather with a chat line per log.
     // The door needs a placed table (bot.craft requires the block): without
     // one the step could neither progress nor finish, churning done forever.
-    feasible: (facts) => facts.logs >= NEED_LOGS || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
+    // Frame logs (g0z.12): while the castle's next cell is a Fachwerk beam
+    // the logs ARE the castle batch — a full load must not turn to planks.
+    feasible: (facts) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
@@ -1102,8 +1104,8 @@ const STEP_CRITERIA = {
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
-  castlefetch: 'castle is stone-none, planks-none, torch-none, door-none or a -some word and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
-  castle: 'castle is clear, finish, stone-batch, planks-batch, torch-batch or door-batch and time is day: lay the next castle blocks',
+  castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
+  castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night and home is built and inside is no: stop marching and wait where you are till dawn',

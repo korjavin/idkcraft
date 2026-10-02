@@ -141,7 +141,7 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 8)
     assert.equal(world.get(door.x, door.y, door.z), 'air')
     assert.ok(bot.calls.goals.length >= 3, 're-issues the apron walk')
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${door.idx}`].why, 'off-apron')
+    assert.equal(ctx.castle.blocked[`${1}:${door.idx}`].why, 'off-apron')
   })
 
   it('a sunken apron floor (soul sand, feet ~0.125 low) still counts as on the apron', async () => {
@@ -250,7 +250,7 @@ describe('g0z.2 castle executor', () => {
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 2)
     assert.equal(bot.calls.digs.length, 0)
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'kept-chest')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-chest')
   })
 
   it('g0z.11: a v2 castle lays the full plan and keys its blocks by v2', async () => {
@@ -327,9 +327,9 @@ describe('g0z.2 castle executor', () => {
     bot.entity.position = { x: SITE.x - 30, y: 64, z: SITE.z - 30 }
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 5)
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`], undefined, 'approach ticks never strike')
+    assert.equal(ctx.castle.blocked[`${1}:0`], undefined, 'approach ticks never strike')
     await run(bot, ctx, 5)
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'unreachable')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'unreachable')
     assert.equal(bot.calls.places.length, 0)
   })
 
@@ -342,7 +342,7 @@ describe('g0z.2 castle executor', () => {
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 12)
     assert.ok(bot.calls.goals.length >= 3, 'sidestep goals issued')
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:0`].why, 'occupied')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'occupied')
     assert.ok(!bot.calls.places.some((p) => p.x === c.x && p.y === c.y && p.z === c.z), 'never placed into its own body')
   })
 
@@ -427,7 +427,7 @@ describe('g0z.2 castle executor', () => {
     paint(world, stuck.idx)
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 60)
-    const e = ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${stuck.idx}`]
+    const e = ctx.castle.blocked[`${1}:${stuck.idx}`]
     assert.ok(e && e.tries === 1 && e.until > Date.now())
     assert.ok(bot.calls.places.every((p) => p.y <= SITE.y + 1), 'nothing above the blocked layer')
     assert.ok(bot.calls.places.some((p) => p.y === SITE.y + 1), 'the rest of its layer still lays')
@@ -438,7 +438,7 @@ describe('g0z.2 castle executor', () => {
     refusing = false
     await run(bot, ctx, 6)
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
-    assert.equal(ctx.castle.blocked[`${blueprint.BLUEPRINT_VERSION}:${stuck.idx}`], undefined)
+    assert.equal(ctx.castle.blocked[`${1}:${stuck.idx}`], undefined)
   })
 
   it('backoff is bounded', () => {
