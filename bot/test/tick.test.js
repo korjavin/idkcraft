@@ -1758,6 +1758,63 @@ describe('work mode (epic rw4)', () => {
       assert.ok(bot.goals.some((g) => g.constructor.name === 'GoalNear'), 'GoalNear issued on first ticks')
       assert.match(bot._tickerCtx.lastGoalKey, /^return-spawn:/)
     })
+
+    // 9ldm: an autonomous restart with nobody online works where it stands;
+    // with a player online but unseen the 3a7 pre-arm walk stays.
+    async function autonomousRestart(players) {
+      const { runOnce } = require('../src/index')
+      const { EventEmitter } = require('node:events')
+      const b = new EventEmitter()
+      b.username = 'IdkBot'
+      b.players = players
+      b.entities = {}
+      b.health = 20
+      b.food = 20
+      b.entity = { position: pos(-13, 80, -150), onGround: true }
+      b.spawnPoint = pos(-48, 65, -350)
+      b.registry = require('minecraft-data')('1.21.1')
+      b.inventory = { items: () => [] }
+      b.goals = []
+      b.pathfinder = { isMoving: () => false, stop: () => {}, setGoal: (goal) => { b.goals.push(goal) }, setMovements: (m) => { b.movements = m } }
+      b.setControlState = () => {}
+      b.clearControlStates = () => {}
+      b.loadPlugin = () => {}
+      b.quit = () => {}
+      b.chat = () => {}
+      const logs = []
+      const origLog = console.log
+      console.log = (m) => logs.push(String(m))
+      try {
+        runOnce({
+          host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+          brain: mockBrain(), leaveAfterMs: 0, followName: '', autonomous: true,
+          createBot: () => b, pingFn: async () => ({ players: { online: 0 } }),
+        }).then(() => {}, () => {})
+        b.emit('spawn')
+        await new Promise((r) => setTimeout(r, 60))
+      } finally {
+        console.log = origLog
+        b._ticker && b._ticker.destroy && b._ticker.destroy()
+      }
+      return { b, logs }
+    }
+
+    it('autonomous restart on an empty server works at once, no spawn walk (9ldm)', async () => {
+      const { b, logs } = await autonomousRestart({})
+      const c = b._tickerCtx
+      assert.ok((c.unseenTicks || 0) < 10, `not pre-armed (unseenTicks=${c.unseenTicks})`)
+      assert.equal(c.work, true, 'work mode started at spawn')
+      assert.ok(!logs.some((l) => l.includes('returning to spawn')), `no homing walk: ${logs.join(' | ')}`)
+      assert.ok(!/^return-spawn:/.test(c.lastGoalKey || ''), `goal key ${c.lastGoalKey}`)
+      const first = logs.find((l) => l.includes('decision source='))
+      assert.ok(first && first.includes("source=goal-fsm"), `first decision: ${first} logs: ${logs.join(" | ")}`)
+    })
+
+    it('autonomous restart with a player online but unseen still walks to spawn (3a7)', async () => {
+      const { b } = await autonomousRestart({ P: { username: 'P', entity: null } })
+      assert.ok(b._tickerCtx.unseenTicks >= 10, `pre-armed (unseenTicks=${b._tickerCtx.unseenTicks})`)
+      assert.match(b._tickerCtx.lastGoalKey, /^return-spawn:/)
+    })
   })
 
   it('(e2) go work clears the menu-wide hold for the ordered retry', async () => {
@@ -1915,6 +1972,73 @@ describe('work mode (epic rw4)', () => {
       await ticker.tick()
       assert.ok(bot.attackCalls >= 1) // inside intruder still gets hit
       assert.equal(bot.calls.setGoal, 0) // but no pursuit through the wall
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('(j) 33vm: sheltered + zombie inside the interior box: fight dispatched, not shelter-idle', async () => {
+    const run = async (zx) => {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, zx) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      bot._tickerCtx.inShelter = true
+      bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+      try {
+        const r = await ticker.tick()
+        return { r, bot }
+      } finally {
+        ticker.destroy()
+      }
+    }
+    const inside = await run(3.5) // floored x=3: inside the box
+    assert.equal(inside.r.decision.action, 'fight')
+    assert.ok(inside.bot.calls.setGoal >= 1, 'pursues the intruder')
+    const outside = await run(6) // x=6: beyond the wall
+    assert.deepEqual(outside.r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+    assert.equal(outside.bot.calls.setGoal, 0)
+  })
+
+  it('(l) g9cj: intruder fight plans no-dig; outside mob leaves canDig alone', async () => {
+    const run = async (zx) => {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, zx) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      bot._tickerCtx.inShelter = true
+      bot._tickerCtx.movements = { canDig: true, allowSprinting: false, allowParkour: true }
+      bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+      try {
+        await ticker.tick()
+        return bot._tickerCtx.movements.canDig
+      } finally {
+        ticker.destroy()
+      }
+    }
+    assert.equal(await run(3.5), false)
+    assert.equal(await run(6), true)
+    // the tick-start claim keeps no-dig while the flag stands (sticky across resetTick when sheltered)
+    const body = require('../src/body')
+    const ctx = { inShelter: true, intruderFight: true, movements: { canDig: true, allowSprinting: false, allowParkour: true } }
+    body.resetTick(ctx); body.claimBody({}, ctx, 'shelter')
+    assert.equal(ctx.movements.canDig, false)
+  })
+
+  it('(k) 33vm: a nearer zombie outside the wall does not hide the one inside', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, -1.5), 2: zombie(2, 3.5) } // 1 outside (x=-2), nearer; 2 inside
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.home = { built: true, site: pos(-1, 64, -1), interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 4, y: 65, z: 3 } } }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(bot._tickerCtx.fightId, 2, 'the intruder, not the nearer mob outside')
     } finally {
       ticker.destroy()
     }
@@ -2522,7 +2646,8 @@ describe('nobody-online leave', () => {
       }).then(() => { done = true }, () => { done = true })
       // merge seam (3nt.11 x 3nt.14): both listeners must survive in runOnce
       assert.equal(bot.listenerCount('playerLeft'), 1, 'playerLeft wired')
-      assert.equal(bot.listeners('spawn').length, 2, 'spawn kit tap wired')
+      // +1: installPlaceTiming defers its wrap to the first spawn (idkcraft-6x7.11)
+      assert.equal(bot.listeners('spawn').length, 3, 'spawn kit tap wired')
       bot.emit('spawn')
       await new Promise((r) => setTimeout(r, 50))
       assert.ok(lines.some((l) => l.includes('spawned as IdkBot')), 'spawn logged')

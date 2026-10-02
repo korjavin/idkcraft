@@ -847,13 +847,21 @@ function shelter(bot, ctx, target, state) {
   const st = ctx.shelter
   try {
     const bp = botPos(bot)
+    // Not while the dig-in walks to a dirt column (stone stance): arrival
+    // re-anchors at the pit column below, and from then on a fight that
+    // drags the body off the pit resets the record like any displacement.
+    if (st.dig && st.dig.walked && !st.dig.walk && !st.dig.anchored && bp) {
+      st.pillarAt = { x: bp.x, z: bp.z }
+      st.dig.anchored = true
+    }
     const pa = st.pillarAt
-    if (bp && pa && typeof pa.x === 'number' &&
+    if (!(st.dig && st.dig.walk) && bp && pa && typeof pa.x === 'number' &&
       Math.hypot(bp.x - pa.x, bp.z - pa.z) > SHELTER_DISPLACE_XZ) {
       // Displaced past the anchor: drop the hold and the stale climb, and
       // re-pillar below. A foreign non-pillar episode is never touched.
       st.pillared = false
       st.pillarAt = null
+      st.dig = null
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -869,14 +877,14 @@ function shelter(bot, ctx, target, state) {
     ctx.inShelter = false
     // A foreign live episode (a stuck flow's non-pillar prim) is never
     // touched: the hold is the point, the pillar best-effort.
-    if (!ctx.recovery) {
+    if (!ctx.recovery && !st.dig) {
       try { retreatMod.beginPillar(ctx, 'shelter', null) } catch (_) { /* episode best-effort */ }
       try {
         const bp0 = botPos(bot)
         if (bp0) st.pillarAt = { x: bp0.x, z: bp0.z }
       } catch (_) { /* anchor best-effort */ }
     }
-    if (!ctx.recovery || ctx.recovery.action === 'pillar_up') {
+    if (!st.dig && (!ctx.recovery || ctx.recovery.action === 'pillar_up')) {
       const before = ctx.recovery && ctx.recovery.status
       if (before === 'running' || before === 'starting' || before == null) {
         try { recover.run(bot, ctx) } catch (_) { /* prim best-effort */ }
@@ -886,11 +894,31 @@ function shelter(bot, ctx, target, state) {
       // Terminal verdict (pillar-wrapper mirror): pillared or not, the hold
       // starts — even a failed pillar beats the march. Release the episode
       // so a later stuck flow never adopts this stale record.
-      if (rec !== 'done' && !st.pillarLogged) {
+      if (rec === 'failed:no-scaffold') {
+        // Empty kit (ed88: world-spawn respawn, 7 deaths in 3 min holding
+        // on the ground): dig in instead. Stop any live path first so the
+        // walk cannot drag the body off the pit column.
+        // setGoal(null), never stop(): stop() on a live path only latches,
+        // and the latch would swallow a same-tick dig-in walk goal (revmux 03).
+        st.dig = {}
+        try {
+          bot.pathfinder.setGoal(null)
+          bot.clearControlStates()
+        } catch (_) { /* body best-effort */ }
+        ctx.lastGoalKey = 'stay'
+      } else if (rec !== 'done' && !st.pillarLogged) {
         st.pillarLogged = true
         try { console.log(`shelter pillar ${rec}, holding on the ground`) } catch (_) { /* log best-effort */ }
       }
       try { ctx.recovery = null } catch (_) { /* release best-effort */ }
+    }
+    if (st.dig) {
+      let r = 'failed:error'
+      try { r = recover.digInRun(bot, ctx, st.dig) } catch (_) { /* fail into the hold */ }
+      if (r === 'running') return
+      st.dig = null
+      st.pillarAt = null // re-anchored below, at the pit
+      try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
     // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
     // above, so holding here would leave pillarAt null and the death/

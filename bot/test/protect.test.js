@@ -9,7 +9,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
-const { canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA } = require('../src/behaviours/util')
+const { canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA } = require('../src/behaviours/util')
 
 function blk(name, x = 0, y = 64, z = 0) {
   return { name, position: new Vec3(x, y, z) }
@@ -126,6 +126,42 @@ describe('canBreak guard (idkcraft-drq)', () => {
     trackPlaced(failing, ctx2)
     await assert.rejects(failing.placeBlock({ position: new Vec3(0, 0, 0) }, new Vec3(0, 1, 0)))
     assert.equal(ctx2.placedByBot ? ctx2.placedByBot.size : 0, 0, 'failed place not recorded')
+  })
+
+  it('installPlaceTiming holds a jump-place until the rising feet clear the block (idkcraft-6x7.11)', async () => {
+    // Jump arc from feet y=63: the tower fires at 63.42, the block spans 63..64.
+    const arc = [63.42, 63.7532, 64.0013, 64.1662]
+    let t = 0
+    const sentAt = []
+    const bot = {
+      entity: { position: new Vec3(-44.5, arc[0], -226.5), velocity: new Vec3(0, 0.33, 0) },
+      waitForTicks: async () => { t++; bot.entity.position.y = arc[t] },
+      placeBlock: async () => { sentAt.push(bot.entity.position.y) },
+    }
+    installPlaceTiming(bot)
+    await bot.placeBlock({ position: new Vec3(-45, 62, -227) }, new Vec3(0, 1, 0))
+    assert.deepEqual(sentAt, [64.1662], 'placed one tick after the feet cleared y 64')
+    // Standing (not rising) or placing beside the body: no wait.
+    const still = { entity: { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }, waitForTicks: async () => { throw new Error('waited') }, placeBlock: async () => {} }
+    installPlaceTiming(still)
+    await still.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0))
+    const beside = { entity: { position: new Vec3(0.5, 64.2, 0.5), velocity: new Vec3(0, 0.3, 0) }, waitForTicks: async () => { throw new Error('waited') }, placeBlock: async () => {} }
+    installPlaceTiming(beside)
+    await beside.placeBlock({ position: new Vec3(2, 63, 0) }, new Vec3(0, 1, 0))
+    // A capped jump never clears: bounded wait, then places as before.
+    let n = 0
+    const capped = { entity: { position: new Vec3(0.5, 63.3, 0.5), velocity: new Vec3(0, 0.1, 0) }, waitForTicks: async () => { n++ }, placeBlock: async () => {} }
+    installPlaceTiming(capped)
+    await capped.placeBlock({ position: new Vec3(0, 62, 0) }, new Vec3(0, 1, 0))
+    assert.equal(n, 8, 'bounded wait')
+    // Before mineflayer injects placeBlock (createTicker runs first): deferred to spawn.
+    const early = { once: (ev, fn) => { early.ev = ev; early.fn = fn } }
+    installPlaceTiming(early)
+    assert.equal(early.ev, 'spawn')
+    early.placeBlock = async () => {}
+    const raw = early.placeBlock
+    early.fn()
+    assert.notEqual(early.placeBlock, raw, 'wrapped on spawn')
   })
 
   it('logDeny prints the protected line without throwing', () => {
@@ -651,4 +687,29 @@ describe('house footprint (idkcraft-e5ba)', () => {
     assert.equal(denyReason(top, blk('dirt', 102, 71, -358), { home, recovery: {} }), 'protected', 'standing on the porch: no exemption')
   })
   it('no home -> unchanged', () => assert.equal(denyReason(bot, blk('dirt', 100, 70, -356), {}), null))
+})
+
+describe('castle ground (idkcraft-g0z.14)', () => {
+  const blueprint = require('../src/castle')
+  const site = { x: 100, y: 64, z: 200 }
+  const castle = { site, rot: 0, blueprintVersion: 2 }
+  const bot = worldBot(new Map())
+  const d = (n, x, y, z) => denyReason(bot, blk(n, x, y, z), { castle })
+  const plan = blueprint.absPlan(site, 0, 2)
+  const wall = plan.cells.find((c) => c.kind === 'stone' && c.dy === 0)
+  const moat = plan.cells.find((c) => c.kind === 'dig' && c.dy === -1)
+  it('natural ground under the site is protected, deep too', () => {
+    assert.equal(d('stone', wall.x, site.y - 1, wall.z), 'protected')
+    assert.equal(d('dirt', site.x + 15, site.y - 1, site.z + 13), 'protected') // hall floor
+    assert.equal(d('deepslate', wall.x, site.y - 20, wall.z), 'protected')
+  })
+  it('moat dig cells, ground off the box, at site level and non-natural stay as before', () => {
+    assert.equal(d('stone', moat.x, moat.y, moat.z), null)
+    assert.equal(d('coal_ore', moat.x, moat.y, moat.z), null)
+    assert.equal(d('stone', site.x - 1, site.y - 1, site.z), null)
+    assert.equal(d('dirt', site.x + 15, site.y, site.z + 13), null)
+    assert.equal(d('coal_ore', wall.x, site.y - 3, wall.z), null)
+    assert.equal(d('snow', wall.x, site.y - 1, wall.z), null)
+    assert.equal(denyReason(bot, blk('stone', wall.x, site.y - 1, wall.z), {}), null, 'no castle')
+  })
 })

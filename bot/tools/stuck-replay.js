@@ -21,6 +21,8 @@
 //     "goal":[62.5,64,-205.5],"order":"bring me iron_ore 2",
 //     "expect":["here is ","here are "],"fail":["could not "]}]
 // mode defaults to follow; goal keeps its feet-coords convention in both.
+// Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
+// shelter step alone: reached = enclosed within 15 s and alive at the end.
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -132,7 +134,19 @@ function loadSpots() {
     // order instead of a follow walk. order/expect/fail are required there
     // and rejected on follow spots (dead data in a gate corpus confuses).
     const mode = s.mode == null ? 'follow' : String(s.mode)
-    if (mode !== 'follow' && mode !== 'order') throw new Error(`spots[${i}]: bad mode (want follow|order)`)
+    if (mode !== 'follow' && mode !== 'order' && mode !== 'shelter') throw new Error(`spots[${i}]: bad mode (want follow|order|shelter)`)
+    // Shelter spots (idkcraft-ed88): night, work mode, a built home `home`
+    // far past the night walk range (injected as ctx.home, never raised —
+    // its chunks stay unloaded), the guide parked out of sight on `goal`.
+    let home = null
+    if (mode === 'shelter') {
+      if (!Array.isArray(s.home) || s.home.length !== 3 || !s.home.every(Number.isInteger)) {
+        throw new Error(`spots[${i}]: shelter spots need an integer home [x, y, z] site`)
+      }
+      home = { x: s.home[0], y: s.home[1], z: s.home[2] }
+    } else if (s.home != null) {
+      throw new Error(`spots[${i}]: home needs mode=shelter`)
+    }
     let order = null
     let expect = null
     let fail = null
@@ -178,7 +192,19 @@ function loadSpots() {
       }
       prep = s.prep.slice()
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep }
+    // Danger memory (idkcraft-zj2p): [x, y, z, r] marks seeded into the
+    // follower's ctx.danger at the window cut (a water death the day
+    // before), dropped after the window. The row reports minDanger, the
+    // closest xz approach to a mark centre, judged by the baseline floor.
+    let danger = []
+    if (s.danger != null) {
+      if (!Array.isArray(s.danger) || s.danger.length === 0 || s.danger.length > 8 ||
+        !s.danger.every((d) => Array.isArray(d) && d.length === 4 && d.every(Number.isFinite) && d[3] > 0)) {
+        throw new Error(`spots[${i}]: bad danger (want [[x, y, z, r]], <=8)`)
+      }
+      danger = s.danger.map((d) => d.slice())
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home }
   })
 }
 
@@ -210,6 +236,7 @@ function matchOrderLine(line, expect, fail) {
 // Only the chat verdict judges an order. Returns true/false on a
 // terminal verdict, null to keep the window open.
 function windowReached(mode, useGoal, d, gd, orderVerdict) {
+  if (mode === 'shelter') return null // runs the full window: alive at the end is part of the verdict
   if (mode === 'order') {
     if (orderVerdict === 'expect') return true
     if (orderVerdict === 'fail') return false
@@ -217,6 +244,22 @@ function windowReached(mode, useGoal, d, gd, orderVerdict) {
   }
   if ((useGoal && d !== null && d < REACH_DIST) || (gd !== null && gd <= 6)) return true
   return null
+}
+
+// Shelter verdict (idkcraft-ed88): pure, unit-tested. Enclosed = floor,
+// all 4 sides at feet and head, and a cap over the head are full blocks.
+// solidAt(dx, dy, dz) reads relative to the feet cell. reached = enclosed
+// within SHELTER_CLOSE_SECS of window start AND alive at the window end.
+const SHELTER_CLOSE_SECS = 15
+function enclosed(solidAt) {
+  if (!solidAt(0, -1, 0) || !solidAt(0, 2, 0)) return false
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (!solidAt(dx, 0, dz) || !solidAt(dx, 1, dz)) return false
+  }
+  return true
+}
+function shelterReached(closedAt, died) {
+  return !died && closedAt !== null && closedAt <= SHELTER_CLOSE_SECS
 }
 
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
@@ -248,6 +291,9 @@ function compareBaseline(rows, baseline) {
     if (r.stuck > e.maxStuck) return { spot: r.spot, verdict: 'regressed', was, now, why: `stuck ${r.stuck} > ${e.maxStuck}` }
     if (r.eps > e.maxEps) return { spot: r.spot, verdict: 'regressed', was, now, why: `episodes ${r.eps} > ${e.maxEps}` }
     if (r.call > e.maxCalls) return { spot: r.spot, verdict: 'regressed', was, now, why: `calls ${r.call} > ${e.maxCalls}` }
+    // Danger spots (idkcraft-zj2p): minDanger floors the closest approach
+    // to a seeded mark — a walk back into the drowned disc regresses.
+    if (typeof e.minDanger === 'number' && !(r.minDanger >= e.minDanger)) return { spot: r.spot, verdict: 'regressed', was, now, why: `minDanger ${r.minDanger} < ${e.minDanger} (entered the danger disc)` }
     // Control spots (idkcraft-jsf.7): minCalls pins the page a trap MUST
     // raise — a silent trap (detector broke) or a leaking one (the bot
     // walked out, so its twin's reached proves nothing) regresses.
@@ -484,7 +530,9 @@ async function main() {
     // Order spots park the guide ON the goal instead: it is the delivery
     // point (corpus rule: near the spawn), and the bot walks back to it.
     let gx; let gz; let gy
-    if (s.mode === 'order') {
+    // Shelter spots park it on the goal too: far out of entity range, so
+    // the follower works alone (a visible player would be its target).
+    if (s.mode === 'order' || s.mode === 'shelter') {
       gx = s.goal[0]; gz = s.goal[2]; gy = s.goal[1] + 1
     } else {
       let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
@@ -583,14 +631,33 @@ async function main() {
       c.buildSkip = []; c.buildFails = 0; c.buildFailIdx = -1; c.buildGoalIdx = -1; c.buildFarIdx = -1; c.buildFarFails = 0
       c.step = ''; c.stepStatus = null; c.stepFail = {}
       c.gather = null; c.forage = null; c.forageSkip = null; c.forageFinal = null
-      c.gohome = null; c.stay = null; c.inShelter = false
+      c.gohome = null; c.stay = null; c.shelter = null; c.inShelter = false
       c.restGaveUps = 0; c.restGaveUpAt = null; c.restGaveUpCalled = false
       try { if (c.movements && typeof c.movements.canDig === 'boolean') c.movements.canDig = true } catch (_) { /* reset best-effort */ }
+      if (s.danger.length > 0) c.danger = { spots: s.danger.map(([x, y, z, r]) => ({ x, y, z, r, at: Date.now() })) }
     }
     stuckEps = []
     resets = {}
     chats = []
     died = false
+    // Shelter spots (idkcraft-ed88): night, a built home far past the walk
+    // range, then 'go work' through the real chat path (revokes the follow;
+    // the corpus keeps this spot after every follow spot). Set before the
+    // unpause so no tick walks toward the guide first.
+    if (s.mode === 'shelter') {
+      const h = s.home
+      if (c) {
+        c.home = {
+          site: { ...h }, built: true, v: 2,
+          interior: { min: { x: h.x + 1, y: h.y, z: h.z + 1 }, max: { x: h.x + 5, y: h.y + 1, z: h.z + 4 } },
+          door: { x: h.x + 3, y: h.y, z: h.z },
+        }
+      }
+      await rcon('time set 18000')
+      try { guide.chat('go work') } catch (e) {
+        throw new Error(`spot ${s.name}: work chat failed: ${e && e.message ? e.message : e}`)
+      }
+    }
     if (c) c.paused = false
     // Order spots (idkcraft-6x7.7): the guide chats the work order at window
     // start, like a player would — the follower takes it through the real
@@ -611,6 +678,7 @@ async function main() {
     let minDist = Infinity
     let minGuide = Infinity
     let maxDisp = 0
+    let minDanger = Infinity
     let reached = false
     // Order-spot verdict (idkcraft-6x7.7): the first expect/fail marker in
     // windowed follower chat. scannedChats cursors the shared array so each
@@ -619,6 +687,7 @@ async function main() {
     let orderVerdict = null
     let orderLine = ''
     let scannedChats = 0
+    let closedAt = null // shelter spots: seconds into the window the pit first read enclosed
     const scanOrderChat = () => {
       if (s.mode !== 'order' || orderVerdict) return
       for (; scannedChats < chats.length; scannedChats++) {
@@ -640,7 +709,16 @@ async function main() {
         if (gd < minGuide) minGuide = gd
         const disp = p.distanceTo(p0)
         if (disp > maxDisp) maxDisp = disp
+        for (const [mx, , mz] of s.danger) minDanger = Math.min(minDanger, Math.hypot(p.x - mx, p.z - mz))
       } catch (_) { /* sampling best-effort */ }
+      if (s.mode === 'shelter' && closedAt === null) {
+        try {
+          const f = follower.entity.position.floored()
+          if (enclosed((dx, dy, dz) => { const b = follower.blockAt(f.offset(dx, dy, dz)); return !!b && b.boundingBox === 'block' })) {
+            closedAt = (Date.now() - t0) / 1000
+          }
+        } catch (_) { /* sampling best-effort */ }
+      }
       scanOrderChat()
       // Reached ends the window: post-goal walking is outside the spot.
       const w = windowReached(s.mode, useGoal, d, gd, orderVerdict)
@@ -649,6 +727,10 @@ async function main() {
     scanOrderChat() // final gap: a marker in the last <500 ms still counts
     const wEnd = windowReached(s.mode, false, null, null, orderVerdict)
     if (wEnd !== null) reached = wEnd
+    if (s.mode === 'shelter') {
+      reached = shelterReached(closedAt, died)
+      await rcon('time set 1000') // later spots (if any) walk in daylight
+    }
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
@@ -657,9 +739,12 @@ async function main() {
     // note (dying is behavior, judged like any unreached row).
     const onote = s.mode === 'order'
       ? (orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
-      : ''
-    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : onote)
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
+      : s.mode === 'shelter'
+        ? (closedAt === null ? `OPEN at ${(() => { try { return follower.entity.position.floored().toArray().join(' ') } catch (_) { return '?' } })()}` : `CLOSED ${closedAt.toFixed(0)}s`)
+        : ''
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
+    if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
@@ -724,4 +809,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS }

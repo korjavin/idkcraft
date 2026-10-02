@@ -316,6 +316,14 @@ function apronEscape(bot, home, pos) {
 // a 'below-feet' denial over solid may sit on a build. Returns null when
 // the block itself is diggable, else 'protected'. Never returns trap
 // reasons (revmux 01 core-1).
+// Castle guard (shared with behaviours/castle.js guardCastle): a laid plan
+// block, or natural ground under the site (idkcraft-g0z.14). Solid ground
+// only, like the house footprint: snow layers stay build's clears.
+function castleProtects(state, pos, name) {
+  return castle.protects(state, pos, name) ||
+    (name !== 'snow' && NATURAL_SOLID.has(name) && castle.groundCell(state, pos))
+}
+
 function protectedReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
@@ -330,7 +338,7 @@ function protectedReason(bot, block, ctx) {
     // Castle blocks (idkcraft-g0z.2): guarded for every executor BEFORE the
     // placedByBot exemption — the bot laid them, and that must not license
     // a recover/gather dig through the castle wall.
-    if (ctx && ctx.castle && castle.protects(ctx.castle, pos, name)) return 'protected'
+    if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name)) return 'protected'
     // House footprint (idkcraft-e5ba): natural ground under/around our own
     // house is its floor and door support, never scaffold. Solid ground only:
     // build's own clears (flora, snow) stay legal.
@@ -373,6 +381,55 @@ function logDeny(block, reason) {
   } catch (_) { /* logging never breaks a dig */ }
 }
 
+// Jump-place timing (idkcraft-6x7.11): the server refuses a block that would
+// overlap the placer's own hitbox, and the pathfinder's 1x1 tower fires as
+// soon as the feet clear the REFERENCE top (y+0.42) while the new block still
+// spans y..y+1 — refused, reset=place_error, re-jump, same race (S6-LEAD:
+// 300+ refusals, reached only when one packet happened to land at the apex).
+// Hold a rising placement until the feet clear the destination; the
+// continuation runs after the tick's position packet is sent. Bounded: a jump
+// that peaks below it (or a body not rising) places as before.
+const FEET_CLEAR_TICKS = 8
+async function feetClear(bot, ref, face) {
+  const rp = ref && ref.position
+  if (!rp || !face || typeof bot.waitForTicks !== 'function') return
+  const dy = rp.y + face.y
+  const dx = rp.x + face.x + 0.5
+  const dz = rp.z + face.z + 0.5
+  for (let i = 0; i < FEET_CLEAR_TICKS; i++) {
+    const e = bot.entity
+    const p = e && e.position
+    if (!p || !(e.velocity && e.velocity.y > 0)) return
+    if (p.y + 1.8 <= dy) return
+    if (Math.abs(p.x - dx) >= 0.8 || Math.abs(p.z - dz) >= 0.8) return // half-width 0.3 + 0.5
+    if (p.y >= dy + 1) {
+      // Measured on the rig: a packet sent on the first tick above (y+1.0013)
+      // is still refused, one tick later (y+1.17) lands — the server judges
+      // the previous position. Only a held placement pays this extra tick.
+      if (i > 0) await bot.waitForTicks(1)
+      return
+    }
+    await bot.waitForTicks(1)
+  }
+}
+
+// Wraps bot.placeBlock with feetClear. createTicker runs before mineflayer
+// injects its plugins (inject_allowed is a setTimeout 0), so a missing
+// placeBlock defers the install to the first spawn.
+function installPlaceTiming(bot) {
+  if (!bot || bot._placeTimingInstalled) return
+  if (typeof bot.placeBlock !== 'function') {
+    if (typeof bot.once === 'function') bot.once('spawn', () => installPlaceTiming(bot))
+    return
+  }
+  bot._placeTimingInstalled = true
+  const orig = bot.placeBlock.bind(bot)
+  bot.placeBlock = async (ref, face, opts) => {
+    await feetClear(bot, ref, face)
+    return orig(ref, face, opts)
+  }
+}
+
 // Record every successful placement in ctx.placedByBot ("x,y,z", capped).
 // Installed once per bot in createTicker; covers all place sites plus the
 // pathfinder executor's own placements, so future code is tracked too.
@@ -397,4 +454,4 @@ function trackPlaced(bot, ctx) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, CLEAR_FLORA, submergedAt, solidBelow, protectedReason }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects }

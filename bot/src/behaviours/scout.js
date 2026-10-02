@@ -375,8 +375,9 @@ function startFarSearch(bot, blockName, refY = null, opts = null) {
 // ring 70 covers (48..96], rings 110/150 the (96..160] shell. In
 // exposed-only mode (bring candidate (a), atl.19) only an exposed hit
 // closes the ring: buried ore inside 96 must not stop the shells short
-// of an open vein at 100-150.
-function farShellDone(cursor, bot, ring) {
+// of an open vein at 100-150. Nor does a gated exposed hit (atl.22):
+// a vein the caller can't walk to must not stop the shells either.
+function farShellDone(cursor, bot, ring, gated = null) {
   const origin = cursor.origin || (bot.entity && bot.entity.position)
   if (!origin) return false
   const edge = ring === 70 ? 96 : SEARCH_MAX
@@ -384,6 +385,7 @@ function farShellDone(cursor, bot, ring) {
   for (const q of cursor.hits.values()) {
     if (dist(q, origin) > edge) continue
     if (!exposedOnly) return true
+    if (gated && gated(q)) continue
     let exposed = false
     try { exposed = isExposed(bot, q) } catch { exposed = false }
     if (exposed) return true
@@ -396,10 +398,15 @@ function farShellDone(cursor, bot, ring) {
 // early, never win ranking. Omitted by bring.js: behaviour unchanged there.
 // opts.exposedOnly (atl.19): opt-in exposed mode for bring candidate (a),
 // same flag as startFarSearch; when present it wins over the cursor's.
+// opts.gate(q) (atl.22, exposed mode only): exposed hits the caller can't
+// walk to (bring's descent gate). They never close a ring nor stop the
+// search early nor enter the exposed pool; the best of them rides back as
+// result.gated, so the caller can name the vein in its refusal.
 // Gather and find-me pass neither: their path below is byte-identical.
 function stepFarSearch(bot, cursor, opts) {
   if (!cursor || cursor === 'unknown') return { done: true, result: cursor, edge: null }
   const excluded = opts && typeof opts.exclude === 'function' ? opts.exclude : null
+  const gated = opts && typeof opts.gate === 'function' ? opts.gate : null
   if (opts && opts.exposedOnly !== undefined) cursor.exposedOnly = !!opts.exposedOnly
   const live = bot.entity && bot.entity.position
   if (!live || typeof live.x !== 'number') return { done: true, result: null, edge: cursor.edge }
@@ -425,7 +432,7 @@ function stepFarSearch(bot, cursor, opts) {
     // Ring completed: a nearer shell with hits closes the search (the next
     // stage runs only when the previous came up empty).
     if (lastRing !== null && c.ring !== lastRing) {
-      if (farShellDone(cursor, bot, lastRing)) {
+      if (farShellDone(cursor, bot, lastRing, gated)) {
         cursor.at = cursor.queue.length
         break
       }
@@ -463,6 +470,7 @@ function stepFarSearch(bot, cursor, opts) {
     for (const q of cursor.hits.values()) {
       if (dist(q, origin) > edge) continue
       if (excluded && excluded(q)) continue
+      if (cursor.exposedOnly && gated && gated(q)) continue
       let exposed = false
       try { exposed = isExposed(bot, q) } catch { exposed = false }
       if (exposed) {
@@ -491,10 +499,12 @@ function stepFarSearch(bot, cursor, opts) {
   // the same as before. Either may be null.
   const exposedHits = []
   const buriedHits = []
+  const gatedHits = []
   for (const q of kept) {
     let e = false
     try { e = isExposed(bot, q) } catch { e = false }
-    if (e) exposedHits.push(q)
+    if (e && gated && gated(q)) gatedHits.push(q)
+    else if (e) exposedHits.push(q)
     else buriedHits.push(q)
   }
   const pick = (hits) => {
@@ -507,6 +517,7 @@ function stepFarSearch(bot, cursor, opts) {
     done: true,
     result: epool.length > 0 ? wrapResult(bot, cursor.blockName, rankHits(bot, epool, cursor.refY)) : null,
     buried: bpool.length > 0 ? wrapResult(bot, cursor.blockName, rankHits(bot, bpool, cursor.refY)) : null,
+    gated: gatedHits.length > 0 ? wrapResult(bot, cursor.blockName, rankHits(bot, pick(gatedHits), cursor.refY)) : null,
     edge: cursor.edge,
   }
 }

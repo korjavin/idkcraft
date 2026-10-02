@@ -17,7 +17,7 @@ const { addSwimExits, addSwimPrune } = require('./swim')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
-const { trackPlaced } = require('./behaviours/util')
+const { trackPlaced, installPlaceTiming } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
 const dangerMod = require('./danger')
@@ -134,6 +134,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     bot._tickerCtx = ctx
     installEquipGuard(bot, ctx)
     trackPlaced(bot, ctx) // idkcraft-drq: record own placements for the dig guard
+    installPlaceTiming(bot) // idkcraft-6x7.11: jump-place waits for the feet to clear
   }
   let inFlight = false
   let lastTargetPos = null
@@ -780,7 +781,27 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log('shelter-run: holding fight preemption, walking home')
         ctx.shelterRunLogged = true
       }
-      if (ctx.inShelter && decision.action === 'fight') {
+      // 33vm: a hostile already INSIDE the interior box is fought (prod: six
+      // deaths standing idle in stay with a zombie at 0.7). Scanned, not
+      // state.hostile: the nearest may stand outside the wall. The pin and
+      // the state swap keep fight's sticky target on the intruder.
+      let intruder = null
+      if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
+        const bp = bot.entity && bot.entity.position
+        for (const e of Object.values(bot.entities || {})) {
+          if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
+          if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
+        }
+      }
+      if (ctx.inShelter && !intruder) ctx.intruderFight = false
+      if (intruder) {
+        ctx.fightId = intruder.id
+        state.hostile = intruder
+        // g9cj: no digging through our own walls while chasing it (no-dig stash, body.js).
+        ctx.intruderFight = true
+        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'shelter') } catch (_) { /* lease best-effort */ }
+      }
+      if (ctx.inShelter && decision.action === 'fight' && !intruder) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
@@ -1086,12 +1107,15 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       console.log(`spawned as ${bot.username}${verSuffix}`)
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
-      // instead of standing through N more ticks.
+      // instead of standing through N more ticks. Not when autonomous on an
+      // empty server (9ldm): spawn is where players show up, and with none
+      // online the walk only throws away the work — start working here.
       const tickCtx = bot._tickerCtx
       try {
         const bp = bot.entity && bot.entity.position
         const sp = bot.spawnPoint
-        if (tickCtx && bp && sp && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
+        const alone = tickCtx && tickCtx.autonomous && !Object.keys(bot.players || {}).some((n) => n !== bot.username)
+        if (tickCtx && bp && sp && !alone && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
           tickCtx.unseenTicks = UNSEEN_HOME_TICKS
         }
       } catch (_) { /* best-effort */ }
@@ -1277,6 +1301,21 @@ function handleDeath(bot, ticker) {
     const ctx = bot && bot._tickerCtx
     if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
   } catch (_) { /* memory best-effort */ }
+  // ed88: night-step phase records belong to the dead body's position — a
+  // gohome 'enter' resumed from world spawn stood 60 s, then cannot-reach.
+  // Drop them so the step re-arms from the respawn (walk / hold / pillar);
+  // a shelter climb episode goes with its record.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (ctx) {
+      ctx.gohome = null
+      ctx.stay = null
+      ctx.shelter = null
+      ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
+      ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
+      if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
+    }
+  } catch (_) { /* reset best-effort */ }
 }
 
 function handleRespawn(bot, ticker) {

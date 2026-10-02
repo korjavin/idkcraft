@@ -300,7 +300,7 @@ describe('9kd sheepless day latch', () => {
     failedEpisode(ctx)
     assert.equal(ctx.beds.noWool.fails, 2)
     assert.equal(F(FACTS, bot, ctx), false, 'second failure latches')
-    assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: no sheep today')
+    assert.equal(goal.stepWhy('beds', FACTS, bot, ctx, ''), 'beds: sheep hunt latched')
     bot.time.day = 6 // 9qt0: a new MC day no longer releases
     assert.equal(F(FACTS, bot, ctx), false, 'next MC day stays latched')
     ctx.beds.noWool.at -= beds.LATCH_MS

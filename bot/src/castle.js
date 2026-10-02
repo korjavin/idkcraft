@@ -426,6 +426,22 @@ function protects(state, pos, name) {
   } catch (_) { return false }
 }
 
+// Ground under the site (idkcraft-g0z.14, the house's e5ba rule): a cell in
+// the footprint box below site.y that is no plan cell — the walls' support
+// and the v2 hall floor. Planned moat digs stay plan cells (diggable); the
+// moat banks and floor around them are ground. All the way down, like e5ba.
+function groundCell(state, pos) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos) return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    if (y >= site.y) return false
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    if (x < site.x || x >= site.x + w || z < site.z || z >= site.z + d) return false
+    return !absPlan(site, state.rot, state.blueprintVersion).at.has(`${x},${y},${z}`)
+  } catch (_) { return false }
+}
+
 function billOfMaterials(plan) {
   const bom = {}
   for (const c of plan) bom[c.kind] = (bom[c.kind] || 0) + 1
@@ -453,4 +469,5 @@ module.exports = {
   matches,
   absPlan,
   protects,
+  groundCell,
 }
