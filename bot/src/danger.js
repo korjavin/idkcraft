@@ -185,8 +185,11 @@ function clear(ctx) {
 // target stay cheap, so the steep cost never floods A* (the heuristic is
 // off by the cost) where the disc cannot be avoided, while a plan still
 // bends around the centre instead of crossing it. Whole-block rings, no
-// slack: a replan one step in sees the same ring, so walks cannot creep
-// inward plan by plan. The goal is read from the live pathfinder goal (x/z
+// slack: the free band is under one block deep. ponytail: a body that
+// still steps across a ring boundary (off-centre feet, a partial path's
+// best node) re-reads the ring one block deeper on the next plan — inward
+// creep is slowed, not latched; latch the ring per live goal if prod shows
+// walks spiralling in. The goal is read from the live pathfinder goal (x/z
 // goals and GoalFollow's entity; other goal kinds keep the full disc).
 const PATH_COST = 10
 function addPathCost(movements, ctx, bot) {
