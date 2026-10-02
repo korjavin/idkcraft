@@ -115,9 +115,10 @@ async function main() {
   await until('bot spawn', 60000, () => bot && bot.entity && bot._tickerCtx)
   await sleep(3000)
   await rcon(`clear ${NAME}`)
-  // Torches: the plan's floor torch sits among the first stone cells; this
+  // Torches: v2's floor torches sit among the first stone cells and their
+  // batch is 16 (rig run 1 stalled at 16/30 on 8 torches); this
   // check is about stone (g0z.4's e2e covers the castle-chest torch).
-  for (const [item, n] of [['stone_pickaxe', 1], ['stone_sword', 1], ['white_bed', 2], ['torch', 8]]) await rcon(`give ${NAME} ${item} ${n}`)
+  for (const [item, n] of [['stone_pickaxe', 1], ['stone_sword', 1], ['white_bed', 2], ['torch', 64]]) await rcon(`give ${NAME} ${item} ${n}`)
   await rcon(`tp ${NAME} ${sp.x} ${gy} ${sp.z}`)
   await rcon(`tp ${GUIDE} ${at.x + 0.5} ${top} ${at.z + 0.5} 180 0`)
   await sleep(2000)
@@ -135,7 +136,8 @@ async function main() {
   const cz = site.z + Math.floor(d / 2)
   const startDist = Math.hypot(bot.entity.position.x - cx, bot.entity.position.z - cz)
   log(`order ok: ${chats[chats.length - 1]}; bot ${startDist.toFixed(0)} blocks from the site centre`)
-  await guide.quit()
+  // The guide stays online: the bot works only while someone is.
+  await rcon(`tp ${GUIDE} ${home.x} ${gy} ${home.z - 4}`)
   const stoneLaid = () => castleMod.progressByKind(bot, st).stone.done
   let last = -1
   await until(`${WANT_STONE} stone cells`, 40 * 60000, () => {

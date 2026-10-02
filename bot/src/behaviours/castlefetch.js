@@ -61,6 +61,8 @@ const QUARRY_TOP = 3 // a hill is cut up to site.y + this
 const QUARRY_TRIES = 3 // digs on one quarry cell before it is skipped
 const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble picked up
 const LIQUID = new Set(['water', 'lava', 'bubble_column'])
+// Pickaxe blocks a trench meets; anything else is dug bare-handed.
+const ROCK = /stone|_ore$|granite|diorite|andesite|deepslate|tuff|calcite|basalt/
 
 // Seams for unit tests (craftany and gather need a real recipe registry /
 // a world); production reads the real modules lazily (gather -> goal cycle).
@@ -467,8 +469,12 @@ function digTick(bot, ctx, f) {
     f.lastCobble = have
   }
   flight(ctx, async () => {
-    const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
-    if (pick) await bot.equip(pick, 'hand')
+    // Trench dirt by hand (rig: the pick wore out on the sod before the
+    // batch was in); rock with the pickaxe.
+    if (ROCK.test(b.name)) {
+      const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
+      if (pick) await bot.equip(pick, 'hand')
+    } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
     await bot.dig(b)
   }, DIG_TIMEOUT_MS, () => {
     // A refused/hung dig skips the block; the no-gain strike counts it.

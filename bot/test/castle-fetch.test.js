@@ -538,6 +538,26 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.equal(ctx.castleFetch.target.x, SITE.x - 5, 'a new leg retries side 0')
   })
 
+  it('trench dirt is dug bare-handed, stone with the pickaxe (rig: the pick wore out on sod)', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 62 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const held = []
+    bot.equip = async (it) => { bot.heldItem = it; held.push('equip') }
+    bot.unequip = async () => { bot.heldItem = null; held.push('unequip') }
+    const realDig = bot.dig
+    const dug = []
+    bot.dig = async (b) => { dug.push([b.name, bot.heldItem ? bot.heldItem.name : 'hand']); await realDig(b) }
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 12; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.ok(dug.some(([n]) => n === 'stone') && dug.some(([n]) => n === 'dirt'))
+    for (const [n, h] of dug) assert.equal(h, n === 'stone' ? 'stone_pickaxe' : 'hand', `${n} with ${h}`)
+  })
+
   it('revmux 01: a path block in the trench is stepped around, the side lives', () => {
     const set = new Map([[`${SITE.x - 4},63,${SITE.z + 2}`, 'dirt_path']])
     const bot = makeBot({ items: TOOLS(), set })
