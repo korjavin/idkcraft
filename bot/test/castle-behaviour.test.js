@@ -138,6 +138,25 @@ describe('g0z.2 castle executor', () => {
     assert.equal(world.get(c.x, c.y, c.z), 'cobblestone')
   })
 
+  it('our own scaffold in a place cell is dug like terrain', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'oak_planks') // wrong kind, but ours
+    const ctx = { castle: { site: SITE, rot: 0 }, placedByBot: new Set([`${c.x},${c.y},${c.z}`]) }
+    await run(bot, ctx, 6)
+    assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
+    assert.equal(world.get(c.x, c.y, c.z), 'cobblestone')
+    // After a restart (no placedByBot) a cobblestone scaffold in a landing
+    // cell still clears: it is the Movements scaffold item.
+    const land = cells().find((x) => x.kind === 'planks')
+    world.set(land.x, land.y, land.z, 'cobblestone')
+    paint(world, land.idx)
+    const ctx2 = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx2, 6)
+    assert.equal(world.get(land.x, land.y, land.z), 'oak_planks')
+  })
+
   it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
     const world = makeWorld()
     const bot = mockBot(world)

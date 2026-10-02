@@ -291,13 +291,21 @@ function placeCell(bot, ctx, st, c, item, now) {
 }
 
 // Air/dig cell holding something, or a place cell holding a wrong
-// occupant (grass, dirt, leftover scaffold — revmux 01): natural terrain or flora only
-// (flat allowlist + build REPLACEABLE), never under anyone's feet, and
+// occupant (grass, dirt, our own scaffold — revmux 01): natural terrain,
+// flora or our own placements only (flat allowlist + build REPLACEABLE +
+// ctx.placedByBot), never under anyone's feet, and
 // the shared denyReason gates (trap, gravity, submerged, protected).
 function digCell(bot, ctx, st, c, now) {
   const name = nameAt(bot, c)
   if (flat.isLiquidName(name)) { blockCell(ctx, st, c, 'liquid', now); return }
-  if (!flat.isDiggable(name) && !build.isReplaceable(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  // Our own placements count too: the executor's scaffolding (cobblestone
+  // pillared into a landing cell on the rig) must clear like terrain.
+  // placedByBot is session-only, so cobblestone (Movements' scaffold item)
+  // in a castle cell clears by name too: after a restart the leftover
+  // pillar would otherwise gate every layer above it forever.
+  let ours = name === 'cobblestone'
+  try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
+  if (!ours && !flat.isDiggable(name) && !build.isReplaceable(name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   if (approach(bot, ctx, c, () => new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
@@ -307,7 +315,11 @@ function digCell(bot, ctx, st, c, now) {
   if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
   try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
-  const deny = b ? denyReason(bot, b, ctx) : 'unreadable'
+  // Ours (above) passes the type rules like placedByBot does; the trap,
+  // gravity, submerged and castle-block rules still apply.
+  const k = `${c.x},${c.y},${c.z}`
+  const dctx = ours ? { ...ctx, placedByBot: new Set([k]) } : ctx
+  const deny = b ? denyReason(bot, b, dctx) : 'unreadable'
   if (deny) {
     if (b) logDeny(b, deny)
     strike(ctx, st, c, deny, now)

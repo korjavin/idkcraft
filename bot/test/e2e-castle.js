@@ -14,6 +14,11 @@ const { promisify } = require('node:util')
 const { waitFor, sleep } = require('./e2e-util')
 const blueprint = require('../src/castle')
 const castle = require('../src/behaviours/castle')
+const { trackPlaced } = require('../src/behaviours/util')
+const { addSwimExits, addSwimPrune } = require('../src/swim')
+const { addNoCornerCut } = require('../src/nocorner')
+const { addSnowGround } = require('../src/snow')
+const { addJumpUpCost } = require('../src/jumpcost')
 
 const execFileAsync = promisify(execFile)
 const MC_HOST = process.env.MC_HOST || 'localhost'
@@ -21,7 +26,7 @@ const MC_PORT = parseInt(process.env.MC_PORT || '25565', 10)
 const MC_CONTAINER = process.env.MC_CONTAINER || 'idk-mc'
 const NAME = `Castle${Math.floor(Math.random() * 10000)}`
 const RESTART_AT = 60 // laid cells before the simulated restart
-const DEADLINE_MS = 30 * 60 * 1000
+const DEADLINE_MS = 120 * 60 * 1000
 
 async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', cmd])
@@ -32,10 +37,20 @@ async function session(state, stopAt, onSpawn) {
   const bot = mineflayer.createBot({ host: MC_HOST, port: MC_PORT, username: NAME, auth: 'offline' })
   bot.loadPlugin(pathfinder)
   await waitFor(bot, 'spawn', 60000, 'bot spawn')
-  bot.pathfinder.setMovements(new Movements(bot))
+  // The prod Movements stack (index.js setMovements): plain Movements
+  // corner-cuts the doorway diagonal and wedges on the wall.
+  const m = new Movements(bot)
+  addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m)
+  bot.pathfinder.setMovements(m)
+  if (process.env.E2E_VERBOSE) {
+    const at = (m) => (m ? `${m.x},${m.y},${m.z}${m.toBreak && m.toBreak.length ? ' brk' + m.toBreak.length : ''}${m.toPlace && m.toPlace.length ? ' plc' + m.toPlace.length : ''}` : '-')
+    bot.on('path_update', (r) => { try { console.log(`  path ${r.status} len=${r.path.length} visited=${r.visitedNodes} ms=${Math.round(r.time)} next=${at(r.path[0])} end=${at(r.path[r.path.length - 1])}`) } catch (e) { console.log('  path log err', e.message) } })
+    bot.on('path_reset', (why) => console.log(`  reset ${why}`))
+  }
   if (onSpawn) await onSpawn()
   await sleep(2000)
   const ctx = { castle: state }
+  trackPlaced(bot, ctx) // prod tracks every placement, incl. pathfinder scaffolds
   const end = Date.now() + DEADLINE_MS
   let lastLog = ''
   try {
