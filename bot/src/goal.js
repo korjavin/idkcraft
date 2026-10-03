@@ -65,15 +65,15 @@ const MENU = {
     // Night-far (ipn.12): at night a far march is a death march — shelter
     // owns it (see nightFarFromHome). Dusk marches at any distance.
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
-      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot),
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
   shelter: {
     // Night shelter (ipn.12): the night-far complement of gohome — pillar
     // up and hold where you are till dawn instead of marching the dark.
-    feasible: (facts, bot, ctx) => facts.time === 'night' && facts.home === 'built' && facts.inside === 'no' &&
-      shelterOwns(bot, ctx),
+    // Castle night (g0z.21): at the far castle it shelters from dusk on.
+    feasible: (facts, bot, ctx) => facts.home === 'built' && facts.inside === 'no' && shelterFits(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -548,9 +548,47 @@ function noteGohomeFail(ctx, bot, status) {
     console.log(`goal gohome latched for the night fails=${ctx.gohomeLatch.fails} status=${status} pos=${f(pos)}`)
   }
 }
-// Shelter owns the night when home is too far to walk or gohome is latched.
+// Castle night (idkcraft-g0z.21): prod built a castle 113 blocks from
+// home and spent the nights marching between them (gohome failed x46,
+// deaths clustered on the night transitions). While an unfinished,
+// unparked castle stands far from home and the bot works at it, the night
+// is spent in the shelter step by the site — from dusk, so the dusk march
+// never starts — and dawn finds it at the castle. The shelter's dig-in
+// already vetoes castle-protected cells (recover.digInVeto).
+// ponytail: distance to the site centre; a per-cell footprint test if a
+// big site ever needs it.
+const CASTLE_NIGHT_DIST = 48
+function castleNight(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    const c = st && st.site
+    const h = ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!c || !h || !bp || typeof c.x !== 'number' || typeof h.x !== 'number' || typeof bp.x !== 'number') return false
+    if (st.parked || st.phase === 'complete') return false
+    let cx = c.x
+    let cz = c.z
+    try {
+      const { w, d } = require('./castle').siteDimensions(st.rot | 0, st.blueprintVersion)
+      cx += w / 2
+      cz += d / 2
+    } catch (_) { /* corner */ }
+    return Math.hypot(cx - h.x, cz - h.z) > CASTLE_NIGHT_DIST &&
+      Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST &&
+      Math.hypot(bp.x - cx, bp.z - cz) <= CASTLE_NIGHT_DIST
+  } catch (_) {
+    return false
+  }
+}
+// Shelter owns the night when home is too far to walk, gohome is latched,
+// or the bot is at its far castle.
 function shelterOwns(bot, ctx) {
-  return nightFarFromHome(bot, ctx) || gohomeLatched(ctx, bot)
+  return nightFarFromHome(bot, ctx) || gohomeLatched(ctx, bot) || castleNight(bot, ctx)
+}
+// Shelter fits now: the night it owns, or a castle dusk (g0z.21).
+function shelterFits(facts, bot, ctx) {
+  const t = facts && facts.time
+  return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx))
 }
 
 // Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
@@ -1097,7 +1135,7 @@ function goalFsm(facts, feasibleNames) {
     if (!ok.has(name)) continue
     if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
-    if (name === 'shelter' && t !== 'night') continue // shelter is the night-far step; dusk marches
+    if (name === 'shelter' && t === 'day') continue // night-far step; at dusk only the castle night (g0z.21) makes it feasible
     return name
   }
   return 'rest'
@@ -1118,7 +1156,7 @@ const STEP_CRITERIA = {
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
   equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
-  shelter: 'time is night and home is built and inside is no: stop marching and wait where you are till dawn',
+  shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
   deliver: 'haul is waiting: carry it to the player',
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
@@ -1248,9 +1286,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.home !== 'built') return 'gohome: home not built'
       if (facts.inside !== 'no') return 'gohome: already inside'
       if (gohomeLatched(ctx, bot)) return 'gohome: failed at the same spot tonight'
+      if (castleNight(bot, ctx)) return 'gohome: sheltering at the castle'
       return 'gohome: too far to walk at night'
     case 'shelter':
-      if (facts.time !== 'night') return 'shelter: daytime'
+      if (facts.time === 'day') return 'shelter: daytime'
+      if (facts.time === 'dusk') return 'shelter: dusk marches home'
       if (facts.home !== 'built') return 'shelter: home not built'
       if (facts.inside !== 'no') return 'shelter: already inside'
       return 'shelter: home is close'
@@ -1547,14 +1587,14 @@ async function decide(bot, ctx) {
   // keepInventory respawn by the house moves no bucket, so without the
   // force the askedKey shortcut below would re-issue shelter all night.
   const nightNearShelter = !finished && prev === 'shelter' &&
-    facts.time === 'night' && !shelterOwns(bot, ctx)
+    facts.time !== 'day' && !shelterFits(facts, bot, ctx)
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
   // shelter is night-infeasible — and through the behaviour's own done.
   // Near home the hold releases too (revmux 02): a death that respawns by
   // the house must walk in (gohome/stay), not pillar outside it all night.
-  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && facts.time === 'night' && shelterOwns(bot, ctx)))) {
+  if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && shelterFits(facts, bot, ctx)))) {
     if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
