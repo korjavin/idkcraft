@@ -1751,11 +1751,13 @@ function repeatPaged(ctx, bp) {
 // an escape worked; gave-up = budget spent, target stays dropped.
 function release(bot, ctx, how) {
   const rec = ctx.recovery || {}
+  // drop-goal (kl19) ends like a gave-up for the owner, minus the pit mark/page
+  const gaveUp = how === 'gave-up' || how === 'drop-goal'
   const by = (ctx.stuck && ctx.stuck.by) || 'unknown'
   // Rest escalation (q0h): consecutive gave-ups in the rest step fail it, so
   // the goal arbiter reconsiders instead of spinning episodes in one pit. A
   // done episode is progress and clears the count; other steps never feed it.
-  if (how === 'gave-up' && ctx.work && ctx.step === 'rest') {
+  if (gaveUp && ctx.work && ctx.step === 'rest') {
     ctx.restGaveUps = (ctx.restGaveUps || 0) + 1
     if (ctx.restGaveUps >= REST_GAVE_UPS) {
       ctx.restGaveUps = 0
@@ -1800,19 +1802,19 @@ function release(bot, ctx, how) {
     } catch (_) { ctx.lead.nudgedAt = null }
     ctx.lead.stuckTicks = 0
     ctx.lead.workTicks = 0
-    if (how === 'gave-up') ctx.lead = null
+    if (gaveUp) ctx.lead = null
   }
   if (by === 'gather' && ctx.gather) {
     // An escape may have moved the bot somewhere reachable: scan fresh.
     // On gave-up the step's failed:* final stands and the arbiter moves on.
-    if (how !== 'gave-up') { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
+    if (!gaveUp) { ctx.gather.skip.clear(); ctx.gather.streak = 0 }
   }
   // Release latch (consulted by stuck.js COOLDOWN). The ticker latch
   // anchors on gave-up only (rra round 2): a 'done' may be a partial climb
   // still in the pit, and latching it would end all escapes with no page.
   // Lead latches too (6x7.2), or a mining stall re-fires every slow
   // threshold and the order never gives up.
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && how === 'gave-up')) {
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp)) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
@@ -1864,6 +1866,25 @@ function release(bot, ctx, how) {
   return { action: 'idle', sprint: false, source: rec.source || 'fsm' }
 }
 
+// idkcraft-kl19: a goal >= DROP_GOAL_DY up on open ground with no climb
+// primitive feasible (no scaffold, no pickaxe/bucket/dig_step) cannot be
+// reached by sidestep/wait/call: drop it at entry instead of burning the 28 s
+// budget. Pits keep the old path (call_player/page/mark); follow keeps its
+// player (stuck.js asks for help there).
+// ponytail: fixed threshold, same as gather's CLIFF_DY.
+const DROP_GOAL_DY = 3
+function dropGoal(ctx, facts) {
+  // Only on a terminal planner verdict: a plain wedge on a hill is not a cliff.
+  if (ctx.lastPathStatus !== 'noPath' && ctx.lastPathStatus !== 'timeout') return false
+  if (facts.goalDy < DROP_GOAL_DY || facts.scaffold > 0 || facts.pit || (ctx.stuck && ctx.stuck.by === 'follow')) return false
+  // Steep only (horizontal <= 3x rise): a far goal up a long slope is still
+  // walkable, and sidestep walking goalward may free it.
+  if (Math.sqrt(Math.max(0, facts.goalDist * facts.goalDist - facts.goalDy * facts.goalDy)) > 3 * facts.goalDy) return false
+  return !['pillar_up', 'dig_up', 'water_up', 'dig_step'].some((n) => {
+    try { return RECOVER_MENU[n].feasible(facts, ctx) } catch (_) { return false }
+  })
+}
+
 // Decision point: entry (no episode) or a finished primitive. A running
 // primitive keeps its action with no re-ask. Returns a BEHAVIOURS action
 // (the primitive) or idle after release.
@@ -1885,6 +1906,10 @@ async function decide(bot, ctx, state, target) {
         bot.pathfinder.setGoal(null)
       }
     } catch (_) { /* body best-effort */ }
+    if (dropGoal(ctx, facts)) {
+      logRecover(bot, ctx, 'none', 'fsm', 'drop-goal', facts)
+      return release(bot, ctx, 'drop-goal')
+    }
   } else {
     // A primitive finished: record the outcome, then continue, re-ask, or
     // give up. Terminal states feed the next facts as last=<action>:<outcome>.

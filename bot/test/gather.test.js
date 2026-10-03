@@ -786,8 +786,39 @@ describe('gather target selection (idkcraft-m7ke)', () => {
       ctx.lastPathStatus = 'timeout' // every climb times out
     }
     assert.equal(ctx.stepStatus, 'failed:unreachable')
-    assert.equal(ctx.gather.streak, 3, 'reached through the strike streak')
+    assert.equal(ctx.gather.skip.size, 3, 'kl19: one strike took all three')
     assert.ok(!ctx.stuck, 'cliff strikes request no recover episode')
+  })
+
+  it('cliff strike drops every candidate that high at once (kl19)', () => {
+    const spots = [pos(20, 73, 0), pos(20, 73, 10), pos(20, 73, 20)]
+    const names = {}
+    for (const p of spots) names[`${p.x},${p.y},${p.z}`] = 'oak_log'
+    const bot = mockBot({ spots, names })
+    bot._moving = true
+    const ctx = freshCtx()
+    bot.entity.position = pos(1, 64, 0)
+    quiet(() => gather(bot, ctx, null, {}))
+    ctx.lastPathStatus = 'timeout'
+    bot.entity.position = pos(2, 64, 0)
+    quiet(() => gather(bot, ctx, null, {}))
+    assert.equal(ctx.gather.skip.size, 3, 'one verdict, all three struck')
+  })
+
+  it('a far shallow +4 candidate survives a cliff strike (kl19)', () => {
+    const spots = [pos(20, 73, 0), pos(40, 68, 30)]
+    const names = {}
+    for (const p of spots) names[`${p.x},${p.y},${p.z}`] = 'oak_log'
+    const bot = mockBot({ spots, names })
+    bot._moving = true
+    const ctx = freshCtx()
+    bot.entity.position = pos(1, 64, 0)
+    quiet(() => gather(bot, ctx, null, {}))
+    ctx.lastPathStatus = 'timeout'
+    bot.entity.position = pos(2, 64, 0)
+    quiet(() => gather(bot, ctx, null, {}))
+    assert.ok(ctx.gather.skip.has('20,73,0'))
+    assert.ok(!ctx.gather.skip.has('40,68,30'))
   })
 
   it('an unloaded memory point keeps its walk on a timeout (stall backstop judges it)', () => {
