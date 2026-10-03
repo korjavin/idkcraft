@@ -2805,7 +2805,7 @@ describe('drop-goal on a high goal with no climber (kl19)', () => {
   it('scaffold 0, goal +9, open ground: dropped at entry, no sidestep/wait, no pit mark', async () => {
     const bot = flat()
     bot.pathfinder = { goal: {}, setGoal(g) { this.goal = g } }
-    const ctx = { stuck: { by: 'lead', goal: { x: 0, y: 70, z: 0 } }, lead: { pos: { x: 0, y: 70, z: 0 } }, brain: { source: 't', ask: async () => 'wait' } }
+    const ctx = { lastPathStatus: 'timeout', stuck: { by: 'lead', goal: { x: 0, y: 70, z: 0 } }, lead:{ pos: { x: 0, y: 70, z: 0 } }, brain: { source: 't', ask: async () => 'wait' } }
     const d = await recover.decide(bot, ctx, {}, null)
     assert.equal(d.action, 'idle')
     assert.equal(ctx.recovery, null)
@@ -2813,6 +2813,17 @@ describe('drop-goal on a high goal with no climber (kl19)', () => {
     assert.equal(ctx.lead, null, 'order dropped like a gave-up')
     assert.equal(bot.pathfinder.goal, null)
     assert.equal(danger.count(ctx), 0, 'open ground is no pit')
+  })
+  it('no planner verdict (plain wedge): not dropped; no-displacement latch set on drop', async () => {
+    const bot = flat()
+    const ctx = { stuck: { by: 'lead', goal: { x: 0, y: 70, z: 0 } }, brain: { source: 't', ask: async () => 'wait' } }
+    const d = await recover.decide(bot, ctx, {}, null)
+    assert.notEqual(d.action, 'idle')
+    const bot2 = flat()
+    bot2.pathfinder = { goal: {}, setGoal(g) { this.goal = g } }
+    const ctx2 = { lastPathStatus: 'noPath', stuck: { by: 'no-displacement', goal: { x: 0, y: 70, z: 0 }, key: 'k' }, brain: null }
+    await recover.decide(bot2, ctx2, {}, null)
+    assert.equal(ctx2.recoverLatch && ctx2.recoverLatch.by, 'no-displacement')
   })
   it('a level goal still gets a primitive', async () => {
     const bot = flat()

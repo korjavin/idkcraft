@@ -1814,7 +1814,7 @@ function release(bot, ctx, how) {
   // still in the pit, and latching it would end all escapes with no page.
   // Lead latches too (6x7.2), or a mining stall re-fires every slow
   // threshold and the order never gives up.
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && how === 'gave-up')) {
+  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp)) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
@@ -1874,6 +1874,8 @@ function release(bot, ctx, how) {
 // ponytail: fixed threshold, same as gather's CLIFF_DY.
 const DROP_GOAL_DY = 3
 function dropGoal(ctx, facts) {
+  // Only on a terminal planner verdict: a plain wedge on a hill is not a cliff.
+  if (ctx.lastPathStatus !== 'noPath' && ctx.lastPathStatus !== 'timeout') return false
   if (facts.goalDy < DROP_GOAL_DY || facts.scaffold > 0 || facts.pit || (ctx.stuck && ctx.stuck.by === 'follow')) return false
   // Steep only (horizontal <= 3x rise): a far goal up a long slope is still
   // walkable, and sidestep walking goalward may free it.
