@@ -562,6 +562,18 @@ describe('yrtx shelter in water: land first, pillar on dry ground', () => {
     assert.ok(first)
   })
 
+  it('a gap between wet ticks pauses the stall timer', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    const st = ctx.shelter
+    st.wetTickAt -= 10000
+    const before = st.dryProgressAt
+    home.shelter(bot, ctx, null, null)
+    assert.ok(st.dryProgressAt >= before + 9000, 'borrowed time is not stall time')
+    assert.equal(st.skip.length, 0)
+  })
+
   it('on land: pillars as before', () => {
     const bot = waterBot()
     bot.entity.isInWater = false
