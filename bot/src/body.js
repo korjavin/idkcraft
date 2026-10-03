@@ -51,6 +51,7 @@ function pickOwner(ctx) {
   if (ctx.breath) return 'breath' // episode latch: the reflex owns while latched
   if (ctx.stuck) return 'recover' // fact from the previous tick's stuck.update
   if (ctx.comehome) return 'comehome'
+  if (ctx.gocastle) return 'gocastle'
   if (ctx.lead) return 'lead'
   if (ctx.bring) return 'bring'
   if (ctx.flat && !ctx.flat.parked) return 'flat'
@@ -98,6 +99,11 @@ function gohomeWalk(ctx) {
 function meetDig(ctx) {
   const o = ctx && ctx.comehome
   return !!(o && !o.exiting && (o.phase === 'walk' || o.phase === 'seat'))
+}
+
+function castleWalk(ctx) {
+  const o = ctx && ctx.gocastle
+  return !!(o && o.phase === 'walk')
 }
 
 // Flat-gate inputs, verbatim from follow.js (5vv) and home.js (rw4.10):
@@ -191,7 +197,7 @@ function movementsFor(owner, bot, ctx, extra) {
   let sprint = false
   let parkour = true
   try {
-    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
+    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx) || castleWalk(ctx)) canDig = false
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes
@@ -202,7 +208,7 @@ function movementsFor(owner, bot, ctx, extra) {
       const leg = ctx.shelterLeg
       const legFar = !!(bp && leg && typeof leg.x === 'number' &&
         Math.hypot(bp.x - (leg.x + 0.5), bp.y - leg.y, bp.z - (leg.z + 0.5)) > SPRINT_DIST)
-      const shelterGate = !!leg && (key.startsWith('gohome-') || key.startsWith('comehome-')) &&
+      const shelterGate = !!leg && (key.startsWith('gohome-') || key.startsWith('comehome-') || key.startsWith('gocastle-')) &&
         legFar && flat
       if (followGate || shelterGate) { sprint = true; parkour = false }
     }

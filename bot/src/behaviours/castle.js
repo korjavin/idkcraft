@@ -936,3 +936,4 @@ module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
 module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
+module.exports.entrance = entrance

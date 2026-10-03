@@ -30,6 +30,7 @@ function createOrders(box) {
       ctx.flat = null
       ctx.inShelter = false
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first follow path (jr2.3)
+      ctx.gocastle = null
       const real = resolvePlayer(bot, name)
       box.followName = real
       try { ctx.followName = real || null } catch (_) { /* follow best-effort */ }
@@ -84,6 +85,7 @@ function createOrders(box) {
     // executor's per-site scratch resets with it; null persists as a drop.
     setCastle: (st) => {
       ctx.castle = st || null
+      ctx.gocastle = null
       ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null; ctx.castleWord = null; ctx.castlePrepSaid = false; ctx.castlePrep = null
       try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castle } catch (_) { /* hold best-effort */ }
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
@@ -106,9 +108,10 @@ function createOrders(box) {
       ctx.work = false
       ctx.lead = null
       ctx.leadTargetGone = 0
+      ctx.gocastle = null
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); resetNightStep(); homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
+    setLead: (order) => { clearStuck(); resetNightStep(); ctx.gocastle = null; homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
@@ -150,6 +153,7 @@ function createOrders(box) {
     setShare: ({ by }) => {
       clearPendingSearch(ctx)
       resetNightStep()
+      ctx.gocastle = null
       let items = []
       try {
         items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -171,6 +175,7 @@ function createOrders(box) {
     setBring: ({ name, want, by }) => {
       clearPendingSearch(ctx)
       resetNightStep()
+      ctx.gocastle = null
       if (bringMod.isFoodRequest(name)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
@@ -430,6 +435,7 @@ function createOrders(box) {
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
+      ctx.gocastle = null
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first flat walk (jr2.3)
       if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
@@ -514,6 +520,7 @@ function createOrders(box) {
       let inside = false
       try { inside = homeMod.isInside(bot, ctx.home) } catch (_) { inside = false }
       const prior = ctx.comehome
+      ctx.gocastle = null
       ctx.comehome = homeMod.startMeet(by, inside, home)
       // Re-ordered mid-exit after 'build here' swapped the house: the fresh
       // order keeps exiting the pinned old house, then reseeks the current
@@ -529,10 +536,47 @@ function createOrders(box) {
       }
       return 'coming home'
     },
+    // 'Go castle' order (idkcraft-3qia): walk to the castle entrance and hold there.
+    setGocastle: ({ by }) => {
+      const st = ctx.castle
+      if (!st || !st.site) return 'no castle yet — say build castle'
+      clearPendingSearch(ctx)
+      clearStuck()
+      resetNightStep()
+      if (!ctx.comehome && homeMod.isInside(bot, ctx.home)) {
+        ctx.comehome = homeMod.startMeet(by, true, ctx.home)
+      }
+      homeMod.releaseMeet(bot, ctx)
+      if (!(ctx.comehome && ctx.comehome.exiting)) ctx.comehome = null
+      if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+      if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+      if (ctx.flat) ctx.flat.parked = true
+      const held = box.followName
+      box.followName = ''
+      if (held) {
+        try { ctx.followName = null } catch (_) { /* follow best-effort */ }
+        try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      }
+      ctx.work = false
+      ctx.paused = false
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
+      ctx.lastGoalKey = ''
+      ctx.stepStatus = 'running'
+      ctx.gocastle = {
+        by: by || 'you',
+        castle: st,
+        phase: 'walk',
+        stalls: 0,
+        fails: 0,
+        lastPos: null,
+      }
+      return 'going to castle'
+    },
     status: () => {
       const facts = goal.goalFacts(bot, ctx)
       const flatParked = ctx.flat && ctx.flat.parked
-      const mode = ctx.comehome ? 'coming home' : (ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.lead ? 'leading' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : 'following')))))
+      const mode = ctx.gocastle ? 'going to castle' : (ctx.comehome ? 'coming home' : (ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.lead ? 'leading' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : 'following'))))))
       // atl.7: a resting bot names the reason decide() stored, if any.
       const why = ctx.step === 'rest' && ctx.restWhy ? ` resting because ${ctx.restWhy}` : ''
       bot.chat(`${mode} step=${ctx.step || 'none'}${why} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)

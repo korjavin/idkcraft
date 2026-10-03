@@ -60,6 +60,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   if (resSubmerged(bot, ctx, res)) {
     homeMod.releaseMeet(bot, ctx)
     if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+    ctx.gocastle = null
     ctx.unseenTicks = 0
     ctx.resumeWork = false
     ctx.bring = {
@@ -71,6 +72,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
   }
   homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the fetch walk (jr2.3)
   if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+  ctx.gocastle = null
   // A fresh explicit order restarts homing math (a tripped counter would
   // starve the order) and supersedes a pending spawn work-resume (which
   // would otherwise cancel the order on the next sighted tick).
@@ -310,8 +312,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   } else if (msg === 'go work' || msg === 'free') {
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
-  } else if (msg === 'come home') {
+  } else if (msg === 'come home' || msg === 'go home') {
     if (ticker && typeof ticker.setComehome === 'function') bot.chat(ticker.setComehome({ by: playerName }))
+  } else if (msg === 'go castle') {
+    if (ticker && typeof ticker.setGocastle === 'function') {
+      const reply = ticker.setGocastle({ by: playerName })
+      if (reply) bot.chat(reply)
+    }
   } else if (msg === 'build here') {
     const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
     const pos = speaker && speaker.position

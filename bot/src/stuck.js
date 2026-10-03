@@ -285,7 +285,7 @@ function latchStale(ctx, bot, bp) {
 // come-home meet own their own stalls (rw4.5, jr2.3, ipn.12); the rest
 // gave-up hold (q0h) owns repeats at its marked point.
 function raiseExempt(ctx, bot) {
-  if ((ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay' || ctx.step === 'shelter')) || ctx.comehome) return true
+  if ((ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay' || ctx.step === 'shelter')) || ctx.comehome || ctx.gocastle) return true
   try {
     if (recover.restGaveUpHolds(ctx, bot)) return true
   } catch (_) { /* hold best-effort */ }
