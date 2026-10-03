@@ -538,6 +538,30 @@ describe('yrtx shelter in water: land first, pillar on dry ground', () => {
     assert.equal(ctx.inShelter, false)
   })
 
+  it('kelp floor is not land; no land swims toward home and never pillars', () => {
+    const bot = waterBot()
+    bot.blockAt = (p) => (p.y <= 62 ? STONE : p.y <= 64 ? WATER : { name: 'kelp', boundingBox: 'empty' })
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.recovery == null, true)
+    assert.equal(bot.calls.goals.length, 1, 'one home goal, steady')
+    assert.equal(bot.calls.goals[0].x, SITE.x)
+  })
+
+  it('a stalled swim skips its cell after 15 s', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    const first = bot.calls.goals[0]
+    home.shelter(bot, ctx, null, null) // first distance reading
+    ctx.shelter.dryProgressAt -= 16000
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.shelter.skip.length, 1)
+    assert.ok(ctx.shelter.dry == null || ctx.shelter.dry.z !== ctx.shelter.skip[0].z || ctx.shelter.dry.x !== ctx.shelter.skip[0].x)
+    assert.ok(first)
+  })
+
   it('on land: pillars as before', () => {
     const bot = waterBot()
     bot.entity.isInWater = false

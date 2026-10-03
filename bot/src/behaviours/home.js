@@ -806,11 +806,13 @@ const SHELTER_DRY_R = 24
 // yrtx: nearest dry standing cell (solid non-water floor, two free cells
 // above) within SHELTER_DRY_R. Pillaring in water never stands (the breath
 // reflex lifts the body, the anchor reads 'displaced', Drowned finish it).
-function nearestDry(bot) {
+const WET_PLANTS = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
+function nearestDry(bot, skip = []) {
   const bp = botPos(bot)
   if (!bp || typeof bot.blockAt !== 'function') return null
   const x0 = Math.floor(bp.x), y0 = Math.floor(bp.y), z0 = Math.floor(bp.z)
-  const wet = (b) => !b || (typeof b.name === 'string' && b.name.includes('water'))
+  const wet = (b) => !b || b.isWaterlogged === true ||
+    (typeof b.name === 'string' && (b.name.includes('water') || WET_PLANTS.has(b.name)))
   const free = (b) => !!b && b.boundingBox === 'empty' && !wet(b)
   let best = null
   let bd = Infinity
@@ -818,10 +820,11 @@ function nearestDry(bot) {
     for (let dz = -SHELTER_DRY_R; dz <= SHELTER_DRY_R; dz++) {
       const d = dx * dx + dz * dz
       if (d >= bd) continue
-      for (let dy = 3; dy >= -4; dy--) {
+      for (let dy = 1; dy >= -4; dy--) { // at most a step above the surface: climbable
         const at = (k) => bot.blockAt(new Vec3(x0 + dx, y0 + dy + k, z0 + dz))
         const floor = at(-1)
         if (floor && floor.boundingBox === 'block' && !wet(floor) && free(at(0)) && free(at(1))) {
+          if (skip.some((s) => s.x === x0 + dx && s.z === z0 + dz)) continue
           best = { x: x0 + dx, y: y0 + dy, z: z0 + dz }
           bd = d
           break
@@ -900,15 +903,41 @@ function shelter(bot, ctx, target, state) {
     } catch (_) { /* dry on doubt */ }
     if (wet) {
       ctx.inShelter = false
-      if (!st.dry) { try { st.dry = nearestDry(bot) } catch (_) { st.dry = null } }
+      const now = Date.now()
+      const bp = botPos(bot)
+      if (!st.skip) st.skip = []
+      // Give-up (revmux 01): a cell the swim does not get closer to in 15 s
+      // is skipped; the scan reruns at most every 5 s (no land: home goal).
+      if (st.dry && bp) {
+        const dist = Math.hypot(bp.x - st.dry.x, bp.z - st.dry.z)
+        if (!(dist < (st.dryBest === undefined ? Infinity : st.dryBest) - 0.5)) {
+          if (now - st.dryProgressAt > 15000) { st.skip.push(st.dry); st.dry = null; st.scanAt = 0 }
+        } else {
+          st.dryBest = dist
+          st.dryProgressAt = now
+        }
+      }
+      if (!st.dry && st.skip.length < 3 && !(now - (st.scanAt || 0) < 5000)) {
+        st.scanAt = now
+        try { st.dry = nearestDry(bot, st.skip) } catch (_) { st.dry = null }
+        st.dryBest = undefined
+        st.dryProgressAt = now
+        ctx.lastGoalKey = null
+      }
       const d = st.dry
       // No land in reach: keep swimming toward the house, never pillar here.
-      setGoal(bot, ctx, 'shelter-dry', d
+      setGoal(bot, ctx, d ? `shelter-dry-${d.x},${d.z}` : 'shelter-dry', d
         ? new goals.GoalNear(d.x + 0.5, d.y, d.z + 0.5, 1)
         : new goals.GoalNearXZ(home.site.x, home.site.z, 2))
       return
     }
+    if (st.dry || ctx.lastGoalKey === 'shelter-dry') {
+      // Landed: drop the swim goal so it cannot fight the pillar jump.
+      try { bot.pathfinder.setGoal(null) } catch (_) { /* best-effort */ }
+      ctx.lastGoalKey = null
+    }
     st.dry = null
+    st.skip = null
   }
   if (!st.pillared) {
     // Climbing unsheltered (revmux 01 core-1): arming inShelter before the
