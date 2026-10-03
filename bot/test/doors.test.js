@@ -572,6 +572,132 @@ describe('doors: revmux 01 fixes (idkcraft-6xno)', () => {
     }
   })
 
+  it('sendback (a): a closed read before the open lands never untracks', () => {
+    // Real ping: the opener tracks at click time, the server update lands
+    // later. A fast-shut pass in between must not untrack (old code did —
+    // then the open door was nobody's and stayed open).
+    const realNow = Date.now
+    let now = 5000000
+    Date.now = () => now
+    const cap = capture()
+    try {
+      const st = { open: false }
+      const bot = mockBot({ open: false, at: { x: 0.5, y: 64, z: -0.5 } })
+      bot.activateBlock = async () => { bot.toggles++ } // echo withheld
+      const liveState = (v) => { st.open = v }
+      bot.blockAt = (p) => {
+        const x = Math.floor(p.x)
+        const y = Math.floor(p.y)
+        const z = Math.floor(p.z)
+        if (x === 0 && y === 64 && z === -2) {
+          return {
+            name: 'oak_door',
+            position: new Vec3(x, y, z),
+            getProperties: () => ({ open: st.open, facing: 'north', hinge: 'left', half: 'lower' }),
+          }
+        }
+        return { name: 'air', position: new Vec3(x, y, z), getProperties: () => ({}) }
+      }
+      const ctx = { lastPathNodes: [{ x: 0.5, y: 64, z: -1.5 }] }
+      doors.doorReflex(bot, ctx) // click (T), echo still in flight
+      assert.equal(bot.toggles, 1)
+      assert.equal(ctx.doorOpened.size, 1)
+      now += 250 // fast-shut pass sees the pre-update closed read
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'shut fired on the unlanded open')
+      assert.equal(ctx.doorOpened.size, 1, 'pending open untracked')
+      liveState(true) // the update lands
+      bot.entity.position = { x: 0.5, y: 64, z: -4.0 }
+      ctx.lastPathNodes = [{ x: 0.5, y: 64, z: -4.0 }, { x: 0.5, y: 64, z: -5.0 }]
+      now += 250
+      doors.doorReflex(bot, ctx)
+      assert.equal(bot.toggles, 2, 'never shut after the echo landed')
+    } finally {
+      Date.now = realNow
+      cap.release()
+    }
+  })
+
+  it('sendback (b): a door consumed at the window tail counts as passed', () => {
+    // Door at the last window index, body just past it along the leg: old
+    // code skips (at >= ahead is always true at the tail) until a replan.
+    const bot = mockBot({ open: true, at: { x: 0.5, y: 64, z: -3.0 } })
+    const ctx = {
+      lastPathNodes: [{ x: 0.5, y: 64, z: 0.5 }, { x: 0.5, y: 64, z: -0.5 }, { x: 0.5, y: 64, z: -1.5 }],
+      doorOpened: new Map([['0,64,-2', { x: 0, y: 64, z: -2, seen: true }]]),
+    }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 1, 'tail-consumed door never shut')
+    assert.equal(bot.state.open, false)
+  })
+
+  it('sendback (b): approaching a tail door still holds the shut', () => {
+    // Same tail geometry, body still short of the door: no shut (guards
+    // the projection fix against flipping the approach case).
+    const bot = mockBot({ open: true, at: { x: 0.5, y: 64, z: 1.5 } })
+    const ctx = {
+      lastPathNodes: [{ x: 0.5, y: 64, z: 0.5 }, { x: 0.5, y: 64, z: -0.5 }, { x: 0.5, y: 64, z: -1.5 }],
+      doorOpened: new Map([['0,64,-2', { x: 0, y: 64, z: -2, seen: true }]]),
+    }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 0, 'shut a door still being approached')
+  })
+
+  it('sendback (b): the opener never reopens a door behind the body', () => {
+    // Tracked door shut (by a player) while the body stands past it at the
+    // window tail: reopening would flap against the closer every window.
+    const bot = mockBot({ open: false, at: { x: 0.5, y: 64, z: -3.0 } })
+    const ctx = {
+      lastPathNodes: [{ x: 0.5, y: 64, z: 0.5 }, { x: 0.5, y: 64, z: -0.5 }, { x: 0.5, y: 64, z: -1.5 }],
+      doorOpened: new Map([['0,64,-2', { x: 0, y: 64, z: -2, seen: true }]]),
+    }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 0, 'reopened a door behind the body')
+  })
+
+  it('sendback (c): no sideways exit out of a doorway', () => {
+    // Standing IN a north-door cell, the lib offers 90° turns out that the
+    // panel/frame cannot execute. Only facing-axis exits stay; iron keeps
+    // every exit (the escape hatch: you can only stand in one by
+    // spawn/teleport and must be able to leave).
+    const doorwayCells = (door) => {
+      const cells = new Map()
+      for (let x = -2; x <= 2; x++) {
+        for (let z = -2; z <= 2; z++) {
+          cells.set(`${x},63,${z}`, { name: 'stone' })
+        }
+      }
+      for (const y of [64, 65]) {
+        cells.set(`0,${y},0`, { state: stateIdFor(door, { facing: 'north', half: y === 64 ? 'lower' : 'upper', open: true }) })
+      }
+      return cells
+    }
+    const { movements } = wiredMovements(doorwayCells('oak_door'))
+    const ns = movements.getNeighbors(new Move(0, 64, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.x !== 0),
+      `sideways exit offered: ${ns.filter((m) => m.x !== 0).map((m) => `${m.x},${m.y},${m.z}`).join(' ')}`)
+    assert.ok(ns.some((m) => m.x === 0 && m.y === 64 && m.z === 1), 'straight exit north dropped')
+    assert.ok(ns.some((m) => m.x === 0 && m.y === 64 && m.z === -1), 'straight exit south dropped')
+    const iron = wiredMovements(doorwayCells('iron_door')).movements
+    const ins = iron.getNeighbors(new Move(0, 64, 0, 0, 0))
+    assert.ok(ins.some((m) => m.x === 1 && m.y === 64 && m.z === 0), 'iron doorway escape hatch shut')
+  })
+
   it('minor: a diagonal grazing a door panel is still dropped', () => {
     // Freestanding oak door at (1,64,0); the (0,64,0)->(1,64,1) diagonal
     // brushes it as a side cell. The lib offers it (free far side); the

@@ -118,15 +118,16 @@ function addDoorPassages(movements) {
       const edge = doorEdge(movements, node, dx, dz)
       if (edge) out.push(edge)
     }
-    return out
+    return filterDoorExits(movements, node, out)
   }
 }
 
-// A level straight step into a hand-door cell, across the panel plane:
-// feet = lower half, head = upper half of the same door, the move along the
-// facing axis. Anything unreadable fails closed (no edge): the door stays
-// shut-but-whole rather than planned through blind.
-function doorEdge(movements, node, dx, dz) {
+// The facing of a well-formed hand doorway (lower half at feet, upper half
+// at head, same door), or null. Shared by entry edges and exit filtering;
+// anything unreadable fails closed to null and each caller picks its safe
+// side (entries refuse the edge, exits keep lib behaviour — never trap a
+// body inside a doorway on an unreadable read).
+function doorwayFacing(movements, node, dx, dz) {
   let feet = null
   try { feet = movements.getBlock(node, dx, 0, dz) } catch (_) { return null }
   if (!feet || !isHandDoor(feet.name)) return null
@@ -139,14 +140,42 @@ function doorEdge(movements, node, dx, dz) {
   let headProps = null
   try { headProps = typeof head.getProperties === 'function' ? head.getProperties() : null } catch (_) { return null }
   if (!headProps || headProps.half !== 'upper') return null
+  const f = props.facing
+  return f === 'north' || f === 'south' || f === 'east' || f === 'west' ? f : null
+}
+
+// A body inside a doorway leaves along the facing axis only (sendback c):
+// the lib offers 90° turns out of the cell that the panel/frame cannot
+// execute (an L jog through the doorway plans, pushes, and burns a stuck
+// cycle). Straight exits — through or back out — stay, as do in-place
+// moves. Iron doorways stay unfiltered: you can only ever stand in one by
+// spawn/teleport, and must be able to leave (the escape hatch).
+function filterDoorExits(movements, node, moves) {
+  const f = doorwayFacing(movements, node, 0, 0)
+  if (!f) return moves
+  const alongX = f === 'east' || f === 'west'
+  return moves.filter((m) => {
+    if (!m || typeof m.x !== 'number' || typeof m.z !== 'number') return true
+    return alongX ? m.z === node.z : m.x === node.x
+  })
+}
+
+// A level straight step into a hand-door cell, across the panel plane:
+// feet = lower half, head = upper half of the same door, the move along the
+// facing axis. Anything unreadable fails closed (no edge): the door stays
+// shut-but-whole rather than planned through blind.
+function doorEdge(movements, node, dx, dz) {
   // Across the plane = along the facing axis: north/south doors cross along
   // z, east/west along x (the home.js lane geometry). The facing read comes
   // from the lower half; the upper half carries the same facing.
-  const f = props.facing
+  const f = doorwayFacing(movements, node, dx, dz)
+  if (!f) return null
   const across = (f === 'north' || f === 'south')
     ? (dx === 0 && dz !== 0)
-    : (f === 'east' || f === 'west') ? (dz === 0 && dx !== 0) : false
+    : (dz === 0 && dx !== 0)
   if (!across) return null
+  let feet = null
+  try { feet = movements.getBlock(node, dx, 0, dz) } catch (_) { return null }
   // Standable floor under the door (never place under one).
   let under = null
   try { under = movements.getBlock(node, dx, -1, dz) } catch (_) { return null }
@@ -231,6 +260,32 @@ function windowIndexOf(nodes, x, y, z) {
   return -1
 }
 
+// Past the nearest window node along its incoming leg (sendback b): the
+// window is capped and never refreshes on consumption, so a door at the
+// last index stays nearest past the doorway — projection onto the leg
+// tells approaching from consumed. Anything unreadable reads approaching
+// (conservative: the next path_update refreshes the caller's guard).
+function passedTailNode(nodes, ahead, bp) {
+  if (ahead <= 0) return false
+  const n = nodes[ahead]
+  const prev = nodes[ahead - 1]
+  if (!n || !prev || typeof n.x !== 'number' || typeof n.z !== 'number' ||
+      typeof prev.x !== 'number' || typeof prev.z !== 'number') return false
+  const dx = n.x - prev.x
+  const dz = n.z - prev.z
+  if (dx === 0 && dz === 0) return false
+  return (bp.x - n.x) * dx + (bp.z - n.z) * dz > 0
+}
+
+// The door still blocks the shut (closer) — off-plan and behind-nearest
+// are free; the nearest node itself is free only once consumed past it.
+function doorStillAhead(nodes, ahead, at, bp) {
+  if (at < 0) return false
+  if (at > ahead) return true
+  if (at < ahead) return false
+  return !passedTailNode(nodes, ahead, bp)
+}
+
 function planWindow(ctx) {
   const nodes = ctx && Array.isArray(ctx.lastPathNodes) ? ctx.lastPathNodes : null
   return nodes && nodes.length > 0 ? nodes : null
@@ -259,6 +314,10 @@ function openNextDoor(bot, ctx) {
   for (let i = ahead; i < nodes.length; i++) {
     const n = nodes[i]
     if (!n || typeof n.x !== 'number' || typeof n.y !== 'number' || typeof n.z !== 'number') continue
+    // Never reopen behind the body (sendback b): a tracked door the player
+    // shuts while the body stands past it at the window tail would flap
+    // against the closer every window otherwise.
+    if (i === ahead && passedTailNode(nodes, ahead, bp)) continue
     const x = Math.floor(n.x)
     const y = Math.floor(n.y)
     const z = Math.floor(n.z)
@@ -280,7 +339,10 @@ function openNextDoor(bot, ctx) {
   if (!stampReady(ctx, 'doorToggleAt', key, Date.now())) return
   if (!tryToggle(bot, fresh)) return
   const tracked = trackedDoors(ctx)
-  tracked.set(key, { x: pick.x, y: pick.y, z: pick.z })
+  // Unseen until the open is OBSERVED (sendback a): the server update lands
+  // after the click, and a fast-shut pass reading the stale closed state
+  // must not untrack a door nobody has seen open yet.
+  tracked.set(key, { x: pick.x, y: pick.y, z: pick.z, seen: false })
   while (tracked.size > DOOR_TRACK_MAX) tracked.delete(tracked.keys().next().value)
   try { console.log(`door open at ${pick.x} ${pick.y} ${pick.z}`) } catch (_) { /* log best-effort */ }
 }
@@ -302,11 +364,19 @@ function closeOwnDoors(bot, ctx) {
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(door.x, door.y, door.z)) } catch (_) { continue }
     if (!block || !isDoorName(block.name)) { tracked.delete(key); continue }
-    if (!doorOpen(block)) { tracked.delete(key); continue }
+    if (!doorOpen(block)) {
+      // Only an observed open untracks on shut (sendback a): a closed read
+      // on an unseen entry is the open echo still in flight — stay tracked
+      // and stay quiet (a lost click retries via the opener; an abandoned
+      // one sits until FIFO eviction, toggling nothing).
+      if (door.seen) tracked.delete(key)
+      continue
+    }
+    door.seen = true
     if (key === feetKey) continue // standing in the doorway
     if (nodes) {
       const at = windowIndexOf(nodes, door.x, door.y, door.z)
-      if (at >= ahead) continue // still walking toward it
+      if (doorStillAhead(nodes, ahead, at, bp)) continue // still walking toward it
     }
     if (Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z) <= DOOR_CLOSE_DIST) continue
     const d = Math.hypot(door.x + 0.5 - bp.x, door.y + 0.5 - bp.y, door.z + 0.5 - bp.z)
