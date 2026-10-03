@@ -798,3 +798,102 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'cobblestone', 'foreign cobble kept')
   })
 })
+
+describe('place seam: no pathfinder scaffold above the level (idkcraft-3dkn)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  it('place predicate vetoes above-level cells inside the square only', () => {
+    const bot = mockBot(makeWorld({}), {})
+    const mov = { exclusionAreasBreak: [], exclusionAreasPlace: [] }
+    bot.pathfinder.movements = mov
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.level = 63
+    const ctx = { lastGoalKey: 'flat-shave:1,66,0', flat: f }
+    flat.guardFlatSurface(bot, ctx)
+    assert.equal(mov.exclusionAreasPlace.length, 1)
+    const place = (x, y, z) => mov.exclusionAreasPlace[0]({ position: { x, y, z } })
+    const brk = (x, y, z) => mov.exclusionAreasBreak[0]({ position: { x, y, z } })
+    assert.equal(place(0, 64, 0), 100, 'above level inside: vetoed')
+    assert.equal(place(0, 63, 0), 0, 'cap at level: allowed')
+    assert.equal(place(0, 62, 0), 0, 'bridge below level: allowed')
+    assert.equal(place(20, 64, 0), 0, 'outside the square')
+    assert.equal(brk(0, 64, 0), 0, 'break above level still allowed')
+    ctx.lastGoalKey = 'bring:1,2,3'
+    assert.equal(place(0, 64, 0), 0, 'non-flat goal: guard off')
+    ctx.lastGoalKey = 'flat-shave:1,66,0'
+    ctx.flat = null
+    flat.guardFlatSurface(bot, ctx)
+    assert.equal(mov.exclusionAreasPlace.length, 0, 'finish detaches place')
+    assert.equal(mov.exclusionAreasBreak.length, 0, 'finish detaches break')
+  })
+
+  // Fake pathfinder over the real seam: a goal 2+ above the feet makes it
+  // tower (dirt into the feet cell) unless exclusionAreasPlace vetoes the
+  // cell; otherwise it steps onto the goal column when that is at most one
+  // up or down. The search runs a tick later, like the real one (the goal
+  // key is set by then).
+  function towerPathfinder(bot, world, mov) {
+    bot.pathfinder.movements = mov
+    bot.pathfinder.setGoal = (g) => {
+      bot.calls.goals.push(g)
+      bot.pathfinder.goal = g
+      if (!g) return
+      setImmediate(() => {
+        const p = bot.entity.position
+        const fx = Math.floor(p.x)
+        const fy = Math.floor(p.y)
+        const fz = Math.floor(p.z)
+        if ((fx - g.x) ** 2 + (fy - g.y) ** 2 + (fz - g.z) ** 2 <= g.rangeSq) return // GoalNear met
+        if (g.y >= fy + 2) {
+          const cell = { position: { x: fx, y: fy, z: fz } }
+          const cost = mov.exclusionAreasPlace.reduce((s, fn) => s + fn(cell), 0)
+          if (cost >= 100) return
+          world.set(fx, fy, fz, 'dirt')
+          bot.entity.position = pos(fx + 0.5, fy + 1, fz + 0.5)
+          return
+        }
+        // Walk: nearest standable cell (one up/down at most) meeting the goal.
+        let best = null
+        for (let x = g.x - 3; x <= g.x + 3; x++) {
+          for (let z = g.z - 3; z <= g.z + 3; z++) {
+            let gy = 70
+            while (gy > 60 && world.blockAt({ x, y: gy - 1, z }).name === 'air') gy--
+            if (Math.abs(gy - fy) > 1 || (x - g.x) ** 2 + (gy - g.y) ** 2 + (z - g.z) ** 2 > g.rangeSq) continue
+            const d = (x - fx) ** 2 + (z - fz) ** 2
+            if (!best || d < best.d) best = { x, y: gy, z, d }
+          }
+        }
+        if (best) bot.entity.position = pos(best.x + 0.5, best.y, best.z + 0.5)
+      })
+    }
+  }
+
+  it('a 3-high bump next to a shaved bump leaves no scaffold, each cell dug once', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt') // 1-high bump, shaved first (nearest)
+    world.set(1, 64, 0, 'dirt') // 3-high bump beside it
+    world.set(1, 65, 0, 'dirt')
+    world.set(1, 66, 0, 'dirt')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], feet: pos(3.5, 64, 0.5) })
+    towerPathfinder(bot, world, { exclusionAreasBreak: [], exclusionAreasPlace: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    for (let i = 0; i < 120 && ctx.flat; i++) {
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.flat, null, 'episode ends')
+    const digs = cap.lines.filter((l) => l.startsWith('flat dig '))
+    assert.equal(digs.length, 4, cap.lines.join('\n'))
+    assert.equal(new Set(digs).size, digs.length, `no cell dug twice:\n${digs.join('\n')}`)
+    for (let x = -4; x <= 4; x++) {
+      for (let z = -4; z <= 4; z++) {
+        for (let y = 64; y <= 68; y++) {
+          assert.equal(world.blockAt({ x, y, z }).name, 'air', `nothing above the level at ${x},${y},${z}`)
+        }
+      }
+    }
+    assert.ok(bot.chats.some((c) => c.startsWith('flat done:') && c.includes('shaved 2 bumps')), bot.chats.join('\n'))
+  })
+})
