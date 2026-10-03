@@ -92,6 +92,7 @@ describe('g0z.21 castle night: shelter by the far castle, not the march home', (
       ['parked', AT_CASTLE, { site: { ...CASTLE }, rot: 0, parked: true }],
       ['complete', AT_CASTLE, { site: { ...CASTLE }, rot: 0, phase: 'complete' }],
       ['near home', near, undefined],
+      ['far from both', { x: 400, y: 64, z: 400 }, undefined], // exploring the other way: the old dusk march
     ]
     for (const [name, at, castle] of cases) {
       const b = bot(at, 12500)
