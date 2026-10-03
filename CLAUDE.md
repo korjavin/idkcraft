@@ -143,8 +143,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - Profile is picked from the diff: `idkcraft-risky` (two agents, synthesis on) when it touches
   `bot/src/index.js`, `goal.js`, `brain.js`, `behaviours/recover.js`, `follow.js`, the pathfinder
   customisations (`jumpcost.js`, `nocorner.js`, `swim.js`, `snow.js`), the packet taps (`unpin.js`,
-  `decontact.js`, `detour.js`), any `Movements` setting or `laya/`; else `idkcraft` (one agent,
-  `--no-synthesis`). Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
+  `decontact.js`, `detour.js`), any `Movements` setting (an added line naming `scafoldingBlocks`,
+  `canDig`, `allow1by1towers`, `allowParkour`, `blocksCantBreak`, `exclusionAreas`, `canOpenDoors`,
+  `allowSprinting` or `Movements` — i.e. `bot/src/body.js` `movementsFor`) or `laya/`; else `idkcraft`
+  (one agent, `--no-synthesis`). Check a pick: `git diff --no-ext-diff origin/master...HEAD | sh .revmux/review.sh --pick`. Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
   (`LENSES=` overrides).
 - Risky files: the review archive is **mandatory** for merge, and the round gets the
   `bot/tools/stuck-run.sh` output via `STUCKRUN=<file>` (lands in `input/context/`).
@@ -162,4 +164,4 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - A livelock/pathing finding raised in two rounds or by both agents is never dropped or downgraded
   without a written reason (the ones that were came back as prod bugs: 3nt.19→ak4, ef3→9sq, 2bh→lzw).
 - Privacy pre-check by hand (must print nothing):
-  `git diff origin/master...HEAD | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\b|(api[_-]?key|secret|token)\s*[:=]\s*\S{8,})'`
+  `git diff --no-ext-diff origin/master...HEAD | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\b|(api[_-]?key|secret|token)\s*[:=]\s*\S{8,})'`
