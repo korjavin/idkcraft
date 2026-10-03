@@ -2,8 +2,9 @@
 
 // Manual e2e castle site levelling (not run by npm test; idkcraft-g0z.16):
 // the REAL bot stack (runOnce, stub brain, work mode) on a flat Paper rig
-// (sh test/mc-up.sh). A footprint with a 3-high step is refused with the
-// spot count and worst offset; levelled to ±2 (2-high bumps, a 2-deep
+// (sh test/mc-up.sh). A footprint with a 5-high step in the hall (core,
+// g0z.20: ±4) is refused with the spot count and worst offset, and the
+// site search it starts is cancelled; levelled (2-high bumps, a 2-deep
 // hole) the order is taken, prep cuts and fills it to site.y-1 and the
 // castle reaches its body phase.
 //   MC_HOST=localhost MC_PORT=25565 MC_CONTAINER=idk-mc node test/e2e-castle-level.js
@@ -74,10 +75,10 @@ async function main() {
     if (/not loaded|error|Unknown/i.test(o)) throw new Error(`site fill failed: ${o}`)
   }
   // Uneven ground inside the footprint, away from the guide's stance.
-  const bump = { x: site.x + 6, z: site.z + 6 }
+  const bump = { x: site.x + 14, z: site.z + 10 } // a hall column: core
   const ridge = { x: site.x + 12, z: site.z + 18 }
   const hole = { x: site.x + 20, z: site.z + 8 }
-  await rcon(`fill ${bump.x} ${sy} ${bump.z} ${bump.x + 1} ${sy + 2} ${bump.z + 1} dirt`) // 3 high: refused
+  await rcon(`fill ${bump.x} ${sy} ${bump.z} ${bump.x + 1} ${sy + 4} ${bump.z + 1} dirt`) // 5 high: refused
   await raiseHouse(rcon, home)
   await sleep(6000) // Paper same-IP connection throttle
   let bot = null
@@ -107,14 +108,19 @@ async function main() {
   await sleep(1000)
   const ctx = bot._tickerCtx
 
-  // ±3: refused, with the spot count and the worst offset.
+  // ±5 in the core: refused, with the spot count and the worst offset; the
+  // search it starts (g0z.19) is cancelled.
   guide.chat('build castle')
   const no = await until('refusal', 15000, () => chats.find((c) => /too uneven/.test(c)))
-  if (!/4 spots are more than 2 blocks off level, worst 3 up/.test(no) || ctx.castle) throw new Error(`refusal: ${no}`)
+  if (!/4 spots are more than 4 blocks off level, worst 5 up/.test(no) || ctx.castle) throw new Error(`refusal: ${no}`)
+  guide.chat('castle forget')
+  // The search may already have found a spot nearby: forget drops it too.
+  await until('search cancelled', 15000, () => chats.some((c) => c === 'castle search cancelled' || /forgotten/.test(c)))
+  if (ctx.castle) throw new Error('castle still set after forget')
   log(`refused ok: ${no}`)
 
-  // ±2: two 2-high bumps (one planted on the plan) and a 2-deep hole.
-  await rcon(`fill ${bump.x} ${sy + 2} ${bump.z} ${bump.x + 1} ${sy + 2} ${bump.z + 1} air`)
+  // In range: two 2-high bumps (one planted on the plan) and a 2-deep hole.
+  await rcon(`fill ${bump.x} ${sy + 2} ${bump.z} ${bump.x + 1} ${sy + 4} ${bump.z + 1} air`)
   await rcon(`fill ${ridge.x} ${sy} ${ridge.z} ${ridge.x + 2} ${sy + 1} ${ridge.z} stone`)
   await rcon(`fill ${hole.x} ${sy - 2} ${hole.z} ${hole.x + 1} ${sy - 1} ${hole.z + 1} air`)
   await sleep(1000)

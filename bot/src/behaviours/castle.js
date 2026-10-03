@@ -268,12 +268,21 @@ function peek(bot, st, now, ctx) {
 // the footprint volume, then levels the footprint to site.y-1 (g0z.16):
 // cuts every solid block at or above site.y (top-down, spoil kept as castle
 // material) and fills holes up to site.y-1 (bottom-up, stone, else dirt).
-// Plan cells below site.y (the moat) are the plan's, never filled; a block
-// that already matches its plan cell stays. Best effort: a target that
-// refuses is blocked like any cell and the body phase starts without it —
-// the body executor still clears what its own cells hit.
-const MAX_DIP = 2 // ground may sit this far off site.y-1 (owner 2026-10-02)
+// Plan cells below site.y (the moat) are the plan's, never filled — except
+// in a wet ring column (g0z.20), where the fill replaces the water and the
+// moat digs it out again. A block that already matches its plan cell stays.
+// Best effort: a target that refuses is blocked like any cell and the body
+// phase starts without it — the body executor still clears what its own
+// cells hit.
+// Thresholds (owner 2026-10-03, g0z.20): the core (walls, towers, hall) may
+// sit ±MAX_DIP off level, the ring around it (apron, moat, fence) anything
+// the scan reads, all of it within EARTH_BUDGET blocks cut + filled; water
+// in the core refuses, up to RING_WATER wet ring columns are filled.
+const MAX_DIP = 4
 const SCAN_DOWN = 8 // holes are read this deep for the refusal's worst offset
+const RING_DIP = SCAN_DOWN // the scan floor (a deeper hole reads 9+, refused)
+const EARTH_BUDGET = 400
+const RING_WATER = 6
 // Built things: someone's house, not terrain (the site check refuses them).
 const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 
@@ -283,14 +292,21 @@ function isTreeBlock(n) { return isLogName(n) || (typeof n === 'string' && n.end
 function passes(n) { return AIR.has(n) || build.isReplaceable(n) || isTreeBlock(n) }
 
 // Top-down column read over the site volume: first ground block, or what
-// disqualifies the column. Unloaded reads are 'unknown' (never a refusal).
+// disqualifies the column. Unloaded reads are 'unknown'. Water below the
+// level is read through to its bed (g0z.20: {top, water: y}, the fill's
+// to replace); lava, bubble columns and water at or above site.y refuse.
 function scanColumn(bot, x, z, sy) {
   const logs = []
+  let water = null
   for (let y = sy + SITE_TOP; y >= sy - 1 - SCAN_DOWN; y--) {
     const name = nameAt(bot, { x, y, z })
     if (name == null) return { unknown: true }
     if (FOREIGN.test(name)) return { foreign: name, y }
-    if (flat.isLiquidName(name)) return { liquid: name, y }
+    if (flat.isLiquidName(name)) {
+      if (name !== 'water' || y >= sy) return { liquid: name, y }
+      if (water == null) water = y
+      continue
+    }
     // Collision-free blocks (any flora, double-tall flowers included) are
     // not ground; mineflayer reads water as empty too, hence liquid first.
     let soft = false
@@ -299,35 +315,160 @@ function scanColumn(bot, x, z, sy) {
       if (isLogName(name)) logs.unshift(y)
       continue
     }
-    return { top: y, logs }
+    return water == null ? { top: y, logs } : { top: y, logs, water }
   }
-  return { top: sy - 2 - SCAN_DOWN, logs }
+  const top = sy - 2 - SCAN_DOWN
+  return water == null ? { top, logs } : { top, logs, water }
 }
 
-// Order-time check: null when the footprint is acceptable, else the reason.
-// Water/lava/foreign builds refuse at the first one; uneven ground counts
-// every column past MAX_DIP and names the worst offset (g0z.16).
-function siteCheck(bot, site, rot, version) {
+// Core columns (g0z.20): under a planned cell at or above the floor, the
+// fence excepted — walls, towers, the hall. The rest is the ring.
+let coreCache = null
+function coreOf(rot, version) {
+  const bp = blueprint.blueprintOf(version)
+  const key = `${rot | 0},${bp.version}`
+  if (coreCache && coreCache.key === key) return coreCache.set
+  const set = new Set()
+  for (const c of blueprint.rotatePlan(bp.PLAN, rot | 0, bp.version)) {
+    if (c.dy >= 0 && c.kind !== 'fence') set.add(`${c.dx},${c.dz}`)
+  }
+  coreCache = { key, set }
+  return set
+}
+
+// Order-time check (g0z.20): the level is the median ground top over the
+// core (site.y is only the scan hint — the speaker's feet), then every
+// column is judged at that level. Returns {y, bad: null} (y = the level
+// to build on, median+1) or {y, bad: reason, why: water|built|uneven|
+// unloaded}; {pause: true} when opts.scan ran out of budget (the search
+// resumes it). opts.strict: an unloaded column refuses (the search);
+// without it it passes (the speaker stands there, the walk loads it).
+function siteEval(bot, site, rot, version, opts = {}) {
   const { w, d } = blueprint.siteDimensions(rot | 0, version)
+  const core = coreOf(rot, version)
+  const scan = opts.scan || ((x, z, sy) => scanColumn(bot, x, z, sy))
+  const tops = []
+  for (const k of core) {
+    const [dx, dz] = k.split(',').map(Number)
+    const r = scan(site.x + dx, site.z + dz, site.y)
+    if (!r) return { pause: true }
+    if (typeof r.top === 'number') tops.push(r.top)
+  }
+  tops.sort((a, b) => a - b)
+  const sy = tops.length ? tops[tops.length >> 1] + 1 : site.y
   let n = 0
+  let moved = 0
   let worst = null
+  let over = null
+  let wet = 0
+  let firstWet = null
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
       const x = site.x + dx
       const z = site.z + dz
-      const r = scanColumn(bot, x, z, site.y)
-      if (r.unknown) continue
-      if (r.liquid) return `there is ${r.liquid} at ${x} ${r.y} ${z}`
-      if (r.foreign) return `somebody built there (${r.foreign} at ${x} ${r.y} ${z})`
-      const off = r.top - (site.y - 1)
-      if (Math.abs(off) <= MAX_DIP) continue
-      n++
+      const r = scan(x, z, sy)
+      if (!r) return { pause: true }
+      if (r.unknown) {
+        if (opts.strict) return { y: sy, bad: `I can't see the ground at ${x} ${z} yet`, why: 'unloaded' }
+        continue
+      }
+      if (r.liquid) return { y: sy, bad: `there is ${r.liquid} at ${x} ${r.y} ${z}`, why: 'water' }
+      if (r.foreign) return { y: sy, bad: `somebody built there (${r.foreign} at ${x} ${r.y} ${z})`, why: 'built' }
+      const inCore = core.has(`${dx},${dz}`)
+      if (r.water != null) {
+        if (inCore) return { y: sy, bad: `there is water at ${x} ${r.water} ${z}`, why: 'water' }
+        wet++
+        firstWet = firstWet || { x, y: r.water, z }
+      }
+      const off = r.top - (sy - 1)
+      moved += Math.abs(off)
       if (!worst || Math.abs(off) > Math.abs(worst.off)) worst = { off, x, z }
+      if (Math.abs(off) > (inCore ? MAX_DIP : RING_DIP)) {
+        n++
+        if (!over || Math.abs(off) > Math.abs(over.off)) over = { off, x, z } // the refusal names an offender
+      }
+      // The search needs the verdict, not the tally: stop reading here.
+      if (opts.strict && (n || moved > EARTH_BUDGET)) return { y: sy, bad: 'the ground is too uneven', why: 'uneven' }
     }
   }
-  if (!n) return null
-  const by = worst.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(worst.off)) // the scan floor
-  return `the ground is too uneven: ${n} spots are more than ${MAX_DIP} blocks off level, worst ${by} ${worst.off > 0 ? 'up' : 'down'} at ${worst.x} ${worst.z} (I level up to ${MAX_DIP})`
+  if (wet > RING_WATER) {
+    return { y: sy, bad: `there is water in ${wet} spots around it, first at ${firstWet.x} ${firstWet.y} ${firstWet.z} (I fill up to ${RING_WATER})`, why: 'water' }
+  }
+  if (!n && moved <= EARTH_BUDGET) return { y: sy, bad: null }
+  const p = n ? over : worst
+  const by = p.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(p.off)) // the scan floor
+  const at = `worst ${by} ${p.off > 0 ? 'up' : 'down'} at ${p.x} ${p.z}`
+  if (n) return { y: sy, bad: `the ground is too uneven: ${n} spots are more than ${MAX_DIP} blocks off level, ${at} (I level up to ${MAX_DIP} under the castle)`, why: 'uneven' }
+  return { y: sy, bad: `the ground is too uneven: levelling it moves ${moved} blocks, ${at} (I move up to ${EARTH_BUDGET})`, why: 'uneven' }
+}
+
+// Reason or null (tests, the legacy seam); an order builds on siteEval's y.
+function siteCheck(bot, site, rot, version) {
+  return siteEval(bot, site, rot, version).bad
+}
+
+// Gate toward the speaker (castleSite's mapping): rot for a castle lying
+// along (lx, lz) from them — 0 gate north, 1 east, 2 south, 3 west.
+function facing(lx, lz) {
+  return Math.abs(lx) > Math.abs(lz) ? (lx > 0 ? 3 : 1) : (lz > 0 ? 0 : 2)
+}
+
+// Site search (g0z.19): candidates on a SEARCH_STEP grid within
+// SEARCH_RADIUS of the speaker, nearest first, the gate toward them; the
+// first that siteEval passes (strict: loaded chunks only) and `reject`
+// (the house) lets through wins. A tick reads at most `budget` new
+// columns; reads are cached per (x, z, level), so a candidate that ran out
+// resumes for free next tick. ponytail: one rotation per spot; try all 4
+// if prod shows castles refused between hills.
+const SEARCH_RADIUS = 48
+const SEARCH_STEP = 4
+const SEARCH_SCANS = 300 // new columns per tick, ~25 blockAt each
+function startSiteSearch(from, version, reject) {
+  const cands = []
+  for (let ox = -SEARCH_RADIUS; ox <= SEARCH_RADIUS; ox += SEARCH_STEP) {
+    for (let oz = -SEARCH_RADIUS; oz <= SEARCH_RADIUS; oz += SEARCH_STEP) {
+      if (Math.hypot(ox, oz) <= SEARCH_RADIUS) cands.push([ox, oz])
+    }
+  }
+  cands.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]))
+  return {
+    from: { x: Math.floor(from.x), y: Math.floor(from.y), z: Math.floor(from.z) },
+    version, reject, cands, i: 0, cache: new Map(), why: {}, lastScans: 0,
+  }
+}
+
+// One tick of the search: {done: false}, {done: true, site, rot}, or
+// {done: true, site: null, why, n, of} — the most common refusal.
+function stepSiteSearch(bot, cur, budget = SEARCH_SCANS) {
+  let left = budget
+  const scan = (x, z, sy) => {
+    const k = `${x},${z},${sy}`
+    let r = cur.cache.get(k)
+    if (r) return r
+    if (left <= 0) return null
+    left--
+    r = scanColumn(bot, x, z, sy)
+    cur.cache.set(k, r)
+    return r
+  }
+  try {
+    while (cur.i < cur.cands.length) {
+      const [ox, oz] = cur.cands[cur.i]
+      const rot = facing(ox, oz)
+      const { w, d } = blueprint.siteDimensions(rot, cur.version)
+      const site = { x: cur.from.x + ox - (w >> 1), y: cur.from.y, z: cur.from.z + oz - (d >> 1) }
+      const r = cur.reject && cur.reject(site, rot) ? { why: 'house' } : siteEval(bot, site, rot, cur.version, { scan, strict: true })
+      if (r.pause) return { done: false }
+      cur.i++
+      if (!r.why) return { done: true, site: { ...site, y: r.y }, rot }
+      cur.why[r.why] = (cur.why[r.why] || 0) + 1
+    }
+  } finally {
+    cur.lastScans = budget - left
+  }
+  let why = null
+  for (const k of Object.keys(cur.why)) if (!why || cur.why[k] > cur.why[why]) why = k
+  return { done: true, site: null, why, n: why ? cur.why[why] : 0, of: cur.cands.length }
 }
 
 function prepDone(bot, c) {
@@ -353,6 +494,7 @@ function prepTargets(bot, ctx, st, now) {
   const { x: sx, y: sy, z: sz } = st.site
   const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 4)
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+  const core = coreOf(st.rot, st.blueprintVersion)
   const logs = []
   const cuts = []
   const fills = []
@@ -365,8 +507,8 @@ function prepTargets(bot, ctx, st, now) {
       if (r.unknown) unknown++
       if (r.unknown || r.liquid || r.foreign) continue
       for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
-      // Past ±MAX_DIP the order refused it: a later change is not ours to level.
-      if (Math.abs(r.top - (sy - 1)) > MAX_DIP) continue
+      // Past its cap the order refused it: a later change is not ours to level.
+      if (Math.abs(r.top - (sy - 1)) > (core.has(`${dx},${dz}`) ? MAX_DIP : RING_DIP)) continue
       for (let y = r.top; y >= sy; y--) {
         const c = { x, y, z, kind: 'air', prep: 'cut', idx: idx(x, y, z) }
         const p = at.get(`${x},${y},${z}`)
@@ -374,7 +516,8 @@ function prepTargets(bot, ctx, st, now) {
         cuts.push(c)
       }
       for (let y = r.top + 1; y <= sy - 1; y++) {
-        if (!at.has(`${x},${y},${z}`)) fills.push({ x, y, z, kind: 'stone', prep: 'fill', idx: idx(x, y, z) })
+        const p = at.get(`${x},${y},${z}`)
+        if (!p || (r.water != null && p.kind === 'dig')) fills.push({ x, y, z, kind: 'stone', prep: 'fill', idx: idx(x, y, z) })
       }
     }
   }
@@ -851,6 +994,16 @@ function work(bot, ctx, st, c, now, status) {
   else digCell(bot, ctx, st, c, now)
 }
 
+// A searched site (g0z.19) is announced again once the body stands on it.
+function arrive(bot, st) {
+  const bp = bodyPos(bot)
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  if (!bp || Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) > Math.max(w, d) / 2) return
+  st.announce = false
+  const n = blueprint.blueprintOf(st.blueprintVersion).PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+  try { bot.chat(`building the castle here at ${st.site.x} ${st.site.y} ${st.site.z} (~${n} blocks)`) } catch (_) { /* chat best-effort */ }
+}
+
 function castle(bot, ctx) {
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return
@@ -867,6 +1020,7 @@ function castle(bot, ctx) {
   }
   if (ctx.placeInFlight || ctx.digInFlight) return
   guardCastle(bot, ctx)
+  if (st.announce) arrive(bot, st)
   if (ctx.castlePickup && pickup(bot, ctx)) return
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
@@ -928,6 +1082,13 @@ module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.ent
 module.exports.menuFact = menuFact
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
+module.exports.siteEval = siteEval
+module.exports.facing = facing
+module.exports.startSiteSearch = startSiteSearch
+module.exports.stepSiteSearch = stepSiteSearch
+module.exports.SEARCH_RADIUS = SEARCH_RADIUS
+module.exports.SEARCH_SCANS = SEARCH_SCANS
+module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
 module.exports.findItem = findItem

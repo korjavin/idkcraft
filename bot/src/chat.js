@@ -111,6 +111,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
   const p = ctx && ctx.pendingSearch
   if (!p || p.deciding) return
   if (ctx.lastHostileSnap && ctx.lastHostileSnap.count > 0) return
+  if (p.kind === 'castle') { advanceCastleSearch(bot, ctx, p); return }
   // Bring shells carry the walk gate (atl.22), the searchfar twin's predicate.
   const r = stepFarSearch(bot, p.cursor, p.kind === 'bring'
     ? { gate: (q) => bringMod.descentGated(bot.entity && bot.entity.position, q) }
@@ -457,9 +458,8 @@ function castleSite(pos, yaw) {
   const y = typeof yaw === 'number' && Number.isFinite(yaw) ? yaw : 0
   const lx = -Math.sin(y)
   const lz = -Math.cos(y)
-  const [dx, dz, rot] = Math.abs(lx) > Math.abs(lz)
-    ? (lx > 0 ? [1, 0, 3] : [-1, 0, 1])
-    : (lz > 0 ? [0, 1, 0] : [0, -1, 2])
+  const rot = castleMod.facing(lx, lz)
+  const [dx, dz] = [[0, 1], [-1, 0], [0, -1], [1, 0]][rot] // the look axis (gate north: castle south)
   const bp = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION) // new orders only
   const e = blueprint.rotatePlan([{ ...bp.ENTRANCE, kind: 'air' }], rot, bp.version)[0]
   const site = {
@@ -482,6 +482,39 @@ function overlapsHome(home, site, rot) {
 
 const at = (p) => `${p.x} ${p.y} ${p.z}`
 
+function startCastle(ticker, site, rot, announce) {
+  const v = blueprint.BLUEPRINT_VERSION
+  ticker.setCastle({ site, rot, blueprintVersion: v, phase: 'prep', blocked: {}, parked: false, announce })
+  ticker.work()
+  const n = blueprint.blueprintOf(v).PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+  return `castle at ${at(site)}, ~${n} blocks, this will take many hours; I work while someone is online (or autonomous on)`
+}
+
+const SEARCH_WHY = {
+  water: 'water', uneven: 'ground too uneven', built: "somebody's buildings",
+  house: 'my house in the way', unloaded: "ground I can't see (not loaded)",
+}
+
+// One tick of a castle site search (g0z.19): the found site becomes the
+// order (the castle executor walks there), else an honest refusal naming
+// the most common reason. A newer order, stop, follow or castle forget
+// clears ctx.pendingSearch, so a late result never lands.
+function advanceCastleSearch(bot, ctx, p) {
+  const r = castleMod.stepSiteSearch(bot, p.cursor)
+  if (!r.done) return
+  ctx.pendingSearch = null
+  if (!r.site) {
+    const why = SEARCH_WHY[r.why] || 'nothing fits'
+    bot.chat(`I found no castle spot within ${castleMod.SEARCH_RADIUS} blocks — mostly ${why} (${r.n} of ${r.of} spots); try another area`)
+    return
+  }
+  if (ctx.castle) return // ordered meanwhile (another speaker)
+  const { w, d } = blueprint.siteDimensions(r.rot, blueprint.BLUEPRINT_VERSION)
+  const f = p.cursor.from
+  const dist = Math.round(Math.hypot(r.site.x + w / 2 - f.x, r.site.z + d / 2 - f.z))
+  bot.chat(`found a castle spot ${dist} blocks away, going there; ${startCastle(p.ticker, r.site, r.rot, true)}`)
+}
+
 // One castle per bot: 'build castle' starts it, 'castle' reports, 'castle
 // stop' / 'castle go' park and resume, 'castle forget' drops the project
 // (the laid blocks stay). Returns the reply line, or null for silence.
@@ -494,16 +527,27 @@ function castleChat(bot, ticker, playerName, cmd) {
     const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
     const pos = speaker && speaker.position
     if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
+    // The spot in front of the speaker first; else the bot searches the
+    // nearest one itself (g0z.19), sliced over ticks by advancePendingSearch.
     const { site, rot } = castleSite(pos, speaker.yaw)
-    if (overlapsHome(ctx.home, site, rot)) return `that castle would sit on my house at ${at(ctx.home.site)} — step further away and ask again`
-    const bad = castleMod.siteCheck(bot, site, rot, blueprint.BLUEPRINT_VERSION)
-    if (bad) return `I can't build a castle here: ${bad}. Step to flatter, open ground and ask again`
-    ticker.setCastle({ site, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION, phase: 'prep', blocked: {}, parked: false })
-    ticker.work()
-    const n = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION).PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
-    return `castle at ${at(site)}, ~${n} blocks, this will take many hours; I work while someone is online (or autonomous on)`
+    const v = blueprint.BLUEPRINT_VERSION
+    const home = overlapsHome(ctx.home, site, rot)
+    const r = home ? null : castleMod.siteEval(bot, site, rot, v)
+    if (r && !r.bad) return startCastle(ticker, { ...site, y: r.y }, rot, false)
+    const why = home ? `it would sit on my house at ${at(ctx.home.site)}` : r.bad
+    ctx.pendingSearch = {
+      kind: 'castle', by: playerName, ticker,
+      cursor: castleMod.startSiteSearch(pos, v, (s, q) => overlapsHome(ctx.home, s, q)),
+    }
+    return `not right here (${why}) — looking for a castle spot within ${castleMod.SEARCH_RADIUS} blocks…`
   }
-  if (!st) return 'no castle yet — say build castle'
+  if (!st) {
+    if (ctx.pendingSearch && ctx.pendingSearch.kind === 'castle' && (cmd === 'castle forget' || cmd === 'castle stop')) {
+      clearPendingSearch(ctx)
+      return 'castle search cancelled'
+    }
+    return 'no castle yet — say build castle'
+  }
   if (cmd === 'castle') {
     const now = Date.now()
     let loaded = false

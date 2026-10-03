@@ -93,20 +93,69 @@ describe('g0z.5 site check', () => {
     assert.equal(check((w) => { w.set(103, 63, 203, 'air'); w.set(103, 62, 203, 'air') }), null)
     assert.equal(check((w) => { w.set(104, 64, 204, 'dirt'); w.set(104, 65, 204, 'stone') }), null)
   })
-  it('g0z.16: refuses past ±2 with the spot count and the worst offset', () => {
-    assert.equal(check((w) => { for (let y = 61; y <= 63; y++) w.set(103, y, 203, 'air') }),
-      'the ground is too uneven: 1 spots are more than 2 blocks off level, worst 3 down at 103 203 (I level up to 2)')
-    const r = check((w) => {
-      for (const x of [101, 102, 103]) for (let y = 64; y <= 66; y++) w.set(x, y, 201, 'dirt')
-      for (let y = 64; y <= 67; y++) w.set(105, y, 205, 'stone')
-    })
-    assert.match(r, /too uneven: 4 spots are more than 2 blocks off level, worst 4 up at 105 205/)
+  it('g0z.20: the core levels ±4 and refuses past it with the spot count and the worst offset', () => {
+    // (103, 203) / (105, 205): v1 tower columns (core).
+    assert.equal(check((w) => { for (let y = 60; y <= 63; y++) w.set(103, y, 203, 'air') }), null, '4 deep')
+    assert.equal(check((w) => { for (let y = 59; y <= 63; y++) w.set(103, y, 203, 'air') }),
+      'the ground is too uneven: 1 spots are more than 4 blocks off level, worst 5 down at 103 203 (I level up to 4 under the castle)')
+    const r = check((w) => { for (let y = 64; y <= 69; y++) w.set(105, y, 205, 'stone') })
+    assert.match(r, /too uneven: 1 spots are more than 4 blocks off level, worst 6 up at 105 205/)
     assert.match(check((w) => { for (let y = 50; y <= 63; y++) w.set(103, y, 203, 'air') }), /worst 9\+ down at 103 203/)
   })
-  it('g0z.16: the v2 footprint (31x27) levels ±2 and refuses ±3 at its far corner', () => {
-    const v2 = (mutate) => { const w = makeWorld(); mutate(w); return castle.siteCheck(mockBot(w), SITE, 0, 2) }
-    assert.equal(v2((w) => { w.set(130, 64, 226, 'dirt'); w.set(130, 65, 226, 'dirt') }), null)
-    assert.match(v2((w) => { for (let y = 64; y <= 66; y++) w.set(130, y, 226, 'dirt') }), /1 spots .* worst 3 up at 130 226/)
+})
+
+describe('g0z.20 site level, ring and earthwork budget (v2 31x27)', () => {
+  const v2 = (mutate, site = SITE) => { const w = makeWorld(); if (mutate) mutate(w); return castle.siteEval(mockBot(w), site, 0, 2) }
+  const HALL = { x: SITE.x + 15, z: SITE.z + 10 } // a hall column: core
+  const CORNER = { x: SITE.x + 30, z: SITE.z + 26 } // the fence ring's far corner
+
+  it('(a) a flat clearing passes with the speaker on a 2-high bump: the level is the ground median', () => {
+    const r = v2(null, { ...SITE, y: 66 }) // feet on the bump
+    assert.deepEqual(r, { y: 64, bad: null })
+  })
+
+  it('(b) a 1x1 puddle in the fence ring passes and prep fills it', async () => {
+    const w = makeWorld()
+    w.set(CORNER.x, 63, CORNER.z, 'water')
+    const bot = mockBot(w)
+    assert.deepEqual(castle.siteEval(bot, SITE, 0, 2), { y: 64, bad: null })
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'prep', blocked: {} } }
+    assert.equal(castle.menuFact(bot, ctx), 'clear', 'the fill works now (stone on hand)')
+    await run(bot, ctx, 20)
+    assert.equal(w.get(CORNER.x, 63, CORNER.z), 'cobblestone')
+    assert.ok(bot.chats.some((m) => /0 blocks to cut, 1 holes to fill/.test(m)), bot.chats.join('|'))
+    assert.equal(ctx.castle.phase, 'body')
+  })
+
+  it('(b) water in a moat column is filled too (the moat digs it out later); 7 wet ring spots refuse', async () => {
+    const plan = blueprint.absPlan(SITE, 0, 2)
+    const m = plan.cells.find((c) => c.kind === 'dig' && c.dy === -1)
+    const w = makeWorld()
+    w.set(m.x, 63, m.z, 'water'); w.set(m.x, 62, m.z, 'water')
+    const bot = mockBot(w)
+    assert.equal(castle.siteEval(bot, SITE, 0, 2).bad, null)
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'prep', blocked: {} } }
+    await run(bot, ctx, 20)
+    assert.ok(bot.chats.some((x) => /0 blocks to cut, 2 holes to fill/.test(x)), bot.chats.join('|'))
+    assert.equal(w.get(m.x, 62, m.z), 'cobblestone', 'the dy -2 moat cell filled')
+    assert.equal(w.get(m.x, 63, m.z), 'cobblestone', 'the dy -1 moat cell filled')
+    const r = v2((w) => { for (let x = 0; x < 7; x++) w.set(SITE.x + x, 63, SITE.z, 'water') })
+    assert.match(r.bad, /there is water in 7 spots around it, first at 100 63 200 \(I fill up to 6\)/)
+  })
+
+  it('(c) a slope past the earthwork budget refuses with the number', () => {
+    // Five front rows (the fence, moat and bridge side: all ring) 5 up.
+    const r = v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 5; z++) for (let y = 64; y < 69; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') })
+    assert.equal(r.why, 'uneven')
+    assert.match(r.bad, /too uneven: levelling it moves 775 blocks, worst 5 up at \d+ \d+ \(I move up to 400\)/)
+    // The same rows 2 up stay in budget (310).
+    assert.equal(v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 5; z++) for (let y = 64; y < 66; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') }).bad, null)
+  })
+
+  it('(d) water in the core refuses', () => {
+    const r = v2((w) => { w.set(HALL.x, 63, HALL.z, 'water') })
+    assert.equal(r.bad, `there is water at ${HALL.x} 63 ${HALL.z}`)
+    assert.equal(r.why, 'water')
   })
   it('an unloaded column is never a refusal', () => {
     const w = makeWorld()
@@ -210,7 +259,7 @@ describe('g0z.5 prep phase', () => {
 })
 
 describe('g0z.5 order refusal', () => {
-  it('build castle over water refuses with a reason and sets nothing', () => {
+  it('build castle over water says why and starts a search instead (g0z.19)', () => {
     const w = makeWorld()
     const bot = mockBot(w)
     const p = { x: SITE.x + 5.5, y: 64, z: SITE.z - 1.5 }
@@ -225,11 +274,12 @@ describe('g0z.5 order refusal', () => {
     bot.once = () => {}
     const { castleSite } = require('../src/chat')
     const { site } = castleSite(p, Math.PI)
-    w.set(site.x + 6, site.y - 1, site.z + 6, 'water')
+    w.set(site.x + 15, site.y - 1, site.z + 10, 'water') // a hall column (core)
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     handleChat(bot, ticker, 'Steve', 'build castle')
     assert.equal(bot._tickerCtx.castle, undefined)
-    assert.match(bot.chats.pop(), /can't build a castle here: there is water at .*flatter/)
+    assert.match(bot.chats.pop(), /^not right here \(there is water at .*\) — looking for a castle spot within 48 blocks/)
+    assert.equal(bot._tickerCtx.pendingSearch.kind, 'castle')
   })
 })
 
