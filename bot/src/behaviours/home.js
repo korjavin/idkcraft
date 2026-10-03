@@ -908,6 +908,12 @@ function shelter(bot, ctx, target, state) {
       if (!st.skip) st.skip = []
       // Give-up (revmux 01): a cell the swim does not get closer to in 15 s
       // is skipped; the scan reruns at most every 5 s (no land: home goal).
+      // A gap between wet ticks means fight/breath held the body: not a stall.
+      if (st.wetTickAt && now - st.wetTickAt > 2000) {
+        st.dryProgressAt = now
+        st.dryBest = undefined
+      }
+      st.wetTickAt = now
       if (st.dry && bp) {
         const dist = Math.hypot(bp.x - st.dry.x, bp.z - st.dry.z)
         if (!(dist < (st.dryBest === undefined ? Infinity : st.dryBest) - 0.5)) {
