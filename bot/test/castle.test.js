@@ -15,6 +15,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const castle = require('../src/castle')
 const build = require('../src/behaviours/build')
+const castleMod = require('../src/behaviours/castle')
 
 const PLACE_RANGE = build.PLACE_RANGE // GoalPlaceBlock approach range (build.js:425)
 assert.equal(PLACE_RANGE, 4)
@@ -209,6 +210,18 @@ describe('castle slice reach invariant (range 4, ref face, LOS, way back)', () =
       checked++
     }
     assert.ok(checked > 100, `too few targets checked: ${checked}`)
+  })
+
+  it('g0z.17: torches laid in work order (after every other place cell) stay reachable', () => {
+    const order = castle.PLAN.slice().sort((a, b) => castleMod.rank(a) - castleMod.rank(b))
+    let n = 0
+    order.forEach((c, i) => {
+      if (c.kind !== 'torch') return
+      const r = checkPrefix(order, castle.SITE_W, castle.SITE_D, castle.ENTRANCE, i)
+      assert.ok(r.ok, `torch ${i} ${JSON.stringify(c)}: ${r.reason}`)
+      n++
+    })
+    assert.equal(n, castle.PLAN.filter((c) => c.kind === 'torch').length)
   })
 
   it('mutation: a tower-top cell lifted out of reach fails', () => {

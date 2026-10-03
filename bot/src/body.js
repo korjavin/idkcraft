@@ -51,6 +51,7 @@ function pickOwner(ctx) {
   if (ctx.breath) return 'breath' // episode latch: the reflex owns while latched
   if (ctx.stuck) return 'recover' // fact from the previous tick's stuck.update
   if (ctx.comehome) return 'comehome'
+  if (ctx.gocastle) return 'gocastle'
   if (ctx.lead) return 'lead'
   if (ctx.bring) return 'bring'
   if (ctx.flat && !ctx.flat.parked) return 'flat'
@@ -98,6 +99,11 @@ function gohomeWalk(ctx) {
 function meetDig(ctx) {
   const o = ctx && ctx.comehome
   return !!(o && !o.exiting && (o.phase === 'walk' || o.phase === 'seat'))
+}
+
+function castleWalk(ctx) {
+  const o = ctx && ctx.gocastle
+  return !!(o && o.phase === 'walk')
 }
 
 // Flat-gate inputs, verbatim from follow.js (5vv) and home.js (rw4.10):
@@ -160,6 +166,30 @@ function movementTargets(bot, ctx) {
   return out
 }
 
+// Castle stone (g0z.18): the pathfinder scaffolds with any cobblestone
+// (scafoldingBlocks = dirt + cobblestone), so the castle walk to its site
+// pillared/bridged the quarried batch away. On the castle step, while the
+// bot holds more cobblestone than the SCAFFOLD_LOW reserve, scaffolding is
+// dirt only; at or below the reserve cobble is scaffold again (that is the
+// reserve's job). The castle climbs its own stairs (reach invariant).
+function castleStone(bot, ctx) {
+  try {
+    if (!ctx || !ctx.work || ctx.step !== 'castle') return false
+    let n = 0
+    for (const it of bot.inventory.items() || []) if (it && it.name === 'cobblestone') n += it.count | 0
+    return n > require('./behaviours/equip').SCAFFOLD_LOW // deferred: equip loads inside the goal chain
+  } catch (_) { return false }
+}
+
+function scaffoldCobble(bot, mov, on) {
+  const list = mov.scafoldingBlocks
+  const it = bot && bot.registry && bot.registry.itemsByName && bot.registry.itemsByName.cobblestone
+  if (!Array.isArray(list) || !it) return
+  const i = list.indexOf(it.id)
+  if (on && i < 0) list.push(it.id)
+  if (!on && i >= 0) list.splice(i, 1)
+}
+
 function movementsFor(owner, bot, ctx, extra) {
   const movs = movementTargets(bot, ctx)
   if (movs.length === 0) return
@@ -167,7 +197,7 @@ function movementsFor(owner, bot, ctx, extra) {
   let sprint = false
   let parkour = true
   try {
-    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx)) canDig = false
+    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx) || castleWalk(ctx)) canDig = false
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes
@@ -178,13 +208,15 @@ function movementsFor(owner, bot, ctx, extra) {
       const leg = ctx.shelterLeg
       const legFar = !!(bp && leg && typeof leg.x === 'number' &&
         Math.hypot(bp.x - (leg.x + 0.5), bp.y - leg.y, bp.z - (leg.z + 0.5)) > SPRINT_DIST)
-      const shelterGate = !!leg && (key.startsWith('gohome-') || key.startsWith('comehome-')) &&
+      const shelterGate = !!leg && (key.startsWith('gohome-') || key.startsWith('comehome-') || key.startsWith('gocastle-')) &&
         legFar && flat
       if (followGate || shelterGate) { sprint = true; parkour = false }
     }
   } catch (_) { /* policy best-effort: defaults stand */ }
+  const keepStone = castleStone(bot, ctx)
   for (const mov of movs) {
     try {
+      scaffoldCobble(bot, mov, !keepStone)
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour

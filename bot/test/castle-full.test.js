@@ -12,6 +12,7 @@ const crypto = require('node:crypto')
 const castle = require('../src/castle')
 const build = require('../src/behaviours/build')
 const reach = require('./castle-reach')
+const castleMod = require('../src/behaviours/castle')
 
 assert.equal(reach.RANGE, build.PLACE_RANGE)
 const V2 = castle.BLUEPRINTS[castle.FULL_VERSION]
@@ -140,6 +141,13 @@ describe('castle v2 reach invariant (range 4, ref face, LOS, way in and out)', (
     assert.ok(r.ok, `cell ${r.idx} ${JSON.stringify(r.cell)}: ${r.reason}`)
     assert.equal(r.checked, V2.PLAN.filter((c) => castle.isPlaceTarget(c.kind)).length)
     assert.ok(r.checked > 1500)
+  })
+
+  it('g0z.17: the work order (torches after every other place cell) holds the invariant too', () => {
+    const order = V2.PLAN.slice().sort((a, b) => castleMod.rank(a) - castleMod.rank(b))
+    assert.notDeepEqual(order, V2.PLAN, 'torches moved')
+    const r = reach.checkPlan({ ...V2, PLAN: order }, castle.isPlaceTarget)
+    assert.ok(r.ok, `cell ${r.idx} ${JSON.stringify(r.cell)}: ${r.reason}`)
   })
 
   const fails = (plan) => reach.checkPlan({ ...V2, PLAN: plan }, castle.isPlaceTarget)

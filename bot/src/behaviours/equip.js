@@ -192,6 +192,65 @@ function fail(bot, ctx, item, err) {
   } catch (_) { /* logging best-effort */ }
 }
 
+// idkcraft-ajoe: a home table 113 blocks off (or one whose walk already
+// failed today) kept equip walking/failing table-unreachable for hours
+// while the pack could have funded a table of its own. Past this range
+// (or after that failure) the bot crafts one in the 2x2 and places it
+// beside itself — at most once per MC day, so the world is not littered.
+const FAR_TABLE = 32
+function tableFar(bot, ctx, bp, t) {
+  try {
+    if (dist3(bp, t) > FAR_TABLE) return true
+    const u = ctx && ctx.equipTableUnreachable
+    return !!u && u.day === dayOf(bot) && u.x === t.x && u.y === t.y && u.z === t.z
+  } catch (_) { return false }
+}
+
+// The own-table op for a tabled tool: planks (from a log) then the table
+// itself, both 2x2. Null keeps tableFor's old route: a table in the pack
+// already, today's table already made, a near station standing, no
+// standing station at all (the craft step owns that case), or too little
+// wood for table + tool (4 planks + 3 for a wooden head) — a table that
+// eats the tool's planks would only trade table-unreachable for no-materials.
+function ownTableOp(bot, ctx, op) {
+  try {
+    if (itemsOf(bot).some((i) => i && i.name === 'crafting_table')) return null
+    if (ctx.equipTableDay === dayOf(bot)) return null
+    const bp = bot.entity && bot.entity.position
+    const st = ctx.equip || {}
+    let far = false
+    for (const t of [ctx.home && ctx.home.table, st.tablePos, ctx.claimedTable]) {
+      if (!t || typeof t.x !== 'number' || typeof bot.blockAt !== 'function') continue
+      let block = null
+      try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
+      // Unreadable (unloaded chunk) is standing for the menu (goal.js
+      // stationStanding), so craft never rebuilds: a far one counts here
+      // too, else tableFor drops it and fails no-table daily (revmux 01).
+      // A verified other block is a ghost: skipped.
+      if (block && block.name !== 'crafting_table') continue
+      if (!tableFar(bot, ctx, bp, t)) {
+        if (block) return null
+        continue
+      }
+      far = true
+    }
+    if (!far) return null
+    // ponytail: biggest planks stack + every log, mixed woods can overcount
+    // by a few planks; the next tick's toolOp re-plans on the real pack.
+    const planks = craftMod.sortedWoods(craftMod.tally(bot, '_planks'))
+    const have = (planks.length > 0 ? planks[0][1] : 0) + 4 * countItems(bot, (n) => n.endsWith('_log'))
+    if (have < 4 + (op.stone ? 0 : 3)) return null
+    if (planks.length > 0 && planks[0][1] >= 4) {
+      const found = craftMod.recipes(bot, 'crafting_table', null)
+      return found.length > 0 ? { item: 'crafting_table', recipe: found[0], count: 1, table: null } : null
+    }
+    const logs = craftMod.sortedWoods(craftMod.tally(bot, '_log'))
+    if (logs.length === 0) return null
+    const found = craftMod.recipes(bot, `${logs[0][0]}_planks`, null)
+    return found.length > 0 ? { item: `${logs[0][0]}_planks`, recipe: found[0], count: 1, table: null } : null
+  } catch (_) { return null }
+}
+
 // Placed table for the tool recipes: the walked-to ctx.home.table first
 // (craft-step contract), else a table from the inventory placed beside the
 // body. Resolves { block, pos }, resolves null while walking into reach,
@@ -214,6 +273,8 @@ function tableFor(bot, ctx) {
   if (ctx.claimedTable && ctx.claimedTable !== st.tablePos) tables.push(ctx.claimedTable)
   let homeTable = null
   let homeBlock = null
+  let farTable = null
+  let farBlock = null
   let claimedDead = false
   for (const t of tables) {
     let block = null
@@ -230,8 +291,18 @@ function tableFor(bot, ctx) {
         if (!block) unreadable = true
       } else unreadable = true
     } catch (_) { block = null; unreadable = true }
-    if (block && block.name === 'crafting_table') { homeTable = t; homeBlock = block; break }
+    if (block && block.name === 'crafting_table') {
+      // ajoe: a far or today-unreachable station only wins when nothing
+      // nearer stands and no table is in the pack to place beside us.
+      if (!tableFar(bot, ctx, bp, t)) { homeTable = t; homeBlock = block; break }
+      if (!farTable) { farTable = t; farBlock = block }
+      continue
+    }
     if (!unreadable && t && t === ctx.claimedTable) claimedDead = true
+  }
+  if (!homeTable && farTable && !itemsOf(bot).some((i) => i && i.name === 'crafting_table')) {
+    homeTable = farTable
+    homeBlock = farBlock
   }
   if (homeTable) {
     if (dist3(bp, homeTable) <= TABLE_REACH) {
@@ -246,7 +317,12 @@ function tableFor(bot, ctx) {
     st.walkWaits = (st.walkWaits || 0) + 1
     // Walking that never arrives is a stall, not progress: fail so the
     // menu holds us instead of idling here forever.
-    if (st.walkWaits > 20) return nope('table-unreachable')
+    if (st.walkWaits > 20) {
+      // ajoe: remember the dead walk for the day — the next pick crafts
+      // and places its own table instead of re-walking for hours.
+      try { ctx.equipTableUnreachable = { day: dayOf(bot), x: homeTable.x, y: homeTable.y, z: homeTable.z } } catch (_) { /* best-effort */ }
+      return nope('table-unreachable')
+    }
     return Promise.resolve(null) // walking: retry on a later tick
   }
   // No station standing: retract a verified-dead roadside claim so craft
@@ -446,6 +522,11 @@ function equip(bot, ctx) {
     return
   }
   if (op.tabled) {
+    const make = ownTableOp(bot, ctx, op)
+    if (make) {
+      craftOne(bot, ctx, make)
+      return
+    }
     ctx.equipInFlight = true
     void tableFor(bot, ctx).then(
       (t) => {
@@ -495,6 +576,7 @@ function craftOne(bot, ctx, op) {
     const strikes = (st.made && st.made[op.item]) || 0
     const landed = op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
       : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
+      : op.item === 'crafting_table' ? countItems(bot, (n) => n === 'crafting_table') > 0
       // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
       // the old wooden as landed and burns the cobble retrying. Fresh
       // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
@@ -508,6 +590,11 @@ function craftOne(bot, ctx, op) {
       }
     } else if (st.made) {
       try { delete st.made[op.item] } catch (_) { /* guard best-effort */ }
+    }
+    if (op.item === 'crafting_table') {
+      // ajoe day cap: the next tick's tableFor places it beside us.
+      if (landed) ctx.equipTableDay = dayOf(bot)
+      return
     }
     if (op.item.endsWith('_sword')) {
       try { fightMod.equipGear(bot) } catch (_) { /* best-effort: fight equips anyway */ }

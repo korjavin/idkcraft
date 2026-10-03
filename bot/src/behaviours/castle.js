@@ -155,7 +155,10 @@ function strike(ctx, st, c, why, now) {
 // trip). Then the keep-clear cells, the moat digs (v2, g0z.6: the bridge
 // deck is an ordinary place cell, so it exists before any dig) and the
 // fence ring last. Indices stay plan indices (blocked keys).
-const RANK = { door: 1, air: 2, dig: 3, fence: 4 }
+// Torches (g0z.17) go after every other place cell, before the door: no
+// cell leans on a torch, and a torch-none word (no coal for the craft)
+// must never hold the stone and planks behind it.
+const RANK = { torch: 0.5, door: 1, air: 2, dig: 3, fence: 4 }
 function rank(c) { return RANK[c.kind] || 0 }
 // Interior work (g0z.6): an undone cell ranked before the moat. While one
 // is left — blocked, gated or not — no moat cell is dug, so the bot never
@@ -168,6 +171,16 @@ function workOrder(cells, key) {
   const order = cells.map((c) => c.idx).sort((a, b) => rank(cells[a]) - rank(cells[b]) || a - b)
   orderCache = { key, order }
   return order
+}
+
+// Torchless (g0z.17): with no torch on hand a torch cell steps aside —
+// the moat and fence go on — and the door waits with it (A* never opens
+// it, the torches still need the way in). Neither counts as interior work.
+// Only when nothing else is workable does the torch cell come back, so the
+// word reads torch-none and castlefetch retries.
+function torchOwed(bot, c, owed) {
+  if (c.kind === 'torch') return usable(bot, 'torch') <= 0
+  return c.kind === 'door' && !!owed
 }
 
 // Next cell to work in work order, or why there is none.
@@ -190,11 +203,13 @@ function pick(bot, ctx, st, cells, key, now) {
     let first = -1
     let waiting = null
     let inside = false
+    let owed = null
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
+      if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
       const b = st.blocked[bkey(st, c.idx)]
@@ -205,6 +220,7 @@ function pick(bot, ctx, st, cells, key, now) {
     }
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
+    if (owed) return { idx: owed.idx }
     return { idx: -1, waiting }
   }
 }
@@ -232,10 +248,12 @@ function peek(bot, st, now, ctx) {
   }
   let waiting = null
   let inside = false
+  let owed = null
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
+    if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
     const b = blocked[bkey(st, c.idx)]
@@ -243,7 +261,7 @@ function peek(bot, st, now, ctx) {
     if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
     return { cell: c, waiting: null, cells }
   }
-  return { cell: null, waiting, cells }
+  return { cell: owed, waiting: owed ? null : waiting, cells }
 }
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
@@ -408,7 +426,10 @@ const BATCH = 16
 // Per-kind batch (g0z.12): frame logs come from gather, which stops at
 // goal.NEED_LOGS (14) — a 16 batch would read frame-some forever with the
 // fetch already at its target. A test pins it to NEED_LOGS.
-const BATCH_OF = { frame: 14 }
+// torch (g0z.17, revmux 02): any torch is a batch — torches lay last, and a
+// torch-some word with no coal would hold the moat, fence and door; the
+// castle lays what it holds and the 0-torch cells step aside (torchOwed).
+const BATCH_OF = { frame: 14, torch: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
@@ -906,6 +927,7 @@ module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
 module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.entries(ITEM).some(([kind, want]) =>
   want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN)))
 module.exports.menuFact = menuFact
+module.exports.rank = rank
 module.exports.siteCheck = siteCheck
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
@@ -915,3 +937,4 @@ module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
 module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
+module.exports.entrance = entrance
