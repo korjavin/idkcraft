@@ -507,3 +507,83 @@ describe('ipn.12 shelter hold never raises the stuck backstop', () => {
     assert.equal(BEHAVIOURS.shelter, home.shelter)
   })
 })
+
+describe('yrtx shelter in water: land first, pillar on dry ground', () => {
+  // Water for x<5 at feet/head (y 63..64); stone shelf from x>=5, floor y 62.
+  const AIR = { name: 'air', boundingBox: 'empty' }
+  const WATER = { name: 'water', boundingBox: 'empty' }
+  const STONE = { name: 'stone', boundingBox: 'block' }
+  function waterBot() {
+    const calls = { goals: [] }
+    const bot = nightBot({ x: 0, y: 64, z: 0 })
+    bot.entity.isInWater = true
+    bot.blockAt = (p) => {
+      if (p.y <= 62) return STONE
+      if (p.x < 5) return p.y <= 64 ? WATER : AIR
+      return p.y === 63 ? STONE : AIR
+    }
+    bot.pathfinder = { goal: null, isMoving: () => false, setGoal: (g) => calls.goals.push(g) }
+    bot.calls = calls
+    return bot
+  }
+
+  it('in water: no pillar episode, goal at dry land', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.recovery == null, true, 'beginPillar not called')
+    assert.equal(ctx.shelter.pillarAt, undefined, 'no anchor in water')
+    assert.equal(bot.calls.goals.length, 1)
+    assert.ok(bot.calls.goals[0].x >= 5, 'goal on the shelf')
+    assert.equal(ctx.inShelter, false)
+  })
+
+  it('kelp floor is not land; no land swims toward home and never pillars', () => {
+    const bot = waterBot()
+    bot.blockAt = (p) => (p.y <= 62 ? STONE : p.y <= 64 ? WATER : { name: 'kelp', boundingBox: 'empty' })
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.recovery == null, true)
+    assert.equal(bot.calls.goals.length, 1, 'one home goal, steady')
+    assert.equal(bot.calls.goals[0].x, SITE.x)
+  })
+
+  it('a stalled swim skips its cell after 15 s', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    const first = bot.calls.goals[0]
+    home.shelter(bot, ctx, null, null) // first distance reading
+    ctx.shelter.dryProgressAt -= 16000
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.shelter.skip.length, 1)
+    assert.ok(ctx.shelter.dry == null || ctx.shelter.dry.z !== ctx.shelter.skip[0].z || ctx.shelter.dry.x !== ctx.shelter.skip[0].x)
+    assert.ok(first)
+  })
+
+  it('a gap between wet ticks pauses the stall timer', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    home.shelter(bot, ctx, null, null) // first distance reading
+    const st = ctx.shelter
+    st.wetTickAt -= 10000
+    const before = st.dryProgressAt
+    home.shelter(bot, ctx, null, null)
+    assert.ok(st.dryProgressAt >= before + 9000, 'borrowed time is not stall time')
+    assert.equal(st.skip.length, 0)
+  })
+
+  it('on land: pillars as before', () => {
+    const bot = waterBot()
+    bot.entity.isInWater = false
+    bot.blockAt = () => STONE
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    const l = console.log
+    console.log = () => {}
+    try { home.shelter(bot, ctx, null, null) } finally { console.log = l }
+    assert.ok(ctx.shelter.pillarAt, 'anchor set on land')
+    assert.equal(ctx.inShelter, true)
+  })
+})
