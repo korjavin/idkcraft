@@ -15,6 +15,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
+const metrics = require('../metrics')
 
 // Candidate chest cells, site-relative. v1 (frozen): table is BLUEPRINT[0]
 // at (4,0,1), so (5,0,1) is table+1 east; all sit beside the east wall,
@@ -773,6 +774,9 @@ function stockpile(bot, ctx, target, state) {
               const c = Math.min(fin[name], bankedByName[name])
               fin[name] -= c
               ctx.gearGiven[name] = (ctx.gearGiven[name] || 0) + c
+              try {
+                if (c > 0) metrics.gearGiven.inc({ piece: name, channel: 'bank' }, c)
+              } catch (_) { /* metrics best-effort */ }
               try {
                 if (ctx.haul && typeof ctx.haul === 'object') ctx.haul[name] = Math.max(0, (ctx.haul[name] || 0) - c)
               } catch (_) { /* haul best-effort */ }

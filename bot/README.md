@@ -401,6 +401,7 @@ into VictoriaMetrics — graph them in Grafana, no log grepping needed):
 
 - Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`, `idkcraft_bot_autonomous`, `idkcraft_bot_escalation_total{from,to,reason}` (model-to-FSM fallbacks), `idkcraft_bot_search_duration_seconds{radius}` (staged block search), `idkcraft_bot_recover_total{action,source,outcome}` (stuck-escape menu), `idkcraft_bot_bring_total{outcome,kind}`.
 - Work-mode goal metrics (same endpoint): `idkcraft_bot_goal_steps_total{step,source}` (choices by step and chooser), `idkcraft_bot_goal_step{step}` (gauge: 1 on the running step, 0 elsewhere — the state-timeline), `idkcraft_bot_goal_disagreements_total{model,fsm}` (model vs FSM step choice), `idkcraft_bot_goal_choice_duration_seconds{source}` (step-choice latency, model calls only).
+- Blacksmith metrics (same endpoint, ipn.5): `idkcraft_bot_gear_forged_total{piece,owner}` (every forge at the table, self + owner — first-seen ts is the time-to-piece), `idkcraft_bot_gear_given_total{piece,channel}` (finished owner pieces handed over: `toss` = deliver to an online player, `bank` = stockpile to the home chest; mirrors the gear ledger exactly — `toss` includes death-forgiven losses).
 - Sidecar `/metrics` on its API port (`laya/shim.py`): `laya_predict_duration_seconds` (model latency), `laya_answers_total{choice}` (fight vs follow + errors).
 
 Goal panel queries (the house Grafana dashboard, bot & LAYA brain, has a
@@ -460,6 +461,61 @@ overnight stay Sep 26 01:25–01:35 (dusk to dawn inside, `step-done`).
   bot inside its closed house (Sep 27 08:25–08:28), then 7 more deaths
   walking home at night. JEV comparison still open: switching brains needs
   a player (`brain jev` in chat).
+
+### Blacksmith log rows and metrics (ipn.5)
+
+The `gear` step sits in the menu between `stockpile` and `forage` and
+climbs the ladder (self iron pick → self buckets → owner sword/pick/buckets
+→ armour → diamond) whenever the house stands and nothing else is feasible.
+The night-shift shape is by design: online, deliver-first tosses every
+forage leg, so the ladder effectively progresses with nobody online.
+
+| Log row | Meaning |
+|---|---|
+| `next gear: <name> for you\|me` + `gear rung <tier:kind:self\|give>` | ladder advanced to a rung |
+| `need N more raw iron, going to dig` / `need logs for sticks, going to chop` | latched want — the fetchers own the next move |
+| `need raw iron, none known` / `need coal above the reserve, none known` | honest want: nothing remembered and diggable |
+| `forged <name> for you\|me` + `gear forged <name> for owner\|self` | craft (or bucket fill) completed |
+| `brought ...` | deliver tossed the haul to an online player |
+| `stockpiled ...` + `handed ... to the home chest` | banked; finished owner pieces handed to the chest |
+| `gear ladder complete` | every rung done |
+
+Acceptance queries (the bead's MEASURE — time-to-sword, gear deaths,
+deliver-vs-stockpile handovers):
+
+```promql
+# time-to-iron-sword: first forge of the owner sword
+timestamp(idkcraft_bot_gear_forged_total{piece="iron_sword"} > 0)
+# handovers by channel over the night
+sum by (channel) (increase(idkcraft_bot_gear_given_total[24h]))
+# gear-step deaths: overlay the death rate on the gear gauge timeline and
+# count deaths that land while gear reads 1 (no step label on deaths —
+# that would need index.js). Step-only: a death on a gear-asked iron/coal
+# trip runs under forage, so overlay step="forage" too and read the log's
+# `going to dig` before it
+sum(rate(idkcraft_bot_events_total{event="death"}[5m]))
+max_over_time(idkcraft_bot_goal_step{step="gear"}[5m])
+```
+
+### Blacksmith prod acceptance: FAIL baseline (2026-09-29)
+
+Two observed windows, both FAIL; the acceptance bead (ipn.5) stays open
+for a re-night.
+
+- Night 1 (2026-09-27 22:58 – 09-28 22:44 UTC, ~24 h, owner online ~5 h):
+  the ladder never passed `iron_pickaxe:self` (12x `gear rung
+  iron:pickaxe:self`), 0 smelts/forges, 0 autonomous raw_iron, gear ~100%
+  idle. Deaths 143, 0 on the gear step. 0 gear handovers. Honesty FAIL:
+  4x `need 3 more raw iron, going to dig` + 1x `need logs for sticks` with
+  no fetch after (filed ipn.7/8/9).
+- Night 2 (2026-09-29 00:33–15:20 UTC, ~14.8 h, owner offline): gear chosen
+  0 of 240 step changes (equip/build/beds always ahead), 0 rungs/smelts/
+  forges, 0 raw_iron. Deaths 62 (gohome 53, gear 0). Causes: A — gear
+  starved by beds/equip retrying the same failure (ipn.11); B — build
+  stuck at 98/99 on fill cells (ipn.10); C — no bed, far respawn, night
+  gohome deaths (ipn.12).
+
+Re-night after A+B+C and read the counters above off Prometheus.
 
 ### Changelog (2026-09-27, PRs #113–#136)
 
