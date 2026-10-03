@@ -507,3 +507,46 @@ describe('ipn.12 shelter hold never raises the stuck backstop', () => {
     assert.equal(BEHAVIOURS.shelter, home.shelter)
   })
 })
+
+describe('yrtx shelter in water: land first, pillar on dry ground', () => {
+  // Water for x<5 at feet/head (y 63..64); stone shelf from x>=5, floor y 62.
+  const AIR = { name: 'air', boundingBox: 'empty' }
+  const WATER = { name: 'water', boundingBox: 'empty' }
+  const STONE = { name: 'stone', boundingBox: 'block' }
+  function waterBot() {
+    const calls = { goals: [] }
+    const bot = nightBot({ x: 0, y: 64, z: 0 })
+    bot.entity.isInWater = true
+    bot.blockAt = (p) => {
+      if (p.y <= 62) return STONE
+      if (p.x < 5) return p.y <= 64 ? WATER : AIR
+      return p.y === 63 ? STONE : AIR
+    }
+    bot.pathfinder = { goal: null, isMoving: () => false, setGoal: (g) => calls.goals.push(g) }
+    bot.calls = calls
+    return bot
+  }
+
+  it('in water: no pillar episode, goal at dry land', () => {
+    const bot = waterBot()
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    home.shelter(bot, ctx, null, null)
+    assert.equal(ctx.recovery == null, true, 'beginPillar not called')
+    assert.equal(ctx.shelter.pillarAt, undefined, 'no anchor in water')
+    assert.equal(bot.calls.goals.length, 1)
+    assert.ok(bot.calls.goals[0].x >= 5, 'goal on the shelf')
+    assert.equal(ctx.inShelter, false)
+  })
+
+  it('on land: pillars as before', () => {
+    const bot = waterBot()
+    bot.entity.isInWater = false
+    bot.blockAt = () => STONE
+    const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
+    const l = console.log
+    console.log = () => {}
+    try { home.shelter(bot, ctx, null, null) } finally { console.log = l }
+    assert.ok(ctx.shelter.pillarAt, 'anchor set on land')
+    assert.equal(ctx.inShelter, true)
+  })
+})

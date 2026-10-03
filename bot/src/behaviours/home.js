@@ -802,6 +802,35 @@ function stay(bot, ctx, target, state) {
 // far from the pillar while the step survives — holding there would camp
 // open ground at world spawn. XZ only: the climb itself is vertical.
 const SHELTER_DISPLACE_XZ = 2
+const SHELTER_DRY_R = 24
+// yrtx: nearest dry standing cell (solid non-water floor, two free cells
+// above) within SHELTER_DRY_R. Pillaring in water never stands (the breath
+// reflex lifts the body, the anchor reads 'displaced', Drowned finish it).
+function nearestDry(bot) {
+  const bp = botPos(bot)
+  if (!bp || typeof bot.blockAt !== 'function') return null
+  const x0 = Math.floor(bp.x), y0 = Math.floor(bp.y), z0 = Math.floor(bp.z)
+  const wet = (b) => !b || (typeof b.name === 'string' && b.name.includes('water'))
+  const free = (b) => !!b && b.boundingBox === 'empty' && !wet(b)
+  let best = null
+  let bd = Infinity
+  for (let dx = -SHELTER_DRY_R; dx <= SHELTER_DRY_R; dx++) {
+    for (let dz = -SHELTER_DRY_R; dz <= SHELTER_DRY_R; dz++) {
+      const d = dx * dx + dz * dz
+      if (d >= bd) continue
+      for (let dy = 3; dy >= -4; dy--) {
+        const at = (k) => bot.blockAt(new Vec3(x0 + dx, y0 + dy + k, z0 + dz))
+        const floor = at(-1)
+        if (floor && floor.boundingBox === 'block' && !wet(floor) && free(at(0)) && free(at(1))) {
+          best = { x: x0 + dx, y: y0 + dy, z: z0 + dz }
+          bd = d
+          break
+        }
+      }
+    }
+  }
+  return best
+}
 function shelter(bot, ctx, target, state) {
   const home = ctx && ctx.home
   if (!home || !home.site) {
@@ -860,6 +889,27 @@ function shelter(bot, ctx, target, state) {
       try { console.log('shelter displaced, re-pillaring') } catch (_) { /* log best-effort */ }
     }
   } catch (_) { /* anchor best-effort */ }
+  if (!st.pillared && !ctx.recovery && !st.dig) {
+    // yrtx: get out of the water first; the pillar anchor is set on land.
+    let wet = false
+    try {
+      const f = botPos(bot)
+      const b = f && bot.blockAt(new Vec3(Math.floor(f.x), Math.floor(f.y), Math.floor(f.z)))
+      wet = !!(b && typeof b.name === 'string' && b.name.includes('water')) ||
+        !!(bot.entity && bot.entity.isInWater === true)
+    } catch (_) { /* dry on doubt */ }
+    if (wet) {
+      ctx.inShelter = false
+      if (!st.dry) { try { st.dry = nearestDry(bot) } catch (_) { st.dry = null } }
+      const d = st.dry
+      // No land in reach: keep swimming toward the house, never pillar here.
+      setGoal(bot, ctx, 'shelter-dry', d
+        ? new goals.GoalNear(d.x + 0.5, d.y, d.z + 0.5, 1)
+        : new goals.GoalNearXZ(home.site.x, home.site.z, 2))
+      return
+    }
+    st.dry = null
+  }
   if (!st.pillared) {
     // Climbing unsheltered (revmux 01 core-1): arming inShelter before the
     // pillar stands turns every fight tick idle at the ticker gate — and
