@@ -490,7 +490,9 @@ timestamp(idkcraft_bot_gear_forged_total{piece="iron_sword"} > 0)
 sum by (channel) (increase(idkcraft_bot_gear_given_total[24h]))
 # gear-step deaths: overlay the death rate on the gear gauge timeline and
 # count deaths that land while gear reads 1 (no step label on deaths —
-# that would need index.js; the join reads the same answer)
+# that would need index.js). Step-only: a death on a gear-asked iron/coal
+# trip runs under forage, so overlay step="forage" too and read the log's
+# `going to dig` before it
 sum(rate(idkcraft_bot_events_total{event="death"}[5m]))
 max_over_time(idkcraft_bot_goal_step{step="gear"}[5m])
 ```
