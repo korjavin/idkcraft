@@ -218,8 +218,12 @@ function setGoal(bot, ctx, key, goal) {
 // Arrival is read from the approach-cell CENTRE (out+0.5), the way the goal
 // does: from the integer corner the east GoalNear end cell reads ~1.58, so
 // a 1.5 corner radius misses it one-sided (revmux 01-review loop+goal-5).
-function nearOut(out, range) {
-  return (bp) => Math.hypot(bp.x - (out.x + 0.5), bp.z - (out.z + 0.5)) <= range + 0.5
+// Feet must also be at the threshold level (rgsi/i2bi): XZ-only read a roof
+// 2.8 up or a pit below the door as arrived, then enter walked into a wall.
+// A detour waypoint has no meaningful y (flat = true skips it).
+function nearOut(out, range, flat) {
+  return (bp) => Math.hypot(bp.x - (out.x + 0.5), bp.z - (out.z + 0.5)) <= range + 0.5 &&
+    (flat || Math.abs(bp.y - out.y) <= 1.5)
 }
 
 // Walk-phase helper: arrivals are read from positions (robust without
@@ -247,6 +251,14 @@ function walkTo(bot, ctx, st, key, goal, arrived) {
     let idle = true
     try { idle = !bot.pathfinder.isMoving() } catch (_) { /* retry below */ }
     if (idle) ctx.lastGoalKey = '' // force re-issue below
+    // i2bi: a body 2+ below the aim (a pit at the door) with no path is a
+    // stuck situation the menu can solve (dig a step); gohome/comehome are
+    // raise-exempt, so ask once. Latched/refused -> the normal fail count.
+    if (idle && goal && typeof goal.y === 'number' && bp.y < goal.y - 1.5 &&
+        stuck.request(bot, ctx, 'no-displacement', { x: goal.x, y: goal.y, z: goal.z }, key)) {
+      st.fails = 0
+      return false
+    }
     if (st.fails >= MAX_REISSUES) {
       st.phase = 'failed'
       ctx.stepStatus = 'failed:cannot-reach-home'
@@ -492,7 +504,7 @@ function gohomeTick(bot, ctx, target, state) {
     const goal = diverting
       ? new goals.GoalNearXZ(aim.x, aim.z, 1)
       : new goals.GoalNear(aim.x, aim.y, aim.z, 1)
-    const arrived = walkTo(bot, ctx, st, diverting ? 'gohome-via' : 'gohome-walk', goal, nearOut(aim, 1))
+    const arrived = walkTo(bot, ctx, st, diverting ? 'gohome-via' : 'gohome-walk', goal, nearOut(aim, 1, diverting))
     if (st.phase === 'failed') {
       if (st.via && !st.viaDone) {
         st.phase = 'walk'
@@ -1148,7 +1160,7 @@ function comehome(bot, ctx, target, state) {
     const goal = diverting
       ? new goals.GoalNearXZ(aim.x, aim.z, 1)
       : new goals.GoalNear(aim.x, aim.y, aim.z, 1)
-    const arrived = walkTo(bot, ctx, order, diverting ? 'comehome-via' : 'comehome-walk', goal, nearOut(aim, 1))
+    const arrived = walkTo(bot, ctx, order, diverting ? 'comehome-via' : 'comehome-walk', goal, nearOut(aim, 1, diverting))
     if (order.phase === 'failed') {
       if (order.via && !order.viaDone) {
         order.phase = 'walk'
