@@ -105,6 +105,31 @@ describe('rw4.5 gohome', () => {
     assert.deepEqual(bot.calls.goals, [])
   })
 
+  it('walk does not arrive on the roof above or in a pit below the door (rgsi/i2bi)', () => {
+    for (const dy of [2.8, -2]) {
+      const bot = mockBot({ at: { x: OUTSIDE.x + 0.5, y: OUTSIDE.y + dy, z: OUTSIDE.z + 0.5 } })
+      const ctx = { home: ctxHome() }
+      home.gohome(bot, ctx)
+      assert.equal(ctx.gohome.phase, 'walk', `dy ${dy}`)
+      assert.equal(bot.calls.goals.length, 1, 'pathfinder goal keeps the correct y')
+    }
+  })
+
+  it('a stalled walk from a pit asks the stuck menu once instead of failing (i2bi)', () => {
+    const at = { x: OUTSIDE.x + 2.5, y: OUTSIDE.y - 2, z: OUTSIDE.z + 0.5 }
+    const bot = mockBot({ at })
+    const ctx = { home: ctxHome(), gohome: { phase: 'walk', stalls: 9, fails: 0, lastPos: { ...at } } }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.stuck.by, 'no-displacement')
+    assert.equal(ctx.gohome.fails, 0)
+    assert.equal(ctx.gohome.phase, 'walk')
+    // asked once: further stalls fall through to the normal fail count
+    ctx.stuck = null
+    for (let i = 0; i < 40 && ctx.gohome.phase === 'walk'; i++) home.gohome(bot, ctx)
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.gohome.phase, 'failed')
+  })
+
   it('the walk forbids digging and restores it after', () => {
     // Live 8kc: A* tunneled through dirt beside the unbreakable walls (and
     // timed out into wall-pushing partial paths) instead of routing around.

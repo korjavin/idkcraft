@@ -570,7 +570,12 @@ async function main() {
     }
     // Rig-built home before the settle: the walls must stand (and their
     // chunks stream) before the window opens.
-    if (s.house) await raiseHouse(rcon, s.house)
+    if (s.house) {
+      await raiseHouse(rcon, s.house)
+      // raiseHouse clears the house volume: re-seat the follower after it
+      // (a roof spawn would otherwise fall through its own air fill).
+      await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
+    }
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
     for (const who of [GUIDE, FOLLOWER]) {
