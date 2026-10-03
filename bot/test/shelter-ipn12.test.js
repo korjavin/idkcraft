@@ -566,6 +566,7 @@ describe('yrtx shelter in water: land first, pillar on dry ground', () => {
     const bot = waterBot()
     const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
     home.shelter(bot, ctx, null, null)
+    home.shelter(bot, ctx, null, null) // first distance reading
     const st = ctx.shelter
     st.wetTickAt -= 10000
     const before = st.dryProgressAt
