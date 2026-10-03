@@ -31,16 +31,20 @@
 //    as break. A* crosses head-on by construction, so the bv6 lane stays a
 //    home-legs affair (shared via behaviours/util, not copied).
 //
-// 3. doorReflex, the executor reflex, runs every tick (index.js, next to
-//    unpin): the opener clicks a closed hand door on the plan head within
+// 3. doorReflex, the executor reflex: the opener runs every tick (index.js,
+//    next to unpin) and clicks a closed hand door on the plan head within
 //    reach, re-reading open at the moment of the click; the closer shuts a
 //    door the bot opened itself once the body is out of the doorway — never
 //    a door the player opened (untracked doors are never touched), never
 //    into the bot (the feet-cell + distance guard), never twice per window
 //    (a lagged block update hiding our toggle must not flip it back — the
-//    home.js cooldown shape). A door past the 8-node plan window heals via
-//    one stuck cycle: the push replans, the fresh head names the door, the
-//    opener fires.
+//    home.js cooldown shape). Open and shut stamps are SEPARATE maps: one
+//    shared stamp would hold the shut until the bot has walked out of
+//    reach (revmux 01 major-1). The shut itself runs off the 1 s tick on a
+//    throttled physicsTick tap (doorShutFast, 250 ms): a walk-past crosses
+//    the (1.2, 3.5] shut window in ~0.5 s, which 1 s ticks skip by phase.
+//    A door past the 8-node plan window heals via one stuck cycle: the push
+//    replans, the fresh head names the door, the opener fires.
 const Vec3 = require('vec3')
 const Move = require('mineflayer-pathfinder/lib/move')
 const { botPos, doorOpen } = require('./behaviours/util')
@@ -56,6 +60,9 @@ const DOOR_REACH = 3.5
 const DOOR_CLOSE_DIST = 1.2
 // One toggle per door per window (home.js TOGGLE_COOLDOWN_MS shape).
 const DOOR_TOGGLE_COOLDOWN_MS = 2000
+// Fast-shut cadence (the physicsTick tap): a walk-past spends ~0.5 s in the
+// shut window, so 250 ms catches it twice; 1 s ticks skip it by phase.
+const DOOR_SHUT_FAST_MS = 250
 // Tracked doors cap (FIFO): a teleported-away bot must not grow the map.
 const DOOR_TRACK_MAX = 16
 
@@ -174,13 +181,16 @@ function trackedDoors(ctx) {
   return ctx.doorOpened
 }
 
-function toggleStamps(ctx) {
-  if (!ctx.doorToggleAt || typeof ctx.doorToggleAt !== 'object') ctx.doorToggleAt = {}
-  return ctx.doorToggleAt
+function stampMap(ctx, field) {
+  if (!ctx[field] || typeof ctx[field] !== 'object') ctx[field] = {}
+  return ctx[field]
 }
 
-function toggleReady(ctx, key, now) {
-  const stamps = toggleStamps(ctx)
+// Per-direction stamps (revmux 01 major-1): the opener's click must never
+// hold the closer's — after the open lands, the first eligible shut fires
+// at once, and each direction still gets its own anti-flap window.
+function stampReady(ctx, field, key, now) {
+  const stamps = stampMap(ctx, field)
   const at = stamps[key]
   if (typeof at === 'number' && now - at < DOOR_TOGGLE_COOLDOWN_MS) return false
   stamps[key] = now
@@ -267,7 +277,7 @@ function openNextDoor(bot, ctx) {
   try { fresh = bot.blockAt && bot.blockAt(new Vec3(pick.x, pick.y, pick.z)) } catch (_) { return }
   if (!fresh || !isHandDoor(fresh.name) || doorOpen(fresh)) return
   const key = doorKey(pick.x, pick.y, pick.z)
-  if (!toggleReady(ctx, key, Date.now())) return
+  if (!stampReady(ctx, 'doorToggleAt', key, Date.now())) return
   if (!tryToggle(bot, fresh)) return
   const tracked = trackedDoors(ctx)
   tracked.set(key, { x: pick.x, y: pick.y, z: pick.z })
@@ -301,10 +311,25 @@ function closeOwnDoors(bot, ctx) {
     if (Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z) <= DOOR_CLOSE_DIST) continue
     const d = Math.hypot(door.x + 0.5 - bp.x, door.y + 0.5 - bp.y, door.z + 0.5 - bp.z)
     if (d > DOOR_REACH) continue // out of reach: shut on the return visit
-    if (!toggleReady(ctx, key, Date.now())) continue
+    if (!stampReady(ctx, 'doorShutAt', key, Date.now())) continue
     if (!tryToggle(bot, block)) continue
     try { console.log(`door shut at ${door.x} ${door.y} ${door.z}`) } catch (_) { /* log best-effort */ }
   }
+}
+
+// Fast shut (revmux 01 major-1): the physicsTick tap, throttled — the tick
+// closer above stays as the slow-path backup (same guards, same shut
+// stamps, so the two can never double-click one door).
+function doorShutFast(bot, ctx) {
+  if (!bot || !ctx) return
+  const now = Date.now()
+  try {
+    if (typeof ctx.doorShutFastAt === 'number' && now - ctx.doorShutFastAt < DOOR_SHUT_FAST_MS) return
+    ctx.doorShutFastAt = now
+  } catch (_) {
+    return
+  }
+  try { closeOwnDoors(bot, ctx) } catch (_) { /* closer best-effort */ }
 }
 
 module.exports = {
@@ -312,10 +337,12 @@ module.exports = {
   addDoorPassages,
   addHandDoorsOpenable,
   doorReflex,
+  doorShutFast,
   isDoorName,
   isHandDoor,
   DOOR_PASS_EXTRA,
   DOOR_REACH,
   DOOR_CLOSE_DIST,
   DOOR_TOGGLE_COOLDOWN_MS,
+  DOOR_SHUT_FAST_MS,
 }

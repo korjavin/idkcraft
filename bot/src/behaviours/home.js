@@ -185,8 +185,16 @@ function failNoDoor(ctx, st, where) {
 }
 
 // Fire-and-forget toggle, at most one per window; the phase only advances
-// on the OBSERVED state, never optimistically.
-function tryToggle(bot, st, block) {
+// on the OBSERVED state, never optimistically. Untracks the door from the
+// A* door reflex first (revmux 01 major-2): home owns its door from here,
+// so the reflex stands down instead of double-toggling on its own cooldown.
+function tryToggle(bot, ctx, st, block) {
+  try {
+    const p = block && block.position
+    if (ctx && ctx.doorOpened instanceof Map && p && typeof p.x === 'number') {
+      ctx.doorOpened.delete(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`)
+    }
+  } catch (_) { /* untrack best-effort */ }
   const now = Date.now()
   if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return
   st.lastToggle = now
@@ -529,7 +537,7 @@ function gohomeTick(bot, ctx, target, state) {
       ctx.stepStatus = 'failed:door-stuck'
       return
     } else {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
       return
     }
   }
@@ -553,7 +561,7 @@ function gohomeTick(bot, ctx, target, state) {
       try { bot.chat('home for the night') } catch (_) { /* chat best-effort */ }
       return
     }
-    tryToggle(bot, st, door)
+    tryToggle(bot, ctx, st, door)
   }
 
 }
@@ -698,7 +706,7 @@ function stay(bot, ctx, target, state) {
       ctx.inShelter = false
       if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
     } else if (doorOpen(door)) {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
     }
     holdStill(bot, ctx)
     return
@@ -725,7 +733,7 @@ function stay(bot, ctx, target, state) {
       ctx.stepStatus = 'failed:door-stuck' // gohome's 1l9 cap (idkcraft-470s)
       return
     } else {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
       return
     }
   }
@@ -764,7 +772,7 @@ function stay(bot, ctx, target, state) {
       try { if (line) bot.chat(line) } catch (_) { /* chat best-effort */ }
       return
     }
-    tryToggle(bot, st, door)
+    tryToggle(bot, ctx, st, door)
   }
 
 }
@@ -1043,7 +1051,7 @@ function exitMeet(bot, ctx, home, order) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); the released body's A* may dig the wall (revmux 01 minor)
       return
     } else {
-      tryToggle(bot, order, door)
+      tryToggle(bot, ctx, order, door)
       return
     }
   }
@@ -1066,7 +1074,7 @@ function exitMeet(bot, ctx, home, order) {
       finishExit(bot, ctx, order) // gap walked or door shut: released
       return
     }
-    tryToggle(bot, order, door)
+    tryToggle(bot, ctx, order, door)
   }
 }
 
@@ -1114,7 +1122,7 @@ function comehome(bot, ctx, target, state) {
     else {
       let nightish = false
       try { nightish = goalFacts(bot, ctx).time !== 'day' } catch (_) { nightish = false }
-      if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, order, held)
+      if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, ctx, order, held)
     }
     holdStill(bot, ctx)
     return
@@ -1178,7 +1186,7 @@ function comehome(bot, ctx, target, state) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-xhqv)
       return
     } else {
-      tryToggle(bot, order, door)
+      tryToggle(bot, ctx, order, door)
       return
     }
   }
@@ -1266,7 +1274,7 @@ function comehome(bot, ctx, target, state) {
       arriveMeet(bot, ctx, order)
       return
     }
-    tryToggle(bot, order, door)
+    tryToggle(bot, ctx, order, door)
   }
 }
 

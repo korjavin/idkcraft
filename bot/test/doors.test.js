@@ -41,9 +41,9 @@ function stateIdFor(name, match) {
 function roomCells({ door = 'oak_door', facing = 'north', open = false, walls = 'bedrock' } = {}) {
   const cells = new Map() // "x,y,z" -> { name } | { state }
   const ring = (x, z) => Math.abs(x) === 2 || Math.abs(z) === 2
-  const inRoom = (x, z) => x >= -2 && x <= 2 && z >= -4 && z <= 2
+  const inRoom = (x, z) => x >= -2 && x <= 2 && z >= -8 && z <= 2
   for (let x = -2; x <= 2; x++) {
-    for (let z = -4; z <= 2; z++) {
+    for (let z = -8; z <= 2; z++) {
       for (let y = 60; y <= 62; y++) cells.set(`${x},${y},${z}`, { name: 'bedrock' })
       cells.set(`${x},63,${z}`, { name: (inRoom(x, z) && ring(x, z) && z >= -2) ? 'bedrock' : 'stone' })
       for (let y = 64; y <= 65; y++) {
@@ -438,15 +438,146 @@ describe('doors: closer reflex (idkcraft-6xno)', () => {
   })
 })
 
+describe('doors: revmux 01 fixes (idkcraft-6xno)', () => {
+  function mockBot({ open = false, at = { x: 0.5, y: 64, z: -0.5 } } = {}) {
+    const st = { open }
+    const bot = {
+      entity: { position: { ...at } },
+      toggles: 0,
+      state: st,
+      pathfinder: { isMoving: () => true },
+      blockAt: (p) => {
+        const x = Math.floor(p.x)
+        const y = Math.floor(p.y)
+        const z = Math.floor(p.z)
+        if (x === 0 && y === 64 && z === -2) {
+          return {
+            name: 'oak_door',
+            position: new Vec3(x, y, z),
+            getProperties: () => ({ open: st.open, facing: 'north', hinge: 'left', half: 'lower' }),
+          }
+        }
+        return { name: 'air', position: new Vec3(x, y, z), getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++; st.open = !st.open },
+    }
+    return bot
+  }
+
+  it('major-1: the open click never holds the shut (separate stamps)', () => {
+    // Open at T, walk past at speed, shut at T+500: one shared stamp would
+    // hold the shut until the bot is out of reach (the walk-past miss).
+    const realNow = Date.now
+    let now = 2000000
+    Date.now = () => now
+    const cap = capture()
+    try {
+      const bot = mockBot()
+      const ctx = { lastPathNodes: [{ x: 0.5, y: 64, z: -1.5 }] }
+      doors.doorReflex(bot, ctx) // opens (T)
+      assert.equal(bot.toggles, 1)
+      assert.equal(bot.state.open, true)
+      now += 500
+      bot.entity.position = { x: 0.5, y: 64, z: -4.0 } // past, in reach
+      ctx.lastPathNodes = [{ x: 0.5, y: 64, z: -4.0 }, { x: 0.5, y: 64, z: -5.0 }]
+      doors.doorReflex(bot, ctx) // shuts (T+500, inside the open window)
+      assert.equal(bot.toggles, 2, 'shut held by the open click')
+      assert.equal(bot.state.open, false)
+    } finally {
+      Date.now = realNow
+      cap.release()
+    }
+  })
+
+  it('major-1: the fast shut runs at most every 250 ms', () => {
+    const realNow = Date.now
+    let now = 3000000
+    Date.now = () => now
+    const cap = capture()
+    try {
+      // A door that never reports shut (lost echo): attempts stay throttled.
+      const bot = mockBot({ open: true, at: { x: 0.5, y: 64, z: -4.0 } })
+      bot.activateBlock = async () => { bot.toggles++ } // no state change
+      const ctx = {
+        lastPathNodes: [{ x: 0.5, y: 64, z: -4.0 }],
+        doorOpened: new Map([['0,64,-2', { x: 0, y: 64, z: -2 }]]),
+      }
+      doors.doorShutFast(bot, ctx)
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'unthrottled second attempt')
+      delete ctx.doorShutAt // isolate the throttle from the shut stamp
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'throttle ignored')
+      now += 300
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 2, 'throttled past the window')
+    } finally {
+      Date.now = realNow
+      cap.release()
+    }
+  })
+
+  it('major-1: the ticker exposes the fast shut (physicsTick tap target)', () => {
+    const bot = mockBot({ open: true, at: { x: 0.5, y: 64, z: -4.0 } })
+    bot.registry = mcData
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    assert.equal(typeof ticker.doorShutFast, 'function', 'no ticker.doorShutFast')
+    const ctx = bot._tickerCtx
+    ctx.lastPathNodes = [{ x: 0.5, y: 64, z: -4.0 }]
+    ctx.doorOpened = new Map([['0,64,-2', { x: 0, y: 64, z: -2 }]])
+    const cap = capture()
+    try {
+      ticker.doorShutFast()
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 1, 'ticker fast shut did not fire')
+    assert.equal(bot.state.open, false)
+  })
+
+  it('minor: a diagonal grazing a door panel is still dropped', () => {
+    // Freestanding oak door at (1,64,0); the (0,64,0)->(1,64,1) diagonal
+    // brushes it as a side cell. The lib offers it (free far side); the
+    // 4ac guard must drop it like any solid corner.
+    const cells = new Map()
+    for (let x = -2; x <= 2; x++) {
+      for (let z = -2; z <= 2; z++) {
+        cells.set(`${x},63,${z}`, { name: 'stone' })
+      }
+    }
+    for (const y of [64, 65]) {
+      cells.set(`1,${y},0`, { state: stateIdFor('oak_door', { facing: 'north', half: y === 64 ? 'lower' : 'upper', open: false }) })
+    }
+    const { movements } = wiredMovements(cells)
+    const ns = movements.getNeighbors(new Move(0, 64, 0, 0, 0))
+    assert.ok(!ns.some((m) => m.x === 1 && m.y === 64 && m.z === 1),
+      'diagonal 0,64,0 -> 1,64,1 grazes the door side cell 1,64,0')
+    // Control: no door, same geometry — the diagonal exists.
+    const open = new Map()
+    for (let x = -2; x <= 2; x++) {
+      for (let z = -2; z <= 2; z++) {
+        open.set(`${x},63,${z}`, { name: 'stone' })
+      }
+    }
+    const free = wiredMovements(open).movements
+    assert.ok(free.getNeighbors(new Move(0, 64, 0, 0, 0)).some((m) => m.x === 1 && m.y === 64 && m.z === 1),
+      'control diagonal missing')
+  })
+})
+
 describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
-  // The bot stands in the sealed 3x3 room, goal on the porch outside. Each
-  // tick replans over the live world (the opener's window), runs the reflex,
-  // then steps the body toward the nearest-ahead node — but never THROUGH a
-  // shut door (the executor pushes, it doesn't clip).
+  // The bot stands in the sealed 3x3 room, goal 5 blocks past the door. Each
+  // 1 s tick replans over the live world (the opener's window) and runs the
+  // reflex; between ticks 4 sub-ticks step the body at walk speed (4.4 b/s)
+  // and run the fast shut — the revmux 01 major-1 walk-past. The body never
+  // steps THROUGH a shut door (the executor pushes, it doesn't clip).
+  const SUBSTEP = 1.1
   async function escape({ withReflex }) {
     const cells = roomCells()
-    const world = blockAtFor(cells)
     const doorAt = { x: 0, y: 64, z: -2 }
+    const toggledAt = []
+    let now = 1000000
     const bot = worldBot(cells)
     Object.assign(bot, {
       toggles: [],
@@ -459,6 +590,7 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
       activateBlock: async (b) => {
         const p = b && b.position
         bot.toggles.push(p ? `${p.x},${p.y},${p.z}` : '?')
+        toggledAt.push(now)
         // A hand click flips both halves (facing/hinge kept).
         for (const y of [64, 65]) {
           const cur = Block.fromStateId(cells.get(`0,${y},-2`).state, 0).getProperties()
@@ -475,18 +607,16 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
     movements.allowSprinting = false
     ticker.setMovements(movements)
     const ctx = { lastPathNodes: null, doorOpened: new Map() }
-    const goal = new goals.GoalBlock(0, 64, -4)
+    const goal = new goals.GoalBlock(0, 64, -7)
+    const arrived = () => Math.hypot(bot.entity.position.x - 0.5, bot.entity.position.z + 6.5) < 0.4
     const cap = capture()
-    // Prod cadence: 1 s ticks, so the toggle cooldown (2 s) spans ticks.
     const realNow = Date.now
-    let now = 1000000
     Date.now = () => now
     let reached = false
     try {
-      for (let t = 0; t < 60 && !reached; t++) {
-        now += 1000
+      for (let t = 0; t < 30 && !reached; t++) {
         const bp = bot.entity.position
-        if (Math.hypot(bp.x - 0.5, bp.z + 4.5) < 0.4) { reached = true; break }
+        if (arrived()) { reached = true; break }
         const r = new AStar(
           new Move(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z), 0, 0),
           movements, goal, 10000, 9000).compute()
@@ -494,25 +624,30 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
         if (r.path.length === 0) { reached = true; break }
         ctx.lastPathNodes = r.path.slice(0, 8).map((m) => ({ x: m.x + 0.5, y: m.y, z: m.z + 0.5 }))
         if (withReflex) doors.doorReflex(bot, ctx)
-        // Nearest-ahead node, like the executor's next point.
-        let next = null
-        let nextD = Infinity
-        for (const m of r.path) {
-          const d = Math.hypot(m.x + 0.5 - bp.x, m.z + 0.5 - bp.z)
-          if (d < nextD) { nextD = d; next = m }
+        for (let s = 0; s < 4 && !reached; s++) {
+          now += 250
+          if (withReflex) doors.doorShutFast(bot, ctx)
+          // Nearest-ahead node of the tick's plan, like the executor's next.
+          const here = bot.entity.position
+          let next = null
+          let nextD = Infinity
+          for (const m of r.path) {
+            const d = Math.hypot(m.x + 0.5 - here.x, m.z + 0.5 - here.z)
+            if (d < nextD) { nextD = d; next = m }
+          }
+          if (nextD < 0.25) {
+            const i = r.path.indexOf(next)
+            next = r.path[Math.min(i + 1, r.path.length - 1)]
+            nextD = Math.hypot(next.x + 0.5 - here.x, next.z + 0.5 - here.z)
+          }
+          // A shut door holds the body (no clipping through the panel).
+          const doorNow = Block.fromStateId(cells.get('0,64,-2').state, 0).getProperties()
+          if (next.x === doorAt.x && next.y === doorAt.y && next.z === doorAt.z && !doorNow.open) continue
+          const k = Math.min(SUBSTEP, nextD) / (nextD || 1)
+          bot.entity.position = new Vec3(
+            here.x + (next.x + 0.5 - here.x) * k, 64, here.z + (next.z + 0.5 - here.z) * k)
+          if (arrived()) reached = true
         }
-        if (nextD < 0.25) {
-          const i = r.path.indexOf(next)
-          next = r.path[Math.min(i + 1, r.path.length - 1)]
-          nextD = Math.hypot(next.x + 0.5 - bp.x, next.z + 0.5 - bp.z)
-        }
-        // A shut door holds the body (no clipping through the panel).
-        const doorNow = Block.fromStateId(cells.get('0,64,-2').state, 0).getProperties()
-        if (next.x === doorAt.x && next.y === doorAt.y && next.z === doorAt.z && !doorNow.open) continue
-        const s = Math.min(0.5, nextD) / (nextD || 1)
-        bot.entity.position = new Vec3(
-          bp.x + (next.x + 0.5 - bp.x) * s, 64, bp.z + (next.z + 0.5 - bp.z) * s)
-        if (Math.hypot(bot.entity.position.x - 0.5, bot.entity.position.z + 4.5) < 0.4) reached = true
       }
     } finally {
       Date.now = realNow
@@ -520,10 +655,10 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
     }
     const lower = Block.fromStateId(cells.get('0,64,-2').state, 0)
     const upper = Block.fromStateId(cells.get('0,65,-2').state, 0)
-    return { reached, lower, upper, toggles: bot.toggles, pos: bot.entity.position, logged: cap.logged }
+    return { reached, lower, upper, toggles: bot.toggles, toggledAt, pos: bot.entity.position, logged: cap.logged }
   }
 
-  it('exits through the door; the door stands whole and shut after', async () => {
+  it('exits at walk speed; the door stands whole and shut promptly after', async () => {
     const r = await escape({ withReflex: true })
     assert.ok(r.reached, `never left the room (at ${r.pos.x.toFixed(1)},${r.pos.z.toFixed(1)})`)
     assert.equal(r.lower.name, 'oak_door', 'lower half gone')
@@ -531,6 +666,10 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
     assert.equal(r.lower.getProperties().open, false, 'door left open')
     assert.equal(r.upper.getProperties().open, false, 'halves disagree')
     assert.deepEqual(r.toggles, ['0,64,-2', '0,64,-2'], `toggles: ${r.toggles.join(' ')}`)
+    // Prompt, not on the return visit: shut within ~1 s of the open click
+    // (revmux 01 major-1: the shared-stamp build never shut at all here).
+    assert.ok(r.toggledAt[1] - r.toggledAt[0] <= 1500,
+      `shut ${r.toggledAt[1] - r.toggledAt[0]} ms after the open`)
   })
 
   it('control: without the reflex the bot pushes at the shut door forever', async () => {

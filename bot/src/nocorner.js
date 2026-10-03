@@ -1,5 +1,7 @@
 'use strict'
 
+const { isDoorName } = require('./doors')
+
 // No-corner-cut guard (idkcraft-4ac): mineflayer-pathfinder 2.4.5
 // getMoveDiagonal offers a diagonal when only ONE of the two side cells is
 // free; the 0.6-wide body clips the occupied corner and the executor wedges
@@ -11,10 +13,10 @@
 // move.toBreak — the corner is open after digging) and openable blocks.
 // Note the lib's openable set is gate-named blocks plus the hand doors
 // (doors.js extends it so the fork's postProcessPath centres doorway nodes;
-// canOpenDoors stays false): openable side cells are skipped here, so a
-// diagonal grazing a door panel is allowed; no diagonal INTO a door cell
-// exists anyway (unbreakable, straight-only edges). Iron doors and
-// trapdoors stay solid and their diagonals stay dropped.
+// canOpenDoors stays false). Openable side cells are skipped here — except
+// doors (revmux 01 minor): a diagonal grazing a door panel is the 4ac
+// wedge class, so door side cells keep their drop. No diagonal INTO a door
+// cell exists anyway (unbreakable, straight-only edges).
 function addNoCornerCut(movements) {
   // setMovements also accepts plain movement-like objects (unit mocks carry
   // only flags): wrap only a real Movements with getNeighbors.
@@ -45,7 +47,12 @@ function cutsCorner(movements, node, m) {
   for (let dy = lo; dy <= hi; dy++) {
     for (const [ox, oz] of [[dx, 0], [0, dz]]) {
       const cell = movements.getBlock(node, ox, dy, oz)
-      if (!cell || !cell.physical || cell.safe || cell.openable) continue
+      if (!cell || !cell.physical || cell.safe) continue
+      // Gate side cells keep their skip (lib default, unchanged); doors read
+      // openable too (doors.js, for the doorway centre) but a grazing
+      // diagonal is the 4ac wedge class — keep the drop for any *_door
+      // side cell (revmux 01 minor).
+      if (cell.openable && !isDoorName(cell.name)) continue
       const pos = cell.position
       if (pos && broken.has(`${pos.x},${pos.y},${pos.z}`)) continue
       return true
