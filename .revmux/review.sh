@@ -20,7 +20,7 @@
 set -e
 # risky = the files where every stuck/livelock regression of 09-22..28 landed, plus the
 # pathfinder/Movements customisations and packet taps that change what the server accepts
-RISKY='bot/src/index\.js|bot/src/goal\.js|bot/src/brain\.js|bot/src/behaviours/recover\.js|bot/src/behaviours/follow\.js|bot/src/(jumpcost|nocorner|swim|snow|unpin|decontact|detour)\.js|laya/'
+RISKY='bot/src/body\.js|bot/src/index\.js|bot/src/goal\.js|bot/src/brain\.js|bot/src/behaviours/recover\.js|bot/src/behaviours/follow\.js|bot/src/(jumpcost|nocorner|swim|snow|unpin|decontact|detour)\.js|laya/'
 # Movements settings (body.js movementsFor is the single write site) — matched on added bot/src/ lines
 MOVES='Movements|allowSprinting|scafoldingBlocks|canDig|allow1by1towers|allowParkour|blocksCantBreak|exclusionAreas|canOpenDoors'
 # a risky file in any diff header, or a Movements word on an added line of a bot/src/ file

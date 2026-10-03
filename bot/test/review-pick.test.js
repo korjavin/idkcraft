@@ -21,14 +21,15 @@ describe('review.sh profile pick (idkcraft-111r)', () => {
 
   it('a risky file is risky whatever the content', () => {
     assert.strictEqual(pick(patch('bot/src/goal.js', '+  x()')), 'idkcraft-risky')
+    assert.strictEqual(pick(patch('bot/src/body.js', '+  if (castleWalk(ctx)) x = false')), 'idkcraft-risky', 'movementsFor condition naming no flag')
     assert.strictEqual(pick(patch('laya/app.py', '+x = 1')), 'idkcraft-risky')
   })
 
   it('anything else is the plain profile', () => {
     assert.strictEqual(pick(patch('bot/src/behaviours/castle.js', '+  x()')), 'idkcraft')
-    assert.strictEqual(pick(patch('bot/src/body.js', '-  mov.canDig = x')), 'idkcraft', 'a removed line is not a new setting')
+    assert.strictEqual(pick(patch('bot/src/danger.js', '-  mov.canDig = x')), 'idkcraft', 'a removed line is not a new setting')
     assert.strictEqual(pick(patch('CLAUDE.md', '+ any `Movements` setting, canDig')), 'idkcraft', 'docs/tooling naming the words')
-    assert.strictEqual(pick(patch('bot/test/body.test.js', '+  mov.canDig = true') + patch('bot/src/body.js', '+  x()')), 'idkcraft', 'a test fixture is not a setting')
+    assert.strictEqual(pick(patch('bot/test/body.test.js', '+  mov.canDig = true') + patch('bot/src/behaviours/castle.js', '+  x()')), 'idkcraft', 'a test fixture is not a setting')
   })
 
   it('every patch the script reads bypasses diff.external', () => {
