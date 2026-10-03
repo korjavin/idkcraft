@@ -13,9 +13,9 @@ const pick = (diff) => execFileSync('sh', [script, '--pick'], { input: diff, enc
 const patch = (file, lines) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1,1 +1,2 @@\n ${'//'}\n${lines}\n`
 
 describe('review.sh profile pick (idkcraft-111r)', () => {
-  it('a movementsFor setting on an added line is risky', () => {
+  it('a Movements setting on an added bot/src line is risky (any file)', () => {
     for (const k of ['scafoldingBlocks', 'canDig', 'allow1by1towers', 'allowParkour', 'blocksCantBreak', 'exclusionAreas', 'canOpenDoors']) {
-      assert.strictEqual(pick(patch('bot/src/body.js', `+  mov.${k} = x`)), 'idkcraft-risky', k)
+      assert.strictEqual(pick(patch('bot/src/behaviours/castle.js', `+  mov.${k} = x`)), 'idkcraft-risky', k)
     }
   })
 
