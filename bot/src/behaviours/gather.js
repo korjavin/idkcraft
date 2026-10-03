@@ -322,8 +322,10 @@ function gather(bot, ctx, target, state) {
         // mates would each burn 10 ticks and a strike, failing the step with
         // reachable trees nearby — and an acacia crown branches into
         // neighbouring x,z-columns, so skip the whole crown at once.
+        // Cliff (kl19): every candidate that high is out of reach at once,
+        // not one 5 s verdict per crown.
         for (const q of g.lastFound || []) {
-          if (Math.hypot(q.x - g.pos.x, q.z - g.pos.z) < CROWN_SKIP_RADIUS) g.skip.add(keyOf(q))
+          if ((cliff && q.y - bp.y >= CLIFF_DY) || Math.hypot(q.x - g.pos.x, q.z - g.pos.z) < CROWN_SKIP_RADIUS) g.skip.add(keyOf(q))
         }
         g.skip.add(keyOf(g.pos))
         g.streak = (g.streak || 0) + 1

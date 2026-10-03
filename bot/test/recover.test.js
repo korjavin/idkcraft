@@ -2795,3 +2795,29 @@ describe('recover throughBlocked reads the goalward 1x2 (9sq F1, revmux-01 core-
     assert.equal(shut.action, 'sidestep')
   })
 })
+
+describe('drop-goal on a high goal with no climber (kl19)', () => {
+  function flat() {
+    const solids = new Set()
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) solids.add(key(x, 60, z))
+    return worldBot(solids, [])
+  }
+  it('scaffold 0, goal +9, open ground: dropped at entry, no sidestep/wait, no pit mark', async () => {
+    const bot = flat()
+    bot.pathfinder = { goal: {}, setGoal(g) { this.goal = g } }
+    const ctx = { stuck: { by: 'lead', goal: { x: 0, y: 70, z: 0 } }, lead: { pos: { x: 0, y: 70, z: 0 } }, brain: { source: 't', ask: async () => 'wait' } }
+    const d = await recover.decide(bot, ctx, {}, null)
+    assert.equal(d.action, 'idle')
+    assert.equal(ctx.recovery, null)
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.lead, null, 'order dropped like a gave-up')
+    assert.equal(bot.pathfinder.goal, null)
+    assert.equal(danger.count(ctx), 0, 'open ground is no pit')
+  })
+  it('a level goal still gets a primitive', async () => {
+    const bot = flat()
+    const ctx = { stuck: { by: 'lead', goal: { x: 5, y: 61, z: 0 } }, brain: { source: 't', ask: async () => 'wait' } }
+    const d = await recover.decide(bot, ctx, {}, null)
+    assert.notEqual(d.action, 'idle')
+  })
+})
