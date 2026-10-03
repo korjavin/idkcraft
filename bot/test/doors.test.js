@@ -536,6 +536,42 @@ describe('doors: revmux 01 fixes (idkcraft-6xno)', () => {
     assert.equal(bot.state.open, false)
   })
 
+  it('minor: only the fast shut catches a between-ticks walk-past', () => {
+    // Sprint walk-past: the body is inside the (1.2, 3.5] shut window from
+    // T+100 to T+600 only — both adjacent 1 s ticks find it gone. Fails if
+    // doorShutFast is removed (the round-2 gap: the e2e below pins the
+    // stamps + the integrated shut, not the fast path itself).
+    const realNow = Date.now
+    let now = 4000000
+    Date.now = () => now
+    const cap = capture()
+    try {
+      const bot = mockBot({ open: true, at: { x: 0.5, y: 64, z: -4.0 } })
+      const ctx = {
+        lastPathNodes: [{ x: 0.5, y: 64, z: -4.0 }, { x: 0.5, y: 64, z: -5.0 }],
+        doorOpened: new Map([['0,64,-2', { x: 0, y: 64, z: -2 }]]),
+      }
+      now += 100 // T+100: 2.5 past the door, mid-window
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'fast shut missed the walk-past')
+      assert.equal(bot.state.open, false)
+      // Contrast: the 1 s tick closer at T+1000 sees an empty window.
+      bot.state.open = true
+      bot.toggles = 0
+      ctx.doorOpened.set('0,64,-2', { x: 0, y: 64, z: -2 })
+      delete ctx.doorShutAt
+      bot.entity.position = { x: 0.5, y: 64, z: -7.5 } // 6 past, gone
+      ctx.lastPathNodes = [{ x: 0.5, y: 64, z: -7.5 }]
+      now += 900
+      doors.doorReflex(bot, ctx)
+      assert.equal(bot.toggles, 0, 'tick closer caught a gone bot')
+      assert.equal(bot.state.open, true)
+    } finally {
+      Date.now = realNow
+      cap.release()
+    }
+  })
+
   it('minor: a diagonal grazing a door panel is still dropped', () => {
     // Freestanding oak door at (1,64,0); the (0,64,0)->(1,64,1) diagonal
     // brushes it as a side cell. The lib offers it (free far side); the
@@ -570,8 +606,10 @@ describe('doors: room escape (fake-player e2e, idkcraft-6xno)', () => {
   // The bot stands in the sealed 3x3 room, goal 5 blocks past the door. Each
   // 1 s tick replans over the live world (the opener's window) and runs the
   // reflex; between ticks 4 sub-ticks step the body at walk speed (4.4 b/s)
-  // and run the fast shut — the revmux 01 major-1 walk-past. The body never
-  // steps THROUGH a shut door (the executor pushes, it doesn't clip).
+  // and run the fast shut. Pins the integrated prompt shut (round-2 note:
+  // the between-ticks walk-past itself is pinned by the unit above). The
+  // body never steps THROUGH a shut door (the executor pushes, it doesn't
+  // clip).
   const SUBSTEP = 1.1
   async function escape({ withReflex }) {
     const cells = roomCells()
