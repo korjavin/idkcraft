@@ -991,3 +991,20 @@ describe('bv6 door lane', () => {
     }
   })
 })
+
+describe('6xno home owns its door (revmux 01 major-2)', () => {
+  it("home's toggle untracks the door from the A* reflex (no same-tick double)", () => {
+    // The A* opener tracked the home door (a via-detour crossed it); the
+    // close phase's toggle stands the reflex down so the two never click
+    // the same door on independent cooldowns.
+    const bot = mockBot({ at: { ...INSIDE }, doorOpen: true })
+    const ctx = {
+      home: ctxHome(), step: 'gohome', stepStatus: 'running',
+      doorOpened: new Map([['11,64,20', { x: 11, y: 64, z: 20 }]]),
+      gohome: { phase: 'close', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+    }
+    home.gohome(bot, ctx)
+    assert.equal(bot.calls.activates, 1)
+    assert.equal(ctx.doorOpened.size, 0, 'reflex still tracks the home door')
+  })
+})

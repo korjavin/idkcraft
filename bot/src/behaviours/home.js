@@ -5,7 +5,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { goalFacts } = require('../goal')
 const detour = require('../detour')
 const stuck = require('../stuck')
-const { botPos } = require('./util')
+const { botPos, doorOpen, doorLaneDX: blockLaneDX } = require('./util')
 const body = require('../body')
 const retreatMod = require('./retreat')
 const recover = require('./recover')
@@ -13,12 +13,11 @@ const buildMod = require('./build')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
-// mineflayer-pathfinder never opens doors (Movements.canOpenDoors=false),
-// so both steps work the door themselves with bot.activateBlock. The
-// doorway legs (enter/exit) also bypass the pathfinder entirely: with doors
-// in blocksCantBreak (8si) the door cell reads unsafe and unbreakable, so
-// A* can never route through it — the body sneaks the open doorway by
-// direct control instead.
+// A* routes wooden doors on its own since idkcraft-6xno (doors.js: the
+// opener reflex), but the home door keeps its dedicated phases: the walks
+// end outside, the doorway legs (enter/exit) still bypass the pathfinder
+// entirely and sneak the open doorway by direct control on the bv6 lane,
+// and the shut is explicit — never entrusted to the executor reflex.
 //
 // The door is the lower door cell at site+(1,0,0) on a v1 hut, site+(3,0,0)
 // on a v2 house (jr2.1 blueprint); the outside approach cell is one north
@@ -139,41 +138,11 @@ function doorBlock(bot, home) {
   }
 }
 
-function doorOpen(block) {
-  try {
-    const props = block && typeof block.getProperties === 'function' && block.getProperties()
-    return !!props && props.open === true
-  } catch (_) {
-    return false
-  }
-}
-
-// Door-crossing lane (bv6): an open door leaves a 0.8125-wide gap beside its
-// 0.1875 panel, so the 0.6 body crossing at cell centre clears the panel by
-// ~1 cm — and a diagonal entry (the walk ends up to 1.5 off-centre, the legs
-// cut corners at the 0.6 met radius) pushes the body INTO the panel face at
-// a steep angle, where friction holds it: no slide, the unstick backs up and
-// re-drives the same line, 60 ticks, failed:cannot-reach-home (two nights in
-// a row on rig-m4, door left standing open). The lane is the free gap's
-// centre — cell centre +/- half a panel — on the side AWAY from the open
-// panel. Panel slices per mc-data collision boxes (prismarine-block): with
-// open=true, north/left and south/right hug the west edge, north/right and
-// south/left the east edge. North-wall doors cross along z, so only
-// north/south facings lane; east/west (no z gap), closed, or unreadable
-// doors read 0 and keep today's centre crossing.
-const DOOR_LANE_DX = 0.09375
+// The home door's lane (bv6 geometry lives in behaviours/util, shared with
+// the A* door reflex since idkcraft-6xno): the free-gap offset for the legs.
 function doorLaneDX(bot, home) {
   try {
-    const door = doorBlock(bot, home)
-    if (!door || !doorOpen(door)) return 0
-    const props = typeof door.getProperties === 'function' && door.getProperties()
-    if (!props) return 0
-    const { facing, hinge } = props
-    if (facing !== 'north' && facing !== 'south') return 0
-    if (hinge !== 'left' && hinge !== 'right') return 0
-    // Open panel on the west slice -> lane east of centre, and vice versa.
-    const panelWest = (facing === 'north') === (hinge === 'left')
-    return panelWest ? DOOR_LANE_DX : -DOOR_LANE_DX
+    return blockLaneDX(doorBlock(bot, home))
   } catch (_) {
     return 0
   }
@@ -216,8 +185,16 @@ function failNoDoor(ctx, st, where) {
 }
 
 // Fire-and-forget toggle, at most one per window; the phase only advances
-// on the OBSERVED state, never optimistically.
-function tryToggle(bot, st, block) {
+// on the OBSERVED state, never optimistically. Untracks the door from the
+// A* door reflex first (revmux 01 major-2): home owns its door from here,
+// so the reflex stands down instead of double-toggling on its own cooldown.
+function tryToggle(bot, ctx, st, block) {
+  try {
+    const p = block && block.position
+    if (ctx && ctx.doorOpened instanceof Map && p && typeof p.x === 'number') {
+      ctx.doorOpened.delete(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`)
+    }
+  } catch (_) { /* untrack best-effort */ }
   const now = Date.now()
   if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return
   st.lastToggle = now
@@ -560,7 +537,7 @@ function gohomeTick(bot, ctx, target, state) {
       ctx.stepStatus = 'failed:door-stuck'
       return
     } else {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
       return
     }
   }
@@ -584,7 +561,7 @@ function gohomeTick(bot, ctx, target, state) {
       try { bot.chat('home for the night') } catch (_) { /* chat best-effort */ }
       return
     }
-    tryToggle(bot, st, door)
+    tryToggle(bot, ctx, st, door)
   }
 
 }
@@ -729,7 +706,7 @@ function stay(bot, ctx, target, state) {
       ctx.inShelter = false
       if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
     } else if (doorOpen(door)) {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
     }
     holdStill(bot, ctx)
     return
@@ -756,14 +733,15 @@ function stay(bot, ctx, target, state) {
       ctx.stepStatus = 'failed:door-stuck' // gohome's 1l9 cap (idkcraft-470s)
       return
     } else {
-      tryToggle(bot, st, door)
+      tryToggle(bot, ctx, st, door)
       return
     }
   }
   if (st.phase === 'exit') {
     // No pathfinder goal here at all (revmux 02-review): any GoalNear the
-    // inside cell meets would close the door on itself without walking out,
-    // and with doors unbreakable A* cannot cross the doorway anyway. The
+    // inside cell meets would close the door on itself without walking out.
+    // (A* crosses wooden doorways since idkcraft-6xno, which only strengthens
+    // the point: the exit stays on the sneak legs, never on a goal.) The
     // sneak legs cannot meet arrival in place.
     // One-sided like enter: arrival only with the whole body north of the
     // door cell, never standing in the doorway (revmux 03-review).
@@ -794,7 +772,7 @@ function stay(bot, ctx, target, state) {
       try { if (line) bot.chat(line) } catch (_) { /* chat best-effort */ }
       return
     }
-    tryToggle(bot, st, door)
+    tryToggle(bot, ctx, st, door)
   }
 
 }
@@ -1073,7 +1051,7 @@ function exitMeet(bot, ctx, home, order) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); the released body's A* may dig the wall (revmux 01 minor)
       return
     } else {
-      tryToggle(bot, order, door)
+      tryToggle(bot, ctx, order, door)
       return
     }
   }
@@ -1096,16 +1074,17 @@ function exitMeet(bot, ctx, home, order) {
       finishExit(bot, ctx, order) // gap walked or door shut: released
       return
     }
-    tryToggle(bot, order, door)
+    tryToggle(bot, ctx, order, door)
   }
 }
 
 // 'Come home' order (jr2.3): the walk→open→enter→close wire mirrors gohome
 // (same door primitives, same staging, same arrival predicates — only the
 // meet target is named), then the bot HOLDS the common room until
-// countermanded: day steps work the house through the walls and A* cannot
-// route the doorway (see header), so ending the order inside would strand
-// the next step digging through the wall. A move command while inside arms
+// countermanded: day steps work the house through the walls, so ending the
+// order inside would strand the next step against them (A* opens wooden
+// doors since idkcraft-6xno, but the exit legs stay the doorway's owners).
+// A move command while inside arms
 // the exit via releaseMeet; death/respawn outside silently re-arms the walk.
 // Fight preempts like every other explicit order.
 function comehome(bot, ctx, target, state) {
@@ -1143,7 +1122,7 @@ function comehome(bot, ctx, target, state) {
     else {
       let nightish = false
       try { nightish = goalFacts(bot, ctx).time !== 'day' } catch (_) { nightish = false }
-      if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, order, held)
+      if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, ctx, order, held)
     }
     holdStill(bot, ctx)
     return
@@ -1207,7 +1186,7 @@ function comehome(bot, ctx, target, state) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-xhqv)
       return
     } else {
-      tryToggle(bot, order, door)
+      tryToggle(bot, ctx, order, door)
       return
     }
   }
@@ -1295,7 +1274,7 @@ function comehome(bot, ctx, target, state) {
       arriveMeet(bot, ctx, order)
       return
     }
-    tryToggle(bot, order, door)
+    tryToggle(bot, ctx, order, door)
   }
 }
 

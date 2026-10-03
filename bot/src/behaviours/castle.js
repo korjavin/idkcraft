@@ -149,11 +149,12 @@ function strike(ctx, st, c, why, now) {
 }
 
 // Work order = plan order with the door deferred past every other place
-// cell (revmux 01): A* never opens doors (canOpenDoors=false) and the laid
-// door is break-vetoed, so the doorway stays an open passage while the bot
-// still needs the interior. Then the keep-clear cells, the moat digs (v2,
-// g0z.6: the bridge deck is an ordinary place cell, so it exists before
-// any dig) and the fence ring last. Indices stay plan indices (blocked keys).
+// cell (revmux 01): the laid door is break-vetoed, so the doorway stays an
+// open passage while the bot still needs the interior (A* opens wooden
+// doors since idkcraft-6xno, but an unlaid doorway still beats a toggle per
+// trip). Then the keep-clear cells, the moat digs (v2, g0z.6: the bridge
+// deck is an ordinary place cell, so it exists before any dig) and the
+// fence ring last. Indices stay plan indices (blocked keys).
 // Torches (g0z.17) go after every other place cell, before the door: no
 // cell leans on a torch, and a torch-none word (no coal for the craft)
 // must never hold the stone and planks behind it.

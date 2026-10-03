@@ -14,6 +14,7 @@ const { createOrders } = require('./orders')
 const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard } = require('./reflexes')
 const { createGreeter } = require('./greet')
 const { addSwimExits, addSwimPrune } = require('./swim')
+const doors = require('./doors')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
@@ -424,6 +425,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // at most one cloned packet per second, only on the airborne + storm +
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
+    // Door reflex (idkcraft-6xno): open the plan's next door within reach,
+    // shut our own openings behind us. Reads only + activateBlock, so it
+    // runs ahead of every branch (paused, alone, normal) like unpin.
+    try { doors.doorReflex(bot, ctx) } catch (_) { /* doors best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; ctx.gocastle = null; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
@@ -988,6 +993,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // plain coords — follow reads numbers only. Cleared on a new goal.
     setPathNodes: (arr) => { ctx.lastPathNodes = Array.isArray(arr) ? arr.slice(0, 8).map((n) => (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null)).filter(Boolean) : null },
     setPathReset: (reason) => { stuck.countPathReset(ctx, reason) },
+    // Fast door shut (idkcraft-6xno revmux 01 major-1): the physicsTick tap,
+    // throttled inside doors.js — a walk-past outruns the 1 s tick closer.
+    doorShutFast: () => { try { doors.doorShutFast(bot, ctx) } catch (_) { /* doors best-effort */ } },
     start: () => scheduleNext(true),
     // ponytail: sprint-jump wedges the bot flush against a 1-block step
     // (sprint speed reaches the face before the queued jump lifts off, so
@@ -996,7 +1004,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // site): installing adopts the lease defaults here, sprint only ever
     // opens on the flat-pursuit gates, and sprint on the decision line
     // stays the brain's opinion only.
-    setMovements: (m) => { if (m) { addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
+    setMovements: (m) => { if (m) { doors.banDoorBreaks(m); doors.addDoorPassages(m); addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
     destroy,
     rearm,
     ...createOrders(ordersBox),
@@ -1177,6 +1185,9 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // mineflayer bot ever reaches this code.
     bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+    // Fast door shut (idkcraft-6xno revmux 01 major-1): throttled to 250 ms
+    // inside doors.js. Same spot as the pathfinder taps: real bot only.
+    bot.on('physicsTick', () => ticker.doorShutFast())
     // Hover-arrest taps (idkcraft-1cj): teleport counter + move-packet clone
     // for the watchdog. Same spot as the pathfinder taps: real bot only.
     try { unpin.installUnpinTap(bot, bot._tickerCtx || {}) } catch (_) { /* unpin tap best-effort */ }
