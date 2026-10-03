@@ -123,6 +123,11 @@ describe('rw4.5 gohome', () => {
     assert.equal(ctx.stuck.by, 'no-displacement')
     assert.equal(ctx.gohome.fails, 0)
     assert.equal(ctx.gohome.phase, 'walk')
+    // asked once: further stalls fall through to the normal fail count
+    ctx.stuck = null
+    for (let i = 0; i < 40 && ctx.gohome.phase === 'walk'; i++) home.gohome(bot, ctx)
+    assert.equal(ctx.stuck, null)
+    assert.equal(ctx.gohome.phase, 'failed')
   })
 
   it('the walk forbids digging and restores it after', () => {

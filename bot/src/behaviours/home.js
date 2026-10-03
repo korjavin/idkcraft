@@ -253,9 +253,11 @@ function walkTo(bot, ctx, st, key, goal, arrived) {
     if (idle) ctx.lastGoalKey = '' // force re-issue below
     // i2bi: a body 2+ below the aim (a pit at the door) with no path is a
     // stuck situation the menu can solve (dig a step); gohome/comehome are
-    // raise-exempt, so ask once. Latched/refused -> the normal fail count.
-    if (idle && goal && typeof goal.y === 'number' && bp.y < goal.y - 1.5 &&
+    // raise-exempt, so ask once per walk record (st.asked: a done episode
+    // clears the latch, so the latch alone does not bound it).
+    if (!st.asked && idle && goal && typeof goal.y === 'number' && bp.y < goal.y - 1.5 &&
         stuck.request(bot, ctx, 'no-displacement', { x: goal.x, y: goal.y, z: goal.z }, key)) {
+      st.asked = true
       st.fails = 0
       return false
     }
