@@ -574,6 +574,11 @@ function findRef(bot, p, bp) {
 // (round-2 majors). Goal ownership (not the tick) is the switch, so a
 // multi-tick flat search stays guarded to its end, while a cancel path
 // ('follow me', 'go work', 'stop') or a replaced episode no-ops at once.
+// The place seam is the mirror (idkcraft-3dkn): pathfinder 2.4.5 DOES
+// scaffold (1x1 towers, jump-up steps, bridges), and a tower on a just-
+// shaved cell looped "shave, place, shave" in prod — so no pathfinder
+// placement above the level inside the square; at/below it (bridging an
+// unfilled hole) stays allowed. flat's own fill places bypass the seam.
 function guardFlatSurface(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -582,31 +587,32 @@ function guardFlatSurface(bot, ctx) {
     const key = f ? f.key : null
     if (ctx.flatGuardKey === key && ctx.flatGuardMov === mov) return
     if (ctx.flatGuardFn) {
+      const { brk, plc } = ctx.flatGuardFn
       for (const m of new Set([ctx.flatGuardMov, mov])) {
-        if (m && Array.isArray(m.exclusionAreasBreak)) {
-          m.exclusionAreasBreak = m.exclusionAreasBreak.filter((fn) => fn !== ctx.flatGuardFn)
-        }
+        if (m && Array.isArray(m.exclusionAreasBreak)) m.exclusionAreasBreak = m.exclusionAreasBreak.filter((fn) => fn !== brk)
+        if (m && Array.isArray(m.exclusionAreasPlace)) m.exclusionAreasPlace = m.exclusionAreasPlace.filter((fn) => fn !== plc)
       }
       ctx.flatGuardFn = null
     }
     ctx.flatGuardMov = mov
     ctx.flatGuardKey = key
     if (!f) return
-    const fn = (block) => {
-      try {
-        const cur = ctx.flat
-        if (!cur || cur.key !== key || cur.parked || cur.level == null) return 0
-        const k = ctx.lastGoalKey || ''
-        if (!/^flat[:-]/.test(k)) return 0
-        const q = block && block.position
-        if (!q || typeof q.x !== 'number' || typeof q.y !== 'number' || typeof q.z !== 'number') return 0
-        if (q.y > cur.level) return 0
-        if (Math.abs(q.x - cur.cx) > cur.r || Math.abs(q.z - cur.cz) > cur.r) return 0
-        return 100
-      } catch (_) { return 0 }
+    // Live flat goal and the cell inside the square → its height over the
+    // level; anything else → null (guard off).
+    const overLevel = (block) => {
+      const cur = ctx.flat
+      if (!cur || cur.key !== key || cur.parked || cur.level == null) return null
+      if (!/^flat[:-]/.test(ctx.lastGoalKey || '')) return null
+      const q = block && block.position
+      if (!q || typeof q.x !== 'number' || typeof q.y !== 'number' || typeof q.z !== 'number') return null
+      if (Math.abs(q.x - cur.cx) > cur.r || Math.abs(q.z - cur.cz) > cur.r) return null
+      return q.y - cur.level
     }
-    mov.exclusionAreasBreak.push(fn)
-    ctx.flatGuardFn = fn
+    const brk = (block) => { try { const d = overLevel(block); return d != null && d <= 0 ? 100 : 0 } catch (_) { return 0 } }
+    const plc = (block) => { try { const d = overLevel(block); return d != null && d > 0 ? 100 : 0 } catch (_) { return 0 } }
+    mov.exclusionAreasBreak.push(brk)
+    if (Array.isArray(mov.exclusionAreasPlace)) mov.exclusionAreasPlace.push(plc)
+    ctx.flatGuardFn = { brk, plc }
   } catch (_) { /* best-effort: approach still walks */ }
 }
 
@@ -851,6 +857,7 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
 function digFlight(bot, ctx, f, h, block) {
   ctx.digInFlight = true
   const at = { x: block.position.x, y: block.position.y, z: block.position.z }
+  console.log(`flat dig ${at.x},${at.y},${at.z}`)
   ;(async () => {
     try {
       // Stone by hand takes ~7.5 s and drops nothing; the harvest tool
@@ -1318,8 +1325,9 @@ function recordStepped(f, bp) {
 
 // Scaffold the bot itself placed mid-episode (recover pillar stairs while
 // stuck travelling, post-#158): dirt/cobble above the level in a stepped
-// column that the scan never queued. NOTE: mineflayer-pathfinder 2.4.5 has
-// no scaffold code, so the pathfinder is never the source; flat's own
+// column that the scan never queued. The pathfinder scaffolds too, but the
+// place seam in guardFlatSurface vetoes that above the level inside the
+// square, so the sweep is the backstop for recover pillars; flat's own
 // caps/supports land at/below the level. Runs ONCE at shave end over a
 // frozen set, through the same shave safety gates (structure, liquid,
 // under-feet; the allowlist is extended to SWEEP_MATS for sweep bumps),
