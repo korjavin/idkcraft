@@ -495,33 +495,25 @@ sum(rate(idkcraft_bot_events_total{event="death"}[5m]))
 max_over_time(idkcraft_bot_goal_step{step="gear"}[5m])
 ```
 
-### Prod acceptance (2026-09-28, blacksmith night 1: FAIL baseline)
+### Blacksmith prod acceptance: FAIL baseline (2026-09-29)
 
-Window 2026-09-27 22:58 (deploy #172, ipn.3) – 2026-09-28 22:44 UTC,
-~24 h, bot online throughout (autonomous), 55 restarts (deploys
-#172–#225), owner online ~5 h in episodes:
+Two observed windows, both FAIL; the acceptance bead (ipn.5) stays open
+for a re-night.
 
-- Sword: FAIL. No iron sword forged, no diamonds. The ladder never passed
-  `iron_pickaxe:self` (12x `gear rung iron:pickaxe:self`); 0 smelts, 0
-  forges, 0 furnace claims. Autonomously mined raw_iron: 0 (6 came via the
-  owner's `bring me iron 3` and went back through share). ~1700 gear ticks,
-  ~100% idle (`moving=false`).
-- Deaths: 143 in the window (`events death=142`); 0 on the gear step and 0
-  on gear-asked iron trips (no trips ran). The rest: gohome/night 51+12,
-  build 17, beds 17, craft 11, equip 10, a spawn-cluster stall pocket and
-  one drowning (filed separately: 9kd, aum, 0u9).
-- Handover: 0 gear goods by either channel. `deliver` picked 2x, both
-  failed; `stockpile` banked 4x, junk/planks only.
-- Honesty: FAIL. 4x `need 3 more raw iron, going to dig` + 1x `need logs
-  for sticks, going to chop` with no fetch after. Causes filed as ipn.7
-  (askedKey re-issues the yielded gear — 469/599/571 s stalls), ipn.8
-  (stockpile banks the stick/cobble reserve ahead of gear), ipn.9 (forage
-  blind to gear's latched want, digs logs). `night: survived, no deaths`
-  after a restart wipes the ctx death counter is by design (unfiled).
+- Night 1 (2026-09-27 22:58 – 09-28 22:44 UTC, ~24 h, owner online ~5 h):
+  the ladder never passed `iron_pickaxe:self` (12x `gear rung
+  iron:pickaxe:self`), 0 smelts/forges, 0 autonomous raw_iron, gear ~100%
+  idle. Deaths 143, 0 on the gear step. 0 gear handovers. Honesty FAIL:
+  4x `need 3 more raw iron, going to dig` + 1x `need logs for sticks` with
+  no fetch after (filed ipn.7/8/9).
+- Night 2 (2026-09-29 00:33–15:20 UTC, ~14.8 h, owner offline): gear chosen
+  0 of 240 step changes (equip/build/beds always ahead), 0 rungs/smelts/
+  forges, 0 raw_iron. Deaths 62 (gohome 53, gear 0). Causes: A — gear
+  starved by beds/equip retrying the same failure (ipn.11); B — build
+  stuck at 98/99 on fill cells (ipn.10); C — no bed, far respawn, night
+  gohome deaths (ipn.12).
 
-Verdict: the epic fails the night; re-night after ipn.7 (#231) + ipn.8
-(#233) + ipn.9 (#232). This section's counters landed with ipn.5 so the
-re-night reads off Prometheus.
+Re-night after A+B+C and read the counters above off Prometheus.
 
 ### Changelog (2026-09-27, PRs #113–#136)
 
