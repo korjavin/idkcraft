@@ -82,6 +82,18 @@ describe('castle site search (g0z.19)', () => {
     assert.equal(st.announce, false)
   })
 
+  it('the spot in front is taken at once, on the ground median, not the speaker\'s feet (g0z.20)', () => {
+    const bot = makeBot(() => false)
+    bot.players.Steve.entity.position.y = 66 // on a 2-high bump
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    handleChat(bot, ticker, 'Steve', 'build castle')
+    const st = bot._tickerCtx.castle
+    assert.ok(st, bot.chats.join('|'))
+    assert.equal(st.site.y, 64)
+    assert.equal(st.announce, false)
+    assert.match(bot.chats.pop(), new RegExp(`^castle at ${st.site.x} 64 ${st.site.z}, `))
+  })
+
   it('no valid spot in range: honest refusal with the majority reason', async () => {
     const bot = makeBot(() => true) // all water
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })

@@ -359,6 +359,7 @@ function siteEval(bot, site, rot, version, opts = {}) {
   let n = 0
   let moved = 0
   let worst = null
+  let over = null
   let wet = 0
   let firstWet = null
   for (let dx = 0; dx < w; dx++) {
@@ -382,7 +383,10 @@ function siteEval(bot, site, rot, version, opts = {}) {
       const off = r.top - (sy - 1)
       moved += Math.abs(off)
       if (!worst || Math.abs(off) > Math.abs(worst.off)) worst = { off, x, z }
-      if (Math.abs(off) > (inCore ? MAX_DIP : RING_DIP)) n++
+      if (Math.abs(off) > (inCore ? MAX_DIP : RING_DIP)) {
+        n++
+        if (!over || Math.abs(off) > Math.abs(over.off)) over = { off, x, z } // the refusal names an offender
+      }
       // The search needs the verdict, not the tally: stop reading here.
       if (opts.strict && (n || moved > EARTH_BUDGET)) return { y: sy, bad: 'the ground is too uneven', why: 'uneven' }
     }
@@ -391,8 +395,9 @@ function siteEval(bot, site, rot, version, opts = {}) {
     return { y: sy, bad: `there is water in ${wet} spots around it, first at ${firstWet.x} ${firstWet.y} ${firstWet.z} (I fill up to ${RING_WATER})`, why: 'water' }
   }
   if (!n && moved <= EARTH_BUDGET) return { y: sy, bad: null }
-  const by = worst.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(worst.off)) // the scan floor
-  const at = `worst ${by} ${worst.off > 0 ? 'up' : 'down'} at ${worst.x} ${worst.z}`
+  const p = n ? over : worst
+  const by = p.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(p.off)) // the scan floor
+  const at = `worst ${by} ${p.off > 0 ? 'up' : 'down'} at ${p.x} ${p.z}`
   if (n) return { y: sy, bad: `the ground is too uneven: ${n} spots are more than ${MAX_DIP} blocks off level, ${at} (I level up to ${MAX_DIP} under the castle)`, why: 'uneven' }
   return { y: sy, bad: `the ground is too uneven: levelling it moves ${moved} blocks, ${at} (I move up to ${EARTH_BUDGET})`, why: 'uneven' }
 }

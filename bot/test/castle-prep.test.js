@@ -127,10 +127,18 @@ describe('g0z.20 site level, ring and earthwork budget (v2 31x27)', () => {
     assert.equal(ctx.castle.phase, 'body')
   })
 
-  it('(b) water in a moat column is filled too (the moat digs it out later); 7 wet ring spots refuse', () => {
+  it('(b) water in a moat column is filled too (the moat digs it out later); 7 wet ring spots refuse', async () => {
     const plan = blueprint.absPlan(SITE, 0, 2)
     const m = plan.cells.find((c) => c.kind === 'dig' && c.dy === -1)
-    assert.equal(v2((w) => { w.set(m.x, 63, m.z, 'water'); w.set(m.x, 62, m.z, 'water') }).bad, null)
+    const w = makeWorld()
+    w.set(m.x, 63, m.z, 'water'); w.set(m.x, 62, m.z, 'water')
+    const bot = mockBot(w)
+    assert.equal(castle.siteEval(bot, SITE, 0, 2).bad, null)
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'prep', blocked: {} } }
+    await run(bot, ctx, 20)
+    assert.ok(bot.chats.some((x) => /0 blocks to cut, 2 holes to fill/.test(x)), bot.chats.join('|'))
+    assert.equal(w.get(m.x, 62, m.z), 'cobblestone', 'the dy -2 moat cell filled')
+    assert.equal(w.get(m.x, 63, m.z), 'cobblestone', 'the dy -1 moat cell filled')
     const r = v2((w) => { for (let x = 0; x < 7; x++) w.set(SITE.x + x, 63, SITE.z, 'water') })
     assert.match(r.bad, /there is water in 7 spots around it, first at 100 63 200 \(I fill up to 6\)/)
   })
