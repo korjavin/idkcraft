@@ -149,16 +149,17 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   `canOpenDoors`, `allowSprinting` or `Movements`) or `laya/`; else `idkcraft`
   (one agent, `--no-synthesis`). Check a pick: `git diff --no-ext-diff origin/master...HEAD | sh .revmux/review.sh --pick`. Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
   (`LENSES=` overrides).
-- Risky files: the review archive is **mandatory** for merge, and the round gets the
-  `bot/tools/stuck-run.sh` output via `STUCKRUN=<file>` (lands in `input/context/`).
-- Stuck oracle gate (idkcraft-6x7.4): a PR touching risky files above attaches the
-  `sh bot/tools/stuck-run.sh` output of the branch (judged against `stuck-baseline.json` —
-  no master "before" run), and does not merge
-  while it exits 1 (regression); the script holds its own rig lock (busy = exit 2, no manual
-  `mkdir` wrapper; `RIG_LOCK_WAIT=<secs>` to wait) — exit 2 is an environment failure, fix the rig, not the code.
-  Every closed movement bead adds its prod coords to `bot/tools/stuck-spots.json` (with `bead`)
-  plus the measured entry in `bot/tools/stuck-baseline.json`; one without the other fails
-  the gate or `npm test`. Manual: `bot/tools/README.md`.
+- Risky files: the review archive is **mandatory** for merge.
+- Stuck oracle (idkcraft-6x7.4), **batched** (owner 2026-10-03): PRs do NOT run
+  `sh bot/tools/stuck-run.sh` and do not add spots — the rig run is too slow per PR. After a batch
+  of risky merges (default: every 3, or before an owner play session) one `stuck-run.sh` runs on
+  `master`, judged against `stuck-baseline.json`; exit 1 (regression) → bisect within the batch
+  and file a P1 bead; exit 2 is an environment failure, fix the rig, not the code. The script
+  holds its own rig lock (busy = exit 2; `RIG_LOCK_WAIT=<secs>` to wait). Accepted risk: a
+  regression can reach prod before its batch run. A movement PR lists its prod coords in the PR
+  body; a batch task adds them to `bot/tools/stuck-spots.json` (with `bead`) plus the measured
+  entry in `bot/tools/stuck-baseline.json` — one without the other fails the gate or `npm test`.
+  `STUCKRUN=<file>` stays optional for review rounds. Manual: `bot/tools/README.md`.
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
   .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta). Minors are fixed in the same commit
   and never trigger another round. Max 3 rounds; whatever is still gating is outstanding in the handoff.
