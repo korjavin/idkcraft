@@ -143,7 +143,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - Profile is picked from the diff: `idkcraft-risky` (two agents, synthesis on) when it touches
   `bot/src/index.js`, `goal.js`, `brain.js`, `behaviours/recover.js`, `follow.js`, the pathfinder
   customisations (`jumpcost.js`, `nocorner.js`, `swim.js`, `snow.js`), the packet taps (`unpin.js`,
-  `decontact.js`, `detour.js`), any `Movements` setting (an added line naming `scafoldingBlocks`,
+  `decontact.js`, `detour.js`), any `Movements` setting (an added `bot/src/` line naming `scafoldingBlocks`,
   `canDig`, `allow1by1towers`, `allowParkour`, `blocksCantBreak`, `exclusionAreas`, `canOpenDoors`,
   `allowSprinting` or `Movements` — i.e. `bot/src/body.js` `movementsFor`) or `laya/`; else `idkcraft`
   (one agent, `--no-synthesis`). Check a pick: `git diff --no-ext-diff origin/master...HEAD | sh .revmux/review.sh --pick`. Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
