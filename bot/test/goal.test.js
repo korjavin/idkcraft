@@ -343,6 +343,59 @@ describe('bt8s: a known flip never re-picks forage before the bound', () => {
   })
 })
 
+describe('4dse: a known flicker never flips forage<->explore', () => {
+  // Prod shape: memory holds only iron/lapis with no pickaxe (pickaxe gate
+  // nulls every cell), so known=near rests on one cow at the 48-block edge.
+  const flickerSetup = () => {
+    const bot = goalBot({ items: [] })
+    bot.entities = { 1: { id: 1, name: 'cow', position: pos(47.5, 64, 0) } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } }
+    resources.noteSpots(ctx, [
+      { x: 5, y: 60, z: 0, name: 'iron_ore' },
+      { x: 6, y: 60, z: 0, name: 'lapis_ore' },
+    ], 1000)
+    return { bot, ctx }
+  }
+  it('a cow at the 48-block edge: <=1 step switch over 20 flickering ticks', async () => {
+    const { bot, ctx } = flickerSetup()
+    // Sanity: memory alone never reads near (pickaxe gate), the cow decides it.
+    bot.entities[1].position = pos(48.5, 64, 0)
+    assert.equal(goalFacts(bot, ctx).known, 'none')
+    bot.entities[1].position = pos(47.5, 64, 0)
+    assert.equal(goalFacts(bot, ctx).known, 'near')
+    let switches = 0
+    let last = null
+    for (let tick = 0; tick < 20; tick++) {
+      bot.entities[1].position = pos(tick % 2 ? 48.5 : 47.5, 64, 0)
+      if (ctx.step) ctx.stepStatus = 'running' // legs never finish (prod: preempted every tick)
+      const r = await decide(bot, ctx)
+      if (last !== null && r.action !== last) switches++
+      last = r.action
+    }
+    assert.ok(switches <= 1, `known flicker flipped the step ${switches} times in 20 ticks`)
+  })
+  it('a real situation change still preempts the held leg', async () => {
+    const { bot, ctx } = flickerSetup()
+    assert.equal((await decide(bot, ctx)).action, 'forage')
+    bot.time = { timeOfDay: 15000 } // night falls mid-leg
+    ctx.stepStatus = 'running'
+    assert.equal((await decide(bot, ctx)).action, 'gohome')
+  })
+  it('a fresh forage pick restarts at plan, never resumes the stale leg', async () => {
+    const { bot, ctx } = flickerSetup()
+    assert.equal((await decide(bot, ctx)).action, 'forage') // cow near
+    // The interrupted leg: mid-walk at the old animal, announcement spent.
+    ctx.forage = { phase: 'walk', target: { kind: 'food', name: 'cow', id: 999 }, announced: true }
+    bot.entities[1].position = pos(48.5, 64, 0) // cow out of range
+    ctx.stepStatus = 'done' // leg over: an honest re-pick may leave
+    assert.equal((await decide(bot, ctx)).action, 'explore')
+    bot.entities[1].position = pos(47.5, 64, 0) // cow back in range
+    ctx.stepStatus = 'done'
+    assert.equal((await decide(bot, ctx)).action, 'forage')
+    assert.equal(ctx.forage, null, 'fresh pick drops the stale leg (the behaviour re-inits at plan)')
+  })
+})
+
 describe('atl.4 livelock guard: a holding failure bars its step', () => {
   const logsBot = (n, at, extra) => {
     const items = []

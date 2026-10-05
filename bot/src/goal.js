@@ -1070,6 +1070,12 @@ function goalText(facts, home) {
     (typeof facts.castle === 'string' && facts.castle.startsWith('stone-') && !((facts.pickaxe || 0) > 0) ? ' pickaxe=no' : '')
 }
 
+// goalText without the known token (4dse): equal stripped texts mean the
+// situation moved only on known — the forage/explore hold in decide().
+function stripKnown(text) {
+  return typeof text === 'string' ? text.replace(/known=\S+\s?/, '') : text
+}
+
 // atl.4 livelock guard: a recorded step failure holds while the facts text
 // is unchanged and the body stays within REFAIL_DIST of the failure point.
 // New facts or relocation release the step for a fresh try. Per-step map:
@@ -1638,6 +1644,18 @@ async function decide(bot, ctx) {
       fetchRetry = true
     }
   } catch (_) { /* retry best-effort */ }
+  // Known-flicker hold (4dse): a running forage/explore leg is never
+  // preempted when the ONLY changed fact is known — an animal at the
+  // 48-block find edge flips near/none every 1-3 s (prod: 347
+  // forage<->explore switches/hour, the body standing still). Like the
+  // night-step stickiness above: the leg runs to step-done/failed, which
+  // re-picks honestly. Forced re-decides (chain handoff, fetch retry)
+  // still cut through; the night forces are prev-specific and cannot
+  // fire here.
+  if (!finished && (prev === 'forage' || prev === 'explore') && ctx && ctx.goalText !== text &&
+    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry) {
+    return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
   if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry) {
     const askKey = `${text}\n${status || ''}`
     // The shortcut must respect holds (h9z): it returns the finished step
@@ -1672,6 +1690,9 @@ async function decide(bot, ctx) {
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
     if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
+    // A fresh forage pick restarts the hunt (4dse): a resumed stale
+    // find/walk chases the old target id while explore heads elsewhere.
+    if (choice.step === 'forage' && choice.step !== prev) ctx.forage = null
     // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
     // an order-interrupted night would otherwise hold on open ground. The
     // interrupted gohome walk resets too, so the next march starts from the
