@@ -874,7 +874,7 @@ function placeChest(bot, ctx, spot, bp) {
     ctx.stockpileInFlight = true
     void (async () => {
       try {
-        await craftMod.safeCraft(bot, found[0], 1, tableBlock)
+        await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest' })
       } catch (_) {
         ctx.stockpileInFlight = false
         fail(ctx, 'craft') // loud: failHolds parks until the situation moves
