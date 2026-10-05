@@ -692,6 +692,67 @@ describe('shelter spots (idkcraft-ed88)', () => {
   })
 })
 
+describe('shelter close budget (idkcraft-hoy7)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+
+  it('shelterReached: a spot budget overrides the 15 s default', () => {
+    assert.equal(shelterReached(24, false, 35), true, 'swim spots close slower')
+    assert.equal(shelterReached(35, false, 35), true, 'on the budget')
+    assert.equal(shelterReached(35.5, false, 35), false, 'past the budget')
+    assert.equal(shelterReached(null, false, 35), false, 'never closed, any budget')
+    assert.equal(shelterReached(24, true, 35), false, 'died, any budget')
+    assert.equal(shelterReached(16, false), false, 'default stays 15 (SPAWN-BARE)')
+  })
+
+  it('loadSpots parses closeSecs on shelter spots, rejects it elsewhere', () => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'hoy7-'))
+    const saved = process.argv[2]
+    const load = (list) => {
+      const f = path.join(dir, 'spots.json')
+      fs.writeFileSync(f, JSON.stringify(list))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    const shelter = { name: 'X', mode: 'shelter', spawn: [0, 64, 0], goal: [0, 90, 150], home: [300, 64, 0], secs: 45 }
+    const follow = { name: 'Y', spawn: [0, 64, 0], goal: [1, 64, 0] }
+    try {
+      assert.equal(load([{ ...shelter }])[0].closeSecs, 15, 'default 15')
+      assert.equal(load([{ ...shelter, closeSecs: 35 }])[0].closeSecs, 35)
+      assert.throws(() => load([{ ...shelter, closeSecs: 0 }]), /bad closeSecs/)
+      assert.throws(() => load([{ ...shelter, closeSecs: -5 }]), /bad closeSecs/)
+      assert.throws(() => load([{ ...shelter, closeSecs: 'soon' }]), /bad closeSecs/)
+      assert.throws(() => load([{ ...shelter, closeSecs: 46 }]), /bad closeSecs/, 'past the window end')
+      assert.throws(() => load([{ ...follow, closeSecs: 35 }]), /closeSecs needs mode=shelter/)
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('SPAWN-BARE keeps the default budget', () => {
+    assert.equal(byName['SPAWN-BARE'].closeSecs, undefined, 'no override: 15 s stands')
+  })
+
+  it('SHELTER-WATER is the yrtx night-shelter-in-water spot', () => {
+    const w = byName['SHELTER-WATER']
+    assert.ok(w, 'SHELTER-WATER in the corpus')
+    assert.equal(w.mode, 'shelter')
+    assert.equal(w.bead, 'idkcraft-yrtx')
+    assert.deepEqual(w.spawn, [100.5, 62, -405.5], 'prod water by the yrtx drowned death (103 62 -420)')
+    assert.equal(w.scaffold, 0, 'empty kit: the pillar cannot run, dig-in closes')
+    assert.equal(w.pickaxe, false)
+    assert.equal(w.secs, 45)
+    assert.equal(w.closeSecs, 35, 'swim + dig closes 18-24 s, past the 15 s stand budget')
+    assert.ok(Math.hypot(w.home[0] - w.spawn[0], w.home[2] - w.spawn[2]) > 96, 'home past the night walk range')
+    assert.ok(Math.hypot(w.goal[0] - w.spawn[0], w.goal[2] - w.spawn[2]) > 128, 'guide out of entity range: the bot works alone')
+    assert.deepEqual(baseline.spots['SHELTER-WATER'], { reached: true, maxStuck: 4, maxEps: 1, maxCalls: 0 },
+      'stuck 1-2 (observed max 2: beaching trips stuck resets) + 2 slack, eps 0 + 1, calls strict')
+  })
+})
+
 describe('stuck-replay.js gate wiring (idkcraft-6x7.4)', () => {
   const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
 

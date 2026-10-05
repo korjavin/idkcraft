@@ -348,6 +348,50 @@ describe('doors: opener reflex (idkcraft-6xno)', () => {
     }
     assert.equal(bot.toggles, 1, `toggled ${bot.toggles}x in one window`)
   })
+
+  it('in-doorway: a shut door under the feet opens past the window head (6x7.13)', () => {
+    // Trap geometry (rig DOOR-ROOM): the body entered before the first click
+    // and the lib trimmed the reached door node, so the window starts past
+    // the door — the scan sees nothing and the bot pushes into its own shut
+    // panel forever. Feet cell 0,64,-2 is the door here.
+    const bot = mockBot({ at: { x: 0.5, y: 64, z: -1.6 } })
+    const ctx = { lastPathNodes: [{ x: 0.5, y: 64, z: -2.5 }, { x: 0.5, y: 64, z: -3.5 }] }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 1, 'shut door under the feet never opened')
+    assert.equal(bot.state.open, true, 'door still shut')
+  })
+
+  it('in-doorway: an open door under the feet shadows no door ahead (6x7.13)', () => {
+    // The feet seed only fires on shut: walking out through an open doorway
+    // must not eat the click for the next shut door on the plan.
+    const bot = mockBot({ door: { open: true, name: 'oak_door', facing: 'north' }, at: { x: 0.5, y: 64, z: -1.6 } })
+    const rawBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      if (Math.floor(p.x) === 0 && Math.floor(p.y) === 64 && Math.floor(p.z) === -4) {
+        return { name: 'oak_door', position: new Vec3(0, 64, -4), getProperties: () => ({ open: false, facing: 'north', hinge: 'left', half: 'lower' }) }
+      }
+      return rawBlockAt(p)
+    }
+    let aheadToggles = 0
+    const rawToggle = bot.activateBlock
+    bot.activateBlock = async (b) => {
+      if (b && b.position && b.position.z === -4) aheadToggles++
+      return rawToggle(b)
+    }
+    const ctx = { lastPathNodes: [{ x: 0.5, y: 64, z: -2.5 }, { x: 0.5, y: 64, z: -3.5 }] }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(aheadToggles, 1, 'shut door ahead starved by the open one underfoot')
+  })
 })
 
 describe('doors: closer reflex (idkcraft-6xno)', () => {
