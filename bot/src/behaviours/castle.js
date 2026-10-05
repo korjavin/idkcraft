@@ -1101,11 +1101,12 @@ function castle(bot, ctx) {
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
-  // core-2: the latch survives a retry of the latched cell itself — only
-  // work on another cell re-arms the line (one line through two windows).
-  if (r.idx >= 0) {
-    const cellKey = `${bkey(st, r.idx)}:`
-    if (!ctx.castleBlockedSaid || !ctx.castleBlockedSaid.startsWith(cellKey)) ctx.castleBlockedSaid = null
+  // core-2 (round 3): re-arm only when the latched cell is resolved — its
+  // blocked entry is gone (landed/dug, pruned by pick above) — never on a
+  // mere retry pick. Two stuck cells re-blocking must stay silent.
+  if (ctx.castleBlockedSaid) {
+    const cellKey = ctx.castleBlockedSaid.split(':').slice(0, 2).join(':')
+    if (!st.blocked[cellKey]) ctx.castleBlockedSaid = null
   }
   if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
   if (r.idx < 0) {

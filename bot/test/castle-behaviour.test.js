@@ -596,7 +596,37 @@ describe('g0z.2 castle executor', () => {
     assert.match(ctx.castle.status, new RegExp(`^blocked at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
   })
 
-  it('g0z.23 round 2: work on another cell re-arms the stuck line', async () => {
+  it('g0z.23 round 3: two stuck cells re-blocked after expiry chat once', async () => {
+    const world = makeWorld()
+    const plan = cells()
+    const pair = plan.filter((c) => c.kind === 'stone' && c.dy === 1).slice(0, 2)
+    assert.equal(pair.length, 2)
+    const [a, b] = pair
+    world.set(a.x, a.y, a.z, 'dirt')
+    world.set(b.x, b.y, b.z, 'dirt')
+    paint(world, Math.min(a.idx, b.idx))
+    const bot = mockBot(world)
+    const dig0 = bot.dig
+    const bad = new Set([`${a.x},${a.y},${a.z}`, `${b.x},${b.y},${b.z}`])
+    bot.dig = async (t) => {
+      if (bad.has(`${t.position.x},${t.position.y},${t.position.z}`)) throw new Error('refused')
+      return dig0(t)
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 100)
+    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    // Both backoffs expire: both retry and re-block, still one line.
+    ctx.castle.blocked[`1:${a.idx}`].until = 0
+    ctx.castle.blocked[`1:${b.idx}`].until = 0
+    await run(bot, ctx, 30)
+    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.equal(ctx.castle.blocked[`1:${a.idx}`].tries, 2)
+    assert.equal(ctx.castle.blocked[`1:${b.idx}`].tries, 2)
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+  })
+
+  it('g0z.23 round 3: resolving the latched cell re-arms the stuck line', async () => {
     const world = makeWorld()
     const plan = cells()
     const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
@@ -618,7 +648,7 @@ describe('g0z.2 castle executor', () => {
     refused = false
     await run(bot, ctx, 10)
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
-    assert.equal(ctx.castleBlockedSaid, null, 'a different picked cell re-arms the line')
+    assert.equal(ctx.castleBlockedSaid, null, 'the resolved cell re-arms the line')
   })
 
   it('g0z.23: a kept occupant chats with the remove hint', async () => {
