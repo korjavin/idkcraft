@@ -49,6 +49,8 @@ function mockBot({ registry = LOGREG, spots = [], names = {}, items = [], bare =
       goal: null,
       setGoal: (goal, dynamic) => { calls.setGoal++; calls.goals.push(goal); bot.pathfinder.goal = goal },
       isMoving: () => bot._moving,
+      isMining: () => !!bot._mining,
+      isBuilding: () => !!bot._building,
     },
     inventory: { items: () => bot._items },
     findBlocks(opts) {
@@ -853,6 +855,86 @@ describe('gather target selection (idkcraft-m7ke)', () => {
   it('with scaffold the same timeout keeps the walk (the executor can pillar)', () => {
     const { ctx } = cliffRun([{ name: 'dirt', count: 16 }])
     assert.equal(ctx.gather.pos && ctx.gather.pos.y, 73)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+})
+
+describe('gather walk re-issue (idkcraft-6x7.14)', () => {
+  function stalledWalk() {
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'oak_log', '6,64,0': 'birch_log' },
+    })
+    bot._moving = true // wedged executor: claims moving, body static
+    const ctx = freshCtx()
+    gather(bot, ctx, null, {}) // goal on tree 1
+    assert.match(ctx.lastGoalKey, /^gather:2,64,0$/)
+    return { bot, ctx }
+  }
+
+  it('two idle no-displacement ticks re-issue the same goal, the tree is kept', () => {
+    // JR-BUILD micro-wedge: the executor stands on a stale/failing plan
+    // (drop it cannot straight-line) with zero controls until its 3.5 s
+    // futility fires — rig-counted — and the replan walks free. The
+    // refresh delivers that replan inside the timer window, uncounted.
+    const { goals } = require('mineflayer-pathfinder')
+    const { bot, ctx } = stalledWalk()
+    ctx.lastPathStatus = 'success' // a stale verdict is judging the old plan
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 1, 'one idle tick is plan latency, not a stall')
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 2, 'second idle tick refreshes the plan')
+    const g = bot.calls.goals[1]
+    assert.ok(g instanceof goals.GoalNear, 'same walk goal shape')
+    assert.equal(`${g.x},${g.y},${g.z}`, '2,64,0', 'same target')
+    assert.equal(ctx.lastPathStatus, 'none', 'the next verdict judges the fresh plan')
+    assert.match(ctx.lastGoalKey, /^gather:2,64,0$/, 'same key: no fresh budget')
+    assert.ok(ctx.gather.pos, 'tree kept, not skipped')
+    assert.equal(ctx.gather.skip.size, 0)
+    assert.equal(ctx.gather.streak, 0)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('the re-issue fires once per tree, the legacy budget still skips on tick 10', () => {
+    // A second stall pair is a real wedge for STALL_TICKS, not another
+    // transient: the 68p pin (skip lands on tick 10) holds through it.
+    const { bot, ctx } = stalledWalk()
+    for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 2, 'one refresh, then the legacy budget runs')
+    assert.ok(ctx.gather.skip.has('2,64,0'), 'skipped on the 10th stall tick')
+    assert.equal(ctx.gather.streak, 1)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('a dig or place in flight is progress, never a re-issue trigger', () => {
+    for (const flag of ['_mining', '_building']) {
+      const { bot, ctx } = stalledWalk()
+      bot[flag] = true // the executor works through the tree: leaves, a pillar
+      for (let i = 0; i < 5; i++) gather(bot, ctx, null, {})
+      assert.equal(bot.calls.setGoal, 1, `${flag}: real work is not interrupted`)
+      assert.ok(ctx.gather.pos, `${flag}: tree kept`)
+    }
+  })
+
+  it('displacement resets the re-issue counter', () => {
+    const { bot, ctx } = stalledWalk()
+    gather(bot, ctx, null, {}) // one idle tick
+    bot.entity.position = pos(1, 64, 0) // a step toward the tree
+    gather(bot, ctx, null, {})
+    gather(bot, ctx, null, {}) // one idle tick after the step
+    assert.equal(bot.calls.setGoal, 1, 'no refresh without a stall pair')
+    assert.ok(ctx.gather.pos)
+  })
+
+  it('an unloaded far point never re-issues (chunks stream, the backstop judges)', () => {
+    const bot = mockBot({ spots: [], names: { '90,64,0': 'oak_log' } })
+    bot._moving = true
+    bot.blockAt = () => null // nothing loaded, not even the memory point
+    const ctx = freshCtx()
+    ctx.resources = { items: new Map([['90,64,0', { x: 90, y: 64, z: 0, name: 'oak_log', at: 1 }]]) }
+    for (let i = 0; i < 5; i++) gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:90,64,0$/)
+    assert.equal(bot.calls.setGoal, 1, 'no refresh while the target cell is unloaded')
     assert.equal(ctx.stepStatus, 'running')
   })
 })
