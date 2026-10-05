@@ -895,14 +895,32 @@ describe('gather walk re-issue (idkcraft-6x7.14)', () => {
     assert.equal(ctx.stepStatus, 'running')
   })
 
-  it('the re-issue fires once per tree, the legacy budget still skips on tick 10', () => {
-    // A second stall pair is a real wedge for STALL_TICKS, not another
-    // transient: the 68p pin (skip lands on tick 10) holds through it.
+  it('without progress the refresh fires once, the legacy budget still skips on tick 10', () => {
+    // A stall pair with no step between is one episode: one refresh, then
+    // the 68p pin (skip lands on tick 10) holds through it.
     const { bot, ctx } = stalledWalk()
     for (let i = 0; i < 10; i++) gather(bot, ctx, null, {})
     assert.equal(bot.calls.setGoal, 2, 'one refresh, then the legacy budget runs')
     assert.ok(ctx.gather.skip.has('2,64,0'), 'skipped on the 10th stall tick')
     assert.equal(ctx.gather.streak, 1)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('progress re-arms the refresh: a second stall pair refreshes again', () => {
+    // JR-BUILD val1: the same tree wedged twice (stale plan, then a stale
+    // suffix after a fall). A step between the pairs is a new episode.
+    const { bot, ctx } = stalledWalk()
+    gather(bot, ctx, null, {})
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 2, 'first stall pair refreshes')
+    bot.entity.position = pos(1, 64, 0) // a step toward the tree
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 2, 'progress re-arms, no refresh yet')
+    gather(bot, ctx, null, {})
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 3, 'second stall pair refreshes again')
+    assert.ok(ctx.gather.pos, 'tree kept through both episodes')
+    assert.equal(ctx.gather.streak, 0)
     assert.equal(ctx.stepStatus, 'running')
   })
 

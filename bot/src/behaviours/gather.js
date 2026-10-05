@@ -29,15 +29,18 @@ const FIND_RADIUS = 48
 const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest real trees
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const REISSUE_TICKS = 2 // idle-executor no-displacement ticks before the walk
-// goal is re-issued once (idkcraft-6x7.14): the executor stands with ZERO
+// goal is refreshed (idkcraft-6x7.14): the executor stands with ZERO
 // controls when its walk simulation fails the near path (a drop it cannot
 // straight-line at a tree ledge/canopy) and its only recourse is the 3.5 s
 // futility timer — reset=stuck, rig-counted — followed by a replan that
 // walks free. A refresh from the live stance/world within the timer's
 // window delivers that replan uncounted. 1 would false-fire on plan
 // latency (the first step lands after the issue tick); 3 risks losing the
-// race to the 3.5 s timer. Once per tree: a second stall pair is a real
-// wedge for the legacy budget, not another transient.
+// race to the 3.5 s timer. One credit per stall episode (progress
+// re-arms): a fall or dig restales the plan suffix mid-walk, so the same
+// tree can wedge twice. A true wedge still grinds into the legacy budget
+// below (fewer counted resets, same skip); a hobble gets replans that may
+// fix it.
 const UNREACHABLE_FAILS = 3 // consecutive skips before failed:unreachable
 const CROWN_SKIP_RADIUS = 3 // horizontal blocks, strict: one strike per tree,
 // not per column — acacia crowns branch into neighbouring x,z-columns, while
@@ -342,6 +345,7 @@ function gather(bot, ctx, target, state) {
       if (!cliff && bring.progressed(bp, g.lastPos, grounded)) {
         g.stalls = 0
         g.restalls = 0
+        g.reissued = false // progress re-arms the refresh credit
         g.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       } else if (cliff || ++g.stalls >= STALL_TICKS || stuck.verdict(ctx).placeErrors >= stuck.PLACE_ERRORS_ENTRY) {
         if (cliff) console.log(`gather: ${g.name} at ${g.pos.x} ${g.pos.y} ${g.pos.z} is ${Math.round(g.pos.y - bp.y)} up, no scaffold (${verdict}): next tree`)
@@ -376,11 +380,12 @@ function gather(bot, ctx, target, state) {
             key)
         }
       } else if (!unloadedFar && !execBusy(bot) && !g.reissued && (g.restalls = (g.restalls | 0) + 1) >= REISSUE_TICKS) {
-        // 6x7.14: one refresh, same target (see REISSUE_TICKS). The
-        // legacy budget above counts through it (68p pin: the skip still
-        // lands on tick 10), so this only ever advances the replan, never
-        // the give-up. Same key (issuedKey untouched): the next tick keeps
-        // counting instead of taking a fresh budget.
+        // 6x7.14: one refresh per stall episode, same target (see
+        // REISSUE_TICKS). The legacy budget above counts through it (68p
+        // pin: the skip still lands on tick 10), so this only ever
+        // advances the replan, never the give-up. Same key (issuedKey
+        // untouched): the next tick keeps counting instead of taking a
+        // fresh budget.
         g.reissued = true
         g.restalls = 0
         bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
