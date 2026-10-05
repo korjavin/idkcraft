@@ -345,8 +345,11 @@ const MENU = {
   },
   forage: {
     // Known valuable find nearby (planForage: value rank, pickaxe gate).
-    // Nothing known -> explore finds more.
-    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx),
+    // Nothing known -> explore finds more. A failed leg holds FORAGE_RETRY_MS
+    // past any known flip (bt8s, the castlefetch demand precedent): the
+    // text-keyed failHolds releases on every near/none flip and churned
+    // forage<->explore every few seconds on the rig.
+    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -1083,6 +1086,22 @@ const SELF_ADVANCING = { explore: true, gohome: true, stay: true }
 // failure, but expires — an owner restock of the castle chest moves no
 // fact, so without the expiry an idle bot by the castle never re-looks.
 const CASTLEFETCH_RETRY_MS = 5 * 60 * 1000
+// Bounded forage hold (idkcraft-bt8s): a failed forage leg holds like any
+// failure, but time-keyed, not text-keyed — known=near/none flips move the
+// facts text every few seconds (g0z.12 rig churn, the same mechanism that
+// released the castlefetch hold before g0z.15) and would release a text
+// hold at once. Explore stays self-advancing (its failures consume the
+// point, so holding it would deadlock the spiral); holding forage alone
+// pins the pair on explore until the bound passes.
+const FORAGE_RETRY_MS = 5 * 60 * 1000
+function forageHeld(ctx) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.forage
+    return !!sf && typeof sf.at === 'number' && Date.now() - sf.at <= FORAGE_RETRY_MS
+  } catch (_) {
+    return false
+  }
+}
 // Done-holdable steps (h9z, revmux 01 major): ONLY steps whose every
 // productive path moves the facts text, so a same-text done proves no
 // effect. craft consumes its logs / flips table/door; gather crosses the
@@ -1693,4 +1712,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }
