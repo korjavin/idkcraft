@@ -1082,13 +1082,17 @@ function goalText(facts, home) {
     // Equip words (rwuu): the kit state the equip criterion matches — a
     // missing sword or pickaxe (the g0z.4 stone-castle re-decide rides on
     // the pickaxe word too), a wooden pickaxe the stone chain can upgrade,
-    // or blocks below the equip dig mark. Only while the kit wants work:
-    // a complete kit keeps the text byte-identical (the castle word above
-    // is the precedent), so no other decision re-fires.
+    // or blocks below the dig-full mark. Only while the kit wants work: a
+    // complete kit with full blocks keeps the text byte-identical (the
+    // castle word above is the precedent). The blocks word keys on FULL,
+    // not the 16 feasibility gate: equip digs 16->32 without an in-flight
+    // flag, so a word flipping at 16 would re-decide mid-dig, cut the dig
+    // short and flip-flop at every 15/16 crossing (revmux 01 body-1) — at
+    // 32 the word is constant across the whole dig and the dig completes.
     (!((facts.sword || 0) > 0) ? ' sword=no' : '') +
     (!((facts.pickaxe || 0) > 0) ? ' pickaxe=no'
       : facts.pickWord === 'wood' && (facts.cobble || 0) >= 3 ? ' pickaxe=wood' : '') +
-    ((facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_LOW ? ' blocks=low' : '')
+    ((facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_FULL ? ' blocks=low' : '')
 }
 
 // goalText without the known token (4dse): equal stripped texts mean the

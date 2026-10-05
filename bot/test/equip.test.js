@@ -2325,13 +2325,24 @@ describe('equip wet-dig guard (idkcraft-dj3)', () => {
 })
 
 describe('equip full pack (idkcraft-rwuu)', () => {
-  const JIDS = { ...IDS, leaf_litter: 1001, gravel: 1002 }
-  // Mineflayer-faithful craft: with no room the product is tossed (click
-  // -999) and the op still resolves — without ensureRoom the strike below
-  // is a phantom.
+  const JIDS = { ...IDS, leaf_litter: 1001, gravel: 1002, cobblestone: 1003, stick: 1004 }
+  const PICK_INGREDIENTS = [
+    { id: JIDS.cobblestone }, { id: JIDS.cobblestone }, { id: JIDS.cobblestone },
+    { id: JIDS.stick }, { id: JIDS.stick },
+  ]
+  const pickRecipe = () => ({ result: { name: 'stone_pickaxe', count: 1 }, inShape: [], ingredients: PICK_INGREDIENTS })
+  // Mineflayer-faithful craft: ingredients are consumed, and with no room
+  // the product is tossed (click -999) while the op still resolves —
+  // without ensureRoom the strike below is a phantom.
   function fullAwareCraft(bot) {
     return async (recipe, count, table) => {
       bot.calls.craft.push({ recipe, count, table })
+      for (const ing of recipe.ingredients || []) {
+        const name = Object.keys(JIDS).find((k) => JIDS[k] === ing.id)
+        const stack = bot._items.find((i) => i.name === name && i.count > 0)
+        if (stack) stack.count -= 1
+      }
+      bot._items = bot._items.filter((i) => i.count > 0)
       const name = recipe.result.name
       const stackable = bot._items.find((i) => i.name === name && i.count < 64)
       if (stackable) stackable.count += recipe.result.count || 1
@@ -2359,7 +2370,7 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     const items = []
     for (let i = 0; i < 20; i++) items.push({ name: 'leaf_litter', count: 64 })
     for (let i = 0; i < 13; i++) items.push({ name: 'gravel', count: 64 })
-    items.push({ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 64 })
+    items.push({ name: 'cobblestone', count: 41 }, { name: 'stick', count: 5 }, { name: 'dirt', count: 64 })
     assert.equal(items.length, 36)
     return items
   }
@@ -2368,7 +2379,7 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     const bot = withToss(mockBot({
       items: fullPack(),
       ids: JIDS,
-      recipes: { stone_pickaxe: recipeFor('stone_pickaxe') },
+      recipes: { stone_pickaxe: pickRecipe() },
       blockAtImpl: () => TABLE,
     }))
     bot.craft = fullAwareCraft(bot)
@@ -2386,12 +2397,12 @@ describe('equip full pack (idkcraft-rwuu)', () => {
   it('36/36 without junk: fails inventory-full, crafts nothing, never chats equipped', async () => {
     const items = []
     for (let i = 0; i < 32; i++) items.push({ name: 'dirt', count: 64 })
-    items.push({ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 64 }, { name: 'dirt', count: 64 })
+    items.push({ name: 'cobblestone', count: 41 }, { name: 'stick', count: 5 }, { name: 'dirt', count: 64 }, { name: 'dirt', count: 64 })
     assert.equal(items.length, 36)
     const bot = withToss(mockBot({
       items,
       ids: JIDS,
-      recipes: { stone_pickaxe: recipeFor('stone_pickaxe') },
+      recipes: { stone_pickaxe: pickRecipe() },
       blockAtImpl: () => TABLE,
     }))
     bot.craft = fullAwareCraft(bot)
@@ -2406,6 +2417,27 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
     assert.ok(!bot.lines.some((l) => l.startsWith('equipped')), `lines: ${bot.lines}`)
     assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('36/36 exact materials, no junk: the freed slots fit the craft, nothing tossed', async () => {
+    const items = []
+    for (let i = 0; i < 34; i++) items.push({ name: 'dirt', count: 64 })
+    items.push({ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 })
+    assert.equal(items.length, 36)
+    const bot = withToss(mockBot({
+      items,
+      ids: JIDS,
+      recipes: { stone_pickaxe: pickRecipe() },
+      blockAtImpl: () => TABLE,
+    }))
+    bot.craft = fullAwareCraft(bot)
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.ok(bot._items.some((i) => i.name === 'stone_pickaxe'), 'stone pickaxe landed')
+    assert.deepEqual(bot.calls.toss, [])
+    assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
     bot.restoreError()
   })
 

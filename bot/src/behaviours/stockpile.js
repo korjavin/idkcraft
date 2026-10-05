@@ -960,6 +960,7 @@ module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest
 module.exports.chestCounts = chestCounts
 module.exports.depositToChest = depositToChest
+module.exports.withChest = withChest // craft.js room bank (rwuu): partial junk deposit with spare keeps
 module.exports.withdrawEdible = withdrawEdible
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2

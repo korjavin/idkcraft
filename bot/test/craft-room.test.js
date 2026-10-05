@@ -54,23 +54,41 @@ function roomBot({ stacks = [], craftImpl = null, tossImpl = null, blockAtImpl =
 }
 
 const stack = (name, count) => ({ name, count, type: IDS[name] })
-const prodRecipe = (name, count = 1) => ({ result: { id: IDS[name], count }, inShape: [], ingredients: [] })
+// Prod-shaped recipe: result plus per-placement ingredients (placementsFor
+// counts each entry once — the stone pickaxe takes 3 cobble + 2 sticks).
+const prodRecipe = (name, count = 1, ingredients = []) => ({ result: { id: IDS[name], count }, inShape: [], ingredients })
+const PICK_INGREDIENTS = [
+  { id: IDS.cobblestone }, { id: IDS.cobblestone }, { id: IDS.cobblestone },
+  { id: IDS.stick }, { id: IDS.stick },
+]
 
 function fullPack() {
-  // 36/36: the prod shape — junk stacks plus the stone-pickaxe materials.
+  // 36/36: the prod shape — junk stacks plus the stone-pickaxe materials
+  // in partial stacks (an exact stack would free its own slot, core-1).
   const stacks = []
   for (let i = 0; i < 20; i++) stacks.push(stack('leaf_litter', 64))
   for (let i = 0; i < 13; i++) stacks.push(stack('gravel', 64))
-  stacks.push(stack('cobblestone', 3), stack('stick', 2), stack('dirt', 64))
+  stacks.push(stack('cobblestone', 41), stack('stick', 5), stack('dirt', 64))
   assert.equal(stacks.length, 36)
   return stacks
 }
 
 function fullPackNoJunk() {
-  // 36/36 with nothing tossable: tools, mats and scaffold only.
+  // 36/36 with nothing tossable and no exact stack: tools, mats and
+  // scaffold only, every ingredient stack partial.
   const stacks = []
   for (let i = 0; i < 32; i++) stacks.push(stack('dirt', 64))
-  stacks.push(stack('cobblestone', 41), stack('stick', 2), stack('dirt', 64), stack('dirt', 64))
+  stacks.push(stack('cobblestone', 41), stack('stick', 5), stack('dirt', 64), stack('dirt', 64))
+  assert.equal(stacks.length, 36)
+  return stacks
+}
+
+function fullPackExact() {
+  // 36/36, no junk, but exact material stacks: the cobble and stick slots
+  // free during the op, so the craft fits without tossing (core-1).
+  const stacks = []
+  for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+  stacks.push(stack('cobblestone', 3), stack('stick', 2))
   assert.equal(stacks.length, 36)
   return stacks
 }
@@ -78,7 +96,7 @@ function fullPackNoJunk() {
 describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
   it('room available: crafts without tossing', async () => {
     const bot = roomBot({ stacks: [stack('cobblestone', 3), stack('stick', 2)] })
-    await craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { item: 'stone_pickaxe' })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { item: 'stone_pickaxe' })
     assert.equal(bot.calls.craft.length, 1)
     assert.deepEqual(bot.calls.toss, [])
   })
@@ -95,7 +113,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
 
   it('full pack with junk: tosses the cheapest junk first, then crafts', async () => {
     const bot = roomBot({ stacks: fullPack() })
-    await craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { item: 'stone_pickaxe' })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { item: 'stone_pickaxe' })
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.toss.length, 1)
     assert.equal(bot.calls.toss[0].id, IDS.leaf_litter)
@@ -108,7 +126,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
   it('full pack without junk: fails inventory-full, crafts nothing', async () => {
     const bot = roomBot({ stacks: fullPackNoJunk() })
     await assert.rejects(
-      craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { item: 'stone_pickaxe' }),
+      craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { item: 'stone_pickaxe' }),
       /inventory-full/,
     )
     assert.equal(bot.calls.craft.length, 0)
@@ -119,7 +137,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     const stacks = [stack('bow', 1), stack('bow', 1)]
     for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
     const bot = roomBot({ stacks })
-    await craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { item: 'stone_pickaxe' })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { item: 'stone_pickaxe' })
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.toss.length, 1)
     assert.equal(bot.calls.toss[0].id, IDS.bow)
@@ -147,7 +165,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
       }),
     })
     const ctx = { home: { chest: { x: 1, y: 64, z: 0 } } }
-    await craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { ctx, item: 'stone_pickaxe' })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { ctx, item: 'stone_pickaxe' })
     assert.equal(bot.calls.craft.length, 1)
     assert.deepEqual(bot.calls.toss, [])
     assert.ok(bot.calls.deposit.length > 0, 'junk banked')
@@ -161,9 +179,50 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
       openChestImpl: () => { throw new Error('must not open a far chest') },
     })
     const ctx = { home: { chest: { x: 200, y: 64, z: 200 } } }
-    await craft.safeCraft(bot, prodRecipe('stone_pickaxe'), 1, null, { ctx, item: 'stone_pickaxe' })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { ctx, item: 'stone_pickaxe' })
     assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.openChest, 0)
     assert.equal(bot.calls.toss.length, 1)
+  })
+
+  it('exact material stacks free their slots: full pack crafts, nothing tossed', async () => {
+    const bot = roomBot({ stacks: fullPackExact() })
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.toss, [])
+  })
+
+  it('chest bank keeps the first bow and the first arrow stack', async () => {
+    const stacks = [stack('bow', 1), stack('bow', 1), stack('arrow', 64), stack('arrow', 64)]
+    for (let i = 0; i < 30; i++) stacks.push(stack('leaf_litter', 64))
+    stacks.push(stack('cobblestone', 41), stack('stick', 5))
+    assert.equal(stacks.length, 36)
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: () => ({ name: 'chest' }),
+      openChestImpl: () => ({
+        deposit: async (type, meta, n) => {
+          bot.calls.deposit.push({ type, n })
+          let left = n
+          for (const it of bot._items) {
+            if (left <= 0) break
+            if (it.type !== type) continue
+            const take = Math.min(it.count, left)
+            it.count -= take
+            left -= take
+          }
+          bot._items = bot._items.filter((it) => it.count > 0)
+        },
+        close: () => {},
+      }),
+    })
+    const ctx = { home: { chest: { x: 1, y: 64, z: 0 } } }
+    await craft.safeCraft(bot, prodRecipe('stone_pickaxe', 1, PICK_INGREDIENTS), 1, null, { ctx, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.toss, [])
+    assert.equal(bot._items.filter((i) => i.name === 'bow').length, 1)
+    assert.equal(bot._items.filter((i) => i.name === 'arrow').length, 1)
+    const bankedBow = bot.calls.deposit.find((d) => d.type === IDS.bow)
+    assert.equal(bankedBow && bankedBow.n, 1)
   })
 })

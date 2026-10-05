@@ -417,11 +417,62 @@ function resultOf(bot, recipe, item) {
   return { name, size, count }
 }
 
-// Capacity for the result: same-name stacks with room plus empty slots,
-// mirroring putSelectedItemRange (stack first, empty slot next, toss when
-// neither). True/false; null when the inventory is unreadable (fail open:
-// the craft proceeds exactly as before).
-function roomFor(bot, res, opCount) {
+// Ingredient slots the op frees: mineflayer lifts each ingredient stack
+// into the grid before the result is grabbed, so a stack the op fully
+// consumes is an empty slot by grab time. Walked per ingredient in
+// inventory order exactly like the consumption (a stack at or under the
+// remaining need frees, the first partial ends the walk). Under-counts on
+// ambiguity (unknown recipe, metadata mismatch): the safe direction is a
+// needless toss, never a tossed product.
+function freedStacks(bot, stacks, recipe, opCount) {
+  let needs = null
+  try {
+    needs = placementsFor(recipe, opCount)
+  } catch (_) { return 0 }
+  if (!needs || needs.size === 0) return 0
+  // Registry id -> name (mocks carry names, not types).
+  const nameOf = (id) => {
+    try {
+      const byId = bot && bot.registry && bot.registry.items && bot.registry.items[id]
+      if (byId && typeof byId.name === 'string') return byId.name
+      const byName = bot && bot.registry && bot.registry.itemsByName
+      if (byName) for (const n of Object.keys(byName)) {
+        const e = byName[n]
+        if (e && e.id === id) return n
+      }
+    } catch (_) { /* nameless */ }
+    return null
+  }
+  let freed = 0
+  for (const v of needs.values()) {
+    const nm = nameOf(v.id)
+    let left = v.need
+    for (const s of stacks) {
+      if (left <= 0) break
+      if (!s) continue
+      const same = typeof s.type === 'number' ? s.type === v.id : (nm != null && s.name === nm)
+      if (!same) continue
+      if (v.metadata != null) {
+        let sm = null
+        try { sm = s.metadata } catch (_) { sm = null }
+        if (sm !== v.metadata) continue
+      }
+      const c = typeof s.count === 'number' ? s.count : 1
+      if (c <= left) {
+        freed++
+        left -= c
+      } else break
+    }
+  }
+  return freed
+}
+
+// Capacity for the result: same-name stacks with room plus empty slots
+// plus ingredient slots the op frees, mirroring putSelectedItemRange
+// (stack first, empty slot next, toss when neither). True/false; null
+// when the inventory is unreadable (fail open: the craft proceeds
+// exactly as before).
+function roomFor(bot, res, opCount, recipe) {
   const stacks = invStacks(bot)
   if (!stacks) return null
   let n = 1
@@ -439,33 +490,63 @@ function roomFor(bot, res, opCount) {
   }
   const empty = emptySlots(bot, stacks)
   if (empty == null) return null
-  return free + empty * res.size >= need
+  return free + (empty + freedStacks(bot, stacks, recipe, n)) * res.size >= need
 }
 
 async function ensureRoom(bot, recipe, count, opts) {
   const res = resultOf(bot, recipe, opts && opts.item)
-  if (roomFor(bot, res, count) !== false) return
+  if (roomFor(bot, res, count, recipe) !== false) return
   const ctx = opts && opts.ctx
   // Chest first: an adopted chest within reach banks the junk through the
-  // stockpile deposit path. A far or unreadable chest skips silently — a
-  // mid-craft walk would stall the op on the window timeout.
+  // stockpile window path, minus the spare-only keeps below. A far or
+  // unreadable chest skips silently — a mid-craft walk would stall the op
+  // on the window timeout.
   if (ctx) {
     try {
       const c = ctx.home && ctx.home.chest
       const bp = bot && bot.entity && bot.entity.position
       if (c && typeof c.x === 'number' && bp && typeof bp.x === 'number') {
-        const reach = require('./stockpile').INTERACT_REACH || 4
+        const stockpile = require('./stockpile')
+        const reach = stockpile.INTERACT_REACH || 4
         if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= reach) {
-          const names = []
+          // Per-name totals in inventory order. Spare bows/arrows (owner
+          // 2026-10-06): the first stack stays packed, the rest banks —
+          // the same keep the toss branch applies (revmux 01 core-3).
+          const perName = new Map()
           for (const s of invStacks(bot) || []) {
-            if (s && typeof s.name === 'string' && junkRank(s.name) >= 0 && !castleWants(s.name, ctx) && !names.includes(s.name)) names.push(s.name)
+            if (!s || typeof s.name !== 'string' || junkRank(s.name) < 0 || castleWants(s.name, ctx)) continue
+            const n = typeof s.count === 'number' && s.count > 0 ? Math.floor(s.count) : 1
+            const e = perName.get(s.name)
+            if (!e) perName.set(s.name, { total: n, first: n, type: typeof s.type === 'number' ? s.type : null })
+            else e.total += n
           }
-          if (names.length > 0) {
-            const put = await require('./stockpile').depositToChest(bot, ctx, names).then((r) => (r && r.put) || 0)
+          if (perName.size > 0 && typeof stockpile.withChest === 'function') {
+            const res2 = await stockpile.withChest(bot, ctx, async (window) => {
+              let put = 0
+              for (const [name, e] of perName) {
+                const keep = (name === 'bow' || name === 'arrow') ? e.first : 0
+                const n = e.total - keep
+                if (n <= 0) continue
+                let type = e.type
+                if (type == null) {
+                  try {
+                    const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[name]
+                    type = entry && entry.id
+                  } catch (_) { type = null }
+                }
+                if (typeof type !== 'number') continue
+                try {
+                  await window.deposit(type, null, n)
+                  put += n
+                } catch (_) { /* full or unmovable: keep the rest */ }
+              }
+              return put
+            })
+            const put = res2 && res2.status === 'ok' ? res2.value : 0
             if (put > 0) {
               try { console.log(`craft banked ${put} junk to the home chest to make room`) } catch (_) { /* logging best-effort */ }
             }
-            if (roomFor(bot, res, count) !== false) return
+            if (roomFor(bot, res, count, recipe) !== false) return
           }
         }
       }
@@ -509,7 +590,7 @@ async function ensureRoom(bot, recipe, count, opts) {
         await bot.toss(id, null, n)
       } catch (_) { continue }
       try { console.log(`craft tossed ${n} ${s.name} to make room`) } catch (_) { /* logging best-effort */ }
-      if (roomFor(bot, res, count) !== false) return
+      if (roomFor(bot, res, count, recipe) !== false) return
     }
   }
   throw new Error('inventory-full')

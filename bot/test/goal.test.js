@@ -1280,11 +1280,15 @@ describe('equip words in the model state (idkcraft-rwuu)', () => {
     assert.ok(text.includes('sword=no'), `text: ${text}`)
   })
 
-  it('scaffold below the dig mark reads blocks=low', () => {
-    const text = textOf([
-      { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 5 },
-    ])
-    assert.ok(text.includes('blocks=low'), `text: ${text}`)
+  it('scaffold below the dig-full mark reads blocks=low', () => {
+    const kit = (dirt) => [
+      { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: dirt },
+    ]
+    assert.ok(textOf(kit(5)).includes('blocks=low'), 'low blocks read low')
+    assert.ok(textOf(kit(31)).includes('blocks=low'), 'near-full still reads low')
+    // body-1: the word keys on FULL, so the text is identical across the
+    // 16 feasibility gate — no mid-dig re-decide, the 16->32 dig completes.
+    assert.equal(textOf(kit(15)), textOf(kit(16)))
   })
 
   it('a complete kit carries no equip words', () => {
