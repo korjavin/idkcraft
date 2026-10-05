@@ -326,6 +326,21 @@ function castleProtects(state, pos, name) {
 
 const KEEP_OWN = /(chest|furnace|_door)$/
 
+// Our own placement this session (idkcraft-dahd): the positional key plus
+// the laid-name check (a swap while the chunk was unloaded fires no
+// blockUpdate, so a mismatched name is someone else's block). No recorded
+// name = trust the key. Shared by the dig guard and equip's scaffold scan.
+function isOwnPlaced(ctx, block) {
+  try {
+    const pos = block && block.position
+    const name = block && block.name
+    const pkey = pos && `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
+    const laid = pkey && ctx && ctx.placedNames instanceof Map ? ctx.placedNames.get(pkey) : undefined
+    return !!(pkey && ctx && ctx.placedByBot instanceof Set && ctx.placedByBot.has(pkey) &&
+      (laid === undefined || laid === name))
+  } catch (_) { return false }
+}
+
 function protectedReason(bot, block, ctx) {
   try {
     if (!block || typeof block.name !== 'string') return 'protected'
@@ -346,12 +361,7 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
-    const pkey = pos && `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
-    // Same kind as we laid it (revmux 02 minor: a swap while the chunk was
-    // unloaded fires no blockUpdate); no recorded name = trust the key.
-    const laid = pkey && ctx && ctx.placedNames instanceof Map ? ctx.placedNames.get(pkey) : undefined
-    const own = !!(pkey && ctx && ctx.placedByBot instanceof Set && ctx.placedByBot.has(pkey) &&
-      (laid === undefined || laid === name))
+    const own = isOwnPlaced(ctx, block)
     let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
     if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
     if (fp && !(pos.y >= ctx.home.site.y && own)) return 'protected'
@@ -539,4 +549,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint }
