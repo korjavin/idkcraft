@@ -379,13 +379,16 @@ function gather(bot, ctx, target, state) {
             g.lastFound && g.lastFound[0] ? { x: g.lastFound[0].x, y: g.lastFound[0].y, z: g.lastFound[0].z } : null,
             key)
         }
-      } else if (!unloadedFar && !execBusy(bot) && !g.reissued && (g.restalls = (g.restalls | 0) + 1) >= REISSUE_TICKS) {
+      } else if (!unloadedFar && !execBusy(bot) && !g.reissued && stuck.verdict(ctx).placeErrors === 0 &&
+          (g.restalls = (g.restalls | 0) + 1) >= REISSUE_TICKS) {
         // 6x7.14: one refresh per stall episode, same target (see
         // REISSUE_TICKS). The legacy budget above counts through it (68p
         // pin: the skip still lands on tick 10), so this only ever
         // advances the replan, never the give-up. Same key (issuedKey
         // untouched): the next tick keeps counting instead of taking a
-        // fresh budget.
+        // fresh budget. No refresh inside a place_error streak (revmux 01
+        // minor): the setGoal would emit goal_updated and zero the yvi
+        // streak the fast skip is judging — that detector owns the storm.
         g.reissued = true
         g.restalls = 0
         bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)

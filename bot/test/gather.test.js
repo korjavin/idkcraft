@@ -955,4 +955,35 @@ describe('gather walk re-issue (idkcraft-6x7.14)', () => {
     assert.equal(bot.calls.setGoal, 1, 'no refresh while the target cell is unloaded')
     assert.equal(ctx.stepStatus, 'running')
   })
+
+  it('no refresh inside a place_error streak (the yvi detector owns the storm)', () => {
+    // Revmux 01 minor: the refresh setGoal emits goal_updated, which zeroes
+    // ctx.placeErrors — firing mid-storm would delay the yvi fast skip to
+    // the legacy tick-10 give-up. Drive the ticker resets like the yvi
+    // tests: a storm slower than one error per tick still suppresses.
+    const bot = mockBot({
+      spots: [pos(2, 64, 0), pos(6, 64, 0)],
+      names: { '2,64,0': 'oak_log', '6,64,0': 'birch_log' },
+    })
+    bot._moving = true // wedged executor: claims moving, body static
+    const { createTicker } = require('../src/index')
+    const ticker = createTicker({
+      bot,
+      brain: { decide: async () => ({ action: 'idle', sprint: false, source: 'stub' }) },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    gather(bot, ctx, null, {}) // goal on tree 1
+    ticker.setPathReset('place_error') // storm opens, slower than 1/tick
+    for (let i = 0; i < 4; i++) gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 1, 'streak standing: no refresh steals the verdict')
+    assert.ok(ctx.gather.pos, 'tree kept')
+    ticker.setPathReset('stuck') // any other reason breaks the streak
+    gather(bot, ctx, null, {})
+    gather(bot, ctx, null, {})
+    assert.equal(bot.calls.setGoal, 2, 'streak broken: the idle pair refreshes')
+    assert.ok(ctx.gather.pos, 'tree kept')
+    assert.equal(ctx.gather.streak, 0, 'no strike spent')
+  })
 })
