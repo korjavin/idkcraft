@@ -8,6 +8,8 @@
 //   [{"name":"EP1","spawn":[-61.3,66,-210.5],"goal":[-72,65,-218],
 //     "secs":75,"scaffold":0,"pickaxe":true}]
 // secs/scaffold/pickaxe are optional (defaults 75 / 64 dirt / stone pickaxe).
+// kit (idkcraft-6x7.10) is an optional list of extra "item count" give
+// strings (a seeded house BOM); the replay builds each `give` itself.
 // bucket:true adds 2 water buckets (jsf.2 water_up needs a pair: high pour +
 // ledge pour, both back after the strip). REPLAY_OP=1 pre-ops both bots
 // before login (deterministic offline UUIDs, like water-assay.js ASSAY_OP):
@@ -216,7 +218,29 @@ function loadSpots() {
       }
       danger = s.danger.map((d) => d.slice())
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs }
+    // Per-spot item kit (idkcraft-6x7.10): extra "<item> <count>" give
+    // strings beyond the scaffold/pickaxe/bucket kit (a seeded JR-BUILD
+    // house BOM). Validated like prep: the shape is the allowlist — an
+    // op/tp/effect line never matches "<item> <count>", and the replay
+    // builds the `give` command itself, so no entry can smuggle another
+    // rcon verb. One give carries many stacks (scaffold precedent: dirt
+    // 2304), hence count 1..2304. Optional: omitting kit is the unseeded
+    // run (the from-scratch gather stays runnable via a kit-less file).
+    let kit = []
+    if (s.kit != null) {
+      if (!Array.isArray(s.kit) || s.kit.length === 0 || s.kit.length > 32) {
+        throw new Error(`spots[${i}]: bad kit (want 1..32 "<item> <count>" entries)`)
+      }
+      for (const k of s.kit) {
+        const m = typeof k === 'string' ? k.match(/^([a-z_]+) (\d+)$/) : null
+        const n = m ? Number(m[2]) : NaN
+        if (!m || !Number.isInteger(n) || n < 1 || n > 2304) {
+          throw new Error(`spots[${i}]: bad kit entry (want "<item> <1..2304>"): ${JSON.stringify(k)}`)
+        }
+      }
+      kit = s.kit.slice()
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs, kit }
   })
 }
 
@@ -580,6 +604,13 @@ async function main() {
     if (s.bucket) {
       await rcon(`give ${FOLLOWER} water_bucket 1`)
       await rcon(`give ${FOLLOWER} water_bucket 1`)
+    }
+    // Per-spot item kit (idkcraft-6x7.10): one give per entry, after the
+    // standard kit. rcon asserts each give, so an unknown item fails loud
+    // (exit 2) instead of running half-seeded.
+    for (const entry of s.kit) {
+      const [item, count] = entry.split(' ')
+      await rcon(`give ${FOLLOWER} ${item} ${count}`)
     }
     // Rig-built home before the settle: the walls must stand (and their
     // chunks stream) before the window opens.
