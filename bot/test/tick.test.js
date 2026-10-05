@@ -1982,7 +1982,7 @@ describe('work mode (epic rw4)', () => {
     let n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
     assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
-    // A stale record (text moved on, the e2 shape): still named, same words.
+    // A stale record text with the gather latch still holding: same words.
     ctx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
     n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
@@ -1990,9 +1990,9 @@ describe('work mode (epic rw4)', () => {
     ticker.destroy()
   })
 
-  it('(f3b) status names a stale failure record in hold words (gwvg A3)', async () => {
-    // No gather latch: gather stayed stubbed, so stepWhy is silent and the
-    // recorded failure itself is phrased — the e2 shape with text 't'.
+  it('(f3b) status stays silent on released failure records (gwvg A3, 01 core-1)', async () => {
+    // No gather latch: gather stayed stubbed and the record text moved on,
+    // so nothing holds — the released record must not read as blocked.
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
@@ -2009,7 +2009,7 @@ describe('work mode (epic rw4)', () => {
     ctx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
     const n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
+    assert.ok(!bot.chats.slice(n).join('\n').includes('blocked:'), bot.chats.slice(n).join(' | '))
     ticker.destroy()
   })
 
@@ -2090,6 +2090,52 @@ describe('work mode (epic rw4)', () => {
     for (const l of reply) assert.ok(l.length <= CHAT_LIMIT, `line is ${l.length} chars`)
     assert.ok(reply[0].endsWith('…'), `clipped line ends with …: ${reply[0].slice(-10)}`)
     assert.ok(reply[0].includes('logs=') && reply[0].includes('home='), `facts survive the clip: ${reply[0].slice(0, 140)}`)
+    ticker.destroy()
+  })
+
+  it('(f9) healthy bot omits path success and aged-out recoveries (gwvg 01 body-2)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.lastPathStatus = 'success'
+    ctx.lastRecover = { action: 'pillar_up', outcome: 'done', at: Date.now() - 10 * 60 * 1000 }
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    let reply = bot.chats.slice(n).join('\n')
+    assert.ok(!reply.includes('path='), `no path on a healthy bot: ${reply}`)
+    assert.ok(!reply.includes('last recover:'), `aged-out outcome hidden: ${reply}`)
+    ctx.lastPathStatus = 'noPath'
+    ctx.lastRecover = { action: 'pillar_up', outcome: 'done', at: Date.now() }
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    reply = bot.chats.slice(n).join('\n')
+    assert.ok(reply.includes('path=noPath'), `abnormal verdict shown: ${reply}`)
+    assert.ok(reply.includes('last recover: pillar_up done'), `fresh outcome shown: ${reply}`)
+    ticker.destroy()
+  })
+
+  it('(f10) order hides the stale work pick (gwvg 01 core-2)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick() // gather picked
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.stepPick.step, 'gather')
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('by goal-fsm'), 'pick shown for its own step')
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.ok(ctx.comehome, 'order armed')
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    const reply = bot.chats.slice(n).join('\n')
+    assert.ok(reply.includes('coming home'), reply)
+    assert.ok(!reply.includes('by goal-fsm'), `stale pick hidden: ${reply}`)
     ticker.destroy()
   })
 

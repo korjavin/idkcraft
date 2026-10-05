@@ -21,6 +21,10 @@ const flatMod = require('./behaviours/flat')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
 
+// How long a recover outcome stays reportable in status (01 body-2): the
+// stamp never clears, so without a window every status would cite it.
+const LAST_RECOVER_WINDOW_MS = 5 * 60 * 1000
+
 // Chat cap (commands.js CHAT_LIMIT): an overlong status line clips with '…'.
 function clipStatus(line) {
   const s = String(line)
@@ -604,7 +608,8 @@ function createOrders(box) {
         let line = `${mode}${phase} body=${(ctx.body && ctx.body.owner) || 'none'} step=${step}`
         if (verb) line += ` (${verb})`
         if (ctx.stepStatus) line += ` ${ctx.stepStatus}`
-        const pick = ctx.stepPick
+        // The stamp belongs to its own step only (01 core-2).
+        const pick = ctx.stepPick && ctx.stepPick.step === step ? ctx.stepPick : null
         if (pick && typeof pick.at === 'number') line += ` ${Math.max(0, Math.floor((Date.now() - pick.at) / 1000))}s`
         if (pick && pick.source) line += ` — by ${pick.source} (${pick.why || 'unknown'})`
         // Facts ride ahead of the reasons: a long skipped/resting tail clips first.
@@ -638,16 +643,30 @@ function createOrders(box) {
         const fails = ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
         if (fails.length > 0) {
           const text = goal.goalText(facts, ctx.home)
-          const held = fails.map((n) => {
-            let w = null
-            try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
-            if (!w) {
-              const rec = ctx.stepFail[n] || {}
-              w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
+          // Only live holds read as blocked (01 core-1): a released record
+          // (new facts, relocated body) no longer blocks its step.
+          const holding = fails.filter((n) => {
+            try {
+              if (goal.failHolds(ctx, n, text, bot)) return true
+            } catch (_) { /* fall through to the gather latch */ }
+            try {
+              return n === 'gather' && goal.gatherFailedHolds(ctx.gather, facts.logs, bot)
+            } catch (_) {
+              return false
             }
-            return w
           })
-          wrong.push(`blocked: ${held.join(', ')}`)
+          if (holding.length > 0) {
+            const held = holding.map((n) => {
+              let w = null
+              try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
+              if (!w) {
+                const rec = ctx.stepFail[n] || {}
+                w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
+              }
+              return w
+            })
+            wrong.push(`blocked: ${held.join(', ')}`)
+          }
         }
       } catch (_) { /* blocked best-effort */ }
       let stuckState = 'MOVING'
@@ -655,9 +674,11 @@ function createOrders(box) {
       if (stuckState !== 'MOVING') wrong.push(`stuck=${stuckState}`)
       const rec = ctx.recovery
       if (rec && rec.action) wrong.push(rec.status ? `recovering=${rec.action}/${rec.status}` : `recovering=${rec.action}`)
-      if (ctx.lastPathStatus && ctx.lastPathStatus !== 'none') wrong.push(`path=${ctx.lastPathStatus}`)
+      // Only abnormal verdicts (the stuck.js terminal set): a healthy bot
+      // holds path=success all session (01 body-2).
+      if (ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout') wrong.push(`path=${ctx.lastPathStatus}`)
       const lr = ctx.lastRecover
-      if (lr && lr.action) {
+      if (lr && lr.action && typeof lr.at === 'number' && Date.now() - lr.at <= LAST_RECOVER_WINDOW_MS) {
         const ago = typeof lr.at === 'number' ? ` ${Math.max(0, Math.floor((Date.now() - lr.at) / 1000))}s ago` : ''
         wrong.push(`last recover: ${lr.action} ${lr.outcome || 'unknown'}${ago}`)
       }

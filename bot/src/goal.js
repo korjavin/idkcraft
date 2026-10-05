@@ -1683,7 +1683,9 @@ async function decide(bot, ctx) {
     }
     ctx.stepStatus = 'running'
     // gwvg: status() reads who picked this step and why from the stamp.
-    ctx.stepPick = { source: choice.source, fsm: choice.fsm, why, at: Date.now() }
+    // The step rides along (01 core-2): orders and retreat move ctx.step
+    // without re-stamping, and must not inherit the age/source.
+    ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
