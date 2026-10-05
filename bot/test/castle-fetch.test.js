@@ -713,4 +713,22 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     const nightCtx = { castle: castleState({ blocked: ctx.castle.blocked }) }
     assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(night, nightCtx), night, nightCtx), false)
   })
+
+  it('round 2 core-1: the flip chats through decide, which drops castle for the fetch', async () => {
+    // Prod shape: castle() never runs on the blocked tick — decide() sees
+    // the flipped word first and re-picks. The line must come from the flip.
+    const { stuck, set, ctx } = blockedWorld()
+    const bot = makeBot({ items: TOOLS(), set })
+    ctx.step = 'castle'
+    ctx.stepStatus = 'running'
+    ctx.goalText = 'stale'
+    const r = await goal.decide(bot, ctx)
+    assert.equal(r.action, 'castlefetch')
+    const stuckLines = () => bot.chats.filter((m) => m.startsWith('castle: stuck at'))
+    assert.equal(stuckLines().length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(stuckLines()[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
+    assert.match(ctx.castle.status, new RegExp(`^blocked at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    await goal.decide(bot, ctx)
+    assert.equal(stuckLines().length, 1, 'the standing block stays silent')
+  })
 })

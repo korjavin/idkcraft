@@ -148,6 +148,27 @@ function strike(ctx, st, c, why, now) {
   if (f.n >= STRIKES) blockCell(ctx, st, c, why, now)
 }
 
+// Blocked-state announcement (g0z.23, core-1): the status line (the 'castle'
+// command shows it) and one chat line per distinct cell+why. Called from
+// menuFact — decide() drops the castle step on the flip, so the executor's
+// waiting branch never runs in prod — and from that branch (direct-castle
+// flows); the shared latch dedupes across both. False when no live entry.
+function sayBlocked(bot, ctx, st, cell, now) {
+  const bl = (st && st.blocked) || {}
+  const e = bl[bkey(st, cell.idx)]
+  if (!e || e.until <= now) return false
+  const retry = Math.round((e.until - now) / 1000)
+  st.status = `blocked at ${cell.x} ${cell.y} ${cell.z} (${cell.kind}: ${e.why}), retry in ${retry}s`
+  const said = `${bkey(st, cell.idx)}:${e.why}`
+  if (ctx.castleBlockedSaid === said) return true
+  ctx.castleBlockedSaid = said
+  let line = `castle: stuck at ${cell.x} ${cell.y} ${cell.z} on ${e.why}, retry in ${retry}s`
+  const kept = /^kept-(.+)$/.exec(e.why)
+  if (kept) line += ` — remove the ${kept[1]} there or say castle stop`
+  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+  return true
+}
+
 // Work order = plan order with the door deferred past every other place
 // cell (revmux 01): the laid door is break-vetoed, so the doorway stays an
 // open passage while the bot still needs the interior (A* opens wooden
@@ -242,11 +263,12 @@ function peek(bot, st, now, ctx) {
   const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
   const complete = st.phase === 'complete'
   let gateDy = Infinity
+  let gate = null
   for (const k of Object.keys(blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
     if (Number(v) !== ver(st) || !c || !blocked[k] || done(bot, c)) continue
-    if (blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+    if (blocked[k].until > now && !clearing(c) && c.dy < gateDy) { gateDy = c.dy; gate = c }
   }
   let waiting = null
   let inside = false
@@ -260,10 +282,10 @@ function peek(bot, st, now, ctx) {
     if (interior(c)) inside = true
     const b = blocked[bkey(st, c.idx)]
     if (b && b.until > now) { waiting = waiting || c; continue }
-    if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells }
-    return { cell: c, waiting: null, cells }
+    if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells, gate }
+    return { cell: c, waiting: null, cells, gate }
   }
-  return { cell: owed, waiting: owed ? null : waiting, cells }
+  return { cell: owed, waiting: owed ? null : waiting, cells, gate }
 }
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
@@ -626,12 +648,25 @@ function menuFact(bot, ctx, now = Date.now()) {
       // Blocked (g0z.23): the gated kind and its remainder stay on the word,
       // so a far site reads stock (walk back) and castlefetch quarries the
       // gated kind while the build stands. On site the word stays 'blocked'.
+      // Announced here (core-1): decide() drops the castle step on the flip,
+      // so castle()'s waiting branch never runs in prod.
       if (r.waiting) {
-        let left = 0
-        for (const o of r.cells) {
-          if (o.kind === r.waiting.kind && !done(bot, o)) left++
+        // core-3: only a material kind latches — a blocked keep-clear
+        // ('air') or moat ('dig') cell keeps { word: 'blocked' }, so a far
+        // site reads 'blocked', never a meaningless 'air-none'.
+        const kind = ITEM[r.waiting.kind] ? r.waiting.kind : null
+        if (kind) {
+          let left = 0
+          for (const o of r.cells) {
+            if (o.kind === kind && !done(bot, o)) left++
+          }
+          ctx.castleWord = { word: 'blocked', kind, left }
+        } else {
+          ctx.castleWord = { word: 'blocked' }
         }
-        ctx.castleWord = { word: 'blocked', kind: r.waiting.kind, left }
+        const w = r.waiting
+        const live = (st.blocked || {})[bkey(st, w.idx)]
+        sayBlocked(bot, ctx, st, (live && live.until > now) ? w : (r.gate || w), now)
         return 'blocked'
       }
       word = st.phase === 'complete' ? 'done' : 'finish'
@@ -1066,29 +1101,21 @@ function castle(bot, ctx) {
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
-  if (r.idx >= 0) ctx.castleBlockedSaid = null // work proceeds: a later block chats again
+  // core-2: the latch survives a retry of the latched cell itself — only
+  // work on another cell re-arms the line (one line through two windows).
+  if (r.idx >= 0) {
+    const cellKey = `${bkey(st, r.idx)}:`
+    if (!ctx.castleBlockedSaid || !ctx.castleBlockedSaid.startsWith(cellKey)) ctx.castleBlockedSaid = null
+  }
   if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
   if (r.idx < 0) {
     if (r.waiting) {
       // The stuck cell: waiting itself when its block is live, else the
-      // structural gate cell holding the layers above (g0z.23). One chat
-      // line per distinct cell+why; the 'castle' command shows the status.
+      // structural gate cell holding the layers above (g0z.23). Shared
+      // with menuFact (core-1): one line per distinct cell+why.
       const w = r.waiting
       const live = st.blocked[bkey(st, w.idx)]
-      const cell = (live && live.until > now) ? w : (r.gate || w)
-      const e = st.blocked[bkey(st, cell.idx)]
-      if (e && e.until > now) {
-        const retry = Math.round((e.until - now) / 1000)
-        st.status = `blocked at ${cell.x} ${cell.y} ${cell.z} (${cell.kind}: ${e.why}), retry in ${retry}s`
-        const said = `${bkey(st, cell.idx)}:${e.why}`
-        if (ctx.castleBlockedSaid !== said) {
-          ctx.castleBlockedSaid = said
-          let line = `castle: stuck at ${cell.x} ${cell.y} ${cell.z} on ${e.why}, retry in ${retry}s`
-          const kept = /^kept-(.+)$/.exec(e.why)
-          if (kept) line += ` — remove the ${kept[1]} there or say castle stop`
-          try { bot.chat(line) } catch (_) { /* chat best-effort */ }
-        }
-      } else {
+      if (!sayBlocked(bot, ctx, st, (live && live.until > now) ? w : (r.gate || w), now)) {
         st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
       }
       ctx.stepStatus = 'failed:blocked'

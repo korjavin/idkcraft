@@ -579,21 +579,46 @@ describe('g0z.2 castle executor', () => {
     assert.match(bot.chats[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
     await run(bot, ctx, 6)
     assert.equal(bot.chats.length, 1, 'same backoff window: no re-chat')
-    // Backoff expired, still refused: a new window re-chats once (the
-    // workable retry pick resets the said latch, then the cell re-blocks).
+    // Backoff expired, still refused: the retry re-blocks silently (one
+    // line through two windows, acceptance 6).
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
     await run(bot, ctx, 8)
-    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
+    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
     // The cell lands, then another cell blocks: a second, different line.
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
     refused = { x: next.x, y: next.y, z: next.z }
     await run(bot, ctx, 120)
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
     assert.equal(ctx.stepStatus, 'failed:blocked')
-    assert.equal(bot.chats.length, 3, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[2], new RegExp(`^castle: stuck at ${next.x} ${next.y} ${next.z} on dig-refused, retry in \\d+s$`))
+    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(bot.chats[1], new RegExp(`^castle: stuck at ${next.x} ${next.y} ${next.z} on dig-refused, retry in \\d+s$`))
     assert.match(ctx.castle.status, new RegExp(`^blocked at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+  })
+
+  it('g0z.23 round 2: work on another cell re-arms the stuck line', async () => {
+    const world = makeWorld()
+    const plan = cells()
+    const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
+    world.set(stuck.x, stuck.y, stuck.z, 'dirt')
+    paint(world, stuck.idx)
+    let refused = true
+    const bot = mockBot(world)
+    const dig0 = bot.dig
+    bot.dig = async (b) => {
+      if (refused && b.position.x === stuck.x && b.position.y === stuck.y && b.position.z === stuck.z) throw new Error('refused')
+      return dig0(b)
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 60)
+    assert.equal(bot.chats.length, 1)
+    assert.ok(ctx.castleBlockedSaid)
+    // Backoff expired, digs allowed: the cell lands, work moves elsewhere.
+    ctx.castle.blocked[`1:${stuck.idx}`].until = 0
+    refused = false
+    await run(bot, ctx, 10)
+    assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
+    assert.equal(ctx.castleBlockedSaid, null, 'a different picked cell re-arms the line')
   })
 
   it('g0z.23: a kept occupant chats with the remove hint', async () => {
@@ -608,6 +633,22 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.stepStatus, 'failed:blocked')
     assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
     assert.match(bot.chats[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on kept-chest, retry in \\d+s — remove the chest there or say castle stop$`))
+  })
+
+  it('g0z.23 round 2: a blocked keep-clear cell latches no kind; far reads blocked', () => {
+    const world = makeWorld()
+    const plan = cells()
+    paint(world, plan.length)
+    const win = plan.find((c) => c.kind === 'air')
+    world.set(win.x, win.y, win.z, 'chest')
+    const ctx = { castle: { site: SITE, rot: 0, blocked: { [`1:${win.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'kept-chest' } } } }
+    const bot = mockBot(world, { items: [] })
+    assert.equal(castle.menuFact(bot, ctx), 'blocked')
+    assert.deepEqual(ctx.castleWord, { word: 'blocked' })
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(bot.chats[0], /on kept-chest, retry in \d+s — remove the chest there or say castle stop$/)
+    bot.blockAt = () => null // walked away: no corner reads
+    assert.equal(castle.menuFact(bot, ctx), 'blocked')
   })
 
   it('g0z.23: a far blocked castle reads its gated kind, never blocked', () => {
