@@ -22,7 +22,8 @@
 //     "expect":["here is ","here are "],"fail":["could not "]}]
 // mode defaults to follow; goal keeps its feet-coords convention in both.
 // Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
-// shelter step alone: reached = enclosed within 15 s and alive at the end.
+// shelter step alone: reached = enclosed within the close budget (15 s
+// default, closeSecs overrides — idkcraft-hoy7) and alive at the end.
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -147,6 +148,17 @@ function loadSpots() {
     } else if (s.home != null) {
       throw new Error(`spots[${i}]: home needs mode=shelter`)
     }
+    // Close budget (idkcraft-hoy7): a shelter spot that swims before it digs
+    // (SHELTER-WATER) closes 18-24 s, past the 15 s stand-and-dig budget.
+    // Per-spot budget, default 15.
+    let closeSecs = SHELTER_CLOSE_SECS
+    if (s.closeSecs != null) {
+      if (mode !== 'shelter') throw new Error(`spots[${i}]: closeSecs needs mode=shelter`)
+      closeSecs = Number(s.closeSecs)
+      if (!Number.isFinite(closeSecs) || closeSecs <= 0 || closeSecs > secs) {
+        throw new Error(`spots[${i}]: bad closeSecs (want 0 < closeSecs <= secs)`)
+      }
+    }
     let order = null
     let expect = null
     let fail = null
@@ -204,7 +216,7 @@ function loadSpots() {
       }
       danger = s.danger.map((d) => d.slice())
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs }
   })
 }
 
@@ -249,7 +261,8 @@ function windowReached(mode, useGoal, d, gd, orderVerdict) {
 // Shelter verdict (idkcraft-ed88): pure, unit-tested. Enclosed = floor,
 // all 4 sides at feet and head, and a cap over the head are full blocks.
 // solidAt(dx, dy, dz) reads relative to the feet cell. reached = enclosed
-// within SHELTER_CLOSE_SECS of window start AND alive at the window end.
+// within the close budget (SHELTER_CLOSE_SECS default, a spot's closeSecs
+// overrides — idkcraft-hoy7) of window start AND alive at the window end.
 const SHELTER_CLOSE_SECS = 15
 function enclosed(solidAt) {
   if (!solidAt(0, -1, 0) || !solidAt(0, 2, 0)) return false
@@ -258,8 +271,8 @@ function enclosed(solidAt) {
   }
   return true
 }
-function shelterReached(closedAt, died) {
-  return !died && closedAt !== null && closedAt <= SHELTER_CLOSE_SECS
+function shelterReached(closedAt, died, budget = SHELTER_CLOSE_SECS) {
+  return !died && closedAt !== null && closedAt <= budget
 }
 
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
@@ -733,7 +746,7 @@ async function main() {
     const wEnd = windowReached(s.mode, false, null, null, orderVerdict)
     if (wEnd !== null) reached = wEnd
     if (s.mode === 'shelter') {
-      reached = shelterReached(closedAt, died)
+      reached = shelterReached(closedAt, died, s.closeSecs)
       await rcon('time set 1000') // later spots (if any) walk in daylight
     }
     const secs = (Date.now() - t0) / 1000
