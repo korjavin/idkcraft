@@ -16,7 +16,7 @@ const COMMANDS = [
   { names: ['go work', 'free'], usage: 'go work', what: 'releases the bot to work on its own goal', example: 'go work' },
   { names: ['come home', 'go home'], usage: 'come home', what: 'walks home and waits in the common room', example: 'come home' },
   { names: ['go castle'], usage: 'go castle', what: 'walks to the castle entrance and waits', example: 'go castle' },
-  { names: ['status'], usage: 'status', what: 'reports mode, goal step and home progress', example: 'status' },
+  { names: ['status'], usage: 'status', what: 'reports what the bot does, who chose it and why, what blocks it', example: 'status' },
   { names: ['find me'], usage: 'find me <block>', what: 'finds the nearest block within 48 blocks and leads you there', example: 'find me iron' },
   { names: ['build here'], usage: 'build here', what: 'moves the house site next to you and builds there', example: 'build here' },
   { names: ['build castle', 'castle'], usage: 'build castle | castle [stop|go|forget]', what: 'builds a stone castle in front of you over many hours; castle reports progress, stop/go park and resume, forget drops the order', example: 'build castle' },

@@ -1733,6 +1733,9 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
     } catch (_) { /* err best-effort */ }
   }
   console.log(`recover action=${action} source=${source} outcome=${outcome} pos=${fmtPos(botPos(bot))}${extra}`)
+  // gwvg: the last terminal outcome survives clearStuck for status();
+  // starts ('chosen') and continuations ('continue') are not outcomes.
+  if (ctx && outcome !== 'chosen' && outcome !== 'continue') ctx.lastRecover = { action, outcome, at: Date.now() }
 }
 
 // One page per pit per mark TTL: the latch zone is the same avoid radius

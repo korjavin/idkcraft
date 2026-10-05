@@ -7,6 +7,8 @@ const { layaUrl } = require('./brain')
 const { resolvePlayer } = require('./perception')
 const { findNearest, loadedSearchRadius, startFarSearch } = require('./behaviours/scout')
 const { clearPendingSearch, startBlockOrder } = require('./chat')
+const { CHAT_LIMIT } = require('./commands')
+const { verdict } = require('./stuck')
 const goal = require('./goal')
 const memory = require('./memory')
 const metrics = require('./metrics')
@@ -18,6 +20,12 @@ const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
+
+// Chat cap (commands.js CHAT_LIMIT): an overlong status line clips with '…'.
+function clipStatus(line) {
+  const s = String(line)
+  return s.length > CHAT_LIMIT ? s.slice(0, CHAT_LIMIT - 1) + '…' : s
+}
 
 function createOrders(box) {
   const { bot, ctx, greet, clearStuck, resetNightStep, startWork, stopOnce, doSetBrain } = box
@@ -577,9 +585,84 @@ function createOrders(box) {
       const facts = goal.goalFacts(bot, ctx)
       const flatParked = ctx.flat && ctx.flat.parked
       const mode = ctx.gocastle ? 'going to castle' : (ctx.comehome ? 'coming home' : (ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.lead ? 'leading' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : 'following'))))))
-      // atl.7: a resting bot names the reason decide() stored, if any.
-      const why = ctx.step === 'rest' && ctx.restWhy ? ` resting because ${ctx.restWhy}` : ''
-      bot.chat(`${mode} step=${ctx.step || 'none'}${why} logs=${facts.logs} planks=${facts.planks} home=${facts.home}`)
+      const tail = `logs=${facts.logs} planks=${facts.planks} home=${facts.home}`
+      const lines = []
+      if (mode === 'following') {
+        // The brain's follow/fight/roam/idle share the idle lease by design
+        // (body.js), so the lease owner cannot name the mode — derive it.
+        const owner = ctx.body && ctx.body.owner
+        const bodyName = (!owner || owner === 'idle') ? 'follow' : owner
+        const src = (ctx.lastDecision && ctx.lastDecision.source) || 'none'
+        lines.push(`following body=${bodyName} source=${src} ${tail}`)
+      } else {
+        const step = ctx.step || 'none'
+        const entry = goal.MENU[step]
+        const verb = entry && entry.verb
+        const flatActive = ctx.flat && !ctx.flat.parked ? ctx.flat : null
+        const order = ctx.gocastle || ctx.comehome || ctx.bring || flatActive || ctx.lead
+        const phase = order && typeof order.phase === 'string' && order.phase ? ` phase=${order.phase}` : ''
+        let line = `${mode}${phase} body=${(ctx.body && ctx.body.owner) || 'none'} step=${step}`
+        if (verb) line += ` (${verb})`
+        if (ctx.stepStatus) line += ` ${ctx.stepStatus}`
+        const pick = ctx.stepPick
+        if (pick && typeof pick.at === 'number') line += ` ${Math.max(0, Math.floor((Date.now() - pick.at) / 1000))}s`
+        if (pick && pick.source) line += ` — by ${pick.source} (${pick.why || 'unknown'})`
+        // Facts ride ahead of the reasons: a long skipped/resting tail clips first.
+        line += ` ${tail}`
+        if (step === 'rest') {
+          // atl.7: a resting bot names the reason decide() stored, if any.
+          if (ctx.restWhy) line += ` resting because ${ctx.restWhy}`
+        } else if (goal.STEP_ORDER.includes(step)) {
+          // Higher-priority steps this pick skipped, with their reasons.
+          let names = []
+          try {
+            const text = goal.goalText(facts, ctx.home)
+            names = Object.keys(goal.MENU).filter((n) => {
+              try {
+                if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
+              } catch (_) {
+                return false
+              }
+              return !goal.failHolds(ctx, n, text, bot)
+            })
+          } catch (_) { names = [] }
+          let skipped = ''
+          try { skipped = goal.restWhy(facts, bot, ctx, names, step) } catch (_) { skipped = '' }
+          if (skipped && skipped !== 'model choice') line += `; skipped: ${skipped}`
+        }
+        lines.push(line)
+      }
+      // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
+      const wrong = []
+      try {
+        const fails = ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
+        if (fails.length > 0) {
+          const text = goal.goalText(facts, ctx.home)
+          const held = fails.map((n) => {
+            let w = null
+            try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
+            if (!w) {
+              const rec = ctx.stepFail[n] || {}
+              w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
+            }
+            return w
+          })
+          wrong.push(`blocked: ${held.join(', ')}`)
+        }
+      } catch (_) { /* blocked best-effort */ }
+      let stuckState = 'MOVING'
+      try { stuckState = verdict(ctx).state || 'MOVING' } catch (_) { /* moving default */ }
+      if (stuckState !== 'MOVING') wrong.push(`stuck=${stuckState}`)
+      const rec = ctx.recovery
+      if (rec && rec.action) wrong.push(rec.status ? `recovering=${rec.action}/${rec.status}` : `recovering=${rec.action}`)
+      if (ctx.lastPathStatus && ctx.lastPathStatus !== 'none') wrong.push(`path=${ctx.lastPathStatus}`)
+      const lr = ctx.lastRecover
+      if (lr && lr.action) {
+        const ago = typeof lr.at === 'number' ? ` ${Math.max(0, Math.floor((Date.now() - lr.at) / 1000))}s ago` : ''
+        wrong.push(`last recover: ${lr.action} ${lr.outcome || 'unknown'}${ago}`)
+      }
+      if (wrong.length > 0) lines.push(wrong.join('; '))
+      for (const l of lines) bot.chat(clipStatus(l))
     }
   }
 }

@@ -34,6 +34,13 @@ describe("help command (idkcraft-kae)", () => {
     if (pages.length > 1) assert.ok(pages[0].includes('say help 2'))
   })
 
+  it("'help status' reports the what/who-chose/why/blocks rewrite (gwvg A8)", () => {
+    assert.equal(lookupCommand('status').what, 'reports what the bot does, who chose it and why, what blocks it')
+    const bot = chatBot()
+    handleChat(bot, null, 'Steve', 'help status')
+    assert.ok(bot.chats[0].includes('who chose it and why'), bot.chats[0])
+  })
+
   it("'help find me' explains find me; aliases resolve", () => {
     const bot = chatBot()
     handleChat(bot, null, 'Steve', 'help find me')
