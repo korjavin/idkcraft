@@ -439,3 +439,35 @@ describe('rest site fallbacks (idkcraft-fny)', () => {
 // NOTE (idkcraft-fny mutant review): dropping `site &&` from the wrap guard
 // survives the suite and is equivalent, not a gap — verified by probing:
 // the `if (!site) return` above makes a falsy site unreachable there.
+
+describe('rest waits at the castle site while it is open (g0z.23)', () => {
+  const castleMod = require('../src/behaviours/castle')
+
+  it('strolls near the castle entrance, not the home site', () => {
+    const bot = mockBot()
+    const st = { site: { x: 213, y: 64, z: 100 }, rot: 0, phase: 'body' } // 113 from home
+    const ctx = { lastGoalKey: '', home: { site: pos(100, 64, 100) }, castle: st }
+    rest(bot, ctx, null, {})
+    const ent = castleMod.entrance(st)
+    const g = bot.calls.goals[0]
+    assert.ok(Math.hypot(g.x - ent.x, g.z - ent.z) <= 8, `goal at ${g.x},${g.z}, entrance at ${ent.x},${ent.z}`)
+    assert.ok(Math.hypot(g.x - 100, g.z - 100) > 8, `goal at ${g.x},${g.z} near the home site`)
+    // At the site the stroll stays within the roam envelope of the entrance.
+    bot.entity.position = pos(ent.x + 0.5, ent.y, ent.z + 0.5)
+    for (let i = 0; i < 10; i++) {
+      rest(bot, ctx, null, {})
+      const s = bot.calls.goals[bot.calls.goals.length - 1]
+      assert.ok(Math.hypot(s.x - ent.x, s.z - ent.z) <= 8, `stroll at ${s.x},${s.z}`)
+    }
+  })
+
+  it('a parked or complete castle strolls home as today', () => {
+    for (const extra of [{ parked: true }, { phase: 'complete' }]) {
+      const bot = mockBot()
+      const ctx = { lastGoalKey: '', home: { site: pos(100, 64, 100) }, castle: { site: { x: 213, y: 64, z: 100 }, rot: 0, phase: 'body', ...extra } }
+      rest(bot, ctx, null, {})
+      const g = bot.calls.goals[0]
+      assert.ok(Math.hypot(g.x - 100, g.z - 100) <= 8, `goal at ${g.x},${g.z} for ${JSON.stringify(extra)}`)
+    }
+  })
+})

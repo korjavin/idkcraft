@@ -188,14 +188,16 @@ function pick(bot, ctx, st, cells, key, now) {
   const order = workOrder(cells, key)
   const complete = st.phase === 'complete'
   // Structural gate: an actively blocked place cell stops everything above
-  // its layer. Done or stale-version entries drop here.
+  // its layer. Done or stale-version entries drop here. The gate cell rides
+  // along for the stuck chat (g0z.23): a gated-above waiting cell is not it.
   let gateDy = Infinity
+  let gate = null
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
     // Off-plan entries (prep, litter) live until they expire (g0z.14).
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
-    if (c && st.blocked[k].until > now && !clearing(c)) gateDy = Math.min(gateDy, c.dy)
+    if (c && st.blocked[k].until > now && !clearing(c) && c.dy < gateDy) { gateDy = c.dy; gate = c }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
   for (;;) {
@@ -221,7 +223,7 @@ function pick(bot, ctx, st, cells, key, now) {
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
     if (owed) return { idx: owed.idx }
-    return { idx: -1, waiting }
+    return { idx: -1, waiting, gate }
   }
 }
 
@@ -620,7 +622,20 @@ function menuFact(bot, ctx, now = Date.now()) {
     // the body, so the word is the body's — never 'finish' at 0/240.
     if (st.phase === 'prep' && !r.cell && !r.waiting) r = peek(bot, { ...st, phase: 'body' }, now, ctx)
     let word = null
-    if (!r.cell) word = r.waiting ? 'blocked' : st.phase === 'complete' ? 'done' : 'finish'
+    if (!r.cell) {
+      // Blocked (g0z.23): the gated kind and its remainder stay on the word,
+      // so a far site reads stock (walk back) and castlefetch quarries the
+      // gated kind while the build stands. On site the word stays 'blocked'.
+      if (r.waiting) {
+        let left = 0
+        for (const o of r.cells) {
+          if (o.kind === r.waiting.kind && !done(bot, o)) left++
+        }
+        ctx.castleWord = { word: 'blocked', kind: r.waiting.kind, left }
+        return 'blocked'
+      }
+      word = st.phase === 'complete' ? 'done' : 'finish'
+    }
     // A prep fill takes any filler on hand, no batch (g0z.16): works now.
     else if (clearing(r.cell) || (r.cell.prep === 'fill' && fillItem(bot))) word = 'clear'
     if (word) {
@@ -1051,11 +1066,31 @@ function castle(bot, ctx) {
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
+  if (r.idx >= 0) ctx.castleBlockedSaid = null // work proceeds: a later block chats again
   if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
   if (r.idx < 0) {
     if (r.waiting) {
+      // The stuck cell: waiting itself when its block is live, else the
+      // structural gate cell holding the layers above (g0z.23). One chat
+      // line per distinct cell+why; the 'castle' command shows the status.
       const w = r.waiting
-      st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
+      const live = st.blocked[bkey(st, w.idx)]
+      const cell = (live && live.until > now) ? w : (r.gate || w)
+      const e = st.blocked[bkey(st, cell.idx)]
+      if (e && e.until > now) {
+        const retry = Math.round((e.until - now) / 1000)
+        st.status = `blocked at ${cell.x} ${cell.y} ${cell.z} (${cell.kind}: ${e.why}), retry in ${retry}s`
+        const said = `${bkey(st, cell.idx)}:${e.why}`
+        if (ctx.castleBlockedSaid !== said) {
+          ctx.castleBlockedSaid = said
+          let line = `castle: stuck at ${cell.x} ${cell.y} ${cell.z} on ${e.why}, retry in ${retry}s`
+          const kept = /^kept-(.+)$/.exec(e.why)
+          if (kept) line += ` — remove the ${kept[1]} there or say castle stop`
+          try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+        }
+      } else {
+        st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
+      }
       ctx.stepStatus = 'failed:blocked'
       return
     }

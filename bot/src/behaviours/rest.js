@@ -3,6 +3,21 @@
 const Vec3 = require('vec3')
 const roam = require('./roam')
 
+// Castle anchor (g0z.23): with nobody visible and an open castle, wait at
+// its entrance (the gocastle stance) instead of the home site, so a
+// blocked build finds the bot nearby when the backoff expires. Deferred
+// require (the goal <-> castle cycle precedent).
+function castleAnchor(ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || st.parked || st.phase === 'complete') return null
+    if (!st.site || typeof st.site.x !== 'number') return null
+    return require('./castle').entrance(st)
+  } catch (_) {
+    return null
+  }
+}
+
 // rest: stroll around the home site (world spawn until bead .4 sets one).
 // Pseudo-target: roam only reads target.position (username/id just tag goal
 // keys), and a static point never trips GoalFollow.hasChanged, so the bot
@@ -18,7 +33,7 @@ function rest(bot, ctx, target, state) {
     roam(bot, ctx, target, state)
     return
   }
-  const site = (ctx.home && ctx.home.site) || (bot && bot.spawnPoint)
+  const site = castleAnchor(ctx) || (ctx.home && ctx.home.site) || (bot && bot.spawnPoint)
   if (!site) return
   const p = site && typeof site.floored === 'function' ? site : new Vec3(site.x, site.y, site.z)
   roam(bot, ctx, { position: p }, state)

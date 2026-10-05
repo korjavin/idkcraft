@@ -658,3 +658,59 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.equal(d.short, 4 + castleMod.reserveOf('planks'), 'one infill run, not a 32 stack')
   })
 })
+
+describe('castlefetch while the castle is blocked (g0z.23)', () => {
+  const LAID = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', door: 'oak_door' }
+  // Everything laid but one gated stone cell: the word is blocked, the kind
+  // and remainder stay visible for the fetch.
+  function blockedWorld() {
+    const { cells } = blueprint.absPlan(SITE, 0, 1)
+    const stuck = cells.find((c) => c.kind === 'stone' && c.dy === 1)
+    const set = new Map()
+    for (const c of cells) {
+      if (c === stuck) continue
+      if (LAID[c.kind]) set.set(`${c.x},${c.y},${c.z}`, LAID[c.kind])
+      else set.set(`${c.x},${c.y},${c.z}`, 'air')
+    }
+    const ctx = { castle: castleState({ blocked: { [`1:${stuck.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } }) }
+    return { cells, stuck, set, ctx }
+  }
+
+  it('a gated stone cell reads blocked with its kind, and the fetch quarries it', () => {
+    const { set, ctx } = blockedWorld()
+    const bot = makeBot({ items: TOOLS(), set })
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
+    assert.deepEqual(ctx.castleWord, { word: 'blocked', kind: 'stone', left: 1 })
+    const d = fetch.demand(bot, ctx)
+    assert.equal(d.kind, 'stone')
+    assert.equal(d.word, 'blocked')
+    assert.ok(d.short > 0, `short: ${d.short}`)
+  })
+
+  it('a full batch parks the fetch (the behaviour ends done, the gate closes)', () => {
+    const { set, ctx } = blockedWorld()
+    const items = [...TOOLS(), { name: 'cobblestone', count: 1 + castleMod.reserveOf('stone') }]
+    const bot = makeBot({ items, set })
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
+    assert.equal(fetch.demand(bot, ctx).short, 0)
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('stone fetch while blocked needs a pickaxe and daylight', () => {
+    assert.ok(goal.STEP_CRITERIA.castlefetch.includes('blocked'), 'the model menu names the blocked fetch')
+    const { set, ctx } = blockedWorld()
+    const day = makeBot({ items: TOOLS(), set })
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(day, ctx), day, ctx), true)
+    const bare = makeBot({ items: [{ name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 }], set })
+    const bareCtx = { castle: castleState({ blocked: ctx.castle.blocked }) }
+    const bareFacts = goal.goalFacts(bare, bareCtx)
+    assert.equal(bareFacts.castle, 'blocked')
+    assert.equal(goal.MENU.castlefetch.feasible(bareFacts, bare, bareCtx), false)
+    assert.equal(goal.stepWhy('castlefetch', bareFacts, bare, bareCtx, ''), 'castlefetch: no pickaxe')
+    const night = makeBot({ items: TOOLS(), set, timeOfDay: 18000 })
+    const nightCtx = { castle: castleState({ blocked: ctx.castle.blocked }) }
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(night, nightCtx), night, nightCtx), false)
+  })
+})

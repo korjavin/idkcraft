@@ -1259,3 +1259,34 @@ describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
     assert.ok(bot.chats.includes('need 8 cobble for the furnace, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
   })
 })
+
+describe('g0z.23: explore/forage veto while the castle is blocked', () => {
+  const F = (name, facts, bot, ctx) => MENU[name].feasible(facts, bot, ctx)
+  const day = { time: 'day', home: 'built', known: 'near', castle: 'blocked', health: 20 }
+  it('forage and explore yield while castle=blocked by day', () => {
+    assert.equal(F('forage', day, null, {}), false)
+    assert.equal(F('explore', day, null, {}), false)
+    assert.equal(stepWhy('explore', day, null, {}, ''), 'explore: castle blocked, waiting at the site')
+    assert.equal(stepWhy('forage', day, null, {}, ''), 'forage: castle blocked, waiting at the site')
+  })
+  it('other castle words keep explore/forage (stone-none stays the wood-finding path)', () => {
+    // stone-batch: forage already yields to the workable leg (castleGo);
+    // the veto must not widen that to explore or to other words.
+    assert.equal(F('explore', { ...day, castle: 'stone-batch' }, null, {}), true)
+    assert.equal(F('forage', { ...day, castle: 'stone-batch' }, null, {}), false)
+    for (const castle of ['stone-none', 'none']) {
+      const facts = { ...day, castle }
+      assert.equal(F('explore', facts, null, {}), true, castle)
+      assert.equal(F('forage', facts, null, {}), true, castle)
+    }
+  })
+  it('night explore feasibility unchanged while blocked', () => {
+    assert.equal(F('explore', { ...day, time: 'night' }, null, {}), true)
+  })
+  it('restWhy lists the blocked castle and the veto lines', () => {
+    const why = restWhy(day, goalBot(), {}, ['rest'])
+    assert.ok(why.includes('castle: next cell blocked, retrying later'), `why: ${why}`)
+    assert.ok(why.includes('explore: castle blocked, waiting at the site'), `why: ${why}`)
+    assert.ok(why.includes('forage: castle blocked, waiting at the site'), `why: ${why}`)
+  })
+})
