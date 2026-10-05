@@ -11,6 +11,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const forage = require('../src/behaviours/forage')
 const resources = require('../src/resources')
+const { FORAGE_RETRY_MS } = require('../src/goal')
 
 function pos(x, y, z) {
   return {
@@ -103,6 +104,37 @@ describe('forage deadlock (atl.10)', () => {
     ctx.stepStatus = 'running'
     forage(bot, ctx, null, {})
     assert.ok(bot.calls.setGoal >= 1, 'honest retry issues a walk goal')
+  })
+
+  it('past the goal hold bound the first pick runs honestly, not gated (bt8s revmux 01)', () => {
+    const bot = mockBot() // no pickaxe: iron_ore unplannable -> fail
+    const ctx = memCtx([{ x: 10, y: 60, z: 0, name: 'iron_ore' }])
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+    assert.ok(ctx.forageFinal, 'final recorded')
+    // The goal hold waited out the failure and expired; mem/haul unchanged.
+    ctx.stepFail = { forage: { status: 'failed:no-known', text: 'stale', pos: null, at: Date.now() - FORAGE_RETRY_MS - 1 } }
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    ctx.stepStatus = 'running'
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.forageFinal, null, 'stale final dropped, not replayed')
+    assert.ok(bot.calls.setGoal >= 1, 'honest retry issues a walk goal at once')
+    assert.doesNotMatch(logs.join('\n'), /forage gated/, 'no gated replay past the bound')
+  })
+
+  it('a fresh hold record still replays: the tick-after-fail reason survives (bt8s revmux 01)', () => {
+    const bot = mockBot()
+    const ctx = memCtx([{ x: 10, y: 60, z: 0, name: 'iron_ore' }])
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+    // decide() just stamped the failure (or hasn't run yet): replay, never restart.
+    ctx.stepFail = { forage: { status: 'failed:no-known', text: 'fresh', pos: null, at: Date.now() } }
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    ctx.stepStatus = 'running'
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-known')
+    assert.equal(bot.calls.setGoal, 0, 'gated: no attempt despite pickaxe')
+    assert.match(logs.join('\n'), /forage gated failed:no-known n=1\/3/)
   })
 
   it('struck cells stay skipped across the expiry (atl.2 contract)', () => {
