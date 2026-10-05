@@ -345,7 +345,7 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
-  it('never recycles its own scaffold: own pillars are skipped in the scan (idkcraft-6x7.12)', async () => {
+  it('never recycles its own scaffold in the footprint (idkcraft-6x7.12)', async () => {
     const home = { v: 2, site: { x: 97, y: 71, z: -357 }, interior: { min: { x: 98, y: 71, z: -356 }, max: { x: 102, y: 72, z: -353 } } }
     // An approach pillar inside the box above the floor (own since dahd, so
     // the dig guard allows it) plus natural dirt far outside the footprint.
@@ -374,8 +374,10 @@ describe('equip step', () => {
     assert.equal(bot.calls.dig.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'only own pillars: no-dirt, never the recycle')
     bot.restoreError()
-    // Outside the footprint the name still decides: our dirt pillar there is
-    // skipped, but a swapped cell (our key, someone else's kind now) digs.
+    // Outside the footprint our pillars stay pre-dahd refills: skipping them
+    // lengthened mid-build refill walks into dig-unreachable starvation on
+    // the rig (runs 7/9: scaffold 0, then build wedges) — they are the
+    // short doorway exits, not churn. The laid-name check still applies.
     const road = { x: 110, y: 70, z: -366 }
     const ownRoad = () => ({ lastGoalKey: '', stepStatus: 'running', home, placedByBot: new Set(['110,70,-366']) })
     bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
@@ -383,8 +385,7 @@ describe('equip step', () => {
     ctx = ownRoad()
     equip(bot, ctx, null, {})
     await flush()
-    assert.equal(bot.calls.dig.length, 0)
-    assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'own roadside pillar: skipped')
+    assert.match(ctx.lastGoalKey, /^equip-(dig|pickup):110,70,-366$/, 'own roadside pillar: pre-dahd refill')
     bot.restoreError()
     bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
     bot.entity.position = { x: 105.5, y: 71, z: -365.5 }

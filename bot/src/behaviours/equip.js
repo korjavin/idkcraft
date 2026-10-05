@@ -5,7 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const fightMod = require('./fight')
-const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced } = require('./util')
+const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
 
 // equip: rebuild the starter kit after death (idkcraft-atl.6, owner
 // 2026-09-24: stone_pickaxe, stone_sword, ~32 scaffold blocks). Order is
@@ -610,6 +610,17 @@ function craftOne(bot, ctx, op) {
   })
 }
 
+// Our own placement inside the house footprint (box + apron): the recycle
+// equip must not dig (idkcraft-6x7.12). Outside the footprint our pillars
+// stay diggable pre-dahd refills (see the scan filter above).
+function ownInFootprint(ctx, block) {
+  try {
+    const pos = block && block.position
+    if (!pos || !ctx || !ctx.home) return false
+    return isOwnPlaced(ctx, block) && !!inHouseFootprint(ctx.home, pos)
+  } catch (_) { return false }
+}
+
 function digTick(bot, ctx, st, bp) {
   if (st.digs == null) st.digs = 0
   if (st.digs >= DIG_STALL_STRIKES) {
@@ -625,12 +636,15 @@ function digTick(bot, ctx, st, bp) {
       count: 16, // the wet filter below shrinks the pool: scan wider
       // idkcraft-0mlh: skip protected ground (house apron) in the scan, so
       // 16 porch cells near the door never starve the pool into no-dirt.
-      // idkcraft-6x7.12: skip our own placements too — since dahd filled
-      // placedByBot in prod, the scan offered our own approach pillars in
-      // the footprint (nearest dirt around) and the refill dug them, so
-      // the next approach re-pillared: net-zero dirt, extra wedged walks,
-      // JR-BUILD stuck 1,2,2 -> 4,2,4,2,4. Scaffold is spent, not recycled.
-      useExtraInfo: (b) => protectedReason(bot, b, ctx) === null && !isOwnPlaced(ctx, b),
+      // idkcraft-6x7.12: skip our own placements in the footprint — since
+      // dahd filled placedByBot in prod, the scan offered our own approach
+      // pillars in the footprint (nearest dirt around) and the refill dug
+      // them, so the next approach re-pillared: net-zero dirt, extra
+      // wedged walks. Footprint-only: outside pillars stay pre-dahd
+      // refills (rig runs 7/9: skipping them lengthened mid-build refill
+      // walks into dig-unreachable starvation, scaffold 0, then build
+      // wedges) — they are also the short doorway exits, not churn.
+      useExtraInfo: (b) => protectedReason(bot, b, ctx) === null && !ownInFootprint(ctx, b),
     })
   } catch (_) { found = null }
   if (!found || !found.length) {
@@ -666,7 +680,7 @@ function digTick(bot, ctx, st, bp) {
   }
   cands.sort((a, b) => ((a.hard ? 1 : 0) - (b.hard ? 1 : 0)) || (a.d - b.d))
   const blockOf = (c) => c.blk || { name: c.name, position: c.v }
-  const pick = cands.find((c) => !isOwnPlaced(ctx, blockOf(c)) && canBreak(bot, blockOf(c), ctx))
+  const pick = cands.find((c) => !ownInFootprint(ctx, blockOf(c)) && canBreak(bot, blockOf(c), ctx))
   if (!pick) {
     if (cands[0]) { const d0 = denyReason(bot, blockOf(cands[0]), ctx); logDeny(blockOf(cands[0]), d0) } // idkcraft-drq: scaffold, not the hut
     if (wetSkipped > 0) {
