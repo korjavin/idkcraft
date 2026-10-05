@@ -67,6 +67,13 @@ const CLEAR_FLORA = new Set([
   'snow', 'poppy', 'dandelion', 'oxeye_daisy', 'cornflower', 'azure_bluet',
   'allium', 'blue_orchid', 'lily_of_the_valley', 'red_tulip', 'orange_tulip',
   'white_tulip', 'pink_tulip', 'vine', 'glow_lichen',
+  // g0z.22: same 1.21.5+ ground flora as build REPLACEABLE (without it the
+  // dig guard refuses what the castle executor clears, and the cell blocks
+  // as 'protected' instead of 'kept').
+  'leaf_litter', 'wildflowers', 'firefly_bush',
+  'short_dry_grass', 'tall_dry_grass', 'pink_petals',
+  'sunflower', 'lilac', 'rose_bush', 'peony',
+  'golden_dandelion', 'cactus_flower',
 ])
 
 function isWoody(name) {

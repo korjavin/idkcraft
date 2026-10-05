@@ -845,7 +845,10 @@ function digCell(bot, ctx, st, c, now) {
   // stays narrow for its own shaving; place-cell occupants keep it (g0z.2).
   const natural = flat.isDiggable(name) || build.isReplaceable(name) || isTreeBlock(name) ||
     (clearing(c) && typeof name === 'string' && (NATURAL_SOLID.has(name) || name.endsWith('_ore')))
-  if (!ours && !natural) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  // Unreadable (an unloaded chunk while far) is not a foreign build: it
+  // falls through to the approach below, which loads the cell, and a cell
+  // that never reads strikes 'unreadable' instead (g0z.22).
+  if (name != null && !ours && !natural) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null

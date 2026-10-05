@@ -137,10 +137,17 @@ function blueprintFor(home) {
 
 // Blocks the place flow is allowed to clear: a refusal usually means grass
 // or a flower grew into the cell. Anything else is left alone.
+// g0z.22: the 1.21.5+ ground flora (leaf litter, wildflowers, bushes, dry
+// grasses) plus the older tall flowers; sweet_berry_bush stays out
+// (thorns, often a player farm).
 const REPLACEABLE = new Set([
   'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'snow',
   'torch', 'vine', 'glow_lichen', 'poppy', 'dandelion', 'oxeye_daisy',
   'cornflower', 'azure_bluet', 'allium',
+  'leaf_litter', 'wildflowers', 'bush', 'firefly_bush',
+  'short_dry_grass', 'tall_dry_grass', 'pink_petals',
+  'blue_orchid', 'lily_of_the_valley', 'sunflower', 'lilac',
+  'rose_bush', 'peony', 'golden_dandelion', 'cactus_flower',
 ])
 
 function isReplaceable(name) {
