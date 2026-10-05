@@ -216,7 +216,11 @@ S6-LEAD by the lost order (`reached`).
 
 - `spawn`/`goal` are prod coords on the snapshot; `secs`/`scaffold`/
   `pickaxe`/`bucket` are the per-spot kit (66 dirt default, stone pickaxe,
-  water-bucket pair for `water_up` spots).
+  water-bucket pair for `water_up` spots). `kit` (idkcraft-6x7.10) is an
+  optional list of extra `"<item> <count>"` give-strings (a seeded house
+  BOM): item `[a-z_]+`, count 1..2304 (one give carries many stacks) —
+  validated like `prep`, issued one `give` per entry after the standard
+  kit. Omit it for an unseeded run.
 - Every closed movement bead adds its prod coords as a spot (with `bead`)
   PLUS the measured baseline entry — one without the other fails the gate
   (`NO BASELINE ENTRY` → exit 1) or `npm test`.
@@ -246,12 +250,19 @@ S6-LEAD by the lost order (`reached`).
   ranged 20 blocks east off-terrain and was rejected in review). (The
   jr2.4 approach-loop fix itself is pinned by unit tests; the oracle
   guards the terrain, not the bug.)
-- JR-BUILD is the build gate (idkcraft-d7i): `build here` from scratch
-  on the same slope, expect `home done at` (gather, craft, station, the
-  partition before the door — ~9 min, so it runs last). Before d7i the
-  order stalled inside the house and paged every run; the fix made it
-  complete deterministically, so the completion pin holds (`reached:
-  true`, `maxCalls: 0`).
+- JR-BUILD is the build gate (idkcraft-d7i): `build here` on the same
+  slope, expect `home done at`. Seeded since idkcraft-6x7.10 (was
+  from-scratch: 496-671 s of a 900 s window, ±90 s of gather noise): the
+  `kit` carries the v2 house BOM (107 acacia planks = `needPlanks`, a
+  crafting table and an acacia door), so gather is skipped but
+  craft/equip/build still run — the spot gates build completion
+  (partition, door, roof placed, no wedge/page) in ~220 s of a 300 s
+  window, not the partition order (a partition-first revert still
+  completes: doors open since 6xno). Before d7i the order stalled
+  inside the house and paged every run; the fix made it complete
+  deterministically, so the completion pin holds (`reached: true`,
+  `maxCalls: 0`). The from-scratch gather stays runnable via a kit-less
+  temp spots file (it is 6x7.14's territory, not the oracle's).
 - Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,
   idkcraft-6x7.8): the snapshot holds no adoptable house near the pit
   (measured: doors stand but the table cell + quorum reject every one),

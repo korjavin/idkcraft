@@ -1029,6 +1029,107 @@ describe('dry-moat exit spot (idkcraft-g0z.6)', () => {
   })
 })
 
+describe('spot kit (idkcraft-6x7.10)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+  const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+
+  it('loadSpots passes kit through, defaults to the unseeded run', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-spots-'))
+    const saved = process.argv[2]
+    const load = (kit) => {
+      const spot = { name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0] }
+      if (kit !== undefined) spot.kit = kit
+      const f = path.join(dir, 'k.json')
+      fs.writeFileSync(f, JSON.stringify([spot]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      assert.deepEqual(load(['birch_planks 64', 'stick 16'])[0].kit, ['birch_planks 64', 'stick 16'])
+      assert.deepEqual(load(undefined)[0].kit, [], 'omitted kit is the unseeded run (the gather stays runnable)')
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('loadSpots accepts give-shaped entries, one give carrying many stacks', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-count-'))
+    const saved = process.argv[2]
+    try {
+      const f = path.join(dir, 'k.json')
+      // 107 planks ride one give (scaffold precedent: give dirt 2304).
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], kit: ['acacia_planks 107', 'crafting_table 1', 'acacia_door 1'] }]))
+      process.argv[2] = f
+      assert.deepEqual(loadSpots()[0].kit, ['acacia_planks 107', 'crafting_table 1', 'acacia_door 1'])
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('loadSpots rejects smuggled rcon verbs and malformed entries', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-bad-'))
+    const saved = process.argv[2]
+    const load = (kit) => {
+      const f = path.join(dir, 'k.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], kit }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    try {
+      for (const bad of [
+        ['op X'], ['deop X'], ['tp X 0 64 0'], ['effect give X minecraft:speed 10'],
+        ['give @a dirt 1'], ['fill 0 0 0 1 1 1 air'], ['setblock 0 0 0 stone'],
+        [' Dirt 1'], ['dirt  1'], ['dirt 0'], ['dirt 2305'], ['dirt -1'], ['dirt x'],
+        ['dirt'], ['dirt 1 2'], ['Oak_Planks 1'], ['oak-planks 1'], ['oak planks 1'],
+        [7], [null], [], 'dirt 1', 7,
+      ]) {
+        assert.throws(() => load(bad), /bad kit/, JSON.stringify(bad))
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('JR-BUILD is the seeded build-here spot (house BOM, 300 s window)', () => {
+    // Seeded since idkcraft-6x7.10 (was from-scratch, 496-671 s of a 900 s
+    // window, ±90 s of gather noise): the kit skips only the gather — 107
+    // acacia planks is needPlanks (92 walls/roof/partition + 5 floor cells,
+    // the table+door material budget spare for tool sticks), the table and
+    // the door ride as items. Craft/equip/build still run, so the spot
+    // gates completion (partition, door, roof placed, no wedge/page) in
+    // ~220 s — not the partition order (a partition-first revert still
+    // completes: doors open since 6xno).
+    const b = byName['JR-BUILD']
+    assert.ok(b, 'JR-BUILD in the corpus')
+    assert.deepEqual(b.kit, ['acacia_planks 107', 'crafting_table 1', 'acacia_door 1'])
+    assert.equal(b.secs, 300)
+    assert.equal(b.bead, 'idkcraft-d7i')
+    const e = baseline.spots['JR-BUILD']
+    assert.ok(e, 'JR-BUILD has a baseline entry (a spot without one fails the gate)')
+    assert.equal(e.reached, true)
+    assert.equal(e.maxCalls, 0, 'a page is a gave-up, no slack')
+  })
+
+  it('kit is given after the clear, as give commands the replay builds itself', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    const at = (needle) => { const i = replay.indexOf(needle); assert.ok(i >= 0, needle); return i }
+    const kit = at('for (const entry of s.kit)')
+    assert.ok(at('await rcon(`clear ${FOLLOWER}`)') < kit, 'kit must follow the clear (fresh kit per spot)')
+    assert.ok(replay.includes('await rcon(`give ${FOLLOWER} ${item} ${count}`)'),
+      'the replay builds each give itself — no entry can smuggle another verb')
+  })
+})
+
 describe('danger-seeded spots (idkcraft-zj2p)', () => {
   const base = { brain: 'stub', spots: { A: { reached: true, maxStuck: 2, maxEps: 1, maxCalls: 0, minDanger: 30 } } }
   const drow = (minDanger) => ({ ...row('A', true, 0, 0), ...(minDanger === undefined ? {} : { minDanger }) })
