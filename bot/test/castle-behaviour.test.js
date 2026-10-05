@@ -169,6 +169,35 @@ describe('g0z.2 castle executor', () => {
     assert.equal(world.get(c.x, c.y, c.z), 'cobblestone')
   })
 
+  it('g0z.22: a place cell holding leaf_litter (1.21.5+ flora) is dug, not kept', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const c = cells()[0]
+    world.set(c.x, c.y, c.z, 'leaf_litter')
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 6)
+    assert.deepEqual(bot.calls.digs[0], { x: c.x, y: c.y, z: c.z })
+    assert.equal(world.get(c.x, c.y, c.z), 'cobblestone')
+    assert.deepEqual(ctx.castle.blocked, {})
+  })
+
+  it('g0z.22: an unreadable (unloaded) cell is approached, never kept-null', async () => {
+    const world = makeWorld()
+    const plan = cells()
+    paint(world, plan.length)
+    const win = plan.find((c) => c.kind === 'air' && c.dy === 4)
+    const bot = mockBot(world)
+    const raw = bot.blockAt
+    bot.blockAt = (p) => (Math.floor(p.x) === win.x && Math.floor(p.y) === win.y && Math.floor(p.z) === win.z ? null : raw(p))
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'body' } }
+    await run(bot, ctx, 2)
+    assert.deepEqual(ctx.castle.blocked, {}, 'no instant block: the bot walks there first')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear', 'an approach goal is issued')
+    await run(bot, ctx, 4)
+    const e = ctx.castle.blocked[`1:${win.idx}`]
+    assert.ok(!e || e.why !== 'kept-null', 'never kept-null')
+  })
+
   it('our own scaffold in a place cell is dug like terrain', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
