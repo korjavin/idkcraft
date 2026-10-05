@@ -1920,14 +1920,34 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
-  it('(f) status chats mode, step, inventory and home', async () => {
+  it('(f) status chats what the bot does, who chose it and why (gwvg A1)', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
-    await ticker.tick() // step rest is set
+    const origGather = BEHAVIOURS.gather
+    BEHAVIOURS.gather = () => {} // the step stays running; gather's own tests cover the failure
+    try {
+      await ticker.tick() // step gather is picked
+    } finally {
+      BEHAVIOURS.gather = origGather
+    }
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.stepPick.source, 'goal-fsm')
+    assert.equal(ctx.stepPick.why, 'start')
+    assert.equal(ctx.stepPick.fsm, 'gather')
+    const n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.equal(bot.chats[bot.chats.length - 1], 'working step=gather logs=0 planks=0 home=none')
+    const reply = bot.chats.slice(n)
+    assert.ok(reply.length >= 1 && reply.length <= 3, `1-3 lines, got ${reply.length}`)
+    const line1 = reply[0]
+    for (const frag of ['working', 'body=work', 'step=gather', 'chopping wood', 'running', 'goal-fsm', 'start']) {
+      assert.ok(line1.includes(frag), `line 1 names ${frag}: ${line1}`)
+    }
+    const all = reply.join('\n')
+    for (const frag of ['logs=', 'planks=', 'home=']) {
+      assert.ok(all.includes(frag), `reply keeps ${frag}: ${all}`)
+    }
     ticker.destroy()
   })
 
@@ -1940,8 +1960,203 @@ describe('work mode (epic rw4)', () => {
     bot._tickerCtx.step = 'rest'
     bot._tickerCtx.restWhy = 'gather: load full, explore: house not built yet'
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.equal(bot.chats[bot.chats.length - 1], 'working step=rest resting because gather: load full, explore: house not built yet logs=0 planks=0 home=none')
+    const line = bot.chats[bot.chats.length - 1]
+    assert.ok(line.includes('working'), `mode: ${line}`)
+    assert.ok(line.includes('step=rest'), `step: ${line}`)
+    assert.ok(line.includes('resting because gather: load full, explore: house not built yet'), `same restWhy text: ${line}`)
+    assert.ok(line.includes('logs=0') && line.includes('planks=0') && line.includes('home=none'), `facts: ${line}`)
     ticker.destroy()
+  })
+
+  it('(f3) status names held steps as blocked (gwvg A3)', async () => {
+    const goal = require('../src/goal')
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    // A live hold (record text matches): stepWhy's own wording.
+    const live = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+    ctx.stepFail = { gather: { status: 'failed:unreachable', text: live, pos: { x: 0, y: 64, z: 0 }, at: Date.now() } }
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
+    // A stale record text with the gather latch still holding: same words.
+    ctx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
+    ticker.destroy()
+  })
+
+  it('(f3b) status stays silent on released failure records (gwvg A3, 01 core-1)', async () => {
+    // No gather latch: gather stayed stubbed and the record text moved on,
+    // so nothing holds — the released record must not read as blocked.
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const origGather = BEHAVIOURS.gather
+    BEHAVIOURS.gather = () => {}
+    try {
+      await ticker.tick()
+    } finally {
+      BEHAVIOURS.gather = origGather
+    }
+    const ctx = bot._tickerCtx
+    assert.ok(!ctx.gather, 'no gather latch without a gather run')
+    ctx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
+    const n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(!bot.chats.slice(n).join('\n').includes('blocked:'), bot.chats.slice(n).join(' | '))
+    ticker.destroy()
+  })
+
+  it('(f4) status names stuck and recovering episodes (gwvg A4)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.stuckState = 'STUCK'
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('stuck=STUCK'), bot.chats.slice(n).join(' | '))
+    ctx.stuckState = 'MOVING'
+    ctx.recovery = { action: 'pillar_up', status: 'running' }
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('recovering=pillar_up'), bot.chats.slice(n).join(' | '))
+    ticker.destroy()
+  })
+
+  it('(f5) last recover outcome survives clearStuck (gwvg A4)', async () => {
+    const recover = require('../src/behaviours/recover')
+    const stuck = require('../src/stuck')
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.recovery = { action: 'pillar_up', source: 'fsm' }
+    recover.release(bot, ctx, 'done')
+    stuck.clearStuck(ctx)
+    assert.equal(ctx.recovery, null)
+    const n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('last recover: pillar_up done'), bot.chats.slice(n).join(' | '))
+    ticker.destroy()
+  })
+
+  it('(f6) follow mode status names the brain source (gwvg A5)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const brain = { calls: 0, async decide() { this.calls++; return { action: 'follow', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    ticker.setFollow('Steve')
+    const origFollow = BEHAVIOURS.follow
+    BEHAVIOURS.follow = () => {}
+    try {
+      await ticker.tick()
+    } finally {
+      BEHAVIOURS.follow = origFollow
+    }
+    assert.equal(bot._tickerCtx.lastDecision.source, 'stub')
+    const n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    const reply = bot.chats.slice(n)
+    assert.ok(reply[0].includes('following'), reply.join(' | '))
+    assert.ok(reply[0].includes('body=follow'), reply.join(' | '))
+    assert.ok(reply[0].includes('source=stub'), reply.join(' | '))
+    ticker.destroy()
+  })
+
+  it('(f7) status lines clip to the 256-char chat cap (gwvg A6)', async () => {
+    const { CHAT_LIMIT } = require('../src/commands')
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    bot._tickerCtx.step = 'rest'
+    bot._tickerCtx.restWhy = 'x'.repeat(400)
+    const n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    const reply = bot.chats.slice(n)
+    assert.ok(reply.length >= 1 && reply.length <= 3, `1-3 lines, got ${reply.length}`)
+    for (const l of reply) assert.ok(l.length <= CHAT_LIMIT, `line is ${l.length} chars`)
+    assert.ok(reply[0].endsWith('…'), `clipped line ends with …: ${reply[0].slice(-10)}`)
+    assert.ok(reply[0].includes('logs=') && reply[0].includes('home='), `facts survive the clip: ${reply[0].slice(0, 140)}`)
+    ticker.destroy()
+  })
+
+  it('(f9) healthy bot omits path success and aged-out recoveries (gwvg 01 body-2)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.lastPathStatus = 'success'
+    ctx.lastRecover = { action: 'pillar_up', outcome: 'done', at: Date.now() - 10 * 60 * 1000 }
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    let reply = bot.chats.slice(n).join('\n')
+    assert.ok(!reply.includes('path='), `no path on a healthy bot: ${reply}`)
+    assert.ok(!reply.includes('last recover:'), `aged-out outcome hidden: ${reply}`)
+    ctx.lastPathStatus = 'noPath'
+    ctx.lastRecover = { action: 'pillar_up', outcome: 'done', at: Date.now() }
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    reply = bot.chats.slice(n).join('\n')
+    assert.ok(reply.includes('path=noPath'), `abnormal verdict shown: ${reply}`)
+    assert.ok(reply.includes('last recover: pillar_up done'), `fresh outcome shown: ${reply}`)
+    ticker.destroy()
+  })
+
+  it('(f10) order hides the stale work pick (gwvg 01 core-2)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick() // gather picked
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.stepPick.step, 'gather')
+    let n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    assert.ok(bot.chats.slice(n).join('\n').includes('by goal-fsm'), 'pick shown for its own step')
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    handleChat(bot, ticker, 'Steve', 'come home')
+    assert.ok(ctx.comehome, 'order armed')
+    n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    const reply = bot.chats.slice(n).join('\n')
+    assert.ok(reply.includes('coming home'), reply)
+    assert.ok(!reply.includes('by goal-fsm'), `stale pick hidden: ${reply}`)
+    ticker.destroy()
+  })
+
+  it('(f8) status never leaks the brain URL (gwvg A7)', async () => {
+    const keep = process.env.BRAIN_URL
+    process.env.BRAIN_URL = 'http://' + 'fake-host' + '.invalid:8000/v1/systemone'
+    try {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      await ticker.tick()
+      const n = bot.chats.length
+      handleChat(bot, ticker, 'Steve', 'status')
+      const bad = /http|:\/\/|\d+\.\d+\.\d+\.\d+/
+      for (const l of bot.chats.slice(n)) assert.ok(!bad.test(l), `clean line: ${l}`)
+      ticker.destroy()
+    } finally {
+      if (keep === undefined) delete process.env.BRAIN_URL
+      else process.env.BRAIN_URL = keep
+    }
   })
 
   it('(h) work + inShelter + hostile at 5: fight not dispatched', async () => {

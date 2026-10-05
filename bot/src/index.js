@@ -705,6 +705,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (decision.source !== 'stub-fallback') {
           lastStateKey = key
           lastDecision = decision
+          ctx.lastDecision = decision // gwvg: status() reads the follow/fight/idle source from here
         }
       }
       if (ctx.paused) {

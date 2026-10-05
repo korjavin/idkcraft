@@ -102,7 +102,7 @@ describe("'go castle' command (idkcraft-3qia)", () => {
 
     // status report reflects mode
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.some((c) => c.startsWith('going to castle step=')))
+    assert.ok(bot.chats.some((c) => c.startsWith('going to castle') && c.includes('phase=walk')))
   })
 
   it('far castle with unloaded entrance sets GoalNearXZ, loaded sets GoalNear', async () => {

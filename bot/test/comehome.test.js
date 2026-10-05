@@ -835,7 +835,7 @@ describe('jr2.3 ticks dispatch the meet like an explicit order', () => {
     const ticker = tickerWith(bot)
     handleChat(bot, ticker, 'Steve', 'come home')
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.some((c) => c.startsWith('coming home step=')), bot.chats.join(' | '))
+    assert.ok(bot.chats.some((c) => c.startsWith('coming home') && c.includes('phase=walk')), bot.chats.join(' | '))
   })
 })
 

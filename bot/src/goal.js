@@ -1434,15 +1434,19 @@ function stepWhy(name, facts, bot, ctx, text) {
   }
 }
 
-function restWhy(facts, bot, ctx, names) {
+function restWhy(facts, bot, ctx, names, upto) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let text = ''
   try {
     text = goalText(facts, ctx && ctx.home)
   } catch (_) { /* wording best-effort */ }
   const out = []
+  // upto (gwvg): status() passes the current step so only the
+  // higher-priority steps it skipped are phrased; rest (last) and an
+  // omitted upto iterate everything, byte-identical to before.
   for (const n of STEP_ORDER) {
     if (n === 'rest') continue
+    if (upto && n === upto) break
     // No castle ordered: no castle reason (the rest line stays as it was).
     if ((n === 'castle' || n === 'castlefetch') && (!facts || !facts.castle || facts.castle === 'none')) continue
     let on = false
@@ -1678,6 +1682,10 @@ async function decide(bot, ctx) {
       ctx.gohome = null
     }
     ctx.stepStatus = 'running'
+    // gwvg: status() reads who picked this step and why from the stamp.
+    // The step rides along (01 core-2): orders and retreat move ctx.step
+    // without re-stamping, and must not inherit the age/source.
+    ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
@@ -1712,4 +1720,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }

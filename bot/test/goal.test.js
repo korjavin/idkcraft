@@ -1021,6 +1021,17 @@ describe('atl.7 rest explains itself', () => {
     assert.ok(why.includes('gather holds after failure'), `why: ${why}`)
     assert.ok(!why.includes('gather: load full'), `no stale facts wording: ${why}`)
   })
+  it('restWhy upto phrases only the higher-priority steps (gwvg)', () => {
+    const bot = ladenBot()
+    const facts = goalFacts(bot, { home: siteHome() })
+    const ctx = {}
+    const full = restWhy(facts, bot, ctx, ['rest'])
+    assert.equal(restWhy(facts, bot, ctx, ['rest'], 'rest'), full, 'rest reads byte-identical')
+    const upto = restWhy(facts, bot, ctx, ['rest'], 'craft')
+    assert.ok(upto.includes('stay:'), `higher step kept: ${upto}`)
+    assert.ok(!upto.includes('gather'), `lower step dropped: ${upto}`)
+    assert.ok(!upto.includes('explore'), `lower step dropped: ${upto}`)
+  })
   it('leaving rest clears the stored reason', async () => {
     const bot = goalBot({}) // empty hands: gather is feasible again
     const ctx = { step: 'rest', stepStatus: 'running', goalText: null, restWhy: 'old', home: null }
