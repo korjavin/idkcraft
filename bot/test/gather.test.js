@@ -786,11 +786,11 @@ describe('gather target selection (idkcraft-m7ke)', () => {
       ctx.lastPathStatus = 'timeout' // every climb times out
     }
     assert.equal(ctx.stepStatus, 'failed:unreachable')
-    assert.equal(ctx.gather.skip.size, 3, 'kl19: one strike took all three')
+    assert.equal(ctx.gather.streak, 3, 'reached through the strike streak')
     assert.ok(!ctx.stuck, 'cliff strikes request no recover episode')
   })
 
-  it('cliff strike drops every candidate that high at once (kl19)', () => {
+  it('one cliff verdict strikes one crown, not the whole cliff (6x7.13 reverts kl19)', () => {
     const spots = [pos(20, 73, 0), pos(20, 73, 10), pos(20, 73, 20)]
     const names = {}
     for (const p of spots) names[`${p.x},${p.y},${p.z}`] = 'oak_log'
@@ -802,10 +802,11 @@ describe('gather target selection (idkcraft-m7ke)', () => {
     ctx.lastPathStatus = 'timeout'
     bot.entity.position = pos(2, 64, 0)
     quiet(() => gather(bot, ctx, null, {}))
-    assert.equal(ctx.gather.skip.size, 3, 'one verdict, all three struck')
+    assert.equal(ctx.gather.skip.size, 1, 'one verdict, one crown struck')
+    assert.equal(ctx.gather.streak, 1, 'one verdict, one streak')
   })
 
-  it('a far shallow +4 candidate survives a cliff strike (kl19)', () => {
+  it('a far shallow +4 candidate survives a cliff strike (kl19, kept: crown-locality)', () => {
     const spots = [pos(20, 73, 0), pos(40, 68, 30)]
     const names = {}
     for (const p of spots) names[`${p.x},${p.y},${p.z}`] = 'oak_log'
