@@ -304,10 +304,17 @@ S6-LEAD by the lost order (`reached`).
   range on `goal`, then `go work` from the guide. Shelter picks the night-far
   step, the pillar fails no-scaffold, and dig-in walks to the nearest
   hand-dig column and closes itself in. `reached` = floor, 4 sides at feet
-  and head, and a cap, all solid within 15 s, and alive at the window end
+  and head, and a cap, all solid within the close budget (15 s default,
+  `closeSecs` overrides — idkcraft-hoy7), and alive at the window end
   (the window always runs its full `secs`). The row note reads
   `CLOSED <s>s` or `OPEN at <x y z>`. It chats `go work` (follow-revoking),
   so it stays after every follow spot.
+- SHELTER-WATER (idkcraft-yrtx, via idkcraft-hoy7) spawns floating in prod
+  water by the yrtx drowned death (103 62 -420): shelter must swim to the
+  shore before it digs in. Swim + dig closes 18-24 s (stuck 1-2: beaching
+  trips stuck resets), past the stand-and-dig budget, so the spot carries
+  `closeSecs: 35`. On pre-#293 code the dig-in fails `airborne` and the
+  window stays OPEN.
 
 ## `REPLAY_BRAIN=laya`
 
