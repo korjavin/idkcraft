@@ -329,6 +329,20 @@ function openNextDoor(bot, ctx) {
     pick = { x, y, z, block }
     pickD = d
   }
+  // In-doorway (6x7.13): the lib trims reached head nodes (pathFromPlayer,
+  // 0.35 m), so a plan (re)issued while the body stands in the doorway
+  // starts PAST the door — the scan above never sees it and the bot pushes
+  // into its own shut panel forever (DOOR-ROOM ~50%). A shut hand door
+  // under the feet wins over any scan pick: it is the panel blocking this
+  // body. An open one shadows nothing (the shut read gates the seed, the
+  // re-read below still gates the click).
+  try {
+    const fx = Math.floor(bp.x)
+    const fy = Math.floor(bp.y)
+    const fz = Math.floor(bp.z)
+    const fb = bot.blockAt && bot.blockAt(new Vec3(fx, fy, fz))
+    if (fb && isHandDoor(fb.name) && !doorOpen(fb)) pick = { x: fx, y: fy, z: fz }
+  } catch (_) { /* feet read best-effort */ }
   if (!pick) return
   // State at the moment of the click: a door the player just opened is
   // none of ours — re-read, never trust the scan above.
