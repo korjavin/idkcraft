@@ -377,7 +377,9 @@ describe('equip step', () => {
     // Outside the footprint our pillars stay pre-dahd refills: skipping them
     // lengthened mid-build refill walks into dig-unreachable starvation on
     // the rig (runs 7/9: scaffold 0, then build wedges) — they are the
-    // short doorway exits, not churn. The laid-name check still applies.
+    // short doorway exits, not churn. (The laid-name check inside
+    // isOwnPlaced is pinned by the dahd swap cases in protect.test.js, not
+    // here: outside the footprint any own cell digs regardless of the name.)
     const road = { x: 110, y: 70, z: -366 }
     const ownRoad = () => ({ lastGoalKey: '', stepStatus: 'running', home, placedByBot: new Set(['110,70,-366']) })
     bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
@@ -386,14 +388,6 @@ describe('equip step', () => {
     equip(bot, ctx, null, {})
     await flush()
     assert.match(ctx.lastGoalKey, /^equip-(dig|pickup):110,70,-366$/, 'own roadside pillar: pre-dahd refill')
-    bot.restoreError()
-    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
-    bot.entity.position = { x: 105.5, y: 71, z: -365.5 }
-    ctx = ownRoad()
-    ctx.placedNames = new Map([['110,70,-366', 'cobblestone']]) // we laid cobble; dirt stands there now
-    equip(bot, ctx, null, {})
-    await flush()
-    assert.match(ctx.lastGoalKey, /^equip-(dig|pickup):110,70,-366$/, 'swapped cell still digs')
     bot.restoreError()
   })
 
