@@ -5,7 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const fightMod = require('./fight')
-const { canBreak, denyReason, logDeny, protectedReason } = require('./util')
+const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced } = require('./util')
 
 // equip: rebuild the starter kit after death (idkcraft-atl.6, owner
 // 2026-09-24: stone_pickaxe, stone_sword, ~32 scaffold blocks). Order is
@@ -625,7 +625,12 @@ function digTick(bot, ctx, st, bp) {
       count: 16, // the wet filter below shrinks the pool: scan wider
       // idkcraft-0mlh: skip protected ground (house apron) in the scan, so
       // 16 porch cells near the door never starve the pool into no-dirt.
-      useExtraInfo: (b) => protectedReason(bot, b, ctx) === null,
+      // idkcraft-6x7.12: skip our own placements too — since dahd filled
+      // placedByBot in prod, the scan offered our own approach pillars in
+      // the footprint (nearest dirt around) and the refill dug them, so
+      // the next approach re-pillared: net-zero dirt, extra wedged walks,
+      // JR-BUILD stuck 1,2,2 -> 4,2,4,2,4. Scaffold is spent, not recycled.
+      useExtraInfo: (b) => protectedReason(bot, b, ctx) === null && !isOwnPlaced(ctx, b),
     })
   } catch (_) { found = null }
   if (!found || !found.length) {
@@ -661,7 +666,7 @@ function digTick(bot, ctx, st, bp) {
   }
   cands.sort((a, b) => ((a.hard ? 1 : 0) - (b.hard ? 1 : 0)) || (a.d - b.d))
   const blockOf = (c) => c.blk || { name: c.name, position: c.v }
-  const pick = cands.find((c) => canBreak(bot, blockOf(c), ctx))
+  const pick = cands.find((c) => !isOwnPlaced(ctx, blockOf(c)) && canBreak(bot, blockOf(c), ctx))
   if (!pick) {
     if (cands[0]) { const d0 = denyReason(bot, blockOf(cands[0]), ctx); logDeny(blockOf(cands[0]), d0) } // idkcraft-drq: scaffold, not the hut
     if (wetSkipped > 0) {

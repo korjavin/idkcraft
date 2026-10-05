@@ -345,6 +345,57 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  it('never recycles its own scaffold: own pillars are skipped in the scan (idkcraft-6x7.12)', async () => {
+    const home = { v: 2, site: { x: 97, y: 71, z: -357 }, interior: { min: { x: 98, y: 71, z: -356 }, max: { x: 102, y: 72, z: -353 } } }
+    // An approach pillar inside the box above the floor (own since dahd, so
+    // the dig guard allows it) plus natural dirt far outside the footprint.
+    const pillar = { x: 100, y: 72, z: -355 }
+    const far = { x: 100, y: 70, z: -366 }
+    // Mirrors mineflayer: a useExtraInfo function filters full blocks, then
+    // the nearest `count` survive.
+    const scan = (cells) => (o) => cells.map((v) => ({ ...v, name: 'dirt' }))
+      .filter((v) => !o.useExtraInfo || o.useExtraInfo({ name: v.name, position: v })).slice(0, o.count)
+    const kit = [{ name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }]
+    const own = () => ({ lastGoalKey: '', stepStatus: 'running', home, placedByBot: new Set(['100,72,-355']) })
+    let bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([pillar, far]) })
+    bot.entity.position = { x: 100.5, y: 71, z: -357.5 } // at the door, the pillar is nearer
+    let ctx = own()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.match(ctx.lastGoalKey, /^equip-dig:100,70,-366$/, 'walks past its own pillar to open ground')
+    bot.restoreError()
+    // Only own pillars around: no-dirt, never the recycle.
+    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([pillar]) })
+    bot.entity.position = { x: 100.5, y: 71, z: -357.5 }
+    ctx = own()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'only own pillars: no-dirt, never the recycle')
+    bot.restoreError()
+    // Outside the footprint the name still decides: our dirt pillar there is
+    // skipped, but a swapped cell (our key, someone else's kind now) digs.
+    const road = { x: 110, y: 70, z: -366 }
+    const ownRoad = () => ({ lastGoalKey: '', stepStatus: 'running', home, placedByBot: new Set(['110,70,-366']) })
+    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
+    bot.entity.position = { x: 105.5, y: 71, z: -365.5 }
+    ctx = ownRoad()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks', 'own roadside pillar: skipped')
+    bot.restoreError()
+    bot = mockBot({ items: kit, ids: IDS, recipes: {}, findBlocksImpl: scan([road]) })
+    bot.entity.position = { x: 105.5, y: 71, z: -365.5 }
+    ctx = ownRoad()
+    ctx.placedNames = new Map([['110,70,-366', 'cobblestone']]) // we laid cobble; dirt stands there now
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.match(ctx.lastGoalKey, /^equip-(dig|pickup):110,70,-366$/, 'swapped cell still digs')
+    bot.restoreError()
+  })
+
   it('stone holds the pickaxe first: no hand-mining, no lost drops', async () => {
     const pick = { name: 'stone_pickaxe', count: 1 }
     const bot = mockBot({
