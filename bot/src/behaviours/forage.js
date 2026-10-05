@@ -239,6 +239,25 @@ function snapWorld(bot, ctx) {
   return { mem, haul }
 }
 
+// A recorded failure whose goal hold has expired (bt8s, revmux 01 minor):
+// the next pick retries honestly instead of replaying the stale final —
+// each gated replay would re-stamp stepFail.forage.at and cost another
+// FORAGE_RETRY_MS (~20 min to the first honest retry, not 5). A fresh
+// failure (no record yet, or the hold still binds) still replays, so the
+// tick-after-fail re-run never clobbers the reason (gather's rule).
+// Deferred require (goal.js loads forage).
+function staleFinal(ctx) {
+  try {
+    const FF = ctx && ctx.forageFinal
+    if (!FF || typeof FF.status !== 'string' || !FF.status.startsWith('failed:')) return false
+    const sf = ctx && ctx.stepFail && ctx.stepFail.forage
+    if (!sf || typeof sf.at !== 'number') return false
+    return Date.now() - sf.at > (require('../goal').FORAGE_RETRY_MS || 0)
+  } catch (_) {
+    return false
+  }
+}
+
 function snapInventory(bot) {
   const snap = {}
   try {
@@ -361,6 +380,14 @@ function forage(bot, ctx, target, state) {
   // count or banked haul): the tick after a fail re-runs this function
   // before decide() re-picks, and restarting would clobber unreachable
   // with a fresh no-known (gather's final rule, same shape).
+  // Past the goal hold's bound the stale final drops first (staleFinal):
+  // the hold already waited out the failure, so this pick runs honestly.
+  try {
+    if (staleFinal(ctx)) {
+      ctx.forageFinal = null
+      ctx.forageGated = 0
+    }
+  } catch (_) { /* gate best-effort */ }
   try {
     const FF = ctx && ctx.forageFinal
     if (FF && typeof FF.status === 'string' && FF.status.startsWith('failed:')) {

@@ -4,7 +4,7 @@
 // decision point. Behaviour execution is covered in tick.test.js.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor } = require('../src/goal')
+const { MENU, STEP_ORDER, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, stepWhy, restWhy, STEP_CRITERIA, ASK_INSTRUCTIONS, siteFor, FORAGE_RETRY_MS } = require('../src/goal')
 const resources = require('../src/resources')
 const home = require('../src/behaviours/home')
 const stockpileMod = require('../src/behaviours/stockpile')
@@ -312,6 +312,34 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     const r = await decide(bot, ctx)
     assert.deepEqual(r, { action: 'forage', sprint: false, source: 'goal-fsm' })
     assert.equal(ctx.step, 'forage')
+  })
+})
+
+describe('bt8s: a known flip never re-picks forage before the bound', () => {
+  it('failed forage holds past near/none flips, retries after the bound', async () => {
+    const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } }
+    resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
+    assert.equal((await decide(bot, ctx)).action, 'forage')
+    ctx.stepStatus = 'failed:unreachable'
+    assert.equal((await decide(bot, ctx)).action, 'explore', 'held: no churn')
+    // The rig flip: known moves near->none->near while a bystander bucket
+    // (a player in range) moves the text off the failure line, releasing
+    // the text-keyed hold — the time hold must still bind.
+    resources.forget(ctx, 5, 60, 0)
+    bot.players = { P: { username: 'P', entity: { position: pos(2, 64, 0) } } }
+    ctx.stepStatus = 'running' // explore leg still walking
+    assert.equal(goalFacts(bot, ctx).known, 'none')
+    assert.equal((await decide(bot, ctx)).action, 'explore')
+    resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
+    const facts = goalFacts(bot, ctx)
+    assert.equal(facts.known, 'near')
+    assert.equal(MENU.forage.feasible(facts, bot, ctx), false)
+    assert.equal((await decide(bot, ctx)).action, 'explore', 'known flipped back, still held')
+    // The bound passes: the same facts re-pick honestly.
+    ctx.stepFail.forage.at -= FORAGE_RETRY_MS + 1
+    ctx.stepStatus = 'done' // explore leg over
+    assert.equal((await decide(bot, ctx)).action, 'forage', 'bounded: retries after the bound')
   })
 })
 
