@@ -493,14 +493,102 @@ function roomFor(bot, res, opCount, recipe) {
   return free + (empty + freedStacks(bot, stacks, recipe, n)) * res.size >= need
 }
 
+function cursorOccupied(bot) {
+  try {
+    return !!(bot && bot.inventory && bot.inventory.selectedItem)
+  } catch (_) {
+    return false
+  }
+}
+
+// Keep-best score for spare selection: an enchanted/named stack outranks
+// a plain one, so the tossed/banked spare is the worse bow.
+function keepScore(s) {
+  try {
+    return s && s.nbt != null ? 1 : 0
+  } catch (_) {
+    return 0
+  }
+}
+
+// Every junk stack the room guarantee may remove, cheapest first (shared
+// by the bank and toss branches): all fungible junk plus every bow/arrow
+// stack but the best. Best = enchanted/named over plain, ties to the
+// first in inventory order. Bow/arrow spares go by EXACT slot —
+// type-based removal takes first stacks and could drop the kept,
+// possibly owner-given bow (verifier P2).
+function spareStacks(bot, ctx) {
+  const out = []
+  const bow = []
+  const arrow = []
+  for (const s of invStacks(bot) || []) {
+    if (!s || typeof s.name !== 'string') continue
+    const rank = junkRank(s.name)
+    if (rank < 0 || castleWants(s.name, ctx)) continue
+    if (s.name === 'bow') { bow.push(s); continue }
+    if (s.name === 'arrow') { arrow.push(s); continue }
+    out.push({ s, rank })
+  }
+  for (const group of [bow, arrow]) {
+    if (group.length === 0) continue
+    let best = 0
+    for (let i = 1; i < group.length; i++) {
+      if (keepScore(group[i]) > keepScore(group[best])) best = i
+    }
+    group.forEach((s, i) => { if (i !== best) out.push({ s, rank: junkRank(s.name) }) })
+  }
+  out.sort((a, b) => a.rank - b.rank)
+  return out
+}
+
+function junkTotal(bot, ctx) {
+  let n = 0
+  for (const s of invStacks(bot) || []) {
+    if (!s || typeof s.name !== 'string' || junkRank(s.name) < 0 || castleWants(s.name, ctx)) continue
+    n += typeof s.count === 'number' && s.count > 0 ? Math.floor(s.count) : 1
+  }
+  return n
+}
+
+// Player-window slot -> open-container slot (the player section sits past
+// the container slots). Null when unmappable: the caller skips the stack.
+function chestSlot(bot, window, slot) {
+  try {
+    const base = bot && bot.inventory && typeof bot.inventory.inventoryStart === 'number' ? bot.inventory.inventoryStart : 9
+    const start = window && typeof window.inventoryStart === 'number' ? window.inventoryStart : null
+    if (start == null || typeof slot !== 'number') return null
+    return start + (slot - base)
+  } catch (_) {
+    return null
+  }
+}
+
+function stackType(bot, s) {
+  if (s && typeof s.type === 'number') return s.type
+  try {
+    const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[s.name]
+    return entry && entry.id
+  } catch (_) {
+    return null
+  }
+}
+
+function stackCount(s) {
+  return s && typeof s.count === 'number' && s.count > 0 ? Math.floor(s.count) : 1
+}
+
 async function ensureRoom(bot, recipe, count, opts) {
   const res = resultOf(bot, recipe, opts && opts.item)
   if (roomFor(bot, res, count, recipe) !== false) return
+  // No room with a foreign cursor item held: removal clicks would swap
+  // onto it (mis-toss) and post-bank room reads would lie — fail
+  // honestly instead. clearGrid already tried to put it back, so a stuck
+  // one means no room anyway. With room the craft proceeds as before.
+  if (cursorOccupied(bot)) throw new Error('inventory-full')
   const ctx = opts && opts.ctx
   // Chest first: an adopted chest within reach banks the junk through the
-  // stockpile window path, minus the spare-only keeps below. A far or
-  // unreadable chest skips silently — a mid-craft walk would stall the op
-  // on the window timeout.
+  // stockpile window path. A far or unreadable chest skips silently — a
+  // mid-craft walk would stall the op on the window timeout.
   if (ctx) {
     try {
       const c = ctx.home && ctx.home.chest
@@ -509,40 +597,70 @@ async function ensureRoom(bot, recipe, count, opts) {
         const stockpile = require('./stockpile')
         const reach = stockpile.INTERACT_REACH || 4
         if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) <= reach) {
-          // Per-name totals in inventory order. Spare bows/arrows (owner
-          // 2026-10-06): the first stack stays packed, the rest banks —
-          // the same keep the toss branch applies (revmux 01 core-3).
-          const perName = new Map()
-          for (const s of invStacks(bot) || []) {
-            if (!s || typeof s.name !== 'string' || junkRank(s.name) < 0 || castleWants(s.name, ctx)) continue
-            const n = typeof s.count === 'number' && s.count > 0 ? Math.floor(s.count) : 1
-            const e = perName.get(s.name)
-            if (!e) perName.set(s.name, { total: n, first: n, type: typeof s.type === 'number' ? s.type : null })
-            else e.total += n
-          }
-          if (perName.size > 0 && typeof stockpile.withChest === 'function') {
-            const res2 = await stockpile.withChest(bot, ctx, async (window) => {
-              let put = 0
-              for (const [name, e] of perName) {
-                const keep = (name === 'bow' || name === 'arrow') ? e.first : 0
-                const n = e.total - keep
-                if (n <= 0) continue
-                let type = e.type
-                if (type == null) {
-                  try {
-                    const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[name]
-                    type = entry && entry.id
-                  } catch (_) { type = null }
+          const spares = spareStacks(bot, ctx)
+          if (spares.length > 0 && typeof stockpile.withChest === 'function') {
+            const before = junkTotal(bot, ctx)
+            await stockpile.withChest(bot, ctx, async (window) => {
+              try {
+                // Fungible junk by type (stacks identical: first-match harmless).
+                const fung = new Map()
+                for (const { s } of spares) {
+                  if (s.name === 'bow' || s.name === 'arrow') continue
+                  const e = fung.get(s.name) || { total: 0, type: null }
+                  e.total += stackCount(s)
+                  if (e.type == null) e.type = stackType(bot, s)
+                  fung.set(s.name, e)
                 }
-                if (typeof type !== 'number') continue
+                for (const e of fung.values()) {
+                  if (typeof e.type !== 'number' || !(e.total > 0)) continue
+                  try {
+                    await window.deposit(e.type, null, e.total)
+                  } catch (_) { /* full or unmovable: keep the rest */ }
+                }
+                // Bow/arrow spares by exact slot: the spare goes to the
+                // cursor first, then deposit places the pre-loaded cursor
+                // without re-picking (a re-pick would take the kept best).
+                for (const { s } of spares) {
+                  if (s.name !== 'bow' && s.name !== 'arrow') continue
+                  const wslot = chestSlot(bot, window, s.slot)
+                  const type = stackType(bot, s)
+                  if (wslot == null || typeof type !== 'number' || typeof bot.clickWindow !== 'function') continue
+                  const n = stackCount(s)
+                  try {
+                    await bot.clickWindow(wslot, 0, 0)
+                    const cur = window.selectedItem
+                    if (!cur || cur.type !== type || cur.count !== n) {
+                      // Pickup missed (stale slot): put the cursor back
+                      // where it came from and leave this spare packed.
+                      try {
+                        if (typeof bot.putSelectedItemRange === 'function') {
+                          await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, wslot)
+                        }
+                      } catch (_) { /* cursor homeless: the finally below retries */ }
+                      continue
+                    }
+                    await window.deposit(type, cur.metadata, n, cur.nbt)
+                  } catch (_) { /* full: the finally returns the cursor */ }
+                }
+              } finally {
+                // A failed deposit (chest full) strands the pickup on the
+                // cursor, which close() does NOT copy back — the model
+                // would read false room and the craft could toss its
+                // product (verifier P1). Put it back in the player
+                // section: its source slot is empty, so this never tosses.
                 try {
-                  await window.deposit(type, null, n)
-                  put += n
-                } catch (_) { /* full or unmovable: keep the rest */ }
+                  if (window.selectedItem && typeof bot.putSelectedItemRange === 'function') {
+                    await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, null)
+                  }
+                } catch (_) { /* homeless cursor: the recount below stays truthful */ }
               }
-              return put
             })
-            const put = res2 && res2.status === 'ok' ? res2.value : 0
+            // Post-close truth: the resync lands behind the close (TCP
+            // order), so a lagging model cannot read false room either.
+            try {
+              await syncInventory(bot)
+            } catch (_) { /* unverified: the recount below still decides */ }
+            const put = Math.max(0, before - junkTotal(bot, ctx))
             if (put > 0) {
               try { console.log(`craft banked ${put} junk to the home chest to make room`) } catch (_) { /* logging best-effort */ }
             }
@@ -554,44 +672,33 @@ async function ensureRoom(bot, recipe, count, opts) {
   }
   // No chest: toss one junk stack at a time, cheapest first, re-checking
   // after each. Every stack tosses at most once, so a silent no-op can
-  // never loop. Spare bows/arrows: the first stack stays, the rest go.
-  const cands = []
-  let bowKept = false
-  let arrowKept = false
-  for (const s of invStacks(bot) || []) {
-    if (!s || typeof s.name !== 'string') continue
-    const rank = junkRank(s.name)
-    if (rank < 0 || castleWants(s.name, ctx)) continue
-    if (s.name === 'bow') {
-      if (bowKept) cands.push({ s, rank })
-      else bowKept = true
-      continue
-    }
-    if (s.name === 'arrow') {
-      if (arrowKept) cands.push({ s, rank })
-      else arrowKept = true
-      continue
-    }
-    cands.push({ s, rank })
-  }
-  cands.sort((a, b) => a.rank - b.rank)
-  if (typeof bot.toss === 'function') {
-    for (const { s } of cands) {
-      let id = typeof s.type === 'number' ? s.type : null
-      if (id == null) {
-        try {
-          const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[s.name]
-          id = entry && entry.id
-        } catch (_) { id = null }
-      }
-      if (typeof id !== 'number') continue
-      const n = typeof s.count === 'number' && s.count > 0 ? Math.floor(s.count) : 1
-      try {
+  // never loop. Bow/arrow spares toss by exact slot; anything else may
+  // fall back to type-based toss (fungible: first-match harmless).
+  for (const { s } of spareStacks(bot, ctx)) {
+    if (cursorOccupied(bot)) break // never swap-misdrop onto a live cursor
+    const n = stackCount(s)
+    const exact = typeof s.slot === 'number' && typeof bot.tossStack === 'function'
+    const fungible = s.name !== 'bow' && s.name !== 'arrow'
+    try {
+      if (exact) await bot.tossStack(s)
+      else if (fungible && typeof bot.toss === 'function') {
+        const id = stackType(bot, s)
+        if (typeof id !== 'number') continue
         await bot.toss(id, null, n)
-      } catch (_) { continue }
-      try { console.log(`craft tossed ${n} ${s.name} to make room`) } catch (_) { /* logging best-effort */ }
-      if (roomFor(bot, res, count, recipe) !== false) return
+      } else continue // bow/arrow without an exact slot: kept, never type-tossed
+    } catch (_) { continue }
+    // Drain our own cursor (the entry guard keeps foreign cursors out, so
+    // this is always the junk just picked up — never a swap victim).
+    let guard = 0
+    while (cursorOccupied(bot) && guard++ < 2) {
+      try {
+        if (typeof bot.clickWindow !== 'function') break
+        await bot.clickWindow(-999, 0, 0)
+      } catch (_) { break }
     }
+    if (cursorOccupied(bot)) break
+    try { console.log(`craft tossed ${n} ${s.name} to make room`) } catch (_) { /* logging best-effort */ }
+    if (roomFor(bot, res, count, recipe) !== false) return
   }
   throw new Error('inventory-full')
 }
