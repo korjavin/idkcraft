@@ -1280,15 +1280,24 @@ describe('equip words in the model state (idkcraft-rwuu)', () => {
     assert.ok(text.includes('sword=no'), `text: ${text}`)
   })
 
-  it('scaffold below the dig-full mark reads blocks=low', () => {
+  it('blocks=low rides on the tool words, below the dig-full mark', () => {
     const kit = (dirt) => [
-      { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: dirt },
+      { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: dirt },
     ]
     assert.ok(textOf(kit(5)).includes('blocks=low'), 'low blocks read low')
     assert.ok(textOf(kit(31)).includes('blocks=low'), 'near-full still reads low')
-    // body-1: the word keys on FULL, so the text is identical across the
-    // 16 feasibility gate — no mid-dig re-decide, the 16->32 dig completes.
+    assert.ok(!textOf(kit(32)).includes('blocks='), 'full blocks read quiet')
+    // body-1: the text is identical across the 16 feasibility gate — no
+    // mid-dig re-decide, the 16->32 dig completes.
     assert.equal(textOf(kit(15)), textOf(kit(16)))
+    // core-2: a complete kit never sees the word at any count — no 31/32
+    // churn on non-equip legs.
+    for (const dirt of [0, 5, 15, 16, 31, 32, 40]) {
+      const text = textOf([
+        { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: dirt },
+      ])
+      assert.ok(!text.includes('blocks='), `dirt=${dirt}: ${text}`)
+    }
   })
 
   it('a complete kit carries no equip words', () => {

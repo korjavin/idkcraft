@@ -1072,6 +1072,21 @@ function goalText(facts, home) {
   const inside = facts.time === 'day' ? 'no' : facts.inside
   const unlit = unlitBucket(facts.unlit)
   const beds = facts.beds === 'none' || facts.beds === 'one' ? facts.beds : 'both'
+  // Equip words (rwuu): the kit state the equip criterion matches — a
+  // missing sword or pickaxe (the g0z.4 stone-castle re-decide rides on
+  // the pickaxe word too), a wooden pickaxe the stone chain can upgrade,
+  // or blocks below the dig-full mark. Only while the kit wants work: a
+  // complete kit keeps the text byte-identical (the castle word below is
+  // the precedent). The blocks word rides on the tool words: a word of its
+  // own at 16 would re-decide the flagless 16->32 dig mid-step and
+  // flip-flop at every 15/16 crossing (revmux 01 body-1), and at 32 it
+  // would churn on every crossing where the bot sits after each refill
+  // (revmux 02 core-2) — so kit-complete legs never see it at all.
+  const noSword = !((facts.sword || 0) > 0)
+  const noPick = !((facts.pickaxe || 0) > 0)
+  const woodPick = !noPick && facts.pickWord === 'wood' && (facts.cobble || 0) >= 3
+  const blocksLow = (noSword || noPick || woodPick) &&
+    (facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_FULL
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
@@ -1079,20 +1094,9 @@ function goalText(facts, home) {
     // Castle word only while a castle exists (g0z.3): castle-less text
     // stays byte-identical for the model and every pinned state string.
     (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '') +
-    // Equip words (rwuu): the kit state the equip criterion matches — a
-    // missing sword or pickaxe (the g0z.4 stone-castle re-decide rides on
-    // the pickaxe word too), a wooden pickaxe the stone chain can upgrade,
-    // or blocks below the dig-full mark. Only while the kit wants work: a
-    // complete kit with full blocks keeps the text byte-identical (the
-    // castle word above is the precedent). The blocks word keys on FULL,
-    // not the 16 feasibility gate: equip digs 16->32 without an in-flight
-    // flag, so a word flipping at 16 would re-decide mid-dig, cut the dig
-    // short and flip-flop at every 15/16 crossing (revmux 01 body-1) — at
-    // 32 the word is constant across the whole dig and the dig completes.
-    (!((facts.sword || 0) > 0) ? ' sword=no' : '') +
-    (!((facts.pickaxe || 0) > 0) ? ' pickaxe=no'
-      : facts.pickWord === 'wood' && (facts.cobble || 0) >= 3 ? ' pickaxe=wood' : '') +
-    ((facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_FULL ? ' blocks=low' : '')
+    (noSword ? ' sword=no' : '') +
+    (noPick ? ' pickaxe=no' : woodPick ? ' pickaxe=wood' : '') +
+    (blocksLow ? ' blocks=low' : '')
 }
 
 // goalText without the known token (4dse): equal stripped texts mean the
