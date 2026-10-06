@@ -1283,6 +1283,12 @@ describe('g0z.23: explore/forage veto while the castle is blocked', () => {
   it('night explore feasibility unchanged while blocked', () => {
     assert.equal(F('explore', { ...day, time: 'night' }, null, {}), true)
   })
+  it('follow-up: a full log load is kept while blocked on frame', () => {
+    const full = { time: 'day', logs: 14, planks: 0, maxPlanks: 0, table: 1, door: 1, home: 'built', tablePlaced: true, castle: 'blocked' }
+    assert.equal(F('craft', full, null, { castleWord: { word: 'blocked', kind: 'frame', left: 70 } }), false)
+    assert.equal(F('craft', full, null, { castleWord: { word: 'blocked', kind: 'stone', left: 1 } }), true)
+    assert.equal(F('craft', full, null, {}), true)
+  })
   it('restWhy lists the blocked castle and the veto lines', () => {
     const why = restWhy(day, goalBot(), {}, ['rest'])
     assert.ok(why.includes('castle: next cell blocked, retrying later'), `why: ${why}`)

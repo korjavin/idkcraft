@@ -471,3 +471,31 @@ describe('gear ledger persistence (idkcraft-ipn.3 round-2)', () => {
     assert.equal(back.gear, 0)
   })
 })
+
+describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
+  const castleCtx = (blocked) => ({ castle: { site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked, parked: false } })
+
+  it('round-trips blocked entries with their why', () => {
+    const now = Date.now()
+    const ctx1 = castleCtx({
+      '1:5': { tries: 2, until: now + 60000, why: 'dig-refused' },
+      '1:9': { tries: 1, until: now + 30000, why: 'kept-chest' },
+    })
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    assert.ok(memory.restore(botAt(SPAWN_A), ctx2, file, now))
+    assert.equal(ctx2.castle.blocked['1:5'].why, 'dig-refused')
+    assert.equal(ctx2.castle.blocked['1:9'].why, 'kept-chest')
+    assert.equal(ctx2.castle.blocked['1:5'].tries, 2)
+  })
+
+  it('drops a non-string why instead of persisting it', () => {
+    const now = Date.now()
+    const ctx1 = castleCtx({ '1:5': { tries: 1, until: now + 60000, why: { evil: true } } })
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.equal(ctx2.castle.blocked['1:5'].why, undefined)
+    assert.equal(ctx2.castle.blocked['1:5'].tries, 1)
+  })
+})

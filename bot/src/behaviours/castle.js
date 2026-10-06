@@ -657,8 +657,21 @@ function menuFact(bot, ctx, now = Date.now()) {
         const kind = ITEM[r.waiting.kind] ? r.waiting.kind : null
         if (kind) {
           let left = 0
-          for (const o of r.cells) {
-            if (o.kind === kind && !done(bot, o)) left++
+          // Infill run (g0z.15), like the material branch: planks up to the
+          // next Fachwerk beam only, not the whole remainder.
+          if (kind === 'planks') {
+            // Same cells+key peek just used (absPlan key shape): a cache hit.
+            const order = workOrder(r.cells, `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)}`)
+            for (let i = order.indexOf(r.waiting.idx); i >= 0 && i < order.length; i++) {
+              const o = r.cells[order[i]]
+              if (done(bot, o)) continue
+              if (o.kind === 'frame') break
+              if (o.kind === kind) left++
+            }
+          } else {
+            for (const o of r.cells) {
+              if (o.kind === kind && !done(bot, o)) left++
+            }
           }
           ctx.castleWord = { word: 'blocked', kind, left }
         } else {

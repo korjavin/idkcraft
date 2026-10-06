@@ -153,7 +153,7 @@ function homeOf(h) {
 // Castle project (idkcraft-g0z.3): { site, rot, blueprintVersion, phase,
 // blocked, parked } — progress lives in the world, so this is all a restart
 // needs. Sanitized both ways like the home record: integer site, rot 0..3,
-// a known phase, blocked entries '<v>:<idx>' -> { tries, until } only.
+// a known phase, blocked entries '<v>:<idx>' -> { tries, until, why? }.
 const CASTLE_PHASES = new Set(['prep', 'body', 'moat', 'complete'])
 const CASTLE_BLOCKED_MAX = 4096
 function castleOf(c) {
@@ -172,8 +172,11 @@ function castleOf(c) {
         const until = num(e.until)
         if (tries === null || until === null || tries < 1) continue
         // Clamped to the executor's backoff cap (10 min): a hand-edited
-        // far-future stamp must not freeze a cell.
+        // far-future stamp must not freeze a cell. The why rides along
+        // (g0z.23): the stuck line needs it after a restart; anything but
+        // a short reason token stays dropped.
         out.blocked[k] = { tries: Math.floor(tries), until: Math.min(until, Date.now() + 600000) }
+        if (typeof e.why === 'string' && /^[a-z0-9_-]{1,64}$/.test(e.why)) out.blocked[k].why = e.why
       }
     }
     return out

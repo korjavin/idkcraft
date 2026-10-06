@@ -681,6 +681,35 @@ describe('g0z.2 castle executor', () => {
     assert.equal(castle.menuFact(bot, ctx), 'blocked')
   })
 
+  it('g0z.23 follow-up: a restart during backoff keeps the why in the stuck line', () => {
+    const memory = require('../src/memory')
+    const fs = require('node:fs')
+    const os = require('node:os')
+    const path = require('node:path')
+    const world = makeWorld()
+    const plan = cells()
+    paint(world, plan.length)
+    const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
+    world.set(stuck.x, stuck.y, stuck.z, 'air')
+    // Restart: the blocked map round-trips through disk memory.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g0z23-'))
+    try {
+      const file = path.join(dir, 'bot.json')
+      const live = { castle: { site: SITE, rot: 0, phase: 'body', blocked: { [`1:${stuck.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } } }
+      const botLike = { username: 'IdkBot', spawnPoint: { x: 0, y: 64, z: 0 } }
+      memory.save(botLike, live, file, Date.now())
+      const ctx = {}
+      memory.restore(botLike, ctx, file, Date.now())
+      const bot = mockBot(world, { items: [] })
+      assert.equal(castle.menuFact(bot, ctx), 'blocked')
+      assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+      assert.match(bot.chats[0], /on dig-refused, retry in \d+s$/)
+      assert.ok(!bot.chats[0].includes('undefined'))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('g0z.23: a far blocked castle reads its gated kind, never blocked', () => {
     const world = makeWorld()
     const plan = cells()

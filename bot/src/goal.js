@@ -84,7 +84,10 @@ const MENU = {
     // one the step could neither progress nor finish, churning done forever.
     // Frame logs (g0z.12): while the castle's next cell is a Fachwerk beam
     // the logs ARE the castle batch — a full load must not turn to planks.
-    feasible: (facts) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
+    // Same while blocked on the frame kind (g0z.23 follow-up): the word is
+    // 'blocked', but the fetched logs are still logs the castle needs.
+    feasible: (facts, bot, ctx) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-') &&
+      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
