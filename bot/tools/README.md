@@ -436,6 +436,16 @@ Rules:
   `waiting for players` (an offline bot ticks that, not silence), or after
   two silent polls in a row. Resumes exhausted with the bot still gone exits
   2 immediately — the run is dead, not slow.
+- Castle order follow-ups (vmzq.11): a `looking for a castle spot` ack waits
+  for the search (`found a castle spot` / `I found no castle spot`) before
+  quitting — the asker leaving cancels the search; `I already have a castle`
+  is followed by `castle go` (the bot is still following, `castle go` puts it
+  to work).
+- Fail-closed polling (vmzq.11): a poll judges only when both log streams
+  answer (a one-stream failure is transient, 3 in a row is logs-lost, never
+  a pass); the lookback covers the last good poll, so failed polls and slow
+  resumes leave no gap; log lines past the deadline never judge (a late
+  marker is budget-exceeded, not DONE), and no resume starts past it.
 - One scenario per run; concurrent prod runs collide on the puppet name.
 - Secrets resolve at runtime from the stash (`secrets/idkcraft-mc-host`,
   `secrets/idkcraft-mc-port`, the session-review Grafana/Portainer keys found
@@ -455,5 +465,7 @@ restarts, resumes, and the verdict.
 
 Budget rule after run 1: 2× the median of 3 green runs (owner Q4).
 
-Grafana: the `idkcraft_bot_task_progress{task}` panel lands with vmzq.2 —
-the metric does not exist yet, so there is nothing to point a panel at.
+Grafana: the `idkcraft_bot_task_progress{task}` / `_stall_seconds{task}`
+panel queries live in `bot/README.md` (Task panel queries, vmzq.9) — the
+metric landed in #316, the dashboard JSON lives in the house Grafana, not
+in this repo.

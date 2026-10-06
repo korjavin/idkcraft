@@ -11,17 +11,25 @@
 # Usage: sh bot/tools/task-run.sh <house|castle> [budget-min]
 #   house:  `build here` on a new site (moves the home, builds with what
 #           the bot has). Default budget 180 min.
-#   castle: `build castle` (or monitor the existing one when the bot answers
-#           `I already have a castle at ...`). Default budget 480 min.
+#   castle: `build castle` (or `castle go` + monitor the existing one when
+#           the bot answers `I already have a castle at ...`). A `looking
+#           for a castle spot` reply waits for the search (`found a castle
+#           spot` / `I found no castle spot`) before quitting — the asker
+#           leaving cancels the search (orders.js clearLead). Default 480 min.
 # Exit codes:
 #   0  done within budget (`home done at` / `castle done at` in the window;
 #      a house done over unhealed `build skip` lines is PARTIAL, not done)
 #   1  budget exceeded (prints the last 20 bot lines + the last progress
 #      line), castle with no site, or a partial house
-#   2  environment: bad args, stash/kv/logs unreachable (up front or 3 dead
-#      polls mid-run), puppet refused (human online), the bot never seen,
-#      no order reply, human void, bot autonomy unverified (bot gone and
-#      resumes exhausted)
+#   2  environment: bad args, stash/kv/logs unreachable (up front or 3
+#      degraded polls mid-run — either stream failing), puppet refused
+#      (human online), the bot never seen, no order reply (incl. an
+#      unresolved castle search or an unanswered `castle go`), human void,
+#      bot autonomy unverified (bot gone and resumes exhausted)
+#
+# A poll judges only when BOTH log streams answer (a one-stream failure is
+# transient, never a pass); the lookback covers the last good poll, so a
+# failed poll loses no events; log lines past the deadline never judge.
 #
 # Secrets resolve at runtime and never print: MC host/port from the exact
 # secrets/idkcraft-mc-host + secrets/idkcraft-mc-port keys; the
@@ -37,7 +45,8 @@
 #   TASK_RUN_HTTP_PORT (18080), TASK_RUN_BOT_NAME (IdkBot),
 #   TASK_RUN_PUPPET_NAME (IdkTester), TASK_RUN_POLL_SECS (600),
 #   TASK_RUN_BUDGET_SECS, TASK_RUN_MEET_SECS (720), TASK_RUN_REPLY_SECS (90),
-#   TASK_RUN_BOT_WAIT_SECS (60), TASK_RUN_SKIP_HORIZON_SECS (3900),
+#   TASK_RUN_BOT_WAIT_SECS (60), TASK_RUN_SEARCH_SECS (600),
+#   TASK_RUN_SKIP_HORIZON_SECS (3900),
 #   TASK_RUN_LOGS_SCHEME (https), TASK_RUN_RESUMES (3), TASK_RUN_OUTDIR (/tmp)
 #
 # Every run prints the UTC window start and the VictoriaLogs queries to
@@ -68,9 +77,11 @@ POLL_SECS="${TASK_RUN_POLL_SECS:-600}"
 MEET_SECS="${TASK_RUN_MEET_SECS:-720}"
 REPLY_SECS="${TASK_RUN_REPLY_SECS:-90}"
 BOT_WAIT_SECS="${TASK_RUN_BOT_WAIT_SECS:-60}"
+SEARCH_SECS="${TASK_RUN_SEARCH_SECS:-600}"
 SKIP_HORIZON_SECS="${TASK_RUN_SKIP_HORIZON_SECS:-3900}"
 LOGS_SCHEME="${TASK_RUN_LOGS_SCHEME:-https}"
 MAX_RESUMES="${TASK_RUN_RESUMES:-3}"
+RESUMES_LEFT="$MAX_RESUMES"
 OUTDIR="${TASK_RUN_OUTDIR:-/tmp}"
 C="localhost:$HTTP_PORT"
 
@@ -171,7 +182,9 @@ puppet_cleanup() {
   fi
   for f in $SCRATCH; do rm -f "$OUTDIR/$f"; done
 }
-trap puppet_cleanup EXIT
+# Preserve the exit status through cleanup: a bare EXIT trap ends on rm's
+# 0, turning an abnormal death (e.g. set -u) into a pass.
+trap 'code=$?; puppet_cleanup; exit $code' EXIT
 trap 'puppet_cleanup; exit 130' INT TERM
 
 start_puppet() { # $1 = log path suffix; sets PUPPET_PID, returns 0 on online
@@ -310,8 +323,11 @@ EOF
   return 1
 }
 
-# --- order + reply: sets ORDER_REPLY (the ack line), 0 on ack ---
+# --- order + reply: sets ORDER_REPLY (the ack line) + ORDER_SEEN (the chat
+# length before the order, so a castle search wait sees a resolution that
+# landed before its first fetch), 0 on ack ---
 ORDER_REPLY=""
+ORDER_SEEN=""
 order_and_wait() { # $1 = order text
   pctl POST /stop >/dev/null 2>&1 || true
   # Chat length before the order: only later lines can be the reply.
@@ -356,12 +372,75 @@ print(line)
 EOF
 )"
     v="$(printf '%s' "$verdict" | sed -n '1p')"
-    if [ "$v" = ACK ]; then ORDER_REPLY="$(printf '%s' "$verdict" | sed -n '2p')"; return 0; fi
+    if [ "$v" = ACK ]; then ORDER_REPLY="$(printf '%s' "$verdict" | sed -n '2p')"; ORDER_SEEN="$seen"; return 0; fi
     if [ "$v" = NOSEE ]; then echo "task-run: order refused: $(printf '%s' "$verdict" | sed -n '2p')" >&2; return 1; fi
     sleep 3
   done
   echo "task-run: no order reply within ${REPLY_SECS}s" >&2
   return 1
+}
+
+# --- castle order follow-ups (vmzq.11): the order ack may defer the verdict ---
+# A `looking for a castle spot` ack starts a tick-sliced search owned by the
+# asker: quitting now cancels it (orders.js clearLead kills pendingSearch
+# with the leaver), so the puppet stays until it resolves. The scan starts
+# at ORDER_SEEN (pre-order), so a resolution that landed before the first
+# fetch still counts; the looking line itself matches neither needle. Sets
+# ORDER_REPLY to the resolution line; 0 on a found site, 2 on no site,
+# 3 on human, 1 on timeout or a dead puppet.
+search_and_wait() {
+  deadline=$(( $(now_epoch) + SEARCH_SECS ))
+  while [ "$(now_epoch)" -lt "$deadline" ]; do
+    if ! kill -0 "$PUPPET_PID" 2>/dev/null; then echo "task-run: puppet died waiting for the castle search" >&2; return 1; fi
+    pctl GET "/state?n=100" >/dev/null 2>&1 || { sleep 3; continue; }
+    if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+    if [ "$PSTAT" != 200 ]; then sleep 3; continue; fi
+    verdict="$(python3 - "$PBODY" "$BOT_NAME" "$ORDER_SEEN" <<'EOF'
+import json,sys
+try:
+  n = int(sys.argv[3])
+except Exception:
+  n = 0
+try:
+  d = json.load(open(sys.argv[1]))
+except Exception:
+  print("NONE"); print(""); sys.exit(0)
+verdict = "NONE"
+line = ""
+for c in (d.get("chat") or [])[n:]:
+  if c.get("from") != sys.argv[2]:
+    continue
+  m = c.get("msg") or ""
+  if "I found no castle spot" in m:
+    verdict = "NOSITE"; line = m; break
+  elif "found a castle spot " in m:
+    verdict = "FOUND"; line = m; break
+print(verdict)
+print(line)
+EOF
+)"
+    v="$(printf '%s' "$verdict" | sed -n '1p')"
+    if [ "$v" = FOUND ]; then ORDER_REPLY="$(printf '%s' "$verdict" | sed -n '2p')"; return 0; fi
+    if [ "$v" = NOSITE ]; then ORDER_REPLY="$(printf '%s' "$verdict" | sed -n '2p')"; return 2; fi
+    sleep 3
+  done
+  echo "task-run: castle search never resolved within ${SEARCH_SECS}s" >&2
+  return 1
+}
+
+# An existing castle answers without taking the body (no work() on the
+# already-have path — the bot is still following): `castle go` puts it to
+# work, parked or not. 0 on `castle resumed`, 3 on human, else 1.
+castle_go() {
+  pctl GET "/state?n=100" >/dev/null 2>&1 || return 1
+  if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$PSTAT" != 200 ]; then echo "task-run: puppet not answering" >&2; return 1; fi
+  seen="$(chat_len)"
+  say 'castle go' || return $?
+  got="$(wait_for_bot_line 'castle resumed' "$REPLY_SECS" "$seen")"
+  if [ "$got" = HUMAN ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$got" != 1 ]; then echo "task-run: no castle-go reply within ${REPLY_SECS}s" >&2; return 1; fi
+  return 0
 }
 
 print_queries() { # $1 = hours back (covers the window)
@@ -470,13 +549,17 @@ fetch_logs() { # $1=container $2=span-min $3=outfile; transient failures just fa
 }
 
 classify_poll() { # $1=mcf $2=botf: append new events, print signals
-  python3 - "$1" "$2" "$JOURNAL" "$TASK" "$BOT_NAME" "$PUPPET_NAME" "$WINDOW_START" "$SKIP_HORIZON_SECS" <<'EOF'
+  python3 - "$1" "$2" "$JOURNAL" "$TASK" "$BOT_NAME" "$PUPPET_NAME" "$WINDOW_START" "$SKIP_HORIZON_SECS" "$END_EPOCH" <<'EOF'
 import datetime,json,sys,re
-mc_f, bot_f, journal, task, bot, puppet, start, horizon = sys.argv[1:9]
+mc_f, bot_f, journal, task, bot, puppet, start, horizon, end_epoch = sys.argv[1:10]
 try:
   horizon = int(horizon)
 except Exception:
   horizon = 3900
+try:
+  end = datetime.datetime.utcfromtimestamp(int(end_epoch))
+except Exception:
+  end = None
 seen = set()
 old_skips = [] # (t, line), every house skip already journalled
 restored_at = "" # last verified resume: older gone-signals are already handled
@@ -501,6 +584,11 @@ def emit(t, src, kind, line):
   seen.add(k)
   out.append({"k": k, "t": t, "src": src, "kind": kind, "line": line})
   return True
+def parse(t):
+  try:
+    return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
+  except Exception:
+    return None
 def lines(f):
   try:
     fh = open(f)
@@ -515,12 +603,10 @@ def lines(f):
     m = d.get("_msg") or ""
     if t < start: # this window only: no verdict on older lines
       continue
+    dt = parse(t)
+    if dt is not None and end is not None and dt > end: # nor on lines past the deadline
+      continue
     yield t, m
-def parse(t):
-  try:
-    return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
-  except Exception:
-    return None
 signals = []
 last_progress = ""
 dones = []
@@ -652,15 +738,32 @@ if ! order_and_wait "$ORDER_TEXT"; then
   # One re-meet: the bot may have walked out of range between meet and order.
   if ! meet_bot || ! order_and_wait "$ORDER_TEXT"; then stop_puppet; exit 2; fi
 fi
+if [ "$TASK" = castle ]; then
+  case "$ORDER_REPLY" in
+    *'looking for a castle spot'*)
+      search_and_wait
+      code=$?
+      if [ "$code" = 2 ]; then # the search refused: no site, no run
+        WINDOW_START="$(now_utc)"
+        stop_puppet
+        write_series no-site
+        echo "task-run: no castle site: $ORDER_REPLY"
+        echo "series: $SERIES"
+        exit 1
+      elif [ "$code" != 0 ]; then stop_puppet; exit 2; fi
+      ;;
+  esac
+  case "$ORDER_REPLY" in
+    *'I already have a castle at '*) castle_go || { stop_puppet; exit 2; } ;;
+  esac
+fi
 WINDOW_START="$(now_utc)"
 stop_puppet
 
 BUDGET_SECS="${TASK_RUN_BUDGET_SECS:-$(( BUDGET_MIN * 60 ))}"
 START_EPOCH="$(now_epoch)"
 END_EPOCH=$(( START_EPOCH + BUDGET_SECS ))
-SPAN_MIN=$(( POLL_SECS / 60 + 2 ))
-[ "$SPAN_MIN" -ge 2 ] || SPAN_MIN=2
-RESUMES_LEFT="$MAX_RESUMES"
+LAST_GOOD="$START_EPOCH"
 LOST_STREAK=0
 SILENT_STREAK=0
 
@@ -678,16 +781,19 @@ while :; do
   BOTF="$OUTDIR/task-run-bot-$$.jsonl"
   mc_ok=0
   bot_ok=0
+  # The lookback covers the last good poll, so a failed poll (or a slow
+  # resume between polls) leaves no gap the next one cannot see.
+  SPAN_MIN=$(( ( $(now_epoch) - LAST_GOOD ) / 60 + 2 ))
+  [ "$SPAN_MIN" -ge 2 ] || SPAN_MIN=2
   fetch_logs idkcraft-mc "$SPAN_MIN" "$MCF" && mc_ok=1
   fetch_logs idkcraft-bot "$SPAN_MIN" "$BOTF" && bot_ok=1
-  if [ "$mc_ok" = 1 ] || [ "$bot_ok" = 1 ]; then
+  # Both streams or no judging: a one-stream failure is transient, never
+  # a pass (a house DONE without the bot stream would miss its skip veto).
+  if [ "$mc_ok" = 1 ] && [ "$bot_ok" = 1 ]; then
     LOST_STREAK=0
-    [ "$mc_ok" = 1 ] || : >"$MCF"
-    [ "$bot_ok" = 1 ] || : >"$BOTF"
+    LAST_GOOD="$(now_epoch)"
     signals="$(classify_poll "$MCF" "$BOTF")"
-    if [ "$bot_ok" = 1 ]; then # bot silence counts only on a good fetch
-      if printf '%s' "$signals" | grep -q '^BOT_SILENT$'; then SILENT_STREAK=$(( SILENT_STREAK + 1 )); else SILENT_STREAK=0; fi
-    fi
+    if printf '%s' "$signals" | grep -q '^BOT_SILENT$'; then SILENT_STREAK=$(( SILENT_STREAK + 1 )); else SILENT_STREAK=0; fi
     if printf '%s' "$signals" | grep -q '^VOID '; then
       who="$(printf '%s' "$signals" | sed -n 's/^VOID //p' | head -n 1)"
       write_series void-human
@@ -719,7 +825,9 @@ while :; do
     need_resume=0
     if printf '%s' "$signals" | grep -q '^LEAVE$'; then need_resume=1; fi
     if [ "$SILENT_STREAK" -ge 2 ]; then need_resume=1; fi
-    if [ "$need_resume" = 1 ]; then
+    # Past the deadline the run is over: a late leave (or a poll whose
+    # rows are all past-deadline and filtered) must not buy a resume.
+    if [ "$need_resume" = 1 ] && [ "$(now_epoch)" -lt "$END_EPOCH" ]; then
       if [ "$RESUMES_LEFT" -gt 0 ]; then
         attempt_resume
         if [ "$RESUME_OK" = 0 ] && [ "$RESUMES_LEFT" = 0 ]; then
@@ -742,7 +850,10 @@ while :; do
       echo "task-run: logs unreachable 3 polls in a row — cannot judge; series: $SERIES" >&2
       exit 2
     fi
-    echo "task-run: poll failed (transient), retrying next interval"
+    miss=""
+    [ "$mc_ok" = 1 ] || miss="mc"
+    [ "$bot_ok" = 1 ] || miss="${miss:+$miss+}bot"
+    echo "task-run: poll failed ($miss log fetch failed, transient), retrying next interval"
   fi
   now="$(now_epoch)"
   if [ "$now" -ge "$END_EPOCH" ]; then
