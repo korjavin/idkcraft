@@ -711,6 +711,12 @@ function makeHome(ox, oy, oz, v) {
 // the prod shore site read the water surface as ground and founded over
 // dips. The liquid set mirrors flat.isLiquidName; name-based rather than
 // boundingBox so fakes and mineflayer agree (real water reports 'empty').
+// Built surfaces read the same null (idkcraft-vmzq.14): a house roof is
+// 42 flat columns and the site would found on top (rig: FRESH roofed at
+// y=75 and stalled). Mirrors castle FOREIGN — somebody's structure, not
+// terrain. Cobble/stone huts are not in the set (accepted tail: a stone
+// roof still founds; the bead covers plank roofs and own-house cells).
+const BUILT_GROUND = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 function groundY(bot, x, z, topY) {
   for (let y = topY; y > topY - 32; y--) {
     let b = null
@@ -721,6 +727,7 @@ function groundY(bot, x, z, topY) {
     }
     if (!b || !b.name || b.name === 'air') continue
     if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return null
+    if (BUILT_GROUND.test(b.name)) return null
     return y + 1
   }
   return null
