@@ -394,6 +394,22 @@ describe('4dse: a known flicker never flips forage<->explore', () => {
     assert.equal((await decide(bot, ctx)).action, 'forage')
     assert.equal(ctx.forage, null, 'fresh pick drops the stale leg (the behaviour re-inits at plan)')
   })
+  it('a fresh forage pick banks the interrupted run partial haul, still resets (sqg2)', async () => {
+    const { bot, ctx } = flickerSetup()
+    assert.equal((await decide(bot, ctx)).action, 'forage') // cow near
+    // The interrupted leg: mid-walk at the old animal, 3 beef picked up
+    // since its startInv baseline.
+    ctx.forage = { phase: 'walk', target: { kind: 'food', name: 'cow', id: 999 }, announced: true, startInv: { beef: 0 }, drops: { beef: true } }
+    bot.inventory.items().push({ name: 'beef', count: 3 })
+    bot.entities[1].position = pos(48.5, 64, 0) // cow out of range
+    ctx.stepStatus = 'done' // leg over: an honest re-pick may leave
+    assert.equal((await decide(bot, ctx)).action, 'explore')
+    bot.entities[1].position = pos(47.5, 64, 0) // cow back in range
+    ctx.stepStatus = 'done'
+    assert.equal((await decide(bot, ctx)).action, 'forage')
+    assert.equal(ctx.forage, null, 'fresh pick still drops the stale leg')
+    assert.deepEqual(ctx.haul, { beef: 3 }, 'interrupted run partial haul banked, not dropped')
+  })
 })
 
 describe('atl.4 livelock guard: a holding failure bars its step', () => {

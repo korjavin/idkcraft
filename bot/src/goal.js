@@ -1758,7 +1758,12 @@ async function decide(bot, ctx) {
     if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
     // A fresh forage pick restarts the hunt (4dse): a resumed stale
     // find/walk chases the old target id while explore heads elsewhere.
-    if (choice.step === 'forage' && choice.step !== prev) ctx.forage = null
+    // The interrupted run's partial haul banks first (sqg2), so the reset
+    // drops only the stale target, never the accounting.
+    if (choice.step === 'forage' && choice.step !== prev) {
+      try { forageMod.bankPartial(bot, ctx) } catch (_) { /* haul best-effort */ }
+      ctx.forage = null
+    }
     // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
     // an order-interrupted night would otherwise hold on open ground. The
     // interrupted gohome walk resets too, so the next march starts from the
