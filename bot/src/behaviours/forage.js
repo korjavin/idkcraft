@@ -152,13 +152,14 @@ function questExempt(bot, ctx, target) {
     return false
   }
 }
-// Park bound (idkcraft-vmzq.3 R2): while a task is parked, remembered
+// Park bound (idkcraft-vmzq.3 R2/R3): while a task is parked, remembered
 // cells stay within PARK_FORAGE_RADIUS of home/castle — the menu pick and
 // every mid-run replan share this filter (all three pickers below), so a
 // dug-out near stand ends the leg (replan's null finish) instead of
-// chaining to a far cell. The food fallback keeps no filter: 48 blocks
-// from the bot, and survival beats the radius. Deferred goal require
-// (questBatch precedent — goal.js loads forage at top).
+// chaining to a far cell. The food fallback is gated separately below
+// (parkedHuntOk): near animals or real hunger only — a 48-block hop
+// chain re-centers every replan and would walk the bot home-away (R3).
+// Deferred goal require (questBatch precedent — goal.js loads forage).
 function parkedCellSkipped(ctx, item) {
   try {
     const g = require('../goal')
@@ -343,6 +344,21 @@ function huntAllowed(bot, ctx, drop) {
     return true
   }
 }
+// Parked hunts (vmzq.3 R3): a parked bot hunts only near animals (the
+// same anchor radius as cells) or when actually hungry — survival beats
+// the radius, but a well-fed chain-hunt would drift home-away (02 major).
+// Unreadable hunger is not hunger: it must not defeat the bound.
+function parkedHuntOk(bot, ctx, found) {
+  try {
+    const g = require('../goal')
+    if (!g.taskParked(ctx)) return true
+    if (found && found.position && !parkedCellSkipped(ctx, found.position)) return true
+    const food = bot && bot.food
+    return typeof food === 'number' && food < HUNT_PECKISH
+  } catch (_) {
+    return true
+  }
+}
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
@@ -393,7 +409,7 @@ function planForage(bot, ctx) {
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop && huntAllowed(bot, ctx, drop)) {
+    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(bot, ctx, found)) {
       // Under the reserve a hunt is one kill: a full batch would overflow
       // the checked stack room onto new slots.
       let reserved = false

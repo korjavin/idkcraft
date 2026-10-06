@@ -341,6 +341,31 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(goal.MENU.explore.feasible({ ...freeFacts, home: 'built' }, bot, ctx), true)
   })
 
+  it('parked hunts: near animals or real hunger only (02 major)', () => {
+    // Bot far from the anchors (park landed mid-leg), one cow 30 blocks
+    // from the bot but ~300 from the castle site, no remembered cells.
+    const bot = makeBot()
+    bot.entity.position = pos(300, 64, 300)
+    bot.entities = { 1: { name: 'cow', id: 1, position: pos(320, 64, 310), isValid: true } }
+    const { ctx } = castleCtx(bot)
+    ctx.castle.parked = true
+    ctx.castle.taskPark = { at: 1000000000000, auto: true, diag: 'step=castlefetch running' }
+    // Well-fed: no hunt — the hop chain would drift home-away.
+    assert.equal(bot.food, 20)
+    assert.equal(forageMod.planForage(bot, ctx), null, 'well-fed parked bot skips the far cow')
+    assert.equal(goal.goalFacts(bot, ctx).known, 'none')
+    // Hungry: survival beats the radius.
+    bot.food = 10
+    const plan = forageMod.planForage(bot, ctx)
+    assert.ok(plan && plan.kind === 'food', 'hungry parked bot hunts')
+    assert.equal(goal.goalFacts(bot, ctx).known, 'near')
+    // Unparked and well-fed: the old opportunistic hunt is back.
+    bot.food = 20
+    ctx.castle.parked = false
+    ctx.castle.taskPark = null
+    assert.ok(forageMod.planForage(bot, ctx), 'unparked bot hunts opportunistically')
+  })
+
   it('owner castle stop keeps the pre-house stranded release (core-1)', () => {
     const bot = makeBot()
     bot.entity.position = pos(0, 64, 0)
