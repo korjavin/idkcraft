@@ -643,6 +643,24 @@ function menuFact(bot, ctx, now = Date.now()) {
     // Prep with nothing left to prep (g0z.15): the next castle tick starts
     // the body, so the word is the body's — never 'finish' at 0/240.
     if (st.phase === 'prep' && !r.cell && !r.waiting) r = peek(bot, { ...st, phase: 'body' }, now, ctx)
+    // Task progress (vmzq.2): refresh st.progress while loaded so the stall
+    // clock sees growth even when the castle step never runs (fight/shelter
+    // ticks never reach the work block). Throttled to FULL_RESCAN_MS — no
+    // 1722-cell scan per tick; off-site the last value stands. Prep reads
+    // 0/total (the body has not started); prep itself is tracked separately.
+    try {
+      if (st.phase === 'prep') {
+        if (!st.progress) {
+          const { cells } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
+          let total = 0
+          for (const c of cells) if (!clearing(c)) total++
+          st.progress = { done: 0, total }
+        }
+      } else if (now - (ctx.castleMenuProgressAt || 0) >= FULL_RESCAN_MS) {
+        ctx.castleMenuProgressAt = now
+        progress(bot, st, r.cells, ctx)
+      }
+    } catch (_) { /* progress best-effort */ }
     let word = null
     if (!r.cell) {
       // Blocked (g0z.23): the gated kind and its remainder stay on the word,
@@ -1178,3 +1196,5 @@ module.exports.BATCH = BATCH
 module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
 module.exports.entrance = entrance
+// Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
+module.exports.prepTargets = prepTargets

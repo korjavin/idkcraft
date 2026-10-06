@@ -20,6 +20,7 @@ const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
+const taskMod = require('./task')
 
 // How long a recover outcome stays reportable in status (01 body-2): the
 // stamp never clears, so without a window every status would cite it.
@@ -92,6 +93,7 @@ function createOrders(box) {
         }
       } catch (_) { keepAt = {} }
       ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     },
     // Castle project (g0z.3): a new order or 'castle forget' (null). The
     // executor's per-site scratch resets with it; null persists as a drop.
@@ -101,6 +103,7 @@ function createOrders(box) {
       ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null; ctx.castleWord = null; ctx.castlePrepSaid = false; ctx.castlePrep = null
       try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castle } catch (_) { /* hold best-effort */ }
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
@@ -637,6 +640,11 @@ function createOrders(box) {
         }
         lines.push(line)
       }
+      // Task line (vmzq.2): active build task with its stall, when one exists.
+      try {
+        const tl = taskMod.taskLine(ctx)
+        if (tl) lines.push(tl)
+      } catch (_) { /* task line best-effort */ }
       // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
       const wrong = []
       try {

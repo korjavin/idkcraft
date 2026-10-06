@@ -34,6 +34,7 @@ const buildMod = require('./behaviours/build')
 const castleMod = require('./behaviours/castle')
 const goal = require('./goal')
 const memory = require('./memory')
+const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 const BEHAVIOURS = {
   fight: fightMod,
@@ -278,6 +279,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.forageFinal = null
     ctx.stepFail = {} // atl.4 hold is per-episode too: a stale failure must not veto the ordered retry
     ctx.resumeWork = false
+    try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
   }
 
   function stopOnce() {
@@ -708,6 +710,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           ctx.lastDecision = decision // gwvg: status() reads the follow/fight/idle source from here
         }
       }
+      // Task stall clock (idkcraft-vmzq.2): before the inShelter/fight
+      // short-circuits so fight and shelter time counts toward the stall.
+      try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
       if (ctx.paused) {
         // 'stop' landed during the brain await: discard the stale decision
         // so one in-flight tick cannot issue a follow goal after the park.
