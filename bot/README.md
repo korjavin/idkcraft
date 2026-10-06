@@ -402,6 +402,7 @@ into VictoriaMetrics — graph them in Grafana, no log grepping needed):
 - Bot `:9464/metrics` (`bot/src/metrics.js`): `idkcraft_bot_brain_routes_total{route,reason}` (easy vs hard + hard reason — the logstats ratio, live), `idkcraft_bot_brain_disagreements_total{model,stub}`, `idkcraft_bot_brain_request_duration_seconds{source}` (remote call latency incl. failures), `idkcraft_bot_tick_duration_seconds{brain_called}`, `idkcraft_bot_decisions_total{source,action}`, `idkcraft_bot_events_total{event}` (death, respawn, reflex_swing, spawn), `idkcraft_bot_state{fact}` (health, food, distances), `idkcraft_bot_online`, `idkcraft_bot_autonomous`, `idkcraft_bot_escalation_total{from,to,reason}` (model-to-FSM fallbacks), `idkcraft_bot_search_duration_seconds{radius}` (staged block search), `idkcraft_bot_recover_total{action,source,outcome}` (stuck-escape menu), `idkcraft_bot_bring_total{outcome,kind}`.
 - Work-mode goal metrics (same endpoint): `idkcraft_bot_goal_steps_total{step,source}` (choices by step and chooser), `idkcraft_bot_goal_step{step}` (gauge: 1 on the running step, 0 elsewhere — the state-timeline), `idkcraft_bot_goal_disagreements_total{model,fsm}` (model vs FSM step choice), `idkcraft_bot_goal_choice_duration_seconds{source}` (step-choice latency, model calls only).
 - Blacksmith metrics (same endpoint, ipn.5): `idkcraft_bot_gear_forged_total{piece,owner}` (every forge at the table, self + owner — first-seen ts is the time-to-piece), `idkcraft_bot_gear_given_total{piece,channel}` (finished owner pieces handed over: `toss` = deliver to an online player, `bank` = stockpile to the home chest; mirrors the gear ledger exactly — `toss` includes death-forgiven losses).
+- Task-executive metrics (same endpoint, vmzq.2): `idkcraft_bot_task_progress{task}` (done cells), `idkcraft_bot_task_total{task}` (total cells), `idkcraft_bot_task_stall_seconds{task}` (seconds since progress, active task only, else 0), `idkcraft_bot_task_stall_total{task,level}` (stall escalations; L1 = honest line).
 - Sidecar `/metrics` on its API port (`laya/shim.py`): `laya_predict_duration_seconds` (model latency), `laya_answers_total{choice}` (fight vs follow + errors).
 
 Goal panel queries (the house Grafana dashboard, bot & LAYA brain, has a
@@ -415,6 +416,21 @@ max_over_time(idkcraft_bot_goal_step[5m])
 sum by (step, source) (rate(idkcraft_bot_goal_steps_total[5m]))
 histogram_quantile(0.5, sum by (le, source) (rate(idkcraft_bot_goal_choice_duration_seconds_bucket[5m])))
 sum by (model, fsm) (rate(idkcraft_bot_goal_disagreements_total[5m]))
+```
+
+Task panel queries (same dashboard, a `Task progress` row built from these —
+the JSON lives there, not in this repo; vmzq.9):
+
+```promql
+# done and total cells per task (castle|house) — the progress invariant
+idkcraft_bot_task_progress
+idkcraft_bot_task_total
+# done cells per hour (the vmzq.6 acceptance rate)
+rate(idkcraft_bot_task_progress[1h]) * 3600
+# seconds since progress per task (active task only, else 0)
+idkcraft_bot_task_stall_seconds
+# L1 honest-line escalations per task
+sum by (task) (rate(idkcraft_bot_task_stall_total[1h]))
 ```
 
 ### Prod acceptance (2026-09-23, owner session on the live stack)
