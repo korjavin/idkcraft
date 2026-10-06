@@ -29,6 +29,7 @@ const CASTLE_FOUND = 'found a castle spot 12 blocks away, going there; castle at
 const CASTLE_NOSITE = 'I found no castle spot within 48 blocks — mostly water (157 of 453 spots); try another area'
 const CASTLE_ALREADY = 'I already have a castle at 1 64 3 — say castle forget first'
 const CASTLE_RESUMED = 'castle resumed'
+const CASTLE_FORGOTTEN = 'castle at 1 64 3 forgotten — the blocks stay'
 const HOUSE_DONE = '[16:14:17 INFO]: [Not Secure] <IdkBot> home done at 10 64 20'
 const HOUSE_PROGRESS = '[16:14:17 INFO]: [Not Secure] <IdkBot> building 45/99'
 const CASTLE_DONE = '[16:14:17 INFO]: [Not Secure] <IdkBot> castle done at 1 64 3'
@@ -51,7 +52,8 @@ function writeFakePuppet(dir) {
   fs.writeFileSync(file, `'use strict'
 // Test fake for task-run.sh: the puppet HTTP surface only (--http-port is
 // the only argv it reads). Scenario JSON comes from FAKE_SCENARIO:
-// { bot, dist0, gotoReveals, sayStatus, stateStatus, replies: { text: [lines] },
+// { bot, dist0, pos0, gotoReveals, gotoStuck, gotoHides, sayStatus,
+//   stateStatus, replies: { text: [lines] },
 //   delayed: [{ afterSay, ms, msg }] (unsolicited lines, e.g. a search resolving) }.
 const http = require('node:http')
 const fs = require('node:fs')
@@ -61,6 +63,7 @@ const reqlog = process.env.FAKE_REQLOG
 const log = (o) => fs.appendFileSync(reqlog, JSON.stringify(o) + '\\n')
 const chat = []
 let dist = scenario.dist0 === undefined ? null : scenario.dist0
+let pos = scenario.pos0 || { x: 0, y: 64, z: 0 }
 const t0 = Date.now()
 const botHere = () => !scenario.rosterSansBot || (Date.now() - t0) >= Number(scenario.botDelayMs || 0)
 const server = http.createServer((req, res) => {
@@ -82,15 +85,19 @@ const server = http.createServer((req, res) => {
       return send(200, { ok: true })
     }
     if (req.method === 'POST' && u.pathname === '/goto') {
-      log({ op: 'goto', body })
+      let b = {}
+      try { b = JSON.parse(body || '{}') } catch (_) { b = {} }
+      log({ op: 'goto', x: b.x, y: b.y, z: b.z })
+      if (!scenario.gotoStuck && [b.x, b.y, b.z].every((v) => typeof v === 'number')) pos = { x: b.x, y: b.y, z: b.z }
       if (scenario.gotoReveals !== false) dist = 12.5
+      if (scenario.gotoHides) dist = null
       return send(200, { ok: true })
     }
     if (req.method === 'POST' && u.pathname === '/stop') return send(200, { ok: true })
     if (req.method === 'GET' && u.pathname === '/state') {
       if (scenario.stateStatus === 409) return send(409, { error: 'human online' })
       const n = Math.min(100, Math.max(1, Number(u.searchParams.get('n')) || 20))
-      return send(200, { state: 'online', connected: true,
+      return send(200, { state: 'online', connected: true, pos,
         bot: { name: 'IdkBot', pos: dist === null ? null : { x: 1, y: 2, z: 3 }, dist },
         roster: botHere() ? ['IdkTester', 'IdkBot'] : ['IdkTester'], humans: [], chat: chat.slice(-n) })
     }
@@ -126,6 +133,9 @@ function fakeLogs(handler) {
   })
 }
 
+// runScript inherits process.env: every call needs endpoint overrides
+// (TASK_RUN_MC_HOST/_PORT/_LOGS_URL, or TASK_RUN_KV) unless it exits before
+// endpoint resolution — or the script reads the REAL stash and joins prod.
 function runScript(args, env, timeoutMs = 90000) {
   return new Promise((resolve) => {
     execFile('sh', [SCRIPT, ...args], { env: { ...process.env, ...env }, timeout: timeoutMs }, (err, stdout, stderr) => {
@@ -556,6 +566,150 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.match(r.stderr, /no castle-go reply/)
   })
 
+  it('TASK_RUN_AT walks the puppet to the search area before the order', async () => {
+    const r = await harness({ task: 'castle', name: 'at-walk' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) return [{ _time: nowIsoSec(), _msg: CASTLE_DONE }]
+        return [{ _time: nowIsoSec(), _msg: 'castle 1722/1722' }]
+      },
+      extra: { TASK_RUN_AT: '276,64,177' },
+    })
+    assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /walking the search area to 276,64,177/)
+    const ops = fs.readFileSync(r.reqlog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const atWalk = ops.findIndex((o) => o.op === 'goto' && o.x === 276 && o.y === 64 && o.z === 177)
+    const order = ops.findIndex((o) => o.op === 'say' && o.text === 'build castle')
+    assert.ok(atWalk !== -1, `no walk to the area: ${JSON.stringify(ops.filter((o) => o.op === 'goto'))}`)
+    assert.ok(order !== -1 && atWalk < order, 'the walk lands before the order')
+    assert.equal(ops.filter((o) => o.op === 'goto' && o.x === 276).length, 2, 'the walk plus the idle re-arm between phases')
+    assert.equal(seriesOf(r.stdout).verdict, 'done')
+  })
+
+  it('TASK_RUN_AT rejects garbage with exit 2, negatives pass validation', async () => {
+    for (const at of ['abc', '1,2', '1,2,3,4', '1.5,2,3', '1,,3', '-,2,3', '1,2,', ',,', '1,2,3 ']) {
+      const r = await runScript(['castle', '1'], { TASK_RUN_OUTDIR: dir, TASK_RUN_AT: at })
+      assert.equal(r.code, 2, `AT ${JSON.stringify(at)}: ${r.stdout}${r.stderr}`)
+      assert.match(r.stderr, /TASK_RUN_AT must be x,y,z integers/, `AT ${JSON.stringify(at)}: ${r.stderr}`)
+    }
+    // Negatives validate: with a dead logs endpoint it dies later, on the probe.
+    const port = await freePort()
+    const r = await runScript(['castle', '1'], {
+      TASK_RUN_OUTDIR: dir,
+      TASK_RUN_AT: '-40,63,-215',
+      TASK_RUN_MC_HOST: MC_SENTINEL,
+      TASK_RUN_MC_PORT: '29999',
+      TASK_RUN_LOGS_URL: `http://localhost:${port}/dead`,
+      TASK_RUN_GRAFANA_TOKEN: TOKEN_SENTINEL,
+    })
+    assert.equal(r.code, 2)
+    assert.match(r.stderr, /logs unreachable/, 'negatives validate — it dies later, on the dead logs endpoint')
+  })
+
+  it('a TASK_RUN_AT walk that never arrives exits 2', async () => {
+    const r = await harness({ task: 'castle', name: 'at-stuck' }, {
+      puppet: { gotoStuck: true, replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ACK] } },
+      logs: probeOk,
+      extra: { TASK_RUN_AT: '276,64,177', TASK_RUN_AT_SECS: '4' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /puppet never arrived at 276,64,177/)
+  })
+
+  it('a bot that never follows to TASK_RUN_AT exits 2', async () => {
+    const r = await harness({ task: 'castle', name: 'at-unfollowed' }, {
+      puppet: { dist0: 5, gotoHides: true, replies: { 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ACK] } },
+      logs: probeOk,
+      extra: { TASK_RUN_AT: '276,64,177', TASK_RUN_AT_SECS: '4' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /bot never followed to 276,64,177/)
+  })
+
+  it('TASK_RUN_PROBE=1 reports a found site and forgets it', async () => {
+    let logCalls = 0
+    const r = await harness({ task: 'castle', name: 'probe-found' }, {
+      puppet: {
+        replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_SEARCHING], 'castle forget': [CASTLE_FORGOTTEN] },
+        delayed: [{ afterSay: 'build castle', ms: 1500, msg: CASTLE_FOUND }],
+      },
+      logs: (q) => {
+        logCalls++
+        if (q.includes('stats count')) return [{ n: '1' }]
+        return []
+      },
+      extra: { TASK_RUN_PROBE: '1' },
+    })
+    assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /probe: site found and forgotten: found a castle spot/)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'probe')
+    assert.ok(s.orderReply.includes('found a castle spot'), s.orderReply)
+    assert.equal(logCalls, 1, 'the probe quits after the ask — no polling')
+    const said = saidTexts(r.reqlog)
+    assert.ok(said.includes('castle forget'), said.join(','))
+    assert.ok(!said.includes('castle go'), 'a probe never puts the castle to work')
+  })
+
+  it('TASK_RUN_PROBE=1 reports no site with exit 1 and forgets nothing', async () => {
+    const r = await harness({ task: 'castle', name: 'probe-nosite' }, {
+      puppet: {
+        replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_SEARCHING] },
+        delayed: [{ afterSay: 'build castle', ms: 1500, msg: CASTLE_NOSITE }],
+      },
+      logs: probeOk,
+      extra: { TASK_RUN_PROBE: '1' },
+    })
+    assert.equal(r.code, 1, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /probe: no castle site: I found no castle spot/)
+    assert.equal(seriesOf(r.stdout).verdict, 'probe')
+    assert.ok(!saidTexts(r.reqlog).includes('castle forget'), 'nothing started, nothing to forget')
+  })
+
+  it('TASK_RUN_PROBE=1 meets an existing castle without touching it', async () => {
+    const r = await harness({ task: 'castle', name: 'probe-already' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ALREADY] } },
+      logs: probeOk,
+      extra: { TASK_RUN_PROBE: '1' },
+    })
+    assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /probe: I already have a castle at /)
+    assert.equal(seriesOf(r.stdout).verdict, 'probe')
+    const said = saidTexts(r.reqlog)
+    assert.ok(!said.includes('castle forget') && !said.includes('castle go'), `a probe touches nothing: ${said.join(',')}`)
+  })
+
+  it('TASK_RUN_PROBE=1 forgets an immediately-acked castle', async () => {
+    const r = await harness({ task: 'castle', name: 'probe-ack' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ACK], 'castle forget': [CASTLE_FORGOTTEN] } },
+      logs: probeOk,
+      extra: { TASK_RUN_PROBE: '1' },
+    })
+    assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /probe: site found and forgotten: castle at /)
+    assert.ok(saidTexts(r.reqlog).includes('castle forget'))
+  })
+
+  it('TASK_RUN_PROBE=1 fails loud when the forget goes unanswered', async () => {
+    const r = await harness({ task: 'castle', name: 'probe-unforgotten' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build castle': [CASTLE_ACK] } },
+      logs: probeOk,
+      extra: { TASK_RUN_PROBE: '1', TASK_RUN_REPLY_SECS: '4' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /'castle forget' went unanswered/)
+  })
+
+  it('TASK_RUN_PROBE with house or garbage exits 2', async () => {
+    const r1 = await runScript(['house', '1'], { TASK_RUN_OUTDIR: dir, TASK_RUN_PROBE: '1' })
+    assert.equal(r1.code, 2)
+    assert.match(r1.stderr, /TASK_RUN_PROBE is castle-only/)
+    const r2 = await runScript(['castle', '1'], { TASK_RUN_OUTDIR: dir, TASK_RUN_PROBE: '2' })
+    assert.equal(r2.code, 2)
+    assert.match(r2.stderr, /TASK_RUN_PROBE must be 1/)
+  })
+
   it('a one-stream failure can never yield DONE (env failure, not a pass)', async () => {
     const r = await harness({ task: 'house', name: 'half-blind' }, {
       puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
@@ -803,7 +957,7 @@ esac
   it('order markers match the shipped chat lines', () => {
     const sh = fs.readFileSync(SCRIPT, 'utf8')
     const chat = fs.readFileSync(path.join(__dirname, '..', 'src', 'chat.js'), 'utf8')
-    for (const m of ['building a home at ', 'castle at ', 'looking for a castle spot', 'I found no castle spot', 'found a castle spot ', 'I already have a castle at ', 'castle resumed']) {
+    for (const m of ['building a home at ', 'castle at ', 'looking for a castle spot', 'I found no castle spot', 'found a castle spot ', 'I already have a castle at ', 'castle resumed', 'castle forget', 'forgotten']) {
       assert.ok(sh.includes(m), `script lost marker ${m}`)
       assert.ok(chat.includes(m), `chat.js lost line ${m}`)
     }
