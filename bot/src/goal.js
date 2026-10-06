@@ -1259,7 +1259,20 @@ function failHolds(ctx, name, text, bot) {
     if (!sf.pos) return true
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return true
-    return Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) <= REFAIL_DIST
+    if (Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) > REFAIL_DIST) return false
+    // No-site release (idkcraft-vmzq.16): failed:no-site is a chunk
+    // verdict, but the facts text carries no chunk signal — without the
+    // probe the hold survives the chunks loading and the homeless bot
+    // rests until some unrelated fact moves. While the failure otherwise
+    // stands, re-validate: a site that wins now releases the hold for a
+    // fresh try. Wet/uneven ground keeps refusing (null), so those holds
+    // stand without churn.
+    if (name === 'build' && sf.status === 'failed:no-site' && !(ctx && ctx.home && ctx.home.site)) {
+      try {
+        if (bot && bot.spawnPoint && siteFor(bot, bot.spawnPoint)) return false
+      } catch (_) { /* unverifiable: hold stands */ }
+    }
+    return true
   } catch (_) {
     return false
   }
@@ -1801,6 +1814,19 @@ async function decide(bot, ctx) {
       fetchRetry = true
     }
   } catch (_) { /* retry best-effort */ }
+  // No-site retry (idkcraft-vmzq.16): the fetchRetry mirror for a homeless
+  // build — a failed:no-site hold that no longer binds (chunks loaded and
+  // a site validates, or relocation past REFAIL_DIST) retires and forces
+  // one fresh pick. With the text standing, the replay paths would keep
+  // the step that took over and the valid site never gets seen.
+  let siteRetry = false
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.build
+    if (sf && sf.status === 'failed:no-site' && !failHolds(ctx, 'build', text, bot)) {
+      delete ctx.stepFail.build
+      siteRetry = true
+    }
+  } catch (_) { /* retry best-effort */ }
   // Known-flicker hold (4dse): a running forage/explore leg is never
   // preempted when the ONLY changed fact is known — an animal at the
   // 48-block find edge flips near/none every 1-3 s (prod: 347
@@ -1810,7 +1836,7 @@ async function decide(bot, ctx) {
   // still cut through; the night forces are prev-specific and cannot
   // fire here.
   if (!finished && (prev === 'forage' || prev === 'explore') && ctx && ctx.goalText !== text &&
-    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry) {
+    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry && !siteRetry) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   // Stall-point plan (idkcraft-vmzq.5): a forced one-shot step from the
@@ -1823,7 +1849,7 @@ async function decide(bot, ctx) {
   } catch (_) {
     planStep = null
   }
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || planStep) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep) {
     const askKey = `${text}\n${status || ''}`
     // rw4.16: a finished step that can no longer progress is never
     // re-issued — self-advancing steps are never held, so the shortcut
@@ -1848,7 +1874,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !planStep && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {
