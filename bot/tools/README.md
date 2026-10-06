@@ -263,6 +263,11 @@ S6-LEAD by the lost order (`reached`).
   deterministically, so the completion pin holds (`reached: true`,
   `maxCalls: 0`). The from-scratch gather stays runnable via a kit-less
   temp spots file (it is 6x7.14's territory, not the oracle's).
+  JR-BUILD-FRESH, the unseeded twin at the same spawn/goal, carries a prep
+  air-fill over the house footprint (idkcraft-vmzq.13): without it the order
+  sites on the flat roof of JR-BUILD's standing house (-144 75 -77) instead
+  of the measured ground site, and the roof build TIMED OUT once (stuck 31).
+  Pristine reads air + grass in the volume, so the fill is a no-op alone.
 - Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,
   idkcraft-6x7.8): the snapshot holds no adoptable house near the pit
   (measured: doors stand but the table cell + quorum reject every one),

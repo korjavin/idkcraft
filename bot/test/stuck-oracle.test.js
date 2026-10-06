@@ -1252,8 +1252,13 @@ describe('honest build verdict (idkcraft-vmzq.1)', () => {
     assert.equal(fresh.kit, undefined, 'unseeded means NO kit key (an empty one is rejected)')
     assert.equal(fresh.verifyBuild, true, 'the done marker alone is not the verdict')
     assert.equal(fresh.bead, 'idkcraft-vmzq.1')
-    assert.deepEqual(baseline.spots['JR-BUILD-FRESH'], { reached: true, maxStuck: 3, maxEps: 1, maxCalls: 0 },
-      'measured 2/2 (709/909 s, 99/99 placed, skip 0): stuck 1 + 2, eps 0 + 1, calls strict')
+    // The prep clears JR-BUILD's standing house (idkcraft-vmzq.13): without
+    // it FRESH sites on the flat roof (-144 75 -77) instead of the ground
+    // site, and the roof build TIMED OUT once (stuck 31). Pristine reads
+    // air + grass in the volume, so the fill is a no-op run alone.
+    assert.deepEqual(fresh.prep, ['fill -144 72 -77 -138 82 -72 air'])
+    assert.deepEqual(baseline.spots['JR-BUILD-FRESH'], { reached: true, maxStuck: 6, maxEps: 1, maxCalls: 0 },
+      'measured 12/12 alone (694..972 s): stuck 4 + 2, eps 0 + 1, calls strict')
   })
 
   it('loadSpots passes verifyBuild on a build-here order, rejects it elsewhere', () => {
