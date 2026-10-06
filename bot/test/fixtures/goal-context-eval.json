@@ -1,0 +1,825 @@
+[
+ {
+  "id": "prod-01",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 100,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 21
+  }
+ },
+ {
+  "id": "prod-02",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "forage",
+  "prod_n": 94,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 13
+  }
+ },
+ {
+  "id": "prod-03",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=ready beds=none castle=clear sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "build",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 13,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castle clear cells waiting"
+   ],
+   "since_min": 7
+  }
+ },
+ {
+  "id": "prod-04",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=ready beds=none castle=clear sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "build",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 11,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castle clear cells waiting"
+   ],
+   "since_min": 7
+  }
+ },
+ {
+  "id": "prod-05",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-batch sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 5,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 20
+  }
+ },
+ {
+  "id": "prod-06",
+  "source": "prod-10-05",
+  "facts": "time=day logs=none planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "forage",
+  "prod_n": 4,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-07",
+  "source": "prod-10-05",
+  "facts": "time=day logs=none planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 3,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-08",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 2,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 36
+  }
+ },
+ {
+  "id": "prod-09",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=far chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "forage",
+  "prod_n": 2,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 7
+  }
+ },
+ {
+  "id": "prod-10",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=far chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 2,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-11",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 2,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 2
+  }
+ },
+ {
+  "id": "prod-12",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "forage",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-13",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=blocked sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "stockpile",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "stockpile",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x3",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-14",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=far chest=no surplus=yes handover=none gear=want beds=none castle=stone-batch sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-15",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-batch sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-16",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-batch sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-17",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-18",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "stockpile",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "stockpile",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-19",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=far chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "explore",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-20",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-21",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=clear sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castle clear cells waiting"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-22",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "forage",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-23",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-some sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch short on stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-24",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-25",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "castlefetch",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castlefetch",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-26",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "beds",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "beds",
+  "reviewer": "beds",
+  "prod_model": "forage",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe (equip latched)",
+   "recent": [
+    "equip failed craft-stall x3",
+    "equip latched for the day"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-27",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=near chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "build",
+   "beds",
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "build",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castlefetch no-stone"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "prod-28",
+  "source": "prod-10-05",
+  "facts": "time=day logs=few planks=few table=no door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=far chest=no surplus=yes handover=none gear=ready beds=none castle=clear sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "build",
+   "castle",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "equip",
+  "prod_model": "castle",
+  "prod_n": 1,
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe",
+   "recent": [
+    "equip failed craft-stall x2",
+    "castle clear cells waiting"
+   ],
+   "since_min": 1
+  }
+ },
+ {
+  "id": "stall-1",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=blocked",
+  "menu": [
+   "rest"
+  ],
+  "fsm": "rest",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "leaf_litter in castle cell",
+   "recent": [
+    "castle blocked leaf_litter x12",
+    "no progress 47 min"
+   ],
+   "since_min": 47
+  }
+ },
+ {
+  "id": "stall-2",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=enough table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=near haul=none player=none chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "gear",
+   "forage",
+   "explore",
+   "rest"
+  ],
+  "fsm": "gear",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "stone pickaxe (equip latched)",
+   "recent": [
+    "equip failed craft-stall x3",
+    "equip latched for the day",
+    "forage/explore flip x40"
+   ],
+   "since_min": 60
+  }
+ },
+ {
+  "id": "stall-3",
+  "source": "synthetic",
+  "facts": "time=day logs=enough planks=enough table=yes door=yes home=built inside=no unlit=many health=ok food=ok known=none haul=none player=none chest=no surplus=yes handover=none gear=want beds=none castle=stone-none sword=no pickaxe=no",
+  "menu": [
+   "equip",
+   "stockpile",
+   "gear",
+   "explore",
+   "rest"
+  ],
+  "fsm": "equip",
+  "reviewer": "ask-owner",
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "pack full, no chest (36/36)",
+   "recent": [
+    "equip failed craft-stall x3",
+    "pack 36/36",
+    "stockpile failed no-room x2"
+   ],
+   "since_min": 35
+  }
+ },
+ {
+  "id": "stall-4",
+  "source": "synthetic",
+  "facts": "time=night logs=few planks=few table=yes door=yes home=built inside=no unlit=many health=ok food=hungry known=none haul=none player=none chest=no surplus=no handover=none gear=none beds=none castle=stone-some",
+  "menu": [
+   "shelter",
+   "rest"
+  ],
+  "fsm": "shelter",
+  "reviewer": "ask-owner",
+  "context": {
+   "goal": "build castle",
+   "progress": "8/1722",
+   "blocked_on": "cannot reach home (mobs)",
+   "recent": [
+    "gohome failed cannot-reach-home x2",
+    "shelter dig-in 120 min",
+    "5 deaths tonight"
+   ],
+   "since_min": 120
+  }
+ }
+]
