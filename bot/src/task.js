@@ -282,7 +282,7 @@ function savePark(bot, ctx) {
 function parkTask(bot, ctx, kind, done, total, now) {
   try {
     const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
-    if (!rec || typeof rec !== 'object' || rec.taskPark) return
+    if (!rec || typeof rec !== 'object' || rec.taskPark) return undefined
     const diagnosis = diagnose(bot, ctx)
     const day = utcDay(now)
     const prev = rec.parkHist
@@ -305,14 +305,22 @@ function parkTask(bot, ctx, kind, done, total, now) {
       if (latched) metrics.taskStallTotal.inc({ task: kind, level: 'L3' })
     } catch (_) { /* counter best-effort */ }
     savePark(bot, ctx)
+    return diagnosis
   } catch (_) { /* park never breaks the tick */ }
+  return undefined
 }
 
 function maybeL2(bot, ctx, kind, done, total, state, now) {
   if (state.stallMs < TASK_STALL_L2_MS) return
   const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
   if (!rec || rec.taskPark) return
-  parkTask(bot, ctx, kind, done, total, now)
+  const diagnosis = parkTask(bot, ctx, kind, done, total, now)
+  if (diagnosis === undefined) return
+  // The park line carries this tick's diagnosis, so the L1 must not fire
+  // alongside it ('still trying' + 'parked' back to back contradict).
+  // maybeL2 runs before maybeL1 at every hook site; this stamp skips it.
+  state.lastL1At = now
+  state.lastL1Diag = diagnosis
 }
 
 // Wall-clock park timers (vmzq.3): runs every hooked tick for BOTH records,
@@ -577,8 +585,8 @@ function taskTick(bot, ctx, now = Date.now()) {
         }
         addStall(state, now)
         setStallGauge(kind, state.stallMs)
-        maybeL1(bot, ctx, kind, '?', '?', state, now)
         maybeL2(bot, ctx, kind, '?', '?', state, now)
+        maybeL1(bot, ctx, kind, '?', '?', state, now)
         return
       }
       if (typeof state.done !== 'number') {
@@ -616,8 +624,8 @@ function taskTick(bot, ctx, now = Date.now()) {
       }
       addStall(state, now)
       setStallGauge(kind, state.stallMs)
-      maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
       maybeL2(bot, ctx, kind, cur.done, cur.total, state, now)
+      maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
       return
     }
 
@@ -635,8 +643,8 @@ function taskTick(bot, ctx, now = Date.now()) {
       }
       addStall(state, now)
       setStallGauge(kind, state.stallMs)
-      maybeL1(bot, ctx, kind, '?', '?', state, now)
       maybeL2(bot, ctx, kind, '?', '?', state, now)
+      maybeL1(bot, ctx, kind, '?', '?', state, now)
       return
     }
     if (typeof state.done !== 'number') {
@@ -690,8 +698,8 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
     addStall(state, now)
     setStallGauge(kind, state.stallMs)
-    maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
     maybeL2(bot, ctx, kind, cur.done, cur.total, state, now)
+    maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
   } catch (_) { /* task clock never breaks the tick */ }
 }
 

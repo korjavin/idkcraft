@@ -14,6 +14,7 @@ const goal = require('../src/goal')
 const metrics = require('../src/metrics')
 const memory = require('../src/memory')
 const resources = require('../src/resources')
+const forageMod = require('../src/behaviours/forage')
 const { handleChat } = require('../src/chat')
 const { createTicker } = require('../src/index')
 
@@ -301,31 +302,59 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     // A near oak stand (11 blocks from the castle site) and the park flags.
+    // Facts come through the real goalFacts path, like decide() sees them.
     resources.noteSpots(ctx, [{ x: 110, y: 60, z: 205, name: 'oak_log' }], Date.now())
     ctx.castle.parked = true
     ctx.castle.taskPark = { at: 1000000000000, auto: true, diag: 'step=castlefetch running' }
-    const day = { time: 'day', health: 20, home: 'built', inside: 'no', castle: 'parked', known: 'near', player: 'none' }
     assert.equal(goal.taskParked(ctx), true)
-    assert.equal(goal.MENU.explore.feasible(day, bot, ctx), false, 'explore vetoed while parked')
-    assert.equal(goal.MENU.forage.feasible(day, bot, ctx), true, 'near forage is side work')
-    assert.equal(goal.MENU.castle.feasible(day, bot, ctx), false, 'parked word stalls the leg')
-    assert.equal(goal.MENU.castlefetch.feasible(day, bot, ctx), false, 'parked word stalls the fetch')
-    assert.equal(goal.MENU.rest.feasible(day, bot, ctx), true)
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.castle, 'parked')
+    assert.equal(facts.known, 'near')
+    assert.equal(goal.MENU.explore.feasible({ ...facts, home: 'built' }, bot, ctx), false, 'explore vetoed while parked')
+    assert.equal(goal.MENU.forage.feasible(facts, bot, ctx), true, 'near forage is side work')
+    assert.equal(goal.MENU.castle.feasible(facts, bot, ctx), false, 'parked word stalls the leg')
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), false, 'parked word stalls the fetch')
+    assert.equal(goal.MENU.rest.feasible(facts, bot, ctx), true)
     // Night steps own the night as before (bot at the castle, home near).
     ctx.home = { site: { x: 95, y: 64, z: 195 }, built: true, v: 2 }
     const night = { time: 'night', health: 20, home: 'built', inside: 'no' }
     assert.equal(goal.MENU.stay.feasible({ ...night, inside: 'yes' }, bot, ctx), true)
     assert.equal(goal.MENU.gohome.feasible(night, bot, ctx), true, 'gohome marches home, not to the site')
-    // A far find (360 blocks out) is not parked side work.
+    // A far find (360 blocks out) is not parked side work: known reads
+    // none, so the hunt is out through the plain facts gate.
     ctx.resources.items.clear()
     resources.noteSpots(ctx, [{ x: 400, y: 60, z: 500, name: 'oak_log' }], Date.now())
-    assert.equal(goal.MENU.forage.feasible(day, bot, ctx), false, 'far forage vetoed while parked')
-    assert.equal(goal.stepWhy('forage', day, bot, ctx, ''), 'forage: parked, find too far')
+    const farFacts = goal.goalFacts(bot, ctx)
+    assert.equal(farFacts.known, 'none', 'only far finds read as none while parked')
+    assert.equal(goal.MENU.forage.feasible(farFacts, bot, ctx), false)
+    // The replan path shares the filter: planForage itself returns null
+    // (replan's null finish ends the leg instead of walking far).
+    assert.equal(forageMod.planForage(bot, ctx), null, 'replan finds nothing while parked')
     // Unparked, the same far find is fair game (no cap off-park).
     ctx.castle.parked = false
     ctx.castle.taskPark = null
-    assert.equal(goal.MENU.forage.feasible(day, bot, ctx), true)
-    assert.equal(goal.MENU.explore.feasible(day, bot, ctx), true)
+    const plan = forageMod.planForage(bot, ctx)
+    assert.ok(plan && plan.pos && plan.pos.x === 400, 'unparked plans the far find')
+    const freeFacts = goal.goalFacts(bot, ctx)
+    assert.equal(freeFacts.known, 'near')
+    assert.equal(goal.MENU.forage.feasible(freeFacts, bot, ctx), true)
+    assert.equal(goal.MENU.explore.feasible({ ...freeFacts, home: 'built' }, bot, ctx), true)
+  })
+
+  it('owner castle stop keeps the pre-house stranded release (core-1)', () => {
+    const bot = makeBot()
+    bot.entity.position = pos(0, 64, 0)
+    const daySite = { time: 'day', logs: 0, home: 'site', player: 'none' }
+    const stranded = { pos: null, name: 'log', phase: 'walk', skip: new Set(), streak: 3, final: 'failed:unreachable', atLogs: 0, failPos: { x: 0, y: 64, z: 0 } }
+    // Owner-stopped castle (no episode, never auto-resumes): the stranded
+    // spiral still opens — it is the only no-trees release.
+    const ownerParked = { home: { site: pos(10, 64, 10) }, gather: { ...stranded }, castle: { site: { x: 100, y: 64, z: 200 }, parked: true } }
+    assert.equal(goal.MENU.explore.feasible(daySite, bot, ownerParked), true, 'owner stop keeps the release')
+    // The timer-bounded house park vetoes it (auto-resume retries).
+    const houseParked = { home: { site: pos(10, 64, 10), parked: true, taskPark: { at: 1000000000000, auto: true, diag: 'x' } }, gather: { ...stranded } }
+    assert.equal(goal.MENU.explore.feasible(daySite, bot, houseParked), false, 'house park vetoes briefly')
+    // And the built-home search stays vetoed on any park.
+    assert.equal(goal.MENU.explore.feasible({ ...daySite, home: 'built' }, bot, ownerParked), false)
   })
 
   it('status shows the parked diagnosis', () => {

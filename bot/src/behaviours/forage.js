@@ -152,6 +152,28 @@ function questExempt(bot, ctx, target) {
     return false
   }
 }
+// Park bound (idkcraft-vmzq.3 R2): while a task is parked, remembered
+// cells stay within PARK_FORAGE_RADIUS of home/castle — the menu pick and
+// every mid-run replan share this filter (all three pickers below), so a
+// dug-out near stand ends the leg (replan's null finish) instead of
+// chaining to a far cell. The food fallback keeps no filter: 48 blocks
+// from the bot, and survival beats the radius. Deferred goal require
+// (questBatch precedent — goal.js loads forage at top).
+function parkedCellSkipped(ctx, item) {
+  try {
+    const g = require('../goal')
+    if (!g.taskParked(ctx)) return false
+    if (!item || typeof item.x !== 'number' || typeof item.z !== 'number') return true
+    const radius = g.PARK_FORAGE_RADIUS || 64
+    const anchors = []
+    if (ctx && ctx.home && ctx.home.site) anchors.push(ctx.home.site)
+    if (ctx && ctx.castle && ctx.castle.site) anchors.push(ctx.castle.site)
+    if (anchors.length === 0) return true // parked with no anchor: no far walk
+    return !anchors.some((a) => Math.hypot(item.x - a.x, item.z - a.z) <= radius)
+  } catch (_) {
+    return false
+  }
+}
 function bestMemoryCell(bot, ctx, bp) {
   const mem = ctx && ctx.resources
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
@@ -171,6 +193,7 @@ function bestMemoryCell(bot, ctx, bp) {
   let bestLogDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
@@ -235,6 +258,7 @@ function gearWantCell(bot, ctx, bp, key) {
   let bestD = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number' || typeof item.name !== 'string') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (!re.test(item.name)) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue
@@ -264,6 +288,7 @@ function bestDiamondCell(bot, ctx, bp) {
   let bestDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (typeof item.name !== 'string' || !item.name.includes('diamond')) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue

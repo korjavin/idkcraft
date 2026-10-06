@@ -370,8 +370,10 @@ const MENU = {
     // text-keyed failHolds releases on every near/none flip and churned
     // forage<->explore every few seconds on the rig. A blocked castle vetoes
     // the hunt by day (g0z.23): the bot stays on the build instead. A
-    // parked task keeps the hunt but only near finds (vmzq.3 side work).
-    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx) && !castleBlocked(facts) && (!taskParked(ctx) || parkedForageNear(bot, ctx)),
+    // parked task keeps the hunt but only near finds (vmzq.3 side work):
+    // the pickers in forage.js skip far cells while parked, so known
+    // reads none when only far finds remain — no gate needed here.
+    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx) && !castleBlocked(facts),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -383,13 +385,17 @@ const MENU = {
     // where gather died. Night pre-house never wanders, and neither does a
     // bot with anyone online (p4s: stay with the player, the owner sees).
     // A blocked castle vetoes the built-home search by day (g0z.23); the
-    // pre-house stranded branch below stays. A parked task vetoes both
-    // branches (vmzq.3): the parked wander is the failure to stop.
+    // pre-house stranded branch below stays. A parked task vetoes the
+    // built-home search (vmzq.3: the parked wander is the failure to
+    // stop); the stranded branch vetoes on the house park only (R2).
     feasible: (facts, bot, ctx) => {
-      if (taskParked(ctx)) return false
-      if (facts.home === 'built') return !castleBlocked(facts)
+      if (facts.home === 'built') return !castleBlocked(facts) && !taskParked(ctx)
       if (facts.time !== 'day') return false
       if (facts.player !== 'none') return false
+      // The stranded branch is the only release for a no-trees hold (gyw),
+      // so an owner castle stop — no timer, never auto-resumes — must not
+      // veto it (R2). Only the timer-bounded house park does.
+      if (ctx && ctx.home && ctx.home.parked) return false
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
       } catch (_) {
@@ -461,12 +467,13 @@ function castleBlocked(facts) {
 }
 
 // Task park (idkcraft-vmzq.3, supersedes g0z.24): ANY parked task — owner
-// castle stop or the L2 episode — vetoes explore. The veto is a property
-// of the parked task, never of a castle word (g0z.24's design is rejected:
-// it would strand a tool-less bot). Forage stays as side work (owner Q2)
-// but only near finds: within PARK_FORAGE_RADIUS of home or the castle
-// site, so a parked bot cannot walk to a 300-block remembered diamond.
-// 64 is the epic's own bound (stage-2: ends at home/site, not >64 away).
+// castle stop or the L2 episode — vetoes the built-home explore. The veto
+// is a property of the parked task, never of a castle word (g0z.24's
+// design is rejected: it would strand a tool-less bot). Forage stays as
+// side work (owner Q2) but only near finds: the pickers in forage.js skip
+// cells past PARK_FORAGE_RADIUS of home/castle while parked, so a parked
+// bot cannot chain to a 300-block remembered diamond. 64 is the epic's
+// own bound (stage-2: ends at home/site, not >64 away).
 const PARK_FORAGE_RADIUS = 64
 function taskParked(ctx) {
   try {
@@ -476,21 +483,6 @@ function taskParked(ctx) {
     if (ctx && ctx.home && ctx.home.parked) return true
   } catch (_) { /* unparked */ }
   return false
-}
-function parkedForageNear(bot, ctx) {
-  try {
-    const plan = forageMod.planForage(bot, ctx)
-    const pos = plan && plan.pos
-    if (!pos || typeof pos.x !== 'number' || typeof pos.z !== 'number') return false
-    const anchors = []
-    try { if (ctx && ctx.home && ctx.home.site) anchors.push(ctx.home.site) } catch (_) { /* no home */ }
-    try { if (ctx && ctx.castle && ctx.castle.site) anchors.push(ctx.castle.site) } catch (_) { /* no castle */ }
-    if (anchors.length === 0) return false
-    // Horizontal distance: the wander is horizontal, the find may be deep.
-    return anchors.some((a) => Math.hypot(pos.x - a.x, pos.z - a.z) <= PARK_FORAGE_RADIUS)
-  } catch (_) {
-    return false
-  }
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -1561,7 +1553,6 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (nightHurt(facts)) return 'forage: hurt at night, waiting for dawn'
       if (castleBlocked(facts)) return 'forage: castle blocked, waiting at the site'
       if (facts.known !== 'near') return 'forage: nothing known nearby'
-      if (taskParked(ctx) && !parkedForageNear(bot, ctx)) return 'forage: parked, find too far'
       return 'forage: known find unreachable'
     case 'explore':
       if (taskParked(ctx)) return 'explore: parked, staying near home'
