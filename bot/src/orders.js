@@ -636,6 +636,14 @@ function createOrders(box) {
         const tl = taskMod.taskLine(ctx)
         if (tl) lines.push(tl)
       } catch (_) { /* task line best-effort */ }
+      // Park line (vmzq.3): the parked task with the diagnosis it parked
+      // with (persisted on the episode, so it survives a restart).
+      try {
+        const cEp = ctx.castle && ctx.castle.taskPark
+        const hEp = ctx.home && ctx.home.taskPark
+        if (cEp && cEp.diag) lines.push(`parked castle: ${cEp.diag}`)
+        else if (hEp && hEp.diag) lines.push(`parked house: ${hEp.diag}`)
+      } catch (_) { /* park line best-effort */ }
       // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
       const wrong = []
       try {

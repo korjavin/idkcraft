@@ -1,20 +1,30 @@
 'use strict'
 
-// Task executive, slice 1 (idkcraft-vmzq.2): progress invariant + stall clock
-// + L1 honest line. No behaviour changes: this only measures (gauges), times
-// the stall, and chats/logs one line per 15 min episode. Park/re-plan is .3.
+// Task executive, slices 1-2 (idkcraft-vmzq.2/.3): progress invariant +
+// stall clock + L1 honest line + L2/L3 park ladder. No behaviour changes:
+// this only measures (gauges), times the stall, chats/logs the ladder
+// lines, and parks the task (a menu veto, honoured by goal.js) with a
+// diagnosis. Re-plan is .5.
 //
 // Active task: the house while unbuilt (build outranks castle in STEP_ORDER),
-// else the castle while ordered, unparked and incomplete, else none. The
-// stall clock advances only on day + work + not-paused + no-order ticks —
-// fight and shelter time COUNT (the hook sits before those short-circuits),
-// night/paused/orders pause it. Any progress resets it: castle place cells,
+// else the castle while ordered, incomplete and not owner-parked, else
+// none. A task-parked (L2 episode) task STAYS active: the stall invariant
+// still applies to side work (owner Q2) — the clock runs, L1 keeps firing
+// with a parked suffix, L2 does not re-fire. Owner-parked (castle stop,
+// no episode) pauses. The stall clock advances only on day + work +
+// not-paused + no-order ticks — fight and shelter time COUNT (the hook sits
+// before those short-circuits), night/paused/orders (incl. a running flat
+// order, vmzq.8) pause it. Any progress resets it: castle place cells,
 // prep remaining, demanded-material on hand / remainder; house placed cells.
 
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
 
 const TASK_STALL_L1_MS = 15 * 60 * 1000
+const TASK_STALL_L2_MS = 45 * 60 * 1000
+const TASK_PARK_RETRY_MS = 60 * 60 * 1000
+const TASK_PARKS_PER_DAY = 3
+const TASK_PARK_DIAG_MAX = 200
 const TASK_HOUSE_CACHE_MS = 60 * 1000
 const TASK_FAILS_KEPT = 3
 // Per-tick stall increment cap (verify core-2): ticks that return before the
@@ -29,7 +39,10 @@ function taskKind(ctx) {
   } catch (_) { /* fall through to castle */ }
   try {
     const st = ctx && ctx.castle
-    if (st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete') return 'castle'
+    // Task-parked (an L2 episode on the record) stays active — the clock
+    // runs through the park so side work is still watched; owner-parked
+    // (castle stop, no episode) pauses.
+    if (st && st.site && typeof st.site.x === 'number' && (!st.parked || st.taskPark) && st.phase !== 'complete') return 'castle'
   } catch (_) { /* no task */ }
   return null
 }
@@ -46,6 +59,9 @@ function eligible(bot, ctx) {
   if (!timeDay(bot)) return false
   if (!ctx || !ctx.work || ctx.paused) return false
   if (ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle) return false
+  // A running flat order owns the body (vmzq.8): the L1 must not fire
+  // mid-order. A parked flat episode (stop) is not running.
+  if (ctx.flat && !ctx.flat.parked) return false
   return true
 }
 
@@ -176,14 +192,35 @@ function stallFmt(ms) {
   return `${Math.floor(ms / 3600000)}h${Math.floor((ms % 3600000) / 60000)}m`
 }
 
-// L1 chat line; the diagnosis clips, the honest suffix never does.
-function chatL1(kind, done, total, diagnosis) {
+// L1 chat line; the diagnosis clips, the honest suffix never does. While
+// task-parked the suffix says so — the bot is doing side work, not trying
+// the main task.
+function chatL1(kind, done, total, diagnosis, parked) {
   const prefix = `${kind}: no progress for 15 min at ${done}/${total} — `
-  const suffix = '; still trying'
+  const suffix = parked ? '; parked, doing side work' : '; still trying'
   const maxDiag = CHAT_LIMIT - prefix.length - suffix.length
   const diag = String(diagnosis || 'unknown')
   const clipped = diag.length > maxDiag && maxDiag > 1 ? diag.slice(0, maxDiag - 1) + '…' : diag
   return prefix + clipped + suffix
+}
+
+// L2/L3 chat lines (vmzq.3): the whole line caps at TASK_PARK_DIAG_MAX
+// (200), the full diagnosis rides the log. The resume command differs by
+// task: castle go re-arms the castle, go work re-arms the house.
+function chatClipped(prefix, suffix, diagnosis) {
+  const maxDiag = TASK_PARK_DIAG_MAX - prefix.length - suffix.length
+  const diag = String(diagnosis || 'unknown')
+  const clipped = diag.length > maxDiag && maxDiag > 1 ? diag.slice(0, maxDiag - 1) + '…' : diag
+  return (prefix + clipped + suffix).slice(0, TASK_PARK_DIAG_MAX)
+}
+
+function chatL2(kind, done, total, diagnosis) {
+  const resume = kind === 'castle' ? 'say castle go to resume' : 'say go work to resume'
+  return chatClipped(`${kind} parked at ${done}/${total} after 45 min without progress — `, `; ${resume}`, diagnosis)
+}
+
+function chatL3(kind, diagnosis) {
+  return chatClipped(`${kind} parked for the day (${TASK_PARKS_PER_DAY} stalls) — `, '', diagnosis)
 }
 
 // Clamped stall advance; returns nothing, updates state in place.
@@ -205,17 +242,138 @@ function maybeL1(bot, ctx, kind, done, total, state, now) {
     return
   }
   const step = (ctx && ctx.step) || 'none'
+  const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
+  const parked = !!(rec && rec.taskPark)
   try {
-    console.log(`task ${kind} ${done}/${total} stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
+    console.log(`task ${kind} ${done}/${total} stall=${Math.floor(state.stallMs / 1000)}s${parked ? ' parked' : ''} step=${step} why=${diagnosis}`)
   } catch (_) { /* log best-effort */ }
   try {
-    bot.chat(chatL1(kind, done, total, diagnosis))
+    bot.chat(chatL1(kind, done, total, diagnosis, parked))
   } catch (_) { /* chat best-effort */ }
   try {
     metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
   } catch (_) { /* counter best-effort */ }
   state.lastL1At = now
   state.lastL1Diag = diagnosis
+}
+
+function utcDay(now) {
+  try {
+    return new Date(now).toISOString().slice(0, 10)
+  } catch (_) {
+    return 'unknown'
+  }
+}
+
+function savePark(bot, ctx) {
+  try {
+    require('./memory').save(bot, ctx)
+  } catch (_) { /* park persistence best-effort */ }
+}
+
+// L2 park (vmzq.3): 45 eligible minutes without progress parks the task
+// with the diagnosis. Castle reuses the castle-stop fields (st.parked, so
+// castle status and castle go work unchanged); the house gets ctx.home.parked
+// honoured by build/gather/craft (goal.js). The episode (taskPark) marks a
+// TASK park — owner parks have none — and carries the auto-resume timer;
+// the day history (parkHist) counts parks for the L3 latch. Both persist
+// via memory.js, so a restart mid-park keeps the veto and the timer. The
+// clock is NOT reset: the invariant still watches side work.
+function parkTask(bot, ctx, kind, done, total, now) {
+  try {
+    const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
+    if (!rec || typeof rec !== 'object' || rec.taskPark) return undefined
+    const diagnosis = diagnose(bot, ctx)
+    const day = utcDay(now)
+    const prev = rec.parkHist
+    const n = (prev && prev.day === day && typeof prev.n === 'number' && prev.n >= 1)
+      ? Math.min(prev.n + 1, 99)
+      : 1
+    rec.parkHist = { day, n }
+    const latched = n >= TASK_PARKS_PER_DAY
+    const diag = String(diagnosis || 'unknown')
+    rec.taskPark = { at: now, auto: !latched, diag: diag.length > TASK_PARK_DIAG_MAX ? diag.slice(0, TASK_PARK_DIAG_MAX - 1) + '…' : diag }
+    rec.parked = true
+    try {
+      console.log(`task ${kind} ${done}/${total} parked #${n}${latched ? ' latched' : ''} why=${diagnosis}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      bot.chat(latched ? chatL3(kind, diagnosis) : chatL2(kind, done, total, diagnosis))
+    } catch (_) { /* chat best-effort */ }
+    try {
+      metrics.taskStallTotal.inc({ task: kind, level: 'L2' })
+      if (latched) metrics.taskStallTotal.inc({ task: kind, level: 'L3' })
+    } catch (_) { /* counter best-effort */ }
+    savePark(bot, ctx)
+    return diagnosis
+  } catch (_) { /* park never breaks the tick */ }
+  return undefined
+}
+
+function maybeL2(bot, ctx, kind, done, total, state, now) {
+  if (state.stallMs < TASK_STALL_L2_MS) return
+  const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
+  if (!rec || rec.taskPark) return
+  const diagnosis = parkTask(bot, ctx, kind, done, total, now)
+  if (diagnosis === undefined) return
+  // The park line carries this tick's diagnosis, so the L1 must not fire
+  // alongside it ('still trying' + 'parked' back to back contradict).
+  // maybeL2 runs before maybeL1 at every hook site; this stamp skips it.
+  state.lastL1At = now
+  state.lastL1Diag = diagnosis
+}
+
+// Wall-clock park timers (vmzq.3): runs every hooked tick for BOTH records,
+// eligible or not, active or not — the world may change at night or while
+// the other task runs. One auto-resume per episode, 60 min after the park;
+// a latched (3rd) park waits for an owner command. Stale episodes (the
+// task finished under the park) clear silently.
+function maybeResume(bot, ctx, now) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return
+    for (const kind of ['castle', 'house']) {
+      const rec = kind === 'castle' ? ctx.castle : ctx.home
+      if (!rec || typeof rec !== 'object' || !rec.taskPark) continue
+      if ((kind === 'castle' && rec.phase === 'complete') || (kind === 'house' && rec.built === true)) {
+        rec.taskPark = null
+        rec.parked = false
+        savePark(bot, ctx)
+        continue
+      }
+      const ep = rec.taskPark
+      if (!ep || ep.auto !== true || typeof ep.at !== 'number') continue
+      if (now - ep.at < TASK_PARK_RETRY_MS) continue
+      const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
+      rec.parked = false
+      rec.taskPark = null
+      resetTask(ctx)
+      try {
+        console.log(`task ${kind} resumed after 60 min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
+      } catch (_) { /* log best-effort */ }
+      try {
+        bot.chat(`${kind} retrying after 60 min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
+      } catch (_) { /* chat best-effort */ }
+      savePark(bot, ctx)
+    }
+  } catch (_) { /* resume never breaks the tick */ }
+}
+
+// Owner resume (castle go / go work): clears TASK parks only — an
+// owner-parked castle (no episode) keeps its park until castle go.
+// Returns true when anything changed (the caller persists).
+function clearTaskParks(ctx) {
+  let changed = false
+  try {
+    for (const kind of ['castle', 'house']) {
+      const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
+      if (rec && typeof rec === 'object' && rec.taskPark) {
+        rec.taskPark = null
+        rec.parked = false
+        changed = true
+      }
+    }
+  } catch (_) { /* clear best-effort */ }
+  return changed
 }
 
 // Status line fragment: 'task castle 8/1722 stall=23m', or null when no task.
@@ -344,6 +502,9 @@ function castleSinkBaseline(state, cur) {
 function taskTick(bot, ctx, now = Date.now()) {
   try {
     if (!ctx) return
+    // Park timers first (vmzq.3): wall-clock, independent of the stall
+    // eligibility below. May resetTask, so before the state init.
+    maybeResume(bot, ctx, now)
     if (!ctx.task || typeof ctx.task !== 'object') ctx.task = { active: null }
     const t = ctx.task
     const kind = taskKind(ctx)
@@ -424,6 +585,7 @@ function taskTick(bot, ctx, now = Date.now()) {
         }
         addStall(state, now)
         setStallGauge(kind, state.stallMs)
+        maybeL2(bot, ctx, kind, '?', '?', state, now)
         maybeL1(bot, ctx, kind, '?', '?', state, now)
         return
       }
@@ -462,6 +624,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       }
       addStall(state, now)
       setStallGauge(kind, state.stallMs)
+      maybeL2(bot, ctx, kind, cur.done, cur.total, state, now)
       maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
       return
     }
@@ -480,6 +643,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       }
       addStall(state, now)
       setStallGauge(kind, state.stallMs)
+      maybeL2(bot, ctx, kind, '?', '?', state, now)
       maybeL1(bot, ctx, kind, '?', '?', state, now)
       return
     }
@@ -534,8 +698,9 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
     addStall(state, now)
     setStallGauge(kind, state.stallMs)
+    maybeL2(bot, ctx, kind, cur.done, cur.total, state, now)
     maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_HOUSE_CACHE_MS, STALL_TICK_CLAMP_MS, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, STALL_TICK_CLAMP_MS, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks }

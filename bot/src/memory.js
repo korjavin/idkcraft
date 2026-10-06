@@ -117,11 +117,48 @@ function skipOf(v) {
   return out
 }
 
+// L2 park episode + day history (idkcraft-vmzq.3): { at, auto, diag } and
+// { day, n }. Sanitized both ways like the rest of the record: a far-future
+// at clamps to now (it still expires on time), diag caps at 200 chars, day
+// must be a UTC date. Additive: old docs lack the keys.
+const TASK_PARK_DIAG_MAX = 200
+function taskParkOf(v) {
+  try {
+    if (!v || typeof v !== 'object') return null
+    const at = num(v.at)
+    if (at === null || at <= 0) return null
+    const raw = typeof v.diag === 'string' && v.diag ? v.diag : 'unknown'
+    return { at: Math.min(at, Date.now()), auto: v.auto === true, diag: raw.slice(0, TASK_PARK_DIAG_MAX) }
+  } catch (_) {
+    return null
+  }
+}
+function parkHistOf(v) {
+  try {
+    if (!v || typeof v !== 'object') return null
+    if (typeof v.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v.day)) return null
+    const n = num(v.n)
+    if (n === null || n < 1) return null
+    return { day: v.day, n: Math.min(Math.floor(n), 99) }
+  } catch (_) {
+    return null
+  }
+}
+
 function homeOf(h) {
   if (!h || !h.site) return null
   const site = v3(h.site)
   if (!site) return null
   const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true, v: h && h.v === 2 ? 2 : 1 }
+  // Task park (vmzq.3): a restart mid-park keeps the house veto, the
+  // episode timer and the day count instead of wandering or freezing.
+  try {
+    if (h.parked === true) out.parked = true
+    const tp = taskParkOf(h.taskPark)
+    if (tp) out.taskPark = tp
+    const ph = parkHistOf(h.parkHist)
+    if (ph) out.parkHist = ph
+  } catch (_) { /* park best-effort */ }
   try {
     const skip = skipOf(h.skip)
     if (skip.length) out.skip = skip
@@ -163,6 +200,14 @@ function castleOf(c) {
     if (!site || ![site.x, site.y, site.z].every(Number.isInteger)) return null
     const rot = Number.isInteger(c.rot) && c.rot >= 0 && c.rot <= 3 ? c.rot : 0
     const out = { site, rot, phase: CASTLE_PHASES.has(c.phase) ? c.phase : 'body', blocked: {}, parked: c.parked === true }
+    // Task park (vmzq.3): the episode timer and day count ride with the
+    // parked flag (additive; owner parks have neither key).
+    try {
+      const tp = taskParkOf(c.taskPark)
+      if (tp) out.taskPark = tp
+      const ph = parkHistOf(c.parkHist)
+      if (ph) out.parkHist = ph
+    } catch (_) { /* park best-effort */ }
     if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
     if (c.blocked && typeof c.blocked === 'object') {
       for (const k of Object.keys(c.blocked).slice(0, CASTLE_BLOCKED_MAX)) {
