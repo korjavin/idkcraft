@@ -703,18 +703,9 @@ async function ensureRoom(bot, recipe, count, opts) {
   throw new Error('inventory-full')
 }
 
-// g0z.25: the intra-craft click burst. mineflayer fires a table craft's
-// ~10 clicks in ~5 ms and sync+closes right after; Paper 26.1.2 silently
-// reverts most such bursts (mats back, no product, the op still resolves —
-// assayed 3/8 landed unpaced, 8/8 with 60 ms gaps, same xg9 per-tick shape
-// one grain finer). bot.craft looks bot.clickWindow up per click, so a gap
-// enforcer around the call paces every intra-craft click; restored in
-// finally (a foreign mid-craft overwrite is never clobbered back). Table
-// crafts only: 2x2 clicks already serialize on updateSlot:0 waits, their
-// cursor churn heals in 600 ms, and pacing them would slow craft batches.
-// Compact one-line pack + cursor dump for stall logs (the next review's
-// desync-vs-loss oracle): name×count per stack plus the cursor, which
-// items() never shows. Best-effort 'unreadable', never throws.
+// g0z.25: compact one-line pack + cursor dump for stall logs (the next
+// review's desync-vs-loss oracle): name×count per stack plus the cursor,
+// which items() never shows. Best-effort 'unreadable', never throws.
 function slotSummary(bot) {
   try {
     const win = bot && bot.inventory
@@ -737,6 +728,18 @@ function slotSummary(bot) {
   }
 }
 
+// g0z.25: the intra-craft click burst. mineflayer fires a table craft's
+// ingredient clicks in ~5 ms and sync+closes right after; Paper 26.1.2
+// silently reverts most such bursts (mats back, no product, the op still
+// resolves — assayed 3/8 landed unpaced, 8/8 with 60 ms gaps, same xg9
+// per-tick shape one grain finer). bot.craft looks bot.clickWindow up per
+// ingredient click, so a gap enforcer around the call paces those;
+// restored in finally (a foreign mid-craft overwrite is never clobbered
+// back). The put-away/result-grab tail (bot.putAway, bot.putSelectedItem-
+// Range) calls inventory.js's private click closure and stays unpaced —
+// assayed sufficient as is; wrap those too if tail reverts ever show up.
+// Table crafts only: 2x2 clicks already serialize on updateSlot:0 waits,
+// their cursor churn heals in 600 ms, and pacing them would slow batches.
 async function pacedCraft(bot, recipe, count, table) {
   const orig = bot && bot.clickWindow
   if (!table || typeof orig !== 'function' || typeof bot.craft !== 'function') {

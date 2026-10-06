@@ -612,7 +612,10 @@ describe('craft stranded residuals (idkcraft-zaw)', () => {
 
 describe('craft table pacing + slotSummary (idkcraft-g0z.25)', () => {
   const TABLE_BLOCK = { name: 'crafting_table' }
-  // Mineflayer-shaped bot: craft looks bot.clickWindow up per click.
+  // Wrapper-shaped bot: the fake craft routes its clicks through
+  // bot.clickWindow like mineflayer's ingredient clicks do. (The real
+  // put-away/result-grab tail bypasses the wrapper via inventory.js's
+  // private closure — pinned by the assay, not by this mock.)
   function pacingBot(craftImpl) {
     const times = []
     const bot = {

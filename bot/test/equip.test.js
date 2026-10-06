@@ -2519,6 +2519,32 @@ describe('equip verify-after-resync (idkcraft-g0z.25)', () => {
     bot.restoreError()
   })
 
+  it('product visible only on the second resync: slow path lands, no strike', async () => {
+    // The 2x2-flicker/lag shape: the fast-path resync still misses, the
+    // settle+resync shows the product. Deleting the escalation must fail
+    // this (revmux 01 core-2).
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    let syncs = 0
+    bot._syncWindow = async () => {
+      syncs++
+      if (syncs === 2) bot._items.push({ name: 'wooden_pickaxe', count: 1 })
+    }
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    await untilLines(bot, 1)
+    assert.equal(bot.calls.craft.length, 1, 'no second craft')
+    assert.deepEqual(bot.lines, ['equipped wooden_pickaxe'])
+    assert.ok(!ctx.equip.made || !ctx.equip.made.wooden_pickaxe, 'no strike recorded')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
   it('a true miss still stalls on the third strike and logs the slots', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
