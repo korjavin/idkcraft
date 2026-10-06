@@ -1123,6 +1123,44 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
     }
   })
 
+  it('dusk falling mid-exit does not freeze it: the legs finish and shut the door (verifier P2)', async () => {
+    // The exit starts by day; dusk falls with the door open mid-legs. Day
+    // is required only to START — the committed legs finish instead of
+    // idling in the open doorway until dawn.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.entities = { 21: zombieOutside() }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      let r = await ticker.tick() // open the shut door, by day
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      r = await ticker.tick() // door open -> exit legs start, by day
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.time.timeOfDay = 12500 // dusk falls mid-exit
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        r = await ticker.tick() // arrival -> close -> shut -> released, at dusk
+        await settle()
+        assert.equal(r.decision.action, 'comehome', 'dusk legs keep running')
+      }
+      assert.equal(ctx.comehome, null, 'released at dusk')
+      assert.equal(ctx.inShelter, false)
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+      assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+    } finally {
+      cap.release()
+    }
+  })
+
   it("phase 'open' with the door already open runs the legs despite the lane mob (revmux 03 core-1)", async () => {
     // A wedged leg re-arms 'open' without shutting the door: holding there
     // would freeze the bot mid-doorway with the door open. The hold needs

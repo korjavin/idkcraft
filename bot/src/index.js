@@ -840,25 +840,26 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // handler, and the order gate above only runs it on non-fight
         // ticks). jr2.3 holds: fight is never dispatched here, the legs
         // are doorway direct control (no A*, no pursuit), and the rw4.17
-        // wall guard stays armed. A hostile on the out-lane holds the
-        // exit shut instead of opening into it (revmux 01 core-1, the
-        // bead's 'не выбегая в толпу'); the gate re-checks every tick,
-        // so a cleared lane resumes at once. The hold needs a shut door
-        // behind it: once the legs commit (exit/close) or the door stands
-        // open (a wedged leg re-arms 'open' without shutting it) they
-        // finish — holding there would freeze the bot mid-doorway with
-        // the door open and fight held off (revmux 02/03 core-1) — worse
-        // than stepping out, shutting the door, and handing the body to
-        // fight. Positive-day only (the dayDivert fail-closed precedent):
-        // night keeps the hold, and a gocastle without an exiting
-        // comehome keeps it too (its walk is A* — from inside it would
-        // path the wall).
-        if (dayNow && ctx.comehome && ctx.comehome.exiting) {
+        // wall guard stays armed. Day is required only to START the exit:
+        // once the legs commit (exit/close) or the door stands open they
+        // finish at dusk/night too — otherwise an exit started before
+        // dusk freezes mid-doorway with the door open until dawn
+        // (verifier P2, the revmux 02/03 class). A hostile on the
+        // out-lane holds the not-started exit shut instead of opening
+        // into it (revmux 01 core-1, the bead's 'не выбегая в толпу');
+        // the gate re-checks every tick, so a cleared lane resumes at
+        // once. A gocastle without an exiting comehome keeps the hold
+        // (its walk is A* — from inside it would path the wall).
+        if (ctx.comehome && ctx.comehome.exiting) {
           const exitPhase = ctx.comehome && ctx.comehome.phase
           const exitHome = (ctx.comehome && ctx.comehome.home) || ctx.home
-          let laneBlocked = false
-          try { laneBlocked = exitPhase !== 'exit' && exitPhase !== 'close' && homeMod.outLaneBlocked(bot, exitHome) && homeMod.exitDoorShut(bot, exitHome) } catch (_) { laneBlocked = false }
-          if (!laneBlocked) {
+          let started = false
+          let laneClear = false
+          try {
+            started = exitPhase === 'exit' || exitPhase === 'close' || !homeMod.exitDoorShut(bot, exitHome)
+            laneClear = !homeMod.outLaneBlocked(bot, exitHome)
+          } catch (_) { started = false; laneClear = false }
+          if (started || (dayNow && laneClear)) {
             const handler = BEHAVIOURS.comehome
             if (typeof handler === 'function') handler(bot, ctx, target, state)
             // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
