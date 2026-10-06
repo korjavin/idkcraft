@@ -262,12 +262,10 @@ function cellDone(bot, home, cell) {
 // place, skips ignored. nextCellIdx===-1 alone counts given-up cells as
 // done — the prod house reported 'home done' over 30 skipped cells (whole
 // no-ref rows on an unvalidated shore site) and the oracle scored a false
-// PASS. Both verdict sites in this change (build's own done branch, the
-// index.js stale-built revalidation) gate on this; the world wins over
-// the bookkeeping, so a stale skip over a placed cell still reads
-// complete. (setComehome's silent flip needs the same gate — deferred:
-// orders.js is in flight under vmzq.3.) Doorway/interior plank cells are
-// not holes (8si):
+// PASS. All three verdict sites (build's own done branch, the index.js
+// stale-built revalidation, setComehome's silent flip) gate on this; the
+// world wins over the bookkeeping, so a stale skip over a placed cell
+// still reads complete. Doorway/interior plank cells are not holes (8si):
 // the invariant forbids placing there, so a correctly empty one reads
 // complete — a corrupt plan entry must skip, not brick the house.
 function isComplete(bot, home) {
