@@ -237,6 +237,8 @@ function failNoDoor(ctx, st, where) {
 // on the OBSERVED state, never optimistically. Untracks the door from the
 // A* door reflex first (revmux 01 major-2): home owns its door from here,
 // so the reflex stands down instead of double-toggling on its own cooldown.
+// Returns whether the toggle was sent (false on the cooldown skip): the
+// rw4.18 exit gate commits only on a send (verifier P2b).
 function tryToggle(bot, ctx, st, block) {
   try {
     const p = block && block.position
@@ -245,12 +247,13 @@ function tryToggle(bot, ctx, st, block) {
     }
   } catch (_) { /* untrack best-effort */ }
   const now = Date.now()
-  if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return
+  if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return false
   st.lastToggle = now
   try {
     const r = bot.activateBlock(block)
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch (_) { /* retry next window */ }
+  return true
 }
 
 function setGoal(bot, ctx, key, goal) {
@@ -1229,11 +1232,13 @@ function exitMeet(bot, ctx, home, order) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); failMeet arms the wall guard, so the released body's A* routes via door/gap instead of the wall (rw4.17 closes the old revmux 01 minor)
       return
     } else {
-      // rw4.18/04: the legs started the exit (toggle sent). The tick gate
-      // finishes a committed exit at any clock; without the flag a re-armed
-      // 'open' is indistinguishable from a door the legs never touched.
-      order.committed = true
-      tryToggle(bot, ctx, order, door)
+      // rw4.18/04: the legs started the exit. Commit only on a send: a
+      // cooldown skip (releaseMeet carries the hold's lastToggle) must not
+      // mark an untouched exit started, or the night/lane hold is bypassed
+      // (verifier P2b). The tick gate finishes a committed exit at any
+      // clock; without the flag a re-armed 'open' is indistinguishable
+      // from a door the legs never touched.
+      if (tryToggle(bot, ctx, order, door)) order.committed = true
       return
     }
   }

@@ -1237,6 +1237,46 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
     }
   })
 
+  it('a cooldown-skipped toggle does not commit: night and lane holds still apply (verifier P2b)', async () => {
+    // releaseMeet carries the hold's fresh lastToggle; a tick that runs the
+    // handler inside the cooldown window sends nothing, so the exit stays
+    // uncommitted and the holds below still bind.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000 })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold', lastToggle: Date.now() }
+    ctx.inShelter = true
+    home.releaseMeet(bot, ctx) // arms exiting 'open', carries lastToggle
+    assert.equal(ctx.comehome.exiting, true)
+    assert.ok(ctx.comehome.lastToggle > 0, 'cooldown carried')
+    home.comehome(bot, ctx) // a non-fight tick runs the handler: toggle skips
+    assert.ok(!ctx.comehome.committed, 'no send, no commit')
+    assert.equal(ctx.comehome.openTicks, 1)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 2; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'night hold still applies')
+      }
+      assert.equal(ctx.comehome.phase, 'open')
+      // Day breaks with a mob on the lane: the lane hold still applies too.
+      bot.time.timeOfDay = 6000
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      for (let i = 0; i < 2; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'lane hold still applies')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.equal(ctx.comehome.openTicks, 1, 'handler ran once, on the direct call')
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door never opened')
+    } finally {
+      cap.release()
+    }
+  })
+
   it("phase 'open' with the door already open runs the legs despite the lane mob (revmux 03 core-1)", async () => {
     // By day an already-open door starts even past a lane mob (freezing
     // behind an open door is worse); the wedge re-arm pins committed=true
