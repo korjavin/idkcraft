@@ -14,23 +14,31 @@
 #   castle: `build castle` (or monitor the existing one when the bot answers
 #           `I already have a castle at ...`). Default budget 480 min.
 # Exit codes:
-#   0  done within budget (`home done at` / `castle done at` in the window)
-#   1  budget exceeded (prints the last 20 bot lines + the last progress line)
+#   0  done within budget (`home done at` / `castle done at` in the window;
+#      a house done over unhealed `build skip` lines is PARTIAL, not done)
+#   1  budget exceeded (prints the last 20 bot lines + the last progress
+#      line), castle with no site, or a partial house
 #   2  environment: bad args, stash/kv/logs unreachable (up front or 3 dead
 #      polls mid-run), puppet refused (human online), the bot never seen,
-#      no order reply, human void
+#      no order reply, human void, bot autonomy unverified (bot gone and
+#      resumes exhausted)
 #
-# Secrets resolve at runtime and never print: MC host/port from
-# secrets/idkcraft-mc-host + secrets/idkcraft-mc-port, logs via the
-# session-review Grafana/Portainer keys. Env seams (tests/operators):
+# Secrets resolve at runtime and never print: MC host/port from the exact
+# secrets/idkcraft-mc-host + secrets/idkcraft-mc-port keys; the
+# Grafana/Portainer keys resolve FUZZY by generic words (like the
+# session-review key() helper — no infra labels in this repo): the first
+# stash key whose segments contain all of [portainer url], [portainer api
+# key], [grafana token]. Env seams (tests/operators):
 #   TASK_RUN_KV (default ~/.local/bin/kv), TASK_RUN_MC_HOST_KEY,
 #   TASK_RUN_MC_PORT_KEY, TASK_RUN_PORTAINER_URL_KEY,
-#   TASK_RUN_PORTAINER_API_KEY_KEY, TASK_RUN_GRAFANA_TOKEN_KEY,
-#   TASK_RUN_MC_HOST, TASK_RUN_MC_PORT, TASK_RUN_LOGS_URL,
-#   TASK_RUN_GRAFANA_TOKEN, TASK_RUN_PUPPET_CMD, TASK_RUN_HTTP_PORT (18080),
-#   TASK_RUN_BOT_NAME (IdkBot), TASK_RUN_PUPPET_NAME (IdkTester),
-#   TASK_RUN_POLL_SECS (600), TASK_RUN_BUDGET_SECS, TASK_RUN_MEET_SECS (720),
-#   TASK_RUN_REPLY_SECS (90), TASK_RUN_RESUMES (3), TASK_RUN_OUTDIR (/tmp)
+#   TASK_RUN_PORTAINER_API_KEY_KEY, TASK_RUN_GRAFANA_TOKEN_KEY (exact
+#   overrides; unset = fuzzy), TASK_RUN_MC_HOST, TASK_RUN_MC_PORT,
+#   TASK_RUN_LOGS_URL, TASK_RUN_GRAFANA_TOKEN, TASK_RUN_PUPPET_CMD,
+#   TASK_RUN_HTTP_PORT (18080), TASK_RUN_BOT_NAME (IdkBot),
+#   TASK_RUN_PUPPET_NAME (IdkTester), TASK_RUN_POLL_SECS (600),
+#   TASK_RUN_BUDGET_SECS, TASK_RUN_MEET_SECS (720), TASK_RUN_REPLY_SECS (90),
+#   TASK_RUN_BOT_WAIT_SECS (60), TASK_RUN_SKIP_HORIZON_SECS (3900),
+#   TASK_RUN_LOGS_SCHEME (https), TASK_RUN_RESUMES (3), TASK_RUN_OUTDIR (/tmp)
 #
 # Every run prints the UTC window start and the VictoriaLogs queries to
 # re-judge it by hand, and writes a progress-series JSON next to the
@@ -49,9 +57,9 @@ TOOLS="$(cd "$(dirname "$0")" && pwd)"
 KV="${TASK_RUN_KV:-$HOME/.local/bin/kv}"
 MC_HOST_KEY="${TASK_RUN_MC_HOST_KEY:-secrets/idkcraft-mc-host}"
 MC_PORT_KEY="${TASK_RUN_MC_PORT_KEY:-secrets/idkcraft-mc-port}"
-PORTAINER_URL_KEY="${TASK_RUN_PORTAINER_URL_KEY:-secrets/wandergeek-portainer-url}"
-PORTAINER_API_KEY_KEY="${TASK_RUN_PORTAINER_API_KEY_KEY:-secrets/wandergeek-portainer-api-key}"
-GRAFANA_TOKEN_KEY="${TASK_RUN_GRAFANA_TOKEN_KEY:-secrets/grafana-kfamcloud-sa-token}"
+PORTAINER_URL_KEY="${TASK_RUN_PORTAINER_URL_KEY:-}"
+PORTAINER_API_KEY_KEY="${TASK_RUN_PORTAINER_API_KEY_KEY:-}"
+GRAFANA_TOKEN_KEY="${TASK_RUN_GRAFANA_TOKEN_KEY:-}"
 PUPPET_CMD="${TASK_RUN_PUPPET_CMD:-node $TOOLS/puppet.js}"
 HTTP_PORT="${TASK_RUN_HTTP_PORT:-18080}"
 BOT_NAME="${TASK_RUN_BOT_NAME:-IdkBot}"
@@ -59,6 +67,9 @@ PUPPET_NAME="${TASK_RUN_PUPPET_NAME:-IdkTester}"
 POLL_SECS="${TASK_RUN_POLL_SECS:-600}"
 MEET_SECS="${TASK_RUN_MEET_SECS:-720}"
 REPLY_SECS="${TASK_RUN_REPLY_SECS:-90}"
+BOT_WAIT_SECS="${TASK_RUN_BOT_WAIT_SECS:-60}"
+SKIP_HORIZON_SECS="${TASK_RUN_SKIP_HORIZON_SECS:-3900}"
+LOGS_SCHEME="${TASK_RUN_LOGS_SCHEME:-https}"
 MAX_RESUMES="${TASK_RUN_RESUMES:-3}"
 OUTDIR="${TASK_RUN_OUTDIR:-/tmp}"
 C="localhost:$HTTP_PORT"
@@ -77,6 +88,26 @@ JOURNAL="$OUTDIR/task-run-$TASK-$STAMP.journal.jsonl"
 
 kvget() { "$KV" get "$1" 2>/dev/null || true; }
 
+# Fuzzy stash-key resolution (revmux 01 critical): the first key under
+# secrets/ whose segments (split on non-alphanumerics) contain every given
+# word. No infra labels in this repo — the words are generic. Prints the
+# key, or nothing when kv fails or nothing matches.
+kvkey() {
+  "$KV" ls secrets 2>/dev/null | python3 -c '
+import json,sys,re
+try:
+  keys = json.load(sys.stdin)
+except Exception:
+  sys.exit(0)
+words = [w.lower() for w in sys.argv[1:]]
+for e in keys if isinstance(keys, list) else []:
+  segs = set(re.split(r"[^a-z0-9]+", (e.get("key") or "").lower()))
+  if all(w in segs for w in words):
+    print(e["key"])
+    sys.exit(0)
+' "$@"
+}
+
 # --- resolve the MC endpoint (never printed) ---
 MC_HOST="${TASK_RUN_MC_HOST:-}"
 if [ -z "$MC_HOST" ]; then MC_HOST="$(kvget "$MC_HOST_KEY")"; fi
@@ -91,9 +122,12 @@ fi
 LOGS="${TASK_RUN_LOGS_URL:-}"
 TOKEN="${TASK_RUN_GRAFANA_TOKEN:-}"
 if [ -z "$LOGS" ]; then
+  if [ -z "$PORTAINER_URL_KEY" ]; then PORTAINER_URL_KEY="$(kvkey portainer url)"; fi
+  if [ -z "$PORTAINER_API_KEY_KEY" ]; then PORTAINER_API_KEY_KEY="$(kvkey portainer api key)"; fi
+  if [ -z "$GRAFANA_TOKEN_KEY" ]; then GRAFANA_TOKEN_KEY="$(kvkey grafana token)"; fi
   PURL="$(kvget "$PORTAINER_URL_KEY" | sed 's:/*$::')"
   PKEY="$(kvget "$PORTAINER_API_KEY_KEY")"
-  if [ -z "$PURL" ] || [ -z "$PKEY" ]; then echo "task-run: portainer keys unreachable ($PORTAINER_URL_KEY)" >&2; exit 2; fi
+  if [ -z "$PURL" ] || [ -z "$PKEY" ]; then echo "task-run: portainer keys unreachable (stash words: portainer url / portainer api key)" >&2; exit 2; fi
   GHOST="$(curl -s -m 20 -H "X-API-Key: $PKEY" "$PURL/api/stacks" 2>/dev/null | python3 -c 'import json,sys
 try:
   stacks = json.load(sys.stdin)
@@ -106,8 +140,8 @@ for s in stacks if isinstance(stacks, list) else []:
       sys.exit(0)')"
   if [ -z "$GHOST" ]; then echo "task-run: GRAFANA_HOST not found via portainer" >&2; exit 2; fi
   TOKEN="$(kvget "$GRAFANA_TOKEN_KEY")"
-  if [ -z "$TOKEN" ]; then echo "task-run: grafana token unreachable ($GRAFANA_TOKEN_KEY)" >&2; exit 2; fi
-  LOGS="https://$GHOST/api/datasources/proxy/uid/PD775F2863313E6C7/select/logsql/query"
+  if [ -z "$TOKEN" ]; then echo "task-run: grafana token unreachable (stash words: grafana token)" >&2; exit 2; fi
+  LOGS="$LOGS_SCHEME://$GHOST/api/datasources/proxy/uid/PD775F2863313E6C7/select/logsql/query"
 fi
 PROBE_BODY="$OUTDIR/task-run-probe-$$.json"
 PROBE_CODE="$(curl -s -m 30 -o "$PROBE_BODY" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$LOGS" --data-urlencode 'query=container_name:idkcraft-bot _time:5m | stats count() as n' --data-urlencode 'limit=2' 2>/dev/null)"
@@ -195,6 +229,27 @@ sys.exit(0 if d.get("state") == sys.argv[2] else 1)
 EOF
 }
 
+bot_in_roster() { # 0 when BOT_NAME is on the /state roster in PBODY
+  python3 - "$PBODY" "$BOT_NAME" <<'EOF'
+import json,sys
+try:
+  d = json.load(open(sys.argv[1]))
+except Exception:
+  sys.exit(1)
+sys.exit(0 if sys.argv[2] in (d.get("roster") or []) else 1)
+EOF
+}
+
+chat_len() { # prints the /state chat length in PBODY (0 on garbage)
+  python3 - "$PBODY" <<'EOF'
+import json,sys
+try:
+  print(len(json.load(open(sys.argv[1])).get("chat") or []))
+except Exception:
+  print(0)
+EOF
+}
+
 say() { # $1 = text; 409 (human) fails the run, anything else is returned
   pctl POST /say "{\"text\":\"$1\"}" || return 2
   if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
@@ -203,9 +258,10 @@ say() { # $1 = text; 409 (human) fails the run, anything else is returned
 
 # --- rendezvous: `follow me` until the bot is mutually visible ---
 # The unseen reply leaks the bot's coords (`I'm at X Y Z`, chat.js) — walk
-# there. Quiet; returns 0 on visible, 3 on human, 1 otherwise.
+# there. `autonomous on` goes AFTER the meet: said earlier the bot may be
+# offline and never hear it (revmux 01 major). Quiet; returns 0 on visible,
+# 3 on human, 1 otherwise.
 meet_bot() {
-  say 'autonomous on' >/dev/null 2>&1 || true # belt-and-braces: the env is the real mechanism
   say 'follow me' || return $?
   deadline=$(( $(now_epoch) + MEET_SECS ))
   last_goto=""
@@ -235,7 +291,10 @@ EOF
 )"
     dist="$(printf '%s' "$parsed" | sed -n 's/^dist=//p')"
     at="$(printf '%s' "$parsed" | sed -n 's/^at=//p')"
-    if [ "$dist" != "none" ]; then return 0; fi # mutually visible
+    if [ "$dist" != "none" ]; then # mutually visible: the bot is online and hears
+      say 'autonomous on' >/dev/null 2>&1 || return $?
+      return 0
+    fi
     now="$(now_epoch)"
     if [ "$at" != "none" ] && [ "$at" != "$last_goto" ]; then
       last_goto="$at"
@@ -261,14 +320,7 @@ order_and_wait() { # $1 = order text
   pctl GET "/state?n=100" >/dev/null 2>&1 || return 2
   if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
   if [ "$PSTAT" != 200 ]; then echo "task-run: puppet not answering" >&2; return 1; fi
-  seen="$(python3 - "$PBODY" <<'EOF'
-import json,sys
-try:
-  print(len(json.load(open(sys.argv[1])).get("chat") or []))
-except Exception:
-  print(0)
-EOF
-)"
+  seen="$(chat_len)"
   say "$1" || return $?
   deadline=$(( $(now_epoch) + REPLY_SECS ))
   while [ "$(now_epoch)" -lt "$deadline" ]; do
@@ -333,16 +385,83 @@ open(jf, "a").write(json.dumps(e) + "\n")
 EOF
 }
 
-attempt_resume() { # the bot left: a fresh puppet re-issues `autonomous on`
+wait_for_roster() { # 0 once BOT_NAME is on the roster (BOT_WAIT_SECS)
+  deadline=$(( $(now_epoch) + BOT_WAIT_SECS ))
+  while [ "$(now_epoch)" -lt "$deadline" ]; do
+    if ! kill -0 "$PUPPET_PID" 2>/dev/null; then return 1; fi
+    pctl GET "/state?n=5" >/dev/null 2>&1 || { sleep 3; continue; }
+    if [ "$PSTAT" = 200 ] && bot_in_roster; then return 0; fi
+    sleep 3
+  done
+  return 1
+}
+
+wait_for_bot_line() { # $1 = needle $2 = secs $3 = chat length before the say; prints 1 on sight, HUMAN on 409, else 0
+  seen="$3"
+  deadline=$(( $(now_epoch) + $2 ))
+  while [ "$(now_epoch)" -lt "$deadline" ]; do
+    if ! kill -0 "$PUPPET_PID" 2>/dev/null; then echo 0; return 0; fi
+    pctl GET "/state?n=100" >/dev/null 2>&1 || { sleep 3; continue; }
+    if [ "$PSTAT" = 409 ]; then echo HUMAN; return 0; fi
+    [ "$PSTAT" = 200 ] || { sleep 3; continue; }
+    if python3 - "$PBODY" "$BOT_NAME" "$seen" "$1" <<'EOF'
+import json,sys
+try:
+  n = int(sys.argv[3])
+except Exception:
+  n = 0
+try:
+  d = json.load(open(sys.argv[1]))
+except Exception:
+  sys.exit(1)
+for c in (d.get("chat") or [])[n:]:
+  if c.get("from") == sys.argv[2] and sys.argv[4] in (c.get("msg") or ""):
+    sys.exit(0)
+sys.exit(1)
+EOF
+    then
+      echo 1
+      return 0
+    fi
+    sleep 3
+  done
+  echo 0
+}
+
+RESUME_OK=0
+attempt_resume() { # the bot is gone: a fresh puppet waits for it, re-issues `autonomous on`
   RESUMES_LEFT=$(( RESUMES_LEFT - 1 ))
   n=$(( MAX_RESUMES - RESUMES_LEFT ))
   echo "task-run: bot is gone; resume attempt $n/$MAX_RESUMES (re-issue autonomous on)"
   ok=0
   if start_puppet "resume$n"; then
-    say 'autonomous on' >/dev/null 2>&1 && ok=1
+    # The bot rejoins seconds after the puppet (waitForPlayers): saying
+    # before it is on the roster is lost, and ok=1 needs its reply
+    # (revmux 01 major). The chat baseline is taken before the say —
+    # an instant reply must still count.
+    if wait_for_roster && pctl GET "/state?n=100" >/dev/null 2>&1 && [ "$PSTAT" = 200 ]; then
+      seen="$(chat_len)"
+      say 'autonomous on' >/dev/null 2>&1
+      code=$?
+      if [ "$code" = 3 ]; then
+        stop_puppet
+        write_series void-human
+        echo "task-run: VOID — human online (409 during resume); series: $SERIES"
+        exit 2
+      elif [ "$code" = 0 ]; then
+        ok=$(wait_for_bot_line 'autonomous on' "$REPLY_SECS" "$seen")
+        if [ "$ok" = HUMAN ]; then
+          stop_puppet
+          write_series void-human
+          echo "task-run: VOID — human online (409 during resume); series: $SERIES"
+          exit 2
+        fi
+      fi
+    fi
   fi
   stop_puppet
   journal_event resume "attempt $n ok=$ok"
+  RESUME_OK="$ok"
 }
 
 fetch_logs() { # $1=container $2=span-min $3=outfile; transient failures just fail
@@ -351,16 +470,24 @@ fetch_logs() { # $1=container $2=span-min $3=outfile; transient failures just fa
 }
 
 classify_poll() { # $1=mcf $2=botf: append new events, print signals
-  python3 - "$1" "$2" "$JOURNAL" "$TASK" "$BOT_NAME" "$PUPPET_NAME" "$WINDOW_START" <<'EOF'
-import json,sys,re
-mc_f, bot_f, journal, task, bot, puppet, start = sys.argv[1:8]
+  python3 - "$1" "$2" "$JOURNAL" "$TASK" "$BOT_NAME" "$PUPPET_NAME" "$WINDOW_START" "$SKIP_HORIZON_SECS" <<'EOF'
+import datetime,json,sys,re
+mc_f, bot_f, journal, task, bot, puppet, start, horizon = sys.argv[1:9]
+try:
+  horizon = int(horizon)
+except Exception:
+  horizon = 3900
 seen = set()
+old_skips = [] # (t, line), every house skip already journalled
 try:
   for l in open(journal):
     try:
-      seen.add(json.loads(l).get("k"))
+      e = json.loads(l)
     except Exception:
-      pass
+      continue
+    seen.add(e.get("k"))
+    if e.get("kind") == "skip":
+      old_skips.append((e.get("t") or "", e.get("line") or ""))
 except Exception:
   pass
 out = []
@@ -386,12 +513,19 @@ def lines(f):
     if t < start: # this window only: no verdict on older lines
       continue
     yield t, m
+def parse(t):
+  try:
+    return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
+  except Exception:
+    return None
 signals = []
 last_progress = ""
+dones = []
+nbot = 0
 for t, m in lines(mc_f):
   if task == "house" and "home done at " in m:
     if emit(t, "mc", "done", m):
-      signals.append("DONE " + m)
+      dones.append((t, m)) # judged PARTIAL-or-DONE below, against the skips
   elif task == "castle" and "castle done at " in m:
     if emit(t, "mc", "done", m):
       signals.append("DONE " + m)
@@ -407,14 +541,31 @@ for t, m in lines(mc_f):
     if emit(t, "mc", "join", m) and name != bot and name != puppet:
       signals.append("VOID " + name)
 for t, m in lines(bot_f):
+  nbot += 1
   if task == "castle" and re.match(r"^castle \d+/\d+$", m.strip()):
     if emit(t, "bot", "progress", m):
       last_progress = m
+  if task == "house" and m.startswith("build skip "):
+    if emit(t, "bot", "skip", m):
+      old_skips.append((t, m))
   if ("spawned as %s" % bot) in m:
     emit(t, "bot", "restart", m) # a deploy restart: recorded, never voiding
   if "leaving: nobody online" in m:
     if emit(t, "bot", "leave", m):
       signals.append("LEAVE")
+# A house done over unhealed skips is PARTIAL (revmux 01 major): skips
+# prune hourly, so a skip younger than the horizon at done-time is still
+# a hole; an older one had a prune cycle (a re-fail would re-log young).
+for t, m in dones:
+  dt = parse(t)
+  bad = [(st, sm) for (st, sm) in old_skips
+         if dt is None or parse(st) is None or datetime.timedelta(0) <= (dt - parse(st)) <= datetime.timedelta(seconds=horizon)]
+  if bad:
+    signals.append("PARTIAL %d %s" % (len(bad), bad[-1][1]))
+  else:
+    signals.append("DONE " + m)
+if nbot == 0:
+  signals.append("BOT_SILENT")
 if out:
   with open(journal, "a") as fh:
     for e in out:
@@ -502,6 +653,7 @@ SPAN_MIN=$(( POLL_SECS / 60 + 2 ))
 [ "$SPAN_MIN" -ge 2 ] || SPAN_MIN=2
 RESUMES_LEFT="$MAX_RESUMES"
 LOST_STREAK=0
+SILENT_STREAK=0
 
 trap 'write_series interrupted 2>/dev/null; echo "task-run: interrupted; series so far: $SERIES"; exit 130' INT TERM
 
@@ -524,11 +676,21 @@ while :; do
     [ "$mc_ok" = 1 ] || : >"$MCF"
     [ "$bot_ok" = 1 ] || : >"$BOTF"
     signals="$(classify_poll "$MCF" "$BOTF")"
+    if [ "$bot_ok" = 1 ]; then # bot silence counts only on a good fetch
+      if printf '%s' "$signals" | grep -q '^BOT_SILENT$'; then SILENT_STREAK=$(( SILENT_STREAK + 1 )); else SILENT_STREAK=0; fi
+    fi
     if printf '%s' "$signals" | grep -q '^VOID '; then
       who="$(printf '%s' "$signals" | sed -n 's/^VOID //p' | head -n 1)"
       write_series void-human
       echo "task-run: VOID — human joined ($who); series: $SERIES"
       exit 2
+    fi
+    if printf '%s' "$signals" | grep -q '^PARTIAL '; then
+      write_series partial
+      echo "task-run: PARTIAL — done marker over unhealed skips: $(printf '%s' "$signals" | sed -n 's/^PARTIAL //p' | head -n 1)"
+      echo "last progress: $(last_progress_line)"
+      echo "series: $SERIES"
+      exit 1
     fi
     if printf '%s' "$signals" | grep -q '^DONE '; then
       write_series "done"
@@ -542,11 +704,24 @@ while :; do
       echo "series: $SERIES"
       exit 1
     fi
-    if printf '%s' "$signals" | grep -q '^LEAVE$'; then
+    # The bot is gone explicitly (LEAVE) or silently (a restart never logs
+    # LEAVE — two quiet polls in a row, revmux 01 major): resume while
+    # resumes last, else the run is dead, not slow — exit 2, not 1.
+    need_resume=0
+    if printf '%s' "$signals" | grep -q '^LEAVE$'; then need_resume=1; fi
+    if [ "$SILENT_STREAK" -ge 2 ]; then need_resume=1; fi
+    if [ "$need_resume" = 1 ]; then
       if [ "$RESUMES_LEFT" -gt 0 ]; then
         attempt_resume
+        if [ "$RESUME_OK" = 0 ] && [ "$RESUMES_LEFT" = 0 ]; then
+          write_series unverified
+          echo "task-run: bot autonomy unverified (bot gone, resumes exhausted); series: $SERIES" >&2
+          exit 2
+        fi
       else
-        echo "task-run: bot is gone, resumes exhausted; still watching till budget"
+        write_series unverified
+        echo "task-run: bot autonomy unverified (bot gone, resumes exhausted); series: $SERIES" >&2
+        exit 2
       fi
     fi
     prog="$(printf '%s' "$signals" | sed -n 's/^PROGRESS //p' | head -n 1)"

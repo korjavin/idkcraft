@@ -419,18 +419,25 @@ the bot's coords, chat.js), says the order, confirms the reply, and QUITS —
 the 3 h run meets even a 580-block-away bot via reunion + re-asked coords.
 Progress is read from VictoriaLogs, never from the puppet. Nobody online,
 BOT_AUTONOMOUS on. Exit 0 = done within budget, 1 = budget exceeded (prints
-the last 20 bot lines + the last progress line), 2 = environment (puppet
-refused, bot never seen, no reply, human void, logs lost mid-run).
+the last 20 bot lines + the last progress line), a castle with no site, or a
+house done over unhealed `build skip` lines (PARTIAL — the marker fires when
+every remaining cell is skipped, so skips younger than the prune horizon veto
+the done), 2 = environment (puppet refused, bot never seen, no reply, human
+void, logs lost mid-run, bot autonomy unverified).
 
 Rules:
 - No merge/deploy freeze (owner Q3): a deploy restart mid-run is RECORDED in
   the series and the run resumes (autonomy is env, so the bot rejoins working);
   it never voids. A human joining voids (exit 2, never rejoin).
+- A gone bot triggers a resume (a fresh puppet waits for the roster, says
+  `autonomous on`, needs the bot's reply): on an explicit `leaving` line or
+  two silent polls in a row (a restart never logs LEAVE). Resumes exhausted
+  with the bot still gone exits 2 immediately — the run is dead, not slow.
 - One scenario per run; concurrent prod runs collide on the puppet name.
 - Secrets resolve at runtime from the stash (`secrets/idkcraft-mc-host`,
-  `secrets/idkcraft-mc-port`, the session-review Grafana/Portainer keys) and
-  never print. Every run prints the UTC window start and the VictoriaLogs
-  queries to re-judge it by hand.
+  `secrets/idkcraft-mc-port`, the session-review Grafana/Portainer keys found
+  fuzzy by generic words) and never print. Every run prints the UTC window
+  start and the VictoriaLogs queries to re-judge it by hand.
 
 The series JSON (`/tmp/task-run-<task>-<utc>.series.json`) is the record:
 window, order + reply, progress points (`building N/M`, `castle N/total`),

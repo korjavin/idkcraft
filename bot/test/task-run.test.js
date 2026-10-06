@@ -55,6 +55,8 @@ const reqlog = process.env.FAKE_REQLOG
 const log = (o) => fs.appendFileSync(reqlog, JSON.stringify(o) + '\\n')
 const chat = []
 let dist = scenario.dist0 === undefined ? null : scenario.dist0
+const t0 = Date.now()
+const botHere = () => !scenario.rosterSansBot || (Date.now() - t0) >= Number(scenario.botDelayMs || 0)
 const server = http.createServer((req, res) => {
   const u = new URL(req.url || '/', 'http://x')
   let body = ''
@@ -64,9 +66,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && u.pathname === '/say') {
       let text = ''
       try { text = JSON.parse(body || '{}').text } catch (_) { text = '' }
-      log({ op: 'say', text })
+      log({ op: 'say', text, botPresent: botHere() })
       if (scenario.sayStatus === 409) return send(409, { error: 'human online' })
       for (const m of (scenario.replies || {})[text] || []) chat.push({ t: new Date().toISOString(), from: scenario.bot || 'IdkBot', msg: m })
+      if (botHere()) for (const m of (scenario.repliesWhenBotHere || {})[text] || []) chat.push({ t: new Date().toISOString(), from: scenario.bot || 'IdkBot', msg: m })
       return send(200, { ok: true })
     }
     if (req.method === 'POST' && u.pathname === '/goto') {
@@ -80,7 +83,7 @@ const server = http.createServer((req, res) => {
       const n = Math.min(100, Math.max(1, Number(u.searchParams.get('n')) || 20))
       return send(200, { state: 'online', connected: true,
         bot: { name: 'IdkBot', pos: dist === null ? null : { x: 1, y: 2, z: 3 }, dist },
-        roster: ['IdkTester', 'IdkBot'], humans: [], chat: chat.slice(-n) })
+        roster: botHere() ? ['IdkTester', 'IdkBot'] : ['IdkTester'], humans: [], chat: chat.slice(-n) })
     }
     if (req.method === 'POST' && u.pathname === '/quit') {
       send(200, { ok: true })
@@ -133,6 +136,13 @@ function saidTexts(reqlog) {
   return fs.readFileSync(reqlog, 'utf8').split('\n').filter(Boolean)
     .map((l) => JSON.parse(l)).filter((o) => o.op === 'say').map((o) => o.text)
 }
+
+function saidOps(reqlog) {
+  return fs.readFileSync(reqlog, 'utf8').split('\n').filter(Boolean)
+    .map((l) => JSON.parse(l)).filter((o) => o.op === 'say')
+}
+
+const HOUSE_SKIP = 'build skip -35 63 -214 after 3 refusals (no-ref)'
 
 describe('task-run.sh (idkcraft-vmzq.1)', () => {
   let dir
@@ -212,6 +222,7 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.ok(!r.stdout.includes(MC_SENTINEL) && !r.stdout.includes(TOKEN_SENTINEL), 'secrets never print')
     const said = saidTexts(r.reqlog)
     assert.ok(said.includes('autonomous on') && said.includes('follow me') && said.includes('build here'), said.join(','))
+    assert.ok(said.indexOf('autonomous on') > said.indexOf('follow me'), 'autonomous on only once the bot is seen (revmux 01 major)')
   })
 
   it('castle happy path exits 0 on the castle marker', async () => {
@@ -304,15 +315,15 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.match(r.stderr, /human online \(409\)/)
   })
 
-  it('a bot leave triggers one resume, then budget', async () => {
+  it('a bot leave triggers one verified resume, then budget', async () => {
     let left = false
     const r = await harness({ task: 'house', name: 'resume' }, {
-      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      puppet: { rosterSansBot: true, botDelayMs: 3000, replies: { 'follow me': [UNSEEN_AT], 'build here': [BUILD_HERE_ACK] }, repliesWhenBotHere: { 'autonomous on': ['autonomous on — stays'] } },
       logs: (q) => {
         if (q.includes('stats count')) return [{ n: '1' }]
         if (q.includes('idkcraft-mc')) return []
         if (!left) { left = true; return [{ _time: nowIsoSec(), _msg: 'leaving: nobody online' }] }
-        return []
+        return [{ _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }] // the bot is back after the resume
       },
       extra: { TASK_RUN_BUDGET_SECS: '9', TASK_RUN_RESUMES: '1' },
     })
@@ -322,8 +333,88 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.equal(s.verdict, 'budget-exceeded')
     assert.deepEqual(s.events.map((e) => e.kind).sort(), ['leave', 'resume'])
     assert.equal(s.resumesUsed, 1)
-    const said = saidTexts(r.reqlog)
-    assert.ok(said.filter((t) => t === 'autonomous on').length >= 2, 'order session + resume session')
+    assert.match(s.events.find((e) => e.kind === 'resume').line, /ok=1/)
+    const autos = saidOps(r.reqlog).filter((o) => o.text === 'autonomous on')
+    assert.ok(autos.length >= 2, 'order session + resume session')
+    assert.equal(autos[autos.length - 1].botPresent, true, 'the resume says it only with the bot on the roster')
+  })
+
+  it('an unverified resume with none left exits 2, not budget', async () => {
+    let left = false
+    const r = await harness({ task: 'house', name: 'resume-unverified' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'build here': [BUILD_HERE_ACK] } }, // `autonomous on` never answered
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) return []
+        if (!left) { left = true; return [{ _time: nowIsoSec(), _msg: 'leaving: nobody online' }] }
+        return []
+      },
+      extra: { TASK_RUN_BUDGET_SECS: '60', TASK_RUN_RESUMES: '1', TASK_RUN_REPLY_SECS: '4' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /bot autonomy unverified/)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'unverified')
+    assert.match(s.events.find((e) => e.kind === 'resume').line, /ok=0/)
+  })
+
+  it('two silent polls trigger a resume; still silent with none left exits 2', async () => {
+    const r = await harness({ task: 'house', name: 'silence' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        return [] // both containers answer, the bot just never ticks (a silent restart)
+      },
+      extra: { TASK_RUN_BUDGET_SECS: '60', TASK_RUN_RESUMES: '1' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /resume attempt 1\/1/)
+    assert.match(r.stderr, /bot autonomy unverified/)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'unverified')
+    assert.equal(s.resumesUsed, 1)
+    assert.match(s.events.find((e) => e.kind === 'resume').line, /ok=1/, 'the resume ran; the bot just never came back')
+  })
+
+  it('a house done over unhealed skips is PARTIAL, exit 1', async () => {
+    const r = await harness({ task: 'house', name: 'partial' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) return [{ _time: nowIsoSec(), _msg: HOUSE_PROGRESS }, { _time: nowIsoSec(), _msg: HOUSE_DONE }]
+        return [{ _time: nowIsoSec(), _msg: HOUSE_SKIP }, { _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }]
+      },
+    })
+    assert.equal(r.code, 1, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout, /PARTIAL — done marker over unhealed skips: 1 /)
+    assert.match(r.stdout, /last progress: .*building 45\/99/)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'partial')
+    assert.deepEqual(s.events.map((e) => e.kind).sort(), ['done', 'progress', 'skip'])
+  })
+
+  it('a skip older than the horizon reads healed: DONE', async () => {
+    let mcFetches = 0
+    let botFetches = 0
+    const r = await harness({ task: 'house', name: 'healed' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) {
+          mcFetches++
+          if (mcFetches < 4) return [{ _time: nowIsoSec(), _msg: HOUSE_PROGRESS }]
+          return [{ _time: nowIsoSec(), _msg: HOUSE_DONE }]
+        }
+        botFetches++
+        if (botFetches === 1) return [{ _time: nowIsoSec(), _msg: HOUSE_SKIP }]
+        return [{ _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }]
+      },
+      extra: { TASK_RUN_SKIP_HORIZON_SECS: '2' },
+    })
+    assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'done')
+    assert.ok(s.events.some((e) => e.kind === 'skip'), 'the old skip is recorded, just not vetoing')
   })
 
   it('a deploy restart is recorded, never voiding', async () => {
@@ -447,6 +538,62 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     }
   })
 
+  it('fuzzy stash keys resolve end to end (decoys present, nothing printed)', async () => {
+    const sub = fs.mkdtempSync(path.join(dir, 'fuzzy-'))
+    const scenarioFile = path.join(sub, 'scenario.json')
+    fs.writeFileSync(scenarioFile, JSON.stringify({ replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['ok'], 'build here': [BUILD_HERE_ACK] } }))
+    const reqlog = path.join(sub, 'requests.jsonl')
+    fs.writeFileSync(reqlog, '')
+    const { srv: logsSrv, url: logsUrl } = await fakeLogs((q) => {
+      if (q.includes('stats count')) return [{ n: '1' }]
+      if (q.includes('idkcraft-mc')) return [{ _time: nowIsoSec(), _msg: HOUSE_DONE }]
+      return [{ _time: nowIsoSec(), _msg: 'decision x' }]
+    })
+    const logsPort = Number(new URL(logsUrl).port)
+    const portainer = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify([{ Id: 2, Name: 'local', Env: [{ name: 'GRAFANA_HOST', value: `localhost:${logsPort}` }] }]))
+    })
+    await new Promise((r) => portainer.listen(0, 'localhost', r))
+    const portainerPort = portainer.address().port
+    const kv = path.join(sub, 'fuzzy-kv.sh')
+    fs.writeFileSync(kv, `#!/bin/sh
+if [ "$1" = ls ]; then
+  echo '[{"key":"secrets/decoy-portainerbox-url"},{"key":"secrets/testenv-portainer-url"},{"key":"secrets/portainer-apikey"},{"key":"secrets/testenv-portainer-api-key"},{"key":"secrets/grafana-oidc-secret"},{"key":"secrets/testenv-grafana-token"}]'
+  exit 0
+fi
+case "$2" in
+  *testenv-portainer-url) echo http://localhost:${portainerPort};;
+  *testenv-portainer-api-key) echo testenv-portainer-key;;
+  *testenv-grafana-token) echo testenv-grafana-token;;
+  *mc-host) echo ${MC_SENTINEL};;
+  *mc-port) echo 29999;;
+  *) exit 1;;
+esac
+`)
+    fs.chmodSync(kv, 0o755)
+    const port = await freePort()
+    try {
+      const r = await runScript(['house', '1'], {
+        TASK_RUN_KV: kv,
+        TASK_RUN_LOGS_SCHEME: 'http',
+        TASK_RUN_PUPPET_CMD: `node ${fakePuppet}`,
+        TASK_RUN_HTTP_PORT: String(port),
+        TASK_RUN_OUTDIR: sub,
+        TASK_RUN_POLL_SECS: '2',
+        TASK_RUN_MEET_SECS: '30',
+        TASK_RUN_REPLY_SECS: '10',
+        FAKE_SCENARIO: scenarioFile,
+        FAKE_REQLOG: reqlog,
+      })
+      assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`)
+      assert.ok(!r.stdout.includes('testenv') && !r.stdout.includes(MC_SENTINEL), 'resolved keys and values never print')
+    } finally {
+      logsSrv.close()
+      portainer.close()
+    }
+  })
+
   it('order markers match the shipped chat lines', () => {
     const sh = fs.readFileSync(SCRIPT, 'utf8')
     const chat = fs.readFileSync(path.join(__dirname, '..', 'src', 'chat.js'), 'utf8')
@@ -459,5 +606,10 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     const castle = fs.readFileSync(path.join(__dirname, '..', 'src', 'behaviours', 'castle.js'), 'utf8')
     assert.ok(sh.includes('castle done at ') && castle.includes('castle done at '))
     assert.ok(castle.includes('castle ${n}/${total}'), 'castle progress line')
+  })
+
+  it('no infra labels in the script (revmux 01 critical)', () => {
+    const sh = fs.readFileSync(SCRIPT, 'utf8')
+    assert.ok(!/wandergeek|kfamcloud/i.test(sh), 'stash labels resolve fuzzy, never committed')
   })
 })
