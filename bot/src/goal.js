@@ -730,20 +730,18 @@ function groundY(bot, x, z, topY) {
 const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
 
 // Pick a flat 7x6 site (jr2.1 blueprint): all 42 columns resolve and lie
-// within one block. First fit wins; with no flat fit the first loaded dry
-// footprint is relocated to (uneven but workable — cut/fill earthworks
-// build it, the JR-BUILD slope shape) at its corner column's level, the
-// same coords the old fallback produced there. A footprint with a wet or
-// unloaded column is never founded (idkcraft-vmzq.12: the prod shore site
-// came from the old blind fallback), so null means every footprint failed
-// — the caller waits (chunks load, the next attempt validates) or refuses
-// honestly (water).
+// within one block. First fit wins; anything else refuses (null) —
+// uneven, wet or unloaded footprints are never founded (idkcraft-vmzq.12:
+// the prod shore site came from the old blind fallback, and the build
+// clears only flora, so relief would bury wall cells and fill buildSkip).
+// The caller waits (chunks load, the next attempt validates) or refuses
+// honestly. The JR-BUILD slope rig is safe: its skip-0 baseline proves
+// the footprint wins this loop, the fallback never fired there.
 function siteFor(bot, around) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
   const cx = Math.floor(around.x)
   const cz = Math.floor(around.z)
   const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
-  let fallback = null
   for (const [dx, dz] of SITE_DIRS) {
     const ox = cx + dx
     const oz = cz + dz
@@ -757,12 +755,10 @@ function siteFor(bot, around) {
       }
     }
     if (!ok || ys.length !== 42) continue
-    if (!fallback) fallback = { ox, oz, y: ys[0] }
     const y0 = Math.min(...ys)
     if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz, 2)
   }
-  if (!fallback) return null
-  return makeHome(fallback.ox, fallback.y, fallback.oz, 2)
+  return null
 }
 
 // Adopt a house built by an earlier run: a door within 32 of spawn means

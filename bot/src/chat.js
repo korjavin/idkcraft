@@ -359,9 +359,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     // b2o: then the same transition as 'go work' — follow drops the body
     // and the goal loop starts building instead of trailing the owner.
     const site = goal.siteFor(bot, pos)
-    // vmzq.12: validated sites only — every footprint wet or unloaded
-    // refuses honestly instead of founding blind. Unloaded heals (chunks
-    // load, the owner re-orders); wet needs another spot.
+    // vmzq.12: validated sites only — every footprint uneven, wet or
+    // unloaded refuses honestly instead of founding blind. Unloaded heals
+    // (chunks load, the owner re-orders); wet or uneven needs another spot.
     if (!site) {
       let groundLoaded = false
       try {
@@ -369,7 +369,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
           bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z))) != null
       } catch (_) { groundLoaded = false }
       bot.chat(groundLoaded
-        ? 'no dry ground near you — try another spot'
+        ? 'no flat dry ground near you — try another spot'
         : "I can't see the ground there yet — say build here again in a moment")
       return
     }

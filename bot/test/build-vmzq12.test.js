@@ -13,6 +13,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, handleChat } = require('../src/index')
 const goal = require('../src/goal')
+const buildBeh = require('../src/behaviours/build')
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -131,21 +132,21 @@ describe('vmzq.12 siteFor never founds blind', () => {
     assert.equal(goal.siteFor(bot, pos(0, 64, 0)), null)
   })
 
-  it('a loaded dry slope still founds at the corner column (earthworks)', () => {
-    // Preservation pin: loaded-but-uneven ground keeps the old fallback
-    // (cut/fill builds it — the JR-BUILD slope rig shape).
+  it('a loaded dry slope with no flat window founds nothing', () => {
+    // Revmux 01 major: relief buries wall cells (only flora clears), so
+    // uneven ground refuses instead of founding a skips-bound house. The
+    // JR-BUILD rig is safe — its skip-0 baseline proves its footprint is
+    // flat enough to win the loop above.
     const bot = mockBot(slopeWorld())
-    const home = goal.siteFor(bot, pos(0, 64, 0))
-    assert.deepEqual(home && home.site, { x: 6, y: 67, z: 0 })
+    assert.equal(goal.siteFor(bot, pos(0, 64, 0)), null)
   })
 
-  it('relocate: a wet first footprint yields to a dry uneven one', () => {
+  it('wet first footprint plus uneven rest founds nothing', () => {
     const world = slopeWorld()
     // Above the local ground top (68) at (11,0): in footprint 1 only.
     world.set(11, 69, 0, 'water')
     const bot = mockBot(world)
-    const home = goal.siteFor(bot, pos(0, 64, 0))
-    assert.deepEqual(home && home.site, { x: 4, y: 66, z: 4 })
+    assert.equal(goal.siteFor(bot, pos(0, 64, 0)), null)
   })
 })
 
@@ -167,12 +168,21 @@ describe("vmzq.12 'build here' validates the speaker and the ground", () => {
     assert.equal(ticker.home(), null)
   })
 
-  it('a near speaker over water gets the dry-ground refusal', () => {
+  it('a near speaker over water gets the flat-ground refusal', () => {
     const world = makeWorld()
     paintWater(world, 4, 22, -6, 11) // every footprint around (10,64,0)
     const { bot, ticker } = chatBot(world, pos(10, 64, 0), pos(0, 65, 0))
     handleChat(bot, ticker, 'Steve', 'build here')
-    assert.deepEqual(bot.chats, ['no dry ground near you — try another spot'])
+    assert.deepEqual(bot.chats, ['no flat dry ground near you — try another spot'])
+    assert.equal(ticker.home(), null)
+  })
+
+  it('a near speaker on a slope gets the flat-ground refusal', () => {
+    // Speaker stands on the slope surface (ground top 68 at x=10): every
+    // 7-wide window spans >=3, so nothing validates.
+    const { bot, ticker } = chatBot(slopeWorld(), pos(10, 69, 0), pos(0, 65, 0))
+    handleChat(bot, ticker, 'Steve', 'build here')
+    assert.deepEqual(bot.chats, ['no flat dry ground near you — try another spot'])
     assert.equal(ticker.home(), null)
   })
 
@@ -181,5 +191,27 @@ describe("vmzq.12 'build here' validates the speaker and the ground", () => {
     handleChat(bot, ticker, 'Steve', 'build here')
     assert.deepEqual(bot.chats, ['building a home at 16 64 0'])
     assert.deepEqual(ticker.home().site, { x: 16, y: 64, z: 0 })
+  })
+})
+
+describe('vmzq.12 homeless build fails loud on no site', () => {
+  it('unloaded spawn fails the step instead of idling', () => {
+    // Revmux 01 major: the stepFail hold paces retries and the stall
+    // clock sees the failure; a 'build here' or relocation releases it.
+    const bot = { blockAt: () => null, spawnPoint: pos(0, 64, 0) }
+    const ctx = {}
+    buildBeh(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.ok(!ctx.home)
+  })
+
+  it('the retry validates once chunks load', () => {
+    const bot = { blockAt: () => null, spawnPoint: pos(0, 64, 0) }
+    const ctx = {}
+    buildBeh(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    bot.blockAt = (p) => makeWorld().blockAt(p)
+    buildBeh(bot, ctx, null, {})
+    assert.deepEqual(ctx.home && ctx.home.site, { x: 6, y: 64, z: 0 })
   })
 })
