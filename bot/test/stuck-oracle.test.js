@@ -1253,7 +1253,7 @@ describe('honest build verdict (idkcraft-vmzq.1)', () => {
     assert.equal(fresh.verifyBuild, true, 'the done marker alone is not the verdict')
     assert.equal(fresh.bead, 'idkcraft-vmzq.1')
     assert.deepEqual(baseline.spots['JR-BUILD-FRESH'], { reached: true, maxStuck: 3, maxEps: 1, maxCalls: 0 },
-      'measured 1/1 (709 s, 99/99 placed, skip 0): stuck 1 + 2, eps 0 + 1, calls strict')
+      'measured 2/2 (709/909 s, 99/99 placed, skip 0): stuck 1 + 2, eps 0 + 1, calls strict')
   })
 
   it('loadSpots passes verifyBuild on a build-here order, rejects it elsewhere', () => {
