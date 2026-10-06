@@ -513,6 +513,157 @@ function consumesLastSlot(detail) {
 // crafted at (chest infrastructure) are exempt. Fail-open: anything
 // unreadable crafts exactly as before.
 const RESERVE_EXEMPT = new Set(['chest', 'crafting_table'])
+// Bootstrap shed (g0z.26 R3, revmux 02 major): the 36/36 exit. Prevention
+// alone cannot hold the reserve — ambient pickups (fight/hunt drops,
+// spoil) bypass every dig gate — so a funded bootstrap craft (chest, or
+// the table it needs) at zero empties sheds its smallest placeable junk
+// stack into a pillar beside the bot, then retries. Placing is not
+// tossing (owner 2026-10-06): the blocks stand in the world, recoverable.
+// Wood never sheds (the quest funds the chest from it); stations, torches
+// and food never shed; dirt/stone-family sheds before ores (value last).
+const SHED_FIRST = new Set(['dirt', 'coarse_dirt', 'rooted_dirt', 'mud', 'clay',
+  'sand', 'red_sand', 'gravel', 'soul_sand', 'soul_soil',
+  'cobblestone', 'stone', 'deepslate', 'cobbled_deepslate', 'tuff',
+  'calcite', 'diorite', 'granite', 'andesite', 'sandstone', 'netherrack'])
+function shedRank(name) {
+  if (typeof name !== 'string') return -1
+  if (SHED_FIRST.has(name)) return 0
+  if (name.endsWith('_ore')) return 1
+  return -1
+}
+// Pure victim pick: smallest shedable stack (rank, then count). Null when
+// nothing may shed. Exported for the unit assay.
+function shedVictim(items) {
+  try {
+    if (!Array.isArray(items)) return null
+    let best = null
+    let bestRank = Infinity
+    let bestCount = Infinity
+    for (const s of items) {
+      if (!s || typeof s.name !== 'string') continue
+      const rank = shedRank(s.name)
+      if (rank < 0) continue
+      const n = typeof s.count === 'number' ? s.count : 1
+      if (rank < bestRank || (rank === bestRank && n < bestCount)) {
+        bestRank = rank
+        bestCount = n
+        best = s
+      }
+    }
+    return best
+  } catch (_) {
+    return null
+  }
+}
+// Top single-wood plank count (goal.js maxPlanks mirror): the bootstrap
+// recipes cannot mix woods.
+function fundPlanks(bot) {
+  const perWood = {}
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (!Array.isArray(items)) return { max: 0 }
+    for (const i of items) {
+      if (!i || typeof i.name !== 'string' || !i.name.endsWith('_planks')) continue
+      perWood[i.name] = (perWood[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+    }
+  } catch (_) { /* inventory not ready: unfunded */ }
+  let max = 0
+  for (const n of Object.values(perWood)) if (n > max) max = n
+  return { max }
+}
+// Shed the victim stack into a pillar on ground beside the bot (never under
+// its own feet — that cell is occupied). True iff the stack is gone (its
+// slot freed); false on any failure, honestly, with no partial retry. The
+// pillar column skips opts.avoid (the chest spot: burying it would fail the
+// placement the shed funds).
+async function shedStack(bot, victim, opts) {
+  const feet = bot && bot.entity && bot.entity.position
+  if (!feet || typeof feet.x !== 'number' || !victim || typeof victim.name !== 'string') return false
+  if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return false
+  const avoid = opts && opts.avoid
+  let ref = null
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]]) {
+    const px = Math.floor(feet.x) + dx
+    const pz = Math.floor(feet.z) + dz
+    if (avoid && typeof avoid.x === 'number' && avoid.x === px && avoid.z === pz) continue
+    let g = null
+    try {
+      g = bot.blockAt && bot.blockAt(new Vec3(px, Math.floor(feet.y) - 1, pz))
+    } catch (_) { g = null }
+    if (g && g.name && g.name !== 'air' && g.name !== 'cave_air' && g.name !== 'water' && g.name !== 'lava') {
+      ref = g
+      break
+    }
+  }
+  if (!ref) return false
+  try {
+    await bot.equip(victim, 'hand')
+  } catch (_) {
+    return false
+  }
+  // The hand holds the victim: placements consume it exactly, so place its
+  // snapshot count — never match by name (same-name siblings would keep a
+  // name match alive past the victim). A freed slot is the success read.
+  let startLen = -1
+  try {
+    const items = bot.inventory.items()
+    startLen = Array.isArray(items) ? items.length : -1
+  } catch (_) { startLen = -1 }
+  const rounds = Math.min(70, Math.max(1, typeof victim.count === 'number' ? victim.count : 1))
+  for (let i = 0; i < rounds; i++) {
+    try {
+      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+    } catch (_) {
+      return false
+    }
+    let top = null
+    try {
+      top = bot.blockAt && bot.blockAt(new Vec3(ref.position.x, ref.position.y + 1, ref.position.z))
+    } catch (_) { top = null }
+    if (!top || !top.name || top.name === 'air' || top.name === 'cave_air') return false
+    ref = top
+  }
+  try {
+    const items = bot.inventory.items()
+    return Array.isArray(items) && startLen >= 0 && items.length < startLen
+  } catch (_) {
+    return false
+  }
+}
+// Bootstrap-shed gate: a funded chest/table craft, in the reserve corner
+// (adopted home, no chest, nobody online — the haul owns every online
+// case), at zero empties, with a shedable victim. Sheds, then true (the
+// caller retries room once); false keeps the honest inventory-full.
+async function bootstrapShed(bot, opts) {
+  try {
+    const item = opts && opts.item
+    if (item !== 'chest' && item !== 'crafting_table') return false
+    const ctx = opts && opts.ctx
+    let stockpile = null
+    try { stockpile = require('./stockpile') } catch (_) { stockpile = null }
+    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return false
+    if (!stockpile.reserveCorner(bot, ctx)) return false
+    if (ctx && ctx._shedInFlight) return false
+    const need = item === 'chest' ? 8 : 4
+    if (fundPlanks(bot).max < need) return false
+    const items = bot.inventory.items()
+    if (!Array.isArray(items) || items.length < 36) return false
+    const victim = shedVictim(items)
+    if (!victim) return false
+    if (ctx) ctx._shedInFlight = true
+    try {
+      const freed = await shedStack(bot, victim, opts)
+      if (freed) {
+        try { console.log(`craft shed ${victim.name} into a pillar to fund the bootstrap ${item}`) } catch (_) { /* logging best-effort */ }
+      }
+      return freed
+    } finally {
+      if (ctx) ctx._shedInFlight = false
+    }
+  } catch (_) {
+    return false
+  }
+}
 function reserveBlocks(bot, recipe, count, opts) {
   try {
     const item = opts && opts.item
@@ -829,7 +980,15 @@ async function safeCraft(bot, recipe, count, table, opts) {
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   await ensureStacks(bot, recipe, count)
-  await ensureRoom(bot, recipe, count, opts)
+  try {
+    await ensureRoom(bot, recipe, count, opts)
+  } catch (err) {
+    // Bootstrap shed (g0z.26 R3): a funded chest/table craft at zero
+    // empties sheds one junk stack into a pillar and retries room once —
+    // the 36/36 exit. Anything unshed keeps the honest inventory-full.
+    if (!err || err.message !== 'inventory-full' || !(await bootstrapShed(bot, opts))) throw err
+    await ensureRoom(bot, recipe, count, opts)
+  }
   try {
     await pacedCraft(bot, recipe, count, table)
   } catch (err) {
@@ -981,6 +1140,7 @@ module.exports.tally = tally
 module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
+module.exports.shedVictim = shedVictim
 module.exports.syncInventory = syncInventory
 module.exports.slotSummary = slotSummary
 module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS

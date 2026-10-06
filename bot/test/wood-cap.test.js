@@ -455,3 +455,87 @@ describe('wood ceiling: stone leg yields on a full pack (idkcraft-g0z.26)', () =
     assert.notEqual(ctx.stepStatus, 'failed:castlefetch-pack-full')
   })
 })
+
+describe('reserve corner exits (g0z.26 R3, revmux 02 majors)', () => {
+  const dirt = (n) => Array.from({ length: n }, () => ({ name: 'dirt', count: 64 }))
+  const oak5 = [{ name: 'oak_planks', count: 5 }]
+  const noChestCtx = () => ({ home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } })
+  const q = (inv, target = { kind: 'log', name: 'oak_log' }) => forage.questExempt(packBot(inv), noChestCtx(), target)
+
+  it('M0: the quest leg completes through the 36-transient, never parks one log', () => {
+    // 35 stacks, same-wood room: the first chop is exempt and opens the log
+    // stack at 36/36.
+    assert.equal(q([...oak5, ...dirt(34)]), true, 'first chop exempt')
+    // Chop 1 lands: 36/36 with a single log. R2 refused the next dig here
+    // and parked the single log forever (nothing converts below 14); R3
+    // keeps the leg going — the drops stack onto the log stack.
+    const one = [...oak5, { name: 'oak_log', count: 1 }, ...dirt(34)]
+    assert.equal(one.length, 36)
+    assert.equal(q(one), true, 'the 36-transient completes')
+    // The leg stacks on to the full batch, then hands to conversion: at 14
+    // logs the quest waits instead of over-chopping (a 16-log overshoot
+    // converts 64 planks and overflows the same-wood room at 36).
+    const full = [...oak5, { name: 'oak_log', count: 14 }, ...dirt(34)]
+    assert.equal(q(full), false, '14 logs: conversion owns it')
+    // And the batch it hands over fits exactly (5 + 14*4 = 61 <= 64), so the
+    // conversion stacks and empties the log stack — the chain test below the
+    // R2 suite pins the conversion-to-chest half from here.
+    assert.ok(5 + 14 * 4 <= 64)
+  })
+
+  it('M0: quest legs chop exactly to the batch, never an 8-overshoot', () => {
+    const mem = () => {
+      const ctx = noChestCtx()
+      resources.noteSpots(ctx, [{ x: 10, y: 64, z: 0, name: 'oak_log' }], 1000)
+      return ctx
+    }
+    assert.equal(forage.planForage(packBot([...oak5, ...dirt(30)]), mem()).want, 14, 'empty-handed: the whole batch')
+    const eight = () => {
+      const ctx = noChestCtx()
+      resources.noteSpots(ctx, [{ x: 10, y: 64, z: 0, name: 'oak_log' }], 1000)
+      return ctx
+    }
+    assert.equal(forage.planForage(packBot([...oak5, { name: 'oak_log', count: 8 }, ...dirt(30)]), eight()).want, 6, 'partial: the remainder')
+  })
+
+  it('M3: the quest counts one wood like the chest recipe (4+4 stays on)', () => {
+    // chestTodo funds on maxPlanks of ONE wood; the quest must match — a
+    // mixed 4+4 cannot fund the chest, so the quest stays on (R2 counted 8
+    // total and switched off, stranding the corner with no chopper).
+    const mixed = [{ name: 'oak_planks', count: 4 }, { name: 'birch_planks', count: 4 }, ...dirt(30)]
+    assert.equal(mixed.length, 32)
+    assert.equal(q(mixed, { kind: 'log', name: 'birch_log' }), true, 'mixed 4+4: quest on, birch chops')
+    assert.equal(q([{ name: 'oak_planks', count: 20 }, ...dirt(30)]), false, '20 one wood: funded, quest off')
+    assert.equal(q([{ name: 'oak_planks', count: 8 }, ...dirt(34)]), false, '8 one wood: funded, quest off')
+  })
+
+  it('M3: a refused quest target explores instead of walk-fail-looping', () => {
+    // 35 stacks, oak planks, only birch remembered (mixed at 35: nowhere
+    // for the planks) plus ranked ore. R2 walked to the birch, failed
+    // pack-full post-walk, and re-planned the same walk every 5 minutes.
+    // R3 plans nothing diggable (explore) — the ore skips too, it would
+    // fail the same gate after the same walk.
+    const inv = [...oak5, { name: 'iron_pickaxe', count: 1 }, ...dirt(33)]
+    assert.equal(inv.length, 35)
+    const ctx = noChestCtx()
+    resources.noteSpots(ctx, [
+      { x: 10, y: 64, z: 0, name: 'birch_log' },
+      { x: 12, y: 60, z: 0, name: 'iron_ore' },
+    ], 1000)
+    assert.equal(stockpile.slotReserved(packBot(inv), ctx), true, 'the reserve binds')
+    assert.equal(forage.planForage(packBot(inv), ctx), null, 'refused quest: explore, never a doomed walk')
+  })
+
+  it('M2: shedVictim sheds the smallest junk, never wood, stations or light', () => {
+    assert.deepEqual(
+      craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'cobblestone', count: 3 }]),
+      { name: 'cobblestone', count: 3 }, 'smallest first (fewest placements)',
+    )
+    assert.equal(craft.shedVictim([{ name: 'iron_ore', count: 1 }, { name: 'dirt', count: 64 }]).name, 'dirt', 'dirt before ore')
+    assert.equal(craft.shedVictim([{ name: 'iron_ore', count: 5 }]).name, 'iron_ore', 'ore sheds last-resort')
+    assert.equal(craft.shedVictim([{ name: 'oak_planks', count: 9 }, { name: 'oak_log', count: 14 }]), null, 'wood never sheds')
+    assert.equal(craft.shedVictim([{ name: 'crafting_table', count: 1 }, { name: 'torch', count: 64 }, { name: 'stick', count: 64 }]), null, 'stations, torches, sticks never shed')
+    assert.equal(craft.shedVictim([]), null)
+    assert.equal(craft.shedVictim(null), null)
+  })
+})

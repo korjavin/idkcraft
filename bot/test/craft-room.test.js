@@ -500,6 +500,30 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.equal(bot.calls.craft.length, 1, 'online')
   })
 
+  it('bootstrap craft without funding: no shed, honest inventory-full (g0z.26 R3)', async () => {
+    // 5 planks cannot fund the chest: the shed must not fire — the quest
+    // owns this corner — even with a shedable victim and ground to pillar
+    // on. (The funded half is the round-1 chain test in stockpile.test.js.)
+    const stacks = [stack('oak_planks', 5)]
+    for (let i = 0; i < 35; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 36)
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => ({ name: p.y < 64 ? 'dirt' : 'air', position: { x: p.x, y: p.y, z: p.z } }),
+    })
+    let placed = 0
+    bot.equip = async () => {}
+    bot.placeBlock = async () => { placed++ }
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await assert.rejects(
+      craft.safeCraft(bot, prodRecipe('chest', 1), 1, {}, { ctx, item: 'chest' }),
+      /inventory-full/,
+    )
+    assert.equal(placed, 0, 'nothing shed without funding')
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot._items.length, 36)
+  })
+
   it('a full adopted chest falls through to the next chest in reach (g0z.26)', async () => {
     const bot = roomBot({
       stacks: fullPack(),

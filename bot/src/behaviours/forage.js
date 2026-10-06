@@ -71,7 +71,7 @@ function cellKey(p) {
 }
 
 function packWood(bot) {
-  const out = { stacks: 0, planks: 0, plankRoom: new Map(), logRoom: new Map() }
+  const out = { stacks: 0, planks: 0, plankRoom: new Map(), logRoom: new Map(), logCount: new Map(), plankCount: new Map() }
   try {
     const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
     if (!Array.isArray(items)) return out
@@ -84,9 +84,11 @@ function packWood(bot) {
         out.planks += n
         const wood = s.name.slice(0, -7)
         out.plankRoom.set(wood, (out.plankRoom.get(wood) || 0) + Math.max(0, cap - n))
+        out.plankCount.set(wood, (out.plankCount.get(wood) || 0) + n)
       } else if (s.name.endsWith('_log')) {
         const wood = s.name.slice(0, -4)
         out.logRoom.set(wood, (out.logRoom.get(wood) || 0) + Math.max(0, cap - n))
+        out.logCount.set(wood, (out.logCount.get(wood) || 0) + n)
       }
     }
   } catch (_) { /* unreadable pack: no quest */ }
@@ -99,31 +101,51 @@ function woodOfLog(name) {
 // than 8 planks the next chest needs wood — forage prefers logs over ore so
 // the quest completes at low pack counts, before the reserve binds. Returns
 // the pack's plank woods (empty set when plankless), or null when the quest
-// is off. Deferred require (goal.js loads forage at top).
+// is off. The 8 counts the largest SINGLE wood like goal.js maxPlanks (R3,
+// revmux 02 major): a mixed 4+4 still cannot fund the chest. Deferred
+// require (goal.js loads forage at top).
 function questPlankWoods(bot, ctx) {
   try {
     const stockpile = require('./stockpile')
     if (!stockpile || typeof stockpile.reserveCorner !== 'function') return null
     if (!stockpile.reserveCorner(bot, ctx)) return null
     const pw = packWood(bot)
-    if (pw.planks >= 8) return null
-    return new Set(pw.plankRoom.keys())
+    let max = 0
+    for (const n of pw.plankCount.values()) if (n > max) max = n
+    if (max >= 8) return null
+    return new Set(pw.plankCount.keys())
   } catch (_) {
     return null
   }
 }
+// Log batch the quest chops to (goal.js NEED_LOGS, deferred: goal loads
+// forage at top). Falls back to 14 when goal is unreadable.
+function questBatch() {
+  try {
+    const g = require('../goal')
+    if (g && typeof g.NEED_LOGS === 'number' && g.NEED_LOGS > 0) return g.NEED_LOGS
+  } catch (_) { /* unreadable: 14 */ }
+  return 14
+}
 // Quest exemption from the reserved slot: a wood chop the quest can
-// complete — same-wood plank room for the whole batch (the conversion
-// stacks, a transient 36 self-frees when the log stack empties exactly),
-// or room for the log drop plus the plank stack it converts into.
+// COMPLETE. Same-wood plank room fits the whole batch: chops stack onto
+// the log stack — creating it when below 36, stacking onto it at 36 —
+// and the conversion stacks back and empties it exactly (R3, revmux 02
+// major: the 36-transient completes, it never parks a single log). At a
+// full batch the quest waits for conversion instead of over-chopping
+// (a 16-log overshoot overflows the room and strands a remnant at 36).
+// Mixed/plankless legs need free slots for the new stacks instead.
 function questExempt(bot, ctx, target) {
   try {
     const wood = target && woodOfLog(target.name)
     if (!wood || !target || target.kind !== 'log') return false
     if (!questPlankWoods(bot, ctx)) return false
     const pw = packWood(bot)
-    if (pw.stacks > 35) return false
-    if ((pw.plankRoom.get(wood) || 0) >= 56) return true
+    if ((pw.logCount.get(wood) || 0) >= questBatch()) return false
+    if ((pw.plankRoom.get(wood) || 0) >= 56) {
+      if ((pw.logRoom.get(wood) || 0) > 0) return true
+      return pw.stacks <= 35
+    }
     if ((pw.logRoom.get(wood) || 0) > 0) return pw.stacks <= 34
     return pw.stacks <= 33
   } catch (_) {
@@ -171,7 +193,17 @@ function bestMemoryCell(bot, ctx, bp) {
       }
     }
   }
-  if (quest && bestLog) return bestLog
+  if (quest && bestLog) {
+    // Plan gate (g0z.26 R3, revmux 02 major): when the reserve binds, plan
+    // only a chop the dig phase accepts — a refused target walks there,
+    // fails pack-full, and re-plans the same walk every 5 minutes. Null
+    // explores instead (the plank wood may stand unremembered nearby).
+    // The same-wood preference above already picks the most exemptable log.
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (reserved && !questExempt(bot, ctx, { kind: 'log', name: bestLog.name })) return null
+    return bestLog
+  }
   return best
 }
 
@@ -281,7 +313,20 @@ function planForage(bot, ctx) {
   const cell = bestMemoryCell(bot, ctx, bp)
   if (cell) {
     const kind = cell.name.endsWith('_log') ? 'log' : 'ore'
-    return { kind, name: cell.name, pos: { x: cell.x, y: cell.y, z: cell.z }, drop: bring.dropFor(cell.name), want: FORAGE_WANT }
+    let want = FORAGE_WANT
+    // Exact-batch quest legs (g0z.26 R3, revmux 02 major): the quest chops
+    // exactly to NEED_LOGS — an 8-leg overshoot converts 16 logs into 64
+    // planks, overflowing the same-wood room and stranding a remnant at 36.
+    if (kind === 'log') {
+      try {
+        if (questPlankWoods(bot, ctx)) {
+          const wood = woodOfLog(cell.name)
+          const have = wood ? (packWood(bot).logCount.get(wood) || 0) : 0
+          want = Math.max(1, questBatch() - have)
+        }
+      } catch (_) { /* uncountable: the standing batch */ }
+    }
+    return { kind, name: cell.name, pos: { x: cell.x, y: cell.y, z: cell.z }, drop: bring.dropFor(cell.name), want }
   }
   let found = null
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }

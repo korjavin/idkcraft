@@ -1131,24 +1131,75 @@ describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
     assert.equal(bot.inv.length, 36, 'nothing tossed, nothing banked without a chest')
   })
 
-  it('36/36 with nobody online fails honestly and keeps every stack', async () => {
-    // A generic full pack has no drain that is not tossing (the owner
-    // forbids it): the step fails, the reserve (R2) keeps this state
-    // unreachable, and this test pins the honest failure, not a placement.
-    const bot = mockBot({
-      cells: { '4,64,1': 'crafting_table' },
-      inv: [{ name: 'oak_planks', count: 9 }, ...dirt(35)],
-    })
-    bot.recipesFor = () => [{}]
-    bot.entity.position = pos(4, 64, 1)
+  it('36/36 funded with nobody online: shed one stack, the chest lands (round-1 test, R3)', async () => {
+    // Revmux 02 M2: the 36/36 exit. Prevention alone cannot hold the
+    // reserve (ambient pickups bypass every dig gate), so a funded pack
+    // sheds its smallest junk stack into a pillar — placed, not tossed —
+    // the freed slot takes the chest craft, and the chest lands on its
+    // spot and adopts. The pillar skips the chest spot column.
+    const CHEST_RECIPE = { result: { name: 'chest', count: 1 } }
+    const inv = [{ name: 'oak_planks', count: 12 }, { name: 'dirt', count: 3 }, ...dirt(34)]
+    assert.equal(inv.length, 36)
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv })
+    bot._syncWindow = async () => {}
+    bot.recipesFor = (id) => {
+      if (id === bot.registry.itemsByName['chest'].id) return [CHEST_RECIPE]
+      throw new Error(`unexpected recipesFor(${id})`)
+    }
+    const crafts = []
+    bot.craft = async (recipe) => {
+      crafts.push('chest')
+      const pi = bot.inv.findIndex((i) => i.name === 'oak_planks')
+      bot.inv[pi].count -= 8
+      bot.inv.push({ name: 'chest', count: 1 })
+    }
+    // Generic placement: consume the equipped stack, land the named cell.
+    let held = null
+    bot.equip = async (item) => { held = item && item.name }
+    const placed = {}
+    const origBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (placed[key]) return { name: placed[key], position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+      return origBlockAt(p)
+    }
+    bot.placeBlock = async (ref, face) => {
+      const p = ref && ref.position ? ref.position : { x: 0, y: 63, z: 0 }
+      const f = face || { x: 0, y: 1, z: 0 }
+      const key = `${p.x + f.x},${p.y + f.y},${p.z + f.z}`
+      placed[key] = held || 'chest'
+      const ix = bot.inv.findIndex((i) => i.name === (held || 'chest'))
+      if (ix >= 0) {
+        if (bot.inv[ix].count <= 1) bot.inv.splice(ix, 1)
+        else bot.inv[ix].count--
+      }
+    }
+    bot.entity.position = pos(4, 64, 1) // at the table
     const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
-    stockpile(bot, ctx)
+    stockpile(bot, ctx) // at the table: shed, then the chest craft
+    const t0 = Date.now()
+    while (!crafts.includes('chest') && Date.now() - t0 < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.ok(crafts.includes('chest'), 'the chest crafts after the shed')
+    assert.deepEqual(
+      Object.keys(placed).sort(),
+      ['3,64,1', '3,65,1', '3,66,1'],
+      'the dirt-3 victim pillars beside the bot, skipping the (5,*,1) spot column',
+    )
     await flush()
     await flush()
-    assert.equal(ctx.stepStatus, 'failed:craft')
+    stockpile(bot, ctx) // the spot is near: issue the place goal
+    stockpile(bot, ctx) // arrived: place and adopt
+    await flush()
+    await flush()
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
+    assert.equal(placed['5,64,1'], 'chest')
+    assert.equal(bot.inv.find((i) => i.name === 'oak_planks').count, 4, '8 planks fund the chest')
+    assert.ok(!bot.inv.some((i) => i.name === 'dirt' && i.count !== 64), 'only the victim dirt left the pack')
+    assert.equal(bot.inv.filter((i) => i.name === 'dirt').length, 34, 'the 34 dirt-64 stacks stay packed')
     assert.deepEqual(ctx.haul || {}, {})
-    assert.deepEqual(bot.chats, [])
-    assert.equal(bot.inv.length, 36)
+    assert.ok(!bot.chats.some((l) => l.includes('bringing the surplus')), `chats: ${bot.chats}`)
   })
 
   it('36/36 with a log load and plank room: craft frees the slot, the chest lands', async () => {

@@ -1028,7 +1028,7 @@ function placeChest(bot, ctx, spot, bp) {
     ctx.stockpileInFlight = true
     void (async () => {
       try {
-        await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest' })
+        await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest', avoid: spot })
       } catch (_) {
         ctx.stockpileInFlight = false
         // A room failure still hands the surplus over when a player is

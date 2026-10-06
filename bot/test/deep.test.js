@@ -1829,6 +1829,77 @@ describe('deep behaviour legs', () => {
     assert.deepEqual(bot.calls.digs, [])
   }, { timeout: 30000 })
 
+  it('reserved slot past prescan: retreat up the crumbs, never fail mid-shaft (g0z.26 R3)', async () => {
+    // Revmux 02 M1: a reserve hit at depth used fail(), which dropped the
+    // breadcrumbs and stranded the bot; now the leg keeps its crumbs and
+    // climbs back (the mouth arrival ends failed:pack-full, honestly).
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    for (let i = 0; i < 34; i++) bot.inv.push({ name: 'dirt', count: 64 })
+    assert.equal(bot.inv.length, 35)
+    bot.entity.position = pos(150, 10, 100)
+    const ctx = memCtx([])
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    const steps = [{ x: 150, y: 10, z: 100 }, { x: 149, y: 11, z: 100 }]
+    ctx.deep = {
+      phase: 'descend', shaft: { x: 100, z: 100, topY: 64, dx: 1, dz: 0 }, n: 50,
+      steps, target: null, dug: 3, stalls: 0, lastPos: { x: 150, y: 10, z: 100 },
+      issuedKey: null, startDrops: { diamond: 0 }, cameFrom: null,
+    }
+    deep(bot, ctx, null, {})
+    await tick()
+    assert.deepEqual(bot.calls.digs, [], 'the stair dig never launches')
+    assert.equal(ctx.deep && ctx.deep.phase, 'return', 'the leg retreats, it does not fail in place')
+    assert.equal(ctx.deep && ctx.deep.retreatReason, 'pack-full')
+    assert.equal(ctx.deep.steps.length, 2, 'breadcrumbs preserved for the climb')
+  }, { timeout: 30000 })
+
+  it('reserved slot in digcell: a fitting diamond still mines (g0z.26 R3)', async () => {
+    // 35/36: the free slot fits the target diamond, so the dig runs and
+    // the leg proceeds to pickup instead of refusing its own payload.
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    for (let i = 0; i < 34; i++) bot.inv.push({ name: 'dirt', count: 64 })
+    assert.equal(bot.inv.length, 35)
+    bot.blocks['0,-45,-3'] = 'diamond_ore'
+    const ctx = memCtx([{ x: 0, y: -45, z: -3, name: 'diamond_ore' }])
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    ctx.deep = {
+      phase: 'digcell', shaft: { x: 0, z: -3, topY: 64, dx: 1, dz: 0 }, n: 50,
+      steps: [{ x: 0, y: 60, z: -3 }], target: { x: 0, y: -45, z: -3, name: 'diamond_ore' },
+      dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: { diamond: 0 }, cameFrom: null,
+    }
+    deep(bot, ctx, null, {})
+    await tick()
+    await tick()
+    assert.ok(bot.calls.digs.length > 0, 'the diamond mines')
+    assert.equal(ctx.deep && ctx.deep.phase, 'pickup')
+  }, { timeout: 30000 })
+
+  it('reserved slot in digcell at 36/36: leave the diamond, climb out (g0z.26 R3)', async () => {
+    // No room for the drop: mining would burn it (no pickup room), so the
+    // leg retreats and comes back after the pack drains.
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    for (let i = 0; i < 35; i++) bot.inv.push({ name: 'dirt', count: 64 })
+    assert.equal(bot.inv.length, 36)
+    bot.blocks['0,-45,-3'] = 'diamond_ore'
+    const ctx = memCtx([{ x: 0, y: -45, z: -3, name: 'diamond_ore' }])
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    const steps = [{ x: 0, y: 60, z: -3 }]
+    ctx.deep = {
+      phase: 'digcell', shaft: { x: 0, z: -3, topY: 64, dx: 1, dz: 0 }, n: 50,
+      steps, target: { x: 0, y: -45, z: -3, name: 'diamond_ore' },
+      dug: 0, stalls: 0, lastPos: null, issuedKey: null, startDrops: { diamond: 0 }, cameFrom: null,
+    }
+    deep(bot, ctx, null, {})
+    await tick()
+    assert.deepEqual(bot.calls.digs, [], 'the diamond stays in the wall')
+    assert.equal(ctx.deep && ctx.deep.phase, 'return')
+    assert.equal(ctx.deep && ctx.deep.retreatReason, 'pack-full')
+    assert.equal(ctx.deep.steps.length, 1, 'breadcrumbs preserved for the climb')
+  }, { timeout: 30000 })
+
   it('full leg: site, descend, tunnel, 3 diamonds, return, haul banked', async () => {
     const bot = mockBot()
     bot.inv.push({ name: 'iron_pickaxe', count: 1 })
