@@ -31,7 +31,7 @@ const CASTLE_DONE = '[16:14:17 INFO]: [Not Secure] <IdkBot> castle done at 1 64 
 function freePort() {
   return new Promise((resolve) => {
     const s = net.createServer()
-    s.listen(0, '127.0.0.1', () => {
+    s.listen(0, 'localhost', () => {
       const p = s.address().port
       s.close(() => resolve(p))
     })
@@ -108,7 +108,7 @@ function fakeLogs(handler) {
     })
   })
   return new Promise((resolve) => {
-    srv.listen(0, '127.0.0.1', () => resolve({ srv, url: `http://127.0.0.1:${srv.address().port}/select/logsql/query` }))
+    srv.listen(0, 'localhost', () => resolve({ srv, url: `http://localhost:${srv.address().port}/select/logsql/query` }))
   })
 }
 
@@ -404,7 +404,7 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
       ...base,
       TASK_RUN_MC_HOST: MC_SENTINEL,
       TASK_RUN_MC_PORT: '29999',
-      TASK_RUN_LOGS_URL: `http://127.0.0.1:${port}/dead`,
+      TASK_RUN_LOGS_URL: `http://localhost:${port}/dead`,
       TASK_RUN_GRAFANA_TOKEN: TOKEN_SENTINEL,
     })
     assert.equal(r2.code, 2)
