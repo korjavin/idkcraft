@@ -359,11 +359,13 @@ function findRef(bot, p) {
 // kinds, 0 outside. Refreshed on movements swap or home move (the old
 // closure is detached); a missing movements, exclusion list or home
 // degrades to no guard, never a throw.
-function guardOwnWalls(bot, ctx) {
+function guardOwnWalls(bot, ctx, homeOpt) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
     if (!mov || !Array.isArray(mov.exclusionAreasBreak)) return
-    const home = ctx && ctx.home
+    // Optional override (rw4.17): the comehome exit guards the EXITED house,
+    // which a 'build here' swap may have pinned older than ctx.home.
+    const home = (homeOpt && homeOpt.site) ? homeOpt : (ctx && ctx.home)
     const site = home && home.site
     if (!site || typeof site.x !== 'number') return
     const key = `${site.x},${site.y},${site.z}`
