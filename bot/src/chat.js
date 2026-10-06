@@ -315,6 +315,12 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       bot.chat('no deep find on hold — ask me to find something first')
     }
   } else if (msg === 'go work' || msg === 'free') {
+    // Owner resume (vmzq.3): an L2 task park clears on the explicit order
+    // (internal work() entries — login adoption, resumeWork — keep it, so
+    // the L3 latch survives a restart). Owner castle parks keep theirs.
+    try {
+      if (taskMod.clearTaskParks(bot && bot._tickerCtx) && ticker) ticker.saveMemory()
+    } catch (_) { /* resume best-effort */ }
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
   } else if (msg === 'come home' || msg === 'go home') {
@@ -572,11 +578,17 @@ function castleChat(bot, ticker, playerName, cmd) {
   }
   if (cmd === 'castle stop') {
     st.parked = true
+    // Owner takes over (vmzq.3): drop any L2 episode with it, or the
+    // auto-resume timer would unpark an owner-stopped castle.
+    st.taskPark = null
     ticker.saveMemory()
     try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     return 'castle parked — say castle go to resume'
   }
   if (cmd === 'castle go') {
+    // Owner resume (vmzq.3): clears the L2 episode (plus any house one —
+    // the owner spoke) with the parked flag; the clock resets via work().
+    try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
     st.parked = false
     ticker.saveMemory()
     ticker.work()

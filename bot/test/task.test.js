@@ -92,11 +92,16 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(taskLogs().length, 1, 'same diagnosis does not repeat')
     assert.equal(bot.chats.length, 1)
     // A changed diagnosis repeats: new failure, 15 more min, second L1.
+    // (The stall ends at 45:01, so the L2 park fires once alongside the
+    // second L1 — specified vmzq.3 behaviour, pinned in task-park.test.js.
+    // These counts filter to L1 lines so the L1 contract stays exact.)
     ctx.step = 'equip'
     ctx.stepStatus = 'failed:craft-stall'
     for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + (30 * 60 + 1 + s) * 1000)
-    assert.equal(taskLogs().length, 2, 'changed diagnosis repeats')
-    assert.equal(bot.chats.length, 2)
+    assert.equal(taskLogs().filter((l) => !l.includes('parked')).length, 2, 'changed diagnosis repeats')
+    assert.equal(bot.chats.filter((c) => c.startsWith('castle: no progress')).length, 2)
+    assert.equal(taskLogs().filter((l) => l.includes('parked')).length, 1, 'L2 parks at 45 min')
+    assert.equal(bot.chats.filter((c) => c.includes('parked at')).length, 1)
   })
 
   it('cell progress resets the clock', () => {
