@@ -23,6 +23,11 @@
 //     "goal":[62.5,64,-205.5],"order":"bring me iron_ore 2",
 //     "expect":["here is ","here are "],"fail":["could not "]}]
 // mode defaults to follow; goal keeps its feet-coords convention in both.
+// verifyBuild (idkcraft-vmzq.1, true only on a build-here order spot):
+// 'home done at' also fires when every remaining cell is skipped
+// (nextCellIdx === -1 counts skips as done, index.js:949), so the verdict
+// counts placed blueprint cells and requires an empty skip list — a done
+// marker over skipped or missing cells reports PARTIAL, not reached.
 // Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
 // shelter step alone: reached = enclosed within the close budget (15 s
 // default, closeSecs overrides — idkcraft-hoy7) and alive at the end.
@@ -240,7 +245,16 @@ function loadSpots() {
       }
       kit = s.kit.slice()
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs, kit }
+    // Honest build completion (idkcraft-vmzq.1): off unless asked — the
+    // seeded JR-BUILD keeps its marker-only verdict.
+    let verifyBuild = false
+    if (s.verifyBuild != null && s.verifyBuild !== false) {
+      if (s.verifyBuild !== true || mode !== 'order' || order !== 'build here') {
+        throw new Error(`spots[${i}]: bad verifyBuild (want true on a build-here order spot)`)
+      }
+      verifyBuild = true
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs, kit, verifyBuild }
   })
 }
 
@@ -297,6 +311,27 @@ function enclosed(solidAt) {
 }
 function shelterReached(closedAt, died, budget = SHELTER_CLOSE_SECS) {
   return !died && closedAt !== null && closedAt <= budget
+}
+
+// Honest house completion (idkcraft-vmzq.1): pure over the world-read and
+// the ticker ctx — counts placed blueprint cells (not nextCellIdx, which
+// treats skipped cells as done) and requires an empty skip list.
+function verifyHouse(bot, home, buildSkip, buildMod) {
+  const skipped = Array.isArray(buildSkip) ? buildSkip.length : 0
+  if (!home || !home.site) return { ok: false, placed: 0, total: 0, skipped }
+  const plan = buildMod.blueprintFor(home)
+  let placed = 0
+  for (const cell of plan) {
+    try { if (buildMod.cellDone(bot, home, cell)) placed++ } catch (_) { /* unreadable reads missing */ }
+  }
+  return { ok: plan.length > 0 && placed === plan.length && skipped === 0, placed, total: plan.length, skipped }
+}
+
+// Honest build verdict (idkcraft-vmzq.1): pure, unit-tested. A done marker
+// over skipped or missing cells is PARTIAL, not reached.
+function applyBuildVerify(reached, v) {
+  if (reached && v && !v.ok) return { reached: false, note: `PARTIAL ${v.placed}/${v.total} skip=${v.skipped}` }
+  return { reached, note: null }
 }
 
 // Baseline comparison (idkcraft-6x7.4): pure, unit-tested. baseline shape:
@@ -458,6 +493,7 @@ async function main() {
   const brain = picked.make()
   const recover = require('../src/behaviours/recover')
   const bringMod = require('../src/behaviours/bring')
+  const buildMod = require('../src/behaviours/build')
   const { raiseHouse } = require('./raise-house')
 
   // Windowed counters (reset per spot): stuck declarations, path resets by
@@ -780,6 +816,16 @@ async function main() {
       reached = shelterReached(closedAt, died, s.closeSecs)
       await rcon('time set 1000') // later spots (if any) walk in daylight
     }
+    // Honest build verdict (idkcraft-vmzq.1): on a verifyBuild spot the
+    // done marker alone is not the verdict — the world-read counts.
+    let buildNote = null
+    let buildVerdict = null
+    if (s.mode === 'order' && s.verifyBuild && reached) {
+      buildVerdict = verifyHouse(follower, c && c.home, c && c.buildSkip, buildMod)
+      const v = applyBuildVerify(reached, buildVerdict)
+      reached = v.reached
+      buildNote = v.note
+    }
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
@@ -791,9 +837,9 @@ async function main() {
       : s.mode === 'shelter'
         ? (closedAt === null ? `OPEN at ${(() => { try { return follower.entity.position.floored().toArray().join(' ') } catch (_) { return '?' } })()}` : `CLOSED ${closedAt.toFixed(0)}s`)
         : ''
-    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (buildNote || onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
     if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}) })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
@@ -858,4 +904,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS }
+module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }

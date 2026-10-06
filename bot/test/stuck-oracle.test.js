@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -1170,6 +1170,110 @@ describe('danger-seeded spots (idkcraft-zj2p)', () => {
       for (const bad of [[], [[3, 61, -268]], [[3, 61, -268, 0]], [[3, 'x', -268, 32]], 'x']) {
         assert.throws(() => load(bad), /bad danger/, JSON.stringify(bad))
       }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('honest build verdict (idkcraft-vmzq.1)', () => {
+  const buildMod = require('../src/behaviours/build')
+  const SITE = { x: -144, y: 72, z: -77 }
+  const home = () => ({ site: { ...SITE }, v: 2 })
+  const solid = (name) => ({ name, boundingBox: 'block' })
+  const fakeBot = (map) => ({ blockAt: (p) => (map.has(`${p.x},${p.y},${p.z}`) ? map.get(`${p.x},${p.y},${p.z}`) : null) })
+  // A world where the whole v2 plan reads done at the site.
+  function doneWorld() {
+    const map = new Map()
+    for (const c of buildMod.BLUEPRINT_V2) {
+      const want = c.kind === 'table' ? 'crafting_table' : c.kind === 'door' ? 'acacia_door' : c.kind === 'fill' ? 'dirt' : 'acacia_planks'
+      map.set(`${SITE.x + c.dx},${SITE.y + c.dy},${SITE.z + c.dz}`, solid(want))
+    }
+    return map
+  }
+  const TOTAL = buildMod.BLUEPRINT_V2.length
+
+  it('a fully placed house with no skips verifies', () => {
+    const v = verifyHouse(fakeBot(doneWorld()), home(), [], buildMod)
+    assert.deepEqual(v, { ok: true, placed: TOTAL, total: TOTAL, skipped: 0 })
+  })
+
+  it('one missing plank is partial: placed cells count, not the index', () => {
+    const map = doneWorld()
+    const c = buildMod.BLUEPRINT_V2.find((x) => x.kind === 'planks')
+    map.delete(`${SITE.x + c.dx},${SITE.y + c.dy},${SITE.z + c.dz}`)
+    const v = verifyHouse(fakeBot(map), home(), [], buildMod)
+    assert.equal(v.ok, false)
+    assert.equal(v.placed, TOTAL - 1)
+    assert.equal(v.total, TOTAL)
+  })
+
+  it('skips fail even when every cell reads done (the index would say -1)', () => {
+    // nextCellIdx treats skipped cells as done — an all-skipped plan reads
+    // complete while the world is empty. The verdict must not.
+    const all = buildMod.BLUEPRINT_V2.map((_, i) => i)
+    assert.equal(buildMod.nextCellIdx(fakeBot(new Map()), home(), all), -1)
+    const v = verifyHouse(fakeBot(doneWorld()), home(), [5], buildMod)
+    assert.equal(v.ok, false)
+    assert.equal(v.placed, TOTAL)
+    assert.equal(v.skipped, 1)
+    const empty = verifyHouse(fakeBot(new Map()), home(), all, buildMod)
+    assert.deepEqual(empty, { ok: false, placed: 0, total: TOTAL, skipped: TOTAL })
+  })
+
+  it('no home never verifies', () => {
+    assert.equal(verifyHouse(fakeBot(doneWorld()), null, [], buildMod).ok, false)
+    assert.equal(verifyHouse(fakeBot(doneWorld()), {}, [], buildMod).ok, false)
+  })
+
+  it('applyBuildVerify flips a done marker over a partial house, nothing else', () => {
+    assert.deepEqual(applyBuildVerify(true, { ok: true, placed: TOTAL, total: TOTAL, skipped: 0 }), { reached: true, note: null })
+    assert.deepEqual(applyBuildVerify(true, { ok: false, placed: 92, total: TOTAL, skipped: 3 }), { reached: false, note: `PARTIAL 92/${TOTAL} skip=3` })
+    assert.deepEqual(applyBuildVerify(false, { ok: false, placed: 0, total: TOTAL, skipped: 0 }), { reached: false, note: null })
+    assert.deepEqual(applyBuildVerify(false, null), { reached: false, note: null })
+  })
+
+  it('JR-BUILD-FRESH is the unseeded from-scratch twin (idkcraft-vmzq.1)', () => {
+    const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+    const baseline = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline.json'), 'utf8'))
+    const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
+    const fresh = byName['JR-BUILD-FRESH']
+    const seeded = byName['JR-BUILD']
+    assert.ok(fresh, 'JR-BUILD-FRESH in the corpus')
+    assert.equal(fresh.mode, 'order')
+    assert.equal(fresh.order, 'build here')
+    assert.deepEqual(fresh.expect, ['home done at '])
+    assert.deepEqual([fresh.spawn, fresh.goal], [seeded.spawn, seeded.goal], 'the same slope site')
+    assert.equal(fresh.secs, 1800)
+    assert.equal(fresh.scaffold, 0, 'no seeded dirt: the bot digs its own scaffold')
+    assert.equal(fresh.pickaxe, false, 'no seeded tool: a wood house needs none')
+    assert.equal(fresh.kit, undefined, 'unseeded means NO kit key (an empty one is rejected)')
+    assert.equal(fresh.verifyBuild, true, 'the done marker alone is not the verdict')
+    assert.equal(fresh.bead, 'idkcraft-vmzq.1')
+    assert.deepEqual(baseline.spots['JR-BUILD-FRESH'], { reached: true, maxStuck: 3, maxEps: 1, maxCalls: 0 },
+      'measured 1/1 (709 s, 99/99 placed, skip 0): stuck 1 + 2, eps 0 + 1, calls strict')
+  })
+
+  it('loadSpots passes verifyBuild on a build-here order, rejects it elsewhere', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-spots-'))
+    const saved = process.argv[2]
+    const load = (spot) => {
+      const f = path.join(dir, 'v.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'X', spawn: [0, 64, 0], goal: [1, 64, 0], ...spot }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    const buildHere = { mode: 'order', order: 'build here', expect: ['home done at '], fail: ["I can't see you"] }
+    try {
+      assert.equal(load({ ...buildHere, verifyBuild: true })[0].verifyBuild, true)
+      assert.equal(load({ ...buildHere })[0].verifyBuild, false, 'off unless asked')
+      assert.equal(load({ ...buildHere, verifyBuild: false })[0].verifyBuild, false)
+      assert.throws(() => load({ verifyBuild: true }), /bad verifyBuild/, 'follow spot')
+      assert.throws(() => load({ mode: 'order', order: 'bring me dirt 1', expect: ['here is '], fail: ['could not '], verifyBuild: true }), /bad verifyBuild/, 'non-build order')
+      assert.throws(() => load({ ...buildHere, verifyBuild: 'yes' }), /bad verifyBuild/, 'non-boolean')
     } finally {
       if (saved === undefined) delete process.argv[2]
       else process.argv[2] = saved
