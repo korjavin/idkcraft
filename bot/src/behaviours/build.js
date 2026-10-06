@@ -258,6 +258,27 @@ function cellDone(bot, home, cell) {
   return name.endsWith('_planks')
 }
 
+// Done means placed (idkcraft-vmzq.10): every plan cell physically in
+// place, skips ignored. nextCellIdx===-1 alone counts given-up cells as
+// done — the prod house reported 'home done' over 30 skipped cells (whole
+// no-ref rows on an unvalidated shore site) and the oracle scored a false
+// PASS. All three verdict sites (build's own done branch, the index.js
+// stale-built revalidation, setComehome's silent flip) gate on this; the
+// world wins over the bookkeeping, so a stale skip over a placed cell
+// still reads complete. Doorway/interior plank cells are not holes (8si):
+// the invariant forbids placing there, so a correctly empty one reads
+// complete — a corrupt plan entry must skip, not brick the house.
+function isComplete(bot, home) {
+  try {
+    const plan = blueprintFor(home)
+    for (const cell of plan) {
+      if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
+      if (!cellDone(bot, home, cell)) return false
+    }
+    return true
+  } catch (_) { return false }
+}
+
 // First plan entry (in lay order) that still needs placing, skipping cells
 // already given up on (ctx.buildSkip). Returns the blueprint index, or -1
 // when every remaining cell is in place.
@@ -582,6 +603,18 @@ function build(bot, ctx, target, state) {
 
   const idx = nextCellIdx(bot, ctx.home, ctx.buildSkip)
   if (idx === -1) {
+    // Holes remain (vmzq.10): every remaining cell is placed but given-up
+    // cells are still missing — fail the step, never announce done. The
+    // 1h skip retry re-probes; structural cells re-skip and fail again
+    // instead of fossilizing a false 'home done'.
+    if (!isComplete(bot, ctx.home)) {
+      const n = Array.isArray(ctx.buildSkip) ? ctx.buildSkip.length : 0
+      if (ctx.stepStatus !== 'failed:skipped-cells') {
+        console.log(`build holes remain: ${n} skipped cells still missing`)
+      }
+      ctx.stepStatus = 'failed:skipped-cells'
+      return
+    }
     ctx.home.built = true
     ctx.stepStatus = 'done'
     const s = ctx.home.site
@@ -851,6 +884,7 @@ module.exports.blueprintFor = blueprintFor
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
+module.exports.isComplete = isComplete
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
