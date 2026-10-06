@@ -846,6 +846,21 @@ function goalFacts(bot, ctx) {
   const door = countItems(bot, (n) => n.endsWith('_door'))
   const sword = countItems(bot, (n) => n.endsWith('_sword'))
   const pickaxe = countItems(bot, (n) => n.endsWith('_pickaxe'))
+  // Pickaxe rank word (rwuu): the state text tells no/wood/stone apart so
+  // the equip criterion can match the wooden->stone upgrade. Read locally
+  // (the bring.js PICKAXE_RANK mirror precedent — equip.js owns the copy).
+  let pickWord = 'no'
+  try {
+    const held = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(held)) {
+      let rank = -1
+      for (const i of held) {
+        const m = i && typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+        if (m) rank = Math.max(rank, m[1] === 'wooden' || m[1] === 'golden' ? 0 : 1)
+      }
+      pickWord = rank < 0 ? 'no' : rank === 0 ? 'wood' : 'stone'
+    }
+  } catch (_) { /* unreadable inventory reads as no */ }
   const cobble = countItems(bot, (n) => n === 'cobblestone')
   const sticks = countItems(bot, (n) => n === 'stick')
   const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
@@ -1020,7 +1035,7 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -1057,6 +1072,21 @@ function goalText(facts, home) {
   const inside = facts.time === 'day' ? 'no' : facts.inside
   const unlit = unlitBucket(facts.unlit)
   const beds = facts.beds === 'none' || facts.beds === 'one' ? facts.beds : 'both'
+  // Equip words (rwuu): the kit state the equip criterion matches — a
+  // missing sword or pickaxe (the g0z.4 stone-castle re-decide rides on
+  // the pickaxe word too), a wooden pickaxe the stone chain can upgrade,
+  // or blocks below the dig-full mark. Only while the kit wants work: a
+  // complete kit keeps the text byte-identical (the castle word below is
+  // the precedent). The blocks word rides on the tool words: a word of its
+  // own at 16 would re-decide the flagless 16->32 dig mid-step and
+  // flip-flop at every 15/16 crossing (revmux 01 body-1), and at 32 it
+  // would churn on every crossing where the bot sits after each refill
+  // (revmux 02 core-2) — so kit-complete legs never see it at all.
+  const noSword = !((facts.sword || 0) > 0)
+  const noPick = !((facts.pickaxe || 0) > 0)
+  const woodPick = !noPick && facts.pickWord === 'wood' && (facts.cobble || 0) >= 3
+  const blocksLow = (noSword || noPick || woodPick) &&
+    (facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_FULL
   return `time=${facts.time} logs=${logs} planks=${planks} ` +
     `table=${table} door=${door} home=${facts.home} inside=${inside} unlit=${unlit} health=${health} food=${food} ` +
     `known=${facts.known} haul=${facts.haul} player=${facts.player} ` +
@@ -1064,10 +1094,9 @@ function goalText(facts, home) {
     // Castle word only while a castle exists (g0z.3): castle-less text
     // stays byte-identical for the model and every pinned state string.
     (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '') +
-    // No pickaxe while a castle wants stone (g0z.4): a pick broken mid-fetch
-    // must re-decide into equip, and the rearm must re-decide back — the
-    // pickaxe is otherwise invisible to the text (and to its replays).
-    (typeof facts.castle === 'string' && facts.castle.startsWith('stone-') && !((facts.pickaxe || 0) > 0) ? ' pickaxe=no' : '')
+    (noSword ? ' sword=no' : '') +
+    (noPick ? ' pickaxe=no' : woodPick ? ' pickaxe=wood' : '') +
+    (blocksLow ? ' blocks=low' : '')
 }
 
 // goalText without the known token (4dse): equal stripped texts mean the
@@ -1179,7 +1208,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
-  equip: 'no sword or pickaxe, or blocks are low: craft tools and dig blocks',
+  equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
   deliver: 'haul is waiting: carry it to the player',

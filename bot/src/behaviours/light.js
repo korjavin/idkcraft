@@ -375,7 +375,7 @@ function craftTick(bot, ctx) {
   }
   const run = async () => {
     try {
-      await craftMod.safeCraft(bot, op.recipe, op.count, op.table)
+      await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
       finish(() => fail(ctx, 'failed:craft-torch'))
       return

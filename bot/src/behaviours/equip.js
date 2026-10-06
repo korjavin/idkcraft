@@ -567,7 +567,7 @@ function craftOne(bot, ctx, op) {
   }
   const run = async () => {
     try {
-      await craftMod.safeCraft(bot, op.recipe, op.count, op.table)
+      await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
       finish(() => fail(bot, ctx, op.item, err))
       return
@@ -582,13 +582,16 @@ function craftOne(bot, ctx, op) {
       // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
       : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
     if (!landed) {
+      // A strike is silent: the 'equipped' chat below is only for a landed
+      // craft (rwuu — prod chatted two fakes per stall and lied to the owner).
       st.made = st.made || {}
       st.made[op.item] = strikes + 1
       if (st.made[op.item] >= CRAFT_STALL_STRIKES) {
         fail(bot, ctx, op.item, new Error('craft-stall'))
-        return
       }
-    } else if (st.made) {
+      return
+    }
+    if (st.made) {
       try { delete st.made[op.item] } catch (_) { /* guard best-effort */ }
     }
     if (op.item === 'crafting_table') {

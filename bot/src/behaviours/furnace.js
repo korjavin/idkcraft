@@ -156,7 +156,7 @@ function doCraft(bot, ctx, f) {
   ctx.furnaceInFlight = true
   void (async () => {
     try {
-      await craftMod.safeCraft(bot, found[0], 1, st.block)
+      await craftMod.safeCraft(bot, found[0], 1, st.block, { ctx, item: 'furnace' })
     } catch (err) {
       ctx.furnaceInFlight = false
       fail(ctx, 'craft-furnace')

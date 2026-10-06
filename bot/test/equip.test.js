@@ -2324,6 +2324,142 @@ describe('equip wet-dig guard (idkcraft-dj3)', () => {
   })
 })
 
+describe('equip full pack (idkcraft-rwuu)', () => {
+  const JIDS = { ...IDS, leaf_litter: 1001, gravel: 1002, cobblestone: 1003, stick: 1004 }
+  const PICK_INGREDIENTS = [
+    { id: JIDS.cobblestone }, { id: JIDS.cobblestone }, { id: JIDS.cobblestone },
+    { id: JIDS.stick }, { id: JIDS.stick },
+  ]
+  const pickRecipe = () => ({ result: { name: 'stone_pickaxe', count: 1 }, inShape: [], ingredients: PICK_INGREDIENTS })
+  // Mineflayer-faithful craft: ingredients are consumed, and with no room
+  // the product is tossed (click -999) while the op still resolves —
+  // without ensureRoom the strike below is a phantom.
+  function fullAwareCraft(bot) {
+    return async (recipe, count, table) => {
+      bot.calls.craft.push({ recipe, count, table })
+      for (const ing of recipe.ingredients || []) {
+        const name = Object.keys(JIDS).find((k) => JIDS[k] === ing.id)
+        const stack = bot._items.find((i) => i.name === name && i.count > 0)
+        if (stack) stack.count -= 1
+      }
+      bot._items = bot._items.filter((i) => i.count > 0)
+      const name = recipe.result.name
+      const stackable = bot._items.find((i) => i.name === name && i.count < 64)
+      if (stackable) stackable.count += recipe.result.count || 1
+      else if (bot._items.length < 36) bot._items.push({ name, count: recipe.result.count || 1 })
+    }
+  }
+  function withToss(bot) {
+    bot.calls.toss = []
+    bot.toss = async (id, meta, n) => {
+      bot.calls.toss.push({ id, n })
+      const name = Object.keys(JIDS).find((k) => JIDS[k] === id)
+      let left = n
+      for (const it of bot._items) {
+        if (left <= 0) break
+        if (it.name !== name) continue
+        const take = Math.min(it.count, left)
+        it.count -= take
+        left -= take
+      }
+      bot._items = bot._items.filter((it) => it.count > 0)
+    }
+    return bot
+  }
+  function fullPack() {
+    const items = []
+    for (let i = 0; i < 20; i++) items.push({ name: 'leaf_litter', count: 64 })
+    for (let i = 0; i < 13; i++) items.push({ name: 'gravel', count: 64 })
+    items.push({ name: 'cobblestone', count: 41 }, { name: 'stick', count: 5 }, { name: 'dirt', count: 64 })
+    assert.equal(items.length, 36)
+    return items
+  }
+
+  it('36/36 with junk: tosses junk, the stone pickaxe lands, no craft-stall', async () => {
+    const bot = withToss(mockBot({
+      items: fullPack(),
+      ids: JIDS,
+      recipes: { stone_pickaxe: pickRecipe() },
+      blockAtImpl: () => TABLE,
+    }))
+    bot.craft = fullAwareCraft(bot)
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.ok(bot._items.some((i) => i.name === 'stone_pickaxe'), 'stone pickaxe landed')
+    assert.equal(bot.calls.toss.length, 1)
+    assert.equal(bot.calls.toss[0].id, JIDS.leaf_litter)
+    assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    assert.deepEqual(bot.lines, ['equipped stone_pickaxe'])
+    bot.restoreError()
+  })
+
+  it('36/36 without junk: fails inventory-full, crafts nothing, never chats equipped', async () => {
+    const items = []
+    for (let i = 0; i < 32; i++) items.push({ name: 'dirt', count: 64 })
+    items.push({ name: 'cobblestone', count: 41 }, { name: 'stick', count: 5 }, { name: 'dirt', count: 64 }, { name: 'dirt', count: 64 })
+    assert.equal(items.length, 36)
+    const bot = withToss(mockBot({
+      items,
+      ids: JIDS,
+      recipes: { stone_pickaxe: pickRecipe() },
+      blockAtImpl: () => TABLE,
+    }))
+    bot.craft = fullAwareCraft(bot)
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    const t0 = Date.now()
+    while (ctx.stepStatus === 'running' && Date.now() - t0 < 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(ctx.stepStatus, 'failed:equip-stone_pickaxe')
+    assert.ok(bot.errs.some((e) => e.includes('inventory-full')), `errs: ${bot.errs}`)
+    assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    assert.ok(!bot.lines.some((l) => l.startsWith('equipped')), `lines: ${bot.lines}`)
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+  })
+
+  it('36/36 exact materials, no junk: the freed slots fit the craft, nothing tossed', async () => {
+    const items = []
+    for (let i = 0; i < 34; i++) items.push({ name: 'dirt', count: 64 })
+    items.push({ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 })
+    assert.equal(items.length, 36)
+    const bot = withToss(mockBot({
+      items,
+      ids: JIDS,
+      recipes: { stone_pickaxe: pickRecipe() },
+      blockAtImpl: () => TABLE,
+    }))
+    bot.craft = fullAwareCraft(bot)
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.ok(bot._items.some((i) => i.name === 'stone_pickaxe'), 'stone pickaxe landed')
+    assert.deepEqual(bot.calls.toss, [])
+    assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('phantom crafts never chat equipped: silent strikes, stall on the third', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    for (let i = 0; i < 3; i++) {
+      equip(bot, ctx, null, {})
+      await untilCrafts(bot, i + 1)
+    }
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs.some((e) => e.includes('craft-stall')))
+    assert.ok(!bot.lines.some((l) => l.startsWith('equipped')), `lines: ${bot.lines}`)
+    bot.restoreError()
+  })
+})
+
 // NOTE (idkcraft-17a mutant review): the following source mutants survive the
 // suite and are equivalent, not coverage gaps — verified by probing, not by
 // inspection alone:
