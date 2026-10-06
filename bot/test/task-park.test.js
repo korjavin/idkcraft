@@ -341,7 +341,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(goal.MENU.explore.feasible({ ...freeFacts, home: 'built' }, bot, ctx), true)
   })
 
-  it('parked hunts: near animals or real hunger only (02 major)', () => {
+  it('parked hunts: near animals only, hunger is no exemption (05-verify major)', () => {
     // Bot far from the anchors (park landed mid-leg), one cow 30 blocks
     // from the bot but ~300 from the castle site, no remembered cells.
     const bot = makeBot()
@@ -354,13 +354,21 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(bot.food, 20)
     assert.equal(forageMod.planForage(bot, ctx), null, 'well-fed parked bot skips the far cow')
     assert.equal(goal.goalFacts(bot, ctx).known, 'none')
-    // Hungry: survival beats the radius.
-    bot.food = 10
-    const plan = forageMod.planForage(bot, ctx)
-    assert.ok(plan && plan.kind === 'food', 'hungry parked bot hunts')
-    assert.equal(goal.goalFacts(bot, ctx).known, 'near')
-    // Unparked and well-fed: the old opportunistic hunt is back.
+    // Hungry (food 17): still no hunt — raw drops never feed the bot
+    // (EDIBLE_FOODS has no raw), so the exemption was pure drift.
+    bot.food = 17
+    assert.equal(forageMod.planForage(bot, ctx), null, 'hungry parked bot skips the far cow')
+    assert.equal(goal.goalFacts(bot, ctx).known, 'none')
+    // Near the anchor, the same cow is fair game even well-fed.
     bot.food = 20
+    bot.entity.position = pos(100, 64, 200)
+    bot.entities = { 2: { name: 'cow', id: 2, position: pos(110, 64, 205), isValid: true } }
+    const plan = forageMod.planForage(bot, ctx)
+    assert.ok(plan && plan.kind === 'food', 'parked bot hunts the near cow')
+    assert.equal(goal.goalFacts(bot, ctx).known, 'near')
+    // Unparked and well-fed far away: the old opportunistic hunt is back.
+    bot.entity.position = pos(300, 64, 300)
+    bot.entities = { 1: { name: 'cow', id: 1, position: pos(320, 64, 310), isValid: true } }
     ctx.castle.parked = false
     ctx.castle.taskPark = null
     assert.ok(forageMod.planForage(bot, ctx), 'unparked bot hunts opportunistically')
@@ -373,6 +381,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const bot = makeBot()
     bot.entity.position = pos(300, 64, 300)
     bot.entities = { 9: { id: 9, name: 'cow', position: pos(320, 64, 310), isValid: true } }
+    bot.food = 17 // hungry too: the exemption is gone, the leg still ends
     const { ctx } = castleCtx(bot)
     resources.noteSpots(ctx, [{ x: 400, y: 60, z: 500, name: 'oak_log' }], Date.now())
     ctx.castle.parked = true

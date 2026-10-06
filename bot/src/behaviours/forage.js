@@ -157,8 +157,8 @@ function questExempt(bot, ctx, target) {
 // every mid-run replan share this filter (all three pickers below), so a
 // dug-out near stand ends the leg (replan's null finish) instead of
 // chaining to a far cell. The food fallback is gated separately below
-// (parkedHuntOk): near animals or real hunger only — a 48-block hop
-// chain re-centers every replan and would walk the bot home-away (R3).
+// (parkedHuntOk): near animals only — a 48-block hop chain re-centers
+// every replan and would walk the bot home-away (R3/R5).
 // Deferred goal require (questBatch precedent — goal.js loads forage).
 function parkedCellSkipped(ctx, item) {
   try {
@@ -344,17 +344,16 @@ function huntAllowed(bot, ctx, drop) {
     return true
   }
 }
-// Parked hunts (vmzq.3 R3): a parked bot hunts only near animals (the
-// same anchor radius as cells) or when actually hungry — survival beats
-// the radius, but a well-fed chain-hunt would drift home-away (02 major).
-// Unreadable hunger is not hunger: it must not defeat the bound.
-function parkedHuntOk(bot, ctx, found) {
+// Parked hunts (vmzq.3 R3/R5): a parked bot hunts only near animals —
+// the same anchor radius as cells. No hunger exemption (05-verify
+// major): hunts drop raw meat, which eatReflex never eats
+// (EDIBLE_FOODS has no raw), so a hungry bot would chain-hunt outward
+// without ever getting fed — pure drift, third raising of park drift.
+function parkedHuntOk(ctx, found) {
   try {
     const g = require('../goal')
     if (!g.taskParked(ctx)) return true
-    if (found && found.position && !parkedCellSkipped(ctx, found.position)) return true
-    const food = bot && bot.food
-    return typeof food === 'number' && food < HUNT_PECKISH
+    return !!(found && found.position && !parkedCellSkipped(ctx, found.position))
   } catch (_) {
     return true
   }
@@ -409,7 +408,7 @@ function planForage(bot, ctx) {
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(bot, ctx, found)) {
+    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(ctx, found)) {
       // Under the reserve a hunt is one kill: a full batch would overflow
       // the checked stack room onto new slots.
       let reserved = false
@@ -695,7 +694,7 @@ function forage(bot, ctx, target, state) {
         // Parked re-target (vmzq.3 R4): the in-leg find must pass the
         // same gate as planForage, or each kill re-centers a 48-block
         // hop away from home (03 major). replan already applies it.
-        if (!found || found.name !== t.name || !parkedHuntOk(bot, ctx, found)) {
+        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found)) {
           if (!replan(bot, ctx, f, bp)) return
           return
         }
