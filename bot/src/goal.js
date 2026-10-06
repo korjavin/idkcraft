@@ -1581,6 +1581,15 @@ async function decide(bot, ctx) {
   // leaves inShelter true with no stay step to clear it, suppressing fight
   // all day (revmux 01-review loop+goal-3).
   if (ctx && facts.time === 'day') {
+    // Verifier P2 on #311 (pathing, raised twice — revmux core-1 family):
+    // clearing the flag while the body is still inside must arm the wall
+    // guard first — the next tick may dispatch work or fight from inside,
+    // and without the build-installed exclusion A* digs through our own
+    // walls (the guard is only installed by build/light, never after
+    // adopt). Outside (dig-in, pillar) there is nothing to guard.
+    if (ctx.inShelter && facts.inside === 'yes') {
+      try { buildMod.guardOwnWalls(bot, ctx) } catch (_) { /* guard best-effort */ }
+    }
     ctx.inShelter = false
     ctx.gohomeLatch = null // the latch lasts one night (xhqv)
   }
