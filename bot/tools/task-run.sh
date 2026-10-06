@@ -16,8 +16,9 @@
 # Exit codes:
 #   0  done within budget (`home done at` / `castle done at` in the window)
 #   1  budget exceeded (prints the last 20 bot lines + the last progress line)
-#   2  environment: bad args, stash/kv/logs unreachable, puppet refused
-#      (human online), the bot never seen, no order reply, human void
+#   2  environment: bad args, stash/kv/logs unreachable (up front or 3 dead
+#      polls mid-run), puppet refused (human online), the bot never seen,
+#      no order reply, human void
 #
 # Secrets resolve at runtime and never print: MC host/port from
 # secrets/idkcraft-mc-host + secrets/idkcraft-mc-port, logs via the
@@ -64,15 +65,15 @@ C="localhost:$HTTP_PORT"
 
 command -v curl >/dev/null 2>&1 || { echo "task-run: need curl" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "task-run: need python3" >&2; exit 2; }
+case "$PUPPET_CMD" in node\ *) command -v node >/dev/null 2>&1 || { echo "task-run: need node" >&2; exit 2; } ;; esac
+[ -d "$OUTDIR" ] && [ -w "$OUTDIR" ] || { echo "task-run: OUTDIR not writable: $OUTDIR" >&2; exit 2; }
 
 now_epoch() { date +%s; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-PLOG="$OUTDIR/task-run-$TASK-$STAMP.puppet.jsonl"
-POUT="$OUTDIR/task-run-$TASK-$STAMP.puppet.out"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 SERIES="$OUTDIR/task-run-$TASK-$STAMP.series.json"
 JOURNAL="$OUTDIR/task-run-$TASK-$STAMP.journal.jsonl"
-: >"$JOURNAL"
+: >"$JOURNAL" || { echo "task-run: cannot write $JOURNAL" >&2; exit 2; }
 
 kvget() { "$KV" get "$1" 2>/dev/null || true; }
 
@@ -108,22 +109,33 @@ for s in stacks if isinstance(stacks, list) else []:
   if [ -z "$TOKEN" ]; then echo "task-run: grafana token unreachable ($GRAFANA_TOKEN_KEY)" >&2; exit 2; fi
   LOGS="https://$GHOST/api/datasources/proxy/uid/PD775F2863313E6C7/select/logsql/query"
 fi
-if ! curl -s -m 30 -H "Authorization: Bearer $TOKEN" "$LOGS" --data-urlencode 'query=container_name:idkcraft-bot _time:5m | stats count() as n' --data-urlencode 'limit=2' 2>/dev/null | python3 -c 'import json,sys
-for l in sys.stdin:
-  json.loads(l)
-  sys.exit(0)
-sys.exit(1)'; then
+PROBE_BODY="$OUTDIR/task-run-probe-$$.json"
+PROBE_CODE="$(curl -s -m 30 -o "$PROBE_BODY" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$LOGS" --data-urlencode 'query=container_name:idkcraft-bot _time:5m | stats count() as n' --data-urlencode 'limit=2' 2>/dev/null)"
+if [ "$PROBE_CODE" != 200 ] || ! python3 - "$PROBE_BODY" <<'EOF'
+import json,sys
+try:
+  with open(sys.argv[1]) as fh:
+    first = fh.readline()
+  d = json.loads(first)
+except Exception:
+  sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and "error" not in d else 1)
+EOF
+then
   echo "task-run: logs unreachable (VictoriaLogs probe failed)" >&2; exit 2
 fi
+rm -f "$PROBE_BODY"
 
 # --- puppet lifecycle ---
 PUPPET_PID=""
+SCRATCH="task-run-body-$$.json task-run-mc-$$.jsonl task-run-bot-$$.jsonl task-run-bot-tail-$$.jsonl task-run-probe-$$.json"
 puppet_cleanup() {
   if [ -n "$PUPPET_PID" ] && kill -0 "$PUPPET_PID" 2>/dev/null; then
     kill "$PUPPET_PID" 2>/dev/null || true
     sleep 2
     kill -9 "$PUPPET_PID" 2>/dev/null || true
   fi
+  for f in $SCRATCH; do rm -f "$OUTDIR/$f"; done
 }
 trap puppet_cleanup EXIT
 trap 'puppet_cleanup; exit 130' INT TERM
@@ -208,21 +220,16 @@ import json,sys,re
 try:
   d = json.load(open(sys.argv[1]))
 except Exception:
-  print("dist=none"); print("following=0"); print("at=none"); sys.exit(0)
+  print("dist=none"); print("at=none"); sys.exit(0)
 bot = (d.get("bot") or {}).get("dist")
 print("dist=%s" % ("none" if bot is None else bot))
 at = None
-following = False
 for c in d.get("chat") or []:
   if c.get("from") != sys.argv[2]:
     continue
-  m = c.get("msg") or ""
-  if "Following " in m:
-    following = True
-  mm = re.search(r"I.m at (-?\d+) (-?\d+) (-?\d+)", m)
+  mm = re.search(r"I.m at (-?\d+) (-?\d+) (-?\d+)", c.get("msg") or "")
   if mm:
     at = "%s,%s,%s" % mm.groups()
-print("following=%d" % following)
 print("at=%s" % (at or "none"))
 EOF
 )"
@@ -248,33 +255,44 @@ EOF
 ORDER_REPLY=""
 order_and_wait() { # $1 = order text
   pctl POST /stop >/dev/null 2>&1 || true
+  # Chat length before the order: only later lines can be the reply.
+  # (Index, not time: a reply in the same second must still count, and the
+  # 100-tail never binds in these short sessions.)
+  pctl GET "/state?n=100" >/dev/null 2>&1 || return 2
+  if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$PSTAT" != 200 ]; then echo "task-run: puppet not answering" >&2; return 1; fi
+  seen="$(python3 - "$PBODY" <<'EOF'
+import json,sys
+try:
+  print(len(json.load(open(sys.argv[1])).get("chat") or []))
+except Exception:
+  print(0)
+EOF
+)"
   say "$1" || return $?
-  since="$(now_utc)"
   deadline=$(( $(now_epoch) + REPLY_SECS ))
   while [ "$(now_epoch)" -lt "$deadline" ]; do
     if ! kill -0 "$PUPPET_PID" 2>/dev/null; then echo "task-run: puppet died waiting for the reply" >&2; return 1; fi
     pctl GET "/state?n=100" >/dev/null 2>&1 || { sleep 3; continue; }
     if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
     if [ "$PSTAT" != 200 ]; then sleep 3; continue; fi
-    verdict="$(python3 - "$PBODY" "$BOT_NAME" "$TASK" "$since" <<'EOF'
+    verdict="$(python3 - "$PBODY" "$BOT_NAME" "$TASK" "$seen" <<'EOF'
 import json,sys,re
 task = sys.argv[3]
-since = sys.argv[4]
+try:
+  n = int(sys.argv[4])
+except Exception:
+  n = 0
 try:
   d = json.load(open(sys.argv[1]))
 except Exception:
   print("NONE"); print(""); sys.exit(0)
 verdict = "NONE"
 line = ""
-since_s = since[:19] # chat stamps carry millis, since does not: compare whole seconds
-for c in d.get("chat") or []:
+for c in (d.get("chat") or [])[n:]:
   if c.get("from") != sys.argv[2]:
     continue
-  if (c.get("t") or "")[:19] < since_s: # only the reply to this order (rendezvous chatter is older)
-    continue
   m = c.get("msg") or ""
-  if re.search(r"I.m at -?\d+", m):
-    continue # a rendezvous echo sharing the second, never the order verdict
   if task == "house" and "building a home at " in m:
     verdict = "ACK"; line = m; break
   elif task == "castle" and ("castle at " in m or "looking for a castle spot" in m):
@@ -483,6 +501,7 @@ END_EPOCH=$(( START_EPOCH + BUDGET_SECS ))
 SPAN_MIN=$(( POLL_SECS / 60 + 2 ))
 [ "$SPAN_MIN" -ge 2 ] || SPAN_MIN=2
 RESUMES_LEFT="$MAX_RESUMES"
+LOST_STREAK=0
 
 trap 'write_series interrupted 2>/dev/null; echo "task-run: interrupted; series so far: $SERIES"; exit 130' INT TERM
 
@@ -501,6 +520,7 @@ while :; do
   fetch_logs idkcraft-mc "$SPAN_MIN" "$MCF" && mc_ok=1
   fetch_logs idkcraft-bot "$SPAN_MIN" "$BOTF" && bot_ok=1
   if [ "$mc_ok" = 1 ] || [ "$bot_ok" = 1 ]; then
+    LOST_STREAK=0
     [ "$mc_ok" = 1 ] || : >"$MCF"
     [ "$bot_ok" = 1 ] || : >"$BOTF"
     signals="$(classify_poll "$MCF" "$BOTF")"
@@ -532,6 +552,12 @@ while :; do
     prog="$(printf '%s' "$signals" | sed -n 's/^PROGRESS //p' | head -n 1)"
     if [ -n "$prog" ]; then echo "task-run progress: $prog"; fi
   else
+    LOST_STREAK=$(( LOST_STREAK + 1 ))
+    if [ "$LOST_STREAK" -ge 3 ]; then
+      write_series logs-lost
+      echo "task-run: logs unreachable 3 polls in a row — cannot judge; series: $SERIES" >&2
+      exit 2
+    fi
     echo "task-run: poll failed (transient), retrying next interval"
   fi
   now="$(now_epoch)"

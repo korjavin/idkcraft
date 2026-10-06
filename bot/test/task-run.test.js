@@ -102,8 +102,10 @@ function fakeLogs(handler) {
     req.on('data', (c) => { body += c })
     req.on('end', () => {
       const q = new URLSearchParams(body).get('query') || ''
-      const rows = handler(q)
-      res.writeHead(200, { 'content-type': 'application/json' })
+      const out = handler(q)
+      const status = out && typeof out === 'object' && !Array.isArray(out) ? out.status : 200
+      const rows = out && typeof out === 'object' && !Array.isArray(out) ? out.rows : out
+      res.writeHead(status, { 'content-type': 'application/json' })
       res.end(rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''))
     })
   })
@@ -409,6 +411,40 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     })
     assert.equal(r2.code, 2)
     assert.match(r2.stderr, /logs unreachable/)
+  })
+
+  it('3 dead polls mid-run exit 2, not budget', async () => {
+    let fetches = 0
+    const r = await harness({ task: 'house', name: 'logslost' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        fetches++
+        if (fetches <= 2) return [] // first poll ok-but-empty; then the endpoint dies
+        return { status: 500, rows: [] }
+      },
+      extra: { TASK_RUN_BUDGET_SECS: '60' },
+    })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /logs unreachable 3 polls in a row/)
+    assert.equal(seriesOf(r.stdout).verdict, 'logs-lost')
+  })
+
+  it('a logs endpoint answering errors exits 2 up front', async () => {
+    const { srv, url } = await fakeLogs(() => ({ status: 200, rows: [{ error: 'no such table' }] }))
+    try {
+      const r = await runScript(['house', '1'], {
+        TASK_RUN_MC_HOST: MC_SENTINEL,
+        TASK_RUN_MC_PORT: '29999',
+        TASK_RUN_LOGS_URL: url,
+        TASK_RUN_GRAFANA_TOKEN: TOKEN_SENTINEL,
+        TASK_RUN_OUTDIR: dir,
+      })
+      assert.equal(r.code, 2)
+      assert.match(r.stderr, /logs unreachable/)
+    } finally {
+      srv.close()
+    }
   })
 
   it('order markers match the shipped chat lines', () => {
