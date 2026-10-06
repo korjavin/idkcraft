@@ -571,31 +571,70 @@ function fundPlanks(bot) {
   for (const n of Object.values(perWood)) if (n > max) max = n
   return { max }
 }
-// Shed the victim stack into a pillar on ground beside the bot (never under
-// its own feet — that cell is occupied). True iff the stack is gone (its
-// slot freed); false on any failure, honestly, with no partial retry. The
-// pillar column skips opts.avoid (the chest spot: burying it would fail the
-// placement the shed funds).
-async function shedStack(bot, victim, opts) {
-  const feet = bot && bot.entity && bot.entity.position
-  if (!feet || typeof feet.x !== 'number' || !victim || typeof victim.name !== 'string') return false
-  if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return false
-  const avoid = opts && opts.avoid
-  let ref = null
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]]) {
-    const px = Math.floor(feet.x) + dx
-    const pz = Math.floor(feet.z) + dz
-    if (avoid && typeof avoid.x === 'number' && avoid.x === px && avoid.z === pz) continue
-    let g = null
-    try {
-      g = bot.blockAt && bot.blockAt(new Vec3(px, Math.floor(feet.y) - 1, pz))
-    } catch (_) { g = null }
-    if (g && g.name && g.name !== 'air' && g.name !== 'cave_air' && g.name !== 'water' && g.name !== 'lava') {
-      ref = g
-      break
+// Shed survey (g0z.26 R4, revmux 03 major): pillar columns beside the bot —
+// never under its own feet (that cell is occupied). Each column is
+// ground-verified, air-verified upward, reach-capped (SHED_COL_MAX, Paper
+// refuses high placements), ceiling-aware (a 2-high room caps at 2), and
+// off the avoid column (the chest spot). Two rings, 16 columns: 64 cells
+// outdoors (any single stack), 32 in a 2-high room. Returns the smallest
+// victim plus the surveyed capacity, or null when nothing may shed.
+const SHED_RINGS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
+  [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [2, -2], [-2, 2], [-2, -2]]
+const SHED_COL_MAX = 4
+function shedSurvey(bot, opts) {
+  try {
+    const feet = bot && bot.entity && bot.entity.position
+    if (!feet || typeof feet.x !== 'number') return null
+    let items = null
+    try { items = bot.inventory.items() } catch (_) { items = null }
+    if (!Array.isArray(items)) return null
+    const victim = shedVictim(items)
+    if (!victim) return null
+    const avoid = opts && opts.avoid
+    const fx = Math.floor(feet.x)
+    const fy = Math.floor(feet.y)
+    const fz = Math.floor(feet.z)
+    const columns = []
+    for (const [dx, dz] of SHED_RINGS) {
+      const px = fx + dx
+      const pz = fz + dz
+      if (avoid && typeof avoid.x === 'number' && avoid.x === px && avoid.z === pz) continue
+      let g = null
+      try {
+        g = bot.blockAt && bot.blockAt(new Vec3(px, fy - 1, pz))
+      } catch (_) { g = null }
+      if (!g || !g.name || g.name === 'air' || g.name === 'cave_air' || g.name === 'water' || g.name === 'lava') continue
+      let cap = 0
+      for (let h = 0; h < SHED_COL_MAX; h++) {
+        let c = null
+        try {
+          c = bot.blockAt && bot.blockAt(new Vec3(px, fy + h, pz))
+        } catch (_) { c = null }
+        if (!c || !c.name || (c.name !== 'air' && c.name !== 'cave_air')) break
+        cap++
+      }
+      if (cap <= 0) continue
+      columns.push({ ground: g, cap })
     }
+    let capacity = 0
+    for (const c of columns) capacity += c.cap
+    const need = typeof victim.count === 'number' ? victim.count : 1
+    return { victim, columns, capacity, fits: need <= capacity }
+  } catch (_) {
+    return null
   }
-  if (!ref) return false
+}
+// Shed the surveyed victim across the surveyed columns (a refusal abandons
+// its column, not the shed). True iff the whole victim landed and a slot
+// freed; false up front when nothing fits (never start a doomed shed), or
+// honestly on any failure, with no partial retry.
+async function shedStack(bot, opts) {
+  const feet = bot && bot.entity && bot.entity.position
+  if (!feet || typeof feet.x !== 'number') return false
+  if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return false
+  const survey = shedSurvey(bot, opts)
+  if (!survey || !survey.fits) return false
+  const victim = survey.victim
   try {
     await bot.equip(victim, 'hand')
   } catch (_) {
@@ -609,20 +648,26 @@ async function shedStack(bot, victim, opts) {
     const items = bot.inventory.items()
     startLen = Array.isArray(items) ? items.length : -1
   } catch (_) { startLen = -1 }
-  const rounds = Math.min(70, Math.max(1, typeof victim.count === 'number' ? victim.count : 1))
-  for (let i = 0; i < rounds; i++) {
-    try {
-      await bot.placeBlock(ref, new Vec3(0, 1, 0))
-    } catch (_) {
-      return false
+  let left = typeof victim.count === 'number' ? victim.count : 1
+  for (const col of survey.columns) {
+    if (left <= 0) break
+    let ref = col.ground
+    for (let h = 0; h < col.cap && left > 0; h++) {
+      try {
+        await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      } catch (_) {
+        break // refused: the next column, not the next tick
+      }
+      let top = null
+      try {
+        top = bot.blockAt && bot.blockAt(new Vec3(ref.position.x, ref.position.y + 1, ref.position.z))
+      } catch (_) { top = null }
+      if (!top || !top.name || top.name === 'air' || top.name === 'cave_air') break
+      left--
+      ref = top
     }
-    let top = null
-    try {
-      top = bot.blockAt && bot.blockAt(new Vec3(ref.position.x, ref.position.y + 1, ref.position.z))
-    } catch (_) { top = null }
-    if (!top || !top.name || top.name === 'air' || top.name === 'cave_air') return false
-    ref = top
   }
+  if (left > 0) return false
   try {
     const items = bot.inventory.items()
     return Array.isArray(items) && startLen >= 0 && items.length < startLen
@@ -632,8 +677,9 @@ async function shedStack(bot, victim, opts) {
 }
 // Bootstrap-shed gate: a funded chest/table craft, in the reserve corner
 // (adopted home, no chest, nobody online — the haul owns every online
-// case), at zero empties, with a shedable victim. Sheds, then true (the
-// caller retries room once); false keeps the honest inventory-full.
+// case), at zero empties, with a victim that fits the surveyed columns.
+// Sheds, then true (the caller retries room once); false keeps the honest
+// inventory-full.
 async function bootstrapShed(bot, opts) {
   try {
     const item = opts && opts.item
@@ -648,13 +694,42 @@ async function bootstrapShed(bot, opts) {
     if (fundPlanks(bot).max < need) return false
     const items = bot.inventory.items()
     if (!Array.isArray(items) || items.length < 36) return false
-    const victim = shedVictim(items)
-    if (!victim) return false
     if (ctx) ctx._shedInFlight = true
     try {
-      const freed = await shedStack(bot, victim, opts)
+      const freed = await shedStack(bot, opts)
       if (freed) {
-        try { console.log(`craft shed ${victim.name} into a pillar to fund the bootstrap ${item}`) } catch (_) { /* logging best-effort */ }
+        try { console.log(`craft shed one stack to fund the bootstrap ${item}`) } catch (_) { /* logging best-effort */ }
+      }
+      return freed
+    } finally {
+      if (ctx) ctx._shedInFlight = false
+    }
+  } catch (_) {
+    return false
+  }
+}
+// Quest shed (g0z.26 R4, revmux 03 major): the unfunded quest corner at 34+
+// stacks cannot chop (no free slots) — shed one junk stack per run until
+// the quest fits (33). No funding gate: the quest, not a craft, is the
+// exit. True iff a slot freed.
+async function shedForQuest(bot, ctx) {
+  try {
+    let stockpile = null
+    try { stockpile = require('./stockpile') } catch (_) { stockpile = null }
+    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return false
+    if (!stockpile.reserveCorner(bot, ctx)) return false
+    if (ctx && ctx._shedInFlight) return false
+    let width = -1
+    try {
+      const items = bot.inventory.items()
+      width = Array.isArray(items) ? items.length : -1
+    } catch (_) { width = -1 }
+    if (width < 34) return false
+    if (ctx) ctx._shedInFlight = true
+    try {
+      const freed = await shedStack(bot, { ctx })
+      if (freed) {
+        try { console.log(`craft shed one stack for the chest quest (${width} -> ${width - 1} stacks)`) } catch (_) { /* logging best-effort */ }
       }
       return freed
     } finally {
@@ -1141,6 +1216,7 @@ module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
 module.exports.shedVictim = shedVictim
+module.exports.shedForQuest = shedForQuest
 module.exports.syncInventory = syncInventory
 module.exports.slotSummary = slotSummary
 module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS

@@ -506,6 +506,7 @@ function chestSpotFor(bot, ctx) {
 
 // What the no-chest branch can do: 'adopt' a standing chest on sight,
 // 'place' one when the pack holds a chest item or 8 same-wood planks,
+// 'shed' one junk stack when the unfunded quest corner overflows (R4),
 // 'none' otherwise. The no-spot stamp gates placing only: a chest the
 // owner puts down by hand adopts immediately, never after the hour
 // (revmux 04-review). The menu gates on this so an unready bot never
@@ -526,8 +527,121 @@ function chestTodo(bot, ctx, maxPlanks) {
   try {
     if (countItems(bot, (n) => n === 'chest') > 0) return 'place'
     if ((maxPlanks || 0) >= 8) return 'place'
+    if (questShedDue(bot, ctx)) return 'shed'
   } catch (_) { /* undecidable: none */ }
   return 'none'
+}
+// Quest-shed predicate (g0z.26 R4, revmux 03 major): the unfunded quest
+// corner at 34+ stacks — the quest cannot chop (no free slots), so the
+// stockpile step sheds one junk stack per run until the quest fits (33).
+// Shared by chestTodo (menu) and the no-chest branch (behaviour): one rule,
+// so feasible always runs and running was feasible. Unfunded reads
+// maxPlanks<8, questPlankWoods' own rule; a chest item aboard places. Fit
+// is decided at shed time, not here: the step-aside changes the ground the
+// survey reads, so an unfit survey fails held (bounded) instead of gating
+// the menu.
+const QUEST_SHED_WIDTH = 34
+function questShedDue(bot, ctx) {
+  try {
+    if (!reserveCorner(bot, ctx)) return false
+    if (countItems(bot, (n) => n === 'chest') > 0) return false
+    if (packStacks(bot) < QUEST_SHED_WIDTH) return false
+    let max = 0
+    try {
+      const items = bot.inventory.items()
+      if (!Array.isArray(items)) return false
+      const perWood = {}
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string' || !i.name.endsWith('_planks')) continue
+        perWood[i.name] = (perWood[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+      }
+      for (const n of Object.values(perWood)) if (n > max) max = n
+    } catch (_) { return false }
+    return max < 8
+  } catch (_) {
+    return false
+  }
+}
+// 6-away solid ground with headroom for the shed step-aside (below): the
+// first of 8 directions that stands. Null when none reads safe.
+const SHED_ASIDE_DIST = 6
+function asideDest(bot, bp) {
+  try {
+    if (!bp || typeof bp.x !== 'number') return null
+    const air = (x, y, z) => {
+      const n = blockNameAt(bot, x, y, z)
+      return n === 'air' || n === 'cave_air'
+    }
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const px = Math.floor(bp.x) + dx * SHED_ASIDE_DIST
+      const pz = Math.floor(bp.z) + dz * SHED_ASIDE_DIST
+      const py = Math.floor(bp.y)
+      const g = blockNameAt(bot, px, py - 1, pz)
+      if (!g || g === 'air' || g === 'cave_air' || g === 'water' || g === 'lava') continue
+      if (!air(px, py, pz) || !air(px, py + 1, pz)) continue
+      return { x: px, y: py, z: pz }
+    }
+    return null
+  } catch (_) {
+    return null
+  }
+}
+// Quest-shed branch (g0z.26 R4): shed one junk stack where the survey fits.
+// Pillars eat their own ground's capacity (a second shed on the same survey
+// may not fit), so a run within SHED_ASIDE_NEAR of the last shed site steps
+// aside first, then sheds on fresh columns. Done re-picks (34 sheds again,
+// 33 quests); a refused shed holds until the situation moves.
+const SHED_ASIDE_NEAR = 8
+function questShed(bot, ctx, bp) {
+  // A remembered aside-dest already reached sheds here (without this the
+  // arrival run asides again, an extra walk every run).
+  let dest = null
+  try { dest = ctx.shedAsideDest } catch (_) { dest = null }
+  if (!(dest && typeof dest.x === 'number' && nearPos(bot, dest, 2.5))) dest = null
+  if (!dest) {
+    let aside = null
+    try { aside = ctx.shedAt } catch (_) { aside = null }
+    if (aside && typeof aside.x === 'number' && nearPos(bot, aside, SHED_ASIDE_NEAR)) {
+      dest = asideDest(bot, bp)
+      if (dest) {
+        const key = `stockpile-aside:${dest.x},${dest.y},${dest.z}`
+        if (key !== ctx.lastGoalKey) {
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(dest.x, dest.y, dest.z, 2), false)
+          } catch (_) { /* retry next tick */ }
+          try { ctx.shedAsideDest = dest } catch (_) { /* dest best-effort */ }
+          ctx.lastGoalKey = key
+          return
+        }
+        let moving = false
+        try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+        if (moving) return
+        if (!nearPos(bot, dest, 2.5) && !farStalled(ctx, key)) return
+        // Arrived, or no path to fresh ground: shed in place (best-effort —
+        // the survey may still fit).
+      }
+    }
+  }
+  ctx.stockpileInFlight = true
+  void (async () => {
+    let craftMod = null
+    try { craftMod = require('./craft') } catch (_) { craftMod = null }
+    let freed = false
+    try {
+      freed = craftMod && typeof craftMod.shedForQuest === 'function' ? await craftMod.shedForQuest(bot, ctx) : false
+    } catch (_) { freed = false }
+    ctx.stockpileInFlight = false
+    if (freed) {
+      try {
+        ctx.shedAt = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+        ctx.shedAsideDest = null // shed here: the next run asides past these pillars
+      } catch (_) { /* last-site best-effort */ }
+      ctx.lastGoalKey = null
+      ctx.stepStatus = 'done'
+    } else {
+      fail(ctx, 'shed')
+    }
+  })()
 }
 
 function say(bot, line) {
@@ -803,6 +917,9 @@ function stockpile(bot, ctx, target, state) {
     }
     if (spot && spot.adopt) {
       adopted(ctx, spot)
+    } else if (spot && questShedDue(bot, ctx)) {
+      questShed(bot, ctx, bp)
+      return
     } else if (spot) {
       placeChest(bot, ctx, spot, bp)
       return

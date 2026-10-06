@@ -197,7 +197,8 @@ function bestMemoryCell(bot, ctx, bp) {
     // Plan gate (g0z.26 R3, revmux 02 major): when the reserve binds, plan
     // only a chop the dig phase accepts — a refused target walks there,
     // fails pack-full, and re-plans the same walk every 5 minutes. Null
-    // explores instead (the plank wood may stand unremembered nearby).
+    // explores instead (the plank wood may stand unremembered nearby; the
+    // food fallback stays shut under the reserve unless hungry-safe (R4)).
     // The same-wood preference above already picks the most exemptable log.
     let reserved = false
     try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
@@ -282,6 +283,41 @@ function bestDiamondCell(bot, ctx, bp) {
   return best
 }
 
+// Hunt gate (g0z.26 R4, revmux 03 major): under the reserve a hunt must not
+// fill the bootstrap slot — the well-fed corner skips the animal fallback
+// (the M3 plan gate's null explores), the peckish corner hunts only onto a
+// same-drop stack, and the starving corner hunts anyway (survival beats the
+// reserve; the quest shed drains after). Fail-open outside the corner,
+// fail-closed on unreadable hunger.
+const HUNT_PECKISH = 18 // eatReflex eats below this; a hunt must beat it
+const HUNT_STARVING = 6 // goal.js 'hungry' line: survival over slots
+function dropRoom(bot, drop) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (!Array.isArray(items)) return false
+    for (const s of items) {
+      if (!s || s.name !== drop) continue
+      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      const n = typeof s.count === 'number' ? s.count : 1
+      if (cap - n > 0) return true
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
+function huntAllowed(bot, ctx, drop) {
+  try {
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (!reserved) return true
+    const food = bot && typeof bot.food === 'number' ? bot.food : NaN
+    if (!(food < HUNT_PECKISH)) return false
+    return dropRoom(bot, drop) || food <= HUNT_STARVING
+  } catch (_) {
+    return true
+  }
+}
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
@@ -332,7 +368,13 @@ function planForage(bot, ctx) {
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop) return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: FORAGE_WANT }
+    if (drop && huntAllowed(bot, ctx, drop)) {
+      // Under the reserve a hunt is one kill: a full batch would overflow
+      // the checked stack room onto new slots.
+      let reserved = false
+      try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+      return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: reserved ? 1 : FORAGE_WANT }
+    }
   }
   return null
 }

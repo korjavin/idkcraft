@@ -237,6 +237,22 @@ describe('stockpile chestTodo', () => {
     dark.blockAt = () => null
     assert.equal(stockpile.chestTodo(dark, homeCtx(), 0), 'none')
   })
+
+  it('sheds the unfunded quest corner at 34+ stacks, never when funded or narrow (g0z.26 R4)', () => {
+    // Revmux 03 major: the quest cannot chop without free slots, so the
+    // menu runs the stockpile shed until the quest fits (33).
+    const dirt = (n) => Array.from({ length: n }, () => ({ name: 'dirt', count: 64 }))
+    assert.equal(stockpile.chestTodo(mockBot({ inv: dirt(35) }), homeCtx(), 0), 'shed')
+    assert.equal(stockpile.chestTodo(mockBot({ inv: dirt(34) }), homeCtx(), 0), 'shed')
+    assert.equal(stockpile.chestTodo(mockBot({ inv: dirt(33) }), homeCtx(), 0), 'none')
+    const funded = mockBot({ inv: [{ name: 'oak_planks', count: 8 }, ...dirt(34)] })
+    assert.equal(stockpile.chestTodo(funded, homeCtx(), 8), 'place')
+    const item = mockBot({ inv: [{ name: 'chest', count: 1 }, ...dirt(34)] })
+    assert.equal(stockpile.chestTodo(item, homeCtx(), 0), 'place')
+    const online = mockBot({ inv: dirt(35) })
+    online.players = { owner: { username: 'owner', entity: { position: pos(1, 64, 1) } } }
+    assert.equal(stockpile.chestTodo(online, homeCtx(), 0), 'none')
+  })
 })
 
 describe('stockpile withdraw helpers', () => {
@@ -1260,5 +1276,152 @@ describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
     await flush()
     await flush()
     assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
+  })
+
+  // Generic placement rig for the quest-shed tests: consume the equipped
+  // stack, land the named cell over the mock world.
+  function shedBot({ inv, cells = {}, at = pos(0, 64, 0) }) {
+    const bot = mockBot({ cells, inv })
+    let held = null
+    bot.equip = async (item) => { held = item && item.name }
+    const placed = {}
+    const origBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (placed[key]) return { name: placed[key], position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+      return origBlockAt(p)
+    }
+    bot.placeBlock = async (ref, face) => {
+      const p = ref && ref.position ? ref.position : { x: 0, y: 63, z: 0 }
+      const f = face || { x: 0, y: 1, z: 0 }
+      const key = `${p.x + f.x},${p.y + f.y},${p.z + f.z}`
+      placed[key] = held || 'chest'
+      const ix = bot.inv.findIndex((i) => i.name === (held || 'chest'))
+      if (ix >= 0) {
+        if (bot.inv[ix].count <= 1) bot.inv.splice(ix, 1)
+        else bot.inv[ix].count--
+      }
+    }
+    bot.entity.position = at
+    return { bot, placed }
+  }
+
+  it('quest shed run 1: sheds in place with no aside, done at 34 (g0z.26 R4)', async () => {
+    const inv = [{ name: 'dirt', count: 3 }, ...dirt(34)]
+    assert.equal(inv.length, 35)
+    const { bot, placed } = shedBot({ inv })
+    const ctx = homeCtx()
+    stockpile(bot, ctx)
+    const t0 = Date.now()
+    while (bot.inv.length > 34 && Date.now() - t0 < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    await flush()
+    await flush()
+    assert.equal(bot.inv.length, 34, 'one stack shed')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(Object.keys(placed).sort(), ['1,64,0', '1,65,0', '1,66,0'])
+    assert.deepEqual(bot.calls.goals, [], 'no aside on fresh ground')
+    assert.ok(ctx.shedAt, 'the shed site is remembered')
+    assert.equal(stockpile.chestTodo(bot, ctx, 0), 'shed', '34 sheds again')
+  })
+
+  it('quest shed run 2: asides past its own pillars, unfit ground fails held (g0z.26 R4)', async () => {
+    // 34 uniform dirt-64s on the run-1 pillars: the survey no longer fits,
+    // so the run walks aside — and the mock body never arrives, so the
+    // best-effort in-place shed refuses and holds (bounded, same text).
+    const inv = dirt(34)
+    const { bot } = shedBot({ inv })
+    const placed = {}
+    const origBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (placed[key]) return { name: placed[key], position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+      return origBlockAt(p)
+    }
+    placed['1,64,0'] = 'dirt'
+    placed['1,65,0'] = 'dirt'
+    placed['1,66,0'] = 'dirt'
+    const ctx = homeCtx({ ctx: { shedAt: { x: 0, y: 64, z: 0 } } })
+    for (let i = 0; i < 8; i++) {
+      stockpile(bot, ctx)
+      await flush()
+    }
+    assert.ok(bot.calls.goals.length > 0, 'the aside walk issues')
+    assert.equal(ctx.stepStatus, 'failed:shed')
+    assert.equal(bot.inv.length, 34, 'nothing shed on unfit ground')
+    assert.deepEqual(placed, { '1,64,0': 'dirt', '1,65,0': 'dirt', '1,66,0': 'dirt' }, 'no doomed pillars on unfit ground')
+    assert.deepEqual(ctx.shedAsideDest, { x: 6, y: 64, z: 0 }, 'the aside remembers its dest')
+  })
+
+  it('quest shed aside skips blocked headroom (g0z.26 R4)', async () => {
+    // The +x aside ground stands under a wall: the aside picks -x instead
+    // of issuing a walk into stone.
+    const inv = dirt(34)
+    const { bot } = shedBot({ inv, cells: { '6,64,0': 'stone', '6,65,0': 'stone' } })
+    const ctx = homeCtx({ ctx: { shedAt: { x: 0, y: 64, z: 0 } } })
+    stockpile(bot, ctx)
+    await flush()
+    assert.deepEqual(ctx.shedAsideDest, { x: -6, y: 64, z: 0 })
+  })
+
+  it('shedForQuest refuses a narrow pack: no pillars below 34 (g0z.26 R4)', async () => {
+    // Defense in depth with the 34-wide todo: a direct narrow call sheds
+    // nothing, so a caller slip cannot pillar on a pack the quest fits.
+    const craft = require('../src/behaviours/craft')
+    const inv = dirt(33)
+    const { bot } = shedBot({ inv })
+    let attempts = 0
+    const origPlace = bot.placeBlock
+    bot.placeBlock = async (...a) => { attempts++; return origPlace(...a) }
+    const ctx = homeCtx()
+    assert.equal(await craft.shedForQuest(bot, ctx), false)
+    assert.equal(attempts, 0)
+    assert.equal(bot.inv.length, 33)
+  })
+
+  it('quest shed arrival: fresh ground sheds to 33 and the quest chops (g0z.26 R4)', async () => {
+    const inv = dirt(34)
+    const { bot } = shedBot({ inv, at: pos(6, 64, 0) })
+    const placed = {}
+    const origBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (placed[key]) return { name: placed[key], position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+      return origBlockAt(p)
+    }
+    bot.placeBlock = async (ref, face) => {
+      const p = ref && ref.position ? ref.position : { x: 0, y: 63, z: 0 }
+      const f = face || { x: 0, y: 1, z: 0 }
+      const key = `${p.x + f.x},${p.y + f.y},${p.z + f.z}`
+      placed[key] = 'dirt'
+      const ix = bot.inv.findIndex((i) => i.name === 'dirt')
+      if (ix >= 0) {
+        if (bot.inv[ix].count <= 1) bot.inv.splice(ix, 1)
+        else bot.inv[ix].count--
+      }
+    }
+    placed['1,64,0'] = 'dirt' // run-1 pillar, far outside the fresh survey
+    placed['1,65,0'] = 'dirt'
+    placed['1,66,0'] = 'dirt'
+    const ctx = homeCtx({ ctx: { shedAt: { x: 0, y: 64, z: 0 }, shedAsideDest: { x: 6, y: 64, z: 0 } } })
+    stockpile(bot, ctx)
+    const t0 = Date.now()
+    while (bot.inv.length > 33 && Date.now() - t0 < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    await flush()
+    await flush()
+    assert.equal(bot.inv.length, 33, 'the dirt-64 sheds on fresh columns')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.shedAsideDest, null, 'the arrival dest is consumed')
+    // And the exit: plankless at 33, the quest chop is exempt and plans.
+    const forage = require('../src/behaviours/forage')
+    const qbot = { entity: { position: pos(6, 64, 0) }, inventory: { items: () => bot.inv }, players: {} }
+    assert.equal(forage.questExempt(qbot, ctx, { kind: 'log', name: 'oak_log' }), true)
+    const resources = require('../src/resources')
+    resources.noteSpots(ctx, [{ x: 20, y: 64, z: 0, name: 'oak_log' }], 1000)
+    const plan = forage.planForage(qbot, ctx)
+    assert.equal(plan && plan.kind, 'log', 'the quest chops')
   })
 })

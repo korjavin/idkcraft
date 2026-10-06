@@ -524,6 +524,118 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.equal(bot._items.length, 36)
   })
 
+  it('funded shed spreads a 20-victim under a ceiling, skipping the occupied column (g0z.26 R4)', async () => {
+    // Revmux 03 major: the shed surveys air-verified, reach-capped columns
+    // — a 2-high room caps each at 2, the table column skips, and the fake
+    // placeBlock refuses occupied cells and anything above headroom, like
+    // Paper. Attempts (not just landings) prove the survey never aims at a
+    // refusal.
+    const stacks = [stack('oak_planks', 12), stack('dirt', 20)]
+    for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 36)
+    const cells = { '1,64,0': 'crafting_table' } // the table: first offset, occupied
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => {
+        const key = `${p.x},${p.y},${p.z}`
+        if (cells[key]) return { name: cells[key], position: { x: p.x, y: p.y, z: p.z } }
+        const name = p.y < 64 ? 'dirt' : p.y > 65 ? 'stone' : 'air' // 2-high room
+        return { name, position: { x: p.x, y: p.y, z: p.z } }
+      },
+    })
+    let held = null
+    bot.equip = async (item) => { held = item && item.name }
+    const attempts = []
+    bot.placeBlock = async (ref, face) => {
+      const p = ref && ref.position ? ref.position : { x: 0, y: 63, z: 0 }
+      const f = face || { x: 0, y: 1, z: 0 }
+      const key = `${p.x + f.x},${p.y + f.y},${p.z + f.z}`
+      attempts.push(key)
+      const cur = cells[key] || ((p.y + f.y) < 64 ? 'dirt' : (p.y + f.y) > 65 ? 'stone' : 'air')
+      if (cur !== 'air') throw new Error(`refused: ${key} holds ${cur}`)
+      cells[key] = held
+      const ix = bot._items.findIndex((i) => i.name === held)
+      if (ix >= 0) {
+        if (bot._items[ix].count <= 1) bot._items.splice(ix, 1)
+        else bot._items[ix].count--
+      }
+    }
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, prodRecipe('chest', 1), 1, {}, { ctx, item: 'chest' })
+    assert.equal(bot.calls.craft.length, 1, 'the freed slot takes the chest')
+    assert.ok(!bot._items.some((i) => i.name === 'dirt' && i.count === 20), 'the victim is gone')
+    assert.equal(attempts.length, 20, 'every placement aimed once, none refused')
+    for (const key of attempts) {
+      const [x, y, z] = key.split(',').map(Number)
+      assert.ok(y <= 65, `${key} stays below the ceiling`)
+      assert.ok(!(x === 1 && z === 0), `${key} skips the occupied table column`)
+    }
+    assert.equal(bot._items.filter((i) => i.name === 'dirt').length, 34, 'the dirt-64s stay packed')
+  })
+
+  it('funded shed that cannot fit: no doomed pillars, honest inventory-full (g0z.26 R4)', async () => {
+    // A dirt-64 victim under a 1-high ceiling (16 columns of cap 1): the
+    // survey refuses up front — starting anyway would strand 16 blocks and
+    // eat the ground for the retry.
+    const stacks = [stack('oak_planks', 12), stack('dirt', 64)]
+    for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 36)
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => ({ name: p.y < 64 ? 'dirt' : p.y > 64 ? 'stone' : 'air', position: { x: p.x, y: p.y, z: p.z } }),
+    })
+    bot.equip = async () => {}
+    let attempts = 0
+    bot.placeBlock = async () => { attempts++ }
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await assert.rejects(
+      craft.safeCraft(bot, prodRecipe('chest', 1), 1, {}, { ctx, item: 'chest' }),
+      /inventory-full/,
+    )
+    assert.equal(attempts, 0, 'nothing placed when nothing fits')
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot._items.length, 36)
+  })
+
+  it('a refused column abandons the column, not the shed (g0z.26 R4)', async () => {
+    // The first placement throws (transient refusal): the shed moves to the
+    // next surveyed column and still frees the slot.
+    const stacks = [stack('oak_planks', 12), stack('dirt', 3)]
+    for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 36)
+    const cells = {}
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => {
+        const key = `${p.x},${p.y},${p.z}`
+        if (cells[key]) return { name: cells[key], position: { x: p.x, y: p.y, z: p.z } }
+        return { name: p.y < 64 ? 'dirt' : 'air', position: { x: p.x, y: p.y, z: p.z } }
+      },
+    })
+    bot.equip = async (item) => { bot._held = item && item.name }
+    let n = 0
+    const attempts = []
+    bot.placeBlock = async (ref, face) => {
+      const p = ref && ref.position ? ref.position : { x: 0, y: 63, z: 0 }
+      const f = face || { x: 0, y: 1, z: 0 }
+      const key = `${p.x + f.x},${p.y + f.y},${p.z + f.z}`
+      attempts.push(key)
+      n++
+      if (n === 1) throw new Error('transient refusal')
+      cells[key] = bot._held
+      const ix = bot._items.findIndex((i) => i.name === bot._held)
+      if (ix >= 0) {
+        if (bot._items[ix].count <= 1) bot._items.splice(ix, 1)
+        else bot._items[ix].count--
+      }
+    }
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, prodRecipe('chest', 1), 1, {}, { ctx, item: 'chest' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.equal(attempts.length, 4, 'one refusal plus the three-victim shed')
+    assert.ok(!bot._items.some((i) => i.name === 'dirt' && i.count === 3), 'the victim is gone')
+  })
+
   it('a full adopted chest falls through to the next chest in reach (g0z.26)', async () => {
     const bot = roomBot({
       stacks: fullPack(),

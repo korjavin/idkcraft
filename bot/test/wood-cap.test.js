@@ -526,6 +526,44 @@ describe('reserve corner exits (g0z.26 R3, revmux 02 majors)', () => {
     assert.equal(forage.planForage(packBot(inv), ctx), null, 'refused quest: explore, never a doomed walk')
   })
 
+  it('R4: the well-fed reserve corner never hunts (no 36-fill)', () => {
+    // Revmux 03 major: the M3 plan gate's null fell through to findAnimal
+    // and the kill filled the reserved slot. Under the reserve a full pack
+    // explores instead — with refused-log memory (the round-3 trace) and
+    // with nothing remembered at all.
+    const cow = { 7: { id: 7, name: 'cow', position: pos(5, 64, 0) } }
+    const inv = [...oak5, { name: 'iron_pickaxe', count: 1 }, ...dirt(33)]
+    assert.equal(inv.length, 35)
+    const refused = noChestCtx()
+    resources.noteSpots(refused, [
+      { x: 10, y: 64, z: 0, name: 'birch_log' },
+      { x: 12, y: 60, z: 0, name: 'iron_ore' },
+    ], 1000)
+    const bot = packBot(inv, { food: 20, entities: cow })
+    assert.equal(stockpile.slotReserved(bot, refused), true, 'the reserve binds')
+    assert.equal(forage.planForage(bot, refused), null, 'refused quest + cow: explore, never hunt')
+    assert.equal(forage.planForage(packBot(inv, { food: 20, entities: cow }), noChestCtx()), null, 'no memory + cow: explore, never hunt')
+  })
+
+  it('R4: the reserve corner hunts hungry-onto-a-stack, or starving (one kill)', () => {
+    // Hunger still feeds: peckish onto same-drop room (no new slot), and
+    // starving even without room (survival beats the reserve) — but one
+    // kill, never a batch (the batch would overflow the checked room).
+    const cow = { 7: { id: 7, name: 'cow', position: pos(5, 64, 0) } }
+    const base = [...oak5, { name: 'iron_pickaxe', count: 1 }]
+    const peckish = [...base, { name: 'beef', count: 3 }, ...dirt(32)]
+    assert.equal(peckish.length, 35)
+    const fed = forage.planForage(packBot(peckish, { food: 10, entities: cow }), noChestCtx())
+    assert.equal(fed && fed.kind, 'food', 'peckish with beef room: hunt')
+    assert.equal(fed && fed.want, 1, 'one kill under the reserve')
+    const starving = [...base, ...dirt(33)]
+    const meal = forage.planForage(packBot(starving, { food: 5, entities: cow }), noChestCtx())
+    assert.equal(meal && meal.kind, 'food', 'starving without room: hunt anyway')
+    assert.equal(meal && meal.want, 1)
+    const shy = forage.planForage(packBot(starving, { food: 10, entities: cow }), noChestCtx())
+    assert.equal(shy, null, 'peckish without room: explore')
+  })
+
   it('M2: shedVictim sheds the smallest junk, never wood, stations or light', () => {
     assert.deepEqual(
       craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'cobblestone', count: 3 }]),
