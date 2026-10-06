@@ -99,8 +99,8 @@ const MENU = {
     // Wood ceiling (g0z.26): past the cap a full load no longer converts —
     // the planks would pile past what the castle needs (prod: 700 in 11
     // slots). Table/door branches are unaffected (they spend planks).
-    feasible: (facts, bot, ctx) => (facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
-      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
+    feasible: (facts, bot, ctx) => !(ctx && ctx.home && ctx.home.parked) && ((facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
+      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced)),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
@@ -145,6 +145,9 @@ const MENU = {
     // plank remainder passes with any plank count. Skipped (given-up) cells
     // count as done, the same as in the build behaviour.
     feasible: (facts, bot, ctx) => {
+      // Parked house (vmzq.3): the L2 episode vetoes the house chain —
+      // the bot does side work instead until resume.
+      if (ctx && ctx.home && ctx.home.parked) return false
       if (nightHurt(facts)) return false
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
@@ -283,6 +286,7 @@ const MENU = {
     // is the menu-wide twin of this gate). gyw: relocation past the
     // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
+      if (ctx && ctx.home && ctx.home.parked) return false
       if (nightHurt(facts)) return false
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
@@ -365,7 +369,10 @@ const MENU = {
     // past any known flip (bt8s, the castlefetch demand precedent): the
     // text-keyed failHolds releases on every near/none flip and churned
     // forage<->explore every few seconds on the rig. A blocked castle vetoes
-    // the hunt by day (g0z.23): the bot stays on the build instead.
+    // the hunt by day (g0z.23): the bot stays on the build instead. A
+    // parked task keeps the hunt but only near finds (vmzq.3 side work):
+    // the pickers in forage.js skip far cells while parked, so known
+    // reads none when only far finds remain — no gate needed here.
     feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx) && !castleBlocked(facts),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
@@ -378,11 +385,17 @@ const MENU = {
     // where gather died. Night pre-house never wanders, and neither does a
     // bot with anyone online (p4s: stay with the player, the owner sees).
     // A blocked castle vetoes the built-home search by day (g0z.23); the
-    // pre-house stranded branch below stays.
+    // pre-house stranded branch below stays. A parked task vetoes the
+    // built-home search (vmzq.3: the parked wander is the failure to
+    // stop); the stranded branch vetoes on the house park only (R2).
     feasible: (facts, bot, ctx) => {
-      if (facts.home === 'built') return !castleBlocked(facts)
+      if (facts.home === 'built') return !castleBlocked(facts) && !taskParked(ctx)
       if (facts.time !== 'day') return false
       if (facts.player !== 'none') return false
+      // The stranded branch is the only release for a no-trees hold (gyw),
+      // so an owner castle stop — no timer, never auto-resumes — must not
+      // veto it (R2). Only the timer-bounded house park does.
+      if (ctx && ctx.home && ctx.home.parked) return false
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
       } catch (_) {
@@ -451,6 +464,25 @@ function castleFetchGo(facts, bot, ctx) {
 function castleBlocked(facts) {
   if (!facts || facts.castle !== 'blocked' || facts.time !== 'day') return false
   return registered('castle')
+}
+
+// Task park (idkcraft-vmzq.3, supersedes g0z.24): ANY parked task — owner
+// castle stop or the L2 episode — vetoes the built-home explore. The veto
+// is a property of the parked task, never of a castle word (g0z.24's
+// design is rejected: it would strand a tool-less bot). Forage stays as
+// side work (owner Q2) but only near finds: the pickers in forage.js skip
+// cells past PARK_FORAGE_RADIUS of home/castle while parked, so a parked
+// bot cannot chain to a 300-block remembered diamond. 64 is the epic's
+// own bound (stage-2: ends at home/site, not >64 away).
+const PARK_FORAGE_RADIUS = 64
+function taskParked(ctx) {
+  try {
+    if (ctx && ctx.castle && ctx.castle.parked) return true
+  } catch (_) { /* unparked */ }
+  try {
+    if (ctx && ctx.home && ctx.home.parked) return true
+  } catch (_) { /* unparked */ }
+  return false
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -1396,6 +1428,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.inside !== 'no') return 'shelter: already inside'
       return 'shelter: home is close'
     case 'craft':
+      if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
       if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
       if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
@@ -1416,6 +1449,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
+      if (ctx && ctx.home && ctx.home.parked) return 'build: house parked'
       if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
       // Facts-level wording; the exact remainder gate lives in the rule.
       // Item gates run first (the rule yields on a missing item first),
@@ -1483,6 +1517,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'castlefetch: batch on hand'
     }
     case 'gather':
+      if (ctx && ctx.home && ctx.home.parked) return 'gather: house parked'
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
       return 'gather: load full'
@@ -1520,6 +1555,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
     case 'explore':
+      if (taskParked(ctx)) return 'explore: parked, staying near home'
       if (facts.home !== 'built') return 'explore: house not built yet'
       if (castleBlocked(facts)) return 'explore: castle blocked, waiting at the site'
       return 'explore: nowhere new to go'
@@ -1856,4 +1892,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS }

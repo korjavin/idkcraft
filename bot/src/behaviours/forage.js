@@ -152,6 +152,29 @@ function questExempt(bot, ctx, target) {
     return false
   }
 }
+// Park bound (idkcraft-vmzq.3 R2/R3): while a task is parked, remembered
+// cells stay within PARK_FORAGE_RADIUS of home/castle — the menu pick and
+// every mid-run replan share this filter (all three pickers below), so a
+// dug-out near stand ends the leg (replan's null finish) instead of
+// chaining to a far cell. The food fallback is gated separately below
+// (parkedHuntOk): near animals only — a 48-block hop chain re-centers
+// every replan and would walk the bot home-away (R3/R5).
+// Deferred goal require (questBatch precedent — goal.js loads forage).
+function parkedCellSkipped(ctx, item) {
+  try {
+    const g = require('../goal')
+    if (!g.taskParked(ctx)) return false
+    if (!item || typeof item.x !== 'number' || typeof item.z !== 'number') return true
+    const radius = g.PARK_FORAGE_RADIUS || 64
+    const anchors = []
+    if (ctx && ctx.home && ctx.home.site) anchors.push(ctx.home.site)
+    if (ctx && ctx.castle && ctx.castle.site) anchors.push(ctx.castle.site)
+    if (anchors.length === 0) return true // parked with no anchor: no far walk
+    return !anchors.some((a) => Math.hypot(item.x - a.x, item.z - a.z) <= radius)
+  } catch (_) {
+    return false
+  }
+}
 function bestMemoryCell(bot, ctx, bp) {
   const mem = ctx && ctx.resources
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
@@ -171,6 +194,7 @@ function bestMemoryCell(bot, ctx, bp) {
   let bestLogDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
@@ -235,6 +259,7 @@ function gearWantCell(bot, ctx, bp, key) {
   let bestD = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number' || typeof item.name !== 'string') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (!re.test(item.name)) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue
@@ -264,6 +289,7 @@ function bestDiamondCell(bot, ctx, bp) {
   let bestDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
+    if (parkedCellSkipped(ctx, item)) continue
     if (typeof item.name !== 'string' || !item.name.includes('diamond')) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue
@@ -318,6 +344,20 @@ function huntAllowed(bot, ctx, drop) {
     return true
   }
 }
+// Parked hunts (vmzq.3 R3/R5): a parked bot hunts only near animals —
+// the same anchor radius as cells. No hunger exemption (05-verify
+// major): hunts drop raw meat, which eatReflex never eats
+// (EDIBLE_FOODS has no raw), so a hungry bot would chain-hunt outward
+// without ever getting fed — pure drift, third raising of park drift.
+function parkedHuntOk(ctx, found) {
+  try {
+    const g = require('../goal')
+    if (!g.taskParked(ctx)) return true
+    return !!(found && found.position && !parkedCellSkipped(ctx, found.position))
+  } catch (_) {
+    return true
+  }
+}
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
@@ -368,7 +408,7 @@ function planForage(bot, ctx) {
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop && huntAllowed(bot, ctx, drop)) {
+    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(ctx, found)) {
       // Under the reserve a hunt is one kill: a full batch would overflow
       // the checked stack room onto new slots.
       let reserved = false
@@ -651,7 +691,10 @@ function forage(bot, ctx, target, state) {
       const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
       if (!ent) {
         const found = (() => { try { return bring.findAnimal(bot, t.drop) } catch (_) { return null } })()
-        if (!found || found.name !== t.name) {
+        // Parked re-target (vmzq.3 R4): the in-leg find must pass the
+        // same gate as planForage, or each kill re-centers a 48-block
+        // hop away from home (03 major). replan already applies it.
+        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found)) {
           if (!replan(bot, ctx, f, bp)) return
           return
         }

@@ -136,9 +136,9 @@ const recover = new client.Counter({
   help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
   labelNames: ['action', 'source', 'outcome']
 })
-// Task executive (idkcraft-vmzq.2): progress invariant gauges per task
+// Task executive (idkcraft-vmzq.2/.3): progress invariant gauges per task
 // (castle|house). stall_seconds is the wall time since progress; stall_total
-// counts L1 honest-line escalations by task and level.
+// counts L1/L2/L3 escalations by task and level.
 const taskProgress = new client.Gauge({
   name: 'idkcraft_bot_task_progress',
   help: 'Task done cells by task (castle place cells, house placed cells)',
@@ -156,7 +156,7 @@ const taskStallSeconds = new client.Gauge({
 })
 const taskStallTotal = new client.Counter({
   name: 'idkcraft_bot_task_stall_total',
-  help: 'Task stall escalations by task and level (L1 = honest line)',
+  help: 'Task stall escalations by task and level (L1 = honest line, L2 = park, L3 = day latch)',
   labelNames: ['task', 'level']
 })
 module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, setVitals, serve }
