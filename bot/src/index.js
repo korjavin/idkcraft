@@ -839,19 +839,26 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // while a mob outside holds fight (this idle never runs the
         // handler, and the order gate above only runs it on non-fight
         // ticks). jr2.3 holds: fight is never dispatched here, the legs
-        // are doorway direct control (no A*, no pursuit into the crowd),
-        // and the rw4.17 wall guard stays armed. Positive-day only (the
-        // dayDivert fail-closed precedent): night keeps the hold, and a
-        // gocastle without an exiting comehome keeps it too (its walk is
-        // A* — from inside it would path the wall).
+        // are doorway direct control (no A*, no pursuit), and the rw4.17
+        // wall guard stays armed. A hostile standing on the out-lane
+        // holds the exit shut instead of opening into it (revmux 01
+        // core-1, the bead's 'не выбегая в толпу'); the gate re-checks
+        // every tick, so a cleared lane resumes at once. Positive-day
+        // only (the dayDivert fail-closed precedent): night keeps the
+        // hold, and a gocastle without an exiting comehome keeps it too
+        // (its walk is A* — from inside it would path the wall).
         if (dayNow && ctx.comehome && ctx.comehome.exiting) {
-          const handler = BEHAVIOURS.comehome
-          if (typeof handler === 'function') handler(bot, ctx, target, state)
-          // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
-          try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
-          const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-          console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
-          return { decision: { ...decision, action: 'comehome' }, calledBrain }
+          let laneBlocked = false
+          try { laneBlocked = homeMod.outLaneBlocked(bot, (ctx.comehome && ctx.comehome.home) || ctx.home) } catch (_) { laneBlocked = false }
+          if (!laneBlocked) {
+            const handler = BEHAVIOURS.comehome
+            if (typeof handler === 'function') handler(bot, ctx, target, state)
+            // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
+            try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
+            const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+            console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
+            return { decision: { ...decision, action: 'comehome' }, calledBrain }
+          }
         }
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above

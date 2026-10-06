@@ -1022,6 +1022,69 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
       cap.release()
     }
   })
+
+  it('a hostile on the out-lane holds the exit shut; a cleared lane resumes (revmux 01 core-1)', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    const camper = { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 }
+    bot.entities = { 22: camper }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'lane blocked: hold shut')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.ok(!ctx.comehome.openTicks, 'door never touched')
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door stays shut')
+      // The camper wanders off: the next fight ticks run the legs.
+      bot.entities = {}
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'exit', 'legs resume once the lane clears')
+    } finally {
+      cap.release()
+    }
+  })
+})
+
+describe('rw4.18 outLaneBlocked reads the approach cell, not the bot', () => {
+  function mob(name, x, y, z, extra = {}) {
+    return { id: 31, name, type: 'mob', position: pos(x, y, z), height: 1.95, ...extra }
+  }
+
+  it('blocks on the cell and its ring, clears past it; v1 geometry too', () => {
+    const botOn = (e) => ({ entities: { 31: e } })
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)), v2home()), true, 'on the out cell')
+    assert.equal(home.outLaneBlocked(botOn(mob('skeleton', OUT2.x + 0.5, OUT2.y, OUT2.z - 0.5)), v2home()), true, 'adjacent ring')
+    assert.equal(home.outLaneBlocked(botOn(mob('creeper', OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)), v2home()), true, 'creepers count')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT2.x + 0.5, OUT2.y, OUT2.z - 3)), v2home()), false, 'past the ring')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', MEET2.x, MEET2.y, MEET2.z + 4)), v2home()), false, 'a wall-presser behind the house')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT1.x + 0.5, OUT1.y, OUT1.z + 0.5)), v1home()), true, 'v1 out cell')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT1.x + 0.5, OUT1.y, OUT1.z - 3)), v1home()), false, 'v1 past the ring')
+  })
+
+  it('endermen, players and unreadable worlds never block', () => {
+    const botOn = (e) => ({ entities: { 31: e } })
+    const at = { x: OUT2.x + 0.5, y: OUT2.y, z: OUT2.z + 0.5 }
+    assert.equal(home.outLaneBlocked(botOn(mob('enderman', at.x, at.y, at.z)), v2home()), false, 'neutral unless provoked')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z, { type: 'player' })), v2home()), false, 'players never block')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z, { isValid: false })), v2home()), false, 'dead entities skip')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z)), null), false, 'no home reads clear')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z)), {}), false, 'no site reads clear')
+    assert.equal(home.outLaneBlocked({}, v2home()), false, 'no entities reads clear')
+  })
 })
 
 describe('jr2.3 move commands exit through the doorway, repeat and stop never hang', () => {

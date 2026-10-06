@@ -2,6 +2,7 @@
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
+const { HOSTILE_NAMES } = require('../perception')
 const { goalFacts, timeWord } = require('../goal')
 const detour = require('../detour')
 const stuck = require('../stuck')
@@ -170,6 +171,40 @@ function playerAtDoor(bot, home) {
       if (p.z < roomZ && Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
     }
   } catch (_) { /* unreadable roster: the old rule stands */ }
+  return false
+}
+
+// Out-lane block (rw4.18, revmux 01 core-1): a hostile standing on or
+// beside the outside approach cell while the exit legs would step out. The
+// rw4.18 tick gate holds (door shut) instead of opening into it — the
+// bead's 'не выбегая в толпу'. Radius 2 around the out-cell centre: the
+// cell itself plus the adjacent ring, with a step of margin for wandering
+// mobs; the gate re-checks every tick, so a cleared lane resumes at once
+// and mobs pressing other walls never hold. Creepers count (the step-out
+// lands inside their blast); endermen don't (neutral unless stared at or
+// struck, and the legs do neither — the isFightTarget precedent), and
+// players never block (stepping out to the owner is the point). Anything
+// unreadable reads as clear: the exit legs validate the home themselves
+// (failMeet), and a missing world must not latch a silent hold.
+const OUT_LANE_BLOCKED_R = 2
+function outLaneBlocked(bot, home) {
+  try {
+    const site = home && home.site
+    if (!site || typeof site.x !== 'number') return false
+    const out = outsidePos(home)
+    const ox = out.x + 0.5
+    const oz = out.z + 0.5
+    const ents = (bot && bot.entities) || {}
+    for (const key of Object.keys(ents)) {
+      const e = ents[key]
+      if (!e || e.isValid === false || e.type === 'player') continue
+      const p = e.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') continue
+      const nm = e.name || ''
+      if (!HOSTILE_NAMES.has(nm) || nm === 'enderman') continue
+      if (Math.hypot(p.x - ox, p.y - out.y, p.z - oz) <= OUT_LANE_BLOCKED_R) return true
+    }
+  } catch (_) { /* unreadable reads as clear, see above */ }
   return false
 }
 
@@ -1407,4 +1442,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, SHELTER_RUN_FRESH_MS }
