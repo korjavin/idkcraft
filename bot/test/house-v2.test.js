@@ -653,7 +653,9 @@ describe('jr2.1 memory keeps the house version', () => {
 
   it('round-trips v2 with its rooms', () => {
     const bot = { username: 'Jr2Bot', spawnPoint: { x: 0, y: 64, z: 0 } }
-    const ctx = { home: goal.siteFor({ blockAt: () => null, spawnPoint: bot.spawnPoint }, { x: 0, y: 64, z: 0 }) }
+    // vmzq.12: unloaded ground founds nothing — the memory round-trip reads a flat site.
+    const flat = { blockAt: (p) => ({ name: Math.floor(p.y) <= 63 ? 'dirt' : 'air' }), spawnPoint: bot.spawnPoint }
+    const ctx = { home: goal.siteFor(flat, { x: 0, y: 64, z: 0 }) }
     ctx.home.built = true
     assert.equal(memory.save(bot, ctx), true)
     const ctx2 = {}
@@ -666,7 +668,9 @@ describe('jr2.1 memory keeps the house version', () => {
 
   it('a version-less file restores as v1 (pre-patch prod homes)', () => {
     const bot = { username: 'Jr2Bot', spawnPoint: { x: 0, y: 64, z: 0 } }
-    const ctx = { home: goal.siteFor({ blockAt: () => null, spawnPoint: bot.spawnPoint }, { x: 0, y: 64, z: 0 }) }
+    // vmzq.12: unloaded ground founds nothing — the memory round-trip reads a flat site.
+    const flat = { blockAt: (p) => ({ name: Math.floor(p.y) <= 63 ? 'dirt' : 'air' }), spawnPoint: bot.spawnPoint }
+    const ctx = { home: goal.siteFor(flat, { x: 0, y: 64, z: 0 }) }
     assert.equal(memory.save(bot, ctx), true)
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
     for (const h of raw.homes) delete h.v

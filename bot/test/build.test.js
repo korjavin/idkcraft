@@ -470,6 +470,8 @@ describe('rpw build here on a built home starts a new house', () => {
         { name: 'dirt', count: 32 },
       ],
     })
+    // vmzq.12: the bot stands by the speaker — a far speaker reads last-known.
+    bot.entity.position = pos(100, 65, 100)
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
     return bot
   }
@@ -500,6 +502,8 @@ describe('b2o build here answers and starts work', () => {
   function chatBot() {
     const world = makeWorld()
     const bot = mockBot(world)
+    // vmzq.12: the bot stands by the speaker — a far speaker reads last-known.
+    bot.entity.position = pos(100, 65, 100)
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
     return bot
   }

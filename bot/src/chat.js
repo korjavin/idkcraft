@@ -22,6 +22,11 @@ const deepOffers = new Map()
 // A target more than this far below the requesting player is announced, not
 // led to: walking the player down to buried ore is how prod fell to death.
 const DEEP_WARN_DROP = 8
+// A 'build here' speaker farther than this is last-known, not live
+// (idkcraft-vmzq.12): the server stops sending entity position updates
+// past tracking range, and the prod shore site was founded on such a
+// stale reading (~150 blocks from the bot). Refused like unseen.
+const BUILD_HERE_RANGE = 64
 
 // Wet-commit guard (revmux 02 core-1): the same 'submerged' predicate the
 // bring loop applies — the ore cell itself for exposed targets, the dig
@@ -339,12 +344,35 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       bot.chat("I can't see you, come closer")
       return
     }
+    // vmzq.12: past tracking range the entity position is last-known, not
+    // live — refuse it the same way instead of siting on stale coords.
+    const bp = bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number' && typeof bp.y === 'number' && typeof pos.y === 'number') {
+      if (Math.hypot(bp.x - pos.x, bp.y - pos.y, bp.z - pos.z) > BUILD_HERE_RANGE) {
+        bot.chat("I can't see you, come closer")
+        return
+      }
+    }
     // rpw: always a new site, even over a built home — the owner asked.
     // The new home becomes current (gohome/night go there); old walls stay
     // protected by build.js guardOwnWalls (block-type based, not site).
     // b2o: then the same transition as 'go work' — follow drops the body
     // and the goal loop starts building instead of trailing the owner.
     const site = goal.siteFor(bot, pos)
+    // vmzq.12: validated sites only — every footprint wet or unloaded
+    // refuses honestly instead of founding blind. Unloaded heals (chunks
+    // load, the owner re-orders); wet needs another spot.
+    if (!site) {
+      let groundLoaded = false
+      try {
+        groundLoaded = typeof bot.blockAt === 'function' &&
+          bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z))) != null
+      } catch (_) { groundLoaded = false }
+      bot.chat(groundLoaded
+        ? 'no dry ground near you — try another spot'
+        : "I can't see the ground there yet — say build here again in a moment")
+      return
+    }
     if (ticker && typeof ticker.setHome === 'function') ticker.setHome(site, { fresh: true })
     if (ticker) ticker.work()
     const st = (site && site.site) || {}

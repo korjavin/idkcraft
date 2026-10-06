@@ -31,6 +31,13 @@ function goalBot({ items = [], timeOfDay = 6000, at = pos(0, 64, 0), spawn = pos
   }
 }
 
+// Flat loaded chunks for siteFor (vmzq.12): unloaded ground founds nothing,
+// so a test that needs a real v2 home reads flat dirt here. groundY only
+// reads the block name.
+function flatBot() {
+  return { ...goalBot(), blockAt: (p) => ({ name: Math.floor(p.y) <= 63 ? 'dirt' : 'air' }) }
+}
+
 describe('goal constants and menu shape', () => {
   it('house budget constants', () => {
     assert.equal(NEED_LOGS, 14)
@@ -107,7 +114,7 @@ describe('goalFacts', () => {
     // on a v2 home or none.
     const v1line = { time: 'day', logs: 0, planks: 50, table: 1, door: 1, home: 'site', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }
     const v1home = { site: pos(6, 64, 0), v: 1 }
-    const v2home = siteFor(goalBot(), pos(0, 64, 0))
+    const v2home = siteFor(flatBot(), pos(0, 64, 0))
     assert.ok(goalText(v1line, v1home).includes('planks=enough'), 'v1 budget met reads enough')
     assert.ok(goalText(v1line, v2home).includes('planks=few'), 'same kit reads few on v2')
     assert.ok(goalText(v1line).includes('planks=few'), 'no home defaults to the v2 budget')
@@ -137,7 +144,7 @@ describe('MENU feasibility gates', () => {
     assert.equal(goalFsm(ready, ['rest']), 'rest')
     // Version-aware budget: a v1-sized kit ends a v1 repair gather but not a v2 one.
     const v1ctx = { home: { site: pos(6, 64, 0), v: 1 } }
-    const v2ctx = { home: siteFor(goalBot(), pos(0, 64, 0)) }
+    const v2ctx = { home: siteFor(flatBot(), pos(0, 64, 0)) }
     const kit = { ...base, logs: 0, planks: 50, table: 1, door: 1, home: 'site' }
     assert.equal(F('gather', kit, goalBot(), v1ctx), false)
     assert.equal(F('gather', kit, goalBot(), v2ctx), true)
@@ -164,7 +171,7 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('build', { ...base, planks: 48 }, bot, {}), true) // homeless: defaults the site
     assert.equal(F('build', { ...base, planks: 16 }, bot, {}), true) // one full batch
     assert.equal(F('build', { ...base, planks: 15 }, bot, {}), false) // short of a batch
-    const siteCtx = { home: siteFor(bot, pos(0, 64, 0)) } // all cells read missing: full remainder
+    const siteCtx = { home: siteFor(flatBot(), pos(0, 64, 0)) } // all cells read missing: full remainder
     const kit = { table: 1, door: 1 } // the item gate needs both held for a full remainder
     assert.equal(F('build', { ...base, ...kit, planks: 48, home: 'site' }, bot, siteCtx), true)
     assert.equal(F('build', { ...base, ...kit, planks: 15, home: 'site' }, bot, siteCtx), false)
@@ -1165,14 +1172,13 @@ describe('xoj stepWhy mirrors the next-cell item gate', () => {
   const day = { time: 'day', logs: 0, home: 'site', tablePlaced: false, inside: 'no' }
   it('fresh site, table held, planks short: the batch is the reason, not the door', () => {
     const bot = goalBot() // no blockAt: every cell reads missing, next is the table
-    const ctx = { home: siteFor(bot, pos(0, 64, 0)) }
+    const ctx = { home: siteFor(flatBot(), pos(0, 64, 0)) }
     const facts = { ...day, planks: 5, maxPlanks: 5, table: 1, door: 0 }
     assert.equal(MENU.build.feasible(facts, bot, ctx), false)
     assert.equal(stepWhy('build', facts, bot, ctx, ''), 'build: need 16 planks, have 5')
   })
   it('door cell next, door missing: the item is the reason', () => {
-    const probe = goalBot()
-    const home = siteFor(probe, pos(0, 64, 0))
+    const home = siteFor(flatBot(), pos(0, 64, 0))
     const bot = goalBot()
     bot.blockAt = (p) => {
       const dx = Math.floor(p.x) - home.site.x
