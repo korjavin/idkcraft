@@ -17,6 +17,10 @@ const { CHAT_LIMIT } = require('./commands')
 const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_HOUSE_CACHE_MS = 60 * 1000
 const TASK_FAILS_KEPT = 3
+// Per-tick stall increment cap (verify core-2): ticks that return before the
+// hook (idle, recover, reflexes) leave lastAt stale; without a clamp the next
+// hooked tick would bill the whole gap, nights included, as one instant L1.
+const STALL_TICK_CLAMP_MS = 10000
 
 function taskKind(ctx) {
   try {
@@ -77,9 +81,61 @@ function houseProgress(bot, home) {
   return { done, total: plan.length }
 }
 
-// Diagnosis for the L1 line, extracted from the status builder shape
-// (orders.js status: step, stepStatus, stepPick.why, skipped/blocked holds)
-// plus the castle word and recent failures. .3/.5 consume this same string.
+// Shared with orders.status (verify scope): the skipped/blocked reasons, one
+// implementation used by both the status lines and the L1 diagnosis.
+function skippedReason(bot, ctx, facts, text, upto) {
+  try {
+    const goal = require('./goal')
+    let names = []
+    try {
+      names = Object.keys(goal.MENU).filter((n) => {
+        try {
+          if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
+        } catch (_) {
+          return false
+        }
+        return !goal.failHolds(ctx, n, text, bot)
+      })
+    } catch (_) { names = [] }
+    let skipped = ''
+    try { skipped = goal.restWhy(facts, bot, ctx, names, upto) } catch (_) { skipped = '' }
+    if (skipped && skipped !== 'model choice') return `skipped: ${skipped}`
+  } catch (_) { /* skipped best-effort */ }
+  return null
+}
+
+function blockedReason(bot, ctx, facts, text) {
+  try {
+    const goal = require('./goal')
+    const fails = ctx && ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
+    if (fails.length === 0) return null
+    const holding = fails.filter((n) => {
+      try {
+        if (goal.failHolds(ctx, n, text, bot)) return true
+      } catch (_) { /* fall through to the gather latch */ }
+      try {
+        return n === 'gather' && goal.gatherFailedHolds(ctx.gather, facts.logs, bot)
+      } catch (_) {
+        return false
+      }
+    })
+    if (holding.length === 0) return null
+    const held = holding.map((n) => {
+      let w = null
+      try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
+      if (!w) {
+        const rec = (ctx.stepFail && ctx.stepFail[n]) || {}
+        w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
+      }
+      return w
+    })
+    return `blocked: ${held.join(', ')}`
+  } catch (_) { /* blocked best-effort */ }
+  return null
+}
+
+// Diagnosis for the L1 line: step, pick, the shared skipped/blocked holds,
+// the castle word and recent failures. .3/.5 consume this same string.
 function diagnose(bot, ctx) {
   const parts = []
   try {
@@ -95,47 +151,10 @@ function diagnose(bot, ctx) {
     const goal = require('./goal')
     const facts = goal.goalFacts(bot, ctx)
     const text = goal.goalText(facts, ctx && ctx.home)
-    let names = []
-    try {
-      names = Object.keys(goal.MENU).filter((n) => {
-        try {
-          if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
-        } catch (_) {
-          return false
-        }
-        return !goal.failHolds(ctx, n, text, bot)
-      })
-    } catch (_) { names = [] }
-    let skipped = ''
-    try { skipped = goal.restWhy(facts, bot, ctx, names, (ctx && ctx.step) || 'none') } catch (_) { skipped = '' }
-    if (skipped && skipped !== 'model choice') parts.push(`skipped: ${skipped}`)
-    try {
-      const fails = ctx && ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
-      if (fails.length > 0) {
-        const holding = fails.filter((n) => {
-          try {
-            if (goal.failHolds(ctx, n, text, bot)) return true
-          } catch (_) { /* fall through to the gather latch */ }
-          try {
-            return n === 'gather' && goal.gatherFailedHolds(ctx.gather, facts.logs, bot)
-          } catch (_) {
-            return false
-          }
-        })
-        if (holding.length > 0) {
-          const held = holding.map((n) => {
-            let w = null
-            try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
-            if (!w) {
-              const rec = (ctx.stepFail && ctx.stepFail[n]) || {}
-              w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
-            }
-            return w
-          })
-          parts.push(`blocked: ${held.join(', ')}`)
-        }
-      }
-    } catch (_) { /* blocked best-effort */ }
+    const sk = skippedReason(bot, ctx, facts, text, (ctx && ctx.step) || 'none')
+    if (sk) parts.push(sk)
+    const bl = blockedReason(bot, ctx, facts, text)
+    if (bl) parts.push(bl)
   } catch (_) { /* facts best-effort */ }
   try {
     const cw = ctx && ctx.castleWord
@@ -165,6 +184,38 @@ function chatL1(kind, done, total, diagnosis) {
   const diag = String(diagnosis || 'unknown')
   const clipped = diag.length > maxDiag && maxDiag > 1 ? diag.slice(0, maxDiag - 1) + '…' : diag
   return prefix + clipped + suffix
+}
+
+// Clamped stall advance; returns nothing, updates state in place.
+function addStall(state, now) {
+  const lastAt = typeof state.lastAt === 'number' ? state.lastAt : now
+  state.stallMs = (state.stallMs || 0) + Math.min(Math.max(0, now - lastAt), STALL_TICK_CLAMP_MS)
+  state.lastAt = now
+}
+
+// L1 check + fire. Dedupes on the diagnosis string (sayBlocked precedent):
+// a repeated identical diagnosis stays silent instead of re-chatting every
+// 15 min; the throttle still moves so the next distinct diagnosis is fresh.
+function maybeL1(bot, ctx, kind, done, total, state, now) {
+  if (state.stallMs < TASK_STALL_L1_MS) return
+  if (state.lastL1At && now - state.lastL1At < TASK_STALL_L1_MS) return
+  const diagnosis = diagnose(bot, ctx)
+  if (diagnosis === state.lastL1Diag) {
+    state.lastL1At = now
+    return
+  }
+  const step = (ctx && ctx.step) || 'none'
+  try {
+    console.log(`task ${kind} ${done}/${total} stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
+  } catch (_) { /* log best-effort */ }
+  try {
+    bot.chat(chatL1(kind, done, total, diagnosis))
+  } catch (_) { /* chat best-effort */ }
+  try {
+    metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
+  } catch (_) { /* counter best-effort */ }
+  state.lastL1At = now
+  state.lastL1Diag = diagnosis
 }
 
 // Status line fragment: 'task castle 8/1722 stall=23m', or null when no task.
@@ -252,7 +303,9 @@ function castleCurrent(bot, ctx, st, now) {
     const cw = ctx && ctx.castleWord
     if (cw && typeof cw.kind === 'string' && cw.kind) {
       out.matKind = cw.kind
-      if (typeof cw.left === 'number') out.matLeft = cw.left
+      // Planks left oscillates when cells block (peek moves to the next
+      // infill cell), so it is not a progress signal (verify body-1).
+      if (cw.kind !== 'planks' && typeof cw.left === 'number') out.matLeft = cw.left
       try {
         out.matHave = require('./behaviours/castle').usable(bot, cw.kind)
       } catch (_) { /* inventory best-effort */ }
@@ -272,9 +325,9 @@ function castleProgressed(state, cur) {
 }
 
 // Regress moves the baseline (a creeper hole is repaired) without resetting
-// the clock — only growth resets. matHave is a high-water mark (core-3): it
-// never sinks, so a net-zero place/dig oscillation does not count as
-// progress; only gains above the previous high reset.
+// the clock — only growth resets. matHave is a high-water mark and matLeft
+// a low-water mark (core-3, verify body-1): neither ever moves against
+// progress, so net-zero oscillations do not count.
 function castleSinkBaseline(state, cur) {
   if (typeof cur.done === 'number' && (typeof state.done !== 'number' || cur.done < state.done)) state.done = cur.done
   if (typeof cur.total === 'number') state.total = cur.total
@@ -282,8 +335,6 @@ function castleSinkBaseline(state, cur) {
   if (cur.matKind && cur.matKind !== state.matKind) {
     state.matKind = cur.matKind
     state.matHave = cur.matHave
-    state.matLeft = cur.matLeft
-  } else if (typeof cur.matLeft === 'number' && (typeof state.matLeft !== 'number' || cur.matLeft > state.matLeft)) {
     state.matLeft = cur.matLeft
   }
 }
@@ -362,9 +413,18 @@ function taskTick(bot, ctx, now = Date.now()) {
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
       if (typeof cur.done !== 'number') {
-        // No progress reading yet (off-site, never scanned): hold the clock.
-        state.lastAt = now
-        setStallGauge(kind, state.stallMs || 0)
+        // Never read since connect (verify core-1): st.progress is not
+        // persisted, so an off-site stall would never advance. Advance with
+        // ?/? like the house; the first loaded reading baselines clean.
+        recordFail(ctx, state)
+        if (!eligible(bot, ctx)) {
+          state.lastAt = now
+          setStallGauge(kind, state.stallMs || 0)
+          return
+        }
+        addStall(state, now)
+        setStallGauge(kind, state.stallMs)
+        maybeL1(bot, ctx, kind, '?', '?', state, now)
         return
       }
       if (typeof state.done !== 'number') {
@@ -388,6 +448,7 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.stallMs = 0
         state.lastAt = now
         state.lastL1At = null
+        state.lastL1Diag = null
         state.fails = []
         setStallGauge(kind, 0)
         return
@@ -399,26 +460,9 @@ function taskTick(bot, ctx, now = Date.now()) {
         setStallGauge(kind, state.stallMs || 0)
         return
       }
-      const lastAt = typeof state.lastAt === 'number' ? state.lastAt : now
-      state.stallMs = (state.stallMs || 0) + Math.max(0, now - lastAt)
-      state.lastAt = now
+      addStall(state, now)
       setStallGauge(kind, state.stallMs)
-      if (state.stallMs >= TASK_STALL_L1_MS && (!state.lastL1At || now - state.lastL1At >= TASK_STALL_L1_MS)) {
-        const diagnosis = diagnose(bot, ctx)
-        const done = typeof cur.done === 'number' ? cur.done : 0
-        const total = typeof cur.total === 'number' ? cur.total : 0
-        const step = (ctx && ctx.step) || 'none'
-        try {
-          console.log(`task ${kind} ${done}/${total} stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
-        } catch (_) { /* log best-effort */ }
-        try {
-          bot.chat(chatL1(kind, done, total, diagnosis))
-        } catch (_) { /* chat best-effort */ }
-        try {
-          metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
-        } catch (_) { /* counter best-effort */ }
-        state.lastL1At = now
-      }
+      maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
       return
     }
 
@@ -434,24 +478,9 @@ function taskTick(bot, ctx, now = Date.now()) {
         setStallGauge(kind, state.stallMs || 0)
         return
       }
-      const noReadAt = typeof state.lastAt === 'number' ? state.lastAt : now
-      state.stallMs = (state.stallMs || 0) + Math.max(0, now - noReadAt)
-      state.lastAt = now
+      addStall(state, now)
       setStallGauge(kind, state.stallMs)
-      if (state.stallMs >= TASK_STALL_L1_MS && (!state.lastL1At || now - state.lastL1At >= TASK_STALL_L1_MS)) {
-        const diagnosis = diagnose(bot, ctx)
-        const step = (ctx && ctx.step) || 'none'
-        try {
-          console.log(`task ${kind} ?/? stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
-        } catch (_) { /* log best-effort */ }
-        try {
-          bot.chat(chatL1(kind, '?', '?', diagnosis))
-        } catch (_) { /* chat best-effort */ }
-        try {
-          metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
-        } catch (_) { /* counter best-effort */ }
-        state.lastL1At = now
-      }
+      maybeL1(bot, ctx, kind, '?', '?', state, now)
       return
     }
     if (typeof state.done !== 'number') {
@@ -475,6 +504,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           state.stallMs = 0
           state.lastAt = now
           state.lastL1At = null
+          state.lastL1Diag = null
           state.fails = []
           setStallGauge(kind, 0)
           return
@@ -489,6 +519,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       state.stallMs = 0
       state.lastAt = now
       state.lastL1At = null
+      state.lastL1Diag = null
       state.fails = []
       setStallGauge(kind, 0)
       return
@@ -501,25 +532,10 @@ function taskTick(bot, ctx, now = Date.now()) {
       setStallGauge(kind, state.stallMs || 0)
       return
     }
-    const lastAt = typeof state.lastAt === 'number' ? state.lastAt : now
-    state.stallMs = (state.stallMs || 0) + Math.max(0, now - lastAt)
-    state.lastAt = now
+    addStall(state, now)
     setStallGauge(kind, state.stallMs)
-    if (state.stallMs >= TASK_STALL_L1_MS && (!state.lastL1At || now - state.lastL1At >= TASK_STALL_L1_MS)) {
-      const diagnosis = diagnose(bot, ctx)
-      const step = (ctx && ctx.step) || 'none'
-      try {
-        console.log(`task ${kind} ${cur.done}/${cur.total} stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
-      } catch (_) { /* log best-effort */ }
-      try {
-        bot.chat(chatL1(kind, cur.done, cur.total, diagnosis))
-      } catch (_) { /* chat best-effort */ }
-      try {
-        metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
-      } catch (_) { /* counter best-effort */ }
-      state.lastL1At = now
-    }
+    maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_HOUSE_CACHE_MS, taskKind, diagnose, taskLine, resetTask, taskTick }
+module.exports = { TASK_STALL_L1_MS, TASK_HOUSE_CACHE_MS, STALL_TICK_CLAMP_MS, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick }

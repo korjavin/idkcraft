@@ -83,12 +83,19 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(bot.chats.length, 1, 'one L1 chat line')
     assert.match(taskLogs()[0], /^task castle 8\/1722 stall=900s step=castlefetch why=step=castlefetch running/)
     assert.match(bot.chats[0], /^castle: no progress for 15 min at 8\/1722 — step=castlefetch running.*; still trying$/)
-    // Further stalled ticks stay silent until the 15 min repeat.
+    // Further stalled ticks stay silent until the 15 min throttle passes.
     for (let s = 15 * 60 + 1; s <= 29 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 1, 'no repeat before 15 min')
     assert.equal(bot.chats.length, 1)
+    // Identical diagnosis stays deduped past the throttle (sayBlocked rule).
     for (let s = 29 * 60 + 1; s <= 30 * 60 + 1; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
-    assert.equal(taskLogs().length, 2, 'repeat at 15 min')
+    assert.equal(taskLogs().length, 1, 'same diagnosis does not repeat')
+    assert.equal(bot.chats.length, 1)
+    // A changed diagnosis repeats: new failure, 15 more min, second L1.
+    ctx.step = 'equip'
+    ctx.stepStatus = 'failed:craft-stall'
+    for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + (30 * 60 + 1 + s) * 1000)
+    assert.equal(taskLogs().length, 2, 'changed diagnosis repeats')
     assert.equal(bot.chats.length, 2)
   })
 
@@ -166,14 +173,14 @@ describe('task stall clock (vmzq.2)', () => {
       // Trip off site: partial scan reads short, held, clock advances.
       unknown = 12
       n = 5
-      taskMod.taskTick(bot, ctx, t0 + 60000)
+      taskMod.taskTick(bot, ctx, t0 + 1000)
       assert.equal(ctx.task.castle.prepLeft, 50, 'partial scan does not move the baseline')
-      assert.equal(ctx.task.castle.stallMs, 60000)
+      assert.equal(ctx.task.castle.stallMs, 1000)
       // Back on site, same work left: no false progress.
       unknown = 0
       n = 50
-      taskMod.taskTick(bot, ctx, t0 + 120000)
-      assert.equal(ctx.task.castle.stallMs, 120000, 'return trip is not progress')
+      taskMod.taskTick(bot, ctx, t0 + 2000)
+      assert.equal(ctx.task.castle.stallMs, 2000, 'return trip is not progress')
       assert.equal(taskLogs().length, 0)
     } finally {
       castle.prepTargets = origPrep
@@ -349,12 +356,12 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.house.done, 28)
     // Walk out of range: the reading would be 0/99, held instead.
     loaded = false
-    taskMod.taskTick(bot, ctx, t0 + 61000) // past the 60 s cache
+    for (let s = 1; s <= 61; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000) // past the 60 s cache
     assert.equal(ctx.task.house.done, 28, 'unloaded read does not sink the baseline')
     assert.equal(ctx.task.house.stallMs, 61000)
     // Back on site, same 28: no false progress.
     loaded = true
-    taskMod.taskTick(bot, ctx, t0 + 122000)
+    for (let s = 62; s <= 122; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(ctx.task.house.stallMs, 122000, 'return trip is not progress')
     assert.equal(taskLogs().length, 0)
   })
@@ -367,14 +374,14 @@ describe('task stall clock (vmzq.2)', () => {
     taskMod.taskTick(bot, ctx, t0)
     // Place 1 cobble (scaffold), dig it back: net zero.
     items[0].count = 19
-    taskMod.taskTick(bot, ctx, t0 + 60000)
-    assert.equal(ctx.task.castle.stallMs, 60000, 'spend does not reset')
+    taskMod.taskTick(bot, ctx, t0 + 1000)
+    assert.equal(ctx.task.castle.stallMs, 1000, 'spend does not reset')
     items[0].count = 20
-    taskMod.taskTick(bot, ctx, t0 + 120000)
-    assert.equal(ctx.task.castle.stallMs, 120000, 'net-zero regain does not reset')
+    taskMod.taskTick(bot, ctx, t0 + 2000)
+    assert.equal(ctx.task.castle.stallMs, 2000, 'net-zero regain does not reset')
     // A genuine gain above the high-water mark resets.
     items[0].count = 30
-    taskMod.taskTick(bot, ctx, t0 + 180000)
+    taskMod.taskTick(bot, ctx, t0 + 3000)
     assert.equal(ctx.task.castle.stallMs, 0)
   })
 
@@ -392,10 +399,10 @@ describe('task stall clock (vmzq.2)', () => {
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     assert.equal(ctx.task.active, 'house')
-    taskMod.taskTick(bot, ctx, t0 + 60000)
-    assert.equal(ctx.task.house.stallMs, 60000)
+    taskMod.taskTick(bot, ctx, t0 + 1000)
+    assert.equal(ctx.task.house.stallMs, 1000)
     ctx.castle.progress.done = 9 // the castle grew under the castle step
-    taskMod.taskTick(bot, ctx, t0 + 120000)
+    taskMod.taskTick(bot, ctx, t0 + 2000)
     assert.equal(ctx.task.house.stallMs, 0, 'castle progress resets the house clock')
   })
 
@@ -433,8 +440,55 @@ describe('task stall clock (vmzq.2)', () => {
     ctx.castleWord = { kind: 'stone', left: 80 }
     await ticker.tick()
     assert.ok(ctx.task && ctx.task.castle, 'hook ran on the first tick')
-    ctx.task.castle.lastAt = Date.now() - 60000
+    ctx.task.castle.lastAt = Date.now() - 5000
     await ticker.tick()
-    assert.ok((ctx.task.castle.stallMs || 0) >= 59000, `stall advanced on a sheltered fight tick, got ${ctx.task.castle.stallMs}`)
+    assert.ok((ctx.task.castle.stallMs || 0) >= 4000, `stall advanced on a sheltered fight tick, got ${ctx.task.castle.stallMs}`)
+  })
+
+  it('castle unread since connect still reports (verify core-1)', () => {
+    const bot = makeBot() // null world: off-site, progress never restored
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setCastle({ site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.castleWord = { kind: 'stone', left: 80 }
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.active, 'castle')
+    for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    assert.equal(taskLogs().length, 1, 'off-site stall still gets an L1')
+    assert.match(taskLogs()[0], /^task castle \?\/\? stall=900s/)
+    assert.match(bot.chats[0], /^castle: no progress for 15 min at \?\/\?/)
+    // First loaded reading baselines without resetting.
+    ctx.castle.progress = { done: 8, total: 1722 }
+    taskMod.taskTick(bot, ctx, t0 + (15 * 60 + 1) * 1000)
+    assert.equal(ctx.task.castle.done, 8)
+    assert.ok((ctx.task.castle.stallMs || 0) >= 900000, 'first reading does not reset')
+  })
+
+  it("planks left oscillation does not reset (verify body-1)", () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot, { kind: 'planks', left: 8 })
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    // Block/unblock cycle with nothing placed: left flips 8→7→8… every minute.
+    for (let s = 1; s <= 15 * 60; s++) {
+      if (s % 60 === 0) ctx.castleWord.left = ctx.castleWord.left === 8 ? 7 : 8
+      taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    }
+    assert.equal(ctx.task.castle.stallMs, 900000, 'planks left is ignored')
+    assert.equal(taskLogs().length, 1, 'oscillation still fires the L1')
+  })
+
+  it('wall-time gap clamps to 10 s per tick (verify core-2)', () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    taskMod.taskTick(bot, ctx, t0 + 3600000) // 1 h gap (idle/recover before the hook)
+    assert.equal(ctx.task.castle.stallMs, taskMod.STALL_TICK_CLAMP_MS)
+    assert.equal(taskLogs().length, 0, 'no instant L1 from a gap')
   })
 })

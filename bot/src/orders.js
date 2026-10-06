@@ -622,21 +622,12 @@ function createOrders(box) {
           if (ctx.restWhy) line += ` resting because ${ctx.restWhy}`
         } else if (goal.STEP_ORDER.includes(step)) {
           // Higher-priority steps this pick skipped, with their reasons.
-          let names = []
+          // Shared with the L1 diagnosis (task.js).
           try {
             const text = goal.goalText(facts, ctx.home)
-            names = Object.keys(goal.MENU).filter((n) => {
-              try {
-                if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
-              } catch (_) {
-                return false
-              }
-              return !goal.failHolds(ctx, n, text, bot)
-            })
-          } catch (_) { names = [] }
-          let skipped = ''
-          try { skipped = goal.restWhy(facts, bot, ctx, names, step) } catch (_) { skipped = '' }
-          if (skipped && skipped !== 'model choice') line += `; skipped: ${skipped}`
+            const sk = taskMod.skippedReason(bot, ctx, facts, text, step)
+            if (sk) line += `; ${sk}`
+          } catch (_) { /* skipped best-effort */ }
         }
         lines.push(line)
       }
@@ -648,34 +639,10 @@ function createOrders(box) {
       // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
       const wrong = []
       try {
-        const fails = ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
-        if (fails.length > 0) {
-          const text = goal.goalText(facts, ctx.home)
-          // Only live holds read as blocked (01 core-1): a released record
-          // (new facts, relocated body) no longer blocks its step.
-          const holding = fails.filter((n) => {
-            try {
-              if (goal.failHolds(ctx, n, text, bot)) return true
-            } catch (_) { /* fall through to the gather latch */ }
-            try {
-              return n === 'gather' && goal.gatherFailedHolds(ctx.gather, facts.logs, bot)
-            } catch (_) {
-              return false
-            }
-          })
-          if (holding.length > 0) {
-            const held = holding.map((n) => {
-              let w = null
-              try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
-              if (!w) {
-                const rec = ctx.stepFail[n] || {}
-                w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
-              }
-              return w
-            })
-            wrong.push(`blocked: ${held.join(', ')}`)
-          }
-        }
+        // Only live holds read as blocked (01 core-1). Shared with task.js.
+        const text = goal.goalText(facts, ctx.home)
+        const bl = taskMod.blockedReason(bot, ctx, facts, text)
+        if (bl) wrong.push(bl)
       } catch (_) { /* blocked best-effort */ }
       let stuckState = 'MOVING'
       try { stuckState = verdict(ctx).state || 'MOVING' } catch (_) { /* moving default */ }
