@@ -230,10 +230,16 @@ describe('ticker with a target', () => {
       const bot = mockBot()
       const brain = mockBrain()
       const ticker = createTicker({ bot, brain, tickMs: 111, idleTickMs: 222 })
-      await ticker.tick(true) // scheduled tick, no target -> slow
-      bot.players = { Steve: { username: 'Steve', entity: playerEntity(5) } }
-      await ticker.tick(true) // scheduled tick, target -> fast
-      assert.deepEqual(delays, [222, 111])
+      try {
+        await ticker.tick(true) // scheduled tick, no target -> slow
+        bot.players = { Steve: { username: 'Steve', entity: playerEntity(5) } }
+        await ticker.tick(true) // scheduled tick, target -> fast
+        assert.deepEqual(delays, [222, 111])
+      } finally {
+        // Scheduled ticks arm a background timer: destroy it, or it logs
+        // follow/5.0 every 111 ms into later tests' captures (9ldm flake).
+        ticker.destroy()
+      }
     } finally {
       global.setTimeout = orig
     }
