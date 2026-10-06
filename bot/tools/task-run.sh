@@ -553,6 +553,9 @@ for t, m in lines(bot_f):
   if "leaving: nobody online" in m:
     if emit(t, "bot", "leave", m):
       signals.append("LEAVE")
+  if "waiting for players" in m:
+    if emit(t, "bot", "waiting", m):
+      signals.append("LEAVE") # offline bot ticks this, not silence (revmux 02 major)
 # A house done over unhealed skips is PARTIAL (revmux 01 major): skips
 # prune hourly, so a skip younger than the horizon at done-time is still
 # a hole; an older one had a prune cycle (a re-fail would re-log young).

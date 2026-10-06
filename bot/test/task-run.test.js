@@ -339,6 +339,25 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.equal(autos[autos.length - 1].botPresent, true, 'the resume says it only with the bot on the roster')
   })
 
+  it('waiting for players triggers a resume like a leave', async () => {
+    let waited = false
+    const r = await harness({ task: 'house', name: 'waiting' }, {
+      puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) return []
+        if (!waited) { waited = true; return [{ _time: nowIsoSec(), _msg: 'waiting for players' }] }
+        return [{ _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }]
+      },
+      extra: { TASK_RUN_BUDGET_SECS: '9', TASK_RUN_RESUMES: '1' },
+    })
+    assert.equal(r.code, 1, `${r.stdout}\n${r.stderr}`)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'budget-exceeded')
+    assert.deepEqual(s.events.map((e) => e.kind).sort(), ['resume', 'waiting'])
+    assert.match(s.events.find((e) => e.kind === 'resume').line, /ok=1/)
+  })
+
   it('an unverified resume with none left exits 2, not budget', async () => {
     let left = false
     const r = await harness({ task: 'house', name: 'resume-unverified' }, {
@@ -608,8 +627,10 @@ esac
     assert.ok(castle.includes('castle ${n}/${total}'), 'castle progress line')
   })
 
-  it('no infra labels in the script (revmux 01 critical)', () => {
+  it('no infra labels in the script (revmux 01 critical, 02 critical)', () => {
     const sh = fs.readFileSync(SCRIPT, 'utf8')
-    assert.ok(!/wandergeek|kfamcloud/i.test(sh), 'stash labels resolve fuzzy, never committed')
+    // Allowlist, not a denylist: the test itself must not name the labels.
+    const lits = [...new Set([...sh.matchAll(/secrets\/[\w][\w.-]*/g)].map((m) => m[0]))].sort()
+    assert.deepEqual(lits, ['secrets/idkcraft-mc-host', 'secrets/idkcraft-mc-port'])
   })
 })

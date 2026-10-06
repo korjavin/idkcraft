@@ -430,9 +430,10 @@ Rules:
   the series and the run resumes (autonomy is env, so the bot rejoins working);
   it never voids. A human joining voids (exit 2, never rejoin).
 - A gone bot triggers a resume (a fresh puppet waits for the roster, says
-  `autonomous on`, needs the bot's reply): on an explicit `leaving` line or
-  two silent polls in a row (a restart never logs LEAVE). Resumes exhausted
-  with the bot still gone exits 2 immediately — the run is dead, not slow.
+  `autonomous on`, needs the bot's reply): on `leaving: nobody online`, on
+  `waiting for players` (an offline bot ticks that, not silence), or after
+  two silent polls in a row. Resumes exhausted with the bot still gone exits
+  2 immediately — the run is dead, not slow.
 - One scenario per run; concurrent prod runs collide on the puppet name.
 - Secrets resolve at runtime from the stash (`secrets/idkcraft-mc-host`,
   `secrets/idkcraft-mc-port`, the session-review Grafana/Portainer keys found
