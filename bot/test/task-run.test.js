@@ -358,6 +358,29 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     assert.match(s.events.find((e) => e.kind === 'resume').line, /ok=1/)
   })
 
+  it('a stale waiting line after a verified resume does not re-trigger', async () => {
+    let polls = 0
+    let firstT = null
+    const r = await harness({ task: 'house', name: 'stale-waiting' }, {
+      puppet: { rosterSansBot: true, botDelayMs: 3000, replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
+      logs: (q) => {
+        if (q.includes('stats count')) return [{ n: '1' }]
+        if (q.includes('idkcraft-mc')) return []
+        polls++
+        if (polls === 1) { firstT = nowIsoSec(); return [{ _time: firstT, _msg: 'waiting for players' }] }
+        // Ingestion lag: a NEW key from before the resume-end arrives late.
+        const stale = new Date(Date.parse(firstT) + 1000).toISOString().replace(/\.\d+Z$/, 'Z')
+        return [{ _time: stale, _msg: 'waiting for players' }, { _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }]
+      },
+      extra: { TASK_RUN_BUDGET_SECS: '11', TASK_RUN_RESUMES: '1' },
+    })
+    assert.equal(r.code, 1, `${r.stdout}\n${r.stderr}`)
+    const s = seriesOf(r.stdout)
+    assert.equal(s.verdict, 'budget-exceeded')
+    assert.equal(s.resumesUsed, 1, 'one resume, not one per lagged line')
+    assert.equal(s.events.filter((e) => e.kind === 'waiting').length, 2, 'both lines recorded')
+  })
+
   it('an unverified resume with none left exits 2, not budget', async () => {
     let left = false
     const r = await harness({ task: 'house', name: 'resume-unverified' }, {

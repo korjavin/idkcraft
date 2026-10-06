@@ -479,6 +479,7 @@ except Exception:
   horizon = 3900
 seen = set()
 old_skips = [] # (t, line), every house skip already journalled
+restored_at = "" # last verified resume: older gone-signals are already handled
 try:
   for l in open(journal):
     try:
@@ -488,6 +489,8 @@ try:
     seen.add(e.get("k"))
     if e.get("kind") == "skip":
       old_skips.append((e.get("t") or "", e.get("line") or ""))
+    if e.get("kind") == "resume" and "ok=1" in (e.get("line") or ""):
+      restored_at = max(restored_at, e.get("t") or "")
 except Exception:
   pass
 out = []
@@ -551,10 +554,13 @@ for t, m in lines(bot_f):
   if ("spawned as %s" % bot) in m:
     emit(t, "bot", "restart", m) # a deploy restart: recorded, never voiding
   if "leaving: nobody online" in m:
-    if emit(t, "bot", "leave", m):
+    if emit(t, "bot", "leave", m) and t > restored_at:
       signals.append("LEAVE")
   if "waiting for players" in m:
-    if emit(t, "bot", "waiting", m):
+    # A line older than the last verified resume is the outage that
+    # resume already fixed (ingestion lag can deliver it a poll late):
+    # record it, do not re-trigger (revmux 03 minor).
+    if emit(t, "bot", "waiting", m) and t > restored_at:
       signals.append("LEAVE") # offline bot ticks this, not silence (revmux 02 major)
 # A house done over unhealed skips is PARTIAL (revmux 01 major): skips
 # prune hourly, so a skip younger than the horizon at done-time is still
