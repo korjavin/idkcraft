@@ -1229,6 +1229,10 @@ function exitMeet(bot, ctx, home, order) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); failMeet arms the wall guard, so the released body's A* routes via door/gap instead of the wall (rw4.17 closes the old revmux 01 minor)
       return
     } else {
+      // rw4.18/04: the legs started the exit (toggle sent). The tick gate
+      // finishes a committed exit at any clock; without the flag a re-armed
+      // 'open' is indistinguishable from a door the legs never touched.
+      order.committed = true
       tryToggle(bot, ctx, order, door)
       return
     }
@@ -1238,7 +1242,10 @@ function exitMeet(bot, ctx, home, order) {
     const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       const keepBy = order.by
-      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false }
+      // Committed unconditionally (not carried): the re-arm proves the legs
+      // drove — even through a gap or a pre-open door that never needed a
+      // toggle — so dusk/night finishes instead of freezing behind it.
+      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false, committed: true }
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = ''
       return

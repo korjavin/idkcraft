@@ -841,24 +841,29 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // ticks). jr2.3 holds: fight is never dispatched here, the legs
         // are doorway direct control (no A*, no pursuit), and the rw4.17
         // wall guard stays armed. Day is required only to START the exit:
-        // once the legs commit (exit/close) or the door stands open they
-        // finish at dusk/night too — otherwise an exit started before
-        // dusk freezes mid-doorway with the door open until dawn
-        // (verifier P2, the revmux 02/03 class). A hostile on the
-        // out-lane holds the not-started exit shut instead of opening
-        // into it (revmux 01 core-1, the bead's 'не выбегая в толпу');
-        // the gate re-checks every tick, so a cleared lane resumes at
-        // once. A gocastle without an exiting comehome keeps the hold
-        // (its walk is A* — from inside it would path the wall).
+        // committed legs (exit/close, or the toggle sent — carried
+        // through the wedge re-arm) finish at dusk/night too, else an
+        // exit started before dusk freezes mid-doorway with the door open
+        // until dawn (verifier P2, the revmux 02/03 class). By day an
+        // already-open door also starts (freezing behind it is worse). A
+        // hostile on the out-lane holds the not-started exit shut instead
+        // of opening into it (revmux 01 core-1, the bead's 'не выбегая в
+        // толпу') — including a pre-open door at night, whose legs never
+        // began (revmux 04 body-1); the gate re-checks every tick, so a
+        // cleared lane resumes at once. A gocastle without an exiting
+        // comehome keeps the hold (its walk is A* — from inside it would
+        // path the wall).
         if (ctx.comehome && ctx.comehome.exiting) {
           const exitPhase = ctx.comehome && ctx.comehome.phase
           const exitHome = (ctx.comehome && ctx.comehome.home) || ctx.home
-          let started = false
+          const legCommitted = !!(ctx.comehome && ctx.comehome.committed)
+          let doorShut = true
           let laneClear = false
           try {
-            started = exitPhase === 'exit' || exitPhase === 'close' || !homeMod.exitDoorShut(bot, exitHome)
+            doorShut = homeMod.exitDoorShut(bot, exitHome)
             laneClear = !homeMod.outLaneBlocked(bot, exitHome)
-          } catch (_) { started = false; laneClear = false }
+          } catch (_) { doorShut = true; laneClear = false }
+          const started = exitPhase === 'exit' || exitPhase === 'close' || legCommitted || (dayNow && !doorShut)
           if (started || (dayNow && laneClear)) {
             const handler = BEHAVIOURS.comehome
             if (typeof handler === 'function') handler(bot, ctx, target, state)

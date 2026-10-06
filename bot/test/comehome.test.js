@@ -541,6 +541,7 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     assert.ok(ctx.comehome, 'still releasing, never terminally failed')
     assert.equal(ctx.comehome.exiting, true)
     assert.equal(ctx.comehome.phase, 'open', 'fresh legs')
+    assert.equal(ctx.comehome.committed, true, 're-arm proves the legs drove (rw4.18/04)')
     assert.deepEqual(bot.chats, [], 'silent like stay')
   })
 
@@ -1161,10 +1162,85 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
     }
   })
 
+  it('night with a pre-open door holds a lane-blocked exit (revmux 04 body-1)', async () => {
+    // The owner walked in at night (door open), ordered a move, and a mob
+    // camps the lane: the legs never began, so the night exit holds
+    // instead of walking out beside it.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000, doorOpen: true })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    assert.ok(!ctx.comehome.committed, 'legs never acted')
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'unstarted night exit holds')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.ok(!ctx.comehome.openTicks, 'door never touched')
+      assert.equal(ctx.inShelter, true)
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('night with a pre-open door and a clear lane still holds: no night starts (revmux 04 body-1)', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000, doorOpen: true })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'unstarted night exit holds even clear')
+      }
+      assert.equal(ctx.comehome.phase, 'open')
+      assert.equal(ctx.inShelter, true)
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('an exit the legs started by day finishes at night with the door still shut (revmux 04 body-1)', async () => {
+    // The toggle was sent by day (committed) but never landed; night falls
+    // with the exit still in 'open'. The started exit keeps running instead
+    // of idling until dawn.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      const r1 = await ticker.tick() // day: toggle sent, committed
+      assert.equal(r1.decision.action, 'comehome')
+      assert.equal(ctx.comehome.committed, true)
+      bot.time.timeOfDay = 15000 // night falls, door still shut
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'comehome', 'committed exit finishes at night')
+      assert.equal(ctx.comehome.openTicks, 2, 'handler ran again')
+    } finally {
+      cap.release()
+    }
+  })
+
   it("phase 'open' with the door already open runs the legs despite the lane mob (revmux 03 core-1)", async () => {
-    // A wedged leg re-arms 'open' without shutting the door: holding there
-    // would freeze the bot mid-doorway with the door open. The hold needs
-    // a shut door behind it, so the legs finish instead.
+    // By day an already-open door starts even past a lane mob (freezing
+    // behind an open door is worse); the wedge re-arm pins committed=true
+    // separately, so this setup stays uncommitted and pins the day term.
     const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, doorOpen: true })
     const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
     lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
