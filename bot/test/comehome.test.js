@@ -541,6 +541,7 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     assert.ok(ctx.comehome, 'still releasing, never terminally failed')
     assert.equal(ctx.comehome.exiting, true)
     assert.equal(ctx.comehome.phase, 'open', 'fresh legs')
+    assert.equal(ctx.comehome.committed, true, 're-arm proves the legs drove (rw4.18/04)')
     assert.deepEqual(bot.chats, [], 'silent like stay')
   })
 
@@ -906,6 +907,437 @@ describe('jr2.3 ticks dispatch the meet like an explicit order', () => {
     handleChat(bot, ticker, 'Steve', 'come home')
     handleChat(bot, ticker, 'Steve', 'status')
     assert.ok(bot.chats.some((c) => c.startsWith('coming home') && c.includes('phase=walk')), bot.chats.join(' | '))
+  })
+})
+
+describe('rw4.18 the exit legs keep walking on day fight ticks without an intruder', () => {
+  // A day mob holding fight from outside the walls: inside the 8-block
+  // fight radius of the meet cell, outside the v2 interior box
+  // (x 11..15, z 21..24) so the 33vm scan never calls it an intruder.
+  function zombieOutside() {
+    const p = pos(13.5, 64, 14)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id: 21, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('day fight ticks alone drive the full exit open→exit→close→released, then fight resumes outside', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.entities = { 21: zombieOutside() }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true, 'exit armed, not cleared')
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    const cap = capture()
+    try {
+      const seen = []
+      let r = await ticker.tick() // open the shut door
+      seen.push(r.decision.action)
+      await settle()
+      r = await ticker.tick() // door open -> exit legs start
+      seen.push(r.decision.action)
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        r = await ticker.tick() // arrival -> close -> shut -> released
+        seen.push(r.decision.action)
+        await settle()
+      }
+      assert.equal(ctx.comehome, null, 'released to work on fight ticks alone')
+      assert.equal(ctx.inShelter, false)
+      assert.ok(seen.length >= 3, `several fight ticks ran: ${seen.join(',')}`)
+      assert.ok(seen.every((a) => a === 'comehome'), `every sheltered tick ran the legs: ${seen.join(',')}`)
+      assert.equal(fightRan, 0, 'no pursuit while sheltered (jr2.3)')
+      assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+      // Outside now: the next fight tick fights in the open, like any order.
+      r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(fightRan, 1)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      cap.release()
+    }
+  })
+
+  it('night fight ticks keep the doorway hold (no legs in the dark)', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000 })
+    bot.entities = { 21: zombieOutside() }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true, 'exit armed, not cleared')
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.ok(!ctx.comehome.openTicks, 'door never touched')
+      assert.equal(ctx.inShelter, true, 'the doorway guard stands')
+      assert.deepEqual(bot._goals, [], 'no pathing')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('a gocastle exit rides the comehome legs on day fight ticks while the castle walk waits', async () => {
+    // setGocastle from inside arms BOTH orders: the comehome exit legs own
+    // the doorway, gocastle waits for release.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.entities = { 21: zombieOutside() }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    home.releaseMeet(bot, ctx)
+    ctx.gocastle = { by: 'Steve', phase: 'walk', stalls: 0, fails: 0, lastPos: null }
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      let r = await ticker.tick() // open the shut door
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      r = await ticker.tick() // door open -> exit legs start
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'exit')
+      assert.equal(ctx.gocastle.phase, 'walk', 'the castle walk waits for release')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        r = await ticker.tick()
+        await settle()
+        assert.equal(r.decision.action, 'comehome')
+      }
+      assert.equal(ctx.comehome, null, 'exit released on fight ticks alone')
+      assert.ok(ctx.gocastle, 'gocastle still armed for the walk out')
+      assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('a hostile on the out-lane holds the exit shut; a cleared lane resumes (revmux 01 core-1)', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    const camper = { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 }
+    bot.entities = { 22: camper }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'lane blocked: hold shut')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.ok(!ctx.comehome.openTicks, 'door never touched')
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door stays shut')
+      // The camper wanders off: the next fight ticks run the legs.
+      bot.entities = {}
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'exit', 'legs resume once the lane clears')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("a mob on the lane mid-legs does not freeze them (revmux 02 core-1, 'exit')", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      await ticker.tick() // open the shut door
+      await settle()
+      await ticker.tick() // door open -> exit legs start
+      assert.equal(ctx.comehome.phase, 'exit')
+      const drove = ctx.comehome.legTicks
+      assert.ok(drove > 0, 'legs running')
+      // A mob steps onto the lane mid-legs: the committed legs finish
+      // instead of freezing mid-doorway with the door open.
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      assert.ok(ctx.comehome.legTicks > drove, 'legs keep driving through the lane mob')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("a mob on the lane at the shut does not freeze it (revmux 02 core-1, 'close')", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      await ticker.tick() // open the shut door
+      await settle()
+      await ticker.tick() // door open -> exit legs start
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      // No lastToggle reset: the toggle cooldown holds, so this tick
+      // reaches 'close' with the door still open.
+      const arrived = await ticker.tick()
+      assert.equal(arrived.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'close')
+      // A mob steps onto the lane at the shut: the close still shuts the
+      // door and releases instead of idling it open.
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      ctx.comehome.lastToggle = 0
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+      await ticker.tick()
+      assert.equal(ctx.comehome, null, 'released')
+      assert.equal(ctx.inShelter, false, 'fight takes over outside')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('dusk falling mid-exit does not freeze it: the legs finish and shut the door (verifier P2)', async () => {
+    // The exit starts by day; dusk falls with the door open mid-legs. Day
+    // is required only to START — the committed legs finish instead of
+    // idling in the open doorway until dawn.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.entities = { 21: zombieOutside() }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      let r = await ticker.tick() // open the shut door, by day
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      r = await ticker.tick() // door open -> exit legs start, by day
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.time.timeOfDay = 12500 // dusk falls mid-exit
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      ctx.comehome.lastToggle = 0
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        r = await ticker.tick() // arrival -> close -> shut -> released, at dusk
+        await settle()
+        assert.equal(r.decision.action, 'comehome', 'dusk legs keep running')
+      }
+      assert.equal(ctx.comehome, null, 'released at dusk')
+      assert.equal(ctx.inShelter, false)
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+      assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('night with a pre-open door holds a lane-blocked exit (revmux 04 body-1)', async () => {
+    // The owner walked in at night (door open), ordered a move, and a mob
+    // camps the lane: the legs never began, so the night exit holds
+    // instead of walking out beside it.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000, doorOpen: true })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    assert.ok(!ctx.comehome.committed, 'legs never acted')
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'unstarted night exit holds')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.ok(!ctx.comehome.openTicks, 'door never touched')
+      assert.equal(ctx.inShelter, true)
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('night with a pre-open door and a clear lane still holds: no night starts (revmux 04 body-1)', async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000, doorOpen: true })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'unstarted night exit holds even clear')
+      }
+      assert.equal(ctx.comehome.phase, 'open')
+      assert.equal(ctx.inShelter, true)
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('an exit the legs started by day finishes at night with the door still shut (revmux 04 body-1)', async () => {
+    // The toggle was sent by day (committed) but never landed; night falls
+    // with the exit still in 'open'. The started exit keeps running instead
+    // of idling until dawn.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      const r1 = await ticker.tick() // day: toggle sent, committed
+      assert.equal(r1.decision.action, 'comehome')
+      assert.equal(ctx.comehome.committed, true)
+      bot.time.timeOfDay = 15000 // night falls, door still shut
+      const r2 = await ticker.tick()
+      assert.equal(r2.decision.action, 'comehome', 'committed exit finishes at night')
+      assert.equal(ctx.comehome.openTicks, 2, 'handler ran again')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('a cooldown-skipped toggle does not commit: night and lane holds still apply (verifier P2b)', async () => {
+    // releaseMeet carries the hold's fresh lastToggle; a tick that runs the
+    // handler inside the cooldown window sends nothing, so the exit stays
+    // uncommitted and the holds below still bind.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, timeOfDay: 15000 })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold', lastToggle: Date.now() }
+    ctx.inShelter = true
+    home.releaseMeet(bot, ctx) // arms exiting 'open', carries lastToggle
+    assert.equal(ctx.comehome.exiting, true)
+    assert.ok(ctx.comehome.lastToggle > 0, 'cooldown carried')
+    home.comehome(bot, ctx) // a non-fight tick runs the handler: toggle skips
+    assert.ok(!ctx.comehome.committed, 'no send, no commit')
+    assert.equal(ctx.comehome.openTicks, 1)
+    const cap = capture()
+    try {
+      for (let i = 0; i < 2; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'night hold still applies')
+      }
+      assert.equal(ctx.comehome.phase, 'open')
+      // Day breaks with a mob on the lane: the lane hold still applies too.
+      bot.time.timeOfDay = 6000
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      for (let i = 0; i < 2; i++) {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'idle', 'lane hold still applies')
+      }
+      assert.equal(ctx.comehome.phase, 'open', 'legs never ran')
+      assert.equal(ctx.comehome.openTicks, 1, 'handler ran once, on the direct call')
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door never opened')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("phase 'open' with the door already open runs the legs despite the lane mob (revmux 03 core-1)", async () => {
+    // By day an already-open door starts even past a lane mob (freezing
+    // behind an open door is worse); the wedge re-arm pins committed=true
+    // separately, so this setup stays uncommitted and pins the day term.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, doorOpen: true })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    assert.equal(ctx.comehome.phase, 'open')
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome', 'open door: legs run, no shelter freeze')
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        const rr = await ticker.tick()
+        await settle()
+        assert.equal(rr.decision.action, 'comehome')
+      }
+      assert.equal(ctx.comehome, null, 'released')
+      assert.equal(ctx.inShelter, false)
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+    } finally {
+      cap.release()
+    }
+  })
+})
+
+describe('rw4.18 outLaneBlocked reads the approach cell, not the bot', () => {
+  function mob(name, x, y, z, extra = {}) {
+    return { id: 31, name, type: 'mob', position: pos(x, y, z), height: 1.95, ...extra }
+  }
+
+  it('blocks on the cell and its ring, clears past it; v1 geometry too', () => {
+    const botOn = (e) => ({ entities: { 31: e } })
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)), v2home()), true, 'on the out cell')
+    assert.equal(home.outLaneBlocked(botOn(mob('skeleton', OUT2.x + 0.5, OUT2.y, OUT2.z - 0.5)), v2home()), true, 'adjacent ring')
+    assert.equal(home.outLaneBlocked(botOn(mob('creeper', OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)), v2home()), true, 'creepers count')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT2.x + 0.5, OUT2.y, OUT2.z - 3)), v2home()), false, 'past the ring')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', MEET2.x, MEET2.y, MEET2.z + 4)), v2home()), false, 'a wall-presser behind the house')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT1.x + 0.5, OUT1.y, OUT1.z + 0.5)), v1home()), true, 'v1 out cell')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', OUT1.x + 0.5, OUT1.y, OUT1.z - 3)), v1home()), false, 'v1 past the ring')
+  })
+
+  it('endermen, players and unreadable worlds never block', () => {
+    const botOn = (e) => ({ entities: { 31: e } })
+    const at = { x: OUT2.x + 0.5, y: OUT2.y, z: OUT2.z + 0.5 }
+    assert.equal(home.outLaneBlocked(botOn(mob('enderman', at.x, at.y, at.z)), v2home()), false, 'neutral unless provoked')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z, { type: 'player' })), v2home()), false, 'players never block')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z, { isValid: false })), v2home()), false, 'dead entities skip')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z)), null), false, 'no home reads clear')
+    assert.equal(home.outLaneBlocked(botOn(mob('zombie', at.x, at.y, at.z)), {}), false, 'no site reads clear')
+    assert.equal(home.outLaneBlocked({}, v2home()), false, 'no entities reads clear')
   })
 })
 

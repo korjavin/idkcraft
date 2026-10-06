@@ -834,6 +834,46 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const dayDivert = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
         ctx.inShelter && decision.action === 'fight' && !intruder && dayNow
       if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
+        // rw4.18: an exiting comehome doorway keeps its legs on day fight
+        // ticks without an intruder — otherwise the exit stalls all day
+        // while a mob outside holds fight (this idle never runs the
+        // handler, and the order gate above only runs it on non-fight
+        // ticks). jr2.3 holds: fight is never dispatched here, the legs
+        // are doorway direct control (no A*, no pursuit), and the rw4.17
+        // wall guard stays armed. Day is required only to START the exit:
+        // committed legs (exit/close, or the toggle sent — carried
+        // through the wedge re-arm) finish at dusk/night too, else an
+        // exit started before dusk freezes mid-doorway with the door open
+        // until dawn (verifier P2, the revmux 02/03 class). By day an
+        // already-open door also starts (freezing behind it is worse). A
+        // hostile on the out-lane holds the not-started exit shut instead
+        // of opening into it (revmux 01 core-1, the bead's 'не выбегая в
+        // толпу') — including a pre-open door at night, whose legs never
+        // began (revmux 04 body-1); the gate re-checks every tick, so a
+        // cleared lane resumes at once. A gocastle without an exiting
+        // comehome keeps the hold (its walk is A* — from inside it would
+        // path the wall).
+        if (ctx.comehome && ctx.comehome.exiting) {
+          const exitPhase = ctx.comehome && ctx.comehome.phase
+          const exitHome = (ctx.comehome && ctx.comehome.home) || ctx.home
+          const legCommitted = !!(ctx.comehome && ctx.comehome.committed)
+          let doorShut = true
+          let laneClear = false
+          try {
+            doorShut = homeMod.exitDoorShut(bot, exitHome)
+            laneClear = !homeMod.outLaneBlocked(bot, exitHome)
+          } catch (_) { doorShut = true; laneClear = false }
+          const started = exitPhase === 'exit' || exitPhase === 'close' || legCommitted || (dayNow && !doorShut)
+          if (started || (dayNow && laneClear)) {
+            const handler = BEHAVIOURS.comehome
+            if (typeof handler === 'function') handler(bot, ctx, target, state)
+            // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
+            try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
+            const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+            console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
+            return { decision: { ...decision, action: 'comehome' }, calledBrain }
+          }
+        }
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.

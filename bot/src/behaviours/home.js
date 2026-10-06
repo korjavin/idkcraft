@@ -2,6 +2,7 @@
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
+const { HOSTILE_NAMES } = require('../perception')
 const { goalFacts, timeWord } = require('../goal')
 const detour = require('../detour')
 const stuck = require('../stuck')
@@ -173,6 +174,54 @@ function playerAtDoor(bot, home) {
   return false
 }
 
+// Out-lane block (rw4.18, revmux 01 core-1): a hostile standing on or
+// beside the outside approach cell while the exit legs would step out. The
+// rw4.18 tick gate holds (door shut) instead of opening into it — the
+// bead's 'не выбегая в толпу'. Radius 2 around the out-cell centre: the
+// cell itself plus the adjacent ring, with a step of margin for wandering
+// mobs; the gate re-checks every tick, so a cleared lane resumes at once
+// and mobs pressing other walls never hold. Creepers count (the step-out
+// lands inside their blast); endermen don't (neutral unless stared at or
+// struck, and the legs do neither — the isFightTarget precedent), and
+// players never block (stepping out to the owner is the point). Anything
+// unreadable reads as clear: the exit legs validate the home themselves
+// (failMeet), and a missing world must not latch a silent hold.
+const OUT_LANE_BLOCKED_R = 2
+function outLaneBlocked(bot, home) {
+  try {
+    const site = home && home.site
+    if (!site || typeof site.x !== 'number') return false
+    const out = outsidePos(home)
+    const ox = out.x + 0.5
+    const oz = out.z + 0.5
+    const ents = (bot && bot.entities) || {}
+    for (const key of Object.keys(ents)) {
+      const e = ents[key]
+      if (!e || e.isValid === false || e.type === 'player') continue
+      const p = e.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') continue
+      const nm = e.name || ''
+      if (!HOSTILE_NAMES.has(nm) || nm === 'enderman') continue
+      if (Math.hypot(p.x - ox, p.y - out.y, p.z - oz) <= OUT_LANE_BLOCKED_R) return true
+    }
+  } catch (_) { /* unreadable reads as clear, see above */ }
+  return false
+}
+
+// Door-shut read for the rw4.18 out-lane hold (revmux 03 core-1): the hold
+// only means something behind a shut door — with the door open or gone the
+// legs must finish (walk out, shut it, release, hand to fight) instead of
+// freezing mid-doorway. Missing/unreadable reads as NOT shut (run): there
+// is no shut door to hold behind, and the legs validate the doorway
+// themselves (gap-walk, wedge re-arm).
+function exitDoorShut(bot, home) {
+  try {
+    const door = doorBlock(bot, home)
+    if (!door) return false
+    return !doorOpen(door)
+  } catch (_) { return false }
+}
+
 // A close into a missing door is a failure, never a silent done (rw4.8):
 // prod stood a whole night 'sheltered' with arrows coming through. Failing
 // surfaces the fault to the arbiter (day picks can send build to repair
@@ -188,6 +237,8 @@ function failNoDoor(ctx, st, where) {
 // on the OBSERVED state, never optimistically. Untracks the door from the
 // A* door reflex first (revmux 01 major-2): home owns its door from here,
 // so the reflex stands down instead of double-toggling on its own cooldown.
+// Returns whether the toggle was sent (false on the cooldown skip): the
+// rw4.18 exit gate commits only on a send (verifier P2b).
 function tryToggle(bot, ctx, st, block) {
   try {
     const p = block && block.position
@@ -196,12 +247,13 @@ function tryToggle(bot, ctx, st, block) {
     }
   } catch (_) { /* untrack best-effort */ }
   const now = Date.now()
-  if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return
+  if (st.lastToggle && now - st.lastToggle < TOGGLE_COOLDOWN_MS) return false
   st.lastToggle = now
   try {
     const r = bot.activateBlock(block)
     if (r && typeof r.catch === 'function') r.catch(() => {})
   } catch (_) { /* retry next window */ }
+  return true
 }
 
 function setGoal(bot, ctx, key, goal) {
@@ -1180,7 +1232,13 @@ function exitMeet(bot, ctx, home, order) {
       failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); failMeet arms the wall guard, so the released body's A* routes via door/gap instead of the wall (rw4.17 closes the old revmux 01 minor)
       return
     } else {
-      tryToggle(bot, ctx, order, door)
+      // rw4.18/04: the legs started the exit. Commit only on a send: a
+      // cooldown skip (releaseMeet carries the hold's lastToggle) must not
+      // mark an untouched exit started, or the night/lane hold is bypassed
+      // (verifier P2b). The tick gate finishes a committed exit at any
+      // clock; without the flag a re-armed 'open' is indistinguishable
+      // from a door the legs never touched.
+      if (tryToggle(bot, ctx, order, door)) order.committed = true
       return
     }
   }
@@ -1189,7 +1247,10 @@ function exitMeet(bot, ctx, home, order) {
     const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       const keepBy = order.by
-      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false }
+      // Committed unconditionally (not carried): the re-arm proves the legs
+      // drove — even through a gap or a pre-open door that never needed a
+      // toggle — so dusk/night finishes instead of freezing behind it.
+      ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false, committed: true }
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = ''
       return
@@ -1407,4 +1468,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS }
