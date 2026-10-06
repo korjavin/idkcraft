@@ -43,6 +43,13 @@ function taskKind(ctx) {
   try {
     const home = ctx && ctx.home
     if (home && home.site && typeof home.site.x === 'number' && !home.built) return 'house'
+    // Pending house (idkcraft-vmzq.16): homeless with a recorded no-site —
+    // no progress to measure, but the stall clock still watches (at ?/?)
+    // so the owner hears via the L1 instead of silence. The L2 park
+    // no-ops on no home (nothing to veto); the record dies with the next
+    // build attempt, which founds a site or re-stamps the failure.
+    if ((!home || !home.site) && ctx && ctx.stepFail && ctx.stepFail.build &&
+      ctx.stepFail.build.status === 'failed:no-site') return 'house'
   } catch (_) { /* fall through to castle */ }
   try {
     const st = ctx && ctx.castle
