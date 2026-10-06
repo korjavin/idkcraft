@@ -133,12 +133,22 @@ function fakeLogs(handler) {
   })
 }
 
-// runScript inherits process.env: every call needs endpoint overrides
-// (TASK_RUN_MC_HOST/_PORT/_LOGS_URL, or TASK_RUN_KV) unless it exits before
-// endpoint resolution — or the script reads the REAL stash and joins prod.
+// Fail-closed defaults (vmzq.15 R2): the script reads the REAL stash and
+// joins prod when endpoints are unset, so runScript strips every inherited
+// TASK_RUN_* knob and forces a dead stash + puppet underneath the caller's
+// env. A test that wants anything live opts in by passing it explicitly
+// (harness() always does); a test that forgets dies at endpoint resolution
+// instead of joining prod.
+const DEAD_KV = '/nonexistent-task-run-kv'
+const DEAD_PUPPET_CMD = 'false'
 function runScript(args, env, timeoutMs = 90000) {
+  const base = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!k.startsWith('TASK_RUN_')) base[k] = v
+  }
+  const childEnv = { ...base, TASK_RUN_KV: DEAD_KV, TASK_RUN_PUPPET_CMD: DEAD_PUPPET_CMD, ...env }
   return new Promise((resolve) => {
-    execFile('sh', [SCRIPT, ...args], { env: { ...process.env, ...env }, timeout: timeoutMs }, (err, stdout, stderr) => {
+    execFile('sh', [SCRIPT, ...args], { env: childEnv, timeout: timeoutMs }, (err, stdout, stderr) => {
       const code = err && typeof err.code === 'number' ? err.code : (err ? -1 : 0)
       resolve({ code, stdout: String(stdout || ''), stderr: String(stderr || ''), err })
     })
@@ -708,6 +718,39 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
     const r2 = await runScript(['castle', '1'], { TASK_RUN_OUTDIR: dir, TASK_RUN_PROBE: '2' })
     assert.equal(r2.code, 2)
     assert.match(r2.stderr, /TASK_RUN_PROBE must be 1/)
+  })
+
+  it('runScript defaults are dead: no stash consult, no prod without explicit endpoints', async () => {
+    // A canary stash under a fake HOME: if the script ever consults the
+    // default kv path it records it here. Its values are dead, so even a
+    // consult cannot reach prod.
+    const home = fs.mkdtempSync(path.join(dir, 'fakehome-'))
+    const bindir = path.join(home, '.local', 'bin')
+    fs.mkdirSync(bindir, { recursive: true })
+    const canary = path.join(home, 'canary.log')
+    const kv = path.join(bindir, 'kv')
+    fs.writeFileSync(kv, `#!/bin/sh\necho "kv $@" >> "${canary}"\necho dead\n`)
+    fs.chmodSync(kv, 0o755)
+    const r = await runScript(['castle', '1'], { TASK_RUN_OUTDIR: dir, HOME: home })
+    assert.equal(r.code, 2, `${r.stdout}\n${r.stderr}`)
+    assert.match(r.stderr, /no MC host\/port/)
+    assert.ok(!fs.existsSync(canary), 'a default run consulted the stash path')
+    // And the default puppet is dead too: explicit MC + fake logs reach the
+    // puppet start, which must fail instead of joining anything.
+    const { srv, url } = await fakeLogs(probeOk)
+    try {
+      const r2 = await runScript(['castle', '1'], {
+        TASK_RUN_OUTDIR: dir,
+        TASK_RUN_MC_HOST: MC_SENTINEL,
+        TASK_RUN_MC_PORT: '29999',
+        TASK_RUN_LOGS_URL: url,
+        TASK_RUN_GRAFANA_TOKEN: TOKEN_SENTINEL,
+      })
+      assert.equal(r2.code, 2, `${r2.stdout}\n${r2.stderr}`)
+      assert.match(r2.stderr, /puppet exited 1/)
+    } finally {
+      srv.close()
+    }
   })
 
   it('a one-stream failure can never yield DONE (env failure, not a pass)', async () => {
