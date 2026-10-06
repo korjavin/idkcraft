@@ -1069,11 +1069,11 @@ function releaseMeet(bot, ctx) {
   // rw4.17 (#311 reuse): the exit may yet release unsheltered-while-inside
   // (door-stuck fail, an order handover clearing the flag), and the next A*
   // from inside would eat the walls — the doorway hold is the protection,
-  // the guard is the backstop. Persists on the movements until a home move
-  // re-guards (no runtime movements swap exists), so one arming covers the
-  // episode; the exiting branch above deliberately does not re-arm (a
-  // post-swap refresh would re-box to the new site mid old-house exit).
-  try { buildMod.guardOwnWalls(bot, ctx) } catch (_) { /* guard best-effort */ }
+  // the guard is the backstop. Exit-context install: the box stays put
+  // across a home move while the body stands inside it (no runtime
+  // movements swap exists), so one arming covers the episode; the exiting
+  // branch above deliberately does not re-arm.
+  try { buildMod.guardExitWalls(bot, ctx) } catch (_) { /* guard best-effort */ }
 }
 
 // The order ends out loud (lead precedent): one chat line, then the body is
@@ -1090,10 +1090,11 @@ function failMeet(bot, ctx, status) {
     // the exited house must arm the wall guard first — the released body's
     // A* (fight/work) otherwise digs the walls (the old revmux 01 minor on
     // the door-stuck leg below). The box is the EXITED (pinned) house, not
-    // ctx.home — a 'build here' swap may have moved on mid-exit.
+    // ctx.home — a 'build here' swap may have moved on mid-exit — and it
+    // stays put across later re-box ticks until the body leaves (sticky).
     try {
       const done = order.home || ctx.home
-      if (done && isInside(bot, done)) buildMod.guardOwnWalls(bot, ctx, done)
+      if (done && isInside(bot, done)) buildMod.guardExitWalls(bot, ctx, done)
     } catch (_) { /* guard best-effort */ }
   }
   try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }

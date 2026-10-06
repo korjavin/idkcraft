@@ -10,6 +10,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const home = require('../src/behaviours/home')
+const buildMod = require('../src/behaviours/build')
 const body = require('../src/body')
 const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
 const { lookupCommand, detailLine } = require('../src/commands')
@@ -604,10 +605,24 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     let ticks = 0
     while (ctx.comehome && ticks < 30) { home.comehome(bot, ctx); ticks++ }
     assert.equal(ctx.stepStatus, 'failed:door-stuck')
-    const fn = bot.pathfinder.movements.exclusionAreasBreak[0]
-    assert.equal(typeof fn, 'function', 'the wall guard is installed')
-    assert.equal(fn({ type: 5, position: { x: 11, y: 64, z: 20 } }), 100, 'old wall cell guarded')
-    assert.equal(fn({ type: 5, position: { x: 101, y: 64, z: 100 } }), 0, 'new site box not guarded by the exit')
+    // Read through the live array (what A* sees): a detached closure would
+    // still answer 100 for its box.
+    const seen = (x, y, z) => bot.pathfinder.movements.exclusionAreasBreak
+      .reduce((m, f) => Math.max(m, f({ type: 5, position: { x, y, z } })), 0)
+    assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1, 'the wall guard is installed')
+    assert.equal(seen(11, 64, 20), 100, 'old wall cell guarded')
+    assert.equal(seen(101, 64, 100), 0, 'new site box not guarded by the exit')
+    // Revmux 01 minor: the next build/light tick re-keys to ctx.home (the
+    // new site) — the exited box must hold while the body stands inside it.
+    buildMod.guardOwnWalls(bot, ctx)
+    assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1, 'single slot, no duplicate guard')
+    assert.equal(seen(11, 64, 20), 100, 'old wall cell STILL guarded after a re-key tick')
+    // Once outside, the next re-key frees the old box and guards the new
+    // site — the sticky box never leaks.
+    bot.entity.position = { x: 200, y: 64, z: 200 }
+    buildMod.guardOwnWalls(bot, ctx)
+    assert.equal(seen(101, 64, 100), 100, 'new site guarded once outside')
+    assert.equal(seen(11, 64, 20), 0, 'old box freed once outside')
   })
 
   it('already outside (died mid-exit) releases at once', () => {
