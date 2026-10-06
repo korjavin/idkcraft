@@ -3,8 +3,10 @@
 const { describe, it, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
-const { findHumans, parseArgs, startControlServer } = require('../tools/puppet')
+const { findHumans, parseArgs, startControlServer, puppetMovements } = require('../tools/puppet')
 const { handleChat } = require('../src/index')
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function post(port, path, body) {
   return new Promise((resolve, reject) => {
@@ -32,13 +34,14 @@ function get(port, path) {
 // Fake puppet behind the real HTTP + gating: no MC server anywhere.
 function fakeHooks() {
   const h = {
-    yielded: false, connected: true, calls: [], logged: [], touches: 0,
+    yielded: false, connected: true, calls: [], logged: [],
     gate() {
       if (h.yielded) return { status: 409, error: 'human online' }
       if (!h.connected) return { status: 503, error: 'not connected' }
       return null
     },
-    touch() { h.touches++ },
+    idleMs: 60000, idles: 0,
+    onIdle() { h.idles++ },
     logCall(line) { h.logged.push(line) },
     state: (n) => ({ state: h.yielded ? 'yielded' : 'online', chat: [], n }),
     say: async (body) => {
@@ -116,6 +119,12 @@ describe('puppet argv/env (idkcraft-jlw7)', () => {
     assert.throws(() => parseArgs(['--name=12345678901234567'], {}), /1\.\.16/)
     assert.throws(() => parseArgs(['--nope=1'], {}), /unknown arg/)
   })
+
+  it('empty env reads as unset, not zero (verify #310.4)', () => {
+    const cfg = parseArgs([], { PUPPET_PORT: '', PUPPET_IDLE_MS: '' })
+    assert.equal(cfg.port, 25565)
+    assert.equal(cfg.idleMs, 15 * 60 * 1000)
+  })
 })
 
 describe('puppet 409 gate (idkcraft-jlw7)', () => {
@@ -138,7 +147,7 @@ describe('puppet 409 gate (idkcraft-jlw7)', () => {
     assert.equal(r.status, 409)
   })
 
-  it('/state stays 200 after yield and polls neither log nor idle-touch', async () => {
+  it('/state stays 200 after yield and polls are not logged', async () => {
     const hooks = fakeHooks()
     const srv = await startControlServer(0, hooks)
     servers.push(srv)
@@ -148,10 +157,23 @@ describe('puppet 409 gate (idkcraft-jlw7)', () => {
     assert.equal(r.status, 200)
     assert.equal(r.body.state, 'yielded')
     assert.deepEqual(hooks.logged, [])
-    assert.equal(hooks.touches, 0)
   })
 
-  it('control calls log and idle-touch even when gated', async () => {
+  it('a gate that flips mid-request still 409s (verify #310.2)', async () => {
+    // A human joining between the accept and the body read: the post-read
+    // re-check must deny what the pre-read check allowed.
+    const hooks = fakeHooks()
+    let n = 0
+    hooks.gate = () => (++n > 1 ? { status: 409, error: 'human online' } : null)
+    const srv = await startControlServer(0, hooks)
+    servers.push(srv)
+    const port = srv.address().port
+    const r = await post(port, '/say', { text: 'follow me' })
+    assert.equal(r.status, 409)
+    assert.deepEqual(hooks.calls, []) // denied: act not run
+  })
+
+  it('control calls log even when gated', async () => {
     const hooks = fakeHooks()
     hooks.yielded = true
     const srv = await startControlServer(0, hooks)
@@ -159,7 +181,6 @@ describe('puppet 409 gate (idkcraft-jlw7)', () => {
     const port = srv.address().port
     const r = await post(port, '/stop', {})
     assert.equal(r.status, 409)
-    assert.equal(hooks.touches, 1)
     assert.equal(hooks.logged.length, 1)
     assert.equal(hooks.logged[0].path, '/stop')
     assert.equal(hooks.logged[0].status, 409)
@@ -176,6 +197,67 @@ describe('puppet 409 gate (idkcraft-jlw7)', () => {
     assert.equal(r.status, 404)
     r = await get(port, '/say')
     assert.equal(r.status, 405)
+  })
+})
+
+describe('puppet idle watchdog (verify #310.3)', () => {
+  it('fires with no control calls at all', async () => {
+    const hooks = fakeHooks()
+    hooks.idleMs = 60
+    const srv = await startControlServer(0, hooks)
+    servers.push(srv)
+    await sleep(300)
+    assert.equal(hooks.idles, 1)
+  })
+
+  it('a control call re-arms the clock', async () => {
+    const hooks = fakeHooks()
+    hooks.idleMs = 200
+    const srv = await startControlServer(0, hooks)
+    servers.push(srv)
+    const port = srv.address().port
+    await sleep(100)
+    await post(port, '/stop', {})
+    await sleep(150) // past the original deadline, before the re-armed one
+    assert.equal(hooks.idles, 0)
+    await sleep(400)
+    assert.equal(hooks.idles, 1)
+  })
+
+  it('/state polls do not re-arm the clock', async () => {
+    const hooks = fakeHooks()
+    hooks.idleMs = 150
+    const srv = await startControlServer(0, hooks)
+    servers.push(srv)
+    const port = srv.address().port
+    for (let i = 0; i < 4; i++) { await get(port, '/state'); await sleep(40) }
+    await sleep(250)
+    assert.equal(hooks.idles, 1)
+  })
+})
+
+describe('puppet /state chat default (verify #310.4)', () => {
+  it('a plain GET /state asks for 20 lines, not 1', async () => {
+    const hooks = fakeHooks()
+    const srv = await startControlServer(0, hooks)
+    servers.push(srv)
+    const port = srv.address().port
+    const r = await get(port, '/state')
+    assert.equal(r.status, 200)
+    assert.equal(r.body.n, 20)
+  })
+})
+
+describe('puppet movements never dig or place (verify #310.1)', () => {
+  it('canDig off, no towers, zero scaffolding even holding dirt', () => {
+    const registry = require('minecraft-data')('1.21.1')
+    const dirt = registry.itemsByName.dirt.id
+    const bot = { registry, inventory: { items: () => [{ type: dirt, count: 64 }] } }
+    const mov = puppetMovements(bot)
+    assert.equal(mov.canDig, false)
+    assert.equal(mov.allow1by1towers, false)
+    assert.deepEqual(mov.scafoldingBlocks, [])
+    assert.equal(mov.countScaffoldingItems(), 0)
   })
 })
 

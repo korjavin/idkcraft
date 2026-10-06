@@ -55,6 +55,9 @@ function findHumans(names, botName, puppetName) {
 }
 
 function num(v, dflt) {
+  // Absent/empty reads as unset, not zero: Number(null) is 0, which made a
+  // plain GET /state return 1 chat line instead of 20 (verify #310.4).
+  if (v == null || v === '') return dflt
   const n = Number(v)
   return Number.isFinite(n) ? n : dflt
 }
@@ -121,23 +124,39 @@ function readBody(req) {
 // The localhost HTTP control plane. hooks: gate() -> null (open) or
 // { status, error } (409 yielded / 503 not connected); say/goto/look/stop/
 // quit/state do the work; logCall(line) transcripts the control call;
-// touch() re-arms the idle timer. All seams injected, so tests drive the
-// real HTTP + gating with a fake puppet and no MC server.
+// idleMs + onIdle() are the crashed-agent watchdog. The watchdog lives here
+// (armed at listen, re-armed by every mutating arrival) so no connect/spawn
+// path can skip it — a yield on first spawn still quits (verify #310.3).
+// All seams injected, so tests drive the real HTTP + gating with a fake
+// puppet and no MC server.
 function startControlServer(httpPort, hooks) {
+  let idleTimer = null
+  const rearm = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      idleTimer = null
+      try { hooks.onIdle() } catch (_) { /* watchdog best-effort */ }
+    }, hooks.idleMs)
+    if (typeof idleTimer.unref === 'function') idleTimer.unref()
+  }
+  rearm()
   const server = http.createServer(async (req, res) => {
     try {
       const u = new URL(req.url || '/', 'http://localhost')
       const path = u.pathname
       const mutating = req.method === 'POST' && (path === '/say' || path === '/goto' || path === '/look' || path === '/stop')
       if (mutating) {
-        try { hooks.touch() } catch (_) { /* idle best-effort */ }
-        const denied = hooks.gate()
+        try { rearm() } catch (_) { /* idle best-effort */ }
+        const early = hooks.gate()
         let body = null
         try { body = await readBody(req) } catch (e) {
           hooks.logCall({ path, body: null, status: 400, error: e.message })
           send(res, 400, { error: e.message })
           return
         }
+        // Re-check after the read: a request straddling a human join must
+        // 409, not run (verify #310.2).
+        const denied = early || hooks.gate()
         if (denied) {
           hooks.logCall({ path, body, status: denied.status, error: denied.error })
           send(res, denied.status, { error: denied.error })
@@ -173,10 +192,23 @@ function startControlServer(httpPort, hooks) {
     }
   })
   // Localhost only: the control plane must never listen on a public iface.
+  server.on('close', () => { if (idleTimer) clearTimeout(idleTimer) })
   return new Promise((resolve, reject) => {
     server.on('error', reject)
     server.listen(httpPort, 'localhost', () => resolve(server))
   })
+}
+
+// Prod-safe feet (verify #310.1): the puppet walks prod ground — canDig off,
+// no 1x1 towers, and an emptied scaffolding list (countScaffoldingItems reads
+// 0, so every toPlace move is refused) — a /goto through a wall fails
+// instead of griefing, even holding dirt.
+function puppetMovements(bot) {
+  const mov = new Movements(bot)
+  mov.canDig = false
+  mov.allow1by1towers = false
+  mov.scafoldingBlocks = []
+  return mov
 }
 
 async function main() {
@@ -238,14 +270,9 @@ async function main() {
   }
 
   let server = null
-  let idleTimer = null
-  const touch = () => {
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => {
-      logLine({ dir: 'event', event: 'idle', detail: `no control call for ${cfg.idleMs} ms` })
-      shutdown(0, 'idle timeout')
-    }, cfg.idleMs)
-    if (typeof idleTimer.unref === 'function') idleTimer.unref()
+  const onIdle = () => {
+    logLine({ dir: 'event', event: 'idle', detail: `no control call for ${cfg.idleMs} ms` })
+    shutdown(0, 'idle timeout')
   }
   const shutdown = (code, why) => {
     if (state === 'quitting') return
@@ -284,8 +311,8 @@ async function main() {
   })
   bot.on('playerLeft', () => scanRoster())
   // Mineflayer re-emits spawn after every death-respawn: only the first one
-  // owns the idle clock (revmux 01 core-1) — a puppet dying every few
-  // minutes must still idle-quit for its crashed agent.
+  // sets up (revmux 01 core-1). The idle clock needs no arming here — the
+  // control server armed it at listen on every path (verify #310.3).
   let spawnedOnce = false
   bot.on('spawn', () => {
     scanRoster()
@@ -297,21 +324,15 @@ async function main() {
     }
     state = 'online'
     if (spawnedOnce) {
-      logLine({ dir: 'event', event: 'respawn', detail: 'auto-respawned, idle clock untouched' })
+      logLine({ dir: 'event', event: 'respawn', detail: 'auto-respawned' })
       return
     }
     spawnedOnce = true
-    // Prod-safe feet: the puppet walks prod ground, so it never digs or
-    // towers — a /goto through a wall fails instead of griefing.
     try {
-      const mov = new Movements(bot)
-      mov.canDig = false
-      mov.allow1by1towers = false
-      bot.pathfinder.setMovements(mov)
+      bot.pathfinder.setMovements(puppetMovements(bot))
     } catch (e) { console.error(`puppet: movements failed: ${e.message}`) }
     logLine({ dir: 'event', event: 'ready', detail: `spawned as ${cfg.name}` })
     console.log(`puppet: spawned as ${cfg.name}, control at http://localhost:${cfg.httpPort}, transcript ${cfg.log}`)
-    touch()
     // Login-time roster race: a tab-list straggler reads as nobody here,
     // so re-scan once — a missed human still yields within seconds.
     setTimeout(() => {
@@ -348,7 +369,7 @@ async function main() {
     return null
   }
   const hooks = {
-    gate, touch, state: snapshot,
+    gate, state: snapshot, idleMs: cfg.idleMs, onIdle,
     logCall: ({ path, body, status, error }) => logLine({ dir: 'in', path, body, status, error }),
     say: async (body) => {
       const text = body && body.text
@@ -403,7 +424,7 @@ async function main() {
   process.on('SIGTERM', () => shutdown(0, 'SIGTERM'))
 }
 
-module.exports = { findHumans, parseArgs, startControlServer, DEFAULTS, GOODBYE, EXIT_HUMAN, EXIT_ERROR }
+module.exports = { findHumans, parseArgs, startControlServer, puppetMovements, DEFAULTS, GOODBYE, EXIT_HUMAN, EXIT_ERROR }
 
 if (require.main === module) {
   main().catch((e) => { console.error(`puppet: fatal: ${(e && e.message) || e}`); process.exit(EXIT_ERROR) })
