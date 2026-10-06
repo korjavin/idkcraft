@@ -824,12 +824,15 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // the day menu exits) instead of idling before it forever (prod: the
       // bot sat 2 h in its hole, six dawns missed). Positive-day only: an
       // unreadable clock keeps the night hold (fail closed, the gohome
-      // stamp precedent). Night unchanged; an intruder still fights (33vm);
-      // orders keep their ticks (the shelterRun gate).
+      // stamp precedent). Night unchanged; an intruder still fights (33vm).
+      // Orders keep their ticks: lead/bring (the shelterRun gate) plus an
+      // exiting comehome / gocastle doorway, whose inShelter guard must
+      // survive day fight ticks or the exit paths through the wall (revmux
+      // 01 body-1).
       let dayNow = false
       try { dayNow = goal.timeWord(bot) === 'day' } catch (_) { dayNow = false }
-      const dayDivert = ctx.work && !ctx.lead && !ctx.bring && ctx.inShelter &&
-        decision.action === 'fight' && !intruder && dayNow
+      const dayDivert = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
+        ctx.inShelter && decision.action === 'fight' && !intruder && dayNow
       if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above

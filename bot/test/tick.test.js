@@ -2305,6 +2305,30 @@ describe('work mode (epic rw4)', () => {
     assert.equal(night.restRan, 0)
     assert.equal(night.action, 'idle')
   })
+
+  it('rw4.15 revmux 01 body-1: an exiting comehome keeps the doorway hold by day', async () => {
+    // releaseMeet arms inShelter with the exit legs so fight pursuit cannot
+    // preempt the doorway (jr2.3) — the day divert must not clear it and
+    // path a work step through the wall.
+    for (const order of ['comehome', 'gocastle']) {
+      const bot = workBot()
+      bot.time = { timeOfDay: 6000 }
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, 5) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.inShelter = true
+      ctx[order] = { exiting: true, phase: 'open' }
+      try {
+        const r = await ticker.tick()
+        assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' }, order)
+        assert.equal(ctx.inShelter, true, `${order}: the doorway guard stands`)
+      } finally {
+        ticker.destroy()
+      }
+    }
+  })
 })
 
 describe('stateKey', () => {
