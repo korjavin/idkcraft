@@ -325,6 +325,25 @@ function trackDrop(f, drop) {
   f.drops[drop] = true
 }
 
+// Partial bank (sqg2): the gains of an interrupted run, merged into
+// ctx.haul. The goal.js fresh-forage reset drops the stale leg (4dse fix)
+// and with it startInv/drops — banking first keeps the partial haul. Only
+// ctx.haul moves: no status, no final, no gate touch (the fresh leg runs
+// honestly on its own baseline).
+function bankPartial(bot, ctx) {
+  try {
+    const f = ctx && ctx.forage
+    if (!f || !f.startInv || !f.drops) return
+    const gains = {}
+    for (const d of Object.keys(f.drops)) {
+      const g = bring.countDrop(bot, d) - ((f.startInv && f.startInv[d]) || 0)
+      if (g > 0) gains[d] = g
+    }
+    if (!ctx.haul) ctx.haul = {}
+    for (const d of Object.keys(gains)) ctx.haul[d] = (ctx.haul[d] || 0) + gains[d]
+  } catch (_) { /* haul best-effort */ }
+}
+
 // Skip one memory cell (never forget — the atl.4 hold needs stable
 // memory). Shared with the deep leg (tunnel strikes).
 function skipCell(ctx, p) {
@@ -710,6 +729,7 @@ function forage(bot, ctx, target, state) {
 }
 
 module.exports = forage
+module.exports.bankPartial = bankPartial
 module.exports.planForage = planForage
 module.exports.gearWantCell = gearWantCell
 module.exports.bestDiamondCell = bestDiamondCell
