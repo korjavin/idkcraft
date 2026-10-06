@@ -403,11 +403,14 @@ describe('rw4.4 one flight at a time, dig-retry on weeds', () => {
 
   it('a foreign torch in the cell is kept, never dug (drq protected)', async () => {
     const world = makeWorld()
-    world.set(6, 64, 0, 'torch') // owner's torch in a ring cell
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], failPlace: true })
     bot.entity.position = pos(6, 64, 1)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
-    world.set(11, 64, 1, 'crafting_table') // table already stands: the ring cell is next
+    // Planted after siting (vmzq.14: a torch reads built and would deflect
+    // the site): owner's torch in a ring cell, table already stands so the
+    // ring cell is next.
+    world.set(6, 64, 0, 'torch')
+    world.set(11, 64, 1, 'crafting_table')
     build(bot, ctx, null, null) // approach
     build(bot, ctx, null, null) // refuse -> protected, no dig
     await settle()
@@ -470,6 +473,8 @@ describe('rpw build here on a built home starts a new house', () => {
         { name: 'dirt', count: 32 },
       ],
     })
+    // vmzq.12: the bot stands by the speaker — a far speaker reads last-known.
+    bot.entity.position = pos(100, 65, 100)
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
     return bot
   }
@@ -500,6 +505,8 @@ describe('b2o build here answers and starts work', () => {
   function chatBot() {
     const world = makeWorld()
     const bot = mockBot(world)
+    // vmzq.12: the bot stands by the speaker — a far speaker reads last-known.
+    bot.entity.position = pos(100, 65, 100)
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(100, 64, 100) } } }
     return bot
   }

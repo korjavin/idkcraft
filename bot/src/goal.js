@@ -15,6 +15,7 @@
 const { countItems, wornItems } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
+const { CLEAR_FLORA } = require('./behaviours/util')
 const forageMod = require('./behaviours/forage')
 const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
@@ -706,7 +707,17 @@ function makeHome(ox, oy, oz, v) {
 }
 
 // Feet level of the ground column: first non-air block from topY down, plus
-// one. Null when the column never resolves (unloaded chunk).
+// one. Null when the column never resolves (unloaded chunk) or when the
+// first hit is surface liquid — water is not ground (idkcraft-vmzq.12):
+// the prod shore site read the water surface as ground and founded over
+// dips. The liquid set mirrors flat.isLiquidName; name-based rather than
+// boundingBox so fakes and mineflayer agree (real water reports 'empty').
+// Built surfaces read the same null (idkcraft-vmzq.14): a house roof is
+// 42 flat columns and the site would found on top (rig: FRESH roofed at
+// y=75 and stalled). Mirrors castle FOREIGN — somebody's structure, not
+// terrain. Cobble/stone huts are not in the set (accepted tail: a stone
+// roof still founds; the bead covers plank roofs and own-house cells).
+const BUILT_GROUND = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 function groundY(bot, x, z, topY) {
   for (let y = topY; y > topY - 32; y--) {
     let b = null
@@ -715,7 +726,18 @@ function groundY(bot, x, z, topY) {
     } catch (_) {
       return null
     }
-    if (b && b.name && b.name !== 'air') return y + 1
+    if (!b || !b.name || b.name === 'air') continue
+    if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return null
+    if (BUILT_GROUND.test(b.name)) return null
+    // Clearable flora reads through to the dirt below (revmux 02 major):
+    // one- and two-tall flowers would add relief 2 and refuse a flat
+    // meadow, but the build digs them. CLEAR_FLORA is exactly the
+    // build-clearable set minus the torch (which rejects above). Leaves
+    // and logs still count — reading past a canopy would found a
+    // forest-floor site whose wall cells bury in logs, which nothing
+    // clears, so the overhang deflects to the next footprint instead.
+    if (CLEAR_FLORA.has(b.name)) continue
+    return y + 1
   }
   return null
 }
@@ -724,9 +746,13 @@ function groundY(bot, x, z, topY) {
 const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
 
 // Pick a flat 7x6 site (jr2.1 blueprint): all 42 columns resolve and lie
-// within one block. First fit wins; after 8 rejections the first candidate
-// is taken as-is — ponytail: let the house hang or half-bury rather than
-// block the epic.
+// within one block. First fit wins; anything else refuses (null) —
+// uneven, wet or unloaded footprints are never founded (idkcraft-vmzq.12:
+// the prod shore site came from the old blind fallback, and the build
+// clears only flora, so relief would bury wall cells and fill buildSkip).
+// The caller waits (chunks load, the next attempt validates) or refuses
+// honestly. The JR-BUILD slope rig is safe: its skip-0 baseline proves
+// the footprint wins this loop, the fallback never fired there.
 function siteFor(bot, around) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
   const cx = Math.floor(around.x)
@@ -748,9 +774,7 @@ function siteFor(bot, around) {
     const y0 = Math.min(...ys)
     if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz, 2)
   }
-  const [fx, fz] = SITE_DIRS[0]
-  const fy = groundY(bot, cx + fx, cz + fz, cy + 8)
-  return makeHome(cx + fx, fy == null ? cy : fy, cz + fz, 2)
+  return null
 }
 
 // Adopt a house built by an earlier run: a door within 32 of spawn means

@@ -568,6 +568,15 @@ function build(bot, ctx, target, state) {
     } catch (_) {
       ctx.home = null
     }
+    // vmzq.12: no validated site at spawn (unloaded chunks, water, or no
+    // flat ground) fails the step instead of idling — the stepFail hold
+    // paces retries (a 'build here' or relocation releases it) and the
+    // stall clock sees the failure. The next attempt validates once
+    // chunks load.
+    if (!ctx.home) {
+      ctx.stepStatus = 'failed:no-site'
+      return
+    }
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
     ctx.buildFails = 0
