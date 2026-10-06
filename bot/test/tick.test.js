@@ -2258,6 +2258,77 @@ describe('work mode (epic rw4)', () => {
       ticker.destroy()
     }
   })
+
+  it('rw4.15: day + sheltered + fight diverts to goal.decide and exits; night still holds', async () => {
+    // Prod 2026-10-06: the daytime fight check returned before the goal
+    // arbiter — the only place the shelter flag clears at day — and the
+    // bot sat 2 h in its hole (six dawns missed).
+    const goal = require('../src/goal')
+    const run = async (timeOfDay) => {
+      const bot = workBot()
+      bot.time = { timeOfDay }
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, 5), 2: zombie(2, -5), 3: zombie(3, 7) } // crowd, no home: no intruder
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.inShelter = true
+      // A stable running work step: decide short-circuits to it silently.
+      const text = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+      ctx.step = 'rest'
+      ctx.stepStatus = 'running'
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      let decideCalls = 0
+      let restRan = 0
+      const origDecide = goal.decide
+      const origRest = BEHAVIOURS.rest
+      goal.decide = async (...a) => { decideCalls++; return origDecide(...a) }
+      BEHAVIOURS.rest = () => { restRan++ }
+      try {
+        const r = await ticker.tick()
+        return { action: r.decision.action, inShelter: ctx.inShelter, decideCalls, restRan }
+      } finally {
+        goal.decide = origDecide
+        BEHAVIOURS.rest = origRest
+        ticker.destroy()
+      }
+    }
+    const day = await run(6000)
+    assert.ok(day.decideCalls >= 1, 'day: goal.decide runs')
+    assert.equal(day.inShelter, false, 'day: the shelter flag clears')
+    assert.equal(day.restRan, 1, 'day: the work step dispatches')
+    assert.equal(day.action, 'rest')
+    const night = await run(15000)
+    assert.equal(night.decideCalls, 0, 'night: the hold keeps decide out')
+    assert.equal(night.inShelter, true, 'night: still sheltered')
+    assert.equal(night.restRan, 0)
+    assert.equal(night.action, 'idle')
+  })
+
+  it('rw4.15 revmux 01 body-1: an exiting comehome keeps the doorway hold by day', async () => {
+    // releaseMeet arms inShelter with the exit legs so fight pursuit cannot
+    // preempt the doorway (jr2.3) — the day divert must not clear it and
+    // path a work step through the wall.
+    for (const order of ['comehome', 'gocastle']) {
+      const bot = workBot()
+      bot.time = { timeOfDay: 6000 }
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, 5) }
+      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.inShelter = true
+      ctx[order] = { exiting: true, phase: 'open' }
+      try {
+        const r = await ticker.tick()
+        assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' }, order)
+        assert.equal(ctx.inShelter, true, `${order}: the doorway guard stands`)
+      } finally {
+        ticker.destroy()
+      }
+    }
+  })
 })
 
 describe('stateKey', () => {

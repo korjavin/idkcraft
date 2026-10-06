@@ -860,12 +860,20 @@ function isV2House(bot, dx, dy, dz) {
   }
 }
 
-function goalFacts(bot, ctx) {
+// MC clock word (rw4.15): null when the clock is unreadable — call sites
+// choose their own unknown (goalFacts reads day, the day-shelter divert
+// needs positive day, the gohome arrival line chats).
+function timeWord(bot) {
   let timeOfDay = NaN
   try {
     timeOfDay = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
-  } catch (_) { /* unknown time reads as day below */ }
-  const time = !(timeOfDay >= 0) ? 'day' : timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
+  } catch (_) { /* unknown below */ }
+  if (!(timeOfDay >= 0)) return null
+  return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
+}
+
+function goalFacts(bot, ctx) {
+  const time = timeWord(bot) || 'day'
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   const planks = countItems(bot, (n) => n.endsWith('_planks'))
   const table = countItems(bot, (n) => n === 'crafting_table')
@@ -1573,6 +1581,15 @@ async function decide(bot, ctx) {
   // leaves inShelter true with no stay step to clear it, suppressing fight
   // all day (revmux 01-review loop+goal-3).
   if (ctx && facts.time === 'day') {
+    // Verifier P2 on #311 (pathing, raised twice — revmux core-1 family):
+    // clearing the flag while the body is still inside must arm the wall
+    // guard first — the next tick may dispatch work or fight from inside,
+    // and without the build-installed exclusion A* digs through our own
+    // walls (the guard is only installed by build/light, never after
+    // adopt). Outside (dig-in, pillar) there is nothing to guard.
+    if (ctx.inShelter && facts.inside === 'yes') {
+      try { buildMod.guardOwnWalls(bot, ctx) } catch (_) { /* guard best-effort */ }
+    }
     ctx.inShelter = false
     ctx.gohomeLatch = null // the latch lasts one night (xhqv)
   }
@@ -1724,6 +1741,19 @@ async function decide(bot, ctx) {
   }
   if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry) {
     const askKey = `${text}\n${status || ''}`
+    // rw4.16: a finished step that can no longer progress is never
+    // re-issued — self-advancing steps are never held, so the shortcut
+    // re-ran a day-infeasible gohome done+chat every tick (prod: 434
+    // 'home for the night' lines in 7 min). Running steps keep the
+    // shortcut untouched (stickiness and the forces own their handoffs).
+    let prevFeasible = true
+    if (finished && prev) {
+      try {
+        prevFeasible = !!(MENU[prev] && MENU[prev].feasible(facts, bot, ctx))
+      } catch (_) {
+        prevFeasible = false
+      }
+    }
     // The shortcut must respect holds (h9z): it returns the finished step
     // without choosing, so a held step would bypass its own hold and
     // re-pick forever. A gear yield never rides it either (ipn.7): gear
@@ -1734,7 +1764,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !(prev === 'gear' && status === 'done') && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     const names = Object.keys(MENU).filter((n) => {
       try {
@@ -1812,4 +1842,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS }

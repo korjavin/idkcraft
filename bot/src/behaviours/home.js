@@ -2,7 +2,7 @@
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
-const { goalFacts } = require('../goal')
+const { goalFacts, timeWord } = require('../goal')
 const detour = require('../detour')
 const stuck = require('../stuck')
 const { botPos, doorOpen, doorLaneDX: blockLaneDX } = require('./util')
@@ -572,7 +572,18 @@ function gohomeTick(bot, ctx, target, state) {
       st.phase = 'done'
       ctx.stepStatus = 'done'
       ctx.inShelter = true
-      try { bot.chat('home for the night') } catch (_) { /* chat best-effort */ }
+      // rw4.16: one arrival line per night, never by day — a re-issued
+      // done (stale shortcut, retreat re-pick) must not re-chat every
+      // tick (prod: 434 lines in 7 min, kick risk). Dusk and night share
+      // one MC day (xhqv), so the stamp is the night; an unreadable
+      // clock still chats (legacy behaviour, fail open).
+      let day = false
+      try { day = timeWord(bot) === 'day' } catch (_) { day = false }
+      const mcDay = dayOf(bot)
+      if (!day && ctx.gohomeSaidDay !== mcDay) {
+        ctx.gohomeSaidDay = mcDay
+        try { bot.chat('home for the night') } catch (_) { /* chat best-effort */ }
+      }
       return
     }
     tryToggle(bot, ctx, st, door)
