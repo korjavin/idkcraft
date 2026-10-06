@@ -181,6 +181,16 @@ function fail(bot, ctx, item, err) {
   }
   // Same-reason day latch (ipn.11): keyed on item + error — a repeating
   // identical failure yields the day to gear instead of re-arming forever.
+  // pack-full never latches (g0z.26 R2): transient capacity, cleared by the
+  // next banking — not a broken plan.
+  if (item === 'pack-full') {
+    ctx.stepStatus = 'failed:equip-pack-full'
+    resetRunCounters(ctx)
+    try {
+      console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
+    } catch (_) { /* logging best-effort */ }
+    return
+  }
   try {
     const msg = err && err.message ? String(err.message) : String(err)
     noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
@@ -651,6 +661,15 @@ function ownInFootprint(ctx, block) {
 
 function digTick(bot, ctx, st, bp) {
   if (st.digs == null) st.digs = 0
+  // Reserved slot (g0z.26 R2): the pack stops growing at PACK_RESERVE with
+  // no adopted chest and nobody online — the last slot is the bootstrap
+  // chest craft's room. Fails (held, never day-latched) so stockpile banks.
+  let reserved = false
+  try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+  if (reserved) {
+    fail(bot, ctx, 'pack-full', new Error('pack full, banking first'))
+    return
+  }
   if (st.digs >= DIG_STALL_STRIKES) {
     fail(bot, ctx, 'blocks', new Error('dig-stall'))
     return

@@ -48,6 +48,105 @@ function spotsFor(home) {
   return home && home.v === 2 ? CHEST_SPOTS_V2 : CHEST_SPOTS
 }
 
+// Wood ceiling (idkcraft-g0z.26): while the castle is open the pack keeps
+// one stack of planks and one gather load of logs — enough for any single
+// wood batch (planks 32 + fence/door/chest crafts, frame 14) plus the
+// sticks/torches the other steps drink from it — and banks the rest. Before,
+// the castle reserve kept every plank packed while forage chopped and craft
+// converted without a limit: prod held ~700 planks in 11 slots, the pack
+// filled, and dig drops were lost. LOG_KEEP mirrors goal NEED_LOGS (no
+// shared import: this module must not require goal — goal requires this
+// module). The ceiling only applies on a built home: pre-house the budget
+// needs every plank packed.
+const PLANK_KEEP = 64
+const LOG_KEEP = 14
+function castleWoodOpen(ctx) {
+  try {
+    return !!(ctx && ctx.castle && ctx.castle.phase !== 'complete' && ctx.home && ctx.home.built)
+  } catch (_) {
+    return false
+  }
+}
+// True when the pack holds planks past the ceiling (goal craft gate, craft
+// conversion guard, forage log skip). Planks only (revmux 01 minor): logs
+// at/above NEED_LOGS must still convert — conversion is what frees the log
+// slot, and the depositPlan/surplusWood banking below still caps logs at
+// LOG_KEEP. Fail-open: an unreadable inventory reads empty, the old
+// behaviour.
+function woodCapped(bot, ctx) {
+  try {
+    if (!castleWoodOpen(ctx)) return false
+    return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP
+  } catch (_) {
+    return false
+  }
+}
+// Reserved slot (g0z.26 R2, revmux 01 major): with no adopted chest and
+// nobody online the pack must never fill past PACK_RESERVE — the last slot
+// is the bootstrap chest craft's room. A 36/36 chestless pack has no drain
+// that is not tossing (the owner forbids it), so diggers and crafts yield
+// here instead of filling it. Binds ONLY in that corner: an adopted chest
+// (banking drains, however far) or any player online (the haul drains)
+// opens every gate, and pre-house the budget owns the pack. Forage's chest
+// quest is exempt while it can complete (forage.js questExempt).
+const PACK_RESERVE = 35
+function packStacks(bot) {
+  try {
+    const items = invItems(bot)
+    return Array.isArray(items) ? items.length : 0
+  } catch (_) {
+    return 0
+  }
+}
+// The reserve corner without the stack count (forage.js chest quest): built,
+// chestless and alone. The quest completes early, before the reserve binds.
+function reserveCorner(bot, ctx) {
+  try {
+    if (!ctx || !ctx.home || !ctx.home.built) return false
+    if (ctx.home.chest) return false
+    let level = 'none'
+    try {
+      level = require('./deliver').playerStatus(bot).level
+    } catch (_) {
+      level = 'none'
+    }
+    return level === 'none'
+  } catch (_) {
+    return false
+  }
+}
+function slotReserved(bot, ctx) {
+  try {
+    return reserveCorner(bot, ctx) && packStacks(bot) >= PACK_RESERVE
+  } catch (_) {
+    return false
+  }
+}
+// Above-ceiling wood in inventory order, keep-first (the ensureRoom bank
+// list, craft.js). Empty when the ceiling is off.
+function surplusWood(bot, ctx) {
+  const out = []
+  try {
+    if (!castleWoodOpen(ctx)) return out
+    let kp = PLANK_KEEP
+    let kl = LOG_KEEP
+    for (const i of invItems(bot)) {
+      if (!i || typeof i.name !== 'string') continue
+      const n = typeof i.count === 'number' ? i.count : 1
+      if (i.name.endsWith('_planks')) {
+        const k = Math.min(kp, n)
+        kp -= k
+        if (n - k > 0) out.push({ name: i.name, count: n - k })
+      } else if (i.name.endsWith('_log')) {
+        const k = Math.min(kl, n)
+        kl -= k
+        if (n - k > 0) out.push({ name: i.name, count: n - k })
+      }
+    }
+  } catch (_) { /* unreadable inventory: no surplus */ }
+  return out
+}
+
 // Never banked: worn/carried kit (same shape as bring share keeps), the
 // light fuel rw4.13 counts from the inventory (torch, coal, charcoal and
 // the sticks they craft from), plus a food and scaffold reserve below.
@@ -266,6 +365,10 @@ function depositPlan(bot, ctx) {
   const castleOpen = !!(ctx && ctx.castle && ctx.castle.phase !== 'complete')
   // Deferred require (castle -> build -> ... chain).
   const castleMaterial = (name) => { try { return require('./castle').isMaterial(name, ctx.castle) } catch (_) { return false } }
+  // Wood ceiling counters (g0z.26): keep-first-N per call, in inventory
+  // order — the same rule surplusWood applies for ensureRoom. Null on an
+  // unbuilt home: the house budget needs every plank packed (the old rule).
+  const castleWoodKeep = castleWoodOpen(ctx) ? { planks: PLANK_KEEP, logs: LOG_KEEP } : null
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {
@@ -283,7 +386,18 @@ function depositPlan(bot, ctx) {
     if (n <= 0) continue
     // Castle reserve (g0z.3): an unfinished castle keeps every castle
     // material packed — banking it would starve the next castle batch.
-    if (castleOpen && castleMaterial(i.name)) continue
+    // Wood is capped (g0z.26): the first KEEP stays, the rest banks through
+    // the keeps below (bed/gear only keep more, never less — bounded).
+    if (castleOpen && castleMaterial(i.name)) {
+      if (!castleWoodKeep) continue
+      if (i.name.endsWith('_planks') || i.name.endsWith('_log')) {
+        const key = i.name.endsWith('_planks') ? 'planks' : 'logs'
+        const k = Math.min(castleWoodKeep[key], n)
+        castleWoodKeep[key] -= k
+        n -= k
+        if (n <= 0) continue
+      } else continue
+    }
     if (bedOwed && (i.name.endsWith('_bed') || i.name === 'string' || (woolReady && i.name.endsWith('_wool')))) continue
     if (bedOwed && i.name.endsWith('_planks')) {
       const k = Math.min(woodKeep[i.name] || 0, n)
@@ -392,6 +506,7 @@ function chestSpotFor(bot, ctx) {
 
 // What the no-chest branch can do: 'adopt' a standing chest on sight,
 // 'place' one when the pack holds a chest item or 8 same-wood planks,
+// 'shed' one junk stack when the unfunded quest corner overflows (R4),
 // 'none' otherwise. The no-spot stamp gates placing only: a chest the
 // owner puts down by hand adopts immediately, never after the hour
 // (revmux 04-review). The menu gates on this so an unready bot never
@@ -412,12 +527,161 @@ function chestTodo(bot, ctx, maxPlanks) {
   try {
     if (countItems(bot, (n) => n === 'chest') > 0) return 'place'
     if ((maxPlanks || 0) >= 8) return 'place'
+    if (questShedDue(bot, ctx)) return 'shed'
   } catch (_) { /* undecidable: none */ }
   return 'none'
+}
+// Quest-shed predicate (g0z.26 R4, revmux 03 major): the unfunded quest
+// corner at 34+ stacks — the quest cannot chop (no free slots), so the
+// stockpile step sheds one junk stack per run until the quest fits (33).
+// Shared by chestTodo (menu) and the no-chest branch (behaviour): one rule,
+// so feasible always runs and running was feasible. Unfunded reads
+// maxPlanks<8, questPlankWoods' own rule; a chest item aboard places. Fit
+// is decided at shed time, not here: the step-aside changes the ground the
+// survey reads, so an unfit survey fails held (bounded) instead of gating
+// the menu.
+const QUEST_SHED_WIDTH = 34
+function questShedDue(bot, ctx) {
+  try {
+    if (!reserveCorner(bot, ctx)) return false
+    if (countItems(bot, (n) => n === 'chest') > 0) return false
+    if (packStacks(bot) < QUEST_SHED_WIDTH) return false
+    let max = 0
+    try {
+      const items = bot.inventory.items()
+      if (!Array.isArray(items)) return false
+      const perWood = {}
+      for (const i of items) {
+        if (!i || typeof i.name !== 'string' || !i.name.endsWith('_planks')) continue
+        perWood[i.name] = (perWood[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+      }
+      for (const n of Object.values(perWood)) if (n > max) max = n
+    } catch (_) { return false }
+    return max < 8
+  } catch (_) {
+    return false
+  }
+}
+// 6-away solid ground with headroom for the shed step-aside (below): the
+// first of 8 directions that stands. Null when none reads safe.
+const SHED_ASIDE_DIST = 6
+function asideDest(bot, bp) {
+  try {
+    if (!bp || typeof bp.x !== 'number') return null
+    const air = (x, y, z) => {
+      const n = blockNameAt(bot, x, y, z)
+      return n === 'air' || n === 'cave_air'
+    }
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const px = Math.floor(bp.x) + dx * SHED_ASIDE_DIST
+      const pz = Math.floor(bp.z) + dz * SHED_ASIDE_DIST
+      const py = Math.floor(bp.y)
+      const g = blockNameAt(bot, px, py - 1, pz)
+      if (!g || g === 'air' || g === 'cave_air' || g === 'water' || g === 'lava') continue
+      if (!air(px, py, pz) || !air(px, py + 1, pz)) continue
+      return { x: px, y: py, z: pz }
+    }
+    return null
+  } catch (_) {
+    return null
+  }
+}
+// Quest-shed branch (g0z.26 R4): shed one junk stack where the survey fits.
+// Pillars eat their own ground's capacity (a second shed on the same survey
+// may not fit), so a run within SHED_ASIDE_NEAR of the last shed site steps
+// aside first, then sheds on fresh columns. Done re-picks (34 sheds again,
+// 33 quests); a refused shed holds until the situation moves.
+const SHED_ASIDE_NEAR = 8
+function questShed(bot, ctx, bp) {
+  // A remembered aside-dest already reached sheds here (without this the
+  // arrival run asides again, an extra walk every run).
+  let dest = null
+  try { dest = ctx.shedAsideDest } catch (_) { dest = null }
+  if (!(dest && typeof dest.x === 'number' && nearPos(bot, dest, 2.5))) dest = null
+  if (!dest) {
+    let aside = null
+    try { aside = ctx.shedAt } catch (_) { aside = null }
+    if (aside && typeof aside.x === 'number' && nearPos(bot, aside, SHED_ASIDE_NEAR)) {
+      dest = asideDest(bot, bp)
+      if (dest) {
+        const key = `stockpile-aside:${dest.x},${dest.y},${dest.z}`
+        if (key !== ctx.lastGoalKey) {
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(dest.x, dest.y, dest.z, 2), false)
+          } catch (_) { /* retry next tick */ }
+          try { ctx.shedAsideDest = dest } catch (_) { /* dest best-effort */ }
+          ctx.lastGoalKey = key
+          return
+        }
+        let moving = false
+        try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+        if (moving) return
+        if (!nearPos(bot, dest, 2.5) && !farStalled(ctx, key)) return
+        // Arrived, or no path to fresh ground: shed in place (best-effort —
+        // the survey may still fit).
+      }
+    }
+  }
+  ctx.stockpileInFlight = true
+  void (async () => {
+    let craftMod = null
+    try { craftMod = require('./craft') } catch (_) { craftMod = null }
+    let freed = false
+    try {
+      freed = craftMod && typeof craftMod.shedForQuest === 'function' ? await craftMod.shedForQuest(bot, ctx) : false
+    } catch (_) { freed = false }
+    ctx.stockpileInFlight = false
+    if (freed) {
+      try {
+        ctx.shedAt = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+        ctx.shedAsideDest = null // shed here: the next run asides past these pillars
+      } catch (_) { /* last-site best-effort */ }
+      ctx.lastGoalKey = null
+      ctx.stepStatus = 'done'
+    } else {
+      fail(ctx, 'shed')
+    }
+  })()
 }
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+}
+
+// Owner handover (g0z.26): when no chest can take the surplus (no spot, no
+// table to craft one, or a full chest) and a player is online, the bankables
+// ride the haul — deliver hands them to the owner. The bot never throws
+// anything away (owner 2026-10-06). Exact-set to the bankable sum per name
+// (the gear forged() shape — a repeat call cannot stack claims, and the
+// keeps never ride along); deliver clamps to live anyway, so a stale claim
+// can never overspend. Deferred require (deliver -> bring -> goal chain).
+function offerHaul(bot, ctx) {
+  let level = 'none'
+  try {
+    level = require('./deliver').playerStatus(bot).level
+  } catch (_) {
+    return false
+  }
+  if (level === 'none') return false
+  let plan = null
+  try {
+    plan = depositPlan(bot, ctx)
+  } catch (_) {
+    return false
+  }
+  if (!plan || plan.length === 0) return false
+  try {
+    if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
+    const bankable = {}
+    for (const p of plan) {
+      if (!p || typeof p.name !== 'string' || !(p.count > 0)) continue
+      bankable[p.name] = (bankable[p.name] || 0) + p.count
+    }
+    for (const name of Object.keys(bankable)) ctx.haul[name] = bankable[name]
+    return true
+  } catch (_) {
+    return false
+  }
 }
 
 function fail(ctx, reason) {
@@ -653,11 +917,15 @@ function stockpile(bot, ctx, target, state) {
     }
     if (spot && spot.adopt) {
       adopted(ctx, spot)
+    } else if (spot && questShedDue(bot, ctx)) {
+      questShed(bot, ctx, bp)
+      return
     } else if (spot) {
       placeChest(bot, ctx, spot, bp)
       return
     } else {
       ctx.chestNoSpotAt = Date.now()
+      if (offerHaul(bot, ctx)) say(bot, 'no room for a chest — bringing the surplus to you')
       fail(ctx, 'no-spot')
       return
     }
@@ -810,6 +1078,7 @@ function stockpile(bot, ctx, target, state) {
         ctx.chestFull = true
         ctx.chestFullAt = Date.now()
         say(bot, 'the home chest is full')
+        if (offerHaul(bot, ctx)) say(bot, 'bringing the surplus to you instead')
       }
       ctx.stepStatus = 'done'
     } catch (_) {
@@ -843,11 +1112,13 @@ function placeChest(bot, ctx, spot, bp) {
       }
     }
     if (!tableBlock) {
+      if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
       fail(ctx, 'no-chest')
       return
     }
     const found = craftMod ? craftMod.recipes(bot, 'chest', tableBlock) : []
     if (found.length === 0) { // no ingredients for the recipe
+      if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
       fail(ctx, 'no-chest')
       return
     }
@@ -874,9 +1145,12 @@ function placeChest(bot, ctx, spot, bp) {
     ctx.stockpileInFlight = true
     void (async () => {
       try {
-        await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest' })
+        await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest', avoid: spot })
       } catch (_) {
         ctx.stockpileInFlight = false
+        // A room failure still hands the surplus over when a player is
+        // online (revmux 01 major): without the haul the pack never drains.
+        if (offerHaul(bot, ctx)) say(bot, 'no room to craft a chest — bringing the surplus to you')
         fail(ctx, 'craft') // loud: failHolds parks until the situation moves
         return
       }
@@ -955,6 +1229,15 @@ function placeChest(bot, ctx, spot, bp) {
 module.exports = stockpile
 module.exports.depositPlan = depositPlan
 module.exports.surplusCount = surplusCount
+module.exports.woodCapped = woodCapped
+module.exports.surplusWood = surplusWood
+module.exports.offerHaul = offerHaul
+module.exports.slotReserved = slotReserved
+module.exports.reserveCorner = reserveCorner
+module.exports.packStacks = packStacks
+module.exports.PLANK_KEEP = PLANK_KEEP
+module.exports.LOG_KEEP = LOG_KEEP
+module.exports.PACK_RESERVE = PACK_RESERVE
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest

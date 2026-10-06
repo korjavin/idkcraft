@@ -2402,7 +2402,11 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     return items
   }
 
-  it('36/36 with junk: tosses junk, the stone pickaxe lands, no craft-stall', async () => {
+  it('36/36 with junk and no chest: fails inventory-full, tosses nothing (g0z.26)', async () => {
+    // Owner 2026-10-06: the bot never throws anything away — without a chest
+    // in reach the op fails honestly instead of tossing the junk (the old
+    // rwuu fallback). The hold parks the step; stockpile (or deliver to the
+    // owner) drains the pack.
     const bot = withToss(mockBot({
       items: fullPack(),
       ids: JIDS,
@@ -2412,12 +2416,17 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     bot.craft = fullAwareCraft(bot)
     const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
     equip(bot, ctx, null, {})
-    await untilCrafts(bot, 1)
-    assert.ok(bot._items.some((i) => i.name === 'stone_pickaxe'), 'stone pickaxe landed')
-    assert.equal(bot.calls.toss.length, 1)
-    assert.equal(bot.calls.toss[0].id, JIDS.leaf_litter)
+    const t0 = Date.now()
+    while (ctx.stepStatus === 'running' && Date.now() - t0 < 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(ctx.stepStatus, 'failed:equip-stone_pickaxe')
+    assert.ok(bot.errs.some((e) => e.includes('inventory-full')), `errs: ${bot.errs}`)
     assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
-    assert.deepEqual(bot.lines, ['equipped stone_pickaxe'])
+    assert.deepEqual(bot.calls.toss, [])
+    assert.equal(bot.calls.craft.length, 0)
+    assert.ok(!bot.lines.some((l) => l.startsWith('equipped')), `lines: ${bot.lines}`)
+    assert.equal(bot._items.length, 36, 'the junk stays packed')
     bot.restoreError()
   })
 
@@ -2465,6 +2474,51 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     assert.ok(bot._items.some((i) => i.name === 'stone_pickaxe'), 'stone pickaxe landed')
     assert.deepEqual(bot.calls.toss, [])
     assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('reserved slot: scaffold digs yield pack-full without day-latching (g0z.26 R2)', async () => {
+    // 35/36, scaffold empty, built + chestless + alone: digTick fails before
+    // the first dig, and the failure never arms the ipn.11 day latch.
+    const items = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+    for (let i = 0; i < 33; i++) items.push({ name: 'iron_ore', count: 64 })
+    assert.equal(items.length, 35)
+    const bot = mockBot({
+      items,
+      ids: { ...JIDS, iron_ore: 15 },
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx({ site: { x: 0, y: 64, z: 0 }, built: true })
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-pack-full')
+    assert.deepEqual(bot.calls.dig, [])
+    assert.ok(bot.errs.some((e) => e.includes('pack-full')), `errs: ${bot.errs}`)
+    assert.equal(ctx.equipLatch, undefined, 'pack-full never latches')
+    ctx.stepStatus = 'running' // same-day repeat: still no latch
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-pack-full')
+    assert.equal(ctx.equipLatch, undefined)
+    bot.restoreError()
+  })
+
+  it('reserved slot: an adopted chest reopens scaffold digs (g0z.26 R2)', async () => {
+    const items = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+    for (let i = 0; i < 33; i++) items.push({ name: 'iron_ore', count: 64 })
+    const bot = mockBot({
+      items,
+      ids: { ...JIDS, iron_ore: 15 },
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx({ site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 5, y: 64, z: 1 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
     bot.restoreError()
   })
 

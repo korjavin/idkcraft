@@ -135,6 +135,46 @@ describe('forage behaviour', () => {
     assert.ok(bot.chats.some((m) => m.startsWith('foraging:')))
   })
 
+  it('reserved slot: the dig phase fails pack-full, banking partials (g0z.26 R2)', async () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const cells = []
+    for (let i = 0; i < 8; i++) {
+      cells.push({ x: 10 + i * 2, y: 60, z: 0, name: 'iron_ore' })
+      bot.blocks[`${10 + i * 2},60,0`] = 'iron_ore'
+    }
+    const ctx = memCtx(cells)
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    bot.dig = async (block) => {
+      bot.calls.digs++
+      bot.inv.push({ name: 'raw_iron', count: 1 })
+    }
+    for (let i = 0; i < 200 && bot.calls.digs < 2; i++) {
+      forage(bot, ctx, null, {})
+      await tick()
+    }
+    assert.equal(bot.calls.digs, 2)
+    while (bot.inv.length < 35) bot.inv.push({ name: 'dirt', count: 64 })
+    for (let i = 0; i < 20 && !ctx.stepStatus.startsWith('failed:'); i++) {
+      forage(bot, ctx, null, {})
+      await tick()
+    }
+    assert.equal(ctx.stepStatus, 'failed:pack-full')
+    assert.equal(bot.calls.digs, 2, 'no dig past the reserve')
+    assert.deepEqual(ctx.haul, { raw_iron: 2 }, 'partials still bank')
+  })
+
+  it('chest quest falls back to ore when no logs are remembered (g0z.26 R2)', () => {
+    // Quest corner (built + chestless + alone + plankless) with ore-only
+    // memory: the preference must not hide the only available dig.
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    const ctx = memCtx([{ x: 10, y: 60, z: 0, name: 'iron_ore' }])
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    const plan = forage.planForage(bot, ctx)
+    assert.equal(plan && plan.name, 'iron_ore')
+  })
+
   it('ghost cell is forgotten and the next plan runs, no stuck fact', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'stone_pickaxe', count: 1 })

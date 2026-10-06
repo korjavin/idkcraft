@@ -70,19 +70,111 @@ function cellKey(p) {
   return `${p.x},${p.y},${p.z}`
 }
 
+function packWood(bot) {
+  const out = { stacks: 0, planks: 0, plankRoom: new Map(), logRoom: new Map(), logCount: new Map(), plankCount: new Map() }
+  try {
+    const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
+    if (!Array.isArray(items)) return out
+    out.stacks = items.length
+    for (const s of items) {
+      if (!s || typeof s.name !== 'string') continue
+      const n = typeof s.count === 'number' ? s.count : 1
+      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      if (s.name.endsWith('_planks')) {
+        out.planks += n
+        const wood = s.name.slice(0, -7)
+        out.plankRoom.set(wood, (out.plankRoom.get(wood) || 0) + Math.max(0, cap - n))
+        out.plankCount.set(wood, (out.plankCount.get(wood) || 0) + n)
+      } else if (s.name.endsWith('_log')) {
+        const wood = s.name.slice(0, -4)
+        out.logRoom.set(wood, (out.logRoom.get(wood) || 0) + Math.max(0, cap - n))
+        out.logCount.set(wood, (out.logCount.get(wood) || 0) + n)
+      }
+    }
+  } catch (_) { /* unreadable pack: no quest */ }
+  return out
+}
+function woodOfLog(name) {
+  return typeof name === 'string' && name.endsWith('_log') ? name.slice(0, -4) : null
+}
+// Chest quest (g0z.26 R2, revmux 01 major): with no adopted chest and fewer
+// than 8 planks the next chest needs wood — forage prefers logs over ore so
+// the quest completes at low pack counts, before the reserve binds. Returns
+// the pack's plank woods (empty set when plankless), or null when the quest
+// is off. The 8 counts the largest SINGLE wood like goal.js maxPlanks (R3,
+// revmux 02 major): a mixed 4+4 still cannot fund the chest. Deferred
+// require (goal.js loads forage at top).
+function questPlankWoods(bot, ctx) {
+  try {
+    const stockpile = require('./stockpile')
+    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return null
+    if (!stockpile.reserveCorner(bot, ctx)) return null
+    const pw = packWood(bot)
+    let max = 0
+    for (const n of pw.plankCount.values()) if (n > max) max = n
+    if (max >= 8) return null
+    return new Set(pw.plankCount.keys())
+  } catch (_) {
+    return null
+  }
+}
+// Log batch the quest chops to (goal.js NEED_LOGS, deferred: goal loads
+// forage at top). Falls back to 14 when goal is unreadable.
+function questBatch() {
+  try {
+    const g = require('../goal')
+    if (g && typeof g.NEED_LOGS === 'number' && g.NEED_LOGS > 0) return g.NEED_LOGS
+  } catch (_) { /* unreadable: 14 */ }
+  return 14
+}
+// Quest exemption from the reserved slot: a wood chop the quest can
+// COMPLETE. Same-wood plank room fits the whole batch: chops stack onto
+// the log stack — creating it when below 36, stacking onto it at 36 —
+// and the conversion stacks back and empties it exactly (R3, revmux 02
+// major: the 36-transient completes, it never parks a single log). At a
+// full batch the quest waits for conversion instead of over-chopping
+// (a 16-log overshoot overflows the room and strands a remnant at 36).
+// Mixed/plankless legs need free slots for the new stacks instead.
+function questExempt(bot, ctx, target) {
+  try {
+    const wood = target && woodOfLog(target.name)
+    if (!wood || !target || target.kind !== 'log') return false
+    if (!questPlankWoods(bot, ctx)) return false
+    const pw = packWood(bot)
+    if ((pw.logCount.get(wood) || 0) >= questBatch()) return false
+    if ((pw.plankRoom.get(wood) || 0) >= 56) {
+      if ((pw.logRoom.get(wood) || 0) > 0) return true
+      return pw.stacks <= 35
+    }
+    if ((pw.logRoom.get(wood) || 0) > 0) return pw.stacks <= 34
+    return pw.stacks <= 33
+  } catch (_) {
+    return false
+  }
+}
 function bestMemoryCell(bot, ctx, bp) {
   const mem = ctx && ctx.resources
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
   let skip = null
   try { skip = (ctx && ctx.forageSkip) || null } catch (_) { skip = null }
+  // Wood ceiling (g0z.26): past the cap remembered logs are not forageable —
+  // ore and the food fallback still plan, so a capped pack digs stone instead
+  // of chopping. Deferred require (goal.js loads forage at top).
+  let capped = false
+  try { capped = !!require('./stockpile').woodCapped(bot, ctx) } catch (_) { capped = false }
+  const quest = questPlankWoods(bot, ctx)
   let best = null
   let bestRank = Infinity
   let bestDist = Infinity
+  let bestLog = null
+  let bestLogSame = false
+  let bestLogDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
+    if (rank === 3 && capped) continue
     if (rank <= 2 && !bring.hasPickaxe(bot, item.name)) continue
     const d = dist(bp, item)
     if (rank < bestRank || (rank === bestRank && d < bestDist)) {
@@ -90,6 +182,28 @@ function bestMemoryCell(bot, ctx, bp) {
       bestDist = d
       best = item
     }
+    // The quest chops wood, not ore — same-wood first (the conversion
+    // stacks); with no logs remembered the ore below still plans.
+    if (rank === 3) {
+      const same = !!quest && quest.has(woodOfLog(item.name))
+      if (!bestLog || (same && !bestLogSame) || (same === bestLogSame && d < bestLogDist)) {
+        bestLog = item
+        bestLogSame = same
+        bestLogDist = d
+      }
+    }
+  }
+  if (quest && bestLog) {
+    // Plan gate (g0z.26 R3, revmux 02 major): when the reserve binds, plan
+    // only a chop the dig phase accepts — a refused target walks there,
+    // fails pack-full, and re-plans the same walk every 5 minutes. Null
+    // explores instead (the plank wood may stand unremembered nearby; the
+    // food fallback stays shut under the reserve unless hungry-safe (R4)).
+    // The same-wood preference above already picks the most exemptable log.
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (reserved && !questExempt(bot, ctx, { kind: 'log', name: bestLog.name })) return null
+    return bestLog
   }
   return best
 }
@@ -169,6 +283,41 @@ function bestDiamondCell(bot, ctx, bp) {
   return best
 }
 
+// Hunt gate (g0z.26 R4, revmux 03 major): under the reserve a hunt must not
+// fill the bootstrap slot — the well-fed corner skips the animal fallback
+// (the M3 plan gate's null explores), the peckish corner hunts only onto a
+// same-drop stack, and the starving corner hunts anyway (survival beats the
+// reserve; the quest shed drains after). Fail-open outside the corner,
+// fail-closed on unreadable hunger.
+const HUNT_PECKISH = 18 // eatReflex eats below this; a hunt must beat it
+const HUNT_STARVING = 6 // goal.js 'hungry' line: survival over slots
+function dropRoom(bot, drop) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (!Array.isArray(items)) return false
+    for (const s of items) {
+      if (!s || s.name !== drop) continue
+      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      const n = typeof s.count === 'number' ? s.count : 1
+      if (cap - n > 0) return true
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
+function huntAllowed(bot, ctx, drop) {
+  try {
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (!reserved) return true
+    const food = bot && typeof bot.food === 'number' ? bot.food : NaN
+    if (!(food < HUNT_PECKISH)) return false
+    return dropRoom(bot, drop) || food <= HUNT_STARVING
+  } catch (_) {
+    return true
+  }
+}
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
@@ -182,23 +331,50 @@ function planForage(bot, ctx) {
   if (latched && GEAR_WANT[latched]) {
     const want = gearWantCell(bot, ctx, bp, latched)
     if (want) {
-      const kind = want.name.endsWith('_log') ? 'log' : 'ore'
-      // Stone drops cobblestone, not stone: dropFor would pin the batch
-      // counter at zero and the step would quarry forever.
-      const drop = latched === 'want-cobble' ? 'cobblestone' : bring.dropFor(want.name)
-      return { kind, name: want.name, pos: { x: want.x, y: want.y, z: want.z }, drop, want: FORAGE_WANT }
+      // Reserved slot (g0z.26 R2): a latched want the reserve would fail
+      // falls through to the quest-aware ranking below instead of starving
+      // the chest quest behind a dig that cannot run. (want-log is never a
+      // GEAR_WANT key, so the latched want is always ore here.)
+      let reserved = false
+      try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+      if (!reserved) {
+        const kind = want.name.endsWith('_log') ? 'log' : 'ore'
+        // Stone drops cobblestone, not stone: dropFor would pin the batch
+        // counter at zero and the step would quarry forever.
+        const drop = latched === 'want-cobble' ? 'cobblestone' : bring.dropFor(want.name)
+        return { kind, name: want.name, pos: { x: want.x, y: want.y, z: want.z }, drop, want: FORAGE_WANT }
+      }
     }
   }
   const cell = bestMemoryCell(bot, ctx, bp)
   if (cell) {
     const kind = cell.name.endsWith('_log') ? 'log' : 'ore'
-    return { kind, name: cell.name, pos: { x: cell.x, y: cell.y, z: cell.z }, drop: bring.dropFor(cell.name), want: FORAGE_WANT }
+    let want = FORAGE_WANT
+    // Exact-batch quest legs (g0z.26 R3, revmux 02 major): the quest chops
+    // exactly to NEED_LOGS — an 8-leg overshoot converts 16 logs into 64
+    // planks, overflowing the same-wood room and stranding a remnant at 36.
+    if (kind === 'log') {
+      try {
+        if (questPlankWoods(bot, ctx)) {
+          const wood = woodOfLog(cell.name)
+          const have = wood ? (packWood(bot).logCount.get(wood) || 0) : 0
+          want = Math.max(1, questBatch() - have)
+        }
+      } catch (_) { /* uncountable: the standing batch */ }
+    }
+    return { kind, name: cell.name, pos: { x: cell.x, y: cell.y, z: cell.z }, drop: bring.dropFor(cell.name), want }
   }
   let found = null
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop) return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: FORAGE_WANT }
+    if (drop && huntAllowed(bot, ctx, drop)) {
+      // Under the reserve a hunt is one kill: a full batch would overflow
+      // the checked stack room onto new slots.
+      let reserved = false
+      try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+      return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: reserved ? 1 : FORAGE_WANT }
+    }
   }
   return null
 }
@@ -282,7 +458,7 @@ function blockAt(bot, x, y, z) {
 
 // Haul delta since step start for the drops we chase, merged into ctx.haul.
 // done when the step banked anything, failed when it banked nothing.
-function finish(bot, ctx, f, ok, reason) {
+function finish(bot, ctx, f, ok, reason, forceFail) {
   const gains = {}
   try {
     for (const d of Object.keys(f.drops || {})) {
@@ -307,9 +483,14 @@ function finish(bot, ctx, f, ok, reason) {
     ctx.forageFinal = banked > 0 ? null : { status: `failed:${reason || 'no-known'}`, world: snapWorld(bot, ctx) }
   } catch (_) { /* final best-effort */ }
   try { ctx.forageGated = 0 } catch (_) { /* counter best-effort */ }
-  if (banked > 0) {
+  // forceFail (pack-full yield): bank the partial gains, but fail so the
+  // time-hold parks the step instead of done-spinning against the reserve.
+  if (banked > 0 && !forceFail) {
     ctx.stepStatus = 'done'
     console.log(`forage done: banked ${Object.keys(gains).map((d) => `${gains[d]} ${d}`).join(', ')}${ok ? '' : ` (${reason})`}`)
+  } else if (banked > 0) {
+    ctx.stepStatus = `failed:${reason || 'no-known'}`
+    console.log(`forage failed:${reason || 'no-known'} (banked ${Object.keys(gains).map((d) => `${gains[d]} ${d}`).join(', ')})`)
   } else {
     ctx.stepStatus = `failed:${reason || 'no-known'}`
     try {
@@ -676,6 +857,17 @@ function forage(bot, ctx, target, state) {
       if (!replan(bot, ctx, f, bp)) return
       return
     }
+    // Reserved slot (g0z.26 R2): the pack stops growing at PACK_RESERVE with
+    // no adopted chest and nobody online — the last slot is the bootstrap
+    // chest craft's room. The chest quest is exempt while it can complete;
+    // food hunts never reach this phase (survival: the kill self-drains).
+    // Fails (time-held) so the stockpile step banks instead of spinning.
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (reserved && !questExempt(bot, ctx, t)) {
+      finish(bot, ctx, f, false, 'pack-full', true)
+      return
+    }
     let block = null
     try { block = blockAt(bot, t.pos.x, t.pos.y, t.pos.z) } catch (_) { block = null }
     if (!block || block.name !== t.name) {
@@ -731,6 +923,7 @@ function forage(bot, ctx, target, state) {
 module.exports = forage
 module.exports.bankPartial = bankPartial
 module.exports.planForage = planForage
+module.exports.questExempt = questExempt
 module.exports.gearWantCell = gearWantCell
 module.exports.bestDiamondCell = bestDiamondCell
 module.exports.skipCell = skipCell

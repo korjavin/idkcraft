@@ -439,6 +439,24 @@ function walkTo(bot, ctx, d, key, goal, arrival) {
 // or updates are lost — fail honestly instead of idling forever (live
 // assay: a stuck dig with no watchdog burned a 12-minute leg).
 const DIG_TRIES_MAX = 6
+// Room for the digcell diamond (g0z.26 R3): an empty slot, or room on the
+// diamond stack. A diamond that fits mines even under the reserve.
+function dropFits(bot) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (!Array.isArray(items)) return false
+    if (items.length < 36) return true
+    for (const s of items) {
+      if (!s || s.name !== 'diamond') continue
+      const cap = typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      const n = typeof s.count === 'number' ? s.count : 1
+      if (cap - n > 0) return true
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
 function digOne(bot, ctx, d, cell, name, nextPhase) {
   if (ctx.digInFlight) return
   // Forage shape: never launch a dig while the pathfinder is moving — the
@@ -459,6 +477,21 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
     fail(bot, ctx, d, 'no-dig', null, null)
     return
   }
+  // Reserved slot (g0z.26 R2): the pack stops growing at PACK_RESERVE with
+  // no adopted chest and nobody online — the last slot is the bootstrap
+  // chest craft's room. Retreats up the breadcrumbs (R3, revmux 02 major):
+  // fail() here would drop d.steps and strand the bot mid-shaft, and the
+  // target diamond still mines when the free slot fits it (a roomless
+  // digcell leaves the diamond and climbs out instead of burning the drop).
+  try {
+    const stockpile = require('./stockpile')
+    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) {
+      if (!(d.phase === 'digcell' && dropFits(bot))) {
+        guardTrip(bot, ctx, d, 'pack-full', null, null)
+        return
+      }
+    }
+  } catch (_) { /* reserve unreadable: dig as before */ }
   const key = `${cell.x},${cell.y},${cell.z}`
   if (d.digCellKey === key) {
     d.digTries = (d.digTries || 0) + 1
