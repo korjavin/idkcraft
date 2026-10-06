@@ -982,17 +982,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // one plan cell read missing (mid-build, mid-repair, dark chunk)
         // froze built=false, and the build menu goes infeasible on an empty
         // remainder — so the build step that would flip it never runs and
-        // the work flow sits on the site stage forever. Re-check the
-        // remainder (minus given-up cells) after every work dispatch; a
-        // complete house flips here with the same effects as the build
-        // step's own done branch (table claim, save, announce). Post-apply
-        // on purpose: normal completions still flow through the build
-        // behaviour (which flips first), so only genuinely stuck flags —
-        // where build was never dispatched — ever reach this branch.
+        // the work flow sits on the site stage forever. Re-check the house
+        // after every work dispatch; a physically complete house flips here
+        // with the same effects as the build step's own done branch (table
+        // claim, save, announce). Skips never count (idkcraft-vmzq.10):
+        // given-up-but-missing cells keep built=false, else this branch
+        // would announce 'home done' over the holes one tick after the
+        // build step honestly failed. Post-apply on purpose: normal
+        // completions still flow through the build behaviour (which flips
+        // first), so only genuinely stuck flags — where build was never
+        // dispatched — ever reach this branch.
         if (ctx.home && ctx.home.site && !ctx.home.built) {
           let complete = false
           try {
-            complete = buildMod.nextCellIdx(bot, ctx.home, ctx.buildSkip) === -1
+            complete = buildMod.isComplete(bot, ctx.home)
           } catch (_) { complete = false }
           if (complete) {
             try {

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const { createTicker, BEHAVIOURS } = require('../src/index')
 const { stateKey } = require('../src/perception')
 const follow = require('../src/behaviours/follow')
+const buildMod = require('../src/behaviours/build')
 
 function pos(x, y, z) {
   const p = {
@@ -968,6 +969,58 @@ describe('work mode (epic rw4)', () => {
       assert.equal(ctx.home.built, false, 'unfinished house keeps its flag')
       assert.ok(!bot.chats.some((m) => m === 'home done at 8 64 8'), 'no premature announce')
       assert.equal(buildRan, 1, 'the missing cell goes through build, not the recheck')
+    } finally {
+      BEHAVIOURS.rest = origRest
+      BEHAVIOURS.build = origBuild
+      ticker.destroy()
+    }
+  })
+
+  it('(a7) work + skipped hole with a stale built=false: revalidation never flips (vmzq.10)', async () => {
+    // Prod (site -40 63 -215): 30 given-up cells read as done and the house
+    // announced `home done` over the holes. The post-dispatch recheck must
+    // demand a physically complete house — a skipped-but-missing cell keeps
+    // built=false with no announce, and build stays infeasible on the empty
+    // remainder (the 1h skip retry re-probes; structural cells re-skip).
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }]
+    const cells = new Map()
+    const paint = (x, y, z, name) => cells.set(`${x},${y},${z}`, name)
+    paint(12, 64, 9, 'crafting_table')
+    for (const [x, z] of [[8, 8], [10, 8], [11, 8], [8, 11], [9, 11], [10, 11], [11, 11], [8, 9], [11, 9], [8, 10], [11, 10]]) {
+      paint(x, 64, z, 'oak_planks')
+      paint(x, 65, z, 'oak_planks')
+    }
+    paint(9, 64, 8, 'oak_door')
+    for (let dx = 0; dx < 4; dx++) {
+      for (let dz = 0; dz < 4; dz++) {
+        if (dx === 0 && dz === 0) continue // the hole: given up, still missing
+        paint(8 + dx, 66, 8 + dz, 'oak_planks')
+      }
+    }
+    bot.blockAt = (pt) => {
+      const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
+      return n ? { name: n } : null
+    }
+    bot.findBlocks = () => []
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.adoptDone = true
+    const doorIdx = buildMod.BLUEPRINT.findIndex((c) => c.kind === 'door')
+    ctx.buildSkip = [doorIdx + 12] // first roof cell (8,66,8): skipped, still air
+    ctx.home = { site: { x: 8, y: 64, z: 8 }, v: 1, built: false, table: null }
+    const origRest = BEHAVIOURS.rest
+    const origBuild = BEHAVIOURS.build
+    let buildRan = 0
+    BEHAVIOURS.rest = () => {}
+    BEHAVIOURS.build = () => { buildRan++ }
+    try {
+      await ticker.tick()
+      assert.equal(ctx.home.built, false, 'a skipped hole is not a finished house')
+      assert.ok(!bot.chats.some((m) => m === 'home done at 8 64 8'), 'no announce over holes')
+      assert.equal(buildRan, 0, 'empty remainder minus skips: build infeasible, no repair tick')
     } finally {
       BEHAVIOURS.rest = origRest
       BEHAVIOURS.build = origBuild
