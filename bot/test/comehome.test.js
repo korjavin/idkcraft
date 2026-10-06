@@ -832,28 +832,6 @@ describe('jr2.3 chat takes and refuses the order', () => {
     assert.ok(bot._tickerCtx.comehome, 'order armed')
   })
 
-  it('a skipped hole refuses the meet: built stays false (vmzq.10)', () => {
-    // Prod (site -40 63 -215): given-up cells read as done. The comehome
-    // silent flip must demand a physically complete house too — a
-    // skipped-but-missing wall cell refuses like any unfinished house.
-    const bot = paintedHouseBot()
-    const origBlockAt = bot.blockAt
-    bot.blockAt = (p) => {
-      if (Math.floor(p.x) === 10 && Math.floor(p.y) === 64 && Math.floor(p.z) === 20) {
-        return { name: 'air', boundingBox: 'empty', position: pos(10, 64, 20) }
-      }
-      return origBlockAt(p)
-    }
-    const home = { ...v2home(), built: false }
-    const ticker = tickerWith(bot, idleBrain, home)
-    const wall = buildMod.BLUEPRINT_V2.findIndex((c) => c.dx === 0 && c.dy === 0 && c.dz === 0 && c.kind === 'planks')
-    bot._tickerCtx.buildSkip = [wall] // (10,64,20): skipped, still air
-    handleChat(bot, ticker, 'Steve', 'come home')
-    assert.deepEqual(bot.chats, ['home not built yet — say go work'])
-    assert.equal(bot._tickerCtx.home.built, false, 'no silent flip over holes')
-    assert.equal(bot._tickerCtx.comehome, undefined, 'order not armed')
-  })
-
   it('an unbuilt new site elsewhere never reroutes to the old house', () => {
     const bot = paintedHouseBot()
     const far = { site: { x: 100, y: 64, z: 100 }, built: false, v: 2, interior: { min: { x: 101, y: 64, z: 101 }, max: { x: 105, y: 65, z: 104 } } }

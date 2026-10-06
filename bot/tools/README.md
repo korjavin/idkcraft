@@ -420,10 +420,12 @@ the 3 h run meets even a 580-block-away bot via reunion + re-asked coords.
 Progress is read from VictoriaLogs, never from the puppet. Nobody online,
 BOT_AUTONOMOUS on. Exit 0 = done within budget, 1 = budget exceeded (prints
 the last 20 bot lines + the last progress line), a castle with no site, or a
-house done over unhealed `build skip` lines (PARTIAL — the marker fires when
-every remaining cell is skipped, so skips younger than the prune horizon veto
-the done), 2 = environment (puppet refused, bot never seen, no reply, human
-void, logs lost mid-run, bot autonomy unverified).
+house done over unhealed `build skip` lines (PARTIAL — pre-vmzq.10 the marker
+fired when every remaining cell was skipped; since vmzq.10 the bot fails the
+step honestly instead, so a hole-y run ends on budget with the skips visible,
+and skips younger than the prune horizon veto the done either way), 2 =
+environment (puppet refused, bot never seen, no reply, human void, logs lost
+mid-run, bot autonomy unverified).
 
 Rules:
 - No merge/deploy freeze (owner Q3): a deploy restart mid-run is RECORDED in

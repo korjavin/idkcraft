@@ -24,10 +24,12 @@
 //     "expect":["here is ","here are "],"fail":["could not "]}]
 // mode defaults to follow; goal keeps its feet-coords convention in both.
 // verifyBuild (idkcraft-vmzq.1, true only on a build-here order spot):
-// 'home done at' also fires when every remaining cell is skipped
-// (nextCellIdx === -1 counts skips as done, index.js:949), so the verdict
-// counts placed blueprint cells and requires an empty skip list — a done
-// marker over skipped or missing cells reports PARTIAL, not reached.
+// Belt and suspenders over the bot's own verdict (idkcraft-vmzq.10: the
+// bot no longer fires 'home done at' over skipped cells —
+// build.isComplete gates the marker — but a run spanning a deploy can
+// still show one): the verdict counts placed blueprint cells and
+// requires an empty skip list — a done marker over skipped or missing
+// cells reports PARTIAL, not reached.
 // Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
 // shelter step alone: reached = enclosed within the close budget (15 s
 // default, closeSecs overrides — idkcraft-hoy7) and alive at the end.

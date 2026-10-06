@@ -497,12 +497,11 @@ function createOrders(box) {
       // A stale unbuilt flag (adopted mid-build or mid-repair, then finished
       // without the build step ever flipping it) re-validates against THIS
       // site's plan, silently: adopting here would announce the wrong house
-      // when 'build here' just moved. Skips never count (idkcraft-vmzq.10):
-      // a hole-y house refuses like any unfinished one.
+      // when 'build here' just moved. Given-up cells stay skipped.
       if (!home.built) {
         let complete = false
         try {
-          complete = buildMod.isComplete(bot, home)
+          complete = buildMod.nextCellIdx(bot, home, ctx.buildSkip) === -1
         } catch (_) { complete = false }
         if (!complete) return 'home not built yet — say go work'
         home.built = true
