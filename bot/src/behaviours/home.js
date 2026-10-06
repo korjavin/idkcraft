@@ -208,6 +208,20 @@ function outLaneBlocked(bot, home) {
   return false
 }
 
+// Door-shut read for the rw4.18 out-lane hold (revmux 03 core-1): the hold
+// only means something behind a shut door — with the door open or gone the
+// legs must finish (walk out, shut it, release, hand to fight) instead of
+// freezing mid-doorway. Missing/unreadable reads as NOT shut (run): there
+// is no shut door to hold behind, and the legs validate the doorway
+// themselves (gap-walk, wedge re-arm).
+function exitDoorShut(bot, home) {
+  try {
+    const door = doorBlock(bot, home)
+    if (!door) return false
+    return !doorOpen(door)
+  } catch (_) { return false }
+}
+
 // A close into a missing door is a failure, never a silent done (rw4.8):
 // prod stood a whole night 'sheltered' with arrows coming through. Failing
 // surfaces the fault to the arbiter (day picks can send build to repair
@@ -1442,4 +1456,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS }

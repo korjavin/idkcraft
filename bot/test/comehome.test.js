@@ -1122,6 +1122,41 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
       cap.release()
     }
   })
+
+  it("phase 'open' with the door already open runs the legs despite the lane mob (revmux 03 core-1)", async () => {
+    // A wedged leg re-arms 'open' without shutting the door: holding there
+    // would freeze the bot mid-doorway with the door open. The hold needs
+    // a shut door behind it, so the legs finish instead.
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, doorOpen: true })
+    const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+    lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+    bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    assert.equal(ctx.comehome.exiting, true)
+    assert.equal(ctx.comehome.phase, 'open')
+    const cap = capture()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome', 'open door: legs run, no shelter freeze')
+      assert.equal(ctx.comehome.phase, 'exit')
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      for (let i = 0; i < 5 && ctx.comehome; i++) {
+        const rr = await ticker.tick()
+        await settle()
+        assert.equal(rr.decision.action, 'comehome')
+      }
+      assert.equal(ctx.comehome, null, 'released')
+      assert.equal(ctx.inShelter, false)
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+    } finally {
+      cap.release()
+    }
+  })
 })
 
 describe('rw4.18 outLaneBlocked reads the approach cell, not the bot', () => {
