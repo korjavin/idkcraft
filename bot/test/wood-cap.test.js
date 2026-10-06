@@ -61,8 +61,10 @@ describe('wood ceiling: pack keeps (idkcraft-g0z.26)', () => {
     assert.equal(stockpile.LOG_KEEP, 14)
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 64 }]), openCtx()), true)
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 63 }]), openCtx()), false)
-    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 14 }]), openCtx()), true)
-    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 13 }]), openCtx()), false)
+    // Planks only (revmux 01 minor): a full log load still converts —
+    // conversion is what frees the log slot.
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 14 }]), openCtx()), false)
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 64 }]), openCtx()), false)
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), {}), false, 'no castle: no ceiling')
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), openCtx({ castle: { phase: 'complete' } })), false, 'done castle: no ceiling')
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), openCtx({ home: { built: false } })), false, 'pre-house: the budget needs it')
@@ -105,10 +107,14 @@ describe('wood ceiling: menu gates (idkcraft-g0z.26)', () => {
   const F = (name, facts, bot, ctx) => goal.MENU[name].feasible(facts, bot, ctx)
 
   it('craft converts a full load below the ceiling, not above it', () => {
+    // Both packs hold the 14-log load (revmux 01 minor): only the plank
+    // count gates the conversion.
     const facts = { logs: 14, maxPlanks: 10, table: 1, door: 1, castle: 'stone-none' }
-    assert.equal(F('craft', facts, packBot([{ name: 'oak_planks', count: 10 }]), openCtx()), true)
+    const below = packBot([{ name: 'oak_planks', count: 10 }, { name: 'oak_log', count: 14 }])
+    assert.equal(F('craft', facts, below, openCtx()), true)
     const capped = { logs: 14, maxPlanks: 70, table: 1, door: 1, castle: 'stone-none' }
-    assert.equal(F('craft', capped, packBot([{ name: 'oak_planks', count: 70 }]), openCtx()), false)
+    const above = packBot([{ name: 'oak_planks', count: 70 }, { name: 'oak_log', count: 14 }])
+    assert.equal(F('craft', capped, above, openCtx()), false)
   })
 
   it('craft still crafts the table past the ceiling (it spends planks)', () => {
@@ -117,8 +123,8 @@ describe('wood ceiling: menu gates (idkcraft-g0z.26)', () => {
   })
 
   it('craft reason names the full wood store', () => {
-    const facts = { logs: 14, maxPlanks: 0, table: 1, door: 0, tablePlaced: false, castle: 'stone-none' }
-    const bot = packBot([{ name: 'oak_log', count: 14 }])
+    const facts = { logs: 14, maxPlanks: 70, table: 1, door: 0, tablePlaced: false, castle: 'stone-none' }
+    const bot = packBot([{ name: 'oak_planks', count: 70 }, { name: 'oak_log', count: 14 }])
     assert.equal(F('craft', facts, bot, openCtx()), false)
     assert.equal(goal.stepWhy('craft', facts, bot, openCtx(), ''), 'craft: wood store full, banking the surplus')
   })
@@ -293,6 +299,105 @@ describe('wood ceiling: owner handover (idkcraft-g0z.26)', () => {
     assert.deepEqual(ctx.haul, { dirt: 8 })
     assert.ok(bot.chats.includes('the home chest is full'), `chats: ${bot.chats}`)
     assert.ok(bot.chats.includes('bringing the surplus to you instead'), `chats: ${bot.chats}`)
+  })
+})
+
+describe('reserved slot (g0z.26 R2, revmux 01 major)', () => {
+  const dirt = (n) => Array.from({ length: n }, () => ({ name: 'dirt', count: 64 }))
+  const ownerOnline = { owner: { username: 'owner', entity: { position: pos(1, 64, 1) } } }
+  const noChestCtx = () => ({ home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } })
+
+  it('slotReserved binds only built + chestless + alone + 35 stacks', () => {
+    assert.equal(stockpile.PACK_RESERVE, 35)
+    assert.equal(stockpile.slotReserved(packBot(dirt(35)), noChestCtx()), true)
+    assert.equal(stockpile.slotReserved(packBot(dirt(34)), noChestCtx()), false)
+    assert.equal(stockpile.slotReserved(packBot(dirt(36)), noChestCtx()), true)
+    const adopted = noChestCtx()
+    adopted.home.chest = { x: 5, y: 64, z: 1 }
+    assert.equal(stockpile.slotReserved(packBot(dirt(35)), adopted), false, 'adopted: banking drains')
+    assert.equal(stockpile.slotReserved(packBot(dirt(35), { players: ownerOnline }), noChestCtx()), false, 'online: the haul drains')
+    const pre = noChestCtx()
+    pre.home.built = false
+    assert.equal(stockpile.slotReserved(packBot(dirt(35)), pre), false, 'pre-house: the budget owns the pack')
+    assert.equal(stockpile.slotReserved(null, noChestCtx()), false)
+    assert.equal(stockpile.slotReserved(packBot(dirt(35)), null), false)
+  })
+
+  it('reserveCorner is the corner without the stack count', () => {
+    assert.equal(stockpile.reserveCorner(packBot(dirt(5)), noChestCtx()), true)
+    assert.equal(stockpile.reserveCorner(packBot(dirt(35)), noChestCtx()), true)
+    const adopted = noChestCtx()
+    adopted.home.chest = { x: 5, y: 64, z: 1 }
+    assert.equal(stockpile.reserveCorner(packBot(dirt(5)), adopted), false)
+  })
+
+  it('planForage prefers quest wood over ore when chestless and plankless', () => {
+    const cells = [
+      { x: 2, y: 64, z: 0, name: 'iron_ore' },
+      { x: 100, y: 64, z: 0, name: 'oak_log' },
+    ]
+    const questCtx = memCtx(cells)
+    delete questCtx.home.chest
+    const questBot = packBot([{ name: 'stone_pickaxe', count: 1 }])
+    assert.equal(forage.planForage(questBot, questCtx).name, 'oak_log', 'the quest chops wood, not ore')
+    const fundedCtx = memCtx(cells)
+    delete fundedCtx.home.chest
+    const fundedBot = packBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'oak_planks', count: 10 }])
+    assert.equal(forage.planForage(fundedBot, fundedCtx).name, 'iron_ore', '8+ planks: ore first again')
+  })
+
+  it('planForage prefers the plank-matching wood on the quest', () => {
+    const cells = [
+      { x: 2, y: 64, z: 0, name: 'birch_log' },
+      { x: 100, y: 64, z: 0, name: 'oak_log' },
+    ]
+    const ctx = memCtx(cells)
+    delete ctx.home.chest
+    const bot = packBot([{ name: 'oak_planks', count: 5 }])
+    assert.equal(forage.planForage(bot, ctx).name, 'oak_log', 'the conversion stacks')
+  })
+
+  it('gather yields pack-full on a reserved pack, before the deny check', () => {
+    const gather = require('../src/behaviours/gather')
+    const chats = []
+    const inv = [{ name: 'oak_log', count: 5 }, ...Array.from({ length: 34 }, () => ({ name: 'dirt', count: 64 }))]
+    let dug = 0
+    const bot = packBot(inv, {
+      chat: (m) => { chats.push(String(m)) },
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false },
+      dig: async () => { dug++ },
+    })
+    const ctx = {
+      lastGoalKey: '', stepStatus: 'running',
+      home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null },
+      gather: {
+        pos: { x: 2, y: 64, z: 0 }, name: 'log', phase: 'dig',
+        block: { name: 'oak_log', position: pos(2, 64, 0) },
+        skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now(),
+      },
+    }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:pack-full')
+    assert.ok(chats.some((l) => l.includes('pack full')), `chats: ${chats}`)
+    assert.equal(dug, 0, 'no dig launched')
+  })
+
+  it('questExempt: only chops the quest can complete', () => {
+    const q = (inv, target = { kind: 'log', name: 'oak_log' }) => forage.questExempt(packBot(inv), noChestCtx(), target)
+    const oak5 = [{ name: 'oak_planks', count: 5 }]
+    const birch5 = [{ name: 'birch_planks', count: 5 }]
+    assert.equal(q([...oak5, ...dirt(34)]), true, '35 stacks + same-wood room 59: the batch stacks')
+    assert.equal(q([...oak5, ...dirt(35)]), false, '36 stacks: capped')
+    assert.equal(q([...birch5, ...dirt(34)]), false, 'mixed wood at 35: nowhere for the planks')
+    assert.equal(q([...birch5, ...dirt(33)]), false, 'mixed wood at 34: the plank stack would take the last slot')
+    assert.equal(q([...birch5, ...dirt(32)]), true, 'mixed wood at 33: room for both new stacks')
+    assert.equal(q([...birch5, { name: 'oak_log', count: 3 }, ...dirt(32)]), true, 'log room: drops stack, 34 fits the planks')
+    assert.equal(q([...birch5, { name: 'oak_log', count: 3 }, ...dirt(33)]), false, 'log room at 35: the planks would not fit')
+    assert.equal(q([...oak5, ...dirt(34)], { kind: 'ore', name: 'iron_ore' }), false, 'ore is never exempt')
+    assert.equal(q([{ name: 'oak_planks', count: 8 }, ...dirt(34)]), false, '8 planks: the quest is funded')
+    const adopted = noChestCtx()
+    adopted.home.chest = { x: 5, y: 64, z: 1 }
+    assert.equal(forage.questExempt(packBot([...oak5, ...dirt(34)]), adopted, { kind: 'log', name: 'oak_log' }), false, 'adopted: no quest')
   })
 })
 

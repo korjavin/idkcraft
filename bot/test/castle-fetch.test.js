@@ -166,6 +166,24 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.equal(ctx.stepStatus, 'done', 'target met ends the leg')
   })
 
+  it('reserved slot: the castle-chest draw is skipped, the dig yields pack-full (g0z.26 R2)', () => {
+    // 35/36, built + chestless + alone: drawing would fill the bootstrap
+    // slot, so the source is skipped (the stock stays) and the dig fails
+    // fast instead of dropping cobble on a full pack.
+    const set = new Map([[`${SITE.x},${SITE.y},${SITE.z}`, 'chest']])
+    const items = [...TOOLS()]
+    for (let i = 0; i < 32; i++) items.push({ name: 'dirt', count: 64 })
+    assert.equal(items.length, 35)
+    const chest = [{ name: 'cobblestone', count: 128 }]
+    const bot = makeBot({ items, set, chest, at: pos(SITE.x + 1.5, 64, SITE.z - 0.5) })
+    const ctx = { castle: castleState(), home: { site: pos(-10, 64, -10), built: true } }
+    fetch(bot, ctx)
+    assert.equal(bot.calls.opens.length, 0, 'the castle chest is never opened')
+    assert.equal(chest[0].count, 128, 'the stock stays in the chest')
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-pack-full')
+  })
+
   it('empty castle chest -> digs stone off the site, never on it', async () => {
     const set = new Map([
       [`${SITE.x},${SITE.y},${SITE.z}`, 'chest'],

@@ -14,11 +14,11 @@ const craft = require('../src/behaviours/craft')
 const IDS = {
   stone_pickaxe: 274, stick: 280, leaf_litter: 1001, gravel: 1002, dirt: 3,
   cobblestone: 4, oak_sapling: 1003, wheat_seeds: 1004, bow: 1005, arrow: 1006,
-  oak_planks: 1007, oak_log: 1008,
+  oak_planks: 1007, oak_log: 1008, chest: 1009, crafting_table: 1010,
 }
 const STACK = { stone_pickaxe: 1, bow: 1 }
 
-function roomBot({ stacks = [], craftImpl = null, tossImpl = null, tossStackImpl = null, clickWindowImpl = null, putBackImpl = null, blockAtImpl = null, openChestImpl = null, findBlocksImpl = null, at = { x: 0, y: 64, z: 0 }, slots = null } = {}) {
+function roomBot({ stacks = [], craftImpl = null, tossImpl = null, tossStackImpl = null, clickWindowImpl = null, putBackImpl = null, blockAtImpl = null, openChestImpl = null, findBlocksImpl = null, players = {}, at = { x: 0, y: 64, z: 0 }, slots = null } = {}) {
   const calls = { craft: [], toss: [], tossStack: [], clickWindow: [], deposit: [], putBack: 0, openChest: 0 }
   const itemsByName = {}
   const items = {}
@@ -31,6 +31,8 @@ function roomBot({ stacks = [], craftImpl = null, tossImpl = null, tossStackImpl
     _openWin: null,
     calls,
     entity: { position: at },
+    players,
+    username: 'IdkBot',
     registry: { itemsByName, items, blocksByName: { chest: { id: 54 } } },
     inventory: { items: () => bot._items, selectedItem: null },
     findBlocks: findBlocksImpl || (() => []),
@@ -434,6 +436,68 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.deepEqual(bot.calls.tossStack, [])
     assert.ok(bot.calls.deposit.length > 0, 'junk banked')
     assert.ok(bot.calls.deposit.every((d) => d.type === IDS.leaf_litter || d.type === IDS.gravel))
+  })
+
+  it('reserved slot: a tool craft refuses the last slot when chestless and alone (R2)', async () => {
+    // Revmux 01 major: the last slot belongs to the bootstrap chest craft —
+    // a 36/36 chestless pack has no drain that is not tossing.
+    const stacks = [stack('cobblestone', 41), stack('stick', 5)]
+    for (let i = 0; i < 33; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 35)
+    const bot = roomBot({ stacks })
+    bot.tossStack = tossStackFake(bot)
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await assert.rejects(
+      craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' }),
+      /inventory-full/,
+    )
+    assert.equal(bot.calls.craft.length, 0)
+    assert.deepEqual(bot.calls.toss, [])
+    assert.deepEqual(bot.calls.tossStack, [])
+    assert.equal(bot._items.length, 35)
+  })
+
+  it('reserved slot: the chest and table crafts are exempt (R2)', async () => {
+    const chestIng = Array.from({ length: 8 }, () => ({ id: IDS.oak_planks }))
+    const tableIng = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    for (const [name, ing] of [['chest', chestIng], ['crafting_table', tableIng]]) {
+      const stacks = [stack('oak_planks', 64)]
+      for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+      const bot = roomBot({ stacks })
+      const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+      await craft.safeCraft(bot, prodRecipe(name, 1, ing), 1, null, { ctx, item: name })
+      assert.equal(bot.calls.craft.length, 1, `${name} takes the last slot`)
+    }
+  })
+
+  it('reserved slot: a stacking conversion passes through (R2)', async () => {
+    const stacks = [stack('oak_log', 14), stack('oak_planks', 5)]
+    for (let i = 0; i < 33; i++) stacks.push(stack('dirt', 64))
+    assert.equal(stacks.length, 35)
+    const bot = roomBot({ stacks })
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, prodRecipe('oak_planks', 4, [{ id: IDS.oak_log }]), 1, null, { ctx, item: 'oak_planks' })
+    assert.equal(bot.calls.craft.length, 1)
+  })
+
+  it('reserved slot: open with an adopted chest, a player online, or pre-house (R2)', async () => {
+    const contexts = {
+      adopted: { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 200, y: 64, z: 200 } } },
+      prehouse: { home: { site: { x: 0, y: 64, z: 0 }, built: false, chest: null } },
+    }
+    for (const [label, ctx] of Object.entries(contexts)) {
+      const stacks = [stack('cobblestone', 41), stack('stick', 5)]
+      for (let i = 0; i < 33; i++) stacks.push(stack('dirt', 64))
+      const bot = roomBot({ stacks })
+      await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
+      assert.equal(bot.calls.craft.length, 1, label)
+    }
+    const stacks = [stack('cobblestone', 41), stack('stick', 5)]
+    for (let i = 0; i < 33; i++) stacks.push(stack('dirt', 64))
+    const bot = roomBot({ stacks, players: { owner: { username: 'owner' } } })
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1, 'online')
   })
 
   it('a full adopted chest falls through to the next chest in reach (g0z.26)', async () => {

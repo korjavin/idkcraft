@@ -67,14 +67,57 @@ function castleWoodOpen(ctx) {
     return false
   }
 }
-// True when the pack holds wood past the ceiling (goal craft/forage gates,
-// craft conversion guard). Fail-open: an unreadable inventory reads empty,
-// exactly the old behaviour.
+// True when the pack holds planks past the ceiling (goal craft gate, craft
+// conversion guard, forage log skip). Planks only (revmux 01 minor): logs
+// at/above NEED_LOGS must still convert — conversion is what frees the log
+// slot, and the depositPlan/surplusWood banking below still caps logs at
+// LOG_KEEP. Fail-open: an unreadable inventory reads empty, the old
+// behaviour.
 function woodCapped(bot, ctx) {
   try {
     if (!castleWoodOpen(ctx)) return false
-    return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP ||
-      countItems(bot, (n) => n.endsWith('_log')) >= LOG_KEEP
+    return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP
+  } catch (_) {
+    return false
+  }
+}
+// Reserved slot (g0z.26 R2, revmux 01 major): with no adopted chest and
+// nobody online the pack must never fill past PACK_RESERVE — the last slot
+// is the bootstrap chest craft's room. A 36/36 chestless pack has no drain
+// that is not tossing (the owner forbids it), so diggers and crafts yield
+// here instead of filling it. Binds ONLY in that corner: an adopted chest
+// (banking drains, however far) or any player online (the haul drains)
+// opens every gate, and pre-house the budget owns the pack. Forage's chest
+// quest is exempt while it can complete (forage.js questExempt).
+const PACK_RESERVE = 35
+function packStacks(bot) {
+  try {
+    const items = invItems(bot)
+    return Array.isArray(items) ? items.length : 0
+  } catch (_) {
+    return 0
+  }
+}
+// The reserve corner without the stack count (forage.js chest quest): built,
+// chestless and alone. The quest completes early, before the reserve binds.
+function reserveCorner(bot, ctx) {
+  try {
+    if (!ctx || !ctx.home || !ctx.home.built) return false
+    if (ctx.home.chest) return false
+    let level = 'none'
+    try {
+      level = require('./deliver').playerStatus(bot).level
+    } catch (_) {
+      level = 'none'
+    }
+    return level === 'none'
+  } catch (_) {
+    return false
+  }
+}
+function slotReserved(bot, ctx) {
+  try {
+    return reserveCorner(bot, ctx) && packStacks(bot) >= PACK_RESERVE
   } catch (_) {
     return false
   }
@@ -988,6 +1031,9 @@ function placeChest(bot, ctx, spot, bp) {
         await craftMod.safeCraft(bot, found[0], 1, tableBlock, { ctx, item: 'chest' })
       } catch (_) {
         ctx.stockpileInFlight = false
+        // A room failure still hands the surplus over when a player is
+        // online (revmux 01 major): without the haul the pack never drains.
+        if (offerHaul(bot, ctx)) say(bot, 'no room to craft a chest — bringing the surplus to you')
         fail(ctx, 'craft') // loud: failHolds parks until the situation moves
         return
       }
@@ -1069,8 +1115,12 @@ module.exports.surplusCount = surplusCount
 module.exports.woodCapped = woodCapped
 module.exports.surplusWood = surplusWood
 module.exports.offerHaul = offerHaul
+module.exports.slotReserved = slotReserved
+module.exports.reserveCorner = reserveCorner
+module.exports.packStacks = packStacks
 module.exports.PLANK_KEEP = PLANK_KEEP
 module.exports.LOG_KEEP = LOG_KEEP
+module.exports.PACK_RESERVE = PACK_RESERVE
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest

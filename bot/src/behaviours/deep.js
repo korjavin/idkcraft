@@ -459,6 +459,16 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
     fail(bot, ctx, d, 'no-dig', null, null)
     return
   }
+  // Reserved slot (g0z.26 R2): the pack stops growing at PACK_RESERVE with
+  // no adopted chest and nobody online — the last slot is the bootstrap
+  // chest craft's room. Fails (held) so the stockpile step banks.
+  try {
+    const stockpile = require('./stockpile')
+    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) {
+      fail(bot, ctx, d, 'pack-full', null, null)
+      return
+    }
+  } catch (_) { /* reserve unreadable: dig as before */ }
   const key = `${cell.x},${cell.y},${cell.z}`
   if (d.digCellKey === key) {
     d.digTries = (d.digTries || 0) + 1

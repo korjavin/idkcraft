@@ -2477,6 +2477,51 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     bot.restoreError()
   })
 
+  it('reserved slot: scaffold digs yield pack-full without day-latching (g0z.26 R2)', async () => {
+    // 35/36, scaffold empty, built + chestless + alone: digTick fails before
+    // the first dig, and the failure never arms the ipn.11 day latch.
+    const items = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+    for (let i = 0; i < 33; i++) items.push({ name: 'iron_ore', count: 64 })
+    assert.equal(items.length, 35)
+    const bot = mockBot({
+      items,
+      ids: { ...JIDS, iron_ore: 15 },
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx({ site: { x: 0, y: 64, z: 0 }, built: true })
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-pack-full')
+    assert.deepEqual(bot.calls.dig, [])
+    assert.ok(bot.errs.some((e) => e.includes('pack-full')), `errs: ${bot.errs}`)
+    assert.equal(ctx.equipLatch, undefined, 'pack-full never latches')
+    ctx.stepStatus = 'running' // same-day repeat: still no latch
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-pack-full')
+    assert.equal(ctx.equipLatch, undefined)
+    bot.restoreError()
+  })
+
+  it('reserved slot: an adopted chest reopens scaffold digs (g0z.26 R2)', async () => {
+    const items = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+    for (let i = 0; i < 33; i++) items.push({ name: 'iron_ore', count: 64 })
+    const bot = mockBot({
+      items,
+      ids: { ...JIDS, iron_ore: 15 },
+      recipes: {},
+      findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+    })
+    const ctx = freshCtx({ site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 5, y: 64, z: 1 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 1)
+    bot.restoreError()
+  })
+
   it('phantom crafts never chat equipped: silent strikes, stall on the third', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],

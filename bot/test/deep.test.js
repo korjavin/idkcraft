@@ -1810,6 +1810,25 @@ describe('deep behaviour legs', () => {
     assert.equal(ctx.deep.steps.length, 0)
   })
 
+  it('reserved slot: the shaft yields pack-full before the first dig (g0z.26 R2)', async () => {
+    // 35/36, built + chestless + alone: the shaft would fill the bootstrap
+    // slot, so the leg fails fast instead of digging.
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    for (let i = 0; i < 34; i++) bot.inv.push({ name: 'dirt', count: 64 })
+    assert.equal(bot.inv.length, 35)
+    bot.entity.position = pos(0, -43, 0)
+    for (let y = -42; y <= -28; y++) bot.blocks[`0,${y},-3`] = 'air'
+    bot.blocks['0,-43,-3'] = 'stone'
+    for (const x of [5, 8, 11]) bot.blocks[`${x},-45,-3`] = 'diamond_ore'
+    const cells = [5, 8, 11].map((x) => ({ x, y: -45, z: -3, name: 'diamond_ore' }))
+    const ctx = memCtx(cells)
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
+    const status = await runLeg(bot, ctx, 800)
+    assert.equal(status, 'failed:pack-full')
+    assert.deepEqual(bot.calls.digs, [])
+  }, { timeout: 30000 })
+
   it('full leg: site, descend, tunnel, 3 diamonds, return, haul banked', async () => {
     const bot = mockBot()
     bot.inv.push({ name: 'iron_pickaxe', count: 1 })

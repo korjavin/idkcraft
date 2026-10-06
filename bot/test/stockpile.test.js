@@ -1106,3 +1106,108 @@ describe('stockpile gear reserve (idkcraft-ipn.8)', () => {
     assert.equal(stripped.key, 'want-logs')
   })
 })
+
+describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
+  const dirt = (n) => Array.from({ length: n }, () => ({ name: 'dirt', count: 64 }))
+  const ownerOnline = { owner: { username: 'owner', entity: { position: pos(1, 64, 1) } } }
+
+  it('a room-failed chest craft still hands the surplus over when a player is online', async () => {
+    // 36/36 with a 9-plank stack: the chest recipe neither fits nor frees
+    // its slot, so the craft fails honestly — and the haul drains the pack.
+    const bot = mockBot({
+      cells: { '4,64,1': 'crafting_table' },
+      inv: [{ name: 'oak_planks', count: 9 }, ...dirt(35)],
+    })
+    bot.players = ownerOnline
+    bot.recipesFor = () => [{}]
+    bot.entity.position = pos(4, 64, 1) // at the table
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft')
+    assert.ok((ctx.haul && ctx.haul.dirt) > 0, `haul: ${JSON.stringify(ctx.haul)}`)
+    assert.ok(bot.chats.some((l) => l.includes('bringing the surplus to you')), `chats: ${bot.chats}`)
+    assert.equal(bot.inv.length, 36, 'nothing tossed, nothing banked without a chest')
+  })
+
+  it('36/36 with nobody online fails honestly and keeps every stack', async () => {
+    // A generic full pack has no drain that is not tossing (the owner
+    // forbids it): the step fails, the reserve (R2) keeps this state
+    // unreachable, and this test pins the honest failure, not a placement.
+    const bot = mockBot({
+      cells: { '4,64,1': 'crafting_table' },
+      inv: [{ name: 'oak_planks', count: 9 }, ...dirt(35)],
+    })
+    bot.recipesFor = () => [{}]
+    bot.entity.position = pos(4, 64, 1)
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } } })
+    stockpile(bot, ctx)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:craft')
+    assert.deepEqual(ctx.haul || {}, {})
+    assert.deepEqual(bot.chats, [])
+    assert.equal(bot.inv.length, 36)
+  })
+
+  it('36/36 with a log load and plank room: craft frees the slot, the chest lands', async () => {
+    // The reachable recovery (revmux 01 major, adapted): conversion stacks
+    // onto plank room and empties the log stack exactly, the freed slot
+    // takes the chest craft, and the stockpile step reaches a placed chest.
+    const craft = require('../src/behaviours/craft')
+    const PLANK_RECIPE = { result: { name: 'oak_planks', count: 4 } }
+    const CHEST_RECIPE = { result: { name: 'chest', count: 1 } }
+    const inv = [{ name: 'oak_log', count: 14 }, { name: 'oak_planks', count: 5 }, ...dirt(34)]
+    assert.equal(inv.length, 36)
+    const bot = mockBot({ cells: { '4,64,1': 'crafting_table' }, inv })
+    bot._syncWindow = async () => {} // the post-craft resync is instant here
+    bot.recipesFor = (id) => {
+      if (id === bot.registry.itemsByName['oak_planks'].id) return [PLANK_RECIPE]
+      if (id === bot.registry.itemsByName['chest'].id) return [CHEST_RECIPE]
+      throw new Error(`unexpected recipesFor(${id})`)
+    }
+    const crafts = []
+    bot.craft = async (recipe, count) => {
+      crafts.push(recipe === CHEST_RECIPE ? 'chest' : 'planks')
+      if (recipe === CHEST_RECIPE) {
+        const pi = bot.inv.findIndex((i) => i.name === 'oak_planks')
+        bot.inv[pi].count -= 8
+        bot.inv.push({ name: 'chest', count: 1 })
+        return
+      }
+      const li = bot.inv.findIndex((i) => i.name === 'oak_log')
+      bot.inv[li].count -= 1
+      if (bot.inv[li].count <= 0) bot.inv.splice(li, 1)
+      bot.inv.find((i) => i.name === 'oak_planks').count += 4
+    }
+    bot.entity.position = pos(4, 64, 1)
+    const ctx = homeCtx({ home: { table: { x: 4, y: 64, z: 1 } }, ctx: { castle: { phase: 'body', blueprintVersion: 2 } } })
+    craft(bot, ctx, null, {})
+    const t0 = Date.now()
+    while (crafts.length < 14 && Date.now() - t0 < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(crafts.length, 14, 'the full load converts')
+    assert.equal(bot.inv.length, 35, 'the emptied log stack frees its slot')
+    await flush()
+    await flush()
+    assert.equal(ctx.craftInFlight, false, 'the batch settles')
+    craft(bot, ctx, null, {}) // nothing left to convert: the step dones
+    assert.equal(ctx.stepStatus, 'done')
+    ctx.stepStatus = 'running' // the re-pick resets the status (decide.js)
+    stockpile(bot, ctx) // at the table: the chest craft takes the freed slot
+    const t1 = Date.now()
+    while (!crafts.includes('chest') && Date.now() - t1 < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.ok(crafts.includes('chest'), 'the chest crafts')
+    await flush()
+    await flush()
+    stockpile(bot, ctx) // the spot is near: issue the place goal
+    stockpile(bot, ctx) // arrived: place and adopt
+    await flush()
+    await flush()
+    assert.deepEqual({ x: ctx.home.chest.x, y: ctx.home.chest.y, z: ctx.home.chest.z }, { x: 5, y: 64, z: 1 })
+  })
+})

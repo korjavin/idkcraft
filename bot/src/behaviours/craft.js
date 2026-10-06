@@ -474,8 +474,9 @@ function freedStacks(bot, stacks, recipe, opCount) {
 // plus ingredient slots the op frees, mirroring putSelectedItemRange
 // (stack first, empty slot next, toss when neither). True/false; null
 // when the inventory is unreadable (fail open: the craft proceeds
-// exactly as before).
-function roomFor(bot, res, opCount, recipe) {
+// exactly as before). roomDetail exposes the breakdown for the
+// reserved-slot rule below; roomFor keeps the old boolean shape.
+function roomDetail(bot, res, opCount, recipe) {
   const stacks = invStacks(bot)
   if (!stacks) return null
   let n = 1
@@ -488,12 +489,41 @@ function roomFor(bot, res, opCount, recipe) {
       if (!s || s.name !== res.name) continue
       const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : res.size
       free += Math.max(0, cap - (typeof s.count === 'number' ? s.count : 1))
-      if (free >= need) return true
+      if (free >= need) break
     }
   }
   const empty = emptySlots(bot, stacks)
   if (empty == null) return null
-  return free + (empty + freedStacks(bot, stacks, recipe, n)) * res.size >= need
+  return { need, free, empty, freed: freedStacks(bot, stacks, recipe, n), size: res.size }
+}
+function roomFor(bot, res, opCount, recipe) {
+  const d = roomDetail(bot, res, opCount, recipe)
+  if (!d) return null
+  return d.free + (d.empty + d.freed) * d.size >= d.need
+}
+// The craft takes the last empty slot: room holds only because of it.
+// Conversions that stack onto room and exact-consumptions never do.
+function consumesLastSlot(detail) {
+  return !!detail && detail.empty === 1 && detail.free + detail.freed * detail.size < detail.need
+}
+// Reserved-slot rule (g0z.26 R2, revmux 01 major): with no adopted chest and
+// nobody online the last pack slot belongs to the bootstrap chest craft —
+// any other craft that would consume it fails here instead of filling the
+// pack past the point of no drain. The chest craft and the table it is
+// crafted at (chest infrastructure) are exempt. Fail-open: anything
+// unreadable crafts exactly as before.
+const RESERVE_EXEMPT = new Set(['chest', 'crafting_table'])
+function reserveBlocks(bot, recipe, count, opts) {
+  try {
+    const item = opts && opts.item
+    if (typeof item !== 'string' || RESERVE_EXEMPT.has(item)) return false
+    const stockpile = require('./stockpile')
+    if (!stockpile || typeof stockpile.slotReserved !== 'function') return false
+    if (!stockpile.slotReserved(bot, opts && opts.ctx)) return false
+    return consumesLastSlot(roomDetail(bot, resultOf(bot, recipe, item), count, recipe))
+  } catch (_) {
+    return false
+  }
 }
 
 function cursorOccupied(bot) {
@@ -795,6 +825,7 @@ async function pacedCraft(bot, recipe, count, table) {
 }
 
 async function safeCraft(bot, recipe, count, table, opts) {
+  if (reserveBlocks(bot, recipe, count, opts)) throw new Error('inventory-full')
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   await ensureStacks(bot, recipe, count)

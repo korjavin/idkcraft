@@ -224,6 +224,16 @@ function near(bot, p, reach) {
 // Source 1: the castle chest. Returns true while it owns the tick.
 function chestTick(bot, ctx, f, d) {
   if (f.chestDone) return false
+  // Reserved slot (g0z.26 R2): drawing from the owner's chest into a
+  // reserved pack would fill the bootstrap slot — skip the source this leg
+  // (the stock stays in the chest, nothing is lost).
+  try {
+    const stockpile = require('./stockpile')
+    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) {
+      f.chestDone = true
+      return false
+    }
+  } catch (_) { /* reserve unreadable: draw as before */ }
   const at = f.chest || (f.chest = castleChest(bot, ctx.castle))
   if (!at) { f.chestDone = true; return false }
   if (!near(bot, at, CHEST_REACH)) {
@@ -393,8 +403,14 @@ function pickQuarry(bot, ctx, f) {
 // the ground and counts no-gain strikes — fail fast instead, so the hold
 // parks the leg while the stockpile step banks the surplus. An empty slot
 // or room on a cobble/dirt stack reads as room; an unreadable inventory
-// digs as before.
-function roomForDrop(bot) {
+// digs as before. R2 (revmux 01 major): with no adopted chest and nobody
+// online the reserve binds one slot earlier — the last slot is the
+// bootstrap chest craft's room, and a 36/36 chestless pack has no drain.
+function roomForDrop(bot, ctx) {
+  try {
+    const stockpile = require('./stockpile')
+    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) return false
+  } catch (_) { /* reserve unreadable: the room check below decides */ }
   try {
     const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
     if (!Array.isArray(items)) return true
@@ -413,7 +429,7 @@ function digTick(bot, ctx, f) {
   const bp = bodyPos(bot)
   if (!bp) return
   if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
-  if (!roomForDrop(bot)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  if (!roomForDrop(bot, ctx)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
   const stoneAt = (q) => {

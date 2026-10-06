@@ -138,7 +138,7 @@ function failFinal(bot, ctx, g, logs, final) {
   g.atLogs = logs
   g.failPos = bodyPos(bot)
   ctx.stepStatus = g.final
-  say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : 'cannot reach the trees')
+  say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : g.final === 'failed:pack-full' ? 'pack full, banking first' : 'cannot reach the trees')
   clearGoal(bot, ctx)
 }
 
@@ -404,6 +404,16 @@ function gather(bot, ctx, target, state) {
     if (typeof bot.dig !== 'function') {
       g.skip.add(keyOf(g.pos))
       g.pos = null
+      return
+    }
+    // Reserved slot (g0z.26 R2): the pack stops growing at PACK_RESERVE
+    // with no adopted chest and nobody online — the last slot is the
+    // bootstrap chest craft's room. No quest exemption (forage runs it);
+    // the log-count hold below releases when the stockpile banks.
+    let reserved = false
+    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    if (reserved) {
+      failFinal(bot, ctx, g, logs, 'failed:pack-full')
       return
     }
     const gDeny = denyReason(bot, g.block, ctx) // idkcraft-drq: placed logs are not trees
