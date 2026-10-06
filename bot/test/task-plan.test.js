@@ -433,6 +433,51 @@ describe('stall-point planner (vmzq.5)', () => {
     )
   })
 
+  it("a done-status same-step answer parks as same-step (revmux 02 core-1)", async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.stepStatus = 'done' // leg just ended; decide() has not re-picked yet
+    ctx.brain = { plan: async () => ({ step: 'castlefetch', confidence: 0.9, probabilities: { castlefetch: 0.9 }, source: 'jev' }) }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    const t1 = advance(bot, ctx, t0, 45)
+    await flush()
+    taskMod.taskTick(bot, ctx, t1 + 10000)
+    assert.equal(ctx.castle.parked, true)
+    assert.equal(ctx.taskPlanStep || null, null, 'nothing forced')
+    assert.ok(
+      planLogs().some((l) => l === 'task plan kind=castle progress=8/1722 source=jev answer=park why=same-step'),
+      JSON.stringify(planLogs()),
+    )
+  })
+
+  it('a failed-and-held step stays offerable and forcible (hold-retry carve-out)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.step = 'gather'
+    ctx.stepStatus = 'failed:no-trees'
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    const text = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+    ctx.stepFail = { gather: { status: 'failed:no-trees', text, pos: null, at: Date.now() } }
+    const calls = []
+    ctx.brain = {
+      plan: async (req) => {
+        calls.push(req)
+        return { step: 'gather', confidence: 0.9, probabilities: { gather: 0.9 }, source: 'jev' }
+      },
+    }
+    const t1 = advance(bot, ctx, t0, 45)
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.ok('gather' in calls[0].criteria, 'held ctx.step is offered')
+    taskMod.taskTick(bot, ctx, t1 + 10000)
+    assert.equal(ctx.taskPlanStep, 'gather', 'held step forced one-shot')
+    assert.equal(ctx.task.castle.stallMs, 0, 'fresh window for the retry')
+    assert.equal(ctx.castle.parked, false)
+    assert.ok(planLogs().some((l) => l.includes('disagree')), 'disagree line on a real retry')
+  })
+
   it('a brain without plan() parks deterministically with no plan lines', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)

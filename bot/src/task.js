@@ -320,19 +320,34 @@ function parkTask(bot, ctx, kind, done, total, now) {
   return undefined
 }
 
+// A same-step answer is only forcible while the step is HELD (revmux 01
+// core-1, 02 core-1): a running/done/failed-but-released ctx.step is what
+// decide() would do anyway, so forcing it only resets the window.
+// Retrying a hold is the planner's job, so a failed + holding step stays.
+function planRetryable(ctx, bot) {
+  try {
+    const step = ctx && typeof ctx.step === 'string' ? ctx.step : null
+    const status = ctx && typeof ctx.stepStatus === 'string' ? ctx.stepStatus : ''
+    if (!step || !status.startsWith('failed')) return false
+    const goal = require('./goal')
+    return goal.failHolds(ctx, step, goal.goalText(goal.goalFacts(bot, ctx), ctx && ctx.home), bot)
+  } catch (_) {
+    return false
+  }
+}
+
 // Plan menu: feasible + registered, failHolds IGNORED (retrying a held
 // step is the point: at a stall the helping step is usually held), rest
 // excluded (forcing rest is idling; an only-rest menu parks instead).
-// The RUNNING step is excluded too (revmux 01 core-1): forcing the step
-// that just stalled changes nothing and buys 45 min for free. A failed
-// step stays (retrying a hold is the planner's job).
+// ctx.step is excluded unless it is held (see planRetryable above).
 function planMenu(bot, ctx) {
   const goal = require('./goal')
   const facts = goal.goalFacts(bot, ctx)
-  const running = ctx && ctx.stepStatus === 'running' ? ctx.step : null
+  const step = ctx && typeof ctx.step === 'string' ? ctx.step : null
+  const retryable = step ? planRetryable(ctx, bot) : false
   return goal.STEP_ORDER.filter((n) => {
     if (n === 'rest') return false
-    if (running && n === running) return false
+    if (step && n === step && !retryable) return false
     try {
       return !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
     } catch (_) {
@@ -479,10 +494,11 @@ function consumePlan(bot, ctx, kind, done, total, state, now) {
     }
   }
   if (!step) return parkFallback((ans && ans.park) || 'invalid')
-  // Same-step stay (revmux 01 core-1): the running step is not offered,
-  // so an answer naming it is off-menu — park instead of resetting the
-  // window for the loop that just stalled.
-  if (ctx && step === ctx.step && ctx.stepStatus === 'running') return parkFallback('same-step')
+  // Same-step stay (revmux 01 core-1, 02 core-1): an unheld ctx.step is
+  // not offered, so an answer naming it is off-menu — park instead of
+  // resetting the window for the loop that just stalled. A failed +
+  // holding step passes (the hold-retry carve-out).
+  if (ctx && step === ctx.step && !planRetryable(ctx, bot)) return parkFallback('same-step')
   // Stale answer (revmux 01 core-1): the menu moved between the call and
   // the consume tick, so decide() would degrade the force to the normal
   // menu — park instead of resetting the window for a force that cannot
