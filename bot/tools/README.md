@@ -402,3 +402,48 @@ exit 2 and no join. Exit codes: 0 = `/quit` or idle timeout, 1 = error,
 2 = human online. Agent manual: `.claude/skills/idkcraft-prod-play/SKILL.md`.
 The bot tags incoming chat (`chat from=<name> msg=<msg>` in `src/chat.js`),
 so session review tells `from=IdkTester` from live players.
+
+## Unattended build oracle (`task-run.sh`, idkcraft-vmzq.1)
+
+One command per stage orders a build on prod, leaves, and judges it from the
+logs — the epic-vmzq acceptance that "finish a build unattended" is a test.
+
+```sh
+sh bot/tools/task-run.sh house 180    # `build here` on a new site, 3 h budget
+sh bot/tools/task-run.sh castle 480   # `build castle`, 8 h budget
+```
+
+Regime (the owner's case: "give the order and leave"): the puppet joins, says
+`autonomous on` + `follow me`, walks into mutual range (the unseen reply leaks
+the bot's coords, chat.js), says the order, confirms the reply, and QUITS —
+the 3 h run meets even a 580-block-away bot via reunion + re-asked coords.
+Progress is read from VictoriaLogs, never from the puppet. Nobody online,
+BOT_AUTONOMOUS on. Exit 0 = done within budget, 1 = budget exceeded (prints
+the last 20 bot lines + the last progress line), 2 = environment (puppet
+refused, bot never seen, no reply, human void, logs lost mid-run).
+
+Rules:
+- No merge/deploy freeze (owner Q3): a deploy restart mid-run is RECORDED in
+  the series and the run resumes (autonomy is env, so the bot rejoins working);
+  it never voids. A human joining voids (exit 2, never rejoin).
+- One scenario per run; concurrent prod runs collide on the puppet name.
+- Secrets resolve at runtime from the stash (`secrets/idkcraft-mc-host`,
+  `secrets/idkcraft-mc-port`, the session-review Grafana/Portainer keys) and
+  never print. Every run prints the UTC window start and the VictoriaLogs
+  queries to re-judge it by hand.
+
+The series JSON (`/tmp/task-run-<task>-<utc>.series.json`) is the record:
+window, order + reply, progress points (`building N/M`, `castle N/total`),
+restarts, resumes, and the verdict.
+
+### Baseline (current master)
+
+| date | sha | stage | result | minutes | interventions | diagnosis quoted |
+|---|---|---|---|---|---|---|
+| 2026-10-06 | 3d4f340 | rig JR-BUILD-FRESH | PASS | 15 | 0 | from scratch, verifyBuild 99/99 skip 0; gather variance 709/909 s over 2 runs |
+| 2026-10-06 | 3d4f340 | prod house | FAIL (partial) | 30 | 0 | marker `home done at -40 63 -215` in 30 min, but 30 `build skip … after 3 refusals (no-ref)` lines 17:00:46–17:08:37Z and a post-run world-read shows 70/99 placed (whole dz=5 row + roof patches missing); first pause 17:08:43Z at 94/99 (`next: rearming (laya)` — planks out, then night → `menu=rest`); zero joins in the window |
+
+Budget rule after run 1: 2× the median of 3 green runs (owner Q4).
+
+Grafana: the `idkcraft_bot_task_progress{task}` panel lands with vmzq.2 —
+the metric does not exist yet, so there is nothing to point a panel at.
