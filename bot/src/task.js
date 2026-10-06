@@ -1,10 +1,11 @@
 'use strict'
 
-// Task executive, slices 1-2 (idkcraft-vmzq.2/.3): progress invariant +
-// stall clock + L1 honest line + L2/L3 park ladder. No behaviour changes:
-// this only measures (gauges), times the stall, chats/logs the ladder
-// lines, and parks the task (a menu veto, honoured by goal.js) with a
-// diagnosis. Re-plan is .5.
+// Task executive, slices 1-2 (idkcraft-vmzq.2/.3) + re-plan (.5): progress
+// invariant + stall clock + L1 honest line + L2/L3 park ladder. No
+// behaviour changes: this only measures (gauges), times the stall,
+// chats/logs the ladder lines, fires one JEV step pick at L2 (the answer
+// rides ctx.taskPlanStep, honoured one-shot by goal.js), and parks the
+// task (a menu veto, honoured by goal.js) with a diagnosis.
 //
 // Active task: the house while unbuilt (build outranks castle in STEP_ORDER),
 // else the castle while ordered, incomplete and not owner-parked, else
@@ -322,11 +323,16 @@ function parkTask(bot, ctx, kind, done, total, now) {
 // Plan menu: feasible + registered, failHolds IGNORED (retrying a held
 // step is the point: at a stall the helping step is usually held), rest
 // excluded (forcing rest is idling; an only-rest menu parks instead).
+// The RUNNING step is excluded too (revmux 01 core-1): forcing the step
+// that just stalled changes nothing and buys 45 min for free. A failed
+// step stays (retrying a hold is the planner's job).
 function planMenu(bot, ctx) {
   const goal = require('./goal')
   const facts = goal.goalFacts(bot, ctx)
+  const running = ctx && ctx.stepStatus === 'running' ? ctx.step : null
   return goal.STEP_ORDER.filter((n) => {
     if (n === 'rest') return false
+    if (running && n === running) return false
     try {
       return !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
     } catch (_) {
@@ -473,6 +479,23 @@ function consumePlan(bot, ctx, kind, done, total, state, now) {
     }
   }
   if (!step) return parkFallback((ans && ans.park) || 'invalid')
+  // Same-step stay (revmux 01 core-1): the running step is not offered,
+  // so an answer naming it is off-menu — park instead of resetting the
+  // window for the loop that just stalled.
+  if (ctx && step === ctx.step && ctx.stepStatus === 'running') return parkFallback('same-step')
+  // Stale answer (revmux 01 core-1): the menu moved between the call and
+  // the consume tick, so decide() would degrade the force to the normal
+  // menu — park instead of resetting the window for a force that cannot
+  // apply. Holds are NOT consulted (same rule as decide()'s force path).
+  let fresh = false
+  try {
+    const goal = require('./goal')
+    const facts = goal.goalFacts(bot, ctx)
+    fresh = !!(goal.MENU[step] && goal.MENU[step].feasible(facts, bot, ctx) && goal.registered(step))
+  } catch (_) {
+    fresh = false
+  }
+  if (!fresh) return parkFallback('stale')
   if (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) {
     return parkFallback(`low-confidence conf=${ans.conf.toFixed(2)}`)
   }

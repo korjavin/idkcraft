@@ -152,6 +152,7 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(req.instructions, goal.ASK_INSTRUCTIONS)
     assert.ok(Object.keys(req.criteria).length > 0)
     assert.ok(!('rest' in req.criteria), 'rest is not a plan option')
+    assert.ok(!(ctx.step in req.criteria), 'the running step is not offered (revmux 01 core-1)')
     for (const k of Object.keys(req.criteria)) assert.equal(req.criteria[k], goal.STEP_CRITERIA[k])
     // The plan line, the disagree line against the .3 park, the metric.
     assert.match(
@@ -262,7 +263,7 @@ describe('stall-point planner (vmzq.5)', () => {
   it('a low-confidence answer parks with why=low-confidence', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
-    ctx.brain = { plan: async () => ({ step: 'equip', confidence: 0.2, probabilities: { equip: 0.3, forage: 0.3 }, source: 'jev' }) }
+    ctx.brain = { plan: async () => ({ step: 'gather', confidence: 0.2, probabilities: { gather: 0.3, forage: 0.3 }, source: 'jev' }) }
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     const t1 = advance(bot, ctx, t0, 45)
@@ -370,6 +371,66 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(second.action, 'gather')
     assert.equal(ctx.taskPlanStep, null)
     assert.notEqual(ctx.stepPick.source, 'task-plan')
+  })
+
+  it('a running step as the only option parks without calling (revmux 01 core-1)', async () => {
+    // Poor house bot: gather is the only feasible step, and it is running.
+    const bot = makeBot()
+    const { ctx } = houseCtx(bot)
+    ctx.step = 'gather'
+    ctx.stepStatus = 'running'
+    const calls = []
+    ctx.brain = { plan: async (req) => { calls.push(req); return { step: 'gather', confidence: 0.9, source: 'jev' } } }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    advance(bot, ctx, t0, 45)
+    await flush()
+    assert.equal(calls.length, 0, 'running-only menu asks nothing')
+    assert.equal(ctx.home.parked, true, 'deterministic park')
+    assert.equal(planLogs().length, 0, 'no plan lines without a consultation')
+  })
+
+  it('an off-menu same-step answer parks as same-step (revmux 01 core-1)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    assert.equal(ctx.step, 'castlefetch')
+    assert.equal(ctx.stepStatus, 'running')
+    ctx.brain = { plan: async () => ({ step: 'castlefetch', confidence: 0.9, probabilities: { castlefetch: 0.9 }, source: 'jev' }) }
+    const before = await planCounter('park')
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    const t1 = advance(bot, ctx, t0, 45)
+    await flush()
+    taskMod.taskTick(bot, ctx, t1 + 10000)
+    assert.equal(ctx.castle.parked, true)
+    assert.equal(ctx.taskPlanStep || null, null, 'nothing forced')
+    assert.ok(
+      planLogs().some((l) => l === 'task plan kind=castle progress=8/1722 source=jev answer=park why=same-step'),
+      JSON.stringify(planLogs()),
+    )
+    assert.equal(planLogs().filter((l) => l.includes('disagree')).length, 0, 'no disagree line on a fallback')
+    assert.equal(await planCounter('park'), before + 1)
+  })
+
+  it('an answer infeasible at consume time parks as stale (revmux 01 core-1)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    // stay is day-infeasible: decide() would degrade the force, so the
+    // window must not reset for it.
+    ctx.brain = { plan: async () => ({ step: 'stay', confidence: 0.9, probabilities: { stay: 0.9 }, source: 'jev' }) }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    const t1 = advance(bot, ctx, t0, 45)
+    await flush()
+    const stalled = ctx.task.castle.stallMs
+    assert.ok(stalled >= taskMod.TASK_STALL_L2_MS)
+    taskMod.taskTick(bot, ctx, t1 + 10000)
+    assert.equal(ctx.castle.parked, true)
+    assert.equal(ctx.taskPlanStep || null, null, 'nothing forced')
+    assert.ok(
+      planLogs().some((l) => l === 'task plan kind=castle progress=8/1722 source=jev answer=park why=stale'),
+      JSON.stringify(planLogs()),
+    )
   })
 
   it('a brain without plan() parks deterministically with no plan lines', async () => {
