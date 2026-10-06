@@ -359,15 +359,26 @@ function findRef(bot, p) {
 // kinds, 0 outside. Refreshed on movements swap or home move (the old
 // closure is detached); a missing movements, exclusion list or home
 // degrades to no guard, never a throw.
-function guardOwnWalls(bot, ctx) {
+function guardOwnWalls(bot, ctx, homeOpt) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
     if (!mov || !Array.isArray(mov.exclusionAreasBreak)) return
-    const home = ctx && ctx.home
+    // Optional override (rw4.17): the comehome exit guards the EXITED house,
+    // which a 'build here' swap may have pinned older than ctx.home.
+    const home = (homeOpt && homeOpt.site) ? homeOpt : (ctx && ctx.home)
     const site = home && home.site
     if (!site || typeof site.x !== 'number') return
     const key = `${site.x},${site.y},${site.z}`
     if (ctx.buildGuardedMov === mov && ctx.buildGuardKey === key) return
+    // Sticky exit box (rw4.17 revmux 01 minor): an exit-installed guard is
+    // not freed by a home move while the body still stands inside the
+    // guarded box — freeing it there hands the next A* the walls (swap +
+    // door-stuck fail, then a build tick re-boxes to the new site). The
+    // next call after leaving re-boxes, so nothing leaks. Build-installed
+    // guards (flag unset) re-box as before. Unknown position fails open to
+    // today's behaviour.
+    if (ctx.buildGuardFn && ctx.buildGuardExit && ctx.buildGuardBox &&
+      posInBox(bot && bot.entity && bot.entity.position, ctx.buildGuardBox)) return
     if (ctx.buildGuardFn) {
       const prev = ctx.buildGuardedMov
       if (prev && Array.isArray(prev.exclusionAreasBreak)) {
@@ -410,7 +421,32 @@ function guardOwnWalls(bot, ctx) {
     ctx.buildGuardFn = fn
     ctx.buildGuardedMov = mov
     ctx.buildGuardKey = key
+    ctx.buildGuardBox = box
+    ctx.buildGuardExit = false // a fresh install is build-context until guardExitWalls adopts it
   } catch (_) { /* best-effort: approach still walks */ }
+}
+
+// Feet-in-box test for the sticky exit box: floor to the standing block
+// first (the isInside lesson — a raw float misreads the back row).
+function posInBox(bp, box) {
+  try {
+    if (!bp || typeof bp.x !== 'number' || !box) return false
+    const x = Math.floor(bp.x)
+    const y = Math.floor(bp.y)
+    const z = Math.floor(bp.z)
+    return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1 && z >= box.z0 && z <= box.z1
+  } catch (_) { return false }
+}
+
+// Exit-context install (rw4.17): same box as guardOwnWalls, but the guard
+// stays put across a home move while the body stands inside it (see the
+// sticky branch above). The comehome exit's backstop — build/light/decide
+// keep calling guardOwnWalls and re-box as before.
+function guardExitWalls(bot, ctx, home) {
+  guardOwnWalls(bot, ctx, home)
+  try {
+    if (ctx.buildGuardFn) ctx.buildGuardExit = true
+  } catch (_) { /* flag best-effort */ }
 }
 
 function skipCell(ctx, idx, p, why) {
@@ -806,6 +842,7 @@ module.exports = build
 module.exports.findRef = findRef
 module.exports.isReplaceable = isReplaceable
 module.exports.guardOwnWalls = guardOwnWalls
+module.exports.guardExitWalls = guardExitWalls
 module.exports.BLUEPRINT = BLUEPRINT
 module.exports.BLUEPRINT_V2 = BLUEPRINT_V2
 module.exports.PLANK_COUNT = PLANK_COUNT

@@ -1066,6 +1066,14 @@ function releaseMeet(bot, ctx) {
   ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0, home: order.home || ctx.home }
   ctx.lastGoalKey = ''
   ctx.inShelter = true
+  // rw4.17 (#311 reuse): the exit may yet release unsheltered-while-inside
+  // (door-stuck fail, an order handover clearing the flag), and the next A*
+  // from inside would eat the walls — the doorway hold is the protection,
+  // the guard is the backstop. Exit-context install: the box stays put
+  // across a home move while the body stands inside it (no runtime
+  // movements swap exists), so one arming covers the episode; the exiting
+  // branch above deliberately does not re-arm.
+  try { buildMod.guardExitWalls(bot, ctx) } catch (_) { /* guard best-effort */ }
 }
 
 // The order ends out loud (lead precedent): one chat line, then the body is
@@ -1077,6 +1085,18 @@ function failMeet(bot, ctx, status) {
   ctx.stepStatus = status
   ctx.comehome = null
   if (exiting) ctx.inShelter = false // exit path: the shelter flag was armed by releaseMeet
+  if (exiting) {
+    // rw4.17 (#311 reuse): clearing the flag while the body is still inside
+    // the exited house must arm the wall guard first — the released body's
+    // A* (fight/work) otherwise digs the walls (the old revmux 01 minor on
+    // the door-stuck leg below). The box is the EXITED (pinned) house, not
+    // ctx.home — a 'build here' swap may have moved on mid-exit — and it
+    // stays put across later re-box ticks until the body leaves (sticky).
+    try {
+      const done = order.home || ctx.home
+      if (done && isInside(bot, done)) buildMod.guardExitWalls(bot, ctx, done)
+    } catch (_) { /* guard best-effort */ }
+  }
   try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   ctx.shelterLeg = null
   try { bot.clearControlStates() } catch (_) { /* body best-effort */ }
@@ -1157,7 +1177,7 @@ function exitMeet(bot, ctx, home, order) {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) order.phase = 'exit'
     else if ((order.openTicks = (order.openTicks || 0) + 1) > OPEN_TICKS) {
-      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); the released body's A* may dig the wall (revmux 01 minor)
+      failMeet(bot, ctx, 'failed:door-stuck') // gohome's 1l9 cap (idkcraft-470s); failMeet arms the wall guard, so the released body's A* routes via door/gap instead of the wall (rw4.17 closes the old revmux 01 minor)
       return
     } else {
       tryToggle(bot, ctx, order, door)
