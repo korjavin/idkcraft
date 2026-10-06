@@ -482,12 +482,53 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(taskLogs().length, 1, 'oscillation still fires the L1')
   })
 
+  it('stone left repair cycle does not reset (verify 02 core-1 low-water)', () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot, { kind: 'stone', left: 80 })
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    // Creeper hole (+1 remainder) then repair, every minute, nothing net.
+    for (let s = 1; s <= 15 * 60; s++) {
+      if (s % 120 === 60) ctx.castleWord.left = 81
+      if (s % 120 === 0) ctx.castleWord.left = 80
+      taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    }
+    assert.equal(ctx.task.castle.stallMs, 900000, 'repair to the low-water mark is not progress')
+    assert.equal(taskLogs().length, 1, 'dig/repair cycle still fires the L1')
+  })
+
+  it('runTick advances the stall on recover ticks (verify 03 core-1)', async () => {
+    // Pins the hook above the recover branch: stuck ticks must bill at cadence.
+    const bot = makeBot()
+    bot.blockAt = () => null
+    const brain = { decide: async () => ({ action: 'follow', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.setCastle({ site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.castleWord = { kind: 'stone', left: 80 }
+    const recover = require('../src/behaviours/recover')
+    const origDecide = recover.decide
+    recover.decide = async () => ({ action: 'idle', sprint: false, source: 'stub-recover' })
+    try {
+      ctx.stuck = { by: 'test', key: 'test' }
+      await ticker.tick()
+      assert.ok(ctx.task && ctx.task.castle, 'hook ran on a recover tick')
+      ctx.stuck = { by: 'test', key: 'test' }
+      ctx.task.castle.lastAt = Date.now() - 5000
+      await ticker.tick()
+      assert.ok((ctx.task.castle.stallMs || 0) >= 4000, `recover tick billed at cadence, got ${ctx.task.castle.stallMs}`)
+    } finally {
+      recover.decide = origDecide
+    }
+  })
+
   it('wall-time gap clamps to 10 s per tick (verify core-2)', () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
-    taskMod.taskTick(bot, ctx, t0 + 3600000) // 1 h gap (idle/recover before the hook)
+    taskMod.taskTick(bot, ctx, t0 + 3600000) // 1 h gap (idle/reflex before the hook)
     assert.equal(ctx.task.castle.stallMs, taskMod.STALL_TICK_CLAMP_MS)
     assert.equal(taskLogs().length, 0, 'no instant L1 from a gap')
   })

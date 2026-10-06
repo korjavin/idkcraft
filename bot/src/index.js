@@ -678,6 +678,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       }
       // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
       stuck.update(bot, ctx)
+      // Task stall clock (idkcraft-vmzq.2): before recover and the
+      // inShelter/fight short-circuits so recover, fight and shelter time
+      // counts toward the stall at tick cadence (verify 02 body-1).
+      try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
       let decision = null
       if (ctx.stuck && !urgentFight(state)) {
         try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
@@ -710,9 +714,6 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           ctx.lastDecision = decision // gwvg: status() reads the follow/fight/idle source from here
         }
       }
-      // Task stall clock (idkcraft-vmzq.2): before the inShelter/fight
-      // short-circuits so fight and shelter time counts toward the stall.
-      try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
       if (ctx.paused) {
         // 'stop' landed during the brain await: discard the stale decision
         // so one in-flight tick cannot issue a follow goal after the park.
