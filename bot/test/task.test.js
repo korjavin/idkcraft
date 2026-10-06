@@ -22,11 +22,15 @@ function makeBot({ timeOfDay = 6000, items = null } = {}) {
     username: 'IdkBot',
     chats: [],
     chat(m) { this.chats.push(String(m)) },
-    entity: { position: pos(100, 64, 200) },
+    entity: { position: pos(100, 64, 200), onGround: true, isInWater: false },
     inventory: { items: () => inv },
     time: { timeOfDay, day: 1 },
+    health: 20,
+    food: 20,
+    oxygenLevel: 20,
     spawnPoint: pos(0, 64, 0),
     players: {},
+    entities: {},
     // Unloaded world (null): menuFact keeps the last progress/word instead
     // of rescanning, so the fake ctx values below stand.
     blockAt: () => null,
@@ -125,8 +129,12 @@ describe('task stall clock (vmzq.2)', () => {
     const origPrep = castle.prepTargets
     try {
       let n = 50
-      castle.prepTargets = () => new Array(n).fill({ idx: 1 })
+      castle.prepTargets = (bot, ctx) => {
+        ctx.castlePrep = { unknown: 0 }
+        return new Array(n).fill({ idx: 1 })
+      }
       const bot = makeBot()
+      bot.blockAt = () => ({ name: 'dirt', boundingBox: 'block' }) // loaded site
       const { ctx } = castleCtx(bot, { phase: 'prep', done: 0 })
       const t0 = 1000000000000
       taskMod.taskTick(bot, ctx, t0)
@@ -134,6 +142,39 @@ describe('task stall clock (vmzq.2)', () => {
       n = 40 // ten prep cells cleared
       taskMod.taskTick(bot, ctx, t0 + (14 * 60 + 1) * 1000)
       assert.equal(taskLogs().length, 0, 'prep work resets')
+    } finally {
+      castle.prepTargets = origPrep
+    }
+  })
+
+  it('unloaded prep scan holds the last value (core-2)', () => {
+    const castle = require('../src/behaviours/castle')
+    const origPrep = castle.prepTargets
+    try {
+      let n = 50
+      let unknown = 0
+      castle.prepTargets = (bot, ctx) => {
+        ctx.castlePrep = { unknown }
+        return new Array(n).fill({ idx: 1 })
+      }
+      const bot = makeBot()
+      bot.blockAt = () => ({ name: 'dirt', boundingBox: 'block' })
+      const { ctx } = castleCtx(bot, { phase: 'prep', done: 0 })
+      const t0 = 1000000000000
+      taskMod.taskTick(bot, ctx, t0)
+      assert.equal(ctx.task.castle.prepLeft, 50)
+      // Trip off site: partial scan reads short, held, clock advances.
+      unknown = 12
+      n = 5
+      taskMod.taskTick(bot, ctx, t0 + 60000)
+      assert.equal(ctx.task.castle.prepLeft, 50, 'partial scan does not move the baseline')
+      assert.equal(ctx.task.castle.stallMs, 60000)
+      // Back on site, same work left: no false progress.
+      unknown = 0
+      n = 50
+      taskMod.taskTick(bot, ctx, t0 + 120000)
+      assert.equal(ctx.task.castle.stallMs, 120000, 'return trip is not progress')
+      assert.equal(taskLogs().length, 0)
     } finally {
       castle.prepTargets = origPrep
     }
@@ -270,8 +311,8 @@ describe('task stall clock (vmzq.2)', () => {
 
   it('house task: placed cells, active while unbuilt', () => {
     const bot = makeBot()
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // loaded, nothing placed
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
-    // Fake a built-nothing site: blockAt reads air everywhere, so 0 placed.
     ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
     ticker.work()
     const ctx = bot._tickerCtx
@@ -282,5 +323,97 @@ describe('task stall clock (vmzq.2)', () => {
     for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 1)
     assert.match(bot.chats[0], /^house: no progress for 15 min at 0\/99/)
+  })
+
+  it('unloaded house holds the baseline (core-1)', () => {
+    const bot = makeBot()
+    let loaded = true
+    // 30 cells read placed while loaded (planks on the first 30 plan cells).
+    const build = require('../src/behaviours/build')
+    const home = { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 }
+    const plan = build.blueprintFor(home)
+    const placed = new Set(plan.slice(0, 30).map((c) => `${home.site.x + c.dx},${home.site.y + c.dy},${home.site.z + c.dz}`))
+    bot.blockAt = (p) => {
+      if (!loaded) return null
+      const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (placed.has(k)) return { name: 'oak_planks', boundingBox: 'block' }
+      return { name: 'air', boundingBox: 'empty' }
+    }
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome(home)
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    // Table (plan[0]) and door (plan[27]) are not planks: 28 of 30 read placed.
+    assert.equal(ctx.task.house.done, 28)
+    // Walk out of range: the reading would be 0/99, held instead.
+    loaded = false
+    taskMod.taskTick(bot, ctx, t0 + 61000) // past the 60 s cache
+    assert.equal(ctx.task.house.done, 28, 'unloaded read does not sink the baseline')
+    assert.equal(ctx.task.house.stallMs, 61000)
+    // Back on site, same 28: no false progress.
+    loaded = true
+    taskMod.taskTick(bot, ctx, t0 + 122000)
+    assert.equal(ctx.task.house.stallMs, 122000, 'return trip is not progress')
+    assert.equal(taskLogs().length, 0)
+  })
+
+  it('material oscillation does not reset (core-3 high-water)', () => {
+    const items = [{ name: 'cobblestone', count: 20 }]
+    const bot = makeBot({ items })
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    // Place 1 cobble (scaffold), dig it back: net zero.
+    items[0].count = 19
+    taskMod.taskTick(bot, ctx, t0 + 60000)
+    assert.equal(ctx.task.castle.stallMs, 60000, 'spend does not reset')
+    items[0].count = 20
+    taskMod.taskTick(bot, ctx, t0 + 120000)
+    assert.equal(ctx.task.castle.stallMs, 120000, 'net-zero regain does not reset')
+    // A genuine gain above the high-water mark resets.
+    items[0].count = 30
+    taskMod.taskTick(bot, ctx, t0 + 180000)
+    assert.equal(ctx.task.castle.stallMs, 0)
+  })
+
+  it('castle growth resets the house clock while the castle step runs (body-2)', () => {
+    const bot = makeBot()
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.setCastle({ site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.step = 'castle'
+    ctx.stepStatus = 'running'
+    ctx.castleWord = { kind: 'stone', left: 80 }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.active, 'house')
+    taskMod.taskTick(bot, ctx, t0 + 60000)
+    assert.equal(ctx.task.house.stallMs, 60000)
+    ctx.castle.progress.done = 9 // the castle grew under the castle step
+    taskMod.taskTick(bot, ctx, t0 + 120000)
+    assert.equal(ctx.task.house.stallMs, 0, 'castle progress resets the house clock')
+  })
+
+  it('runTick advances the stall on sheltered fight ticks (core-5)', async () => {
+    // Pins the hook position: the shelter/fight short-circuits must not skip it.
+    const bot = makeBot()
+    bot.blockAt = () => null
+    const brain = { decide: async () => ({ action: 'fight', sprint: false, source: 'stub' }) }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.setCastle({ site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.inShelter = true
+    ctx.castleWord = { kind: 'stone', left: 80 }
+    await ticker.tick()
+    assert.ok(ctx.task && ctx.task.castle, 'hook ran on the first tick')
+    ctx.task.castle.lastAt = Date.now() - 60000
+    await ticker.tick()
+    assert.ok((ctx.task.castle.stallMs || 0) >= 59000, `stall advanced on a sheltered fight tick, got ${ctx.task.castle.stallMs}`)
   })
 })

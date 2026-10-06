@@ -46,7 +46,25 @@ function eligible(bot, ctx) {
 }
 
 // Placed cells of the home plan (NOT nextCellIdx: an index treats skipped
-// cells as done). 99 blockAt max (v2), cached 60 s by the caller.
+// cells as done). 99 blockAt max (v2), cached 60 s by the caller. Loaded
+// only (core-1): unloaded cells read undone, so a partial read would sink
+// the baseline to 0 and the return trip would count as progress.
+function houseLoaded(bot, home) {
+  try {
+    const build = require('./behaviours/build')
+    for (const cell of build.blueprintFor(home)) {
+      try {
+        if (!build.cellLoaded(bot, home, cell)) return false
+      } catch (_) {
+        return false
+      }
+    }
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 function houseProgress(bot, home) {
   const build = require('./behaviours/build')
   const plan = build.blueprintFor(home)
@@ -207,9 +225,22 @@ function castleCurrent(bot, ctx, st, now) {
   } catch (_) { /* progress best-effort */ }
   try {
     if (st.phase === 'prep') {
-      const castle = require('./behaviours/castle')
-      const list = castle.prepTargets(bot, ctx, st, now)
-      out.prepLeft = Array.isArray(list) ? list.length : 0
+      // Loaded site only (core-2): unloaded columns are skipped from the
+      // scan, so a partial scan reads short and a trip off site would count
+      // as progress. Off-site the last value stands.
+      let loaded = false
+      try {
+        const Vec3 = require('vec3')
+        const blueprint = require('./castle')
+        const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+        loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+      } catch (_) { loaded = false }
+      if (loaded) {
+        const castle = require('./behaviours/castle')
+        const list = castle.prepTargets(bot, ctx, st, now)
+        const scan = ctx && ctx.castlePrep
+        if (scan && !scan.unknown && Array.isArray(list)) out.prepLeft = list.length
+      }
     } else {
       out.prepLeft = 0
     }
@@ -237,8 +268,10 @@ function castleProgressed(state, cur) {
   return false
 }
 
-// Regress moves the baseline (a creeper hole is repaired, spent material is
-// re-gathered) without resetting the clock — only growth resets.
+// Regress moves the baseline (a creeper hole is repaired) without resetting
+// the clock — only growth resets. matHave is a high-water mark (core-3): it
+// never sinks, so a net-zero place/dig oscillation does not count as
+// progress; only gains above the previous high reset.
 function castleSinkBaseline(state, cur) {
   if (typeof cur.done === 'number' && (typeof state.done !== 'number' || cur.done < state.done)) state.done = cur.done
   if (typeof cur.total === 'number') state.total = cur.total
@@ -247,9 +280,8 @@ function castleSinkBaseline(state, cur) {
     state.matKind = cur.matKind
     state.matHave = cur.matHave
     state.matLeft = cur.matLeft
-  } else {
-    if (typeof cur.matHave === 'number' && (typeof state.matHave !== 'number' || cur.matHave < state.matHave)) state.matHave = cur.matHave
-    if (typeof cur.matLeft === 'number' && (typeof state.matLeft !== 'number' || cur.matLeft > state.matLeft)) state.matLeft = cur.matLeft
+  } else if (typeof cur.matLeft === 'number' && (typeof state.matLeft !== 'number' || cur.matLeft > state.matLeft)) {
+    state.matLeft = cur.matLeft
   }
 }
 
@@ -278,12 +310,18 @@ function taskTick(bot, ctx, now = Date.now()) {
         if (cache && typeof cache.at === 'number' && now - cache.at < TASK_HOUSE_CACHE_MS &&
           typeof cache.done === 'number' && typeof cache.total === 'number') {
           houseCur = { done: cache.done, total: cache.total }
-        } else {
+          metrics.taskProgress.set({ task: 'house' }, houseCur.done)
+          metrics.taskTotal.set({ task: 'house' }, houseCur.total)
+        } else if (houseLoaded(bot, home)) {
           houseCur = houseProgress(bot, home)
           t.houseCache = { at: now, done: houseCur.done, total: houseCur.total }
+          metrics.taskProgress.set({ task: 'house' }, houseCur.done)
+          metrics.taskTotal.set({ task: 'house' }, houseCur.total)
+        } else if (cache && typeof cache.done === 'number' && typeof cache.total === 'number') {
+          // Unloaded (core-1): hold the last loaded reading for the clock;
+          // the gauges keep their last values instead of dropping to 0.
+          houseCur = { done: cache.done, total: cache.total }
         }
-        metrics.taskProgress.set({ task: 'house' }, houseCur.done)
-        metrics.taskTotal.set({ task: 'house' }, houseCur.total)
       }
     } catch (_) { /* house gauges best-effort */ }
 
@@ -306,9 +344,12 @@ function taskTick(bot, ctx, now = Date.now()) {
           matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft,
           stallMs: 0, lastAt: now, lastL1At: null, fails: [],
         }
+      } else if (houseCur) {
+        t.house = { done: houseCur.done, total: houseCur.total, stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
       } else {
-        const cur = houseCur || { done: 0, total: 0 }
-        t.house = { done: cur.done, total: cur.total, stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+        // Unloaded and never read (core-1): wait for a loaded reading
+        // instead of baselining 0/0.
+        t.house = { stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
       }
       setStallGauge(kind, 0)
       return
@@ -379,7 +420,13 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
 
     // House: placed cells only.
-    const cur = houseCur || { done: 0, total: 0 }
+    const cur = houseCur
+    if (!cur || typeof cur.done !== 'number') {
+      // Unloaded (core-1): hold the clock on the last loaded baseline.
+      state.lastAt = now
+      setStallGauge(kind, state.stallMs || 0)
+      return
+    }
     if (typeof state.done !== 'number') {
       state.done = cur.done
       state.total = cur.total
@@ -387,6 +434,28 @@ function taskTick(bot, ctx, now = Date.now()) {
       setStallGauge(kind, state.stallMs || 0)
       return
     }
+    // Castle work while the house is unbuilt (body-2): a growing castle
+    // resets the house clock too, so the L1 does not blame the house while
+    // the castle step owns the body.
+    try {
+      const step = ctx && ctx.step
+      if ((step === 'castle' || step === 'castlefetch') && ctx.castle && ctx.castle.site) {
+        const ccur = castleCurrent(bot, ctx, ctx.castle, now)
+        if (!t.castleWatch || typeof t.castleWatch !== 'object') {
+          t.castleWatch = { done: ccur.done, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft }
+        } else if (typeof ccur.done === 'number' && typeof t.castleWatch.done === 'number' && castleProgressed(t.castleWatch, ccur)) {
+          t.castleWatch = { done: ccur.done, total: ccur.total, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft }
+          state.stallMs = 0
+          state.lastAt = now
+          state.lastL1At = null
+          state.fails = []
+          setStallGauge(kind, 0)
+          return
+        } else {
+          castleSinkBaseline(t.castleWatch, ccur)
+        }
+      }
+    } catch (_) { /* castle watch best-effort */ }
     if (cur.done > state.done) {
       state.done = cur.done
       state.total = cur.total
