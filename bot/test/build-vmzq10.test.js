@@ -95,6 +95,9 @@ describe('vmzq.10 isComplete: done means placed, skips never count', () => {
   })
 
   it('one missing cell is incomplete', () => {
+    // Skip interplay (a skip never completes a hole, a stale skip over a
+    // placed cell still completes) is pinned at the build level below —
+    // isComplete takes no skip list, so units here cannot exercise it.
     const world = makeWorld()
     const bot = mockBot(world)
     const home = goal.siteFor(bot, pos(0, 64, 0))
@@ -102,26 +105,6 @@ describe('vmzq.10 isComplete: done means placed, skips never count', () => {
     const roof = plan.findIndex((c) => c.kind === 'planks' && c.dy === 2)
     paintHouse(world, home, [roof])
     assert.equal(build.isComplete(bot, home), false)
-  })
-
-  it('a skipped-but-missing cell keeps the house incomplete', () => {
-    const world = makeWorld()
-    const bot = mockBot(world)
-    const home = goal.siteFor(bot, pos(0, 64, 0))
-    const plan = build.blueprintFor(home)
-    const roof = plan.findIndex((c) => c.kind === 'planks' && c.dy === 2)
-    paintHouse(world, home, [roof])
-    // The verdict follows the world, not the bookkeeping: a skip never
-    // completes a hole (prod: 30 skips read as done).
-    assert.equal(build.isComplete(bot, home), false)
-  })
-
-  it('a stale skip over a placed cell still reads complete', () => {
-    const world = makeWorld()
-    const bot = mockBot(world)
-    const home = goal.siteFor(bot, pos(0, 64, 0))
-    paintHouse(world, home) // every cell physically placed
-    assert.equal(build.isComplete(bot, home), true)
   })
 
   it('a correctly empty doorway-interior cell is not a hole (8si)', () => {
