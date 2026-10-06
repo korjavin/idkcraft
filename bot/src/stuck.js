@@ -14,6 +14,16 @@ const recover = require('./behaviours/recover')
 const MOVE_TOLERANCE = 0.5 // the single displacement tolerance, every stall budget
 const STUCK_RESETS_ENTRY = 2 // fast entry: 'stuck' resets with no displacement
 const PLACE_ERRORS_ENTRY = 3 // fast entry: consecutive place_error resets
+// Dig hold (uqhp): still ticks while the executor works a planned dig
+// (bot.targetDigBlock set) before the slow count resumes. Barehand granite
+// runs ~8 s a block and multi-block legs pass 30 stills with zero
+// displacement (CLUSTER-BARE: 7 barehand cells, ~54 s of digging per green
+// run) — a wedge mid-dig kills the dig (the episode clears the goal and
+// break progress resets), walks away, pages, and re-digs from scratch.
+// 2x the slow entry: measured legs run <= ~25 s of digging, so the hold
+// covers any working leg while a pathological dig (unbreakable target,
+// endless flail) still wedges one minute late, not never.
+const DIG_STILLS_CAP = 60
 const LATCH_CLEAR = 4 // release-latch radius: relocation past it re-arms
 // Still ticks after a 3D jump during which the fast entry holds fire: tower
 // attempts apex every jump, so a reset streak alone must not wedge
@@ -35,6 +45,16 @@ function bodyPos(bot) {
 function movingNow(bot) {
   try {
     return !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
+  } catch (_) { return false }
+}
+
+// Active lib dig (uqhp): bot.targetDigBlock is the block mineflayer is
+// currently breaking (the executor sets it for plan toBreak digs; behaviour
+// bot.dig calls set it too). Mocks and pre-dig ticks read nothing —
+// fail-open counts as before, so digging is never assumed.
+function diggingNow(bot) {
+  try {
+    return !!(bot && bot.targetDigBlock)
   } catch (_) { return false }
 }
 
@@ -297,6 +317,7 @@ function zeroCounters(ctx) {
   ctx.stuckResets = 0
   ctx.placeErrors = 0
   ctx.jumpCooldown = 0
+  ctx.digStills = 0
 }
 
 // Read-only verdict: the ONLY stuck state behaviours may consult.
@@ -381,7 +402,13 @@ function update(bot, ctx) {
       ctx.stuckTicks = 0
       ctx.stuckState = 'MOVING'
     } else {
-      ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+      // Dig hold (uqhp): an active dig is work, not stuck — stills accrue on
+      // a separate budget instead of the slow count, so a working multi-block
+      // dig never wedges mid-dig (the episode would clear the goal and break
+      // progress resets). The fast entry still consults below: lib complaints
+      // wedge even mid-dig, and past the cap the slow count resumes.
+      if (diggingNow(bot) && (ctx.digStills || 0) < DIG_STILLS_CAP) ctx.digStills = (ctx.digStills || 0) + 1
+      else ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       ctx.stuckState = 'SUSPECT'
       if (!raiseExempt(ctx, bot)) {
         const fast = moving && fastKey(ctx) && (ctx.jumpCooldown || 0) <= 0 &&
@@ -429,6 +456,7 @@ module.exports = {
   MOVE_TOLERANCE,
   STUCK_RESETS_ENTRY,
   PLACE_ERRORS_ENTRY,
+  DIG_STILLS_CAP,
   UNSEEN_HOME_TICKS,
   ownerOf,
   verdict,
