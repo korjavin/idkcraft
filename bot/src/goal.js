@@ -1818,11 +1818,15 @@ async function decide(bot, ctx) {
   // build — a failed:no-site hold that no longer binds (chunks loaded and
   // a site validates, or relocation past REFAIL_DIST) retires and forces
   // one fresh pick. With the text standing, the replay paths would keep
-  // the step that took over and the valid site never gets seen.
+  // the step that took over and the valid site never gets seen. Gated on
+  // the failure text still standing (revmux 01 majors): a changed text
+  // releases through the normal hold path — retiring here would preempt a
+  // forage leg past the 4dse flicker hold and delete the record the
+  // pending-house stall clock reads, resetting it on every bucket flip.
   let siteRetry = false
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
-    if (sf && sf.status === 'failed:no-site' && !failHolds(ctx, 'build', text, bot)) {
+    if (sf && sf.status === 'failed:no-site' && sf.text === text && !failHolds(ctx, 'build', text, bot)) {
       delete ctx.stepFail.build
       siteRetry = true
     }

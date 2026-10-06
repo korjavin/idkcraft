@@ -14,6 +14,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const goal = require('../src/goal')
 const taskMod = require('../src/task')
+const resources = require('../src/resources')
 const { createTicker } = require('../src/index')
 
 function pos(x, y, z) {
@@ -220,5 +221,27 @@ describe('vmzq.16 homeless no-site joins the stall clock', () => {
     assert.equal(bot.chats.filter((c) => c.includes('parked')).length, 0)
     assert.equal(bot.chats.length, 1, 'identical diagnosis stays deduped')
     assert.equal(ctx.home, undefined, 'no home founded by the clock')
+  })
+
+  it('known flips interleaved with decide never reset the stall clock', async () => {
+    // Revmux 01 majors: retiring the no-site record on any text change
+    // nulled the task between ticks (taskTick runs before decide), so
+    // every bucket flip re-baselined the clock and the L1 never fired.
+    const { bot, ctx } = homelessNoSite()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let last = 0
+    for (let s = 1; s <= 12; s++) {
+      if (s % 2 === 1) resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
+      else resources.forget(ctx, 5, 60, 0)
+      taskMod.taskTick(bot, ctx, t0 + s * 1000)
+      assert.equal(ctx.task.active, 'house', `tick ${s}: task stays pending-house`)
+      const stall = ctx.task.house.stallMs
+      assert.ok(stall >= last, `tick ${s}: stall keeps growing`)
+      last = stall
+      await goal.decide(bot, ctx)
+      assert.equal(ctx.stepFail.build && ctx.stepFail.build.status, 'failed:no-site', `tick ${s}: record survives the flip`)
+    }
+    assert.equal(last, 12000, '12 eligible seconds bill 12 s, no reset')
   })
 })
