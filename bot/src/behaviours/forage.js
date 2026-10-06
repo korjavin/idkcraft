@@ -692,7 +692,10 @@ function forage(bot, ctx, target, state) {
       const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
       if (!ent) {
         const found = (() => { try { return bring.findAnimal(bot, t.drop) } catch (_) { return null } })()
-        if (!found || found.name !== t.name) {
+        // Parked re-target (vmzq.3 R4): the in-leg find must pass the
+        // same gate as planForage, or each kill re-centers a 48-block
+        // hop away from home (03 major). replan already applies it.
+        if (!found || found.name !== t.name || !parkedHuntOk(bot, ctx, found)) {
           if (!replan(bot, ctx, f, bp)) return
           return
         }

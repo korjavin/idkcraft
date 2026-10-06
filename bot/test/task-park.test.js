@@ -366,6 +366,34 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.ok(forageMod.planForage(bot, ctx), 'unparked bot hunts opportunistically')
   })
 
+  it('parked food leg ends instead of re-targeting far (03 major)', () => {
+    // Mid-leg state: first cow killed and picked up, one beef short of
+    // the batch. The next same-drop cow is 30 blocks from the bot but
+    // ~300 from the castle anchor; the only remembered cell is far too.
+    const bot = makeBot()
+    bot.entity.position = pos(300, 64, 300)
+    bot.entities = { 9: { id: 9, name: 'cow', position: pos(320, 64, 310), isValid: true } }
+    const { ctx } = castleCtx(bot)
+    resources.noteSpots(ctx, [{ x: 400, y: 60, z: 500, name: 'oak_log' }], Date.now())
+    ctx.castle.parked = true
+    ctx.castle.taskPark = { at: 1000000000000, auto: true, diag: 'x' }
+    ctx.forage = { phase: 'find', target: { kind: 'food', name: 'cow', id: null, drop: 'beef', want: 8 }, leg: null, via: null, stalls: 0, streak: 1, lastBotPos: null, startInv: {}, drops: { beef: true }, announced: true }
+    ctx.stepStatus = 'running'
+    forageMod(bot, ctx, null, {})
+    assert.equal(ctx.forage, null, 'leg finished instead of adopting the far cow')
+    assert.ok(ctx.stepStatus.startsWith('failed:'), `leg failed, got ${ctx.stepStatus}`)
+    // Unparked, the same state re-targets onto the cow and keeps hunting.
+    const bot2 = makeBot()
+    bot2.entity.position = pos(300, 64, 300)
+    bot2.entities = { 9: { id: 9, name: 'cow', position: pos(320, 64, 310), isValid: true } }
+    const { ctx: ctx2 } = castleCtx(bot2)
+    ctx2.forage = { phase: 'find', target: { kind: 'food', name: 'cow', id: null, drop: 'beef', want: 8 }, leg: null, via: null, stalls: 0, streak: 1, lastBotPos: null, startInv: {}, drops: { beef: true }, announced: true }
+    ctx2.stepStatus = 'running'
+    forageMod(bot2, ctx2, null, {})
+    assert.equal(ctx2.forage.target.id, 9, 'unparked leg adopts the cow')
+    assert.equal(ctx2.forage.phase, 'walk')
+  })
+
   it('owner castle stop keeps the pre-house stranded release (core-1)', () => {
     const bot = makeBot()
     bot.entity.position = pos(0, 64, 0)
