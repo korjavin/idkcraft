@@ -945,6 +945,22 @@ describe('gave-up marks danger (mnx)', () => {
   })
 })
 
+describe('release resets the dig budget (uqhp round 2)', () => {
+  it('gave-up and done both zero a spent 60-tick budget', () => {
+    // A dig that wedges at the cap releases with digStills spent; without
+    // the reset the next leg wedges after 30 ticks (the pre-fix shape).
+    for (const how of ['gave-up', 'done']) {
+      const bot = { pathfinder: { goal: null }, entity: { position: pos(10, 64, 0) }, username: 'IdkBot' }
+      const ctx = { digStills: 60, stuckTicks: 30 }
+      recover.setStuck(ctx, 'follow', { x: 10, y: 64, z: 0 }, 'follow:Steve')
+      ctx.recovery = { action: 'sidestep', status: 'done' }
+      recover.release(bot, ctx, how)
+      assert.equal(ctx.digStills, 0, how)
+      assert.equal(ctx.stuckTicks, 0, how)
+    }
+  })
+})
+
 describe('repeat gave-up pages the owner (rw4.9)', () => {
   function pageBot(at, players) {
     return {

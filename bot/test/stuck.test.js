@@ -254,6 +254,65 @@ describe('stuck update: slow entry', () => {
   })
 })
 
+describe('stuck update: dig hold (uqhp)', () => {
+  function diggingBot() {
+    const target = { username: 'P', id: 7, position: pos(10, 64, 0) }
+    const bot = mockBot({ moving: true, goal: followGoal(target) })
+    bot.targetDigBlock = { name: 'granite', position: pos(1, 64, 0) }
+    return bot
+  }
+
+  it('stills accrue on the dig budget, never the slow count, while the executor digs', () => {
+    const bot = diggingBot()
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    for (let i = 0; i < 45; i++) stuck.update(bot, ctx)
+    assert.equal(ctx.digStills, 45)
+    assert.equal(ctx.stuckTicks || 0, 0)
+    assert.equal(ctx.stuck || null, null)
+    assert.equal(stuck.verdict(ctx).state, 'SUSPECT')
+  })
+
+  it('past the cap the slow count resumes, so a pathological dig still wedges', () => {
+    const bot = diggingBot()
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    const cap = capture()
+    try {
+      for (let i = 0; i < stuck.DIG_STILLS_CAP; i++) stuck.update(bot, ctx)
+      assert.equal(ctx.stuck || null, null, 'no wedge inside the dig budget')
+      assert.equal(ctx.stuckTicks || 0, 0)
+      for (let i = 0; i < recover.STUCK_TICKS_ENTRY; i++) stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK')
+    assert.equal(ctx.stuck && ctx.stuck.by, 'follow')
+  })
+
+  it('progress zeroes the dig budget (tunnel legs each get a fresh hold)', () => {
+    const bot = diggingBot()
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    for (let i = 0; i < 20; i++) stuck.update(bot, ctx)
+    assert.equal(ctx.digStills, 20)
+    bot.entity.position = pos(3, 64, 0) // mount between dig legs
+    stuck.update(bot, ctx)
+    assert.equal(ctx.digStills, 0)
+    assert.equal(ctx.stuckState, 'MOVING')
+  })
+
+  it('the fast entry still fires mid-dig on lib complaints', () => {
+    const bot = diggingBot()
+    const ctx = { lastGoalKey: 'follow:P', lastPos: { x: 0, y: 64, z: 0 } }
+    const cap = capture()
+    try {
+      stuck.update(bot, ctx)
+      stuck.countPathReset(ctx, 'stuck')
+      stuck.update(bot, ctx)
+      stuck.countPathReset(ctx, 'stuck')
+      stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK')
+    assert.equal(ctx.stuck && ctx.stuck.by, 'follow')
+  })
+})
+
 describe('stuck update: fast entry', () => {
   function wedgedBot(key, goal) {
     const target = { username: 'P', id: 7, position: pos(20, 64, 0) }

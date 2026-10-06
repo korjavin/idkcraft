@@ -1859,6 +1859,9 @@ function release(bot, ctx, how) {
   ctx.placeErrors = 0
   ctx.stuckTicks = 0
   ctx.jumpCooldown = 0
+  // uqhp round 2: the streak family resets together — a stale 60-tick budget
+  // would wedge the next dig leg after 30 ticks (the pre-fix shape).
+  ctx.digStills = 0
   ctx.stuck = null
   ctx.recovery = null
   // Terminal dones are already counted by decide() per finished primitive;
