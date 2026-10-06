@@ -282,6 +282,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
   const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
+  // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
+  // review tells from=IdkTester apart from live players. No metric label.
+  console.log(`chat from=${playerName} msg=${msg}`)
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seen = bot.players && bot.players[playerName] && bot.players[playerName].entity

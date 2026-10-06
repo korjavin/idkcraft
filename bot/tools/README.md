@@ -365,3 +365,40 @@ never drift. `RIG_ID=auto` takes the first free of `RIG_SLOTS` (default
 `0 a b`, `0` = default rig) — use it when several agents share the box.
 Each Paper takes ~1.5 GB; three fit Docker's 8 GB next to the stand. Runs
 from one worktree in parallel need distinct `REPLAY_OUT`.
+
+## Puppet player (`puppet.js`, idkcraft-jlw7)
+
+Agents run real prod play sessions without the owner: the puppet joins as
+`PUPPET_NAME` (default `IdkTester`) and takes the owner's place at the
+keyboard. Commands go through the real chat path (entity-needing orders work)
+and the puppet counts as roster for work mode. It runs from the agent's
+machine — never add it to `docker-compose.yml` (shared contract).
+
+```sh
+node bot/tools/puppet.js --host=<mc-host> --port=<mc-port> --http-port=18080
+```
+
+Control is HTTP on `localhost` only: `POST /say {text}`, `POST /goto
+{x,y,z}` or `{player}`, `POST /look {yaw,pitch}`, `POST /stop`, `GET
+/state[?n=N]`, `POST /quit`. Every control call and every chat line heard
+appends to the JSONL transcript. `/goto` never digs or towers (a walk through
+a wall fails instead of griefing prod).
+
+| var | default | meaning |
+| --- | ------- | ------- |
+| `PUPPET_HOST` / `--host` | `localhost` | MC Java host (env/argv only — never commit prod's) |
+| `PUPPET_PORT` / `--port` | `25565` | MC Java port |
+| `PUPPET_NAME` / `--name` | `IdkTester` | puppet username (1..16 chars, whitelisted on prod) |
+| `BOT_USERNAME` / `--bot-name` | `IdkBot` | the prod bot (ignored in the roster, like `index.js:505`) |
+| `PUPPET_HTTP_PORT` / `--http-port` | `18080` | localhost control port |
+| `PUPPET_LOG` / `--log` | `/tmp/idkcraft-puppet-<pid>.jsonl` | JSONL transcript path |
+| `PUPPET_IDLE_MS` / `--idle-ms` | `900000` | quit when no control call arrives for this long (min 1000) |
+
+Yield to humans (owner requirement): any roster entry other than the puppet
+and `BOT_USERNAME` (exact match — a Bedrock `.Name` is just a roster key)
+makes the puppet say goodbye and leave within 2 s; HTTP stays up and control
+calls return `409 human online`. A human already on at connect refuses with
+exit 2 and no join. Exit codes: 0 = `/quit` or idle timeout, 1 = error,
+2 = human online. Agent manual: `.claude/skills/idkcraft-prod-play/SKILL.md`.
+The bot tags incoming chat (`chat from=<name> msg=<msg>` in `src/chat.js`),
+so session review tells `from=IdkTester` from live players.
