@@ -283,6 +283,10 @@ async function main() {
     }
   })
   bot.on('playerLeft', () => scanRoster())
+  // Mineflayer re-emits spawn after every death-respawn: only the first one
+  // owns the idle clock (revmux 01 core-1) — a puppet dying every few
+  // minutes must still idle-quit for its crashed agent.
+  let spawnedOnce = false
   bot.on('spawn', () => {
     scanRoster()
     const humans = findHumans(lastRoster, cfg.botName, cfg.name)
@@ -292,6 +296,11 @@ async function main() {
       return
     }
     state = 'online'
+    if (spawnedOnce) {
+      logLine({ dir: 'event', event: 'respawn', detail: 'auto-respawned, idle clock untouched' })
+      return
+    }
+    spawnedOnce = true
     // Prod-safe feet: the puppet walks prod ground, so it never digs or
     // towers — a /goto through a wall fails instead of griefing.
     try {
