@@ -20,6 +20,7 @@ const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
+const taskMod = require('./task')
 
 // How long a recover outcome stays reportable in status (01 body-2): the
 // stamp never clears, so without a window every status would cite it.
@@ -92,6 +93,7 @@ function createOrders(box) {
         }
       } catch (_) { keepAt = {} }
       ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     },
     // Castle project (g0z.3): a new order or 'castle forget' (null). The
     // executor's per-site scratch resets with it; null persists as a drop.
@@ -101,6 +103,7 @@ function createOrders(box) {
       ctx.castleCursor = 0; ctx.castleScanKey = null; ctx.castleScanAt = 0; ctx.castleFails = null; ctx.castleCell = null; ctx.castleFar = null; ctx.castleGoalIdx = -1; ctx.castleSelfOcc = null; ctx.castleWord = null; ctx.castlePrepSaid = false; ctx.castlePrep = null
       try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castle } catch (_) { /* hold best-effort */ }
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     },
     // Disk memory (idkcraft-hlk): explicit seams for load-before-adopt and
     // save-on-exit; the periodic tick save covers the rest.
@@ -619,55 +622,27 @@ function createOrders(box) {
           if (ctx.restWhy) line += ` resting because ${ctx.restWhy}`
         } else if (goal.STEP_ORDER.includes(step)) {
           // Higher-priority steps this pick skipped, with their reasons.
-          let names = []
+          // Shared with the L1 diagnosis (task.js).
           try {
             const text = goal.goalText(facts, ctx.home)
-            names = Object.keys(goal.MENU).filter((n) => {
-              try {
-                if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
-              } catch (_) {
-                return false
-              }
-              return !goal.failHolds(ctx, n, text, bot)
-            })
-          } catch (_) { names = [] }
-          let skipped = ''
-          try { skipped = goal.restWhy(facts, bot, ctx, names, step) } catch (_) { skipped = '' }
-          if (skipped && skipped !== 'model choice') line += `; skipped: ${skipped}`
+            const sk = taskMod.skippedReason(bot, ctx, facts, text, step)
+            if (sk) line += `; ${sk}`
+          } catch (_) { /* skipped best-effort */ }
         }
         lines.push(line)
       }
+      // Task line (vmzq.2): active build task with its stall, when one exists.
+      try {
+        const tl = taskMod.taskLine(ctx)
+        if (tl) lines.push(tl)
+      } catch (_) { /* task line best-effort */ }
       // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
       const wrong = []
       try {
-        const fails = ctx.stepFail && typeof ctx.stepFail === 'object' ? Object.keys(ctx.stepFail) : []
-        if (fails.length > 0) {
-          const text = goal.goalText(facts, ctx.home)
-          // Only live holds read as blocked (01 core-1): a released record
-          // (new facts, relocated body) no longer blocks its step.
-          const holding = fails.filter((n) => {
-            try {
-              if (goal.failHolds(ctx, n, text, bot)) return true
-            } catch (_) { /* fall through to the gather latch */ }
-            try {
-              return n === 'gather' && goal.gatherFailedHolds(ctx.gather, facts.logs, bot)
-            } catch (_) {
-              return false
-            }
-          })
-          if (holding.length > 0) {
-            const held = holding.map((n) => {
-              let w = null
-              try { w = goal.stepWhy(n, facts, bot, ctx, text) } catch (_) { w = null }
-              if (!w) {
-                const rec = ctx.stepFail[n] || {}
-                w = rec.status === 'done' ? `${n} holds after an unchanged done` : `${n} holds after failure`
-              }
-              return w
-            })
-            wrong.push(`blocked: ${held.join(', ')}`)
-          }
-        }
+        // Only live holds read as blocked (01 core-1). Shared with task.js.
+        const text = goal.goalText(facts, ctx.home)
+        const bl = taskMod.blockedReason(bot, ctx, facts, text)
+        if (bl) wrong.push(bl)
       } catch (_) { /* blocked best-effort */ }
       let stuckState = 'MOVING'
       try { stuckState = verdict(ctx).state || 'MOVING' } catch (_) { /* moving default */ }

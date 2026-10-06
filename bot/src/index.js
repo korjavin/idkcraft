@@ -34,6 +34,7 @@ const buildMod = require('./behaviours/build')
 const castleMod = require('./behaviours/castle')
 const goal = require('./goal')
 const memory = require('./memory')
+const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 const BEHAVIOURS = {
   fight: fightMod,
@@ -278,6 +279,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.forageFinal = null
     ctx.stepFail = {} // atl.4 hold is per-episode too: a stale failure must not veto the ordered retry
     ctx.resumeWork = false
+    try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
   }
 
   function stopOnce() {
@@ -676,6 +678,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       }
       // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
       stuck.update(bot, ctx)
+      // Task stall clock (idkcraft-vmzq.2): before recover and the
+      // inShelter/fight short-circuits so recover, fight and shelter time
+      // counts toward the stall at tick cadence (verify 02 body-1).
+      try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
       let decision = null
       if (ctx.stuck && !urgentFight(state)) {
         try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }

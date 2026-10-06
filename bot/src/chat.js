@@ -13,6 +13,7 @@ const homeMod = require('./behaviours/home')
 const { denyReason } = require('./behaviours/util')
 const blueprint = require('./castle')
 const castleMod = require('./behaviours/castle')
+const taskMod = require('./task')
 const Vec3 = require('vec3')
 
 // Targets declined as too deep, held per player for an explicit 'lead
@@ -572,6 +573,7 @@ function castleChat(bot, ticker, playerName, cmd) {
   if (cmd === 'castle stop') {
     st.parked = true
     ticker.saveMemory()
+    try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     return 'castle parked — say castle go to resume'
   }
   if (cmd === 'castle go') {
