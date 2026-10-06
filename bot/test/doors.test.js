@@ -261,8 +261,9 @@ describe('doors: shared open/lane (idkcraft-6xno)', () => {
 describe('doors: opener reflex (idkcraft-6xno)', () => {
   // Mock bot over a live door cell: blockAt reads the mutable state,
   // activateBlock flips it.
-  function mockBot({ door = { open: false, name: 'oak_door', facing: 'north' }, at = { x: 0.5, y: 64, z: -0.5 }, moving = true } = {}) {
+  function mockBot({ door = { open: false, name: 'oak_door', facing: 'north' }, at = { x: 0.5, y: 64, z: -0.5 }, moving = true, cell = null } = {}) {
     const st = { ...door }
+    const dc = cell || { x: 0, y: 64, z: -2 }
     const bot = {
       entity: { position: { ...at } },
       toggles: 0,
@@ -272,11 +273,11 @@ describe('doors: opener reflex (idkcraft-6xno)', () => {
         const x = Math.floor(p.x)
         const y = Math.floor(p.y)
         const z = Math.floor(p.z)
-        if (x === 0 && (y === 64 || y === 65) && z === -2) {
+        if (x === dc.x && (y === dc.y || y === dc.y + 1) && z === dc.z) {
           return {
             name: st.name,
             position: new Vec3(x, y, z),
-            getProperties: () => ({ open: st.open, facing: st.facing, hinge: 'left', half: y === 64 ? 'lower' : 'upper' }),
+            getProperties: () => ({ open: st.open, facing: st.facing, hinge: 'left', half: y === dc.y ? 'lower' : 'upper' }),
           }
         }
         return { name: 'air', position: new Vec3(x, y, z), getProperties: () => ({}) }
@@ -391,6 +392,32 @@ describe('doors: opener reflex (idkcraft-6xno)', () => {
       cap.release()
     }
     assert.equal(aheadToggles, 1, 'shut door ahead starved by the open one underfoot')
+  })
+
+  it('in-doorway: the JR-BUILD pocket-pin stance opens via the feet seed (idkcraft-6x7.15)', () => {
+    // Run11 forensics (pre-#298, gitsha=b70e367): the body stood EXACTLY on
+    // the doorway node (-140.5,72,-76.5, the door cell centre — exact .5
+    // boundaries), the lib had trimmed the reached head so the window held
+    // only the past-door node (-140.5,72,-77.5, air): the scan saw no door,
+    // no click fired for 8 futility cycles, the raise paged. The feet seed
+    // opens from the feet read alone; with it skipped this stance toggles
+    // nothing (mutated to prove it).
+    const bot = mockBot({
+      door: { open: false, name: 'acacia_door', facing: 'north' },
+      at: { x: -140.5, y: 72, z: -76.5 },
+      cell: { x: -141, y: 72, z: -77 },
+    })
+    const ctx = { lastPathNodes: [{ x: -140.5, y: 72, z: -77.5 }] }
+    const cap = capture()
+    try {
+      doors.doorReflex(bot, ctx)
+    } finally {
+      cap.release()
+    }
+    assert.equal(bot.toggles, 1, 'shut door under the feet never opened')
+    assert.equal(bot.state.open, true, 'door still shut')
+    assert.ok(ctx.doorOpened instanceof Map && ctx.doorOpened.has('-141,72,-77'), 'untracked')
+    assert.ok(cap.logged.some((l) => l === 'door open at -141 72 -77'), cap.logged.join('\n'))
   })
 })
 
