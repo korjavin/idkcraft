@@ -75,6 +75,11 @@ function bestMemoryCell(bot, ctx, bp) {
   if (!mem || !(mem.items instanceof Map) || mem.items.size === 0) return null
   let skip = null
   try { skip = (ctx && ctx.forageSkip) || null } catch (_) { skip = null }
+  // Wood ceiling (g0z.26): past the cap remembered logs are not forageable —
+  // ore and the food fallback still plan, so a capped pack digs stone instead
+  // of chopping. Deferred require (goal.js loads forage at top).
+  let capped = false
+  try { capped = !!require('./stockpile').woodCapped(bot, ctx) } catch (_) { capped = false }
   let best = null
   let bestRank = Infinity
   let bestDist = Infinity
@@ -83,6 +88,7 @@ function bestMemoryCell(bot, ctx, bp) {
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
+    if (rank === 3 && capped) continue
     if (rank <= 2 && !bring.hasPickaxe(bot, item.name)) continue
     const d = dist(bp, item)
     if (rank < bestRank || (rank === bestRank && d < bestDist)) {

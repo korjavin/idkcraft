@@ -48,6 +48,62 @@ function spotsFor(home) {
   return home && home.v === 2 ? CHEST_SPOTS_V2 : CHEST_SPOTS
 }
 
+// Wood ceiling (idkcraft-g0z.26): while the castle is open the pack keeps
+// one stack of planks and one gather load of logs — enough for any single
+// wood batch (planks 32 + fence/door/chest crafts, frame 14) plus the
+// sticks/torches the other steps drink from it — and banks the rest. Before,
+// the castle reserve kept every plank packed while forage chopped and craft
+// converted without a limit: prod held ~700 planks in 11 slots, the pack
+// filled, and dig drops were lost. LOG_KEEP mirrors goal NEED_LOGS (no
+// shared import: this module must not require goal — goal requires this
+// module). The ceiling only applies on a built home: pre-house the budget
+// needs every plank packed.
+const PLANK_KEEP = 64
+const LOG_KEEP = 14
+function castleWoodOpen(ctx) {
+  try {
+    return !!(ctx && ctx.castle && ctx.castle.phase !== 'complete' && ctx.home && ctx.home.built)
+  } catch (_) {
+    return false
+  }
+}
+// True when the pack holds wood past the ceiling (goal craft/forage gates,
+// craft conversion guard). Fail-open: an unreadable inventory reads empty,
+// exactly the old behaviour.
+function woodCapped(bot, ctx) {
+  try {
+    if (!castleWoodOpen(ctx)) return false
+    return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP ||
+      countItems(bot, (n) => n.endsWith('_log')) >= LOG_KEEP
+  } catch (_) {
+    return false
+  }
+}
+// Above-ceiling wood in inventory order, keep-first (the ensureRoom bank
+// list, craft.js). Empty when the ceiling is off.
+function surplusWood(bot, ctx) {
+  const out = []
+  try {
+    if (!castleWoodOpen(ctx)) return out
+    let kp = PLANK_KEEP
+    let kl = LOG_KEEP
+    for (const i of invItems(bot)) {
+      if (!i || typeof i.name !== 'string') continue
+      const n = typeof i.count === 'number' ? i.count : 1
+      if (i.name.endsWith('_planks')) {
+        const k = Math.min(kp, n)
+        kp -= k
+        if (n - k > 0) out.push({ name: i.name, count: n - k })
+      } else if (i.name.endsWith('_log')) {
+        const k = Math.min(kl, n)
+        kl -= k
+        if (n - k > 0) out.push({ name: i.name, count: n - k })
+      }
+    }
+  } catch (_) { /* unreadable inventory: no surplus */ }
+  return out
+}
+
 // Never banked: worn/carried kit (same shape as bring share keeps), the
 // light fuel rw4.13 counts from the inventory (torch, coal, charcoal and
 // the sticks they craft from), plus a food and scaffold reserve below.
@@ -266,6 +322,10 @@ function depositPlan(bot, ctx) {
   const castleOpen = !!(ctx && ctx.castle && ctx.castle.phase !== 'complete')
   // Deferred require (castle -> build -> ... chain).
   const castleMaterial = (name) => { try { return require('./castle').isMaterial(name, ctx.castle) } catch (_) { return false } }
+  // Wood ceiling counters (g0z.26): keep-first-N per call, in inventory
+  // order — the same rule surplusWood applies for ensureRoom. Null on an
+  // unbuilt home: the house budget needs every plank packed (the old rule).
+  const castleWoodKeep = castleWoodOpen(ctx) ? { planks: PLANK_KEEP, logs: LOG_KEEP } : null
   for (const i of list) {
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {
@@ -283,7 +343,18 @@ function depositPlan(bot, ctx) {
     if (n <= 0) continue
     // Castle reserve (g0z.3): an unfinished castle keeps every castle
     // material packed — banking it would starve the next castle batch.
-    if (castleOpen && castleMaterial(i.name)) continue
+    // Wood is capped (g0z.26): the first KEEP stays, the rest banks through
+    // the keeps below (bed/gear only keep more, never less — bounded).
+    if (castleOpen && castleMaterial(i.name)) {
+      if (!castleWoodKeep) continue
+      if (i.name.endsWith('_planks') || i.name.endsWith('_log')) {
+        const key = i.name.endsWith('_planks') ? 'planks' : 'logs'
+        const k = Math.min(castleWoodKeep[key], n)
+        castleWoodKeep[key] -= k
+        n -= k
+        if (n <= 0) continue
+      } else continue
+    }
     if (bedOwed && (i.name.endsWith('_bed') || i.name === 'string' || (woolReady && i.name.endsWith('_wool')))) continue
     if (bedOwed && i.name.endsWith('_planks')) {
       const k = Math.min(woodKeep[i.name] || 0, n)
@@ -418,6 +489,42 @@ function chestTodo(bot, ctx, maxPlanks) {
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+}
+
+// Owner handover (g0z.26): when no chest can take the surplus (no spot, no
+// table to craft one, or a full chest) and a player is online, the bankables
+// ride the haul — deliver hands them to the owner. The bot never throws
+// anything away (owner 2026-10-06). Exact-set to the bankable sum per name
+// (the gear forged() shape — a repeat call cannot stack claims, and the
+// keeps never ride along); deliver clamps to live anyway, so a stale claim
+// can never overspend. Deferred require (deliver -> bring -> goal chain).
+function offerHaul(bot, ctx) {
+  let level = 'none'
+  try {
+    level = require('./deliver').playerStatus(bot).level
+  } catch (_) {
+    return false
+  }
+  if (level === 'none') return false
+  let plan = null
+  try {
+    plan = depositPlan(bot, ctx)
+  } catch (_) {
+    return false
+  }
+  if (!plan || plan.length === 0) return false
+  try {
+    if (!ctx.haul || typeof ctx.haul !== 'object') ctx.haul = {}
+    const bankable = {}
+    for (const p of plan) {
+      if (!p || typeof p.name !== 'string' || !(p.count > 0)) continue
+      bankable[p.name] = (bankable[p.name] || 0) + p.count
+    }
+    for (const name of Object.keys(bankable)) ctx.haul[name] = bankable[name]
+    return true
+  } catch (_) {
+    return false
+  }
 }
 
 function fail(ctx, reason) {
@@ -658,6 +765,7 @@ function stockpile(bot, ctx, target, state) {
       return
     } else {
       ctx.chestNoSpotAt = Date.now()
+      if (offerHaul(bot, ctx)) say(bot, 'no room for a chest — bringing the surplus to you')
       fail(ctx, 'no-spot')
       return
     }
@@ -810,6 +918,7 @@ function stockpile(bot, ctx, target, state) {
         ctx.chestFull = true
         ctx.chestFullAt = Date.now()
         say(bot, 'the home chest is full')
+        if (offerHaul(bot, ctx)) say(bot, 'bringing the surplus to you instead')
       }
       ctx.stepStatus = 'done'
     } catch (_) {
@@ -843,11 +952,13 @@ function placeChest(bot, ctx, spot, bp) {
       }
     }
     if (!tableBlock) {
+      if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
       fail(ctx, 'no-chest')
       return
     }
     const found = craftMod ? craftMod.recipes(bot, 'chest', tableBlock) : []
     if (found.length === 0) { // no ingredients for the recipe
+      if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
       fail(ctx, 'no-chest')
       return
     }
@@ -955,6 +1066,11 @@ function placeChest(bot, ctx, spot, bp) {
 module.exports = stockpile
 module.exports.depositPlan = depositPlan
 module.exports.surplusCount = surplusCount
+module.exports.woodCapped = woodCapped
+module.exports.surplusWood = surplusWood
+module.exports.offerHaul = offerHaul
+module.exports.PLANK_KEEP = PLANK_KEEP
+module.exports.LOG_KEEP = LOG_KEEP
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest
 module.exports.withdrawAnyFromChest = withdrawAnyFromChest

@@ -46,6 +46,16 @@ function nightHurt(facts) {
   return facts.time === 'night' && facts.health < 6
 }
 
+// Wood ceiling read (g0z.26): stockpile owns the rule; fail-open false, the
+// old behaviour.
+function woodCapped(bot, ctx) {
+  try {
+    return !!stockpileMod.woodCapped(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
+
 // Step menu: feasible(facts, bot, ctx) means the step can make progress NOW
 // (not just ever). Most steps read facts only; build also scans the home
 // site through the bot. Registration (BEHAVIOURS[name]) is checked
@@ -86,7 +96,10 @@ const MENU = {
     // the logs ARE the castle batch — a full load must not turn to planks.
     // Same while blocked on the frame kind (g0z.23 follow-up): the word is
     // 'blocked', but the fetched logs are still logs the castle needs.
-    feasible: (facts, bot, ctx) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-') &&
+    // Wood ceiling (g0z.26): past the cap a full load no longer converts —
+    // the planks would pile past what the castle needs (prod: 700 in 11
+    // slots). Table/door branches are unaffected (they spend planks).
+    feasible: (facts, bot, ctx) => (facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
       !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
@@ -1386,6 +1399,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
       if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
+      if (facts.logs >= NEED_LOGS && woodCapped(bot, ctx)) return 'craft: wood store full, banking the surplus'
       return `craft: need ${NEED_LOGS} logs, have ${facts.logs}`
     case 'equip': {
       // Mirrors MENU.equip.feasible branch for branch (atl.6): tools first,

@@ -389,10 +389,31 @@ function pickQuarry(bot, ctx, f) {
 
 // Source 3a: dig stone near the bot (equip digTick shape: walk into
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
+// Pack-full yield (g0z.26): digging into a full pack drops the cobble on
+// the ground and counts no-gain strikes — fail fast instead, so the hold
+// parks the leg while the stockpile step banks the surplus. An empty slot
+// or room on a cobble/dirt stack reads as room; an unreadable inventory
+// digs as before.
+function roomForDrop(bot) {
+  try {
+    const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
+    if (!Array.isArray(items)) return true
+    if (items.length < 36) return true
+    for (const s of items) {
+      if (!s || (s.name !== 'cobblestone' && s.name !== 'dirt')) continue
+      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      if ((typeof s.count === 'number' ? s.count : 1) < cap) return true
+    }
+  } catch (_) {
+    return true
+  }
+  return false
+}
 function digTick(bot, ctx, f) {
   const bp = bodyPos(bot)
   if (!bp) return
   if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
+  if (!roomForDrop(bot)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
   const stoneAt = (q) => {
