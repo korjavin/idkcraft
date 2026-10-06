@@ -124,6 +124,32 @@ describe('vmzq.12 water is not ground', () => {
     const bot = mockBot(world)
     assert.equal(goal.siteFor(bot, pos(0, 64, 0)), null)
   })
+
+  it('clearable flora reads through to the dirt (revmux 02 major)', () => {
+    // One- and two-tall flowers would add relief 2 and refuse a flat
+    // meadow; the build digs them, so the scan reads past them.
+    const world = makeWorld()
+    world.set(6, 64, 0, 'tall_grass')
+    world.set(7, 64, 1, 'short_grass')
+    world.set(8, 64, 2, 'lilac')
+    world.set(8, 65, 2, 'lilac')
+    world.set(9, 64, 3, 'sunflower')
+    world.set(9, 65, 3, 'sunflower')
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    assert.deepEqual(home && home.site, { x: 6, y: 64, z: 0 })
+  })
+
+  it('a leaf overhang still counts as ground (no canopy read-through)', () => {
+    // Declined half of the revmux 02 major: reading past leaves would
+    // found a forest-floor site whose wall cells bury in logs (not
+    // clearable), so the overhang deflects to the next flat footprint.
+    const world = makeWorld()
+    world.set(6, 66, 0, 'oak_leaves')
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    assert.deepEqual(home && home.site, { x: 4, y: 64, z: 4 })
+  })
 })
 
 describe('vmzq.12 siteFor never founds blind', () => {

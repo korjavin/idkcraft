@@ -15,6 +15,7 @@
 const { countItems, wornItems } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
+const { CLEAR_FLORA } = require('./behaviours/util')
 const forageMod = require('./behaviours/forage')
 const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
@@ -728,6 +729,14 @@ function groundY(bot, x, z, topY) {
     if (!b || !b.name || b.name === 'air') continue
     if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return null
     if (BUILT_GROUND.test(b.name)) return null
+    // Clearable flora reads through to the dirt below (revmux 02 major):
+    // one- and two-tall flowers would add relief 2 and refuse a flat
+    // meadow, but the build digs them. CLEAR_FLORA is exactly the
+    // build-clearable set minus the torch (which rejects above). Leaves
+    // and logs still count — reading past a canopy would found a
+    // forest-floor site whose wall cells bury in logs, which nothing
+    // clears, so the overhang deflects to the next footprint instead.
+    if (CLEAR_FLORA.has(b.name)) continue
     return y + 1
   }
   return null
