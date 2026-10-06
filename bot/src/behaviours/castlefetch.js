@@ -107,7 +107,7 @@ function craftNames(bot, kind) {
 
 // The castle's open demand for a kind: { kind, short } where short is how
 // many more usable items the batch needs. Null when the castle word is not
-// a material word (none/parked/done/clear/blocked). Shared by the goal
+// a material word (none/parked/done/clear, or blocked with no gated kind). Shared by the goal
 // gate and the behaviour, so the two never disagree.
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
@@ -117,14 +117,25 @@ function demand(bot, ctx) {
   if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../goal').CASTLEFETCH_RETRY_MS) return null
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
-  const m = /^([a-z]+)-(none|some|batch)$/.exec(w)
-  if (!m || !(m[1] in FETCH)) return null
-  const kind = m[1]
+  let kind = null
+  let word = null
+  // Blocked (g0z.23): the gated kind (menuFact keeps it on castleWord)
+  // still wants its batch while the build stands.
+  if (w === 'blocked') {
+    kind = ctx && ctx.castleWord && ctx.castleWord.kind
+    if (!kind || !(kind in FETCH)) return null
+    word = 'blocked'
+  } else {
+    const m = /^([a-z]+)-(none|some|batch)$/.exec(w)
+    if (!m || !(m[1] in FETCH)) return null
+    kind = m[1]
+    word = m[2]
+  }
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(FETCH[kind], left)
   // Raw items: below the reserve the reserve refills first (never laid).
-  return { kind, word: m[2], short: Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) }
+  return { kind, word, short: Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) }
 }
 
 function bodyPos(bot) {

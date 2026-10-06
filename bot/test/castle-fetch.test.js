@@ -658,3 +658,116 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.equal(d.short, 4 + castleMod.reserveOf('planks'), 'one infill run, not a 32 stack')
   })
 })
+
+describe('castlefetch while the castle is blocked (g0z.23)', () => {
+  const LAID = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', door: 'oak_door' }
+  // Everything laid but one gated stone cell: the word is blocked, the kind
+  // and remainder stay visible for the fetch.
+  function blockedWorld() {
+    const { cells } = blueprint.absPlan(SITE, 0, 1)
+    const stuck = cells.find((c) => c.kind === 'stone' && c.dy === 1)
+    const set = new Map()
+    for (const c of cells) {
+      if (c === stuck) continue
+      if (LAID[c.kind]) set.set(`${c.x},${c.y},${c.z}`, LAID[c.kind])
+      else set.set(`${c.x},${c.y},${c.z}`, 'air')
+    }
+    const ctx = { castle: castleState({ blocked: { [`1:${stuck.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } }) }
+    return { cells, stuck, set, ctx }
+  }
+
+  it('a gated stone cell reads blocked with its kind, and the fetch quarries it', () => {
+    const { set, ctx } = blockedWorld()
+    const bot = makeBot({ items: TOOLS(), set })
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
+    assert.deepEqual(ctx.castleWord, { word: 'blocked', kind: 'stone', left: 1 })
+    const d = fetch.demand(bot, ctx)
+    assert.equal(d.kind, 'stone')
+    assert.equal(d.word, 'blocked')
+    assert.ok(d.short > 0, `short: ${d.short}`)
+  })
+
+  it('a full batch parks the fetch (the behaviour ends done, the gate closes)', () => {
+    const { set, ctx } = blockedWorld()
+    const items = [...TOOLS(), { name: 'cobblestone', count: 1 + castleMod.reserveOf('stone') }]
+    const bot = makeBot({ items, set })
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
+    assert.equal(fetch.demand(bot, ctx).short, 0)
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('stone fetch while blocked needs a pickaxe and daylight', () => {
+    assert.ok(goal.STEP_CRITERIA.castlefetch.includes('blocked'), 'the model menu names the blocked fetch')
+    const { set, ctx } = blockedWorld()
+    const day = makeBot({ items: TOOLS(), set })
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(day, ctx), day, ctx), true)
+    const bare = makeBot({ items: [{ name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 }], set })
+    const bareCtx = { castle: castleState({ blocked: ctx.castle.blocked }) }
+    const bareFacts = goal.goalFacts(bare, bareCtx)
+    assert.equal(bareFacts.castle, 'blocked')
+    assert.equal(goal.MENU.castlefetch.feasible(bareFacts, bare, bareCtx), false)
+    assert.equal(goal.stepWhy('castlefetch', bareFacts, bare, bareCtx, ''), 'castlefetch: no pickaxe')
+    const night = makeBot({ items: TOOLS(), set, timeOfDay: 18000 })
+    const nightCtx = { castle: castleState({ blocked: ctx.castle.blocked }) }
+    assert.equal(goal.MENU.castlefetch.feasible(goal.goalFacts(night, nightCtx), night, nightCtx), false)
+  })
+
+  it('follow-up: blocked planks demand counts the infill run, not the whole remainder', () => {
+    // v2: a blocked planks cell P, an unlaid beam F past it (gated) and one
+    // undone planks cell Q past the beam (gated, higher): left is the run
+    // (1), not all undone planks (2). Laid beams never stop a run (material
+    // branch), so F stays unlaid.
+    const { cells } = blueprint.absPlan(SITE, 0, 2)
+    const order = cells.map((c) => c.idx).sort((a, b) => castleMod.rank(cells[a]) - castleMod.rank(cells[b]) || a - b)
+    let pick = null
+    for (const idx of order) {
+      const P = cells[idx]
+      if (P.kind !== 'planks') continue
+      const oi = order.indexOf(idx)
+      let beam = -1
+      for (let i = oi + 1; i < order.length; i++) {
+        if (cells[order[i]].kind === 'frame') { beam = i; break }
+      }
+      if (beam < 0) continue
+      const F = cells[order[beam]]
+      if (F.dy <= P.dy) continue
+      const Q = order.slice(beam + 1).map((j) => cells[j]).find((c) => c.kind === 'planks' && c.dy > P.dy)
+      if (Q) { pick = { P, F, Q }; break }
+    }
+    assert.ok(pick, 'a planks run with a higher beam and higher post-beam planks')
+    const { P, F, Q } = pick
+    const LAID2 = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', door: 'oak_door', frame: 'oak_log', fence: 'oak_fence', chest: 'chest' }
+    const set = new Map()
+    for (const c of cells) {
+      if (c === P || c === F || c === Q) continue
+      set.set(`${c.x},${c.y},${c.z}`, LAID2[c.kind] || 'air')
+    }
+    const ctx = { castle: castleState({ blueprintVersion: 2, blocked: { [`2:${P.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } }) }
+    const bot = makeBot({ items: TOOLS(), set })
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
+    assert.deepEqual(ctx.castleWord, { word: 'blocked', kind: 'planks', left: 1 })
+    const d = fetch.demand(bot, ctx)
+    assert.equal(d.kind, 'planks')
+    assert.equal(d.short, 1 + castleMod.reserveOf('planks'))
+  })
+
+  it('round 2 core-1: the flip chats through decide, which drops castle for the fetch', async () => {
+    // Prod shape: castle() never runs on the blocked tick — decide() sees
+    // the flipped word first and re-picks. The line must come from the flip.
+    const { stuck, set, ctx } = blockedWorld()
+    const bot = makeBot({ items: TOOLS(), set })
+    ctx.step = 'castle'
+    ctx.stepStatus = 'running'
+    ctx.goalText = 'stale'
+    const r = await goal.decide(bot, ctx)
+    assert.equal(r.action, 'castlefetch')
+    const stuckLines = () => bot.chats.filter((m) => m.startsWith('castle: stuck at'))
+    assert.equal(stuckLines().length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(stuckLines()[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
+    assert.match(ctx.castle.status, new RegExp(`^blocked at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    await goal.decide(bot, ctx)
+    assert.equal(stuckLines().length, 1, 'the standing block stays silent')
+  })
+})

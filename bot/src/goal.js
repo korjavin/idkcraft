@@ -84,7 +84,10 @@ const MENU = {
     // one the step could neither progress nor finish, churning done forever.
     // Frame logs (g0z.12): while the castle's next cell is a Fachwerk beam
     // the logs ARE the castle batch — a full load must not turn to planks.
-    feasible: (facts) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
+    // Same while blocked on the frame kind (g0z.23 follow-up): the word is
+    // 'blocked', but the fetched logs are still logs the castle needs.
+    feasible: (facts, bot, ctx) => (facts.logs >= NEED_LOGS && !String(facts.castle).startsWith('frame-') &&
+      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && !facts.tablePlaced) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
@@ -348,8 +351,9 @@ const MENU = {
     // Nothing known -> explore finds more. A failed leg holds FORAGE_RETRY_MS
     // past any known flip (bt8s, the castlefetch demand precedent): the
     // text-keyed failHolds releases on every near/none flip and churned
-    // forage<->explore every few seconds on the rig.
-    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx),
+    // forage<->explore every few seconds on the rig. A blocked castle vetoes
+    // the hunt by day (g0z.23): the bot stays on the build instead.
+    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx) && !castleBlocked(facts),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -360,8 +364,10 @@ const MENU = {
     // spiral, so the menu moves the bot to new ground instead of idling
     // where gather died. Night pre-house never wanders, and neither does a
     // bot with anyone online (p4s: stay with the player, the owner sees).
+    // A blocked castle vetoes the built-home search by day (g0z.23); the
+    // pre-house stranded branch below stays.
     feasible: (facts, bot, ctx) => {
-      if (facts.home === 'built') return true
+      if (facts.home === 'built') return !castleBlocked(facts)
       if (facts.time !== 'day') return false
       if (facts.player !== 'none') return false
       try {
@@ -392,9 +398,10 @@ function castleGo(facts, ctx) {
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
 }
 
-// Castle fetch can progress now (g0z.4): day, a material word, the batch
-// still short (castlefetch.demand — the behaviour's own done test), and
-// the castle unable to lay now unless this fetch is the running leg.
+// Castle fetch can progress now (g0z.4): day, a material word (or blocked
+// with its gated kind, g0z.23), the batch still short (castlefetch.demand
+// — the behaviour's own done test), and the castle unable to lay now
+// unless this fetch is the running leg.
 // Stone needs a pickaxe: without one equip rearms first (it only replaces
 // an absent pick), so a pick broken mid-batch hands over and comes back.
 // ponytail: a castle chest full of cobble still waits for the pickaxe;
@@ -402,9 +409,18 @@ function castleGo(facts, ctx) {
 function castleFetchGo(facts, bot, ctx) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
-  if (!/-(none|some|batch)$/.test(w)) return false
+  // Blocked (g0z.23): the gated kind (menuFact keeps it on castleWord)
+  // still wants its batch while the build stands.
+  let kind = null
+  if (w === 'blocked') {
+    kind = ctx && ctx.castleWord && ctx.castleWord.kind
+    try { if (!kind || !(kind in require('./behaviours/castlefetch').FETCH)) return false } catch (_) { return false }
+  } else {
+    if (!/-(none|some|batch)$/.test(w)) return false
+    kind = w.slice(0, w.lastIndexOf('-'))
+  }
   if (!registered('castlefetch') || !registered('castle')) return false
-  if (w.startsWith('stone-') && !((facts.pickaxe || 0) > 0)) return false
+  if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return false
   if (castleGo(facts, ctx) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
   try {
     const d = require('./behaviours/castlefetch').demand(bot, ctx)
@@ -412,6 +428,16 @@ function castleFetchGo(facts, bot, ctx) {
   } catch (_) {
     return false
   }
+}
+
+// Blocked castle veto (g0z.23): while the build stands the bot stays on it
+// (castlefetch, equip, rest at the site) instead of wandering off to
+// explore/forage. Day only: the night steps own the night. Narrow on
+// purpose — a stone-none word with no pickaxe keeps explore/forage as the
+// only wood-finding path (widen to every in-progress word later if asked).
+function castleBlocked(facts) {
+  if (!facts || facts.castle !== 'blocked' || facts.time !== 'day') return false
+  return registered('castle')
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -1206,7 +1232,7 @@ const STEP_CRITERIA = {
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
-  castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
+  castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -1421,8 +1447,17 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'castlefetch': {
       const w = facts.castle || 'none'
       if (facts.time !== 'day') return 'castlefetch: daytime job'
-      if (!/-(none|some|batch)$/.test(w)) return 'castlefetch: no material owed'
-      if (w.startsWith('stone-') && !((facts.pickaxe || 0) > 0)) return 'castlefetch: no pickaxe'
+      // Blocked (g0z.23): the gated kind, like the gate above.
+      let kind = null
+      if (w === 'blocked') {
+        kind = ctx && ctx.castleWord && ctx.castleWord.kind
+        if (!kind) return 'castlefetch: no material owed'
+        try { if (!(kind in require('./behaviours/castlefetch').FETCH)) return 'castlefetch: no material owed' } catch (_) { return 'castlefetch: no material owed' }
+      } else {
+        if (!/-(none|some|batch)$/.test(w)) return 'castlefetch: no material owed'
+        kind = w.slice(0, w.lastIndexOf('-'))
+      }
+      if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return 'castlefetch: no pickaxe'
       return 'castlefetch: batch on hand'
     }
     case 'gather':
@@ -1459,10 +1494,12 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
     case 'forage':
       if (nightHurt(facts)) return 'forage: hurt at night, waiting for dawn'
+      if (castleBlocked(facts)) return 'forage: castle blocked, waiting at the site'
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
     case 'explore':
       if (facts.home !== 'built') return 'explore: house not built yet'
+      if (castleBlocked(facts)) return 'explore: castle blocked, waiting at the site'
       return 'explore: nowhere new to go'
     default:
       return `${name}: not feasible`

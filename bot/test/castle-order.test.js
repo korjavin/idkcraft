@@ -152,7 +152,7 @@ describe('castle persistence (g0z.3)', () => {
     const ctx = {}
     const out = memory.restore(bot, ctx, f, now)
     assert.equal(out.castle, 1)
-    assert.deepEqual(ctx.castle, { site: SITE, rot: 2, phase: 'body', blocked: { '1:7': { tries: 2, until: now + 60000 } }, parked: true, blueprintVersion: 1 })
+    assert.deepEqual(ctx.castle, { site: SITE, rot: 2, phase: 'body', blocked: { '1:7': { tries: 2, until: now + 60000, why: 'no-ref' } }, parked: true, blueprintVersion: 1 })
   })
 
   it('undefined keeps the stored castle; forget (null) drops it', () => {
