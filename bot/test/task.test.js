@@ -399,6 +399,27 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.house.stallMs, 0, 'castle progress resets the house clock')
   })
 
+  it('unloaded house with no cache still reports (round-2 core-1)', () => {
+    const bot = makeBot() // null world: unloaded throughout
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.active, 'house')
+    assert.equal(ctx.task.house.done, undefined, 'no baseline without a loaded read')
+    for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    assert.equal(taskLogs().length, 1, 'far-off stall still gets an L1')
+    assert.match(taskLogs()[0], /^task house \?\/\? stall=900s/)
+    assert.match(bot.chats[0], /^house: no progress for 15 min at \?\/\?/)
+    // First loaded reading baselines without resetting the clock.
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
+    taskMod.taskTick(bot, ctx, t0 + (15 * 60 + 1) * 1000)
+    assert.equal(ctx.task.house.done, 0)
+    assert.ok((ctx.task.house.stallMs || 0) >= 900000, 'first reading does not reset')
+  })
+
   it('runTick advances the stall on sheltered fight ticks (core-5)', async () => {
     // Pins the hook position: the shelter/fight short-circuits must not skip it.
     const bot = makeBot()

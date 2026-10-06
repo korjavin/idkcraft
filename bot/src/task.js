@@ -168,13 +168,16 @@ function chatL1(kind, done, total, diagnosis) {
 }
 
 // Status line fragment: 'task castle 8/1722 stall=23m', or null when no task.
+// Unread yet (unloaded since reset) reads '?/?' with the live stall.
 function taskLine(ctx) {
   try {
     const t = ctx && ctx.task
     const kind = t && t.active
     const st = kind && t[kind]
-    if (!kind || !st || typeof st.done !== 'number' || typeof st.total !== 'number') return null
-    return `task ${kind} ${st.done}/${st.total} stall=${stallFmt(st.stallMs || 0)}`
+    if (!kind || !st) return null
+    const done = typeof st.done === 'number' ? st.done : '?'
+    const total = typeof st.total === 'number' ? st.total : '?'
+    return `task ${kind} ${done}/${total} stall=${stallFmt(st.stallMs || 0)}`
   } catch (_) {
     return null
   }
@@ -422,9 +425,33 @@ function taskTick(bot, ctx, now = Date.now()) {
     // House: placed cells only.
     const cur = houseCur
     if (!cur || typeof cur.done !== 'number') {
-      // Unloaded (core-1): hold the clock on the last loaded baseline.
+      // Never read since reset (round-2 core-1): the bot may be stalled far
+      // from the house. Advance the clock so the stall still reports; the
+      // first loaded reading baselines without resetting.
+      recordFail(ctx, state)
+      if (!eligible(bot, ctx)) {
+        state.lastAt = now
+        setStallGauge(kind, state.stallMs || 0)
+        return
+      }
+      const noReadAt = typeof state.lastAt === 'number' ? state.lastAt : now
+      state.stallMs = (state.stallMs || 0) + Math.max(0, now - noReadAt)
       state.lastAt = now
-      setStallGauge(kind, state.stallMs || 0)
+      setStallGauge(kind, state.stallMs)
+      if (state.stallMs >= TASK_STALL_L1_MS && (!state.lastL1At || now - state.lastL1At >= TASK_STALL_L1_MS)) {
+        const diagnosis = diagnose(bot, ctx)
+        const step = (ctx && ctx.step) || 'none'
+        try {
+          console.log(`task ${kind} ?/? stall=${Math.floor(state.stallMs / 1000)}s step=${step} why=${diagnosis}`)
+        } catch (_) { /* log best-effort */ }
+        try {
+          bot.chat(chatL1(kind, '?', '?', diagnosis))
+        } catch (_) { /* chat best-effort */ }
+        try {
+          metrics.taskStallTotal.inc({ task: kind, level: 'L1' })
+        } catch (_) { /* counter best-effort */ }
+        state.lastL1At = now
+      }
       return
     }
     if (typeof state.done !== 'number') {
