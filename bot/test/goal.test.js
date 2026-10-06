@@ -624,6 +624,36 @@ describe('decide decision point', () => {
     assert.equal(r.action, 'stay')
   })
 
+  it('rw4.16: a day-done gohome re-picks instead of restarting every tick', async () => {
+    // Prod 2026-10-06: inside, door shut, day, health low — a finished
+    // gohome restarted every tick and chatted 'home for the night' 434
+    // times in 7 min. The askedKey shortcut re-issued the finished step
+    // without a feasibility check; gohome is self-advancing (never
+    // held), so nothing broke the loop.
+    const bot = goalBot({ timeOfDay: 6000, at: pos(11, 64, 21.5) })
+    bot.health = 4
+    bot.blockAt = () => ({ name: 'oak_door', getProperties: () => ({ open: false }) })
+    const ctx = {
+      step: 'gohome',
+      stepStatus: 'done',
+      gohome: { phase: 'done', stalls: 0, fails: 0, lastPos: null, lastToggle: 0 },
+      home: { site: pos(10, 64, 20), built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } },
+    }
+    const text = goalText(goalFacts(bot, ctx), ctx.home)
+    ctx.goalText = text
+    ctx.askedKey = `${text}\ndone` // stale match: the prod loop shape
+    let gohomePicks = 0
+    for (let i = 0; i < 30; i++) {
+      const r = await decide(bot, ctx)
+      if (r.action === 'gohome') {
+        gohomePicks++
+        home.gohome(bot, ctx) // the tick dispatches the re-issued step
+      }
+    }
+    assert.equal(gohomePicks, 0, 'a day-done gohome is never re-issued')
+    assert.deepEqual(bot.chats.filter((m) => m === 'home for the night'), [], 'no arrival spam by day')
+  })
+
   it('done step re-decides (logs only on change)', async () => {
     // h9z: a same-text done now holds its step (see the done-hold test), so
     // the silent-restart path runs through an exempt step — explore re-picks

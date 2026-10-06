@@ -244,6 +244,29 @@ describe('rw4.5 gohome', () => {
     assert.ok(bot.chats.some((m) => m === 'home for the night'))
   })
 
+  it('rw4.16: a re-issued done chats once per night, never by day', async () => {
+    // Prod 2026-10-06: a finished gohome restarted every tick and chatted
+    // 'home for the night' 434 times in 7 min (kick risk).
+    const bot = mockBot({ at: { ...INSIDE }, doorOpen: false })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx) // inside, door shut -> done
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.chats, ['home for the night'])
+    home.gohome(bot, ctx) // re-issued done, same night
+    home.gohome(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.chats, ['home for the night'], 'one arrival line per night')
+    bot.time.day = 6 // the next night announces again
+    home.gohome(bot, ctx)
+    assert.deepEqual(bot.chats, ['home for the night', 'home for the night'])
+
+    const dayBot = mockBot({ at: { ...INSIDE }, doorOpen: false, timeOfDay: 6000, day: 6 })
+    const dayCtx = { home: ctxHome() }
+    home.gohome(dayBot, dayCtx)
+    assert.equal(dayCtx.stepStatus, 'done')
+    assert.deepEqual(dayBot.chats, [], 'no night line by day')
+  })
+
   it('repeated stall fails the phase, and the next pick re-arms a fresh walk', () => {
     // Revmux 01-review loop+goal-2: a second cannot-reach-home with unchanged
     // facts stranded gohome all night; the failed phase must re-arm choice.

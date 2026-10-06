@@ -819,7 +819,18 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         ctx.intruderFight = true
         try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'shelter') } catch (_) { /* lease best-effort */ }
       }
-      if (ctx.inShelter && decision.action === 'fight' && !intruder) {
+      // rw4.15: shelter is a night concept — by day a sheltered fight tick
+      // falls through to the work block (goal.decide clears inShelter and
+      // the day menu exits) instead of idling before it forever (prod: the
+      // bot sat 2 h in its hole, six dawns missed). Positive-day only: an
+      // unreadable clock keeps the night hold (fail closed, the gohome
+      // stamp precedent). Night unchanged; an intruder still fights (33vm);
+      // orders keep their ticks (the shelterRun gate).
+      let dayNow = false
+      try { dayNow = goal.timeWord(bot) === 'day' } catch (_) { dayNow = false }
+      const dayDivert = ctx.work && !ctx.lead && !ctx.bring && ctx.inShelter &&
+        decision.action === 'fight' && !intruder && dayNow
+      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
@@ -839,7 +850,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || underFire)) {
+      if (ctx.work && (decision.action !== 'fight' || shelterRun || underFire || dayDivert)) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
