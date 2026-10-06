@@ -101,6 +101,7 @@ function mockBot({ items = [], cells = {}, at = null, timeOfDay = 6000, entities
     _items: items,
     registry: { blocksByName: {}, itemsByName },
     inventory: { items: () => bot._items },
+    _syncWindow: async () => {}, // modern mineflayer: the runOp resync is instant here
     recipesAll: (id) => (byId[id] && table[byId[id]]) || [],
     recipesFor: (id) => (byId[id] && table[byId[id]]) || [],
     craft: craftImpl || (async (recipe, count) => {

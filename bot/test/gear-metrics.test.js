@@ -33,6 +33,7 @@ function mockBot({ items = [], ids = {}, recipes = {}, cells = {}, slots = null 
     entity: { position: pos(0, 64, 0), onGround: true },
     registry: { itemsByName },
     inventory: { items: () => bot._items, slots },
+    _syncWindow: async () => {}, // modern mineflayer: the runOp resync is instant here
     recipesFor: (id) => {
       const name = Object.keys(ids).find((n) => ids[n] === id)
       if (!(name in recipes)) throw new Error(`unexpected recipesFor(${name})`)

@@ -549,6 +549,12 @@ function equip(bot, ctx) {
   craftOne(bot, ctx, op)
 }
 
+// g0z.25 slow-path settle (gear PHANTOM_SETTLE_MS parity): the fast-path
+// resync below already shows final truth for table crafts (assayed 5/5 on
+// Paper 26.1.2); the settle is for 2x2 flicker (server-side application
+// lags the op there) and lag-stretched heals.
+const VERIFY_SETTLE_MS = 500
+
 function craftOne(bot, ctx, op) {
   if (typeof bot.craft !== 'function') {
     fail(bot, ctx, op.item, new Error('bot.craft missing'))
@@ -559,12 +565,20 @@ function craftOne(bot, ctx, op) {
   // Exactly-once settlement: a hung window (live ghost reads) must fail
   // loudly on a deadline, never freeze the menu with the flag stuck.
   let settled = false
+  let timedOut = false
   const finish = (fn) => {
     if (settled) return
     settled = true
     ctx.equipInFlight = false
     if (typeof fn === 'function') fn()
   }
+  const landedNow = () => op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
+    : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
+    : op.item === 'crafting_table' ? countItems(bot, (n) => n === 'crafting_table') > 0
+    // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
+    // the old wooden as landed and burns the cobble retrying. Fresh
+    // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
+    : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
   const run = async () => {
     try {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
@@ -572,21 +586,31 @@ function craftOne(bot, ctx, op) {
       finish(() => fail(bot, ctx, op.item, err))
       return
     }
+    // g0z.25 escalating verify: the immediate post-craft model lies
+    // (assayed 11/11 landed products invisible at once on Paper 26.1.2),
+    // so the strike judge reads post-resync truth, never the raw model. A
+    // miss escalates to settle+resync (2x2 server-side flicker, lag) —
+    // inFlight stays up through the verify, like gear's settle.
+    if (timedOut) return
+    try { await craftMod.syncInventory(bot) } catch (_) { /* unverified: the recount below still decides */ }
+    if (timedOut) return
+    let landed = landedNow()
+    if (!landed) {
+      await new Promise((resolve) => setTimeout(resolve, VERIFY_SETTLE_MS))
+      if (timedOut) return
+      try { await craftMod.syncInventory(bot) } catch (_) { /* unverified: the recount below still decides */ }
+      if (timedOut) return
+      landed = landedNow()
+    }
     finish()
     const strikes = (st.made && st.made[op.item]) || 0
-    const landed = op.item === 'stick' ? countItems(bot, (n) => n === 'stick') > 0
-      : op.item.endsWith('_planks') ? true // planks feed the next op, not the kit
-      : op.item === 'crafting_table' ? countItems(bot, (n) => n === 'crafting_table') > 0
-      // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
-      // the old wooden as landed and burns the cobble retrying. Fresh
-      // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
-      : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
     if (!landed) {
       // A strike is silent: the 'equipped' chat below is only for a landed
       // craft (rwuu — prod chatted two fakes per stall and lied to the owner).
       st.made = st.made || {}
       st.made[op.item] = strikes + 1
       if (st.made[op.item] >= CRAFT_STALL_STRIKES) {
+        try { console.error(`equip craft-stall item=${op.item} slots: ${craftMod.slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
         fail(bot, ctx, op.item, new Error('craft-stall'))
       }
       return
@@ -609,6 +633,7 @@ function craftOne(bot, ctx, op) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   void Promise.race([run(), timeout]).catch((err) => {
+    timedOut = true
     finish(() => fail(bot, ctx, op.item, err))
   })
 }

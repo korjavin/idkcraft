@@ -20,6 +20,7 @@ function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, blockAt
     entity: { position: { x: 0, y: 64, z: 0 } },
     registry: { itemsByName },
     inventory: { items: () => bot._items },
+    _syncWindow: async () => {}, // modern mineflayer: the verify resync is instant here
     recipesFor: (id) => {
       const name = Object.keys(ids).find((n) => ids[n] === id)
       if (!(name in recipes)) throw new Error(`unexpected recipesFor(${name})`)
@@ -78,6 +79,31 @@ function landingCraft(bot) {
     bot.calls.craft.push({ recipe, count, table })
     bot._items.push({ name: recipe.result.name, count: recipe.result.count || 1 })
   }
+}
+
+// g0z.25: the verify slow path settles 500 ms after the craft call, so a
+// strike lands later than the call — poll the ledger, not the calls.
+async function untilStrikes(ctx, item, n, timeoutMs = 8000) {
+  const t0 = Date.now()
+  for (;;) {
+    const got = (ctx.equip && ctx.equip.made && ctx.equip.made[item]) || 0
+    // A stall spends the ledger (resetRunCounters): the failure is the proof.
+    if (got >= n || (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:equip-'))) {
+      await flush()
+      return
+    }
+    if (Date.now() - t0 > timeoutMs) throw new Error(`strikes stuck at ${got}, want ${n}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+async function untilLines(bot, n, timeoutMs = 5000) {
+  const t0 = Date.now()
+  while (bot.lines.length < n) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`chat stuck at ${bot.lines.length} lines, want ${n}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await flush()
 }
 
 describe('equip step', () => {
@@ -418,6 +444,7 @@ describe('equip step', () => {
     for (let i = 0; i < 3; i++) {
       equip(bot, ctx, null, {})
       await untilCrafts(bot, i + 1)
+      await untilStrikes(ctx, 'wooden_pickaxe', i + 1)
     }
     assert.equal(bot.calls.craft.length, 3)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
@@ -2452,10 +2479,91 @@ describe('equip full pack (idkcraft-rwuu)', () => {
     for (let i = 0; i < 3; i++) {
       equip(bot, ctx, null, {})
       await untilCrafts(bot, i + 1)
+      await untilStrikes(ctx, 'wooden_pickaxe', i + 1)
     }
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
     assert.ok(bot.errs.some((e) => e.includes('craft-stall')))
     assert.ok(!bot.lines.some((l) => l.startsWith('equipped')), `lines: ${bot.lines}`)
+    bot.restoreError()
+  })
+})
+
+describe('equip verify-after-resync (idkcraft-g0z.25)', () => {
+  it('product visible only after the resync lands: one craft, equipped, no stall', async () => {
+    // The assayed Paper shape: bot.craft resolves while the product packets
+    // are still in flight, so the immediate model lacks the pickaxe and only
+    // the resync window shows it. The judge must read post-resync truth —
+    // no strike, no second craft.
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    let revealed = false
+    bot._syncWindow = async () => {
+      if (!revealed) {
+        revealed = true
+        bot._items.push({ name: 'wooden_pickaxe', count: 1 })
+      }
+    }
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    await untilLines(bot, 1)
+    assert.equal(bot.calls.craft.length, 1, 'no second craft')
+    assert.deepEqual(bot.lines, ['equipped wooden_pickaxe'])
+    assert.ok(!ctx.equip.made || !ctx.equip.made.wooden_pickaxe, 'no strike recorded')
+    assert.ok(!bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('product visible only on the second resync: slow path lands, no strike', async () => {
+    // The 2x2-flicker/lag shape: the fast-path resync still misses, the
+    // settle+resync shows the product. Deleting the escalation must fail
+    // this (revmux 01 core-2).
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    let syncs = 0
+    bot._syncWindow = async () => {
+      syncs++
+      if (syncs === 2) bot._items.push({ name: 'wooden_pickaxe', count: 1 })
+    }
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    await untilLines(bot, 1)
+    assert.equal(bot.calls.craft.length, 1, 'no second craft')
+    assert.deepEqual(bot.lines, ['equipped wooden_pickaxe'])
+    assert.ok(!ctx.equip.made || !ctx.equip.made.wooden_pickaxe, 'no strike recorded')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('a true miss still stalls on the third strike and logs the slots', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => TABLE,
+    })
+    const ctx = freshCtx({ table: { x: 1, y: 64, z: 0 } })
+    for (let i = 0; i < 3; i++) {
+      equip(bot, ctx, null, {})
+      await untilCrafts(bot, i + 1)
+      await untilStrikes(ctx, 'wooden_pickaxe', i + 1)
+    }
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs.some((e) => e.includes('craft-stall')), `errs: ${bot.errs}`)
+    assert.ok(
+      bot.errs.some((e) => e.includes('craft-stall item=wooden_pickaxe slots: [oak_planksx3 stickx2]')),
+      `slots line missing, errs: ${bot.errs}`,
+    )
     bot.restoreError()
   })
 })

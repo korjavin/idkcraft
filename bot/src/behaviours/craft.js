@@ -703,13 +703,75 @@ async function ensureRoom(bot, recipe, count, opts) {
   throw new Error('inventory-full')
 }
 
+// g0z.25: compact one-line pack + cursor dump for stall logs (the next
+// review's desync-vs-loss oracle): name×count per stack plus the cursor,
+// which items() never shows. Best-effort 'unreadable', never throws.
+function slotSummary(bot) {
+  try {
+    const win = bot && bot.inventory
+    const items = win && typeof win.items === 'function' ? win.items() : null
+    if (!Array.isArray(items)) return 'unreadable'
+    const parts = []
+    for (const i of items) {
+      if (!i || typeof i.name !== 'string') continue
+      const c = typeof i.count === 'number' ? i.count : 1
+      parts.push(typeof i.slot === 'number' ? `${i.name}x${c}@${i.slot}` : `${i.name}x${c}`)
+    }
+    let cursor = null
+    try {
+      const cur = win.selectedItem
+      if (cur && typeof cur.name === 'string') cursor = `${cur.name}x${typeof cur.count === 'number' ? cur.count : 1}`
+    } catch (_) { cursor = null }
+    return `[${parts.join(' ')}] cursor=${cursor}`
+  } catch (_) {
+    return 'unreadable'
+  }
+}
+
+// g0z.25: the intra-craft click burst. mineflayer fires a table craft's
+// ingredient clicks in ~5 ms and sync+closes right after; Paper 26.1.2
+// silently reverts most such bursts (mats back, no product, the op still
+// resolves — assayed 3/8 landed unpaced, 8/8 with 60 ms gaps, same xg9
+// per-tick shape one grain finer). bot.craft looks bot.clickWindow up per
+// ingredient click, so a gap enforcer around the call paces those;
+// restored in finally (a foreign mid-craft overwrite is never clobbered
+// back). The put-away/result-grab tail (bot.putAway, bot.putSelectedItem-
+// Range) calls inventory.js's private click closure and stays unpaced —
+// assayed sufficient as is; wrap those too if tail reverts ever show up.
+// Table crafts only: 2x2 clicks already serialize on updateSlot:0 waits,
+// their cursor churn heals in 600 ms, and pacing them would slow batches.
+async function pacedCraft(bot, recipe, count, table) {
+  const orig = bot && bot.clickWindow
+  if (!table || typeof orig !== 'function' || typeof bot.craft !== 'function') {
+    return bot.craft(recipe, count, table)
+  }
+  let last = 0
+  const paced = async (...args) => {
+    const wait = WINDOW_OP_GAP_MS - (Date.now() - last)
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
+    try {
+      return await orig.apply(bot, args)
+    } finally {
+      last = Date.now()
+    }
+  }
+  bot.clickWindow = paced
+  try {
+    return await bot.craft(recipe, count, table)
+  } finally {
+    try {
+      if (bot.clickWindow === paced) bot.clickWindow = orig
+    } catch (_) { /* restore best-effort */ }
+  }
+}
+
 async function safeCraft(bot, recipe, count, table, opts) {
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   await ensureStacks(bot, recipe, count)
   await ensureRoom(bot, recipe, count, opts)
   try {
-    await bot.craft(recipe, count, table)
+    await pacedCraft(bot, recipe, count, table)
   } catch (err) {
     if (!table) {
       await clearGrid(bot)
@@ -852,4 +914,6 @@ module.exports.tally = tally
 module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
+module.exports.syncInventory = syncInventory
+module.exports.slotSummary = slotSummary
 module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS
