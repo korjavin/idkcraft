@@ -840,16 +840,21 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // handler, and the order gate above only runs it on non-fight
         // ticks). jr2.3 holds: fight is never dispatched here, the legs
         // are doorway direct control (no A*, no pursuit), and the rw4.17
-        // wall guard stays armed. A hostile standing on the out-lane
-        // holds the exit shut instead of opening into it (revmux 01
+        // wall guard stays armed. A hostile on the out-lane holds the
+        // pre-open exit shut instead of opening into it (revmux 01
         // core-1, the bead's 'не выбегая в толпу'); the gate re-checks
-        // every tick, so a cleared lane resumes at once. Positive-day
-        // only (the dayDivert fail-closed precedent): night keeps the
-        // hold, and a gocastle without an exiting comehome keeps it too
-        // (its walk is A* — from inside it would path the wall).
+        // every tick, so a cleared lane resumes at once. Once the legs
+        // commit (exit/close) they finish: holding there would freeze the
+        // bot mid-doorway with the door open and fight held off (revmux
+        // 02 core-1) — worse than stepping out, shutting the door, and
+        // handing the body to fight. Positive-day only (the dayDivert
+        // fail-closed precedent): night keeps the hold, and a gocastle
+        // without an exiting comehome keeps it too (its walk is A* — from
+        // inside it would path the wall).
         if (dayNow && ctx.comehome && ctx.comehome.exiting) {
+          const exitPhase = ctx.comehome && ctx.comehome.phase
           let laneBlocked = false
-          try { laneBlocked = homeMod.outLaneBlocked(bot, (ctx.comehome && ctx.comehome.home) || ctx.home) } catch (_) { laneBlocked = false }
+          try { laneBlocked = exitPhase !== 'exit' && exitPhase !== 'close' && homeMod.outLaneBlocked(bot, (ctx.comehome && ctx.comehome.home) || ctx.home) } catch (_) { laneBlocked = false }
           if (!laneBlocked) {
             const handler = BEHAVIOURS.comehome
             if (typeof handler === 'function') handler(bot, ctx, target, state)

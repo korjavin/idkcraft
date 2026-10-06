@@ -1057,6 +1057,71 @@ describe('rw4.18 the exit legs keep walking on day fight ticks without an intrud
       cap.release()
     }
   })
+
+  it("a mob on the lane mid-legs does not freeze them (revmux 02 core-1, 'exit')", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      await ticker.tick() // open the shut door
+      await settle()
+      await ticker.tick() // door open -> exit legs start
+      assert.equal(ctx.comehome.phase, 'exit')
+      const drove = ctx.comehome.legTicks
+      assert.ok(drove > 0, 'legs running')
+      // A mob steps onto the lane mid-legs: the committed legs finish
+      // instead of freezing mid-doorway with the door open.
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      assert.ok(ctx.comehome.legTicks > drove, 'legs keep driving through the lane mob')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it("a mob on the lane at the shut does not freeze it (revmux 02 core-1, 'close')", async () => {
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const ticker = tickerWith(bot, fightBrain)
+    const ctx = bot._tickerCtx
+    ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
+    ctx.inShelter = true
+    handleChat(bot, ticker, 'Steve', 'go work')
+    const cap = capture()
+    try {
+      await ticker.tick() // open the shut door
+      await settle()
+      await ticker.tick() // door open -> exit legs start
+      bot.entity.position = pos(OUT2.x, OUT2.y, OUT2.z) // legs walked out
+      // No lastToggle reset: the toggle cooldown holds, so this tick
+      // reaches 'close' with the door still open.
+      const arrived = await ticker.tick()
+      assert.equal(arrived.decision.action, 'comehome')
+      assert.equal(ctx.comehome.phase, 'close')
+      // A mob steps onto the lane at the shut: the close still shuts the
+      // door and releases instead of idling it open.
+      const lane = pos(OUT2.x + 0.5, OUT2.y, OUT2.z + 0.5)
+      lane.offset = (ox, oy, oz) => pos(lane.x + ox, lane.y + oy, lane.z + oz)
+      bot.entities = { 22: { id: 22, name: 'zombie', type: 'mob', position: lane, height: 1.95 } }
+      ctx.comehome.lastToggle = 0
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      await settle()
+      const door = bot.blockAt({ x: DOOR2.x, y: DOOR2.y, z: DOOR2.z })
+      assert.equal(door.getProperties().open, false, 'door ends shut')
+      await ticker.tick()
+      assert.equal(ctx.comehome, null, 'released')
+      assert.equal(ctx.inShelter, false, 'fight takes over outside')
+    } finally {
+      cap.release()
+    }
+  })
 })
 
 describe('rw4.18 outLaneBlocked reads the approach cell, not the bot', () => {
