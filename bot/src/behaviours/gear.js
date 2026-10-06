@@ -896,7 +896,7 @@ function runOp(bot, ctx, op, onDone) {
   ctx.gearInFlight = true
   void (async () => {
     try {
-      await craftMod.safeCraft(bot, op.recipe, op.count, op.table)
+      await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
       ctx.gearInFlight = false
       fail(ctx, op.item, err)

@@ -98,9 +98,9 @@ describe('goalFacts', () => {
   })
 
   it('goalText is the canonical facts line', () => {
-    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done', beds: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done beds=none')
-    assert.equal(goalText({ time: 'night', logs: 14, planks: 107, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready', beds: 'one' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready beds=one')
-    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }).endsWith('beds=both'), true, 'missing beds reads both (quiet)')
+    assert.equal(goalText({ time: 'day', logs: 3, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done', beds: 'none' }), 'time=day logs=few planks=none table=no door=no home=none inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=no surplus=no handover=none gear=done beds=none sword=no pickaxe=no blocks=low')
+    assert.equal(goalText({ time: 'night', logs: 14, planks: 107, table: 2, door: 1, home: 'built', inside: 'yes', unlit: 7, health: 4, food: 3, known: 'near', haul: 'waiting', player: 'near', chest: 'yes', surplus: 'yes', gearHandover: 'waiting', gear: 'ready', beds: 'one' }), 'time=night logs=enough planks=enough table=yes door=yes home=built inside=yes unlit=many health=low food=hungry known=near haul=waiting player=near chest=yes surplus=yes handover=waiting gear=ready beds=one sword=no pickaxe=no blocks=low')
+    assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'none', inside: 'no', unlit: 0, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'done' }).includes('beds=both'), true, 'missing beds reads both (quiet)')
     assert.equal(goalText({ time: 'day', logs: 0, planks: 0, table: 0, door: 0, home: 'built', inside: 'no', unlit: 2, health: 20, food: 20, known: 'none', haul: 'none', player: 'none', chest: 'no', surplus: 'no', gearHandover: 'none', gear: 'want' }).includes('unlit=few'), true)
     // Version-aware plank bucket (revmux body-2): a v1-sized kit reads
     // 'enough' on a v1 home (so laya still matches build there) and 'few'
@@ -969,7 +969,7 @@ describe('atl.6 menu: equip rearms the starter kit before build', () => {
     assert.equal(MENU.craft.feasible(goalFacts(bot, claimed), bot, claimed), false)
   })
   it('criterion is a short clause', () => {
-    assert.ok(STEP_CRITERIA.equip.includes('blocks are low'))
+    assert.ok(STEP_CRITERIA.equip.includes('blocks is low'))
   })
   it('equip reasons mirror the feasible gates branch for branch', () => {
     const bot = goalBot({})
@@ -1288,5 +1288,59 @@ describe('g0z.23: explore/forage veto while the castle is blocked', () => {
     assert.ok(why.includes('castle: next cell blocked, retrying later'), `why: ${why}`)
     assert.ok(why.includes('explore: castle blocked, waiting at the site'), `why: ${why}`)
     assert.ok(why.includes('forage: castle blocked, waiting at the site'), `why: ${why}`)
+  })
+})
+
+describe('equip words in the model state (idkcraft-rwuu)', () => {
+  const textOf = (items) => goalText(goalFacts(goalBot({ items }), {}))
+  const fullKit = () => [
+    { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 },
+  ]
+
+  it('wooden pickaxe plus cobble reads pickaxe=wood', () => {
+    const text = textOf([
+      { name: 'wooden_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
+      { name: 'cobblestone', count: 3 }, { name: 'dirt', count: 32 },
+    ])
+    assert.ok(text.includes('pickaxe=wood'), `text: ${text}`)
+  })
+
+  it('no pickaxe reads pickaxe=no, no sword reads sword=no', () => {
+    const text = textOf([{ name: 'dirt', count: 32 }])
+    assert.ok(text.includes('pickaxe=no'), `text: ${text}`)
+    assert.ok(text.includes('sword=no'), `text: ${text}`)
+  })
+
+  it('blocks=low rides on the tool words, below the dig-full mark', () => {
+    const kit = (dirt) => [
+      { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: dirt },
+    ]
+    assert.ok(textOf(kit(5)).includes('blocks=low'), 'low blocks read low')
+    assert.ok(textOf(kit(31)).includes('blocks=low'), 'near-full still reads low')
+    assert.ok(!textOf(kit(32)).includes('blocks='), 'full blocks read quiet')
+    // body-1: the text is identical across the 16 feasibility gate — no
+    // mid-dig re-decide, the 16->32 dig completes.
+    assert.equal(textOf(kit(15)), textOf(kit(16)))
+    // core-2: a complete kit never sees the word at any count — no 31/32
+    // churn on non-equip legs.
+    for (const dirt of [0, 5, 15, 16, 31, 32, 40]) {
+      const text = textOf([
+        { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: dirt },
+      ])
+      assert.ok(!text.includes('blocks='), `dirt=${dirt}: ${text}`)
+    }
+  })
+
+  it('a complete kit carries no equip words', () => {
+    const text = textOf(fullKit())
+    assert.ok(!text.includes('sword=no'), `text: ${text}`)
+    assert.ok(!text.includes('pickaxe='), `text: ${text}`)
+    assert.ok(!text.includes('blocks='), `text: ${text}`)
+  })
+
+  it('the equip criterion matches the new words exactly', () => {
+    assert.ok(STEP_CRITERIA.equip.includes('sword is no'), STEP_CRITERIA.equip)
+    assert.ok(STEP_CRITERIA.equip.includes('pickaxe is no or wood'), STEP_CRITERIA.equip)
+    assert.ok(STEP_CRITERIA.equip.includes('blocks is low'), STEP_CRITERIA.equip)
   })
 })
