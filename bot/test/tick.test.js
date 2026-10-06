@@ -2306,27 +2306,61 @@ describe('work mode (epic rw4)', () => {
     assert.equal(night.action, 'idle')
   })
 
-  it('rw4.15 revmux 01 body-1: an exiting comehome keeps the doorway hold by day', async () => {
+  it('rw4.15 revmux 01 body-1: an exiting comehome keeps the doorway guard by day (rw4.18: the legs run, work/fight stay out)', async () => {
     // releaseMeet arms inShelter with the exit legs so fight pursuit cannot
     // preempt the doorway (jr2.3) — the day divert must not clear it and
-    // path a work step through the wall.
-    for (const order of ['comehome', 'gocastle']) {
-      const bot = workBot()
-      bot.time = { timeOfDay: 6000 }
-      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-      bot.entities = { 1: zombie(1, 5) }
-      const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
-      ticker.work()
-      const ctx = bot._tickerCtx
-      ctx.inShelter = true
-      ctx[order] = { exiting: true, phase: 'open' }
-      try {
-        const r = await ticker.tick()
-        assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' }, order)
-        assert.equal(ctx.inShelter, true, `${order}: the doorway guard stands`)
-      } finally {
-        ticker.destroy()
-      }
+    // path a work step through the wall. rw4.18: the legs themselves run
+    // on the fight tick instead of idling; only the work divert and fight
+    // pursuit stay out.
+    const bot = workBot()
+    bot.time = { timeOfDay: 6000 }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.inShelter = true
+    ctx.comehome = { exiting: true, phase: 'open' }
+    const origComehome = BEHAVIOURS.comehome
+    const origFight = BEHAVIOURS.fight
+    let legsRan = 0
+    let fightRan = 0
+    BEHAVIOURS.comehome = () => { legsRan++ }
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'comehome')
+      assert.equal(legsRan, 1, 'the exit legs run on the day fight tick')
+      assert.equal(fightRan, 0, 'no pursuit through the doorway (jr2.3)')
+      assert.equal(ctx.inShelter, true, 'the doorway guard stands')
+      assert.equal(bot.calls.setGoal, 0, 'no work step paths while exiting')
+    } finally {
+      BEHAVIOURS.comehome = origComehome
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('rw4.18: a sheltered gocastle without an exiting comehome still idles on fight ticks', async () => {
+    // The gocastle walk is A* — from inside it would path the wall, so the
+    // hold stays. The real gocastle-from-inside flow arms a comehome exit
+    // beside it, and that exit's legs run per the test above.
+    const bot = workBot()
+    bot.time = { timeOfDay: 6000 }
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.inShelter = true
+    ctx.gocastle = { phase: 'walk' }
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(ctx.inShelter, true, 'the doorway guard stands')
+      assert.equal(bot.calls.setGoal, 0, 'no A* from inside the walls')
+    } finally {
+      ticker.destroy()
     }
   })
 })
