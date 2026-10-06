@@ -31,6 +31,7 @@ function mockBot({ items = [], ids = {}, recipes = {}, craftImpl = null, cells =
     entity: { position: pos(0, 64, 0), onGround: true },
     registry: { itemsByName },
     inventory: { items: () => bot._items, slots },
+    _syncWindow: async () => {}, // modern mineflayer: the runOp resync is instant here
     recipesFor: (id) => {
       const name = Object.keys(ids).find((n) => ids[n] === id)
       if (!(name in recipes)) throw new Error(`unexpected recipesFor(${name})`)
@@ -1268,5 +1269,62 @@ describe('honest want lines (idkcraft-ipn.9)', () => {
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-cobble', 'need 8 cobble for the furnace, going to dig'), 'need 8 cobble for the furnace, going to dig')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-logs', 'need logs for sticks, going to chop'), 'need logs for sticks, going to chop')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-water', 'need water for the bucket'), 'need water for the bucket')
+  })
+})
+
+describe('gear resync verify (idkcraft-g0z.25)', () => {
+  it('white_bed visible only after the resync lands: forged, no phantom', async () => {
+    // Beds craft through craftany -> runOp; the assayed Paper shape (craft
+    // resolves, product packets trail) must read as landed once the resync
+    // window shows the bed — no phantom retry, the forge completes.
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 3 }],
+      ids: { white_bed: 60 },
+      recipes: { white_bed: { result: { name: 'white_bed', count: 1 } } },
+    })
+    bot.craft = async (...a) => { bot.calls.craft.push(a) } // resolves, lands nothing yet
+    let revealed = false
+    bot._syncWindow = async () => {
+      if (!revealed) {
+        revealed = true
+        bot._items.push({ name: 'white_bed', count: 1 })
+      }
+    }
+    const ctx = { home: home(), stepStatus: 'running' }
+    let done = false
+    gear.runOp(bot, ctx, { item: 'white_bed', recipe: { result: { name: 'white_bed', count: 1 } }, count: 1, table: null }, () => { done = true })
+    await tick(800)
+    assert.equal(done, true, 'the forge completion ran')
+    assert.equal(bot.calls.craft.length, 1, 'no retry craft')
+    assert.equal((ctx.gearRun && ctx.gearRun.phantomTicks) || 0, 0, 'no phantom counted')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('a sustained miss logs the slots on craft-no-product', async () => {
+    const bot = mockBot({
+      items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 3 }],
+      ids: { white_bed: 60 },
+      recipes: { white_bed: { result: { name: 'white_bed', count: 1 } } },
+    })
+    bot.craft = async (...a) => { bot.calls.craft.push(a) } // resolves, lands nothing
+    const ctx = { home: home(), stepStatus: 'running' }
+    const errs = []
+    const origError = console.error
+    console.error = (m) => { errs.push(String(m)) }
+    try {
+      for (let i = 0; i < 4; i++) {
+        ctx.stepStatus = 'running'
+        gear.runOp(bot, ctx, { item: 'white_bed', recipe: { result: { name: 'white_bed', count: 1 } }, count: 1, table: null })
+        await tick(700)
+      }
+    } finally {
+      console.error = origError
+    }
+    assert.equal(ctx.stepStatus, 'failed:gear-white_bed')
+    assert.equal(bot.calls.craft.length, 4, 'three silent retries plus the loud one')
+    assert.ok(
+      errs.some((e) => e.includes('craft-no-product item=white_bed slots: [white_woolx3 oak_planksx3]')),
+      `slots line missing, errs: ${errs}`,
+    )
   })
 })

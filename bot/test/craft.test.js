@@ -609,3 +609,74 @@ describe('craft stranded residuals (idkcraft-zaw)', () => {
     bot.restoreError()
   })
 })
+
+describe('craft table pacing + slotSummary (idkcraft-g0z.25)', () => {
+  const TABLE_BLOCK = { name: 'crafting_table' }
+  // Mineflayer-shaped bot: craft looks bot.clickWindow up per click.
+  function pacingBot(craftImpl) {
+    const times = []
+    const bot = {
+      inventory: { items: () => [] },
+      _syncWindow: async () => {},
+      clickWindow: async () => { times.push(Date.now()) },
+      craft: craftImpl,
+    }
+    const origClick = bot.clickWindow
+    return { bot, times, origClick }
+  }
+
+  it('table crafts pace intra-craft clicks and restore clickWindow', async () => {
+    const seen = {}
+    const { bot, times, origClick } = pacingBot(async () => {
+      seen.wrapped = bot.clickWindow !== origClick
+      await bot.clickWindow(10, 0, 0)
+      await bot.clickWindow(11, 0, 0)
+      await bot.clickWindow(12, 0, 0)
+    })
+    await craft.safeCraft(bot, { result: { name: 'x', count: 1 } }, 1, TABLE_BLOCK, { item: 'x' })
+    assert.equal(times.length, 3)
+    assert.equal(seen.wrapped, true, 'clicks ran through the pacing wrapper')
+    assert.ok(times[2] - times[0] >= 100, `two 60 ms gaps, span ${times[2] - times[0]} ms`)
+    assert.equal(bot.clickWindow, origClick, 'wrapper restored')
+  })
+
+  it('2x2 crafts do not wrap clickWindow', async () => {
+    const seen = {}
+    const { bot, times, origClick } = pacingBot(async () => {
+      seen.wrapped = bot.clickWindow !== origClick
+      await bot.clickWindow(1, 0, 1)
+    })
+    await craft.safeCraft(bot, { result: { name: 'x', count: 1 } }, 1, null, { item: 'x' })
+    assert.equal(times.length, 1)
+    assert.equal(seen.wrapped, false, '2x2 clicks run unwrapped')
+    assert.equal(bot.clickWindow, origClick)
+  })
+
+  it('clickWindow is restored when the table craft throws', async () => {
+    const { bot, origClick } = pacingBot(async () => {
+      await bot.clickWindow(10, 0, 0)
+      throw new Error('window jammed')
+    })
+    await assert.rejects(
+      craft.safeCraft(bot, { result: { name: 'x', count: 1 } }, 1, TABLE_BLOCK, { item: 'x' }),
+      /window jammed/,
+    )
+    assert.equal(bot.clickWindow, origClick, 'wrapper restored on error')
+  })
+
+  it('slotSummary dumps stacks plus the cursor', () => {
+    const bot = {
+      inventory: {
+        items: () => [
+          { name: 'oak_planks', count: 37, slot: 9 },
+          { name: 'stick', count: 30 },
+        ],
+        selectedItem: { name: 'oak_log', count: 4 },
+      },
+    }
+    assert.equal(craft.slotSummary(bot), '[oak_planksx37@9 stickx30] cursor=oak_logx4')
+    assert.equal(craft.slotSummary({ inventory: { items: () => [] } }), '[] cursor=null')
+    assert.equal(craft.slotSummary(null), 'unreadable')
+    assert.equal(craft.slotSummary({}), 'unreadable')
+  })
+})

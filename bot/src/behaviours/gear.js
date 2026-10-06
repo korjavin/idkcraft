@@ -909,6 +909,10 @@ function runOp(bot, ctx, op, onDone) {
     // the settle: the op is not done until verified, and a tick inside the
     // window must not re-issue on a stale model.
     await new Promise((resolve) => setTimeout(resolve, PHANTOM_SETTLE_MS))
+    // g0z.25: the settled model still misses landed products (assayed on
+    // Paper 26.1.2 — the product packets trail the op), so the phantom
+    // judge reads post-resync truth, never the raw model.
+    try { await craftMod.syncInventory(bot) } catch (_) { /* unverified: the recount below still decides */ }
     ctx.gearInFlight = false
     let landed = true
     try {
@@ -923,6 +927,7 @@ function runOp(bot, ctx, op, onDone) {
       } catch (_) { /* logging best-effort */ }
       if (n > PHANTOM_RETRIES) {
         r.phantomTicks = 0
+        try { console.error(`gear craft-no-product item=${op.item} slots: ${craftMod.slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
         fail(ctx, op.item, new Error('craft-no-product'))
       }
       return // transient: re-plan re-issues next tick
