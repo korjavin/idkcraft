@@ -1789,7 +1789,17 @@ async function decide(bot, ctx) {
     stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry) {
+  // Stall-point plan (idkcraft-vmzq.5): a forced one-shot step from the
+  // L2 planner. Forces a real re-decide past every shortcut below (but
+  // waits out the in-flight and stickiness holds above — never preempts
+  // a craft click or a door phase).
+  let planStep = null
+  try {
+    planStep = ctx && typeof ctx.taskPlanStep === 'string' ? ctx.taskPlanStep : null
+  } catch (_) {
+    planStep = null
+  }
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || planStep) {
     const askKey = `${text}\n${status || ''}`
     // rw4.16: a finished step that can no longer progress is never
     // re-issued — self-advancing steps are never held, so the shortcut
@@ -1814,9 +1824,9 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !planStep && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
-    const names = Object.keys(MENU).filter((n) => {
+    let names = Object.keys(MENU).filter((n) => {
       try {
         if (!MENU[n].feasible(facts, bot, ctx) || !registered(n)) return false
       } catch (_) {
@@ -1824,9 +1834,29 @@ async function decide(bot, ctx) {
       }
       return !failHolds(ctx, n, text, bot)
     })
-    const why = !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
+    // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
+    // step as the only menu entry. Consumed always (one-shot); applied only
+    // while still feasible and registered (a stale answer degrades to the
+    // normal menu, never to a broken step). failHolds is bypassed: retrying
+    // a held step is the planner's job.
+    let planApplied = false
+    if (planStep) {
+      try { ctx.taskPlanStep = null } catch (_) { /* consume best-effort */ }
+      let ok = false
+      try {
+        ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
+      } catch (_) {
+        ok = false
+      }
+      if (ok) {
+        names = [planStep]
+        planApplied = true
+      }
+    }
+    const why = planApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
+    if (planApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     ctx.step = choice.step
     // A fresh equip pick starts with fresh run counters (revmux round-1):

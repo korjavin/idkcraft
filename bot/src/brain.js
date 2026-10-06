@@ -11,6 +11,9 @@ const metrics = require('./metrics')
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
 const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
+// Stall-point planner (idkcraft-vmzq.5): off the tick path, so its own
+// deadline, not BRAIN_TIMEOUT_MS.
+const PLAN_TIMEOUT_MS = 20000
 
 // Remote-brain source name: the JEV hostname stays 'jev', anything else
 // (e.g. the compose service laya) is addressed by its own hostname.
@@ -138,6 +141,70 @@ function askErrorStreak(situation) {
   return (situation && askErrors.get(situation)) || 0
 }
 
+// Stall-point planner (idkcraft-vmzq.5): one JEV choice over the feasible
+// goal menu with the goal/situation/history OBJECT state (the JEV docs
+// recommend object states: the material you would present to a panel of
+// experts). Unlike ask(), this reads the answer's probabilities +
+// confidence — the caller gates low-confidence answers back to the
+// rule-based park. Laya never gets this call (fact-insensitive on menus),
+// so plan() always posts to JEV, whatever URL the tick ask uses — the
+// alone-exemption for plan() falls out of that: a laya-stepped-down brain
+// still plans via JEV. It exists only when the JEV key is present, so
+// key-absent/stub brains keep the .3 deterministic park with no new env.
+// plan({ state, instructions, criteria }) -> { step, confidence,
+// probabilities, source } or throws (timeout/http/invalid/error, the same
+// outcome vocabulary as ask()). A single option answers directly.
+function planner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS) {
+  const doFetch = fetchFn || fetch
+  async function plan({ state, instructions, criteria }) {
+    const keys = Object.keys(criteria || {})
+    if (keys.length === 0) throw new Error('jev missing plan answer')
+    if (keys.length === 1) return { step: keys[0], confidence: 1, probabilities: { [keys[0]]: 1 }, source: 'single' }
+    const endTimer = metrics.brainDuration.startTimer({ source: 'jev' })
+    try {
+      const headers = { 'Content-Type': 'application/json' }
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(new DOMException('brain timeout', 'TimeoutError')), timeoutMs)
+      let data
+      try {
+        const res = await doFetch(JEV_ENDPOINT, {
+          method: 'POST',
+          signal: ac.signal,
+          headers,
+          body: JSON.stringify({
+            model: JEV_MODEL,
+            state,
+            questions: { action: { type: 'choice', instructions, criteria } }
+          })
+        })
+        if (!res.ok) throw new Error(`jev http ${res.status}`)
+        data = await res.json()
+      } finally {
+        clearTimeout(timer)
+      }
+      const ans = data && data.answers && data.answers.action
+      const choice = ans && ans.choice
+      if (typeof choice !== 'string' || !keys.includes(choice)) throw new Error('jev missing plan answer')
+      const confidence = ans && typeof ans.confidence === 'number' ? ans.confidence : null
+      const probabilities = ans && ans.probabilities && typeof ans.probabilities === 'object' ? ans.probabilities : null
+      endTimer()
+      metrics.brainRequests.inc({ source: 'jev', outcome: 'ok' })
+      return { step: choice, confidence, probabilities, source: 'jev' }
+    } catch (err) {
+      endTimer()
+      const msg = String(err && err.message ? err.message : err)
+      const outcome = err && err.name === 'TimeoutError' ? 'timeout'
+        : msg.startsWith('jev http') ? 'http'
+        : msg.startsWith('jev missing') ? 'invalid'
+        : 'error'
+      metrics.brainRequests.inc({ source: 'jev', outcome })
+      throw err
+    }
+  }
+  return { plan }
+}
+
 function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   const doFetch = fetchFn || fetch
   const source = sourceForUrl(url)
@@ -226,6 +293,9 @@ function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
     name: source,
     source,
     ask,
+    // The stall-point planner rides every keyed brain (even a laya one):
+    // plan() posts to JEV, never to the tick URL.
+    ...((apiKey) ? planner(apiKey, doFetch) : {}),
     // reason is the hard-case name hybridBrain passes (isHard's answer, the
     // one fact that distinguishes the hard states); it rides the wire as a
     // leading hard=<reason> word. Sprint is NOT asked: the model answered
@@ -319,6 +389,7 @@ function hybridBrain(remote) {
     name: 'hybrid',
     source: remote && remote.name,
     ...((remote && typeof remote.ask === 'function') ? { ask: (q) => remote.ask(q) } : {}),
+    ...((remote && typeof remote.plan === 'function') ? { plan: (q) => remote.plan(q) } : {}),
     async decide(state) {
       const fsm = stubBrain.decide(state)
       const reason = isHard(state)
@@ -357,4 +428,4 @@ function makeBrain(env) {
   return stubBrain
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS }

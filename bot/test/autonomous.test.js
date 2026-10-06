@@ -168,6 +168,46 @@ describe('autonomous mode', () => {
     assert.equal(ticker.getBrainEngine(), 'off', 'paid URL never runs alone')
   })
 
+  it('downgraded brains keep plan() while the key exists (vmzq.5 exemption)', async () => {
+    // To laya: the tick ask steps down, the planner still reaches JEV.
+    process.env.BRAIN_URL = 'http://laya:8000/v1/systemone'
+    process.env.TYPESAFE_API_KEY = 'k'
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })
+    handleChat(bot, ticker, 'Steve', 'brain jev')
+    handleChat(bot, ticker, 'Steve', 'autonomous on')
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'laya')
+    assert.equal(typeof bot._tickerCtx.brain.plan, 'function', 'laya-stepped-down brain keeps plan()')
+    // To off: stub decide, planner attached.
+    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
+    const bot2 = mockBot()
+    bot2.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker2 = createTicker({ bot: bot2, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })
+    handleChat(bot2, ticker2, 'Steve', 'brain jev')
+    handleChat(bot2, ticker2, 'Steve', 'autonomous on')
+    bot2.players = {}
+    for (let i = 0; i < 3; i++) await ticker2.tick()
+    assert.equal(ticker2.getBrainEngine(), 'off')
+    assert.equal(typeof bot2._tickerCtx.brain.plan, 'function', 'off brain keeps plan() with a key')
+    assert.equal(bot2._tickerCtx.brain.ask, undefined, 'no tick ask while off')
+    const d = await bot2._tickerCtx.brain.decide({ distance_to_player: 1, player_moving: false })
+    assert.equal(d.source, 'stub', 'off decide stays the free stub')
+  })
+
+  it('off downgrade without a key has no plan()', async () => {
+    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
+    delete process.env.TYPESAFE_API_KEY
+    const bot = mockBot()
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev', autonomous: true })
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off')
+    assert.equal(bot._tickerCtx.brain.plan, undefined, 'keyless off brain cannot plan')
+  })
+
   it('chat toggle outlives the ticker via the effective flag', () => {
     assert.equal(parseAutonomous({}), false)
     assert.equal(parseAutonomous({ BOT_AUTONOMOUS: '1' }), true)

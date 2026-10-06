@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
-const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard, brainTimeoutMs, layaUrl } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard, brainTimeoutMs, layaUrl, planner } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
@@ -315,9 +315,15 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
       const url = layaUrl()
       const to = url ? 'laya' : 'off'
+      // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask
+      // runs free/off, but the stall-point planner still reaches JEV. A
+      // laya-stepped-down brain keeps plan() automatically (plan posts to
+      // JEV, never to the tick URL); the off brain needs it attached, and
+      // only when the key exists.
+      const key = process.env.TYPESAFE_API_KEY
       const next = to === 'laya'
-        ? hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
-        : stubBrain
+        ? hybridBrain(jevBrain(key, undefined, brainTimeoutMs(process.env), url))
+        : key ? { ...stubBrain, ...planner(key) } : stubBrain
       ctx.brainRestore = { from: 'jev', manual: ctx.manualBrain === 'jev' }
       doSetBrain(next, to)
       console.log(`brain auto to=${to} (nobody online)`)

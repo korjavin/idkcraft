@@ -159,4 +159,11 @@ const taskStallTotal = new client.Counter({
   help: 'Task stall escalations by task and level (L1 = honest line, L2 = park, L3 = day latch)',
   labelNames: ['task', 'level']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, setVitals, serve }
+// Stall-point planner (idkcraft-vmzq.5): plan resolutions by answer — a
+// menu step the executive forces one-shot, or park (rule-based fallback).
+const taskPlanTotal = new client.Counter({
+  name: 'idkcraft_bot_task_plan_total',
+  help: 'Stall-point plan resolutions by answer (menu step or park)',
+  labelNames: ['answer']
+})
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, setVitals, serve }

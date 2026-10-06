@@ -1,10 +1,11 @@
 'use strict'
 
-// Task executive, slices 1-2 (idkcraft-vmzq.2/.3): progress invariant +
-// stall clock + L1 honest line + L2/L3 park ladder. No behaviour changes:
-// this only measures (gauges), times the stall, chats/logs the ladder
-// lines, and parks the task (a menu veto, honoured by goal.js) with a
-// diagnosis. Re-plan is .5.
+// Task executive, slices 1-2 (idkcraft-vmzq.2/.3) + re-plan (.5): progress
+// invariant + stall clock + L1 honest line + L2/L3 park ladder. No
+// behaviour changes: this only measures (gauges), times the stall,
+// chats/logs the ladder lines, fires one JEV step pick at L2 (the answer
+// rides ctx.taskPlanStep, honoured one-shot by goal.js), and parks the
+// task (a menu veto, honoured by goal.js) with a diagnosis.
 //
 // Active task: the house while unbuilt (build outranks castle in STEP_ORDER),
 // else the castle while ordered, incomplete and not owner-parked, else
@@ -27,6 +28,12 @@ const TASK_PARKS_PER_DAY = 3
 const TASK_PARK_DIAG_MAX = 200
 const TASK_HOUSE_CACHE_MS = 60 * 1000
 const TASK_FAILS_KEPT = 3
+// Stall-point planner gate (idkcraft-vmzq.5): below this confidence no
+// option holds a majority of the model's belief, so the rule-based park
+// runs instead of forcing a coin flip. Measured via stand-steps jev
+// +context on goal-context-eval (2026-10-06): right answers mean 0.70
+// (n=47), wrong 0.56 (n=15).
+const TASK_PLAN_MIN_CONF = 0.5
 // Per-tick stall increment cap (verify core-2): ticks that return before the
 // hook (idle, recover, reflexes) leave lastAt stale; without a clamp the next
 // hooked tick would bill the whole gap, nights included, as one instant L1.
@@ -283,6 +290,9 @@ function parkTask(bot, ctx, kind, done, total, now) {
   try {
     const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
     if (!rec || typeof rec !== 'object' || rec.taskPark) return undefined
+    // A park voids any forced step decide() has not consumed yet (vmzq.5):
+    // the retry window is over, the vetoes own the menu now.
+    if (ctx && typeof ctx === 'object') ctx.taskPlanStep = null
     const diagnosis = diagnose(bot, ctx)
     const day = utcDay(now)
     const prev = rec.parkHist
@@ -310,10 +320,253 @@ function parkTask(bot, ctx, kind, done, total, now) {
   return undefined
 }
 
+// A same-step answer is only forcible while the step is HELD (revmux 01
+// core-1, 02 core-1): a running/done/failed-but-released ctx.step is what
+// decide() would do anyway, so forcing it only resets the window.
+// Retrying a hold is the planner's job, so a failed + holding step stays.
+function planRetryable(ctx, bot) {
+  try {
+    const step = ctx && typeof ctx.step === 'string' ? ctx.step : null
+    const status = ctx && typeof ctx.stepStatus === 'string' ? ctx.stepStatus : ''
+    if (!step || !status.startsWith('failed')) return false
+    const goal = require('./goal')
+    return goal.failHolds(ctx, step, goal.goalText(goal.goalFacts(bot, ctx), ctx && ctx.home), bot)
+  } catch (_) {
+    return false
+  }
+}
+
+// Plan menu: feasible + registered, failHolds IGNORED (retrying a held
+// step is the point: at a stall the helping step is usually held), rest
+// excluded (forcing rest is idling; an only-rest menu parks instead).
+// ctx.step is excluded unless it is held (see planRetryable above).
+function planMenu(bot, ctx) {
+  const goal = require('./goal')
+  const facts = goal.goalFacts(bot, ctx)
+  const step = ctx && typeof ctx.step === 'string' ? ctx.step : null
+  const retryable = step ? planRetryable(ctx, bot) : false
+  return goal.STEP_ORDER.filter((n) => {
+    if (n === 'rest') return false
+    if (step && n === step && !retryable) return false
+    try {
+      return !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
+    } catch (_) {
+      return false
+    }
+  })
+}
+
+// Plan state: the goal/situation/history object (owner idea): the goal +
+// progress + the .2/.3 diagnosis + recent failures + stall minutes + the
+// byte-identical per-tick facts text (no goal words are added to goalText
+// itself — the tick path stays as is).
+function planState(bot, ctx, kind, done, total, state) {
+  let factsText = ''
+  try {
+    const goal = require('./goal')
+    factsText = goal.goalText(goal.goalFacts(bot, ctx), ctx && ctx.home)
+  } catch (_) {
+    factsText = ''
+  }
+  let recent = []
+  try {
+    const fails = state && Array.isArray(state.fails) ? state.fails : []
+    recent = fails.slice()
+  } catch (_) {
+    recent = []
+  }
+  return {
+    goal: kind === 'castle' ? 'build castle' : 'build home',
+    progress: `${done}/${total}`,
+    blocked_on: diagnose(bot, ctx),
+    recent,
+    since_min: Math.floor(((state && state.stallMs) || 0) / 60000),
+    facts: factsText,
+  }
+}
+
+function planErrReason(err) {
+  try {
+    if (err && err.name === 'TimeoutError') return 'timeout'
+    const msg = String((err && err.message) || err)
+    if (msg.startsWith('jev http')) return 'http'
+    if (msg.startsWith('jev missing')) return 'invalid'
+    return 'error'
+  } catch (_) {
+    return 'error'
+  }
+}
+
+// Top-3 probabilities for the plan line (stand-steps.js fmtProbs shape).
+function fmtProbs(probs) {
+  try {
+    if (!probs || typeof probs !== 'object') return '?'
+    const ks = Object.keys(probs).sort((a, b) => probs[b] - probs[a]).slice(0, 3)
+    if (ks.length === 0) return '?'
+    return ks.map((k) => `${k}:${Number(probs[k]).toFixed(2)}`).join(',')
+  } catch (_) {
+    return '?'
+  }
+}
+
+// Fire the one async plan call for this stall run. Not on the tick path:
+// the answer lands in onPlanAnswer and the next tick consumes it. Returns
+// true when a call is in flight — the caller waits instead of parking.
+// False means no planner (no plan() on the brain, an empty menu, or a
+// menu that failed to build): park deterministically.
+function tryPlan(bot, ctx, kind, done, total, state) {
+  const brain = ctx && ctx.brain
+  if (!brain || typeof brain.plan !== 'function') return false
+  let menu = []
+  try {
+    menu = planMenu(bot, ctx)
+  } catch (_) {
+    return false
+  }
+  if (menu.length === 0) return false
+  let criteria = {}
+  let instructions = ''
+  try {
+    const goal = require('./goal')
+    for (const n of menu) criteria[n] = goal.STEP_CRITERIA[n]
+    instructions = goal.ASK_INSTRUCTIONS
+  } catch (_) {
+    return false
+  }
+  const seq = (state.planSeq = (state.planSeq || 0) + 1)
+  state.planTried = true
+  state.planPending = seq
+  const req = { state: planState(bot, ctx, kind, done, total, state), instructions, criteria }
+  Promise.resolve()
+    .then(() => brain.plan(req))
+    .then(
+      (ans) => onPlanAnswer(ctx, kind, state, seq, ans, null),
+      (err) => onPlanAnswer(ctx, kind, state, seq, null, err),
+    )
+  return true
+}
+
+// Plan resolver: stores the answer for the next tick. Stale answers
+// (progress or a resume cleared the pending marker, or the task switched
+// to a new state object) are dropped — the stall they planned for is over.
+function onPlanAnswer(ctx, kind, state, seq, ans, err) {
+  try {
+    if (!ctx || !ctx.task || ctx.task[kind] !== state) return
+    if (state.planPending !== seq) return
+    state.planPending = null
+    if (err || !ans || typeof ans.step !== 'string') {
+      state.planAnswer = { park: err ? planErrReason(err) : 'invalid' }
+      return
+    }
+    state.planAnswer = {
+      step: ans.step,
+      conf: typeof ans.confidence === 'number' ? ans.confidence : null,
+      probs: ans.probabilities && typeof ans.probabilities === 'object' ? ans.probabilities : null,
+      source: typeof ans.source === 'string' ? ans.source : 'jev',
+    }
+  } catch (_) { /* a dropped answer parks on the next tick */ }
+}
+
+// Consume a stored plan answer: force a valid confident step one-shot
+// (fresh stall window; decide() honours ctx.taskPlanStep), or park
+// deterministically on any failure. Returns the park diagnosis when it
+// parked, null when it forced a step.
+function consumePlan(bot, ctx, kind, done, total, state, now) {
+  const ans = state.planAnswer
+  state.planAnswer = null
+  const parkFallback = (why) => {
+    try {
+      console.log(`task plan kind=${kind} progress=${done}/${total} source=${(ans && ans.source) || 'jev'} answer=park why=${why}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      metrics.taskPlanTotal.inc({ answer: 'park' })
+    } catch (_) { /* counter best-effort */ }
+    const diagnosis = parkTask(bot, ctx, kind, done, total, now)
+    return diagnosis === undefined ? 'unknown' : diagnosis
+  }
+  let step = ans && typeof ans.step === 'string' ? ans.step : null
+  if (step) {
+    try {
+      const goal = require('./goal')
+      if (!goal.MENU[step] || step === 'rest') step = null
+    } catch (_) {
+      step = null
+    }
+  }
+  if (!step) return parkFallback((ans && ans.park) || 'invalid')
+  // Same-step stay (revmux 01 core-1, 02 core-1): an unheld ctx.step is
+  // not offered, so an answer naming it is off-menu — park instead of
+  // resetting the window for the loop that just stalled. A failed +
+  // holding step passes (the hold-retry carve-out).
+  if (ctx && step === ctx.step && !planRetryable(ctx, bot)) return parkFallback('same-step')
+  // Stale answer (revmux 01 core-1): the menu moved between the call and
+  // the consume tick, so decide() would degrade the force to the normal
+  // menu — park instead of resetting the window for a force that cannot
+  // apply. Holds are NOT consulted (same rule as decide()'s force path).
+  let fresh = false
+  try {
+    const goal = require('./goal')
+    const facts = goal.goalFacts(bot, ctx)
+    fresh = !!(goal.MENU[step] && goal.MENU[step].feasible(facts, bot, ctx) && goal.registered(step))
+  } catch (_) {
+    fresh = false
+  }
+  if (!fresh) return parkFallback('stale')
+  if (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) {
+    return parkFallback(`low-confidence conf=${ans.conf.toFixed(2)}`)
+  }
+  ctx.taskPlanStep = step
+  state.stallMs = 0
+  state.lastAt = now
+  state.lastL1At = null
+  state.lastL1Diag = null
+  // planTried stays: the forced step gets one fresh window, then the
+  // deterministic park (at most one plan call per stall episode).
+  setStallGauge(kind, 0)
+  try {
+    const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
+    console.log(`task plan kind=${kind} progress=${done}/${total} source=${ans.source || 'jev'} answer=${step} conf=${conf} probs=${fmtProbs(ans.probs)}`)
+  } catch (_) { /* log best-effort */ }
+  try {
+    console.log(`task plan disagree kind=${kind} plan=${step} rule=park`)
+  } catch (_) { /* log best-effort */ }
+  try {
+    metrics.taskPlanTotal.inc({ answer: step })
+  } catch (_) { /* counter best-effort */ }
+  return null
+}
+
+// A plan in flight (or an unconsumed answer) belongs to the stall that
+// fired it: progress ends that stall, so the next one plans fresh. The
+// pending-marker clear orphans the late answer (onPlanAnswer drops it).
+function clearPlan(state) {
+  try {
+    if (state && typeof state === 'object') {
+      state.planTried = false
+      state.planPending = null
+      state.planAnswer = null
+    }
+  } catch (_) { /* clear best-effort */ }
+}
+
 function maybeL2(bot, ctx, kind, done, total, state, now) {
   if (state.stallMs < TASK_STALL_L2_MS) return
   const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
   if (!rec || rec.taskPark) return
+  // Stall-point planner (vmzq.5): one async JEV step pick per stall run
+  // before the deterministic park. This tick only fires the call; the
+  // answer applies on the next tick. Park/ask-owner stay rule-based —
+  // the planner only ever picks a menu step.
+  if (state.planAnswer) {
+    const parked = consumePlan(bot, ctx, kind, done, total, state, now)
+    if (parked !== null) {
+      state.lastL1At = now
+      state.lastL1Diag = parked
+    }
+    return
+  }
+  if (state.planPending) return
+  if (!state.planTried && tryPlan(bot, ctx, kind, done, total, state)) return
   const diagnosis = parkTask(bot, ctx, kind, done, total, now)
   if (diagnosis === undefined) return
   // The park line carries this tick's diagnosis, so the L1 must not fire
@@ -397,6 +650,10 @@ function taskLine(ctx) {
 function resetTask(ctx) {
   try {
     if (ctx) ctx.task = null
+  } catch (_) { /* reset best-effort */ }
+  try {
+    // A new episode plans fresh (vmzq.5): no stale forced step survives.
+    if (ctx) ctx.taskPlanStep = null
   } catch (_) { /* reset best-effort */ }
   try {
     metrics.taskStallSeconds.set({ task: 'castle' }, 0)
@@ -612,6 +869,7 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.lastL1At = null
         state.lastL1Diag = null
         state.fails = []
+        clearPlan(state)
         setStallGauge(kind, 0)
         return
       }
@@ -670,6 +928,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           state.lastL1At = null
           state.lastL1Diag = null
           state.fails = []
+          clearPlan(state)
           setStallGauge(kind, 0)
           return
         } else {
@@ -685,6 +944,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       state.lastL1At = null
       state.lastL1Diag = null
       state.fails = []
+      clearPlan(state)
       setStallGauge(kind, 0)
       return
     }
@@ -703,4 +963,4 @@ function taskTick(bot, ctx, now = Date.now()) {
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, STALL_TICK_CLAMP_MS, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks }
