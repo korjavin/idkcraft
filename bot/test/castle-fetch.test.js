@@ -1013,6 +1013,20 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(bot.blockAt({ x, y, z }).name, 'air', 'the cell broke')
   })
 
+  it('a trench cell past pickup reach walks in instead of digging far (vmzq.20)', () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(99, 64, 203) }) // ~3.3 from side-0 column 0
+    const ctx = { castle: castleState() }
+    const orig = console.log
+    console.log = () => {}
+    try { fetch(bot, ctx) } finally { console.log = orig }
+    const f = ctx.castleFetch
+    assert.ok(f && f.target && f.target.quarry, 'target held')
+    assert.equal(bot.calls.goals.length, 1, 'one walk issued')
+    assert.equal(f.starts, undefined, 'no dig from pickup-out-of-reach')
+    assert.equal(f.spend.walk, 1)
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
   it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
     const bot = makeBot({ items: TOOLS() })
     const ctx = { castle: castleState(), castleFetch: { kind: 'stone', spend: { dig: 1, walk: 0, other: 0 } }, castleFetchInFlight: true, castleFetchFlight: 'dig' }

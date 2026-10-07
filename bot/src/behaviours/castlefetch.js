@@ -607,9 +607,13 @@ function digTick(bot, ctx, f) {
   }
   const b = targetAt(t)
   const dist = Math.hypot(bp.x - (t.x + 0.5), bp.y - (t.y + 0.5), bp.z - (t.z + 0.5))
-  // A trench cell is dug from dig reach (the next stance steps over the
-  // drops); surface stone from pickup reach.
-  if (dist > (t.quarry ? DIG_REACH : PICKUP_REACH + 0.5)) {
+  // Every cell is dug from pickup reach — trench cells included. The old
+  // trench exception (dig from 4, "the next stance steps over the drops")
+  // never collected: the stance advances along the trench while the drops
+  // stay behind, and ~2/3 of dug blocks never reached the pack (rig: 368
+  // issues banked +113). Linger-by-construction: a stance within 2.5 of
+  // every dug cell sits on the drops through the dig.
+  if (dist > PICKUP_REACH + 0.5) {
     const range = dist > DIG_REACH ? 2 : 1
     walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
     if (stalled(t, dist, APPROACH_WAITS)) {
@@ -631,8 +635,8 @@ function digTick(bot, ctx, f) {
     return
   }
   if (t.quarry) {
-    // Trench drops are collected a stance later, so no cobble-gain strike;
-    // a cell that survives its digs is skipped instead.
+    // Drops land at the digging stance (pickup reach), so no
+    // cobble-gain strike; a cell that survives its digs is skipped instead.
     if (++t.tries > QUARRY_TRIES) {
       spend(f, 'other')
       try { console.log(`castlefetch stone: cell refused ${QUARRY_TRIES}x at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
