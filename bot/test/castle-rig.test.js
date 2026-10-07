@@ -116,6 +116,10 @@ describe('castle-replay.js verdict contract', () => {
     // Usernames cap at 16 chars (stuck-replay precedent): the length guard
     // must stay, or an overlong TAG dies in the hello decode server-side.
     assert.ok(src.includes('exceed 16 chars'), 'missing 16-char name guard')
+    // Holes report (vmzq.27): the follower's `castle: ` chats land in the
+    // log + OUT record, or the one-line acceptance has no rig evidence.
+    assert.ok(src.includes('CASTLE-RIG say: '), 'missing holes say-capture')
+    assert.ok(src.includes('said: seen.said'), 'missing said record field')
   })
 
   it('counts castle<->castlefetch flips in both directions (one-char join bug)', () => {

@@ -54,7 +54,7 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /,
   /^CASTLE-RIG /, /^task castle /, /no progress for/]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [] }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [] }
 function hookConsole() {
   console.log = (...a) => {
     const line = a.map(String).join(' ')
@@ -374,16 +374,29 @@ async function main() {
         flips: seen.flips, deaths, steps: seen.steps, fails: seen.fails,
         partial: Date.now() < endAt,
         tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-        kit: KIT, tickrate: TICKRATE, series,
+        kit: KIT, tickrate: TICKRATE, said: seen.said, series,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
   sample()
   checkpoint()
+  // Holes report (vmzq.27): the follower's own `castle: ` chats (the ack
+  // has no colon, so the prefix skips it) land in the log + OUT record.
+  let scannedSay = chats.length
+  const drainSaid = () => {
+    for (; scannedSay < chats.length; scannedSay++) {
+      const msg = chats[scannedSay]
+      if (typeof msg === 'string' && msg.startsWith('castle: ')) {
+        seen.said.push(msg.slice(0, 300))
+        origLog(`CASTLE-RIG say: ${msg.slice(0, 300)}`)
+      }
+    }
+  }
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
   while (Date.now() < endAt) {
     await sleep(15000)
     const s = sample()
+    drainSaid()
     checkpoint()
     const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
     try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
@@ -392,6 +405,7 @@ async function main() {
       origLog(line)
     }
   }
+  drainSaid()
   const last = series[series.length - 1] || {}
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0
@@ -401,7 +415,7 @@ async function main() {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-    kit: KIT, tickrate: TICKRATE, blocked: blockedSeeds, series,
+    kit: KIT, tickrate: TICKRATE, blocked: blockedSeeds, said: seen.said, series,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
