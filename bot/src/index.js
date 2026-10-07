@@ -11,7 +11,7 @@ const { UNSEEN_HOME_TICKS } = stuck
 const body = require('./body')
 const { handleChat, advancePendingSearch, clearPendingSearch, wakeBody } = require('./chat')
 const { createOrders } = require('./orders')
-const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard } = require('./reflexes')
+const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard, abortReflex } = require('./reflexes')
 const { createGreeter } = require('./greet')
 const { addSwimExits, addSwimPrune } = require('./swim')
 const doors = require('./doors')
@@ -681,6 +681,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
         console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
         return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
+      }
+      // Water abort owns the body over every order except breath (n9ta): a
+      // swimmer under drowned fire beaches first and resumes after. Oxygen
+      // kills faster, so breath preempts and hands off here on full lungs.
+      if (abortReflex(bot, ctx, state)) {
+        const abortPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+        console.log(`decision source=reflex action=abort dist=${abortPlayerDist} ${pathSuffix()}`)
+        return { decision: { action: 'abort', sprint: false, source: 'reflex' }, calledBrain }
       }
       // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
       stuck.update(bot, ctx)
@@ -1470,4 +1478,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, abortReflex }

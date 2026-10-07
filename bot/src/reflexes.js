@@ -463,6 +463,232 @@ function headInAir(bot) {
   } catch (_) { return false }
 }
 
+// Water abort (idkcraft-n9ta): rig A drowned twice mid-crossing on the
+// site<->spawn-quarry runs (nearest=drowned, one body found submerged).
+// A bot swimming deep water has no footing: it cannot outswim a drowned,
+// cannot reach a trident thrower, and melee trades 1-for-3 while treading
+// water. On threat (a water mob or any hostile already in the water within
+// range, or fresh damage from anything unseen) the crossing suspends and
+// the bot beaches at the nearest landable shore — the entry shore when it
+// is closer — then the leg resumes. Wading (footing below) fights
+// normally, and dry-land threats never trigger: a zombie ashore while the
+// bot swims past is not its fight. Episode latch like breath (trigger,
+// drive, release, cooldown): release on footing regained, threat gone, or
+// the stuck menu appearing (it owns the body then); a short cooldown
+// paces waterline re-probes. Rides the tick's baseline owner like
+// fleeReflex (a keyed pathfinder goal needs no lease edge); breath still
+// preempts (oxygen kills faster) and hands off here on full lungs.
+const ABORT_RANGE = 6
+const ABORT_CLEAR_DIST = 8 // release band: threat must leave past this (no mid-water flap)
+const ABORT_HURT_MS = 5000 // fresh-damage window (mirrors index.js HURT_FRESH_MS; this module cannot import index)
+const ABORT_COOLDOWN_MS = 15000 // post-release calm: paces waterline re-probes, not a latch
+const ABORT_SCAN_MS = 5000 // shore re-scan throttle (mirrors shelter-dry)
+const ABORT_STALL_MS = 15000 // no-approach -> skip the shore (mirrors shelter-dry)
+const ABORT_MAX_SKIP = 3 // skipped shores -> give up, release to the leg
+const ABORT_DY_LO = -1 // waterline stances only: wadable or a +1 exit;
+const ABORT_DY_HI = 1 // deeper is caves, higher is h04-unexitable walls
+const ABORT_WATER_MOBS = new Set(['drowned', 'guardian', 'elder_guardian'])
+const ABORT_WETFLORA = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
+function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
+  let inWater = false
+  try { inWater = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { inWater = false }
+  if (!inWater) {
+    try { trackAbortDry(bot, ctx) } catch (_) { /* entry shore best-effort */ }
+  }
+  if (ctx.abort) return driveAbort(bot, ctx, state, nowMs)
+  if (!inWater) return false
+  if (ctx.breath) return false
+  if (ctx.stuck || ctx.recovery) return false
+  if (typeof ctx.abortCoolUntil === 'number' && nowMs < ctx.abortCoolUntil) return false
+  if (abortFooting(bot)) return false
+  if (!abortThreat(bot, ctx, state, nowMs, ABORT_RANGE)) return false
+  const target = pickAbortShore(bot, ctx, [])
+  if (!target) return false
+  try { if (typeof bot.stopDigging === 'function') bot.stopDigging() } catch (_) { /* nothing in flight */ }
+  dropAbortGoal(bot, ctx)
+  ctx.abort = { x: target.x, y: target.y, z: target.z, skip: [], scanAt: nowMs, best: undefined, progressAt: nowMs }
+  driveAbortGoal(bot, ctx)
+  console.log(`reflex abort-shore threat=${abortThreatName(state)} target=${target.x},${target.y},${target.z}`)
+  try { metrics.events.inc({ event: 'reflex_abort' }) } catch (_) { /* metrics best-effort */ }
+  return true
+}
+
+function driveAbort(bot, ctx, state, nowMs) {
+  const a = ctx.abort
+  let inWater = false
+  try { inWater = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { inWater = false }
+  if (!inWater || abortFooting(bot)) {
+    releaseAbort(bot, ctx, nowMs)
+    return false
+  }
+  if (!abortThreat(bot, ctx, state, nowMs, ABORT_CLEAR_DIST)) {
+    releaseAbort(bot, ctx, nowMs)
+    return false
+  }
+  if (ctx.stuck || ctx.recovery) {
+    releaseAbort(bot, ctx, nowMs)
+    return false
+  }
+  if (!a || typeof a.x !== 'number') {
+    releaseAbort(bot, ctx, nowMs)
+    return false
+  }
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number') {
+      const dist = Math.hypot(bp.x - (a.x + 0.5), bp.z - (a.z + 0.5))
+      if (dist < (a.best === undefined ? Infinity : a.best) - 0.5) {
+        a.best = dist
+        a.progressAt = nowMs
+      } else if (nowMs - (a.progressAt || nowMs) > ABORT_STALL_MS) {
+        a.skip.push({ x: a.x, z: a.z })
+        a.x = null
+        a.scanAt = 0
+      }
+    }
+  } catch (_) { /* progress best-effort */ }
+  if ((a.x === null || a.x === undefined) && a.skip.length < ABORT_MAX_SKIP && !(nowMs - (a.scanAt || 0) < ABORT_SCAN_MS)) {
+    a.scanAt = nowMs
+    let next = null
+    try { next = pickAbortShore(bot, ctx, a.skip) } catch (_) { next = null }
+    if (next) {
+      a.x = next.x
+      a.y = next.y
+      a.z = next.z
+      a.best = undefined
+      a.progressAt = nowMs
+      try { ctx.lastGoalKey = '' } catch (_) { /* re-issue below */ }
+    } else {
+      a.scanEmpty = true
+    }
+  }
+  if (a.x === null || a.x === undefined) {
+    // Nothing more to swim to (skips exhausted, or the fresh scan is
+    // empty): release so the leg advances, and the cooldown re-tries from
+    // further along. A pending throttled scan holds briefly instead.
+    if (a.skip.length >= ABORT_MAX_SKIP || a.scanEmpty) {
+      try { console.log('reflex abort-shore give-up') } catch (_) { /* log best-effort */ }
+      releaseAbort(bot, ctx, nowMs)
+      return false
+    }
+    return true // throttled re-scan pending: hold the water, keep the body
+  }
+  driveAbortGoal(bot, ctx)
+  return true
+}
+
+function driveAbortGoal(bot, ctx) {
+  const a = ctx.abort
+  if (!a || typeof a.x !== 'number') return
+  const key = `abort-shore:${a.x},${a.z}`
+  let moving = false
+  try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
+  if (key !== ctx.lastGoalKey || !moving) {
+    try {
+      bot.pathfinder.setGoal(new goals.GoalNear(a.x + 0.5, a.y, a.z + 0.5, 1), false)
+      ctx.lastGoalKey = key
+    } catch (_) { /* retry next tick */ }
+  }
+}
+
+function releaseAbort(bot, ctx, nowMs = Date.now()) {
+  ctx.abort = null
+  ctx.abortCoolUntil = nowMs + ABORT_COOLDOWN_MS
+  dropAbortGoal(bot, ctx)
+}
+
+function dropAbortGoal(bot, ctx) {
+  try {
+    if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+  } catch (_) { /* body best-effort */ }
+  ctx.lastGoalKey = ''
+}
+
+// Footing: a solid cube directly below the feet (wading). One cell is
+// enough: flora at the feet is walk-through, so the cell below is the bed
+// whenever the body stands. Unknown reads swimming (fail toward the abort
+// under threat; the trigger still needs a target).
+function abortFooting(bot) {
+  try {
+    const p = bot && bot.entity && bot.entity.position
+    if (!p || typeof p.x !== 'number' || typeof bot.blockAt !== 'function') return false
+    const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y) - 1, Math.floor(p.z)))
+    return !!b && b.boundingBox === 'block'
+  } catch (_) { return false }
+}
+
+// Entry shore: the last grounded dry cell (updated while dry, so at the
+// trigger it is the waterline the swim started from). Grounded only: an
+// airborne apex over water must not become the shore.
+function trackAbortDry(bot, ctx) {
+  const e = bot && bot.entity
+  const p = e && e.position
+  if (!p || typeof p.x !== 'number' || e.onGround !== true) return
+  ctx.waterLastDry = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
+}
+
+// Threat at range: fresh damage (a trident thrower out of sight counts) or
+// a hostile that is a water mob or itself in the water. A dry-land hostile
+// while swimming past is not a reason to beach.
+function abortThreat(bot, ctx, state, nowMs, range) {
+  try {
+    if (typeof ctx.lastHurtAt === 'number' && nowMs - ctx.lastHurtAt < ABORT_HURT_MS) return true
+  } catch (_) { /* stamp best-effort */ }
+  const hostile = state && state.hostile
+  const d = state && typeof state.hostile_distance === 'number' ? state.hostile_distance : null
+  if (!hostile || hostile.isValid === false || d === null || d > range) return false
+  const name = hostile.name || ''
+  if (ABORT_WATER_MOBS.has(name)) return true
+  try {
+    const p = hostile.position
+    if (!p || typeof p.x !== 'number' || typeof bot.blockAt !== 'function') return false
+    const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))
+    const n = b && b.name
+    return typeof n === 'string' && (n.includes('water') || ABORT_WETFLORA.has(n))
+  } catch (_) { return false }
+}
+
+function abortThreatName(state) {
+  try {
+    const h = state && state.hostile
+    if (h && h.isValid !== false) return `${h.name || 'mob'}@${state.hostile_distance}`
+  } catch (_) { /* name best-effort */ }
+  return 'hurt'
+}
+
+// Closer of the entry shore (when still a waterline stance) and the
+// nearestDry scan, skips excluded; entry wins ties. Null when neither
+// stands (open water past scan range and no entry): the crossing swims on
+// with melee, i.e. current behavior.
+function pickAbortShore(bot, ctx, skip) {
+  let home = null
+  try { home = require('./behaviours/home') } catch (_) { return null } // lazy: home<->goal cycle (fleeReflex precedent)
+  if (!home || typeof home.nearestDry !== 'function' || typeof home.dryStanceAt !== 'function') return null
+  const skipped = (c) => Array.isArray(skip) && skip.some((s) => s && s.x === c.x && s.z === c.z)
+  let entry = null
+  try {
+    const ld = ctx.waterLastDry
+    const p = bot && bot.entity && bot.entity.position
+    if (ld && typeof ld.x === 'number' && p && typeof p.x === 'number') {
+      const dy = ld.y - Math.floor(p.y)
+      if (dy >= ABORT_DY_LO && dy <= ABORT_DY_HI && !skipped(ld) && home.dryStanceAt(bot, ld.x, ld.y, ld.z)) entry = ld
+    }
+  } catch (_) { entry = null }
+  let scan = null
+  try {
+    scan = home.nearestDry(bot, Array.isArray(skip) ? skip : [], ABORT_DY_LO, ABORT_DY_HI)
+    if (scan && skipped(scan)) scan = null
+  } catch (_) { scan = null }
+  if (!entry) return scan
+  if (!scan) return entry
+  try {
+    const p = bot.entity.position
+    const de = Math.hypot(p.x - (entry.x + 0.5), p.z - (entry.z + 0.5))
+    const ds = Math.hypot(p.x - (scan.x + 0.5), p.z - (scan.z + 0.5))
+    return ds < de ? scan : entry
+  } catch (_) { return entry }
+}
+
 // Melee reflex (3nt.13): the arm is not the body. A hostile already
 // within swing reach is hit every tick regardless of the brain answer —
 // the same every-tick seam as scout. Runs on every tick path that has (or
@@ -539,4 +765,4 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard, abortReflex, ABORT_RANGE, ABORT_CLEAR_DIST, ABORT_COOLDOWN_MS }

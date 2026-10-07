@@ -870,28 +870,38 @@ const SHELTER_DRY_R = 24
 // above) within SHELTER_DRY_R. Pillaring in water never stands (the breath
 // reflex lifts the body, the anchor reads 'displaced', Drowned finish it).
 const WET_PLANTS = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
-function nearestDry(bot, skip = []) {
+function wetCell(b) {
+  return !b || b.isWaterlogged === true ||
+    (typeof b.name === 'string' && (b.name.includes('water') || WET_PLANTS.has(b.name)))
+}
+function freeCell(b) {
+  return !!b && b.boundingBox === 'empty' && !wetCell(b)
+}
+// One dry stance: feet cell (x, y, z) standable (solid dry floor, two free
+// cells above). Shared by nearestDry and the n9ta water abort (which also
+// verifies its entry shore through it).
+function dryStanceAt(bot, x, y, z) {
+  if (!bot || typeof bot.blockAt !== 'function') return false
+  const floor = bot.blockAt(new Vec3(x, y - 1, z))
+  if (!floor || floor.boundingBox !== 'block' || wetCell(floor)) return false
+  return freeCell(bot.blockAt(new Vec3(x, y, z))) && freeCell(bot.blockAt(new Vec3(x, y + 1, z)))
+}
+function nearestDry(bot, skip = [], dyLo = -4, dyHi = 1) {
   const bp = botPos(bot)
   if (!bp || typeof bot.blockAt !== 'function') return null
   const x0 = Math.floor(bp.x), y0 = Math.floor(bp.y), z0 = Math.floor(bp.z)
-  const wet = (b) => !b || b.isWaterlogged === true ||
-    (typeof b.name === 'string' && (b.name.includes('water') || WET_PLANTS.has(b.name)))
-  const free = (b) => !!b && b.boundingBox === 'empty' && !wet(b)
   let best = null
   let bd = Infinity
   for (let dx = -SHELTER_DRY_R; dx <= SHELTER_DRY_R; dx++) {
     for (let dz = -SHELTER_DRY_R; dz <= SHELTER_DRY_R; dz++) {
       const d = dx * dx + dz * dz
       if (d >= bd) continue
-      for (let dy = 1; dy >= -4; dy--) { // at most a step above the surface: climbable
-        const at = (k) => bot.blockAt(new Vec3(x0 + dx, y0 + dy + k, z0 + dz))
-        const floor = at(-1)
-        if (floor && floor.boundingBox === 'block' && !wet(floor) && free(at(0)) && free(at(1))) {
-          if (skip.some((s) => s.x === x0 + dx && s.z === z0 + dz)) continue
-          best = { x: x0 + dx, y: y0 + dy, z: z0 + dz }
-          bd = d
-          break
-        }
+      for (let dy = dyHi; dy >= dyLo; dy--) { // at most a step above the surface: climbable
+        if (!dryStanceAt(bot, x0 + dx, y0 + dy, z0 + dz)) continue
+        if (skip.some((s) => s.x === x0 + dx && s.z === z0 + dz)) continue
+        best = { x: x0 + dx, y: y0 + dy, z: z0 + dz }
+        bd = d
+        break
       }
     }
   }
@@ -1472,4 +1482,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, nearestDry, dryStanceAt }
