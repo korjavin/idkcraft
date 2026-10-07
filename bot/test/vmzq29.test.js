@@ -8,6 +8,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { goals } = require('mineflayer-pathfinder')
 const castle = require('../src/behaviours/castle')
+const blueprint = require('../src/castle')
 
 const SITE = { x: 100, y: 64, z: 200 }
 
@@ -82,5 +83,18 @@ describe('vmzq.29 far castle step', () => {
     assert.equal(setGoals.length, 2, 'the cell re-arms')
     const last = setGoals[setGoals.length - 1]
     assert.ok(!(last instanceof goals.GoalNearXZ), 'in range the cell goal replaces the XZ walk')
+  })
+
+  it('C (revmux 01): on the footprint a cross-corner cell (>32 off) never takes the XZ walk', () => {
+    const { bot, setGoals } = farBot({ items: [{ name: 'cobblestone', count: 40, type: 14 }, { name: 'oak_fence', count: 40, type: 15 }], at: pos(SITE.x + 30, 64, SITE.z + 26), loaded: () => true })
+    const ctx = { castle: castleState({ blueprintVersion: 2 }), step: 'castle', work: true }
+    // Everything but the far corner cell (100,200) waits out a backoff.
+    const { cells } = blueprint.absPlan(SITE, 0, 2)
+    const target = cells.find((c) => c.x === SITE.x && c.z === SITE.z && blueprint.isPlaceTarget(c.kind))
+    for (const c of cells) if (c !== target) ctx.castle.blocked[`2:${c.idx}`] = { until: Date.now() + 600000, tries: 1, why: 'test' }
+    castle(bot, ctx)
+    assert.equal(ctx.castleGoalIdx, target.idx, 'the cross-corner cell is worked (no far: latch)')
+    assert.ok(setGoals.length >= 1, 'a goal is issued')
+    assert.ok(!setGoals.some((g) => g instanceof goals.GoalNearXZ), 'on site: no XZ walk')
   })
 })

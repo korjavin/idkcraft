@@ -1120,7 +1120,12 @@ function work(bot, ctx, st, c, now, status) {
   // climbed toward castle height from y 36 and wedged.
   try {
     const bp = bodyPos(bot)
-    if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
+    // Measured to the footprint, not the cell (revmux 01): on site a
+    // cross-corner cell (~41 off on v2) never flips to the XZ walk.
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const ox = bp && Math.max(st.site.x - bp.x, 0, bp.x - (st.site.x + w))
+    const oz = bp && Math.max(st.site.z - bp.z, 0, bp.z - (st.site.z + d))
+    if (bp && Math.hypot(ox, oz) > SITE_WALK_DIST) {
       st.status = 'walking to the site'
       // Re-issue after a clear (revmux 01 core-1): approach() only
       // re-arms on a new idx or a foreign goal — a goal cleared to
