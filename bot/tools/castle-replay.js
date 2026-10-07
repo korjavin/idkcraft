@@ -22,6 +22,7 @@
 //   2 = environment/setup failure (spawn, pad, order, dropped follower).
 
 const mineflayer = require('mineflayer')
+const Vec3 = require('vec3')
 const fs = require('node:fs')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
@@ -175,7 +176,10 @@ async function main() {
         let top = null; let topY = null
         for (let y = 110; y >= 45; y--) {
           let b = null
-          try { b = guide.blockAt({ x, y, z }) } catch (_) { b = null }
+          // A Vec3, never a bare {x,y,z}: getBlock floors it, a plain object
+          // threw into the catch and every candidate read unreadable — the
+          // pad fell back to the preferred spot, a lake (idkcraft-vmzq.26).
+          try { b = guide.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
           if (!b) return null // unloaded: candidate unreadable
           if (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air') continue
           top = b.name; topY = y
