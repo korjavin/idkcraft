@@ -48,6 +48,7 @@ const OUT = process.env.CASTLE_OUT || `${__dirname}/last-castle.json`
 const LOGFILE = process.env.CASTLE_LOG || `/tmp/castle-rig-${TAG}.log`
 const KIT = process.env.CASTLE_KIT || 'empty'
 const TICKRATE = process.env.CASTLE_TICKRATE || '1'
+const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -62,12 +63,13 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /,
   /^goal watchdog /, /^goal outcome /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 } }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 } }
 function resetSeen() {
   seen.flips = 0
   seen.steps = {}
   seen.fails = {}
   seen.progress = []
+  seen.said = []
   seen.wdCalls = 0
   seen.wdChoices = {}
   seen.wdFirstAt = 0
@@ -149,6 +151,21 @@ function fail(kind, detail) {
   origLog(`CASTLE-RIG SETUP-FAIL ${kind}: ${detail} (full log ${LOGFILE})`)
   try { logStream.end() } catch (_) { /* close best-effort */ }
   process.exit(2)
+}
+
+// Blocked-cell seeds (idkcraft-vmzq.27): prod run4's stall mix — a lone
+// oak_log reads 'protected' (util.isTreeLog wants a trunk or a crown),
+// a chest reads kept-chest (FOREIGN, never dug). Lowest (dy, idx) stone
+// first: all three land in the work order's first-16 prefix, so the old
+// layer gate stalls on them within minutes and the skip fix must build
+// past. Pure (unit-tested): the rcon writes + readback live in main().
+const SEED_MATS = ['oak_log', 'chest']
+function pickBlockedSeeds(site, rot, version, n) {
+  const blueprint = require('../src/castle')
+  const { cells } = blueprint.absPlan(site, rot, version)
+  const byDyIdx = (a, b) => a.dy - b.dy || a.idx - b.idx
+  return cells.filter((c) => c.kind === 'stone').sort(byDyIdx).slice(0, n)
+    .map((c, i) => ({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: SEED_MATS[i % SEED_MATS.length] }))
 }
 
 function waitFor(em, ev, ms, what) {
@@ -319,6 +336,28 @@ async function main() {
   }
   if (!ordered) fail('order', 'no castle ack in 300 s')
   origLog(`CASTLE-RIG ordered: ${ordered.slice(0, 160)}`)
+  // Blocked seeds (vmzq.27): set after the ack (the site only exists now),
+  // before the guide quits — its presence loads the site chunks, and the
+  // readback below fails the run instead of measuring an unseeded castle.
+  let blockedSeeds = []
+  if (BLOCKED > 0) {
+    const st = follower._tickerCtx && follower._tickerCtx.castle
+    if (!st || !st.site || typeof st.site.x !== 'number') fail('seed-blocked', 'no castle site after order')
+    blockedSeeds = pickBlockedSeeds(st.site, st.rot, st.blueprintVersion, BLOCKED)
+    if (blockedSeeds.length < BLOCKED) fail('seed-blocked', `only ${blockedSeeds.length} seed cells for ${BLOCKED}`)
+    await rcon(`tp ${GUIDE} ${st.site.x + 15.5} ${st.site.y + 10} ${st.site.z + 13.5}`).catch((e) => fail('seed-blocked', e.message))
+    await sleep(3000)
+    for (const s of blockedSeeds) {
+      await rcon(`setblock ${s.x} ${s.y} ${s.z} minecraft:${s.block}`).catch((e) => fail('seed-blocked', `${s.x} ${s.y} ${s.z}: ${e.message}`))
+    }
+    await sleep(1000)
+    for (const s of blockedSeeds) {
+      let name = null
+      try { const b = guide.blockAt(new Vec3(s.x, s.y, s.z)); name = b && b.name } catch (_) { name = null }
+      if (name !== s.block) fail('seed-blocked', `readback ${s.x} ${s.y} ${s.z}: want ${s.block}, got ${name}`)
+    }
+    origLog(`CASTLE-RIG blocked: ${blockedSeeds.map((s) => `${s.x} ${s.y} ${s.z} ${s.kind} ${s.block}`).join('; ')}`)
+  }
   try { guide.quit('ordered') } catch (_) { /* quit best-effort */ }
 
   // Window: sample progress/step/pos every 15 s; a short sample line every
@@ -392,17 +431,30 @@ async function main() {
         flips: seen.flips, deaths, steps: seen.steps, fails: seen.fails,
         partial: Date.now() < endAt,
         tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-        kit: KIT, tickrate: TICKRATE, planner: PLANNER,
+        kit: KIT, tickrate: TICKRATE, planner: PLANNER, said: seen.said,
         wdCalls: seen.wdCalls, wdChoices: seen.wdChoices, outcomes: seen.outcomes, series,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
   sample()
   checkpoint()
+  // Holes report (vmzq.27): the follower's own `castle: ` chats (the ack
+  // has no colon, so the prefix skips it) land in the log + OUT record.
+  let scannedSay = chats.length
+  const drainSaid = () => {
+    for (; scannedSay < chats.length; scannedSay++) {
+      const msg = chats[scannedSay]
+      if (typeof msg === 'string' && msg.startsWith('castle: ')) {
+        seen.said.push(msg.slice(0, 300))
+        origLog(`CASTLE-RIG say: ${msg.slice(0, 300)}`)
+      }
+    }
+  }
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
   while (Date.now() < endAt) {
     await sleep(15000)
     const s = sample()
+    drainSaid()
     checkpoint()
     const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
     try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
@@ -411,6 +463,7 @@ async function main() {
       origLog(line)
     }
   }
+  drainSaid()
   const last = series[series.length - 1] || {}
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0
@@ -421,7 +474,7 @@ async function main() {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-    kit: KIT, tickrate: TICKRATE, planner: PLANNER,
+    kit: KIT, tickrate: TICKRATE, planner: PLANNER, blocked: blockedSeeds, said: seen.said,
     wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
     series,
   }
@@ -440,4 +493,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds }

@@ -552,7 +552,7 @@ function findRef(bot, p, bp) {
     try {
       block = bot.blockAt(q)
     } catch (_) { /* treat as open */ }
-    if (block && isSolidCell(block)) {
+    if (block && isSolidCell(block) && !util.isInteractRef(block.name)) {
       const cand = { ref: block, face: new Vec3(-ox, -oy, -oz) }
       if (!fallback) fallback = cand
       if (eyes) {

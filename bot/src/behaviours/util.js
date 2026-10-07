@@ -394,6 +394,35 @@ function canBreak(bot, block, ctx) {
   return denyReason(bot, block, ctx) === null
 }
 
+// Blocks whose right-click USES instead of placing (idkcraft-vmzq.27): a
+// placement click on one opens its GUI (or toggles/uses it) instead of
+// landing the block — and the stuck-open window desyncs every later
+// equip/place (mineflayer clicks land in the open window, not the
+// inventory), so the server refuses all placements from then on. Prod
+// shape: the castle stalled at 70 with every placement refused after a
+// seed chest was clicked. findRef (build, flat) and beds' fillRef never
+// return one. Fail-safe direction: when in doubt a name belongs here — a
+// skipped ref retries as a hole, a clicked GUI stalls the bot.
+const INTERACT_REF = new Set([
+  'chest', 'trapped_chest', 'ender_chest', 'barrel',
+  'furnace', 'blast_furnace', 'smoker',
+  'hopper', 'dropper', 'dispenser', 'crafter', 'crafting_table',
+  'enchanting_table', 'anvil', 'chipped_anvil', 'damaged_anvil',
+  'grindstone', 'loom', 'stonecutter', 'cartography_table',
+  'smithing_table', 'brewing_stand', 'lectern', 'jukebox',
+  'note_block', 'lever', 'bell', 'daylight_detector',
+  'comparator', 'repeater', 'cake',
+  'command_block', 'chain_command_block', 'repeating_command_block',
+  'structure_block', 'jigsaw', 'dragon_egg', 'respawn_anchor',
+  'chiseled_bookshelf', 'vault', 'campfire', 'shulker_box', 'cauldron',
+])
+const INTERACT_SUFFIX = ['_door', '_button', '_fence_gate', '_trapdoor', '_bed', '_sign', '_shulker_box', '_cauldron', '_campfire']
+function isInteractRef(name) {
+  if (typeof name !== 'string') return false
+  if (INTERACT_REF.has(name)) return true
+  return INTERACT_SUFFIX.some((s) => name.endsWith(s))
+}
+
 function logDeny(block, reason) {
   try {
     const n = (block && block.name) || '?'
@@ -556,4 +585,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }

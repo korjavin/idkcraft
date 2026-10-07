@@ -377,7 +377,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-chest')
   })
 
-  it('g0z.6: v2 moat waits for the interior; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
+  it('g0z.6 + vmzq.27: v2 moat digs past a blocked hole; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
     const v2 = blueprint.absPlan(SITE, 0, 2).cells
     const world = makeWorld()
     const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch' }
@@ -395,38 +395,79 @@ describe('g0z.2 castle executor', () => {
     const fence = v2.filter((c) => c.kind === 'fence')
     const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, blocked: { [`2:${held.idx}`]: { tries: 1, until: Date.now() + 3600000 } } } }
 
-    // Interior work left (a blocked roof cell): bridge, gate and fence go
-    // in, the moat stays undug.
-    await run(bot, ctx, 600)
-    assert.ok(!log.some((e) => e.op === 'dig' && moat.has(k(e.p))), 'no moat dig while interior work is left')
+    // Interior work left (a blocked roof cell): the moat digs past the
+    // hole (vmzq.27 revmux 01 — holes never feed `inside`), deck and fence
+    // go in, the hole stays reported.
+    await run(bot, ctx, 1600)
+    for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c} dug past the hole`) }
     for (const c of deck) assert.equal(world.get(c.x, c.y, c.z), 'oak_planks', 'deck laid (ground dug, then placed)')
     for (const c of fence) assert.equal(world.get(c.x, c.y, c.z), 'oak_fence')
-    assert.equal(ctx.stepStatus, 'failed:blocked')
-    assert.equal(castle.menuFact(bot, ctx), 'blocked', 'peek holds the moat too')
-
-    // The interior completes: the moat is dug, the bridge columns last and
-    // under the laid deck; every dig walks onto its drop.
-    world.set(held.x, held.y, held.z, 'oak_planks')
-    for (const c of fence) world.set(c.x, c.y, c.z, 'air') // fence ring knocked down: it re-lays after the moat
-    const before = log.length
-    for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
-    assert.equal(ctx.stepStatus, 'done')
-    for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c}`) }
-    const digs = log.slice(before).filter((e) => e.op === 'dig' && moat.has(k(e.p)))
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(bot.chats[0].includes(`${held.x} ${held.y} ${held.z}`), 'the hole is listed')
+    assert.equal(ctx.stepStatus, 'failed:blocked', 'the live hole still waits')
+    assert.equal(castle.menuFact(bot, ctx), 'blocked', 'peek agrees while the hole is live')
+    // Moat order, read off phase 1 (the moat digs here now): bridge
+    // columns last and under the laid deck, fence ring after the moat,
+    // every dig walks onto its drop.
+    const digs = log.filter((e) => e.op === 'dig' && moat.has(k(e.p)))
     assert.equal(digs.length, moat.size)
     const cols = digs.slice(-deck.length)
     for (const e of cols) {
       assert.ok(deck.some((c) => c.x === e.p.x && c.z === e.p.z), `${k(e.p)} is a bridge column`)
       assert.equal(e.above, 'oak_planks', 'the deck stands while its column is dug')
     }
-    const fences = log.slice(before).map((e, i) => ({ ...e, i })).filter((e) => e.op === 'place' && e.what === 'oak_fence')
+    const fences = log.map((e, i) => ({ ...e, i })).filter((e) => e.op === 'place' && e.what === 'oak_fence')
     assert.equal(fences.length, fence.length)
-    const lastDig = log.slice(before).findLastIndex((e) => e.op === 'dig' && moat.has(k(e.p)))
+    const lastDig = log.findLastIndex((e) => e.op === 'dig' && moat.has(k(e.p)))
     assert.ok(fences[0].i > lastDig, 'fence ring after the moat')
     const near1 = new Set(bot.calls.goals.filter((g) => g && g.constructor.name === 'GoalNear' && g.rangeSq === 1).map(k))
     const isCol = (e) => deck.some((c) => c.x === e.p.x && c.z === e.p.z)
     assert.ok(digs.every((e) => isCol(e) !== near1.has(k(e.p))), 'every moat dig but a bridge column walks onto its drop')
     assert.ok(deck.every((c) => !near1.has(k(c))), 'no pickup walk into a deck cell')
+
+    // The interior completes: the held cell lands, the knocked-down fence
+    // ring re-lays, the castle finishes.
+    world.set(held.x, held.y, held.z, 'oak_planks')
+    for (const c of fence) world.set(c.x, c.y, c.z, 'air') // fence ring knocked down: it re-lays
+    const before = log.length
+    for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
+    assert.equal(ctx.stepStatus, 'done')
+    for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c} stays dug`) }
+    const refences = log.slice(before).filter((e) => e.op === 'place' && e.what === 'oak_fence')
+    assert.equal(refences.length, fence.length)
+  })
+
+  it('vmzq.27 revmux 01: a retired hole plus the moat ends in phase complete, holes still reported', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const world = makeWorld()
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch' }
+    const held = v2.find((c) => c.kind === 'planks' && c.dy === 11)
+    for (const c of v2) if (c !== held && c.dy >= 0 && NAME[c.kind]) world.set(c.x, c.y, c.z, NAME[c.kind])
+    const bot = mockBot(world, { items: [...KIT, { name: 'oak_fence', count: 200 }] })
+    const place0 = bot.placeBlock
+    bot.placeBlock = async (ref, face) => {
+      const p = { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z }
+      if (p.x === held.x && p.y === held.y && p.z === held.z) throw new Error('refused')
+      return place0(ref, face)
+    }
+    const moat = new Set(v2.filter((c) => c.kind === 'dig').map((c) => `${c.x},${c.y},${c.z}`))
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, blocked: { [`2:${held.idx}`]: { tries: castle.MAX_HOLE_TRIES - 1, until: 0, why: 'air' } } } }
+    // The next block retires the hole (tries hit MAX): it re-chats once
+    // with the retired marker, then never waits again.
+    await run(bot, ctx, 30)
+    const e = ctx.castle.blocked[`2:${held.idx}`]
+    assert.ok(e && e.retired && e.tries === castle.MAX_HOLE_TRIES, `entry: ${JSON.stringify(e)}`)
+    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(bot.chats[1], new RegExp(`^castle: 1 hole at ${held.x} ${held.y} ${held.z} \\(planks: air, retired\\), no retries left$`))
+    // The moat, deck, door and fence all finish past it; the castle
+    // completes with the hole still listed on the status.
+    for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.castle.phase, 'complete')
+    assert.ok(bot.chats.some((m) => m.startsWith('castle done at')), `chats: ${JSON.stringify(bot.chats.slice(-3))}`)
+    for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c}`) }
+    assert.equal(world.get(held.x, held.y, held.z), 'air', 'the retired hole stays open')
+    assert.match(ctx.castle.status, new RegExp(`^holes: ${held.x} ${held.y} ${held.z} \\(planks: air, retired\\)$`))
   })
 
   it('an unreachable cell blocks after three stands that get no closer', async () => {
@@ -527,7 +568,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(bot.calls.digs.length, 1)
   })
 
-  it('three refusals block a cell with backoff and gate the layers above', async () => {
+  it('vmzq.27: three refusals block a cell with backoff and the build skips past it', async () => {
     const world = makeWorld()
     const plan = cells()
     const stuck = plan.find((c) => c.dy === 1)
@@ -535,17 +576,21 @@ describe('g0z.2 castle executor', () => {
     const bot = mockBot(world, { refuse: (p) => refusing && p.x === stuck.x && p.y === stuck.y && p.z === stuck.z })
     paint(world, stuck.idx)
     const ctx = { castle: { site: SITE, rot: 0 } }
-    await run(bot, ctx, 60)
+    await run(bot, ctx, 120)
     const e = ctx.castle.blocked[`${1}:${stuck.idx}`]
     assert.ok(e && e.tries === 1 && e.until > Date.now())
-    assert.ok(bot.calls.places.every((p) => p.y <= SITE.y + 1), 'nothing above the blocked layer')
     assert.ok(bot.calls.places.some((p) => p.y === SITE.y + 1), 'the rest of its layer still lays')
-    assert.equal(ctx.stepStatus, 'failed:blocked')
-    assert.match(ctx.castle.status, /^blocked at /)
-    // Backoff expires: the cell retries (and now lands).
-    e.until = 0
+    assert.ok(bot.calls.places.some((p) => p.y > SITE.y + 1), 'layers above lay past the hole')
+    assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
+    // Out-of-order attempts cascade: cells above the hole have no laid
+    // neighbour yet and block no-ref — unlisted at try 1 (revmux 01), so
+    // the seed's line stands alone until a lasting hole appears.
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: air\\), retry in \\d+s$`))
+    // Backoffs expire: every hole retries (and now lands, refs and all).
+    for (const k of Object.keys(ctx.castle.blocked)) ctx.castle.blocked[k].until = 0
     refusing = false
-    await run(bot, ctx, 6)
+    await run(bot, ctx, 20)
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
     assert.equal(ctx.castle.blocked[`${1}:${stuck.idx}`], undefined)
   })
@@ -555,13 +600,13 @@ describe('g0z.2 castle executor', () => {
     assert.equal(castle.backoffMs(20), 600000)
   })
 
-  it('g0z.23: a blocked cell chats once with the why, then stays silent until a new block', async () => {
+  it('g0z.23 + vmzq.27: a skipped hole chats once, then stays silent until a new hole', async () => {
     const world = makeWorld()
     const plan = cells()
     const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
     world.set(stuck.x, stuck.y, stuck.z, 'dirt')
-    // A second stone cell one layer up, still gated: the later new block.
-    const next = plan.find((c) => c.kind === 'stone' && c.dy === 2)
+    // A later stone cell in work order: the new hole after stuck lands.
+    const next = plan.find((c) => c.kind === 'stone' && c.dy === 4)
     world.set(next.x, next.y, next.z, 'dirt')
     paint(world, stuck.idx)
     let refused = { x: stuck.x, y: stuck.y, z: stuck.z }
@@ -573,30 +618,34 @@ describe('g0z.2 castle executor', () => {
     }
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 60)
-    assert.equal(ctx.stepStatus, 'failed:blocked')
-    assert.match(ctx.castle.status, new RegExp(`^blocked at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
+    assert.ok(bot.calls.places.length >= 5, 'the build progressed past the refusing cell')
+    assert.ok(bot.calls.places.every((p) => !(p.x === stuck.x && p.y === stuck.y && p.z === stuck.z)), 'the hole itself never lays')
     assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
+    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
     await run(bot, ctx, 6)
     assert.equal(bot.chats.length, 1, 'same backoff window: no re-chat')
     // Backoff expired, still refused: the retry re-blocks silently (one
     // line through two windows, acceptance 6).
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
     await run(bot, ctx, 8)
-    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.notEqual(ctx.stepStatus, 'failed:blocked')
+    assert.equal(ctx.castle.blocked[`1:${stuck.idx}`].tries, 2)
     assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    // The cell lands, then another cell blocks: a second, different line.
+    // The cell lands, then a later cell blocks: a second, different line.
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
-    refused = { x: next.x, y: next.y, z: next.z }
-    await run(bot, ctx, 120)
+    refused = null
+    await run(bot, ctx, 10)
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'cobblestone')
-    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.equal(ctx.castleBlockedSaid, null, 'no open holes re-arms the line')
+    refused = { x: next.x, y: next.y, z: next.z }
+    await run(bot, ctx, 300)
+    assert.ok(ctx.castle.blocked[`1:${next.idx}`], 'the later cell blocked')
     assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], new RegExp(`^castle: stuck at ${next.x} ${next.y} ${next.z} on dig-refused, retry in \\d+s$`))
-    assert.match(ctx.castle.status, new RegExp(`^blocked at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    assert.match(bot.chats[1], new RegExp(`^castle: 1 hole at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
   })
 
-  it('g0z.23 round 3: two stuck cells re-blocked after expiry chat once', async () => {
+  it('g0z.23 round 3 + vmzq.27: two holes share one line, re-blocking stays silent', async () => {
     const world = makeWorld()
     const plan = cells()
     const pair = plan.filter((c) => c.kind === 'stone' && c.dy === 1).slice(0, 2)
@@ -614,16 +663,19 @@ describe('g0z.2 castle executor', () => {
     }
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 100)
-    assert.equal(ctx.stepStatus, 'failed:blocked')
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    // Both backoffs expire: both retry and re-block, still one line.
+    assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
+    // One line per new hole, each listing every hole so far.
+    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(bot.chats[1], /^castle: 2 holes: .*\(stone: dig-refused\), .*\(stone: dig-refused\), retry in \d+s$/)
+    assert.ok(bot.chats[1].includes(`${a.x} ${a.y} ${a.z}`) && bot.chats[1].includes(`${b.x} ${b.y} ${b.z}`), 'both holes listed')
+    // Both backoffs expire: both retry and re-block, still two lines.
     ctx.castle.blocked[`1:${a.idx}`].until = 0
     ctx.castle.blocked[`1:${b.idx}`].until = 0
     await run(bot, ctx, 30)
-    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.notEqual(ctx.stepStatus, 'failed:blocked')
     assert.equal(ctx.castle.blocked[`1:${a.idx}`].tries, 2)
     assert.equal(ctx.castle.blocked[`1:${b.idx}`].tries, 2)
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
   })
 
   it('g0z.23 round 3: resolving the latched cell re-arms the stuck line', async () => {
@@ -651,7 +703,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castleBlockedSaid, null, 'the resolved cell re-arms the line')
   })
 
-  it('g0z.23: a kept occupant chats with the remove hint', async () => {
+  it('g0z.23 + vmzq.27: a kept occupant chats with the remove hint, then the build skips it', async () => {
     const world = makeWorld()
     const plan = cells()
     const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
@@ -660,9 +712,44 @@ describe('g0z.2 castle executor', () => {
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 60)
-    assert.equal(ctx.stepStatus, 'failed:blocked')
+    assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
+    assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'chest', 'the foreign block is never dug')
+    // The chest is skipped as a placement ref too, so the cell stacked on
+    // it holes no-ref until its sides lay — unlisted at try 1 (revmux 01),
+    // while the seed itself is reported (the heal is pinned below).
     assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on kept-chest, retry in \\d+s — remove the chest there or say castle stop$`))
+    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
+  })
+
+  it('vmzq.27: above a chest seed the cell lands via a side ref, never clicking the chest', async () => {
+    // Prod shape: the rig's chest seed sits in a stone cell; the cell
+    // above must not click it (the server opens the GUI instead of
+    // placing, and the stuck window desyncs every later equip). The mock
+    // refuses chest clicks like the server; sides are laid, so the cell
+    // lands against one of them while the seed stays a reported hole.
+    const world = makeWorld()
+    const plan = cells()
+    const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
+    const above = plan.find((c) => c.kind === 'stone' && c.x === stuck.x && c.z === stuck.z && c.dy === stuck.dy + 1)
+    assert.ok(above, 'a stone cell stacks on the seed cell')
+    paint(world, plan.length)
+    world.set(stuck.x, stuck.y, stuck.z, 'chest')
+    world.set(above.x, above.y, above.z, 'air')
+    const bot = mockBot(world)
+    const place0 = bot.placeBlock
+    bot.placeBlock = async (ref, face) => {
+      if (ref.position.x === stuck.x && ref.position.y === stuck.y && ref.position.z === stuck.z) {
+        throw new Error('Server refused: chest GUI opened')
+      }
+      return place0(ref, face)
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 30)
+    assert.equal(world.get(above.x, above.y, above.z), 'cobblestone', 'lands via a side ref')
+    assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'chest', 'the seed is never dug')
+    assert.ok(ctx.castle.blocked[`1:${stuck.idx}`], 'the seed stays a reported hole')
+    assert.equal(ctx.castle.blocked[`1:${above.idx}`], undefined, 'no hole for the landed cell')
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
   })
 
   it('g0z.23 round 2: a blocked keep-clear cell latches no kind; far reads blocked', () => {
@@ -676,7 +763,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(castle.menuFact(bot, ctx), 'blocked')
     assert.deepEqual(ctx.castleWord, { word: 'blocked' })
     assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], /on kept-chest, retry in \d+s — remove the chest there or say castle stop$/)
+    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${win.x} ${win.y} ${win.z} \\(air: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
     bot.blockAt = () => null // walked away: no corner reads
     assert.equal(castle.menuFact(bot, ctx), 'blocked')
   })
@@ -703,24 +790,27 @@ describe('g0z.2 castle executor', () => {
       const bot = mockBot(world, { items: [] })
       assert.equal(castle.menuFact(bot, ctx), 'blocked')
       assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-      assert.match(bot.chats[0], /on dig-refused, retry in \d+s$/)
+      assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
       assert.ok(!bot.chats[0].includes('undefined'))
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('g0z.23: a far blocked castle reads its gated kind, never blocked', () => {
+  it('g0z.23 + vmzq.27: a far blocked castle reads its waiting kind, never blocked', () => {
     const world = makeWorld()
     const plan = cells()
     paint(world, plan.length)
     const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
     world.set(stuck.x, stuck.y, stuck.z, 'air')
-    // Gated spare stone above, so the remainder spans none/some/batch.
+    // Spare stone above, blocked too (skipping would otherwise work it),
+    // so the remainder spans none/some/batch.
     const spare = plan.filter((c) => c.kind === 'stone' && c.dy > 1).slice(0, 10)
     assert.equal(spare.length, 10)
     for (const c of spare) world.set(c.x, c.y, c.z, 'air')
-    const ctx = { castle: { site: SITE, rot: 0, blocked: { [`1:${stuck.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } } }
+    const blocked = { [`1:${stuck.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } }
+    for (const c of spare) blocked[`1:${c.idx}`] = { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' }
+    const ctx = { castle: { site: SITE, rot: 0, blocked } }
     assert.equal(castle.menuFact(mockBot(world, { items: [] }), ctx), 'blocked')
     assert.deepEqual(ctx.castleWord, { word: 'blocked', kind: 'stone', left: 11 })
     const far = (items) => {
