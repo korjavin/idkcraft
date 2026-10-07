@@ -502,8 +502,10 @@ function digTick(bot, ctx, f) {
     if (due) {
       let r = null
       try { r = deps.craftItem(bot, ctx, ['stone_pickaxe'], 1) } catch (_) { r = { done: false } }
-      if (r === 'running' || (r && r.done)) return // crafting across ticks; the landed pick ends it
+      if (r === 'running') return // crafting across ticks; the terminal outcome latches below
       f.pickUp = true
+      try { console.log(`castlefetch stone: pick upgrade ${r && r.done ? 'done' : 'failed'}, digging on`) } catch (_) { /* log best-effort */ }
+      if (r && r.done) return
     }
   }
   const st = ctx.castle

@@ -286,15 +286,22 @@ async function main() {
       s.x = Math.round(p.x); s.y = Math.round(p.y); s.z = Math.round(p.z)
     } catch (_) { /* pos best-effort */ }
     try {
-      let cobble = 0; let dirt = 0; let logs = 0
+      let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
+      let pick = 'none'
       for (const it of (follower.inventory && follower.inventory.items()) || []) {
         if (!it || typeof it.name !== 'string') continue
         const n = typeof it.count === 'number' ? it.count : 1
         if (it.name === 'cobblestone') cobble += n
         else if (it.name === 'dirt') dirt += n
         else if (/_log$/.test(it.name)) logs += n
+        else if (/_planks$/.test(it.name)) planks += n
+        else if (it.name === 'stick') sticks += n
+        else if (/_pickaxe$/.test(it.name)) {
+          if (it.name === 'stone_pickaxe') pick = 'stone'
+          else if (pick === 'none' && it.name === 'wooden_pickaxe') pick = 'wood'
+        }
       }
-      s.cobble = cobble; s.dirt = dirt; s.logs = logs
+      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick
     } catch (_) { /* inventory best-effort */ }
     try {
       const c = follower._tickerCtx
