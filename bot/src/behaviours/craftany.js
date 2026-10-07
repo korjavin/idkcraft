@@ -14,6 +14,7 @@
 // orders own that) — only the pack plus one planks/sticks layer.
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const gearMod = require('./gear')
 const equipMod = require('./equip')
@@ -171,9 +172,24 @@ function missingLine(target, missing) {
 // 4 planks-worth to make one (any wood, logs count quadruple — the recipe
 // lookup filters by held). Null reads as the honest no-table refusal,
 // never a craft attempt.
+// Standing table; under ctx.craftanyLocal (vmzq.37 buried pick rearm) only
+// one within reach counts — a far one would be walked to, and a body
+// sealed underground cannot walk; it places its own instead.
+function standingTable(bot, ctx) {
+  const tb = gearMod.tableBlock(bot, ctx)
+  if (!tb || !ctx || !ctx.craftanyLocal) return tb
+  const bp = bot.entity && bot.entity.position
+  for (const p of [ctx.home && ctx.home.table, ctx.claimedTable]) {
+    if (!bp || !p || typeof p.x !== 'number' || dist3(bp, p) > TABLE_REACH) continue
+    const block = bot.blockAt && bot.blockAt(new Vec3(p.x, p.y, p.z))
+    if (block && block.name === 'crafting_table') return { block, pos: p }
+  }
+  return null
+}
+
 function tablePathOf(bot, ctx, pack) {
   try {
-    if (gearMod.tableBlock(bot, ctx)) return 'placed'
+    if (standingTable(bot, ctx)) return 'placed'
   } catch (_) { /* unreadable claim: fall through */ }
   if ((pack.crafting_table || 0) > 0) return 'pack'
   // Logs fund the table through a planks op first (did.4 core-1): the
@@ -419,7 +435,7 @@ function craftItem(bot, ctx, name, count) {
   if (plan.requiresTable && !st.table) {
     let tb = null
     try {
-      tb = gearMod.tableBlock(bot, ctx)
+      tb = standingTable(bot, ctx)
     } catch (_) { tb = null }
     if (tb) {
       if (dist3(bp, tb.pos) > TABLE_REACH) {

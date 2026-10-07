@@ -227,7 +227,7 @@ function fail(bot, ctx, item, err) {
 const FAR_TABLE = 32
 function tableFar(bot, ctx, bp, t) {
   try {
-    if (dist3(bp, t) > FAR_TABLE) return true
+    if (dist3(bp, t) > (ctx && ctx.craftanyLocal ? TABLE_REACH : FAR_TABLE)) return true // vmzq.37 buried rearm
     const u = ctx && ctx.equipTableUnreachable
     return !!u && u.day === dayOf(bot) && u.x === t.x && u.y === t.y && u.z === t.z
   } catch (_) { return false }
@@ -658,18 +658,32 @@ function pickRearmDue(bot, ctx) {
     const p = bot.entity.position
     if (!(p.y < ctx.castle.site.y - REARM_BELOW)) return false
     if (ctx.craftany && ctx.craftany.key === PICK_REARM_KEY) return true
-    return !!require('./craftany').planCraft(bot, ctx, PICK_REARM, 1).ok // deferred: craftany requires equip
+    ctx.craftanyLocal = true
+    try {
+      return !!require('./craftany').planCraft(bot, ctx, PICK_REARM, 1).ok // deferred: craftany requires equip
+    } finally { ctx.craftanyLocal = false }
   } catch (_) { return false }
 }
+// Local only (revmux 01): ctx.craftanyLocal makes craftany/tableFor skip a
+// known table out of reach — a buried body cannot walk to the surface
+// one, it places its own beside it. A failed rearm is a spot verdict
+// (sealed pocket, no table cell), never the day latch: the hand staircase
+// moves the body and the next equip retries.
 function pickRearm(bot, ctx) {
   if (!pickRearmDue(bot, ctx)) return false
-  const r = require('./craftany')(bot, ctx, PICK_REARM, 1)
-  if (r === 'running') return true
-  if (r && r.done) {
-    try { console.log(`equip rearmed ${r.target} (pickless castle)`) } catch (_) { /* log best-effort */ }
-    return true
+  const fresh = !(ctx.craftany && ctx.craftany.key === PICK_REARM_KEY)
+  let r = null
+  try {
+    ctx.craftanyLocal = true
+    r = require('./craftany')(bot, ctx, PICK_REARM, 1)
+  } finally { ctx.craftanyLocal = false }
+  if (fresh && r === 'running') {
+    try { console.log('equip rearm: pickless underground castle, crafting a pick here') } catch (_) { /* log best-effort */ }
   }
-  fail(bot, ctx, 'pickaxe', new Error((r && r.line) || 'craft-failed'))
+  if (r === 'running' || (r && r.done)) return true
+  ctx.stepStatus = 'failed:equip-pickaxe'
+  resetRunCounters(ctx)
+  try { console.error(`equip rearm failed: ${(r && r.line) || 'craft-failed'}`) } catch (_) { /* log best-effort */ }
   return true
 }
 

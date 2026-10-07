@@ -328,6 +328,11 @@ function pitChain(facts, hemmed) {
 // Lava in or around the mount head: digging the cap would open a flow
 // onto the mount, and standing under lava is death either way. Mirrors the
 // executor's dontCreateFlow refusal (liquid above or beside the break).
+// The body's own jump head (vmzq.37): lava over it or beside it would flow
+// into the dug cell and down onto the body.
+function headLavaAt(bot) {
+  return isLava(cellAt(bot, 0, 3, 0)) || SIDES.some(([dx, dz]) => isLava(cellAt(bot, dx, 2, dz)))
+}
 function capLavaAt(bot, dx, dz) {
   return isLava(cellAt(bot, dx, 2, dz)) || isLava(cellAt(bot, dx, 3, dz)) ||
     isLava(cellAt(bot, dx + 1, 2, dz)) || isLava(cellAt(bot, dx - 1, 2, dz)) ||
@@ -353,7 +358,7 @@ function findDigStepDir(bot) {
   // vmzq.37: a solid jump head digs first (the buried 1x2 pocket), like the
   // side cells — only when it digs and no lava sits on it.
   const own = cellAt(bot, 0, 2, 0)
-  if (solid(own) && (!diggable(bot, own) || isLava(cellAt(bot, 0, 3, 0)))) return null
+  if (solid(own) && (!diggable(bot, own) || headLavaAt(bot))) return null
   let cobbleSide = null
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
@@ -1216,7 +1221,7 @@ function digStepRun(bot, ctx) {
   // Jump head first (vmzq.37): the mount leap needs it clear.
   const own = cellAt(bot, 0, 2, 0)
   if (own && solid(own)) {
-    if (!diggable(bot, own) || isLava(cellAt(bot, 0, 3, 0))) { setJump(bot, false); return 'failed:no-step' }
+    if (!diggable(bot, own) || headLavaAt(bot)) { setJump(bot, false); return 'failed:no-step' }
     return digStepCell(bot, ctx, st, own)
   }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])

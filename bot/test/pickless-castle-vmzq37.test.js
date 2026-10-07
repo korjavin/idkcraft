@@ -68,6 +68,25 @@ describe('pickless buried castle rearms first (vmzq.37)', () => {
     equip(bot, ctx)
     assert.deepEqual(crafted, [['stone_pickaxe', 'wooden_pickaxe']])
   })
+
+  it('decide: buried pickless body rearms even over a castle plan pin; at the site the batch lays', async () => {
+    planOk = true
+    const p = (x, y, z) => ({ x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z), clone() { return p(x, y, z) }, floored() { return p(Math.floor(x), Math.floor(y), Math.floor(z)) } })
+    const SITE = { x: 100, y: 64, z: 200 }
+    const mk = (y) => ({
+      username: 'IdkBot', chats: [], chat() {},
+      entity: { position: p(SITE.x - 12, y, SITE.z) },
+      inventory: { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'oak_planks', count: 16 }, { name: 'stone_sword', count: 1 }] },
+      time: { timeOfDay: 6000, day: 1 }, spawnPoint: p(0, 64, 0), players: {},
+      blockAt: (q) => ({ name: Math.floor(q.y) <= 63 ? 'stone' : 'air', position: q, boundingBox: Math.floor(q.y) <= 63 ? 'block' : 'empty' }),
+      pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null, movements: null, setMovements() {} },
+      clearControlStates() {}, on() {}, once() {},
+    })
+    const castle = () => ({ site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false })
+    assert.equal((await goal.decide(mk(39), { castle: castle() })).action, 'equip', 'buried: rearm first')
+    assert.equal((await goal.decide(mk(39), { castle: castle(), taskPlanStep: 'castle' })).action, 'equip', 'a castle plan pin yields to the rearm')
+    assert.equal((await goal.decide(mk(64), { castle: castle() })).action, 'castle', 'vmzq.19: at the site the batch lays first')
+  })
 })
 
 describe('bare-hand stone staircase (vmzq.37)', () => {
@@ -97,5 +116,39 @@ describe('bare-hand stone staircase (vmzq.37)', () => {
     assert.ok(names.includes('dig_step'))
     assert.equal(recover.recoverFsm(f, names), 'dig_step')
     assert.equal(recover.RECOVER_MENU.dig_step.repeatable(f), true, 'the climb chains to the mouth')
+  })
+})
+
+describe('buried pocket run (vmzq.37)', () => {
+  it('the first staircase dig opens the jump head, then the side', async () => {
+    // Body at y=37 in a sealed stone mass, 1x2 air: (0,39,0) is the head.
+    const air = new Set(['0,37,0', '0,38,0'])
+    const dug = []
+    const bot = {
+      username: 'IdkBot', players: {}, entities: {}, health: 20, food: 20,
+      entity: { position: new Vec3(0.5, 37, 0.5), onGround: true },
+      inventory: { items: () => [] },
+      controls: {},
+      setControlState(c, v) { this.controls[c] = !!v },
+      getControlState(c) { return !!this.controls[c] },
+      clearControlStates() { this.controls = {} },
+      blockAt(q) {
+        const x = Math.floor(q.x); const y = Math.floor(q.y); const z = Math.floor(q.z)
+        const open = air.has(`${x},${y},${z}`)
+        return { name: open ? 'air' : 'stone', position: new Vec3(x, y, z), boundingBox: open ? 'empty' : 'block' }
+      },
+      async dig(b) { await Promise.resolve(); dug.push(`${b.position.x},${b.position.y},${b.position.z}`); air.add(`${b.position.x},${b.position.y},${b.position.z}`) },
+      pathfinder: { goal: null, setGoal(g) { this.goal = g }, stop() {}, isMoving: () => false },
+      chats: [], chat(m) { this.chats.push(String(m)) },
+    }
+    const ctx = { stuck: { by: 'castle', goal: { x: 300, y: 37, z: 0 }, key: 'castle' }, brain: null }
+    const r = await recover.decide(bot, ctx, null, null)
+    assert.equal(r.action, 'dig_step')
+    for (let t = 0; t < 6 && dug.length < 2; t++) {
+      recover.run(bot, ctx)
+      for (let i = 0; i < 3; i++) await new Promise((res) => setImmediate(res))
+    }
+    assert.equal(dug[0], '0,39,0', `head first, dug ${dug}`)
+    assert.ok(dug.length >= 2 && dug[1] !== '0,39,0', `then the side, dug ${dug}`)
   })
 })
