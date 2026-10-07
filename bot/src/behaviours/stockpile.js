@@ -207,6 +207,17 @@ function edibles() {
   return new Set(['bread', 'apple', 'carrot', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken'])
 }
 
+// Raw fallback meats (vmzq.34): the keep fills preferred food first so hunt
+// drops never push cooked food into the chest. Same deferred shape as
+// edibles(); the inline set mirrors reflexes.js RAW_FALLBACK.
+function rawFallback() {
+  try {
+    const set = require('../reflexes').RAW_FALLBACK
+    if (set && typeof set.has === 'function') return set
+  } catch (_) { /* reflexes not loaded: mirror below */ }
+  return new Set(['beef', 'porkchop', 'mutton', 'rabbit'])
+}
+
 function isKeep(name) {
   if (typeof name !== 'string') return true
   if (EXACT_KEEP.has(name)) return true
@@ -277,7 +288,26 @@ function gearLadderDone(bot, ctx) {
 function depositPlan(bot, ctx) {
   const list = invItems(bot)
   const edible = edibles()
-  let keepFood = FOOD_KEEP
+  const raw = rawFallback()
+  // Food keep, preferred-first (vmzq.34 R2, revmux 01 minor): the keep is
+  // what the eater feeds from, so cooked/bread fills it before raw — an
+  // early raw stack must not push later cooked food into the chest. Two
+  // passes over inventory order; without raw this assigns exactly the old
+  // first-10-in-order keeps.
+  const foodKeep = new Map()
+  {
+    let left = FOOD_KEEP
+    for (let pass = 0; pass < 2 && left > 0; pass++) {
+      for (let idx = 0; idx < list.length && left > 0; idx++) {
+        const j = list[idx]
+        if (!j || typeof j.name !== 'string' || !edible.has(j.name)) continue
+        if ((pass === 1) !== raw.has(j.name)) continue
+        const k = Math.min(left, typeof j.count === 'number' ? j.count : 1)
+        left -= k
+        foodKeep.set(idx, (foodKeep.get(idx) || 0) + k)
+      }
+    }
+  }
   let keepScaffold = SCAFFOLD_KEEP
   // Bed reserve (jr2.2): while bedroom beds are owed, the work-in-progress
   // stays packed — banking it starves the beds craft/place between picks
@@ -369,7 +399,9 @@ function depositPlan(bot, ctx) {
   // order — the same rule surplusWood applies for ensureRoom. Null on an
   // unbuilt home: the house budget needs every plank packed (the old rule).
   const castleWoodKeep = castleWoodOpen(ctx) ? { planks: PLANK_KEEP, logs: LOG_KEEP } : null
+  let li = 0
   for (const i of list) {
+    const lidx = li++
     if (!i || typeof i.name !== 'string') continue
     if (isKeep(i.name)) {
       if (!finished) continue
@@ -424,9 +456,7 @@ function depositPlan(bot, ctx) {
       if (n <= 0) continue
     }
     if (edible.has(i.name)) {
-      const k = Math.min(keepFood, n)
-      keepFood -= k
-      n -= k
+      n -= Math.min(foodKeep.get(lidx) || 0, n)
     } else if (i.name === 'cobblestone') {
       // Furnace cobble first (ipn.8): the shared scaffold pool below is
       // dirt-first, so without this a dirt-heavy pack banks the 7 cobble a

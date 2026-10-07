@@ -69,6 +69,15 @@ const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
+// Carried-food census (idkcraft-vmzq.34): mirror of reflexes.js EDIBLE_FOODS
+// (the source of truth — update both). The 15 s sample reads hunger + carried
+// edibles so long runs evidence the food economy, not just the build.
+const SAMPLE_EDIBLES = new Set([
+  'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
+  'cooked_rabbit', 'apple', 'carrot', 'baked_potato',
+  'beef', 'porkchop', 'mutton', 'rabbit',
+])
+
 // Full log to a file; stdout keeps the cycle-readable lines (goal steps,
 // fetch needs, blocked cells, progress, deaths, verdict). Ticker chatter
 // (decision/scout/kit/eat) would bury the verdict on a 30+ min run.
@@ -398,11 +407,16 @@ async function main() {
       s.x = Math.round(p.x); s.y = Math.round(p.y); s.z = Math.round(p.z)
     } catch (_) { /* pos best-effort */ }
     try {
+      s.hunger = (follower && typeof follower.food === 'number') ? follower.food : null
+    } catch (_) { /* hunger best-effort */ }
+    try {
       let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
+      let edibles = 0
       let pick = 'none'
       for (const it of (follower.inventory && follower.inventory.items()) || []) {
         if (!it || typeof it.name !== 'string') continue
         const n = typeof it.count === 'number' ? it.count : 1
+        if (SAMPLE_EDIBLES.has(it.name)) edibles += n
         if (it.name === 'cobblestone') cobble += n
         else if (it.name === 'dirt') dirt += n
         else if (/_log$/.test(it.name)) logs += n
@@ -413,7 +427,7 @@ async function main() {
           else if (pick === 'none' && it.name === 'wooden_pickaxe') pick = 'wood'
         }
       }
-      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick
+      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick; s.edibles = edibles
     } catch (_) { /* inventory best-effort */ }
     try {
       // Ground-drop census (vmzq.20): non-player entities near the bot.
@@ -525,7 +539,7 @@ async function main() {
     }
     drainSaid()
     checkpoint()
-    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
+    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths} hunger=${s.hunger ?? '?'} edibles=${s.edibles ?? '?'}`
     try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
     if (Date.now() - lastSampleLine > 300000) {
       lastSampleLine = Date.now()
