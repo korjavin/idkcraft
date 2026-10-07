@@ -10,6 +10,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const home = require('../src/behaviours/home')
+const taskMod = require('../src/task')
 const buildMod = require('../src/behaviours/build')
 const body = require('../src/body')
 const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
@@ -343,6 +344,7 @@ describe('jr2.3 reseek walks the current home after exiting the old', () => {
       comehome: { ...home.startMeet('Steve', true, old), phase: 'close', exiting: true, reseek: true },
       inShelter: true,
     }
+    const stamp = taskMod.orderStamp(ctx.comehome)
     home.comehome(bot, ctx) // shut door, near: release completes into reseek
     assert.ok(ctx.comehome, 'order continues')
     assert.equal(ctx.comehome.phase, 'walk')
@@ -350,6 +352,7 @@ describe('jr2.3 reseek walks the current home after exiting the old', () => {
     assert.deepEqual(ctx.comehome.home.site, fresh.site, 'walks the current home')
     assert.equal(ctx.inShelter, false)
     assert.deepEqual(bot.chats, [], 'silent handoff')
+    assert.equal(taskMod.orderStamp(ctx.comehome), stamp, 'reseek re-arm carries the order stamp (R2 core-1)')
   })
 })
 

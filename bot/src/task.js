@@ -277,6 +277,34 @@ function orderObj(ctx, kind) {
   return null
 }
 
+// Stable order identity (R2 core-1): re-arms replace the order object
+// mid-order (home.js exit start/reseek/fail), so object identity alone
+// would read every re-arm as a replaced order and reset the stall clock.
+// The stamp is allocated per object, carried across re-arms, and stored
+// as orderRef at baseline; a genuinely new order object gets a fresh one.
+const orderStamps = new WeakMap()
+let orderStampSeq = 0
+function orderStamp(o) {
+  try {
+    if (!o || typeof o !== 'object') return null
+    let s = orderStamps.get(o)
+    if (typeof s !== 'number') {
+      s = ++orderStampSeq
+      orderStamps.set(o, s)
+    }
+    return s
+  } catch (_) {
+    return null
+  }
+}
+function carryOrderStamp(from, to) {
+  try {
+    if (!from || typeof from !== 'object' || !to || typeof to !== 'object' || from === to) return
+    const s = orderStamp(from)
+    if (typeof s === 'number') orderStamps.set(to, s)
+  } catch (_) { /* carry best-effort */ }
+}
+
 function dist3(a, b) {
   try {
     if (!a || !b || typeof a.x !== 'number' || typeof b.x !== 'number') return null
@@ -2155,17 +2183,28 @@ function taskTick(bot, ctx, now = Date.now()) {
     // eligibility below. May resetTask, so before the state init.
     maybeResume(bot, ctx, now)
     if (!ctx.task || typeof ctx.task !== 'object') ctx.task = { active: null }
-    // Order identity (finding 4): a new order object over a running one of
-    // the same kind is a NEW goal — the setters replace without resetTask,
-    // so re-baseline here: the old baseline, stall, rounds and live unlock
-    // all end with the replaced preempt instead of leaking across.
+    // Order identity (finding 4, R2 core-1): compare only while the kind
+    // is ACTIVE — a leftover t[k0] from a finished order is stale, not a
+    // replace, and wiping ctx.task would take the castle/house clock with
+    // it. Stale state is deleted so the newly-active branch re-baselines;
+    // a live replace ends its window and drops only its own kind.
     try {
       const k0 = goalKind(ctx)
       if (k0 && isOrderKind(k0)) {
-        const st0 = ctx.task[k0]
-        if (st0 && typeof st0 === 'object' && st0.orderRef !== orderObj(ctx, k0)) {
-          resetTask(ctx, 'replaced')
-          ctx.task = { active: null }
+        const t0 = ctx.task
+        const st0 = t0 && t0[k0]
+        if (st0 && typeof st0 === 'object' && st0.orderRef !== orderStamp(orderObj(ctx, k0))) {
+          if (t0.active === k0) {
+            try {
+              const g = ctx.goal
+              if (g && g.commit) endCommit(bot, ctx, k0, st0, g.commit, 'preempted:replaced', now)
+            } catch (_) { /* window best-effort */ }
+            // A live replace founds a new goal (fresh text/startedAt);
+            // ensureGoal below recreates it. The stale path keeps the
+            // current goal — ensureGoal swaps it when the kind differs.
+            try { ctx.goal = null } catch (_) { /* goal best-effort */ }
+          }
+          delete t0[k0]
         }
       }
     } catch (_) { /* identity best-effort */ }
@@ -2268,7 +2307,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           t[kind] = {
             done: cur.done, total: cur.total, dist: cur.dist,
             stallMs: 0, lastAt: now, lastL1At: null, fails: [],
-            orderRef: orderObj(ctx, kind),
+            orderRef: orderStamp(orderObj(ctx, kind)),
           }
           // Travel goals baseline the distance as the total (blocks left).
           if ((kind === 'comehome' || kind === 'gocastle' || kind === 'lead') && typeof cur.dist === 'number') {
@@ -2592,4 +2631,4 @@ function taskTick(bot, ctx, now = Date.now()) {
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }

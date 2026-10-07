@@ -1,6 +1,6 @@
 'use strict'
 
-// Goal watchdog delivery 2 (idkcraft-vmzq.22) + round-2 fixes: owner
+// Goal watchdog delivery 2 (idkcraft-vmzq.22) + round-2/3 fixes: owner
 // orders as goals (bring/comehome/gocastle/lead/flat metrics) + option
 // table of costed unlocks. Fake brains only; no network.
 
@@ -16,7 +16,6 @@ const exploreMod = require('../src/behaviours/explore')
 const gatherMod = require('../src/behaviours/gather')
 const forageMod = require('../src/behaviours/forage')
 const cfMod = require('../src/behaviours/castlefetch')
-const scoutMod = require('../src/behaviours/scout')
 
 function pos(x, y, z) {
   return { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -41,6 +40,20 @@ function makeBot({ timeOfDay = 6000, items = null, players = null, registry = nu
     pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null },
     clearControlStates() {},
     registry: registry || null,
+  }
+}
+
+// Stone world for the live-scan tests (R2 core-2/body-3): stone at the
+// listed cells, dirt at/below y 64, air above — so a y-64 hit is exposed
+// (air above) and a y-63 hit is buried (dirt above and beside).
+function stoneWorld(bot, stones) {
+  const set = new Set((stones || []).map(([x, y, z]) => `${x},${y},${z}`))
+  bot.blockAt = (p) => {
+    const x = Math.floor(p.x)
+    const y = Math.floor(p.y)
+    const z = Math.floor(p.z)
+    const name = set.has(`${x},${y},${z}`) ? 'stone' : (y >= 65 ? 'air' : 'dirt')
+    return { name, position: pos(x, y, z), boundingBox: name === 'air' ? 'empty' : 'block' }
   }
 }
 
@@ -302,18 +315,59 @@ describe('option table (acceptance 2, findings 1+3)', () => {
     const { bot, ctx } = castleFixture()
     bot.registry = { blocksByName: { stone: { id: 1 } } }
     bot.findBlocks = () => [{ x: 100, y: 64, z: 136 }]
-    const origExposed = scoutMod.isExposed
-    scoutMod.isExposed = () => true
-    try {
-      ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
-      const opts = goalOptions(bot, ctx, 'castle')
-      const far = opts.find((o) => o.id === 'castlefetch-far')
-      assert.ok(far, `castlefetch-far offered: ${opts.map((o) => o.id)}`)
-      assert.equal(far.step, 'castlefetch')
-      assert.deepEqual(far.unlock.candidate, { x: 100, y: 64, z: 136 })
-    } finally {
-      scoutMod.isExposed = origExposed
+    stoneWorld(bot, [[100, 64, 136]])
+    ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
+    const opts = goalOptions(bot, ctx, 'castle')
+    const far = opts.find((o) => o.id === 'castlefetch-far')
+    assert.ok(far, `castlefetch-far offered: ${opts.map((o) => o.id)}`)
+    assert.equal(far.step, 'castlefetch')
+    assert.deepEqual(far.unlock.candidate, { x: 100, y: 64, z: 136 })
+  })
+
+  it('cave hit at site.y-15 is NOT a castlefetch-far candidate (R2 core-2)', () => {
+    const { bot, ctx } = castleFixture()
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    bot.findBlocks = () => [{ x: 100, y: 49, z: 136 }]
+    stoneWorld(bot, [[100, 49, 136]])
+    ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
+    const skips = []
+    const opts = goalOptions(bot, ctx, 'castle', skips)
+    assert.ok(!opts.some((o) => o.id === 'castlefetch-far'), JSON.stringify(opts.map((o) => o.id)))
+    assert.ok(skips.some((s) => s.id === 'castlefetch-far' && /no exposed stone past 32/.test(s.why)), JSON.stringify(skips))
+  })
+
+  it('stone on a danger spot is skipped (R2 core-2 shared predicate)', () => {
+    const { bot, ctx } = castleFixture()
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    bot.findBlocks = () => [{ x: 100, y: 64, z: 136 }]
+    stoneWorld(bot, [[100, 64, 136]])
+    ctx.danger = { spots: [{ x: 100, z: 136, at: Date.now() }] }
+    ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
+    const skips = []
+    const opts = goalOptions(bot, ctx, 'castle', skips)
+    assert.ok(!opts.some((o) => o.id === 'castlefetch-far'), JSON.stringify(opts.map((o) => o.id)))
+    assert.ok(skips.some((s) => s.id === 'castlefetch-far' && /no exposed stone past 32/.test(s.why)), JSON.stringify(skips))
+  })
+
+  it('buried-first hits are all examined at a wide count; nearest accepted wins (R2 body-3)', () => {
+    const { bot, ctx } = castleFixture()
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    const buried = []
+    for (let i = 0; i < 20; i++) buried.push({ x: 96 + (i % 5), y: 63, z: 132 + Math.floor(i / 5) })
+    const near = { x: 101, y: 64, z: 137 }
+    const far = { x: 104, y: 64, z: 140 }
+    let seenCount = 0
+    bot.findBlocks = (args) => {
+      seenCount = (args && args.count) || 0
+      return [...buried, far, near] // accepted hits last, nearest very last
     }
+    stoneWorld(bot, [...buried.map((p) => [p.x, p.y, p.z]), [101, 64, 137], [104, 64, 140]])
+    ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
+    const opts = goalOptions(bot, ctx, 'castle')
+    const cf = opts.find((o) => o.id === 'castlefetch-far')
+    assert.ok(seenCount >= 4096, `wide count, saw ${seenCount}`)
+    assert.ok(cf, `castlefetch-far offered past 20 buried hits: ${opts.map((o) => o.id)}`)
+    assert.deepEqual(cf.unlock.candidate, { x: 101, y: 64, z: 137 })
   })
 
   it('stone demand + remembered logs only does NOT offer castlefetch-far (demand mismatch)', () => {
@@ -409,9 +463,65 @@ describe('order replacement re-baselines (finding 4)', () => {
     assert.equal(ctx.task.bring.done, 0, 'baseline is order B')
     assert.equal(ctx.task.bring.stallMs, 0)
     assert.equal((ctx.task.bring.wd || {}).rounds || 0, 0, 'no rounds leak across')
-    assert.equal(ctx.task.bring.orderRef, orderB)
+    assert.equal(ctx.task.bring.orderRef, taskMod.orderStamp(orderB))
     assert.ok(!ctx.goal.commit, 'no unlock leaks across')
     assert.ok(outLogs().some((l) => /result=preempted:replaced/.test(l)), JSON.stringify(outLogs()))
+  })
+
+  it('castle wd.rounds survive bring A complete -> bring B (R2 core-1)', () => {
+    const bot = makeBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } }
+    ticker.setCastle(st)
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.active, 'castle')
+    ctx.task.castle.wd = { rounds: 3, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null }
+    const orderA = { kind: 'block', name: 'oak_log', want: 8, by: 'P', have: 0, drop: 'oak_log', phase: 'find', announced: true }
+    ctx.bring = orderA
+    taskMod.taskTick(bot, ctx, t0 + 10000)
+    assert.equal(ctx.task.active, 'bring')
+    ctx.bring = null // A completes; the castle resumes with its clock kept
+    taskMod.taskTick(bot, ctx, t0 + 20000)
+    assert.equal(ctx.task.active, 'castle')
+    assert.equal(ctx.task.castle.wd.rounds, 3, 'clock kept across the errand')
+    const orderB = { kind: 'block', name: 'cobblestone', want: 4, by: 'P', have: 0, drop: 'cobblestone', phase: 'find', announced: true }
+    ctx.bring = orderB
+    taskMod.taskTick(bot, ctx, t0 + 30000)
+    assert.equal(ctx.task.active, 'bring')
+    assert.equal(ctx.task.castle.wd.rounds, 3, 'stale t.bring delete leaves t.castle alone')
+    assert.equal(ctx.task.bring.stallMs, 0, 'B re-baselines')
+    assert.equal(ctx.task.bring.orderRef, taskMod.orderStamp(orderB))
+  })
+
+  it('comehome re-arm with carried stamp keeps the clock; without carry it re-baselines (R2 core-1)', () => {
+    const bot = makeBot()
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.work = false
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true, v: 2 }
+    const order = { phase: 'walk', home: ctx.home }
+    ctx.comehome = order
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.active, 'comehome')
+    const stBefore = ctx.task.comehome
+    // Re-arm WITH the stamp carried (what home.js does): same state object.
+    const rearmed = { ...order, exiting: true, phase: 'open' }
+    taskMod.carryOrderStamp(order, rearmed)
+    ctx.comehome = rearmed
+    taskMod.taskTick(bot, ctx, t0 + 10000)
+    assert.equal(ctx.task.comehome, stBefore, 'carried stamp: no reset')
+    // A genuinely new order object (no carry): fresh baseline.
+    const fresh = { phase: 'walk', home: ctx.home }
+    ctx.comehome = fresh
+    taskMod.taskTick(bot, ctx, t0 + 20000)
+    assert.notEqual(ctx.task.comehome, stBefore, 'new stamp: re-baselined')
+    assert.equal(ctx.task.comehome.stallMs, 0)
+    assert.equal(ctx.task.comehome.orderRef, taskMod.orderStamp(fresh))
   })
 })
 
@@ -452,9 +562,8 @@ describe('unlock windows survive progress (finding 5)', () => {
 
   it('castlefetch-far window survives the first stone; expiry reads progress', async () => {
     const { bot, ctx } = stoneFixture()
-    const origExposed = scoutMod.isExposed
-    scoutMod.isExposed = () => true
-    try {
+    stoneWorld(bot, [[100, 64, 136]])
+    {
       const t = await liveWindow(bot, ctx, 'castlefetch-far')
       const c = ctx.goal.commit
       assert.deepEqual(c.unlock.candidate, { x: 100, y: 64, z: 136 })
@@ -470,8 +579,6 @@ describe('unlock windows survive progress (finding 5)', () => {
       taskMod.taskTick(bot, ctx, t2 + 10000)
       assert.equal(ctx.goal.commit, null)
       assert.ok(outLogs().some((l) => /result=progress/.test(l) && /unlock=candidate,radius/.test(l)), JSON.stringify(outLogs()))
-    } finally {
-      scoutMod.isExposed = origExposed
     }
   })
 

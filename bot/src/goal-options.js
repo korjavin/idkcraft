@@ -95,9 +95,14 @@ const WOOD_FETCH_KINDS = ['planks', 'door', 'fence', 'chest', 'frame']
 // Bounded live scan for EXPOSED stone past DIG_RADIUS of the castle site
 // (finding 1): resource memory never holds stone in prod (the arrival scan
 // notes ores + logs only), so a remembered "stone" would send the fetcher
-// to a tree. Rings sample 8 compass points each, nearest ring first; every
-// hit is verified exposed (diggable) at fire time. Runs only on watchdog
-// fire, never per tick. Returns { x, y, z, name, dist } or null.
+// to a tree. Rings sample 8 compass points each, nearest ring first, and
+// the first probe with an accepted hit wins (ring early-exit: this runs
+// only on watchdog fire, never per tick). Every hit is filtered through
+// pickStone's own acceptance (R2 core-2: the site ground window, EXPOSE,
+// !danger.near, canBreak — one shared predicate, so the table never
+// offers a block the leg would refuse), across ALL hits before taking the
+// nearest (R2 body-3: findBlocks is nearest-first, so a small count sees
+// only the buried layer). Returns { x, y, z, name, dist } or null.
 function liveStonePast(bot, ctx) {
   try {
     const st = ctx && ctx.castle
@@ -106,7 +111,10 @@ function liveStonePast(bot, ctx) {
     const e = reg && reg.stone
     if (!e || typeof e.id !== 'number' || typeof bot.findBlocks !== 'function') return null
     const Vec3 = require('vec3')
-    const scout = require('./behaviours/scout')
+    const fetch = require('./behaviours/castlefetch')
+    const accept = fetch && fetch.acceptStone
+    const COUNT = (fetch && fetch.FIND_COUNT) || 4096
+    if (typeof accept !== 'function') return null
     const a = anchorOf(bot, ctx)
     const DIG = 32
     for (const r of [64, 128, 192]) {
@@ -115,24 +123,21 @@ function liveStonePast(bot, ctx) {
         const z = Math.round(st.site.z - r * Math.cos((k * Math.PI) / 4))
         let hits = []
         try {
-          hits = bot.findBlocks({ point: new Vec3(x, st.site.y, z), matching: e.id, maxDistance: 24, count: 16 }) || []
+          hits = bot.findBlocks({ point: new Vec3(x, st.site.y, z), matching: e.id, maxDistance: 24, count: COUNT }) || []
         } catch (_) {
           hits = []
         }
+        let best = null
         for (const p of hits) {
           if (!p || typeof p.x !== 'number') continue
           const dSite = Math.hypot(p.x - st.site.x, p.z - st.site.z)
           if (dSite <= DIG) continue
           if (a && typeof a.x === 'number' && Math.hypot(p.x - a.x, p.z - a.z) > OUTER_DISK) continue
-          let exposed = false
-          try {
-            exposed = !!scout.isExposed(bot, p)
-          } catch (_) {
-            exposed = false
-          }
-          if (!exposed) continue
-          return { x: p.x, y: p.y, z: p.z, name: 'stone', dist: dSite }
+          if (!accept(bot, ctx, p, st.site.y)) continue
+          const dProbe = Math.hypot(p.x - x, p.y - st.site.y, p.z - z)
+          if (!best || dProbe < best.dProbe) best = { x: p.x, y: p.y, z: p.z, name: 'stone', dist: dSite, dProbe }
         }
+        if (best) return { x: best.x, y: best.y, z: best.z, name: best.name, dist: best.dist }
       }
     }
     return null

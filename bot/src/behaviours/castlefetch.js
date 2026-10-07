@@ -279,6 +279,32 @@ function craftTick(bot, ctx, f, d) {
 // danger spot, or our own feet column.
 const EXPOSE = [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
 const AIRISH = new Set(['air', 'cave_air'])
+// Shared stone acceptance (R2 core-2): the ground window, exposure,
+// danger and break checks in one predicate so pickStone and the
+// watchdog's live scan accept the same blocks. gy is the ground anchor
+// (the site y, or the latched far candidate's y inside a far leg). at
+// resolves the block (pickStone's stoneAt); default is bot.blockAt.
+function acceptStone(bot, ctx, p, gy, at) {
+  try {
+    if (!bot || !p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+    if (typeof gy !== 'number') return false
+    if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) return false
+    const open = EXPOSE.some(([x, y, z]) => {
+      try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && AIRISH.has(n.name) } catch (_) { return false }
+    })
+    if (!open) return false
+    try { if (danger.near(ctx, p)) return false } catch (_) { return false }
+    let b = null
+    try {
+      b = typeof at === 'function' ? at(p) : bot.blockAt(new Vec3(p.x, p.y, p.z))
+    } catch (_) { b = null }
+    if (!b) return false
+    try { if (!canBreak(bot, b, ctx)) return false } catch (_) { return false }
+    return true
+  } catch (_) {
+    return false
+  }
+}
 function pickStone(bot, ctx, f, bp, stoneAt) {
   const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.stone
   let found = []
@@ -313,22 +339,16 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   let best = null
   for (const p of found) {
     const k = `${p.x},${p.y},${p.z}`
-    if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p) || inTrench(ctx.castle, p)) continue
+    if (f.skip.has(k) || onSite(ctx.castle, p) || inTrench(ctx.castle, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
-    // Near the ground level only (revmux 02/03): a cave wall far
-    // below is 'exposed' too and the canDig walk would shaft down to it; a
-    // cliff face far above means pillaring. Anchored on the site (or the
-    // far candidate), never the live feet — a pick made from inside our
-    // own quarry pit would ratchet the window down a layer per pick.
-    if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) continue
     const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
     if (best && d >= best.d) continue
-    const open = EXPOSE.some(([x, y, z]) => {
-      try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && AIRISH.has(n.name) } catch (_) { return false }
-    })
-    if (!open) continue
-    const b = stoneAt(p)
-    if (!b || !canBreak(bot, b, ctx)) continue
+    // Ground window + exposure + danger + break (R2 core-2): the shared
+    // predicate, so the watchdog's live scan accepts the same blocks.
+    // Anchored on the site (or the far candidate), never the live feet —
+    // a pick made from inside our own quarry pit would ratchet the
+    // window down a layer per pick.
+    if (!acceptStone(bot, ctx, p, gy, stoneAt)) continue
     best = { x: p.x, y: p.y, z: p.z, k, d, waits: 0 }
   }
   return best
@@ -615,3 +635,7 @@ module.exports.castleChest = castleChest
 module.exports.onSite = onSite
 module.exports.deps = deps
 module.exports.FETCH = FETCH
+module.exports.acceptStone = acceptStone
+module.exports.FIND_COUNT = FIND_COUNT
+module.exports.STONE_BELOW = STONE_BELOW
+module.exports.STONE_ABOVE = STONE_ABOVE
