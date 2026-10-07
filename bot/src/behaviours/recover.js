@@ -1281,6 +1281,16 @@ function digStepRun(bot, ctx) {
   // here; the mount branch above validates the anchor, never the cell.
   const step = cellAt(bot, st.dir[0], 0, st.dir[1])
   if (!solid(step)) { st.dir = null; return 'running' }
+  // Behind lip (vmzq.41): the leap backs off the face into the column
+  // behind, and rock two up there bonks the jump — headBlockedAt vetoes
+  // it (failed:head-blocked). Every staircase step leaves exactly that lip
+  // (the last step's dug head with rock over it; rig NOWOOD: 4-8 vetoes,
+  // surfaced@285s or never), so dig it like the cap. Lava over or beside
+  // it, or a cell that does not dig: mount as before, the veto stands.
+  const lip = cellAt(bot, -st.dir[0], 2, -st.dir[1])
+  if (lip && solid(lip) && !solid(cellAt(bot, -st.dir[0], 0, -st.dir[1])) &&
+    !solid(cellAt(bot, -st.dir[0], 1, -st.dir[1])) && diggable(bot, lip) &&
+    !capLavaAt(bot, -st.dir[0], -st.dir[1])) return digStepCell(bot, ctx, st, lip)
   st.phase = 'step'
   st.waited = 0
   st.leapt = false
