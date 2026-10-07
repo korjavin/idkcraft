@@ -172,12 +172,20 @@ function movementTargets(bot, ctx) {
 // bot holds more cobblestone than the SCAFFOLD_LOW reserve, scaffolding is
 // dirt only; at or below the reserve cobble is scaffold again (that is the
 // reserve's job). The castle climbs its own stairs (reach invariant).
+// Dirt gate (vmzq.30, .29B): with no dirt at all a dirt-only set is empty
+// and A* wedges (run6: 4 min of partial/no_scaffolding_blocks in a pit) —
+// spending some cobble on the climb beats a parked castle.
 function castleStone(bot, ctx) {
   try {
     if (!ctx || !ctx.work || ctx.step !== 'castle') return false
     let n = 0
-    for (const it of bot.inventory.items() || []) if (it && it.name === 'cobblestone') n += it.count | 0
-    return n > require('./behaviours/equip').SCAFFOLD_LOW // deferred: equip loads inside the goal chain
+    let dirt = 0
+    for (const it of bot.inventory.items() || []) {
+      if (!it) continue
+      if (it.name === 'cobblestone') n += it.count | 0
+      else if (it.name === 'dirt') dirt += it.count | 0
+    }
+    return dirt > 0 && n > require('./behaviours/equip').SCAFFOLD_LOW // deferred: equip loads inside the goal chain
   } catch (_) { return false }
 }
 
