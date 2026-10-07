@@ -360,11 +360,12 @@ describe('truthful metrics (acceptance 2)', () => {
     const { ctx } = castleCtx(bot)
     ctx.brain = null
     const inv = bot.inventory.items()
+    inv[0].count = 81 // usable 57 at the 24-stone reserve (vmzq.31)
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0) // stone baseline usable 57
     assert.equal(ctx.task.castle.matHave, 57)
     let t = t0 + 10000
-    inv[0].count = 69 // usable 53: sink ignores the dip
+    inv[0].count = 77 // usable 53: sink ignores the dip
     taskMod.taskTick(bot, ctx, t)
     assert.equal(ctx.task.castle.stallMs, 0, 'fresh leg takes the travel grace')
     // Switch away and back at the dipped count, then rise — but still
@@ -379,13 +380,13 @@ describe('truthful metrics (acceptance 2)', () => {
     assert.equal(ctx.task.castle.matHave, 57, 'sticky mark restored, not re-baselined')
     assert.equal(ctx.task.castle.stallMs, 20000)
     t += 10000
-    inv[0].count = 71 // usable 55: above the dip, below the mark
+    inv[0].count = 79 // usable 55: above the dip, below the mark
     taskMod.taskTick(bot, ctx, t)
     assert.equal(ctx.task.castle.stallMs, 30000, 'no recount reset')
     assert.ok(!resetLogs().some((l) => l.includes('material:')), JSON.stringify(resetLogs()))
     // Genuine growth past the mark still resets.
     t += 10000
-    inv[0].count = 74 // usable 58
+    inv[0].count = 82 // usable 58
     taskMod.taskTick(bot, ctx, t)
     assert.ok(resetLogs().some((l) => l === 'goal reset kind=castle why=material:stone'))
     assert.equal(ctx.task.castle.stallMs, 0)
@@ -949,6 +950,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     const { brain } = answerBrain('castlefetch')
     ctx.brain = brain
     const inv = bot.inventory.items()
+    inv[0].count = 81 // mark 57 at the 24-stone reserve (vmzq.31)
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0) // stone mark 57
     let t = t0
@@ -960,7 +962,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     assert.ok(ctx.task.castle.wd.pending, 'round fired')
     // Dip before the answer lands, so the point reading at consume time
     // (53) sits below the clock's high-water mark (57).
-    inv[0].count = 69
+    inv[0].count = 77
     await flush()
     t += 10000
     taskMod.taskTick(bot, ctx, t) // consume
@@ -968,7 +970,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     assert.equal(ctx.goal.commit.snapshot.matHave, 57, 'snapshot carries the mark, not the dip')
     // Rise back to the mark mid-window: movement, but no clock progress.
     t += 10000
-    inv[0].count = 73
+    inv[0].count = 81
     taskMod.taskTick(bot, ctx, t)
     guard = 0
     while (ctx.goal.commit && guard++ < 40) {

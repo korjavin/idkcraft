@@ -95,7 +95,7 @@ describe('vmzq.27 flip-repro with blocked cells: flaps never preempt, the word n
     await quiet(async () => {
       const { blocked, laid } = blocked2()
       const items = [
-        { name: 'cobblestone', count: 20 }, // some: usable 4
+        { name: 'cobblestone', count: 28 }, // some: usable 4 at the 24-stone reserve (vmzq.31)
         { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
       ]
       const bot = makeBot({ items, laid })
@@ -104,7 +104,7 @@ describe('vmzq.27 flip-repro with blocked cells: flaps never preempt, the word n
         ctx.goalText = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
         assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: steady start`)
         for (let i = 0; i < 6; i++) {
-          setCount(items, 'cobblestone', i % 2 === 0 ? 40 : 20) // batch <-> some
+          setCount(items, 'cobblestone', i % 2 === 0 ? 48 : 28) // batch <-> some
           assert.notEqual(castleMod.menuFact(bot, ctx), 'blocked', `${leg}: flap ${i} skips the holes`)
           assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: flap ${i} must not switch`)
         }
