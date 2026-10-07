@@ -3,12 +3,17 @@
 # a disposable world copy, boot Paper, flatten a pad, order `build castle`
 # with an empty kit, run N minutes, print ONE verdict line:
 #   castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>
-# Usage: sh castle-rig.sh [mins]   (default 30; CASTLE_MINS also works)
+# Usage: sh castle-rig.sh [mins]   (default 6; CASTLE_MINS also works;
+#   gate runs pass 30+ explicitly)
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b"),
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
-#   to run the natural day/night cycle instead of locked day.
+#   to run the natural day/night cycle instead of locked day,
+#   CASTLE_KIT (empty|seeded — seeded pre-fills cobble/planks/tools so a
+#   6-min window measures laying, not fetching),
+#   CASTLE_TICKRATE (1 = wall-clock game; N > 1 runs /tick rate N for fast
+#   iteration — gates always run at 1).
 # Exit: 0 = measured (even 0 laid — the line says so),
 #   2 = environment/setup failure, 130 = interrupted (never a pass).
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf); a
@@ -65,9 +70,14 @@ elif [ "$RIG_ID" = auto ]; then
   echo "RIG_LOCK_HELD=1 needs a concrete CASTLE_RIG_ID, not auto"; exit 2
 fi
 case "$RIG_ID" in ''|[a-z]) ;; *) echo "CASTLE_RIG_ID must be one letter a-z, 0 or auto (got '$RIG_ID')"; exit 2 ;; esac
-MINS="${1:-${CASTLE_MINS:-30}}"
+MINS="${1:-${CASTLE_MINS:-6}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
+KIT="${CASTLE_KIT:-empty}"
+case "$KIT" in empty|seeded) ;; *) echo "CASTLE_KIT: want empty|seeded, got '$KIT'"; exit 2 ;; esac
+TICKRATE="${CASTLE_TICKRATE:-1}"
+case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
+{ [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
 PRODWORLD="${PRODWORLD:-/Users/iv/Projects/.idkcraft-prodworld}"
 HERE="$(dirname "$0")"
 TREE="$(cd "$HERE/../.." && pwd)"
@@ -170,11 +180,23 @@ boot() {
     fi
     rcon_assert "time set 1000"
   fi
+  if [ "$TICKRATE" != 1 ]; then
+    # Accelerator, not regime: a Paper that rejects /tick runs on at wall
+    # clock with a loud line (never a silent confound, never a failed run).
+    if _out=$(docker exec "$CONTAINER" rcon-cli "tick rate $TICKRATE" 2>&1) && \
+       case "$_out" in *Incorrect*|*Unknown*|*incomplete*) false ;; *) true ;; esac; then
+      echo "tickrate [$TICKRATE]: $(printf '%s' "$_out" | head -n 1)"
+    else
+      echo "tickrate [$TICKRATE] REJECTED, running at wall clock: $(printf '%s' "${_out:-?}" | head -n 1)"
+      TICKRATE=1
+    fi
+  fi
   rcon_assert "op CastleGuide$CASTLE_TAG"
   rcon_assert "op CastleBuild$CASTLE_TAG"
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
+export CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

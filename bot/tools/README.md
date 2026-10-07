@@ -374,12 +374,14 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
 ```sh
-sh bot/tools/castle-rig.sh [mins]   # default 30
+sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
+CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
 ```
 
 One call = reset the disposable world copy, boot Paper, flatten a dirt pad
 at `CASTLE_PAD` (default `300,300`), join guide + follower, empty the
-follower's kit, order `build castle` through the real chat path, quit the
+follower's kit (or seed it, see below), order `build castle` through the
+real chat path, quit the
 guide (prod-alone parity: nobody online, autonomous on), work `mins`
 minutes, print ONE verdict line:
 
@@ -393,9 +395,15 @@ check; if not ignored, don't commit it), the full log in `CASTLE_LOG`. The
 bot runs the real stack on the stub brain (deterministic, no paid LLM).
 Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle), difficulty
 peaceful, fall damage off, keepInventory on — the window measures build
-throughput, not survival. No `/tick` acceleration by design: the bot ticks
-on wall-clock seconds, so a faster game clock would distort physics
-without speeding decisions.
+throughput, not survival. `CASTLE_KIT=seeded` pre-fills 128 cobble,
+64 planks, 64 dirt and a stone pick+sword after the clear, so a 6-min
+window measures laying (equip is kit-complete, the first word is a batch)
+independent of the fetch chain; `empty` (default) runs the full chain
+from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast iteration
+(a Paper that rejects it warns loudly and runs at wall clock; the record
+carries the effective rate) — gates always run at 1, since the bot ticks
+on wall-clock seconds and a faster game clock changes what a minute of
+play means.
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock

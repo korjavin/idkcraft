@@ -38,6 +38,8 @@ const MINS = Math.max(1, parseInt(process.env.CASTLE_MINS || '30', 10) || 30)
 const PAD = String(process.env.CASTLE_PAD || '300,300').split(',').map(Number)
 const OUT = process.env.CASTLE_OUT || `${__dirname}/last-castle.json`
 const LOGFILE = process.env.CASTLE_LOG || `/tmp/castle-rig-${TAG}.log`
+const KIT = process.env.CASTLE_KIT || 'empty'
+const TICKRATE = process.env.CASTLE_TICKRATE || '1'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -177,6 +179,17 @@ async function main() {
   await rcon(`tp ${GUIDE} ${px + 0.5} ${gy + 1} ${pz + 0.5}`).catch((e) => fail('pad-tp', e.message))
   await rcon(`tp ${FOLLOWER} ${px + 2.5} ${gy + 1} ${pz + 0.5}`).catch((e) => fail('pad-tp', e.message))
   await rcon(`clear ${FOLLOWER}`).catch((e) => fail('clear', e.message))
+  // Seeded kit (pace split: laying measured independent of fetching): a
+  // complete castle-opening kit — batch stone, planks, scaffold dirt and a
+  // stone kit (pick + sword), so equip is kit-complete and the first castle
+  // word is a batch. One give carries many stacks (stuck precedent).
+  if (KIT === 'seeded') {
+    for (const [item, count] of [['cobblestone', 128], ['oak_planks', 64], ['dirt', 64],
+      ['stone_pickaxe', 1], ['stone_sword', 1]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword)')
+  }
   await sleep(3000) // chunks in, both landed
   if (tickCtx()) tickCtx().paused = false
 
@@ -259,7 +272,8 @@ async function main() {
         total: typeof last.total === 'number' ? last.total : 0,
         flips: seen.flips, deaths, steps: seen.steps, fails: seen.fails,
         partial: Date.now() < endAt,
-        tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE, series,
+        tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
+        kit: KIT, tickrate: TICKRATE, series,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
@@ -285,7 +299,8 @@ async function main() {
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy },
-    tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE, series,
+    tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
+    kit: KIT, tickrate: TICKRATE, series,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)

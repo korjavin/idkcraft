@@ -32,6 +32,20 @@ describe('castle-rig.sh anti-noise', () => {
   it('validates the minutes argument before touching the world', () => {
     assert.ok(script.includes("mins: want a positive integer"), 'missing mins validation')
   })
+
+  it('fails loud on a bad kit or tickrate', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-kit-'))
+    const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), ...env } })
+    const badKit = run({ CASTLE_KIT: 'full' })
+    assert.equal(badKit.status, 2)
+    assert.match(badKit.stdout, /CASTLE_KIT: want empty\|seeded/)
+    const badRate = run({ CASTLE_TICKRATE: 'fast' })
+    assert.equal(badRate.status, 2)
+    assert.match(badRate.stdout, /tickrate: want an integer/)
+  })
 })
 
 describe('castle-rig.sh rig lock', () => {
