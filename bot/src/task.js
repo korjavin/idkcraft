@@ -7,9 +7,12 @@
 // rides ctx.taskPlanStep, honoured one-shot by goal.js), and parks the
 // task (a menu veto, honoured by goal.js) with a diagnosis.
 //
-// Active task: the house while unbuilt (build outranks castle in STEP_ORDER),
-// else the castle while ordered, incomplete and not owner-parked, else
-// none. A task-parked (L2 episode) task STAYS active: the stall invariant
+// Active task: the castle while ordered, incomplete and not owner-parked
+// (castle outranks build in STEP_ORDER, vmzq.19 — the body works the
+// castle while the house stands unbuilt, so the clock watches the castle;
+// watching the house would L2-park it and veto the castle chain's
+// gather/craft), else the house while unbuilt, else none. A task-parked
+// (L2 episode) task STAYS active: the stall invariant
 // still applies to side work (owner Q2) — the clock runs, L1 keeps firing
 // with a parked suffix, L2 does not re-fire. Owner-parked (castle stop,
 // no episode) pauses. The stall clock advances only on day + work +
@@ -41,6 +44,13 @@ const STALL_TICK_CLAMP_MS = 10000
 
 function taskKind(ctx) {
   try {
+    const st = ctx && ctx.castle
+    // Task-parked (an L2 episode on the record) stays active — the clock
+    // runs through the park so side work is still watched; owner-parked
+    // (castle stop, no episode) pauses.
+    if (st && st.site && typeof st.site.x === 'number' && (!st.parked || st.taskPark) && st.phase !== 'complete') return 'castle'
+  } catch (_) { /* fall through to house */ }
+  try {
     const home = ctx && ctx.home
     if (home && home.site && typeof home.site.x === 'number' && !home.built) return 'house'
     // Pending house (idkcraft-vmzq.16): homeless with a recorded no-site —
@@ -50,13 +60,6 @@ function taskKind(ctx) {
     // build attempt, which founds a site or re-stamps the failure.
     if ((!home || !home.site) && ctx && ctx.stepFail && ctx.stepFail.build &&
       ctx.stepFail.build.status === 'failed:no-site') return 'house'
-  } catch (_) { /* fall through to castle */ }
-  try {
-    const st = ctx && ctx.castle
-    // Task-parked (an L2 episode on the record) stays active — the clock
-    // runs through the park so side work is still watched; owner-parked
-    // (castle stop, no episode) pauses.
-    if (st && st.site && typeof st.site.x === 'number' && (!st.parked || st.taskPark) && st.phase !== 'complete') return 'castle'
   } catch (_) { /* no task */ }
   return null
 }

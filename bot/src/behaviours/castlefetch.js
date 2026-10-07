@@ -566,6 +566,7 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.demand = demand
+module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
 module.exports.onSite = onSite
 module.exports.deps = deps

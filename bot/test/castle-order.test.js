@@ -186,10 +186,12 @@ describe('castle persistence (g0z.3)', () => {
 describe('castle arbiter step (g0z.3)', () => {
   const decide = (bot, ctx) => goal.decide(bot, ctx)
 
-  it('sits after the house chain, before gather/deliver/forage', () => {
+  it('sits before the house chain (vmzq.19), ahead of gather/deliver/forage', () => {
     const o = goal.STEP_ORDER
-    assert.equal(o.indexOf('castle'), o.indexOf('light') + 2) // castlefetch (g0z.4) between
-    assert.ok(o.indexOf('castle') < o.indexOf('gather'))
+    assert.equal(o.indexOf('castlefetch') + 1, o.indexOf('castle')) // the fetch first, adjacency kept
+    for (const late of ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'forage']) {
+      assert.ok(o.indexOf('castle') < o.indexOf(late), `castle before ${late}`)
+    }
     assert.ok(goal.STEP_CRITERIA.castle.includes('stone-batch'))
   })
 
@@ -274,10 +276,10 @@ describe('castle arbiter step (g0z.3)', () => {
     assert.equal((await decide(bot, ctx)).action, 'castle', 'morning re-enters the castle')
   })
 
-  it('yields to equip (rearm first)', async () => {
+  it('lays a ready batch before rearming (vmzq.19: castle outranks equip)', async () => {
     const bot = makeBot({ items: [{ name: 'cobblestone', count: 64 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }] })
     const r = await decide(bot, { castle: castleState() })
-    assert.equal(r.action, 'equip')
+    assert.equal(r.action, 'castle', 'a layable batch lays; the missing tools rearm after')
   })
 
   it('stone at or below the scaffold reserve is not castle material', async () => {

@@ -74,9 +74,11 @@ const MENU = {
   },
   gohome: {
     // Night-far (ipn.12): at night a far march is a death march — shelter
-    // owns it (see nightFarFromHome). Dusk marches at any distance.
+    // owns it (see nightFarFromHome). Dusk marches at any distance —
+    // except away from home with an active castle (vmzq.19): the night
+    // belongs to the site, never to a 500-block march back.
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
-      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx),
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx) && !castleSiteNight(bot, ctx),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -84,7 +86,10 @@ const MENU = {
     // Night shelter (ipn.12): the night-far complement of gohome — pillar
     // up and hold where you are till dawn instead of marching the dark.
     // Castle night (g0z.21): at the far castle it shelters from dusk on.
-    feasible: (facts, bot, ctx) => facts.home === 'built' && facts.inside === 'no' && shelterFits(facts, bot, ctx),
+    // Castle site (vmzq.19): with an active castle and the bot away from
+    // home it shelters from dusk anywhere — mid-map it pillars in place —
+    // and the built-home gate lifts (an unbuilt far house still shelters).
+    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -146,6 +151,9 @@ const MENU = {
     // plank remainder passes with any plank count. Skipped (given-up) cells
     // count as done, the same as in the build behaviour.
     feasible: (facts, bot, ctx) => {
+      // Castle first (vmzq.19): an active castle vetoes the house build,
+      // and an L2 park keeps the veto past the task radius (R2 minor 3).
+      if (castleFirst(ctx) || castleParkLeash(ctx)) return false
       // Parked house (vmzq.3): the L2 episode vetoes the house chain —
       // the bot does side work instead until resume.
       if (ctx && ctx.home && ctx.home.parked) return false
@@ -215,6 +223,10 @@ const MENU = {
     // (beds.sheepLatched; death-respawns release the stepFail hold, so it
     // cannot hold this).
     feasible: (facts, bot, ctx) => {
+      // Castle first (vmzq.19): an active castle vetoes the wool hunt —
+      // its place/bank legs walk home, 500 blocks in run3 — and an L2
+      // park keeps the veto past the task radius (R2 minor 3).
+      if (castleFirst(ctx) || castleParkLeash(ctx)) return false
       if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
       try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
     },
@@ -227,6 +239,8 @@ const MENU = {
     // equip precedent — goal.js loads inside the behaviour chain).
     feasible: (facts, bot, ctx) => {
       if (facts.time !== 'day') return false
+      // Home-leg leash (vmzq.19 R2, major 2): no cross-map torch run.
+      if (homeLegVetoed(bot, ctx)) return false
       const home = ctx && ctx.home
       if (!home || !home.site) return false
       // Built only (revmux 01 majors): on an unbuilt site light outranks
@@ -341,8 +355,15 @@ const MENU = {
     // The chest=no branch runs only when actionable (a standing chest to
     // adopt, or the pack to place one): an unready bot must not preempt a
     // forage leg just to fail at once (revmux 02-review).
-    feasible: (facts) => facts.home === 'built' && !facts.chestParked &&
+    feasible: (facts, bot, ctx) => facts.home === 'built' && !facts.chestParked &&
       !(facts.haul === 'waiting' && facts.player !== 'none') &&
+      // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run —
+      // unless the pack is full (R3, round-2 major A): stockpile is the
+      // only drain, and castlefetch/equip/gather yield pack-full counting
+      // on it, so a leashed full pack stalls to the L2 park. The pierce
+      // latches for the trip (R4, round-3 major): one placed block must
+      // not turn the walk around, and dusk must not strand it.
+      (!homeLegVetoed(bot, ctx) || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
       (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
@@ -355,6 +376,8 @@ const MENU = {
     // now, want/wait announce once through the said latch, done never fires.
     feasible: (facts, bot, ctx) => {
       if (facts.home !== 'built') return false
+      // Home-leg leash (vmzq.19 R2, major 2): the ladder waits for the castle.
+      if (homeLegVetoed(bot, ctx)) return false
       let plan = null
       try {
         plan = require('./behaviours/gear').menuPlan(facts, ctx)
@@ -484,6 +507,68 @@ function castleBlocked(facts) {
 // bot cannot chain to a 300-block remembered diamond. 64 is the epic's
 // own bound (stage-2: ends at home/site, not >64 away).
 const PARK_FORAGE_RADIUS = 64
+// Castle-first veto (idkcraft-vmzq.19): while an unfinished, unparked
+// castle stands, the house-side steps (beds, build) yield — run3 picked
+// equip then beds over a feasible castle, walked 500 blocks to the house,
+// and never laid a cell. Equip is only outranked (STEP_ORDER), never
+// vetoed: the castle chain needs its kit. Parked/complete releases (the
+// L2 park's side work IS house work). Deferred require (the beds
+// precedent — goal.js loads inside the behaviour chain).
+function castleFirst(ctx) {
+  try {
+    return !!require('./behaviours/explore').castleActive(ctx)
+  } catch (_) {
+    return false
+  }
+}
+// Home-leg leash (vmzq.19 R2, major 2): the home-anchored steps (light,
+// stockpile, gear) with an active castle run only near home — past the
+// task radius the legs cross the map, and laya (which the castle-rule
+// below only skips for a runnable castle) would pick them over the
+// chain's gather/craft/equip. Unreadable position reads near (fail open,
+// the nightFarFromHome rule).
+function homeLegVetoed(bot, ctx) {
+  try {
+    if (!castleFirst(ctx)) return false
+    const h = ctx && ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - h.x, bp.z - h.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+// Parked-castle leash (vmzq.19 R2, minor 3): an L2 castle park releases
+// the vetoes so the bot does side work — but with the home past the task
+// radius, beds/build side work marches 500 blocks home and back on
+// resume, so they stay vetoed then. An owner park (no episode) releases
+// fully: the owner stopped the castle, their call. Near-site side work
+// proceeds under either park. Only the auto-resuming episode leashes (R3,
+// round-2 major B): a latched 3rd park lasts till the owner speaks, and
+// the day's fallback work is the house, not the stalled site.
+function castleParkLeash(ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || !st.taskPark || st.taskPark.auto !== true || !st.site || typeof st.site.x !== 'number') return false
+    const h = ctx && ctx.home && ctx.home.site
+    if (!h || typeof h.x !== 'number') return false
+    return Math.hypot(h.x - st.site.x, h.z - st.site.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+// Pack-full pierce (vmzq.19 R3, round-2 major A): stockpile is the only
+// pack drain. The dig has no room exactly when castlefetch's own
+// roomForDrop says so (36 stacks with no cobble/dirt room, or the
+// chestless reserve corner) — then the banking trip is the unblock, not
+// drift. Deferred require (the demand precedent in castleFetchGo).
+function packFull(bot, ctx) {
+  try {
+    return !require('./behaviours/castlefetch').roomForDrop(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
 function taskParked(ctx) {
   try {
     if (ctx && ctx.castle && ctx.castle.parked) return true
@@ -641,6 +726,31 @@ function noteGohomeFail(ctx, bot, status) {
 // ponytail: distance to the site centre; a per-cell footprint test if a
 // big site ever needs it.
 const CASTLE_NIGHT_DIST = 48
+// Castle-site centre (the footprint middle, not the corner): shared by the
+// two night rules below (vmzq.19 R2).
+function castleSiteCentre(st) {
+  let cx = st.site.x
+  let cz = st.site.z
+  try {
+    const { w, d } = require('./castle').siteDimensions(st.rot | 0, st.blueprintVersion)
+    cx += w / 2
+    cz += d / 2
+  } catch (_) { /* corner */ }
+  return { x: cx, z: cz }
+}
+// The castle stands far from the house (vmzq.19 R2, major 1): a castle
+// next to the house never anchors the night — the bot walks in.
+function castleFarFromHome(ctx) {
+  try {
+    const st = ctx && ctx.castle
+    const h = ctx && ctx.home && ctx.home.site
+    if (!st || !st.site || typeof st.site.x !== 'number' || !h || typeof h.x !== 'number') return false
+    const c = castleSiteCentre(st)
+    return Math.hypot(c.x - h.x, c.z - h.z) > CASTLE_NIGHT_DIST
+  } catch (_) {
+    return false
+  }
+}
 function castleNight(bot, ctx) {
   try {
     const st = ctx && ctx.castle
@@ -649,16 +759,10 @@ function castleNight(bot, ctx) {
     const bp = bot && bot.entity && bot.entity.position
     if (!c || !h || !bp || typeof c.x !== 'number' || typeof h.x !== 'number' || typeof bp.x !== 'number') return false
     if (st.parked || st.phase === 'complete') return false
-    let cx = c.x
-    let cz = c.z
-    try {
-      const { w, d } = require('./castle').siteDimensions(st.rot | 0, st.blueprintVersion)
-      cx += w / 2
-      cz += d / 2
-    } catch (_) { /* corner */ }
-    return Math.hypot(cx - h.x, cz - h.z) > CASTLE_NIGHT_DIST &&
+    const cc = castleSiteCentre(st)
+    return Math.hypot(cc.x - h.x, cc.z - h.z) > CASTLE_NIGHT_DIST &&
       Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST &&
-      Math.hypot(bp.x - cx, bp.z - cz) <= CASTLE_NIGHT_DIST
+      Math.hypot(bp.x - cc.x, bp.z - cc.z) <= CASTLE_NIGHT_DIST
   } catch (_) {
     return false
   }
@@ -668,17 +772,46 @@ function castleNight(bot, ctx) {
 function shelterOwns(bot, ctx) {
   return nightFarFromHome(bot, ctx) || gohomeLatched(ctx, bot) || castleNight(bot, ctx)
 }
-// Shelter fits now: the night it owns, or a castle dusk (g0z.21).
+// Castle-site night (idkcraft-vmzq.19): while an unfinished, unparked
+// castle stands FAR from home and the bot is away from home, dusk and
+// night belong to the site — run3's dusk gohome marched 500 blocks at
+// every dusk (twice caught mid-map) and the latched night looped at the
+// house. castleNight above only fires within 48 of the site; this fires
+// anywhere away from home, so a bot caught mid-map pillars in place
+// instead of marching. Near home — or with the castle next to the house
+// (R2 major 1: a 60-block dusk walk to a standing house beats a pillar) —
+// the old steps win (walk in, stay). A sited home is required: the
+// shelter behaviour fails no-home without one, so a truly homeless bot
+// keeps the old night instead of a doomed pick.
+function castleSiteNight(bot, ctx) {
+  try {
+    if (!castleFirst(ctx) || !castleFarFromHome(ctx)) return false
+    const h = ctx && ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST
+  } catch (_) {
+    return false
+  }
+}
+// Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
+// night away from home with an active castle (vmzq.19, castleSiteNight) —
+// the stickiness and the night-near force below read this too, so a
+// mid-map dusk shelter holds instead of re-deciding every tick.
 function shelterFits(facts, bot, ctx) {
   const t = facts && facts.time
-  return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx))
+  return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
+    ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
 
-// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
-// rearm (equip), build, gather, then unload (deliver), dig (forage), search
+// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then the
+// castle chain (vmzq.19: castlefetch, castle — an ordered castle outranks
+// the house chain, which run3 proved by losing every day to beds/build at
+// the far house while the castle never laid a cell), then craft, rearm
+// (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'castlefetch', 'castle', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1373,6 +1506,11 @@ async function chooseStep(brain, facts, feasible, home) {
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
   // model re-pick to a day step would undo the latch.
   if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return { step: fsm, source: 'night-rule', fsm, model: null }
+  // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
+  // castle is a rule, not a preference — run3's laya picked equip then
+  // beds over a feasible castle and walked 500 blocks home. The model is
+  // consulted only when the castle cannot run now.
+  if (fsm === 'castle' || fsm === 'castlefetch') return { step: fsm, source: 'castle-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -1465,6 +1603,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.inside !== 'no') return 'gohome: already inside'
       if (gohomeLatched(ctx, bot)) return 'gohome: failed at the same spot tonight'
       if (castleNight(bot, ctx)) return 'gohome: sheltering at the castle'
+      if (castleSiteNight(bot, ctx)) return 'gohome: sheltering at the castle'
       return 'gohome: too far to walk at night'
     case 'shelter':
       if (facts.time === 'day') return 'shelter: daytime'
@@ -1494,6 +1633,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
+      if (castleFirst(ctx) || castleParkLeash(ctx)) return 'build: castle comes first'
       if (ctx && ctx.home && ctx.home.parked) return 'build: house parked'
       if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
       // Facts-level wording; the exact remainder gate lives in the rule.
@@ -1516,6 +1656,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'build: nothing left to build'
     }
     case 'beds':
+      if (castleFirst(ctx) || castleParkLeash(ctx)) return 'beds: castle comes first'
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
@@ -1523,6 +1664,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
+      if (homeLegVetoed(bot, ctx)) return 'light: castle comes first'
       const home = ctx && ctx.home
       if (!home || !home.site) return 'light: no home site'
       if (facts.home !== 'built') return 'light: home not built'
@@ -1571,6 +1713,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'deliver: nobody to deliver to'
     case 'stockpile':
       if (facts.home !== 'built') return 'stockpile: house not built yet'
+      if (homeLegVetoed(bot, ctx)) return 'stockpile: castle comes first'
       if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
       if (facts.chestParked) {
         // A blocked lid seals like a full chest but must not read as one.
@@ -1583,6 +1726,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'stockpile: nothing to bank'
     case 'gear': {
       if (facts.home !== 'built') return 'gear: house not built yet'
+      if (homeLegVetoed(bot, ctx)) return 'gear: castle comes first'
       let plan = null
       try {
         plan = require('./behaviours/gear').menuPlan(facts, ctx)
@@ -1768,6 +1912,11 @@ async function decide(bot, ctx) {
       try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
     }
   }
+  // Pack-full pierce latch (vmzq.19 R4, round-3 major): a finished banking
+  // trip releases — done banked, failed re-latches on the next full pick.
+  if (finished && prev === 'stockpile' && ctx) {
+    try { ctx.stockpilePierced = false } catch (_) { /* latch best-effort */ }
+  }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
   // them mid-phase: stepping inside flips inside, which would hand stay the
@@ -1950,6 +2099,12 @@ async function decide(bot, ctx) {
     // The step rides along (01 core-2): orders and retreat move ctx.step
     // without re-stamping, and must not inherit the age/source.
     ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
+    // A banking trip picked under the pierce latches for the trip (R4):
+    // set on the fresh pick only, so the shortcut re-issue below never
+    // arms it and only stockpile's own finish releases it above.
+    if (choice.step === 'stockpile') {
+      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx) } catch (_) { /* latch best-effort */ }
+    }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)

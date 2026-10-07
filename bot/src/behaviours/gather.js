@@ -6,6 +6,7 @@ const bring = require('./bring')
 const resources = require('../resources')
 const danger = require('../danger')
 const blueprint = require('../castle')
+const exploreMod = require('./explore')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS, gatherFailedHolds } = require('../goal')
 const { countItems } = require('../perception')
@@ -133,6 +134,23 @@ function bodyPos(bot) {
   return null
 }
 
+// Own-work bound (idkcraft-vmzq.19): while a build task is active (castle
+// ordered, or a house sited but unbuilt) a remembered tree past the task
+// radius is not walked to — prod hiked 500 blocks to home-ground memory.
+// Live and far search stay bot-centered (a march kits up where it stands);
+// only memory crosses the map. This step is always own work (there is no
+// owner gather order), so no owner exemption applies.
+function taskFar(ctx, it) {
+  try {
+    if (!exploreMod.taskActive(ctx)) return false
+    const a = exploreMod.anchorOf(null, ctx)
+    if (!a || typeof a.x !== 'number' || !it || typeof it.x !== 'number') return false
+    return Math.hypot(it.x - a.x, it.z - a.z) > (exploreMod.TASK_SEARCH_RADIUS || 64)
+  } catch (_) {
+    return false
+  }
+}
+
 function failFinal(bot, ctx, g, logs, final) {
   g.final = final
   g.atLogs = logs
@@ -258,7 +276,7 @@ function gather(bot, ctx, target, state) {
       // rest (the bead's unreachable case: trunk at 40 skipped, log at 200
       // remembered).
       const mem = names.length > 0
-        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || (g.gskip && g.gskip.has(keyOf(it))) || banned(it))
+        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || (g.gskip && g.gskip.has(keyOf(it))) || banned(it) || taskFar(ctx, it))
         : null
       if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)

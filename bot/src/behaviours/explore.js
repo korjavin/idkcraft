@@ -84,10 +84,20 @@ function ownerBring(ctx) {
 // spawn. Null when none exists. A wool self-hunt from the castle used to
 // anchor at home 500 blocks off and walk there; now it spirals at the site.
 // Owner brings keep the home anchor (R3a).
-function taskActive(ctx) {
+// An unfinished, unparked castle project (vmzq.19): single source for the
+// task anchor below and the goal.js castle-first vetoes — a parked/L2 or
+// complete castle releases both.
+function castleActive(ctx) {
   try {
     const st = ctx && ctx.castle
-    if (st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete') return true
+    return !!(st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete')
+  } catch (_) {
+    return false
+  }
+}
+function taskActive(ctx) {
+  try {
+    if (castleActive(ctx)) return true
   } catch (_) { /* no castle verdict */ }
   // Active unbuilt house site (R3b, bead 18 house OR castle): strict
   // built===false — anchor-only fixtures omit built (undefined) and stay
@@ -255,6 +265,7 @@ module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
 module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
 module.exports.taskActive = taskActive
+module.exports.castleActive = castleActive
 module.exports.ownerBring = ownerBring
 module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
