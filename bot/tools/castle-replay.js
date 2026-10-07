@@ -73,7 +73,7 @@ function classify(line) {
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     const pair = [m[1], m[2]].sort().join('<>')
-    if (pair === 'castle<castlefetch') seen.flips++
+    if (pair === 'castle<>castlefetch') seen.flips++
     return
   }
   m = /^decision source=\S+ action=(\S+)/.exec(line)
@@ -310,8 +310,11 @@ async function main() {
   process.exit(0)
 }
 
-main().catch((e) => {
-  origLog(`CASTLE-RIG FATAL: ${e && e.message ? e.message : e}`);
-  try { logStream.end() } catch (_) { /* close best-effort */ }
-  process.exit(2)
-})
+if (require.main === module) {
+  main().catch((e) => {
+    origLog(`CASTLE-RIG FATAL: ${e && e.message ? e.message : e}`);
+    try { logStream.end() } catch (_) { /* close best-effort */ }
+    process.exit(2)
+  })
+}
+module.exports = { classify, seen }

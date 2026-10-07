@@ -31,6 +31,11 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // frame (g0z.12): one gather load — gather stops at NEED_LOGS, so a bigger
 // target could never be met from the world (castle BATCH_OF.frame matches).
 const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1 }
+// Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
+// castle after this long instead of running to its full target. Five
+// minutes ≈ one stone batch at the measured quarry rate, and bounds the
+// castle<->castlefetch switch rate from below no matter how the words flap.
+const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1 }
 const DIG_RADIUS = 32
@@ -539,8 +544,20 @@ function castlefetch(bot, ctx, target, state) {
   if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
-    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0 }
+    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now() }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
+  }
+  // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
+  // not its full target hands over after LEG_MAX_MS, so the castle lays
+  // the partial instead of starving behind an 80-cobble fetch (rig: the
+  // first fetch never finished in 15 min, 0 laid). 'done', never failed:
+  // no hold parks the re-pick after the castle drains. Below a batch the
+  // leg keeps fetching — yielding to a castle that cannot lay would flip
+  // straight back. 'some'/'none'/'blocked' never yield by construction.
+  if (d.word === 'batch' && typeof f.t0 === 'number' && Date.now() - f.t0 > LEG_MAX_MS) {
+    try { console.log(`castlefetch ${d.kind}: batch ready, yielding`) } catch (_) { /* log best-effort */ }
+    finish(bot, ctx, 'done')
+    return
   }
   st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
@@ -565,6 +582,7 @@ function castlefetch(bot, ctx, target, state) {
 }
 
 module.exports = castlefetch
+module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest

@@ -103,4 +103,14 @@ describe('castle-replay.js verdict contract', () => {
     // must stay, or an overlong TAG dies in the hello decode server-side.
     assert.ok(src.includes('exceed 16 chars'), 'missing 16-char name guard')
   })
+
+  it('counts castle<->castlefetch flips in both directions (one-char join bug)', () => {
+    const { classify, seen } = require('../tools/castle-replay')
+    seen.flips = 0
+    classify('goal step=castlefetch prev=castle source=castle-rule fsm=castlefetch why=facts-changed menu=castlefetch facts=a')
+    classify('goal step=castle prev=castlefetch source=castle-rule fsm=castle why=step-done menu=castle facts=b')
+    classify('goal step=equip prev=castle source=goal-fsm fsm=equip why=facts-changed menu=equip facts=c')
+    assert.equal(seen.flips, 2)
+    seen.flips = 0
+  })
 })
