@@ -940,7 +940,15 @@ function siteFor(bot, around) {
     }
     if (!ok || ys.length !== 42) continue
     const y0 = Math.min(...ys)
-    if (ys.every((y) => y === y0 || y === y0 + 1)) return makeHome(ox, y0, oz, 2)
+    if (!ys.every((y) => y === y0 || y === y0 + 1)) continue
+    // The door hangs at y0 and the build clears only flora
+    // (idkcraft-vmzq.36): a relief-1 bump under the door column buries
+    // the door cell in solid terrain — place refuses, 3 strikes skip
+    // it, and the step fails failed:skipped-cells (JR-BUILD TIMEOUT on
+    // the R3 meadow fit, whose door sat on pristine grass_block). Flora
+    // over flat dirt still reads y0, so the R3 meadow keeps accepting.
+    if (groundY(bot, ox + 3, oz + 0, cy + 8) !== y0) continue
+    return makeHome(ox, y0, oz, 2)
   }
   return null
 }
