@@ -1184,7 +1184,8 @@ function finishExit(bot, ctx, order) {
   const by = order && order.by
   if (order && order.reseek && ctx.home && ctx.home.site) {
     ctx.comehome = startMeet(by, false, ctx.home)
-    try { require('../task').carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
+    // No stamp carry (R3 body-1): the destination changed to the new home,
+    // so the reseek re-baselines instead of inheriting the old dist clock.
     ctx.inShelter = false
     ctx.stepStatus = 'running'
     ctx.lastGoalKey = ''

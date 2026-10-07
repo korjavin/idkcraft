@@ -352,7 +352,7 @@ describe('jr2.3 reseek walks the current home after exiting the old', () => {
     assert.deepEqual(ctx.comehome.home.site, fresh.site, 'walks the current home')
     assert.equal(ctx.inShelter, false)
     assert.deepEqual(bot.chats, [], 'silent handoff')
-    assert.equal(taskMod.orderStamp(ctx.comehome), stamp, 'reseek re-arm carries the order stamp (R2 core-1)')
+    assert.notEqual(taskMod.orderStamp(ctx.comehome), stamp, 'reseek re-arm takes a fresh stamp (R3 body-1: new destination re-baselines)')
   })
 })
 
