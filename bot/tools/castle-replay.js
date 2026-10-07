@@ -304,6 +304,20 @@ async function main() {
       s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick
     } catch (_) { /* inventory best-effort */ }
     try {
+      // Ground-drop census (vmzq.20): non-player entities near the bot.
+      // In a peaceful rig these are item drops — a direct read on whether
+      // dug blocks bank or litter the trench (cycle 12: ~2/3 never banked).
+      let drops = 0
+      const bp = follower.entity && follower.entity.position
+      const ents = (follower.entities && typeof follower.entities === 'object') ? Object.values(follower.entities) : []
+      for (const e of ents) {
+        if (!e || e.type === 'player' || e.username) continue
+        if (!bp || !e.position) continue
+        if (Math.hypot(e.position.x - bp.x, e.position.y - bp.y, e.position.z - bp.z) <= 12) drops++
+      }
+      s.drops = drops
+    } catch (_) { /* drops best-effort */ }
+    try {
       const c = follower._tickerCtx
       const f = c && c.castleFetch
       if (f) s.fetch = { kind: f.kind, quarry: !!(f.target && f.target.quarry), skips: f.skips || 0, dead: (f.quarry && f.quarry.dead) || [] }
