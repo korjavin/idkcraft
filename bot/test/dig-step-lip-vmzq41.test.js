@@ -58,4 +58,11 @@ describe('dig_step behind lip (vmzq.41)', () => {
     assert.equal(r, 'failed:head-blocked')
     assert.deepEqual(dug, [])
   })
+
+  it('a denied lip (water over it) falls through to the mount veto, not failed:submerged', () => {
+    const { bot, dug } = stairBot({ '0,41,0': 'water' })
+    const r = recover.RECOVER_MENU.dig_step.run(bot, { recovery: {} })
+    assert.equal(r, 'failed:head-blocked')
+    assert.deepEqual(dug, [])
+  })
 })
