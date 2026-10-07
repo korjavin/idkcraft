@@ -124,6 +124,7 @@ const MENU = {
       // Same-reason day latch (ipn.11, beds sheepLatched mirror): a repeated
       // identical failure yields the rest of the day (gear starves otherwise).
       try { if (require('./behaviours/equip').equipLatched(ctx, bot)) return false } catch (_) { /* unlatched */ }
+      if (facts && facts.rearm) return true // vmzq.37 pickless castle, buried
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
         if (!upgrade && !equipWant(facts)) return false
@@ -528,6 +529,16 @@ function castleFirst(ctx, step = null) {
   } catch (_) {
     return false
   }
+}
+// Pickless castle (idkcraft-vmzq.37): facts.rearm (equip.pickRearmDue —
+// no pickaxe, active castle, body underground, pack funds one) makes equip
+// feasible without a station and goalFsm/chooseStep rank it ahead of the
+// castle legs: prod's pick wore out in a forage tunnel at y~40 and the
+// castle-rule walked the no-dig body there for 17 min while equip waited
+// for a table.
+function picklessCastle(facts, names) {
+  return !!(facts && facts.rearm) && names.includes('equip') &&
+    (names.includes('castle') || names.includes('castlefetch'))
 }
 // Home-leg leash (vmzq.19 R2, major 2): the home-anchored steps (light,
 // stockpile, gear) with an active castle run only near home — past the
@@ -1303,7 +1314,9 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  let rearm = false
+  try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
+  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -1471,6 +1484,8 @@ function goalFsm(facts, feasibleNames) {
     if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
     if (name === 'shelter' && t === 'day') continue // night-far step; at dusk only the castle night (g0z.21) makes it feasible
+    // vmzq.37: a pickless castle rearms first — the legs cannot dig.
+    if ((name === 'castle' || name === 'castlefetch') && picklessCastle(facts, [...ok])) return 'equip'
     return name
   }
   return 'rest'
@@ -1534,7 +1549,8 @@ async function chooseStep(brain, facts, feasible, home) {
   // castle is a rule, not a preference — run3's laya picked equip then
   // beds over a feasible castle and walked 500 blocks home. The model is
   // consulted only when the castle cannot run now.
-  if (fsm === 'castle' || fsm === 'castlefetch') return { step: fsm, source: 'castle-rule', fsm, model: null }
+  // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
+  if (fsm === 'castle' || fsm === 'castlefetch' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -2126,9 +2142,15 @@ async function decide(bot, ctx) {
     // while still feasible and registered (a stale answer degrades to the
     // normal menu, never to a broken step). failHolds is bypassed: retrying
     // a held step is the planner's job.
+    // vmzq.37: a pickless castle rearm outranks a plan/commit pin like the
+    // night steps do — a pinned castle leg cannot dig and wedges again.
+    let rearm = false
+    try { rearm = picklessCastle(facts, names) } catch (_) { rearm = false }
     let planApplied = false
     if (planStep) {
       try { ctx.taskPlanStep = null } catch (_) { /* consume best-effort */ }
+    }
+    if (planStep && !rearm) {
       let ok = false
       try {
         ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
@@ -2146,7 +2168,7 @@ async function decide(bot, ctx) {
     // night step the normal menu runs (chooseStep's night rule picks it)
     // while the window pauses — the commit pins only the work choice.
     let commitApplied = false
-    if (!planApplied && commitActive) {
+    if (!planApplied && commitActive && !rearm) {
       let safety = null
       try {
         safety = goalFsm(facts, names)

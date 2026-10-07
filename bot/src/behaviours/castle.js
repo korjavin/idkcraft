@@ -55,10 +55,15 @@ const ITEM = {
 // Project-material reservation (g0z.3 design): the castle never lays the
 // bot's scaffold/tool stone (equip's SCAFFOLD_LOW mark — below it equip
 // would dig the same blocks back) nor the last planks a stick craft needs.
-// Deferred require: equip loads inside the craft->goal chain.
+// Walk buffer (idkcraft-vmzq.31, revmux 02 core-1): the stone reserve is
+// one shelter pillar over the equip trigger — past the dirt shield (dirt
+// at zero) the walks spend the buffer before the kit reads empty, and
+// below-16 equip refills. Deferred require: equip loads inside the
+// craft->goal chain (SHELTER_RESERVE below is module-local, read at call
+// time, so the forward reference is safe).
 function reserveOf(kind) {
   if (kind === 'stone') {
-    try { return require('./equip').SCAFFOLD_LOW } catch (_) { return 16 }
+    try { return require('./equip').SCAFFOLD_LOW + SHELTER_RESERVE } catch (_) { return 24 }
   }
   return kind === 'planks' ? 2 : 0
 }
@@ -102,11 +107,36 @@ function findItem(bot, kind, ctx) {
   return any
 }
 
+// Night-shelter dirt floor (idkcraft-vmzq.31): the castle never spends the
+// last SHELTER_RESERVE dirt. Dirt is the shield for the cobble store:
+// body.js keeps cobble walk-proof while any dirt is held, so the cobble
+// (the laying reserve plus the night pillar fuel) survives the walks, and
+// fetch-leg spoil refills the dirt the walks do spend (below-16 equip
+// refills it too; at zero dirt past the topsoil the buffer above is what
+// stands between the walks and an empty kit). Prod
+// run6 laid to the stone reserve, pillared the rest away walking, and the
+// night shelter pillar failed with an empty kit. Counting cobble toward
+// the floor would not hold it: cobble at the reserve reads as savings
+// while the dirt drains to zero, and zero dirt unlocks cobble walking
+// (revmux 01 core-1) — so the floor counts dirt only. Shelter and recover
+// spend the floor freely.
+const SHELTER_RESERVE = 8
+function dirtOnHand(bot) {
+  let n = 0
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (it && it.name === 'dirt') n += typeof it.count === 'number' ? it.count : 1
+    }
+  } catch (_) { /* no inventory: none */ }
+  return n
+}
+
 // Prep fill (g0z.16): castle stone above the reserve, else dirt (the cut
-// spoil of a grass hill).
+// spoil of a grass hill) — but never the dirt floor above.
 function fillItem(bot, ctx) {
   const s = findItem(bot, 'stone', ctx)
   if (s) return s
+  if (dirtOnHand(bot) <= SHELTER_RESERVE) return null
   try { return (bot.inventory.items() || []).find((it) => it && it.name === 'dirt') || null } catch (_) { return null }
 }
 
@@ -1479,6 +1509,9 @@ module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
 module.exports.findItem = findItem
+module.exports.fillItem = fillItem
+module.exports.dirtOnHand = dirtOnHand
+module.exports.SHELTER_RESERVE = SHELTER_RESERVE
 module.exports.held = held
 module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
