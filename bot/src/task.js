@@ -1116,10 +1116,13 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // design). Tiers: targeted far/unblock first (bank, demand-matched far),
 // then the goal chain in FSM order, then the blind work spiral, then
 // side plain steps, then house side work, then the order hold retry.
-// Options that already went flat or failed in the passed history, the
-// currently stalling step, and held (failed) steps sort last within
-// their tier — but one is still picked when everything went flat, so
-// there is no dead end. Returns the top option or null.
+// Options that already went flat or failed in the passed history and
+// held (failed) steps sort last within their tier — but one is still
+// picked when everything went flat, so there is no dead end. The
+// currently stalling step itself is never picked (vmzq.35, prod: the
+// fallback re-chose the running castle step twice, a no-op); with
+// nothing else left the caller takes the park fork. Returns the top
+// option or null.
 const FALLBACK_FAR_ORDER = ['bank', 'castlefetch-far', 'gather-far', 'forage-far', 'explore-far']
 const FALLBACK_FLAT_PENALTY = 10000
 // Chain steps per work kind: the STEP_EFFECT +metric/+chain set, plus the
@@ -1131,7 +1134,7 @@ const FALLBACK_CHAIN = {
 function fallbackRank(kind, offered, history = null, currentStep = null, held = null) {
   try {
     const list = Array.isArray(offered) ? offered.slice() : []
-    const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner')
+    const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner' && !(currentStep && o.id === currentStep))
     if (progress.length === 0) return null
     let stepOrder = []
     try {
@@ -1146,7 +1149,6 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
           }
         }
       }
-      if (typeof currentStep === 'string' && currentStep) flat.add(currentStep)
       if (held instanceof Set) {
         for (const id of held) {
           if (typeof id === 'string' && id) flat.add(id)
@@ -1262,6 +1264,20 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
         applyCommit(bot, ctx, kind, fb.id, fb.step || null, now, fb.unlock || null)
         return
       }
+      // Nothing but the stalling step (or park) left (vmzq.35): re-running
+      // it is a no-op, so take the park fork (owner online parks, alone
+      // runs plan-B) — the one option that changes circumstances.
+      try {
+        console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=park conf=? source=fallback why=fallback after ${wd.lowConf}x none (${prefix || source}) only the stalling step left`)
+      } catch (_) { /* log best-effort */ }
+      try {
+        metrics.goalWatchdogTotal.inc({ kind, choice: 'park', source: 'fallback' })
+      } catch (_) { /* counter best-effort */ }
+      clearLowConf()
+      wd.backoffMs = 0
+      wd.backoffUntil = 0
+      maxRounds(bot, ctx, kind, state, wd, now)
+      return
     }
     const diagnosis = diagnose(bot, ctx)
     const why = prefix ? `${prefix} ${diagnosis}` : diagnosis
@@ -2217,6 +2233,39 @@ function setStallGauge(kind, ms) {
   } catch (_) { /* metrics best-effort */ }
 }
 
+// Far-walk progress (vmzq.35, the travel-grace idea for the castle step's
+// own walk): past the castle far-walk range, the distance to the footprint
+// sinking CASTLE_TRAVEL_STEP below its low-water mark is progress. Low-water
+// only, so a wedge or an out-and-back trip never counts; on site or after a
+// teleport (respawn) the mark rebaselines.
+const CASTLE_TRAVEL_STEP = 8
+function castleTravel(bot, ctx, state) {
+  try {
+    const castle = require('./behaviours/castle')
+    const d = castle.siteDist(bot, ctx.castle)
+    if (d == null || d <= castle.SITE_WALK_DIST) {
+      state.siteDist = null
+      state.siteLast = d
+      return false
+    }
+    // A one-tick jump rebaselines (revmux 01/02): task state survives a
+    // death, and a mark sunk before it would deny the walk back from the
+    // respawn. Keyed on the position, not the death event — that fires
+    // before the respawn teleport lands.
+    const last = state.siteLast
+    state.siteLast = d
+    if (typeof state.siteDist !== 'number' || (typeof last === 'number' && Math.abs(d - last) > 2 * castle.SITE_WALK_DIST)) {
+      state.siteDist = d
+      return false
+    }
+    if (d + CASTLE_TRAVEL_STEP > state.siteDist) return false
+    state.siteDist = d
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 // Current castle progress for the clock. Prep remaining only in prep phase
 // (a body-phase prepTargets call would scan the whole site volume cold);
 // material only while a demanded kind is latched.
@@ -2621,6 +2670,18 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
+      if (castleTravel(bot, ctx, state)) {
+        // Far walk back to the site (vmzq.35, prod: a respawn 500 off read
+        // flat for 20 min): the any-clock resets, the placed clock accrues.
+        state.stallMs = 0
+        state.lastAt = now
+        state.lastProgressAt = now
+        try { resetWdProgress(wdOf(state)) } catch (_) { /* rounds best-effort */ }
+        setStallGauge(kind, 0)
+        addPlacedStall(state, now)
+        logReset(kind, 'travel')
+        return
+      }
       if (typeof cur.done !== 'number') {
         // Run tracking for the travel grace (unread ticks count: a run
         // may start while the signals are unreadable).

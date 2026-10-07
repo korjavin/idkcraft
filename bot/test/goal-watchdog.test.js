@@ -1205,6 +1205,23 @@ describe('deterministic fallback (vmzq.28)', () => {
     assert.equal(ctx.task.castle.wd.backoffMs, 0, 'no backoff on fallback')
   })
 
+  it('only the stalling step left: the fallback takes the park fork, never a no-op re-pick (vmzq.35)', async () => {
+    const opts = require('../src/goal-options')
+    const saved = opts.goalOptions
+    opts.goalOptions = () => [{ id: 'castlefetch', step: 'castlefetch', unlock: null }, { id: 'park', step: null, unlock: null }]
+    try {
+      const bot = makeBot()
+      const { ctx } = castleCtx(bot)
+      const first = await firedAnswer(bot, ctx, 1000000000000, lowConf('gather'))
+      await fireNext(bot, ctx, first.t, lowConf('gather'))
+      assert.ok(wdLogs()[1].includes('choice=park conf=? source=fallback'), JSON.stringify(wdLogs()))
+      assert.ok(planbLogs().length >= 1, `alone: plan-B fork ${JSON.stringify(planbLogs())}`)
+      assert.notEqual(ctx.goal && ctx.goal.commit && ctx.goal.commit.optionId, 'castlefetch')
+    } finally {
+      opts.goalOptions = saved
+    }
+  })
+
   it('fallback takes the far option when offered', async () => {
     const bot = makeBot()
     bot.registry = { blocksByName: { stone: { id: 1 } } }
@@ -1272,6 +1289,8 @@ describe('deterministic fallback (vmzq.28)', () => {
     assert.ok(wdLogs()[2].includes('choice=none'), JSON.stringify(wdLogs()))
     await fireNext(bot, ctx, t3, lowConf('gather'))
     assert.ok(wdLogs()[3].includes('source=fallback'), JSON.stringify(wdLogs()))
-    assert.ok(wdLogs()[3].includes('choice=castlefetch'), `second fallback moves on: ${JSON.stringify(wdLogs())}`)
+    // vmzq.35: the flat gather still sorts behind any fresh option, but the
+    // only other one is the stalling castlefetch — never re-picked (no-op).
+    assert.ok(wdLogs()[3].includes('choice=gather'), `never the stalling step: ${JSON.stringify(wdLogs())}`)
   })
 })
