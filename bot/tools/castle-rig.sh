@@ -87,6 +87,8 @@ MAX_MEM="${CASTLE_MAX_MEMORY:-768M}"
 valid_mem() { _m="$1"; case "$_m" in *M|*G) _m="${_m%?}";; *) return 1;; esac; case "$_m" in ''|*[!0-9]*) return 1;; esac; }
 valid_mem "$INIT_MEM" || { echo "memory: want <n>M|<n>G, got INIT '$INIT_MEM'"; exit 2; }
 valid_mem "$MAX_MEM" || { echo "memory: want <n>M|<n>G, got MAX '$MAX_MEM'"; exit 2; }
+mem_mb() { case "$1" in *G) echo $(( ${1%?} * 1024 ));; *) echo "${1%?}";; esac; }
+{ [ "$(mem_mb "$INIT_MEM")" -gt 0 ] && [ "$(mem_mb "$INIT_MEM")" -le "$(mem_mb "$MAX_MEM")" ]; } || { echo "memory: INIT $INIT_MEM must be >0 and <= MAX $MAX_MEM"; exit 2; }
 VIEW_DIST="${CASTLE_VIEW_DISTANCE:-6}"
 SIM_DIST="${CASTLE_SIM_DISTANCE:-4}"
 case "$VIEW_DIST" in ''|*[!0-9]*) echo "view-distance: want an integer 2..32, got '$VIEW_DIST'"; exit 2 ;; esac

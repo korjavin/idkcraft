@@ -376,7 +376,7 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 ```sh
 sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
-CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x game clock: 15 game-min in ~5 wall min
+CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
 ```
 
 One call = reset the disposable world copy, boot Paper, scan nine
@@ -407,7 +407,7 @@ from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast iteration
 slower than wall clock). A Paper that rejects it warns loudly and runs at
 wall clock; the record carries the effective rate. Gates always run at 1,
 since the bot ticks on wall-clock seconds and a faster game clock changes
-what a minute of play means (max safe rate: the vmzq.24 report).
+what a minute of play means (tested 20/60/100 tps: identical laying, no speedup; the cycle win is 3-4 parallel rigs, 3 proven overlapping with no degradation).
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock
