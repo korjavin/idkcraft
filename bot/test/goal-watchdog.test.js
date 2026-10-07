@@ -1184,7 +1184,7 @@ describe('deterministic fallback (vmzq.28)', () => {
 
   const lowConf = (step) => ({ step, confidence: 0.2, probabilities: { [step]: 0.3 }, source: 'jev' })
 
-  it('first low-conf backs off, second applies the top plain step by FSM order', async () => {
+  it('first low-conf backs off, second applies the top fresh step (not the stalling one)', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const t0 = 1000000000000
@@ -1196,11 +1196,11 @@ describe('deterministic fallback (vmzq.28)', () => {
     await fireNext(bot, ctx, first.t, lowConf('gather'))
     assert.equal(wdLogs().length, 2)
     assert.ok(wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
-    // castleCtx offers castlefetch + gather: FSM order takes castlefetch.
-    assert.ok(wdLogs()[1].includes('choice=castlefetch'), JSON.stringify(wdLogs()))
+    // castleCtx stalls on castlefetch: fallback takes gather, never re-commits it.
+    assert.ok(wdLogs()[1].includes('choice=gather'), JSON.stringify(wdLogs()))
     const commit = ctx.goal && ctx.goal.commit
     assert.ok(commit, 'fallback applied')
-    assert.equal(commit.optionId, 'castlefetch')
+    assert.equal(commit.optionId, 'gather')
     assert.equal(ctx.task.castle.wd.lowConf, 0, 'streak cleared on fallback')
     assert.equal(ctx.task.castle.wd.backoffMs, 0, 'no backoff on fallback')
   })
@@ -1258,8 +1258,8 @@ describe('deterministic fallback (vmzq.28)', () => {
     const t0 = 1000000000000
     const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
     const t2 = await fireNext(bot, ctx, first.t, lowConf('gather'))
-    assert.ok(wdLogs()[1].includes('choice=castlefetch'), JSON.stringify(wdLogs()))
-    // Run the fallback window out flat: history names castlefetch.
+    assert.ok(wdLogs()[1].includes('choice=gather'), JSON.stringify(wdLogs()))
+    // Run the fallback window out flat: history names gather.
     let t = t2
     let guard = 0
     while (ctx.goal && ctx.goal.commit && guard++ < 40) {
@@ -1267,11 +1267,11 @@ describe('deterministic fallback (vmzq.28)', () => {
       taskMod.taskTick(bot, ctx, t)
     }
     assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'fallback window ended')
-    assert.ok(outLogs().some((l) => l.includes('choice=castlefetch') && l.includes('result=flat')), JSON.stringify(outLogs()))
+    assert.ok(outLogs().some((l) => l.includes('choice=gather') && l.includes('result=flat')), JSON.stringify(outLogs()))
     const t3 = await fireNext(bot, ctx, t, lowConf('gather'))
     assert.ok(wdLogs()[2].includes('choice=none'), JSON.stringify(wdLogs()))
     await fireNext(bot, ctx, t3, lowConf('gather'))
     assert.ok(wdLogs()[3].includes('source=fallback'), JSON.stringify(wdLogs()))
-    assert.ok(wdLogs()[3].includes('choice=gather'), `second fallback moves on: ${JSON.stringify(wdLogs())}`)
+    assert.ok(wdLogs()[3].includes('choice=castlefetch'), `second fallback moves on: ${JSON.stringify(wdLogs())}`)
   })
 })

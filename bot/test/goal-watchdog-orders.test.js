@@ -915,5 +915,19 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
     )
     const failed = [{ choice: 'gather', outcome: 'failed:gather-no-trees', dur_s: 10, delta: 'x' }]
     assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], failed).id, 'craft')
+    // The stalling step sorts last even with no history (revmux 02 core-1).
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('explore-far', 'explore')], null, 'gather').id,
+      'explore-far',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, 'gather').id,
+      'craft',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('park')], null, 'gather').id,
+      'gather',
+      'only option still retries, penalized or not',
+    )
   })
 })

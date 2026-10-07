@@ -1120,12 +1120,14 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // before the hold retry. Options that already went flat or failed in the
 // passed history sort last (revmux 01 core-2: never re-pick the dead
 // option first — but still pick one when everything went flat, so there
-// is no dead end). Work explore-far (blind) trails plain chain steps
+// is no dead end), as does the currently stalling step (revmux 02
+// core-1: fallback #1 must not re-commit the FSM's own flat step when an
+// unblock is offered). Work explore-far (blind) trails plain chain steps
 // (revmux 01 core-3); order explore-far keeps its unblock rank. Returns
 // the top option or null.
 const FALLBACK_FAR_ORDER = ['bank', 'castlefetch-far', 'gather-far', 'forage-far', 'explore-far']
 const FALLBACK_FLAT_PENALTY = 1000
-function fallbackRank(kind, offered, history = null) {
+function fallbackRank(kind, offered, history = null, currentStep = null) {
   try {
     const list = Array.isArray(offered) ? offered.slice() : []
     const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner')
@@ -1143,6 +1145,7 @@ function fallbackRank(kind, offered, history = null) {
           }
         }
       }
+      if (typeof currentStep === 'string' && currentStep) flat.add(currentStep)
     } catch (_) { /* flat set best-effort */ }
     const isWork = kind === 'castle' || kind === 'house'
     const stepIdx = (o) => {
@@ -1218,7 +1221,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
       try {
         const { goalOptions } = require('./goal-options')
         const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
-        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist)
+        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step)
       } catch (_) { fb = null }
       if (fb) {
         const diagnosis = diagnose(bot, ctx)
