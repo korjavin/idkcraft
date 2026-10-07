@@ -384,9 +384,19 @@ function isPlaceTarget(kind) {
 // and the protection guard share it. 'air' accepts the door's upper half
 // (the server places it into the doorway hole with the lower half).
 const AIR_NAMES = new Set(['air', 'cave_air', 'void_air'])
+// The one castle-stone set (vmzq.38): item and placed-block names alike.
+// The quarry yields granite/diorite/andesite as often as cobble; the castle
+// (wall cells, fetch counts) and the pathfinder scaffold all read this set,
+// so quarry yield is laid instead of hoarded into a 36/36 pack.
+const STONE_ITEMS = Object.freeze(['cobblestone', 'stone', 'granite', 'diorite', 'andesite',
+  'polished_granite', 'polished_diorite', 'polished_andesite', 'cobbled_deepslate'])
+const STONE_SET = new Set(STONE_ITEMS)
+function isStone(name) {
+  return STONE_SET.has(name)
+}
 function matches(kind, name) {
   if (typeof name !== 'string') return false
-  if (kind === 'stone') return name === 'cobblestone' || name === 'stone'
+  if (kind === 'stone') return isStone(name)
   if (kind === 'planks') return name.endsWith('_planks')
   if (kind === 'frame') return name.endsWith('_log')
   if (kind === 'door') return name.endsWith('_door')
@@ -467,6 +477,8 @@ module.exports = {
   isPlaceTarget,
   billOfMaterials,
   matches,
+  STONE_ITEMS,
+  isStone,
   absPlan,
   protects,
   groundCell,

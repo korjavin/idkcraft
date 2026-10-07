@@ -4,6 +4,7 @@ const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
+const { isStone } = require('../castle')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -525,10 +526,11 @@ const SHED_FIRST = new Set(['dirt', 'coarse_dirt', 'rooted_dirt', 'mud', 'clay',
   'sand', 'red_sand', 'gravel', 'soul_sand', 'soul_soil',
   'cobblestone', 'stone', 'deepslate', 'cobbled_deepslate', 'tuff',
   'calcite', 'diorite', 'granite', 'andesite', 'sandstone', 'netherrack'])
+// Castle stone sheds after dirt/sand (vmzq.38: the castle lays it).
 function shedRank(name) {
   if (typeof name !== 'string') return -1
-  if (SHED_FIRST.has(name)) return 0
-  if (name.endsWith('_ore')) return 1
+  if (SHED_FIRST.has(name)) return isStone(name) ? 1 : 0
+  if (name.endsWith('_ore')) return 2
   return -1
 }
 // Pure victim pick: smallest shedable stack (rank, then count). Null when
@@ -675,30 +677,31 @@ async function shedStack(bot, opts) {
     return false
   }
 }
-// Bootstrap-shed gate: a funded chest/table craft, in the reserve corner
-// (adopted home, no chest, nobody online — the haul owns every online
-// case), at zero empties, with a victim that fits the surveyed columns.
-// Sheds, then true (the caller retries room once); false keeps the honest
-// inventory-full.
+// Craft shed (g0z.26 R3; vmzq.38 widened to every craft): the one
+// full-pack guard all craft callers route through (safeCraft). At 35+
+// stacks with no chest in reach (ensureRoom already tried banking) the
+// craft places its smallest junk stack into a pillar beside the bot, then
+// the caller retries room once. Placing is not tossing (owner 2026-10-06).
+// Prod 2026-10-06: a 36/36 granite/diorite/sand pack refused the table
+// craft for 1h+ — no table, no pickaxe, castle flat — because the shed only
+// fired for an adopted, chestless, unattended home. The chest/table
+// bootstrap still needs its planks funded (the quest owns an unfunded
+// corner); every other craft is funded by its recipe lookup.
+// ponytail: one stack per craft op; a pack refilling between ops sheds again.
 async function bootstrapShed(bot, opts) {
   try {
     const item = opts && opts.item
-    if (item !== 'chest' && item !== 'crafting_table') return false
     const ctx = opts && opts.ctx
-    let stockpile = null
-    try { stockpile = require('./stockpile') } catch (_) { stockpile = null }
-    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return false
-    if (!stockpile.reserveCorner(bot, ctx)) return false
     if (ctx && ctx._shedInFlight) return false
-    const need = item === 'chest' ? 8 : 4
-    if (fundPlanks(bot).max < need) return false
+    if (item === 'chest' && fundPlanks(bot).max < 8) return false
+    if (item === 'crafting_table' && fundPlanks(bot).max < 4) return false
     const items = bot.inventory.items()
-    if (!Array.isArray(items) || items.length < 36) return false
+    if (!Array.isArray(items) || items.length < 35) return false
     if (ctx) ctx._shedInFlight = true
     try {
       const freed = await shedStack(bot, opts)
       if (freed) {
-        try { console.log(`craft shed one stack to fund the bootstrap ${item}`) } catch (_) { /* logging best-effort */ }
+        try { console.log(`craft shed one stack to make room for ${item || 'a craft'}`) } catch (_) { /* logging best-effort */ }
       }
       return freed
     } finally {
@@ -1051,16 +1054,19 @@ async function pacedCraft(bot, recipe, count, table) {
 }
 
 async function safeCraft(bot, recipe, count, table, opts) {
-  if (reserveBlocks(bot, recipe, count, opts)) throw new Error('inventory-full')
+  // The reserved last slot sheds a junk stack too (vmzq.38): otherwise the
+  // table -> sticks -> pickaxe chain stalls one op after the first shed.
+  if (reserveBlocks(bot, recipe, count, opts) &&
+    (!(await bootstrapShed(bot, opts)) || reserveBlocks(bot, recipe, count, opts))) throw new Error('inventory-full')
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   await ensureStacks(bot, recipe, count)
   try {
     await ensureRoom(bot, recipe, count, opts)
   } catch (err) {
-    // Bootstrap shed (g0z.26 R3): a funded chest/table craft at zero
-    // empties sheds one junk stack into a pillar and retries room once —
-    // the 36/36 exit. Anything unshed keeps the honest inventory-full.
+    // Craft shed (g0z.26 R3, vmzq.38): any craft at zero empties sheds one
+    // junk stack into a pillar and retries room once — the 36/36 exit.
+    // Anything unshed keeps the honest inventory-full.
     if (!err || err.message !== 'inventory-full' || !(await bootstrapShed(bot, opts))) throw err
     await ensureRoom(bot, recipe, count, opts)
   }

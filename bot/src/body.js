@@ -113,6 +113,7 @@ function castleWalk(ctx) {
 // the same movements object, so an open gate also holds parkour off — a
 // maxD=4 plan would strand the next sprint-off tick.
 const danger = require('./danger')
+const { STONE_ITEMS, isStone } = require('./castle') // pure blueprint data
 
 const SPRINT_DIST = 8
 const SPRINT_LOOKAHEAD = 6
@@ -166,17 +167,18 @@ function movementTargets(bot, ctx) {
   return out
 }
 
-// Castle stone (g0z.18): the pathfinder scaffolds with any cobblestone
-// (scafoldingBlocks = dirt + cobblestone), so the castle walk to its site
+// Castle stone (g0z.18): the pathfinder scaffolds with any castle stone
+// (scafoldingBlocks = dirt + castle.STONE_ITEMS — vmzq.38: the quarry's
+// granite/diorite/andesite scaffold too), so the castle walk to its site
 // pillared/bridged the quarried batch away. On the castle step, while the
-// bot holds more cobblestone than the SCAFFOLD_LOW reserve, scaffolding is
+// bot holds more castle stone than the SCAFFOLD_LOW reserve, scaffolding is
 // dirt only; at or below the reserve cobble is scaffold again (that is the
 // reserve's job). The castle climbs its own stairs (reach invariant).
 function castleStone(bot, ctx) {
   try {
     if (!ctx || !ctx.work || ctx.step !== 'castle') return false
     let n = 0
-    for (const it of bot.inventory.items() || []) if (it && it.name === 'cobblestone') n += it.count | 0
+    for (const it of bot.inventory.items() || []) if (it && isStone(it.name)) n += it.count | 0
     return n > require('./behaviours/equip').SCAFFOLD_LOW // deferred: equip loads inside the goal chain
   } catch (_) { return false }
 }
@@ -188,18 +190,22 @@ function castleStone(bot, ctx) {
 function otherScaffold(bot, mov) {
   try {
     const byName = bot.registry.itemsByName
-    return (bot.inventory.items() || []).some((it) => it && it.name !== 'cobblestone' && (it.count | 0) > 0 &&
+    return (bot.inventory.items() || []).some((it) => it && !isStone(it.name) && (it.count | 0) > 0 &&
       byName[it.name] && mov.scafoldingBlocks.includes(byName[it.name].id))
   } catch (_) { return false }
 }
 
 function scaffoldCobble(bot, mov, on) {
   const list = mov.scafoldingBlocks
-  const it = bot && bot.registry && bot.registry.itemsByName && bot.registry.itemsByName.cobblestone
-  if (!Array.isArray(list) || !it) return
-  const i = list.indexOf(it.id)
-  if (on && i < 0) list.push(it.id)
-  if (!on && i >= 0) list.splice(i, 1)
+  const byName = bot && bot.registry && bot.registry.itemsByName
+  if (!Array.isArray(list) || !byName) return
+  for (const name of STONE_ITEMS) {
+    const it = byName[name]
+    if (!it) continue
+    const i = list.indexOf(it.id)
+    if (on && i < 0) list.push(it.id)
+    if (!on && i >= 0) list.splice(i, 1)
+  }
 }
 
 function movementsFor(owner, bot, ctx, extra) {

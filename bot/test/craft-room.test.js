@@ -15,6 +15,7 @@ const IDS = {
   stone_pickaxe: 274, stick: 280, leaf_litter: 1001, gravel: 1002, dirt: 3,
   cobblestone: 4, oak_sapling: 1003, wheat_seeds: 1004, bow: 1005, arrow: 1006,
   oak_planks: 1007, oak_log: 1008, chest: 1009, crafting_table: 1010,
+  granite: 1011, sand: 1012, rotten_flesh: 1013,
 }
 const STACK = { stone_pickaxe: 1, bow: 1 }
 
@@ -656,5 +657,77 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.equal(bot.calls.openChest, 2)
     assert.deepEqual(bot.calls.toss, [])
     assert.ok(bot.calls.deposit.length > 0, 'junk banked to the second chest')
+  })
+})
+
+// vmzq.38 (prod 2026-10-06): a 36/36 granite/sand/junk pack refused the
+// table craft for 1h+ — no table, no pickaxe, castle flat. The shed is the
+// one full-pack guard every craft routes through: no home, nobody, no chest.
+describe('craft shed at the shared root (vmzq.38)', () => {
+  function shedBot(stacks, over = {}) {
+    const cells = {}
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => {
+        const key = `${p.x},${p.y},${p.z}`
+        return { name: cells[key] || (p.y < 64 ? 'dirt' : 'air'), position: { x: p.x, y: p.y, z: p.z } }
+      },
+      ...over,
+    })
+    bot.equip = async (item) => { bot._held = item }
+    bot.placeBlock = async (ref, face) => {
+      const p = ref.position
+      cells[`${p.x + face.x},${p.y + face.y},${p.z + face.z}`] = bot._held.name
+      bot._held.count--
+      if (bot._held.count <= 0) bot._items = bot._items.filter((i) => i !== bot._held)
+    }
+    bot.calls.placed = cells
+    return bot
+  }
+
+  it('36/36 prod junk, no chest, no home: the table craft sheds sand (not castle stone) and crafts', async () => {
+    const stacks = [stack('oak_planks', 64), stack('granite', 26), stack('sand', 30)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ing = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    await craft.safeCraft(bot, prodRecipe('crafting_table', 1, ing), 1, null, { ctx: {}, item: 'crafting_table' })
+    assert.equal(bot.calls.craft.length, 1, 'the table is crafted')
+    assert.ok(!bot._items.some((i) => i.name === 'sand'), 'sand placed beside the bot')
+    assert.ok(bot._items.some((i) => i.name === 'granite' && i.count === 26), 'castle stone kept')
+    assert.equal(Object.values(bot.calls.placed).filter((n) => n === 'sand').length, 30)
+    assert.deepEqual(bot.calls.toss, [])
+  })
+
+  it('36/36 with only castle stone shedable: granite sheds before nothing crafts', async () => {
+    const stacks = [stack('cobblestone', 41), stack('stick', 5), stack('granite', 12)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx: {}, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.ok(!bot._items.some((i) => i.name === 'granite'), 'the smallest stone stack sheds')
+    assert.ok(bot._items.some((i) => i.name === 'cobblestone' && i.count === 41), 'the pickaxe cobble stays')
+  })
+
+  it('reserved last slot (chestless, alone): the pickaxe craft sheds instead of refusing', async () => {
+    const stacks = [stack('cobblestone', 41), stack('stick', 5), stack('sand', 7)]
+    while (stacks.length < 35) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.ok(!bot._items.some((i) => i.name === 'sand'))
+  })
+
+  it('nothing placeable and no chest: honest inventory-full, nothing placed or tossed', async () => {
+    const stacks = [stack('oak_planks', 64)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ing = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    await assert.rejects(
+      craft.safeCraft(bot, prodRecipe('crafting_table', 1, ing), 1, null, { ctx: {}, item: 'crafting_table' }),
+      /inventory-full/,
+    )
+    assert.deepEqual(bot.calls.placed, {})
+    assert.deepEqual(bot.calls.toss, [])
   })
 })
