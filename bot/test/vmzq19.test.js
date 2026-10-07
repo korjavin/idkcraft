@@ -348,6 +348,93 @@ describe('vmzq.19 own legs stay within the task radius', () => {
   })
 })
 
+describe('vmzq.19 R2 major 1: a castle next to the house never anchors the night', () => {
+  const NEAR_CASTLE = { x: HOME.x + 10, y: 64, z: HOME.z }
+
+  it('dusk 70 out with the castle 10 from home: gohome marches, no shelter', async () => {
+    await quiet(async () => {
+      const { home, cells } = standingHomeCells()
+      const bot = goalBot({ at: pos(HOME.x + 70, 64, HOME.z), timeOfDay: 12500, cells })
+      const ctx = { home, castle: { site: { ...NEAR_CASTLE }, rot: 0, blueprintVersion: 1, phase: 'body' }, work: true, step: 'explore', stepStatus: 'done' }
+      const facts = goal.goalFacts(bot, ctx)
+      assert.equal(goal.MENU.gohome.feasible(facts, bot, ctx), true, 'a short dusk walk beats a pillar')
+      assert.equal(goal.MENU.shelter.feasible(facts, bot, ctx), false)
+      assert.equal((await goal.decide(bot, ctx)).action, 'gohome')
+    })
+  })
+})
+
+describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () => {
+  it('castle-rule: fsm castle/castlefetch skips the model (boom brain)', async () => {
+    const boom = { source: 'laya-test', ask: async () => { throw new Error('model asked') } }
+    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0 }
+    assert.deepEqual(
+      await goal.chooseStep(boom, facts, ['castle', 'light', 'equip', 'rest'], null),
+      { step: 'castle', source: 'castle-rule', fsm: 'castle', model: null })
+    assert.deepEqual(
+      await goal.chooseStep(boom, facts, ['castlefetch', 'gear', 'rest'], null),
+      { step: 'castlefetch', source: 'castle-rule', fsm: 'castlefetch', model: null })
+  })
+
+  it('decide with a lying model still castles (run3: laya picked equip over castle)', async () => {
+    await quiet(async () => {
+      const { home, cells } = standingHomeCells()
+      const items = [
+        { name: 'oak_planks', count: 16 }, { name: 'crafting_table', count: 1 },
+        { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
+        { name: 'dirt', count: 32 }, { name: 'cobblestone', count: 80 },
+      ]
+      const bot = goalBot({ items, cells })
+      const lying = { source: 'laya-test', ask: async () => 'equip' }
+      const ctx = { home, castle: castleState(), brain: lying, work: true, step: 'explore', stepStatus: 'done' }
+      assert.equal((await goal.decide(bot, ctx)).action, 'castle')
+      assert.equal(ctx.stepPick.source, 'castle-rule')
+    })
+  })
+
+  it('light/stockpile/gear vetoed far from home, running near it', () => {
+    const farBot = goalBot({ at: pos(CASTLE.x, 64, CASTLE.z) }) // ~500 from home
+    const nearBot = goalBot({ at: pos(HOME.x + 10, 64, HOME.z) })
+    const ctx = { home: { site: { ...HOME } }, castle: castleState() }
+    const lightFacts = { time: 'day', home: 'built', unlit: 3, torches: 1 }
+    assert.equal(goal.MENU.light.feasible(lightFacts, farBot, ctx), false, 'no cross-map torch run')
+    assert.equal(goal.MENU.light.feasible(lightFacts, nearBot, ctx), true)
+    assert.equal(goal.stepWhy('light', lightFacts, farBot, ctx, ''), 'light: castle comes first')
+    const stockFacts = { home: 'built', chest: 'yes', surplus: 'yes', haul: 'none', chestParked: false }
+    assert.equal(goal.MENU.stockpile.feasible(stockFacts, farBot, ctx), false, 'no cross-map banking run')
+    assert.equal(goal.MENU.stockpile.feasible(stockFacts, nearBot, ctx), true)
+    assert.equal(goal.stepWhy('stockpile', stockFacts, farBot, ctx, ''), 'stockpile: castle comes first')
+    const gearFacts = { home: 'built' }
+    assert.equal(goal.MENU.gear.feasible(gearFacts, farBot, ctx), false, 'the ladder waits for the castle')
+    assert.equal(goal.MENU.gear.feasible(gearFacts, nearBot, ctx), true)
+    assert.equal(goal.stepWhy('gear', gearFacts, farBot, ctx, ''), 'gear: castle comes first')
+    // No castle: the leash never fires.
+    assert.equal(goal.MENU.light.feasible(lightFacts, farBot, { home: ctx.home }), true)
+  })
+})
+
+describe('vmzq.19 R2 minor 3: an L2 castle park leashes far beds/build side work', () => {
+  it('taskPark + far home: beds/build stay vetoed; near home or owner park: released', () => {
+    const { home, cells } = standingHomeCells([0])
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 16 }, { name: 'crafting_table', count: 1 }], cells })
+    const bedsFacts = { time: 'day', home: 'built', beds: 'none' }
+    const buildFacts = goal.goalFacts(bot, { home })
+    const l2Park = castleState({ parked: true, taskPark: { at: 1, auto: true, diag: 'stall' } })
+    const l2Ctx = { home, castle: l2Park }
+    assert.equal(goal.MENU.beds.feasible(bedsFacts, bot, l2Ctx), false, 'no wool march during the park')
+    assert.equal(goal.MENU.build.feasible(buildFacts, bot, l2Ctx), false, 'no repair march during the park')
+    assert.equal(goal.stepWhy('beds', bedsFacts, bot, l2Ctx, ''), 'beds: castle comes first')
+    // Near home the parked side work proceeds.
+    const nearHome = { ...home, site: { x: CASTLE.x + 10, y: 64, z: CASTLE.z } }
+    const nearCtx = { home: nearHome, castle: l2Park }
+    assert.equal(goal.MENU.beds.feasible(bedsFacts, bot, nearCtx), true)
+    // An owner park (no episode) releases fully: the owner stopped the castle.
+    const ownerCtx = { home, castle: castleState({ parked: true }) }
+    assert.equal(goal.MENU.beds.feasible(bedsFacts, bot, ownerCtx), true)
+    assert.equal(goal.MENU.build.feasible(buildFacts, bot, ownerCtx), true)
+  })
+})
+
 describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rises', () => {
   it('gather->craft->equip->castlefetch->castle lays blocks, never beds/build', async () => {
     await quiet(async () => {
