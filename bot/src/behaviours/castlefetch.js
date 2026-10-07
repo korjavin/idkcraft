@@ -689,7 +689,7 @@ function digTick(bot, ctx, f) {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
-    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig // instant look (pathfinder's own digs do the same): a smooth turn added ~0.25 s per dig
+    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
     // A hung dig skips the block (no retry this leg); the no-gain strike
     // counts it. Loud: a 10 s hang per cell is the rig's prime suspect
