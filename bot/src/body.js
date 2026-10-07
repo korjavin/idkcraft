@@ -175,8 +175,10 @@ function movementTargets(bot, ctx) {
 // reserve's job") — and the castle/castlefetch walks pillared the last 16
 // away (prod run6: scaffold 16 -> 0, then the night shelter pillar failed
 // with an empty kit). On the castle and castlefetch steps cobble is now
-// walk-proof while any dirt is held: dirt walks (quarry spoil and equip
-// refill it), cobble stays for laying and the night pillar. Cobble
+// walk-proof while any dirt is held: dirt walks (fetch-leg spoil refills
+// it, below-16 equip too), cobble stays for laying and the night pillar.
+// Past the shield (zero dirt) the walks spend the 24-stone buffer first
+// (castle.js reserveOf). Cobble
 // scaffolds only with no dirt held (the vmzq.29 rule — the set never reads
 // effectively empty, so the run6 pit wedge cannot recur). Dirt is the
 // shield: the castle prep gate (castle.js SHELTER_RESERVE) never spends

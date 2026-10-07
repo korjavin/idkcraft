@@ -188,8 +188,15 @@ describe('castle night-shelter dirt floor (vmzq.31)', () => {
   })
 
   it('fillItem still lays smelted stone at the floor (not pillar fuel)', () => {
-    const it = castleMod.fillItem(botWith(pack(2, 0, [{ name: 'stone', count: 20 }])))
+    const it = castleMod.fillItem(botWith(pack(2, 0, [{ name: 'stone', count: 30 }])))
     assert.ok(it && it.name === 'stone', 'smelted stone above the reserve lays on')
+  })
+
+  it('the castle stops laying stone at 24 (revmux 02 core-1 walk buffer)', () => {
+    assert.equal(castleMod.reserveOf('stone'), 24)
+    assert.equal(castleMod.usable(botWith(pack(0, 24)), 'stone'), 0, '24 lays nothing')
+    assert.equal(castleMod.findItem(botWith(pack(0, 24)), 'stone'), null, 'no item at the buffer')
+    assert.ok(castleMod.findItem(botWith(pack(0, 25)), 'stone'), '25 lays one')
   })
 
   it('prep fill with only floor dirt reads stone-none, routing to castlefetch', () => {
