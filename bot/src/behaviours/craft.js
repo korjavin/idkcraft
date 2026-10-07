@@ -593,11 +593,11 @@ function fundPlanks(bot) {
 // off the avoid column (the chest spot). Two rings, 16 columns: 64 cells
 // outdoors (any single stack), 32 in a 2-high room. Returns the smallest
 // victim plus the surveyed capacity, or null when nothing may shed.
-// Diagonals first (vmzq.38 revmux 01): a 16+ victim no longer walls all
-// four cardinal sides before ring 2.
+// Diagonals first, the (1,0)->(2,0) walk-out line last (vmzq.38 revmux
+// 01/02): a 30-60 stone victim no longer closes the bot's pocket.
 const SHED_RINGS = [[1, 1], [1, -1], [-1, 1], [-1, -1],
-  [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [2, -2], [-2, 2], [-2, -2],
-  [1, 0], [-1, 0], [0, 1], [0, -1]]
+  [-2, 0], [0, 2], [0, -2], [2, 2], [2, -2], [-2, 2], [-2, -2],
+  [-1, 0], [0, 1], [0, -1], [2, 0], [1, 0]]
 const SHED_COL_MAX = 4
 function shedSurvey(bot, opts) {
   try {
