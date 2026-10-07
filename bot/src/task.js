@@ -1461,6 +1461,10 @@ function commitSnapshot(bot, ctx, kind) {
     matKind: st && st.matKind,
     matHave: st && st.matHave,
     matLeft: st && st.matLeft,
+    enLogs: st && st.enLogs,
+    enPlanks: st && st.enPlanks,
+    enSticks: st && st.enSticks,
+    enGear: st && st.enGear,
     marks,
   }
 }
@@ -1545,6 +1549,10 @@ function commitDelta(bot, ctx, kind, c) {
   const mk = cur.matKind || s.matKind
   if (mk && typeof cur.matHave === 'number' && typeof s.matHave === 'number' && cur.matHave !== s.matHave) return `${mk}${s.matHave}->${cur.matHave}`
   if (mk && typeof cur.matLeft === 'number' && typeof s.matLeft === 'number' && cur.matLeft !== s.matLeft) return `${mk}left${s.matLeft}->${cur.matLeft}`
+  if (typeof cur.enLogs === 'number' && typeof s.enLogs === 'number' && cur.enLogs !== s.enLogs) return `logs${s.enLogs}->${cur.enLogs}`
+  if (typeof cur.enPlanks === 'number' && typeof s.enPlanks === 'number' && cur.enPlanks !== s.enPlanks) return `planks${s.enPlanks}->${cur.enPlanks}`
+  if (typeof cur.enSticks === 'number' && typeof s.enSticks === 'number' && cur.enSticks !== s.enSticks) return `sticks${s.enSticks}->${cur.enSticks}`
+  if (typeof cur.enGear === 'number' && typeof s.enGear === 'number' && cur.enGear !== s.enGear) return `gear${s.enGear}->${cur.enGear}`
   if (typeof s.done === 'number') return `cells${s.done}->${typeof cur.done === 'number' ? cur.done : s.done}`
   if (s.matKind && typeof s.matHave === 'number') return `${s.matKind}${s.matHave}->${typeof cur.matHave === 'number' ? cur.matHave : s.matHave}`
   return '?'
@@ -2266,6 +2274,34 @@ function castleTravel(bot, ctx, state) {
   }
 }
 
+// Enabling inventory (idkcraft-m1yb): the opening chain the demand verdict
+// cannot see. While the demand is stone, the bot chops logs, crafts planks
+// and sticks, and makes the table and first picks — none of which moves the
+// demanded kind's counts, so a healthy opening read as a 60 s stall and
+// burned watchdog rounds (r1/r2 committing gather past craft-readiness).
+// Four categories, one per craft stage, so a craft's consumption never
+// masks its output's growth: logs, planks, sticks, and gear (table plus
+// wooden/stone picks). A last-tick delta, not a water mark: the baseline
+// always follows (castleSinkBaseline adopts), so a re-gather past a
+// consumed — or death-wiped — count is progress again. Material-class:
+// it resets the any-clock only, never the placed clock (vmzq.20), so a
+// fetch loop still reports at L1.
+function castleEnabling(bot) {
+  const out = { logs: 0, planks: 0, sticks: 0, gear: 0 }
+  try {
+    const items = (bot && bot.inventory && bot.inventory.items()) || []
+    for (const it of items) {
+      if (!it || typeof it.name !== 'string') continue
+      const n = typeof it.count === 'number' ? it.count : 1
+      if (it.name.endsWith('_log')) out.logs += n
+      else if (it.name.endsWith('_planks')) out.planks += n
+      else if (it.name === 'stick') out.sticks += n
+      else if (it.name === 'crafting_table' || it.name === 'wooden_pickaxe' || it.name === 'stone_pickaxe') out.gear += n
+    }
+  } catch (_) { /* no inventory: none */ }
+  return out
+}
+
 // Current castle progress for the clock. Prep remaining only in prep phase
 // (a body-phase prepTargets call would scan the whole site volume cold);
 // material only while a demanded kind is latched.
@@ -2311,6 +2347,13 @@ function castleCurrent(bot, ctx, st, now) {
       } catch (_) { /* inventory best-effort */ }
     }
   } catch (_) { /* material best-effort */ }
+  try {
+    const en = castleEnabling(bot)
+    out.enLogs = en.logs
+    out.enPlanks = en.planks
+    out.enSticks = en.sticks
+    out.enGear = en.gear
+  } catch (_) { /* enabling best-effort */ }
   return out
 }
 
@@ -2335,10 +2378,11 @@ function seedMarks(state, cur) {
   } catch (_) { /* marks best-effort */ }
 }
 
-// Castle progress verdict with its reason (vmzq.21): cells, prep, or the
-// demanded kind's acquisition — or null. A demand-kind switch alone is
-// never progress (the sink adopts it); only growth under a known demand
-// resets the clock.
+// Castle progress verdict with its reason (vmzq.21): cells, prep, the
+// demanded kind's acquisition, or enabling growth (m1yb) — or null. A
+// demand-kind switch alone is never progress (the sink adopts it); only
+// growth under a known demand resets the clock. Enabling is checked last:
+// under a frame/planks demand the material reason still names the move.
 function castleProgressWhy(state, cur) {
   if (typeof cur.done === 'number' && typeof state.done === 'number' && cur.done > state.done) return 'cells'
   if (typeof cur.prepLeft === 'number' && typeof state.prepLeft === 'number' && cur.prepLeft < state.prepLeft) return 'prep'
@@ -2354,6 +2398,10 @@ function castleProgressWhy(state, cur) {
     if (typeof cur.matHave === 'number' && typeof have === 'number' && cur.matHave > have) return `material:${cur.matKind}`
     if (typeof cur.matLeft === 'number' && typeof left === 'number' && cur.matLeft < left) return `material:${cur.matKind}`
   }
+  if (typeof cur.enLogs === 'number' && typeof state.enLogs === 'number' && cur.enLogs > state.enLogs) return 'enabling:logs'
+  if (typeof cur.enPlanks === 'number' && typeof state.enPlanks === 'number' && cur.enPlanks > state.enPlanks) return 'enabling:planks'
+  if (typeof cur.enSticks === 'number' && typeof state.enSticks === 'number' && cur.enSticks > state.enSticks) return 'enabling:sticks'
+  if (typeof cur.enGear === 'number' && typeof state.enGear === 'number' && cur.enGear > state.enGear) return 'enabling:gear'
   return null
 }
 
@@ -2394,6 +2442,12 @@ function castleSinkBaseline(state, cur) {
   // a repair past the hole re-arms it.
   if (typeof cur.done === 'number' && (typeof state.placedDone !== 'number' || cur.done < state.placedDone)) state.placedDone = cur.done
   if (typeof cur.prepLeft === 'number' && (typeof state.placedPrep !== 'number' || cur.prepLeft > state.placedPrep)) state.placedPrep = cur.prepLeft
+  // Enabling (m1yb) is a last-tick delta, not a water mark: the baseline
+  // always follows, so consumption never poisons the next gather.
+  if (typeof cur.enLogs === 'number') state.enLogs = cur.enLogs
+  if (typeof cur.enPlanks === 'number') state.enPlanks = cur.enPlanks
+  if (typeof cur.enSticks === 'number') state.enSticks = cur.enSticks
+  if (typeof cur.enGear === 'number') state.enGear = cur.enGear
 }
 
 // Placed progress only (vmzq.20): cells laid or prep cleared. Material on
@@ -2530,6 +2584,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           t.castle = {
             done: cur.done, total: cur.total, prepLeft: cur.prepLeft,
             matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft,
+            enLogs: cur.enLogs, enPlanks: cur.enPlanks, enSticks: cur.enSticks, enGear: cur.enGear,
             stallMs: 0, lastAt: now, lastL1At: null, fails: [],
             placedStallMs: 0, placedDone: cur.done, placedPrep: cur.prepLeft, placedLastAt: now,
           }
@@ -2720,6 +2775,10 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.matKind = cur.matKind
         state.matHave = cur.matHave
         state.matLeft = cur.matLeft
+        state.enLogs = cur.enLogs
+        state.enPlanks = cur.enPlanks
+        state.enSticks = cur.enSticks
+        state.enGear = cur.enGear
         seedMarks(state, cur)
         state.placedDone = cur.done
         state.placedPrep = cur.prepLeft
@@ -2730,9 +2789,10 @@ function taskTick(bot, ctx, now = Date.now()) {
       }
       // Placed progress resets both clocks; material-only progress resets
       // the any-clock but accrues the placed one toward L1 (vmzq.20) — flat
-      // placed progress with the bot busy still reports. The verdict is
-      // vmzq.21's marks-aware castleProgressWhy; every any-clock reset logs
-      // its reason and ends the commitment window.
+      // placed progress with the bot busy still reports. Enabling is
+      // material-class (m1yb). The verdict is vmzq.21's marks-aware
+      // castleProgressWhy; every any-clock reset logs its reason and ends
+      // the commitment window.
       const why = castleProgressWhy(state, cur)
       const placed = castlePlacedProgressed(state, cur)
       if (why && placed) {
@@ -2742,6 +2802,10 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.matKind = cur.matKind
         state.matHave = cur.matHave
         state.matLeft = cur.matLeft
+        state.enLogs = cur.enLogs
+        state.enPlanks = cur.enPlanks
+        state.enSticks = cur.enSticks
+        state.enGear = cur.enGear
         seedMarks(state, cur)
         state.placedStallMs = 0
         state.placedDone = cur.done
@@ -2762,6 +2826,10 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.matKind = cur.matKind
         state.matHave = cur.matHave
         state.matLeft = cur.matLeft
+        state.enLogs = cur.enLogs
+        state.enPlanks = cur.enPlanks
+        state.enSticks = cur.enSticks
+        state.enGear = cur.enGear
         seedMarks(state, cur)
         state.stallMs = 0
         state.lastAt = now
@@ -2873,12 +2941,12 @@ function taskTick(bot, ctx, now = Date.now()) {
       if ((step === 'castle' || step === 'castlefetch') && ctx.castle && ctx.castle.site) {
         const ccur = castleCurrent(bot, ctx, ctx.castle, now)
         if (!t.castleWatch || typeof t.castleWatch !== 'object') {
-          t.castleWatch = { done: ccur.done, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft }
+          t.castleWatch = { done: ccur.done, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft, enLogs: ccur.enLogs, enPlanks: ccur.enPlanks, enSticks: ccur.enSticks, enGear: ccur.enGear }
           seedMarks(t.castleWatch, ccur)
         } else {
           const crossWhy = (typeof ccur.done === 'number' && typeof t.castleWatch.done === 'number') ? castleProgressWhy(t.castleWatch, ccur) : null
           if (crossWhy) {
-            t.castleWatch = { done: ccur.done, total: ccur.total, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft }
+            t.castleWatch = { done: ccur.done, total: ccur.total, prepLeft: ccur.prepLeft, matKind: ccur.matKind, matHave: ccur.matHave, matLeft: ccur.matLeft, enLogs: ccur.enLogs, enPlanks: ccur.enPlanks, enSticks: ccur.enSticks, enGear: ccur.enGear }
             seedMarks(t.castleWatch, ccur)
             progressReset(state, kind, now)
             logReset(kind, crossWhy)
