@@ -1074,6 +1074,14 @@ const SITE_TOP = 16 // crenellation dy 13 + headroom
 // range a material-short cell walks to itself (running, never failed); on
 // site it fails and castlefetch fetches.
 const SITE_WALK_DIST = 32
+// XZ distance from the body to the site footprint (0 on it), null unknown.
+// Also the task clock's far-walk progress signal (vmzq.35).
+function siteDist(bot, st) {
+  const bp = bodyPos(bot)
+  if (!bp || !st || !st.site) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  return Math.hypot(Math.max(st.site.x - bp.x, 0, bp.x - (st.site.x + w)), Math.max(st.site.z - bp.z, 0, bp.z - (st.site.z + d)))
+}
 function guardCastle(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -1119,13 +1127,10 @@ function work(bot, ctx, st, c, now, status) {
   // (vmzq.29) — a GoalPlaceBlock into unloaded chunks 500 blocks off
   // climbed toward castle height from y 36 and wedged.
   try {
-    const bp = bodyPos(bot)
     // Measured to the footprint, not the cell (revmux 01): on site a
     // cross-corner cell (~41 off on v2) never flips to the XZ walk.
-    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    const ox = bp && Math.max(st.site.x - bp.x, 0, bp.x - (st.site.x + w))
-    const oz = bp && Math.max(st.site.z - bp.z, 0, bp.z - (st.site.z + d))
-    if (bp && Math.hypot(ox, oz) > SITE_WALK_DIST) {
+    const sd = siteDist(bot, st)
+    if (sd != null && sd > SITE_WALK_DIST) {
       st.status = 'walking to the site'
       // Re-issue after a clear (revmux 01 core-1): approach() only
       // re-arms on a new idx or a foreign goal — a goal cleared to
@@ -1276,5 +1281,6 @@ module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
 module.exports.entrance = entrance
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
+module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets

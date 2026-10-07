@@ -925,9 +925,9 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
       'craft',
     )
     assert.equal(
-      fallbackRank('castle', [o('gather', 'gather'), o('park')], null, 'gather').id,
-      'gather',
-      'only option still retries, penalized or not',
+      fallbackRank('castle', [o('gather', 'gather'), o('park')], null, 'gather'),
+      null,
+      'the stalling step is never re-picked (vmzq.35): the caller parks',
     )
     // Blind work spiral beats side steps but trails the chain (revmux 03).
     assert.equal(fallbackRank('castle', [o('explore-far', 'explore'), o('deliver', 'deliver')]).id, 'explore-far')

@@ -226,12 +226,14 @@ function finish(bot, ctx, status) {
 // (Re)issue the walk: a new key, or our goal was replaced/cleared (another
 // step ran in between and left lastGoalKey alone — rig: a second chest leg
 // after the light step never walked).
-function walkTo(bot, ctx, key, p, range) {
+// xz: a far walk ignores y (vmzq.35, the castle far walk's vmzq.29 fix): a
+// y-aware goal into unloaded chunks 500 off climbs from a cave and wedges.
+function walkTo(bot, ctx, key, p, range, xz = false) {
   let ours = false
   try { ours = !!ctx.castleFetchGoal && bot.pathfinder.goal === ctx.castleFetchGoal } catch (_) { ours = false }
   if (ctx.lastGoalKey === key && ours) return
   try {
-    ctx.castleFetchGoal = new goals.GoalNear(p.x, p.y, p.z, range)
+    ctx.castleFetchGoal = xz ? new goals.GoalNearXZ(p.x, p.z, range) : new goals.GoalNear(p.x, p.y, p.z, range)
     bot.pathfinder.setGoal(ctx.castleFetchGoal)
   } catch (_) { /* retry next tick */ }
   ctx.lastGoalKey = key
@@ -651,7 +653,7 @@ function digTick(bot, ctx, f) {
       // The castle chest is looked up again on arrival, once per leg
       // (revmux 01: a far leg's body-centred lookup found none).
       if (f.chestRelook == null) f.chestRelook = true
-      walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2)
+      walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2, far > 2 * DIG_RADIUS)
       if (stalled(f.siteWalk || (f.siteWalk = {}), far, APPROACH_WAITS)) finish(bot, ctx, 'failed:castlefetch-unreachable')
       spend(f, 'walk')
       return
