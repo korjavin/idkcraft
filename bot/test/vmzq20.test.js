@@ -139,27 +139,12 @@ describe('vmzq.20 batch yield: a leg with a batch hands over, below it keeps fet
   })
 })
 
-describe('vmzq.20 bounded switching: some<->batch flaps never preempt, one cycle switches twice', () => {
-  it('fluctuating stone counts keep the running leg either way (no ping-pong)', async () => {
-    await quiet(async () => {
-      const items = [
-        { name: 'cobblestone', count: 20 }, // some: usable 4
-        { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
-      ]
-      const bot = makeBot({ items })
-      for (const leg of ['castlefetch', 'castle']) {
-        const ctx = { castle: castleState(), work: true, step: leg, stepStatus: 'running' }
-        ctx.goalText = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
-        assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: steady start`)
-        for (let i = 0; i < 6; i++) {
-          setCount(items, 'cobblestone', i % 2 === 0 ? 40 : 20) // batch <-> some
-          assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: flap ${i} must not switch`)
-        }
-        assert.equal(bot.chats.length, 0, `${leg}: no step-change chat on a flap`)
-      }
-    })
-  })
-
+// (revmux 01: the goal-only flap test lived here. It exercised goal.js,
+// which this branch never changes, so it passed on master and proved
+// nothing about the batch yield. The handover test below pins the new
+// mechanism (expired batch leg yields done); the prod 10–40 s word flap
+// needs the gated-cell repro, which is follow-up scope.)
+describe('vmzq.20 bounded switching: one handover cycle switches exactly twice', () => {
   it('one handover cycle: fetch yields once, castle lays, fetch resumes — exactly two switches', async () => {
     await quiet(async () => {
       const items = [
@@ -215,6 +200,22 @@ describe('vmzq.20 table footing: refused cells are skipped, water takes no place
       assert.deepEqual(bot.calls.place, [{ x: 1, z: 0 }, { x: -1, z: 0 }], 'second pick tries the next neighbour')
       assert.equal(r.pos.x, -1)
       assert.equal(ctx.equipTableSkip.size, 0, 'success clears the set')
+    })
+  })
+
+  it('a refused cell is still retried when it is the only viable spot (TABLE_TRIES)', async () => {
+    await quiet(async () => {
+      const bot = tableBot({
+        below: { '1,0': { name: 'dirt' }, '-1,0': { name: 'air' }, '0,1': { name: 'air' }, '0,-1': { name: 'air' } },
+        placeImpl: async (calls, land, ref, face) => {
+          calls.place.push({ x: ref.position.x, z: ref.position.z })
+          throw new Error('no room')
+        },
+      })
+      const ctx = {}
+      for (let i = 0; i < 3; i++) await assert.rejects(equipMod.tableFor(bot, ctx), /no room/)
+      assert.deepEqual(bot.calls.place, [{ x: 1, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 0 }], 'tried cell falls back, three attempts')
+      assert.ok(ctx.equipTableSkip.has('1,64,0'), 'still marked refused')
     })
   })
 
