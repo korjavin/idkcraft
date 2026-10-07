@@ -491,6 +491,10 @@ function pickQuarry(bot, ctx, f) {
           const b = at(x, y, z)
           if (!b || wet(b)) { end = i; endWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
           if (open(b) || f.skip.has(k)) continue
+          // Floating above ground (leaves, an overhang): not trench ground,
+          // and its only stance is a tower over the dug trench (rig v26b:
+          // y68 leaves re-picked first every leg, scaffold spent, timeouts).
+          if (dep < 0 && open(at(x, y - 1, z))) continue
           if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; endWhy = `liquid by ${k}`; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,

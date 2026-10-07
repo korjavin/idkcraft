@@ -1135,3 +1135,21 @@ describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
     assert.ok(maxWalk <= 12, `walks stay on the face's stair, longest ${maxWalk} steps`)
   })
 })
+
+describe('castlefetch quarry: floating cells over the trench (vmzq.26 rig v26b)', () => {
+  it('a leaf hanging over a dug column is never a target; hill ground above base still is', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    const set = new Map()
+    // Column 0 dug out (both lanes, 63), a leaf at base+3 over it, and
+    // a dirt hill bump on column 1 at 64 (sits on the ground: dug).
+    set.set(`${o.x},63,${o.z}`, 'air'); set.set(`${o.x + o.lx},63,${o.z + o.lz}`, 'air')
+    set.set(`${o.x},67,${o.z}`, 'oak_leaves')
+    set.set(`${o.x + o.dx},64,${o.z + o.dz}`, 'dirt')
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState({ quarryBase: [64, null, null, null] }) }
+    fetch(bot, ctx)
+    const t = ctx.castleFetch.target
+    assert.ok(t && t.quarry)
+    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 64, o.z + o.dz], 'the grounded bump, not the leaf')
+  })
+})
