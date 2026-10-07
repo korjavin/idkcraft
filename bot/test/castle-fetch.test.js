@@ -977,6 +977,22 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(s.dig + s.walk + s.other, 2, `buckets: ${JSON.stringify(s)}`)
   })
 
+  it('a cell surviving 3 digs is skipped loud (vmzq.20)', async () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(96, 64, 203) }) // beside side-0 column 0
+    bot.dig = async () => {} // refused: the block never breaks
+    const ctx = { castle: castleState() }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      for (let i = 0; i < 4; i++) { fetch(bot, ctx); await settle() }
+    } finally { console.log = orig }
+    const f = ctx.castleFetch
+    assert.ok(f && f.target == null, 'the refused cell is dropped')
+    assert.ok([...f.skip].length >= 1, '... and skipped')
+    assert.ok(lines.some((m) => m.includes('cell refused 3x')), `lines: ${JSON.stringify(lines)}`)
+  })
+
   it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
     const bot = makeBot({ items: TOOLS() })
     const ctx = { castle: castleState(), castleFetch: { kind: 'stone', spend: { dig: 1, walk: 0, other: 0 } }, castleFetchInFlight: true, castleFetchFlight: 'dig' }

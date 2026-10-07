@@ -631,7 +631,11 @@ function digTick(bot, ctx, f) {
   if (t.quarry) {
     // Trench drops are collected a stance later, so no cobble-gain strike;
     // a cell that survives its digs is skipped instead.
-    if (++t.tries > QUARRY_TRIES) { spend(f, 'other'); skip.add(t.k); f.target = null; return }
+    if (++t.tries > QUARRY_TRIES) {
+      spend(f, 'other')
+      try { console.log(`castlefetch stone: cell refused ${QUARRY_TRIES}x at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
+      skip.add(t.k); f.target = null; return
+    }
     // Drops never reaching the pack (revmux 01): a trench's worth of stone
     // dug with no cobble gained ends the leg instead of digging all day.
     const have = cobble(bot)
@@ -654,7 +658,10 @@ function digTick(bot, ctx, f) {
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
     await bot.dig(b)
   }, DIG_TIMEOUT_MS, () => {
-    // A refused/hung dig skips the block; the no-gain strike counts it.
+    // A hung dig skips the block (no retry this leg); the no-gain strike
+    // counts it. Loud: a 10 s hang per cell is the rig's prime suspect
+    // for the quarry's missing ticks (cycle 11: ~350 standing ticks).
+    try { console.log(`castlefetch stone: dig timed out at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
     skip.add(t.k)
     if (f.target === t) f.target = null
   })
