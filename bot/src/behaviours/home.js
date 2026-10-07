@@ -81,10 +81,10 @@ function nightLine(bot, ctx, home) {
   } catch (_) { /* report best-effort */ }
   const dText = deaths === 0 ? 'no deaths' : `${deaths} death${deaths === 1 ? '' : 's'}`
   const bText = banked.length ? `banked ${banked.join(', ')}` : 'banked nothing'
-  let pText = 'at home'
+  const st = home && home.site
+  let pText = st ? 'at home' : 'no home yet'
   try {
     const bp = botPos(bot)
-    const st = home && home.site
     if (bp && st) {
       const d = Math.hypot(bp.x - st.x, bp.z - st.z)
       if (d > HOME_NEAR_BLOCKS) pText = `${Math.round(d)} blocks from home`
