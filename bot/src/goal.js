@@ -2010,7 +2010,34 @@ async function decide(bot, ctx) {
   } catch (_) {
     planStep = null
   }
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep) {
+  // Watchdog commitment (idkcraft-vmzq.21): a bounded window pinning one
+  // step, honoured like the one-shot force but for the whole window. The
+  // cheap check only (identity + window); taskTick owns preempts/pauses.
+  let commitStep = null
+  let commitActive = false
+  try {
+    const g = ctx && ctx.goal
+    const tc = g && g.commit
+    if (tc && g && tc.goalId === g.id && tc.generation === g.generation && typeof tc.step === 'string' && Date.now() < tc.until) {
+      commitStep = tc.step
+      commitActive = true
+    }
+  } catch (_) {
+    commitStep = null
+    commitActive = false
+  }
+  // A finished window step ends the window early (before any re-pick, so
+  // the ended choice is never re-pinned below): failed names its reason,
+  // done re-measures against the dispatch snapshot.
+  const commitEnded = commitActive && finished && prev && prev === commitStep
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep || (commitActive && ctx.step !== commitStep)) {
+    if (commitEnded) {
+      try {
+        require('./task').commitFinished(bot, ctx, status)
+      } catch (_) { /* window best-effort */ }
+      commitActive = false
+      commitStep = null
+    }
     const askKey = `${text}\n${status || ''}`
     // rw4.16: a finished step that can no longer progress is never
     // re-issued — self-advancing steps are never held, so the shortcut
@@ -2035,7 +2062,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !(commitActive && ctx.step !== commitStep) && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {
@@ -2064,10 +2091,36 @@ async function decide(bot, ctx) {
         planApplied = true
       }
     }
-    const why = planApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
+    // Watchdog commitment (vmzq.21): pin the window's step for the whole
+    // window (same-step holds included). Safety first (peer Q2): the
+    // safety choice is computed from the ORDINARY menu, and when it is a
+    // night step the normal menu runs (chooseStep's night rule picks it)
+    // while the window pauses — the commit pins only the work choice.
+    let commitApplied = false
+    if (!planApplied && commitActive) {
+      let safety = null
+      try {
+        safety = goalFsm(facts, names)
+      } catch (_) {
+        safety = null
+      }
+      if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter') {
+        let ok = false
+        try {
+          ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
+        } catch (_) {
+          ok = false
+        }
+        if (ok) {
+          names = [commitStep]
+          commitApplied = true
+        }
+      }
+    }
+    const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
-    if (planApplied) choice.source = 'task-plan'
+    if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     ctx.step = choice.step
     // A fresh equip pick starts with fresh run counters (revmux round-1):
@@ -2139,4 +2192,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull }

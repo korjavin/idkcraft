@@ -165,12 +165,20 @@ describe('vmzq.16 decide wakes when no-site releases', () => {
 describe('vmzq.16 homeless no-site joins the stall clock', () => {
   let origLog = null
   let lines = []
+  let savedWatchdog
   beforeEach(() => {
     lines = []
     origLog = console.log
     console.log = (m) => { lines.push(String(m)) }
+    // Legacy ladder (vmzq.21 acceptance 5): the watchdog stays off.
+    savedWatchdog = process.env.GOAL_WATCHDOG_MS
+    process.env.GOAL_WATCHDOG_MS = '0'
   })
-  afterEach(() => { console.log = origLog })
+  afterEach(() => {
+    console.log = origLog
+    if (savedWatchdog === undefined) delete process.env.GOAL_WATCHDOG_MS
+    else process.env.GOAL_WATCHDOG_MS = savedWatchdog
+  })
 
   function homelessNoSite() {
     const bot = goalBot(darkWorld())
