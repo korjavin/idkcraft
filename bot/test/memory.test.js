@@ -519,12 +519,22 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
     const ctx2 = {}
     memory.restore(botAt(SPAWN_A), ctx2, file, now)
-    assert.deepEqual(ctx2.castle.quarryBase, [61, null, 64, 59])
+    assert.deepEqual(ctx2.castle.quarryBase, [61, null, 64, 59, null, null, null, null]) // pre-ring 4 pads to 8 (vmzq.31)
     const ctx3 = castleCtx({})
     ctx3.castle.quarryBase = [61, 'x', 64]
     assert.equal(memory.save(botAt(SPAWN_A), ctx3, file, now + 1), true)
     const ctx4 = {}
     memory.restore(botAt(SPAWN_A), ctx4, file, now + 1)
     assert.equal(ctx4.castle.quarryBase, undefined)
+  })
+
+  it('round-trips an 8-entry ring latch as is (vmzq.31)', () => {
+    const now = Date.now()
+    const ctx1 = castleCtx({})
+    ctx1.castle.quarryBase = [61, null, 64, 59, 62, 62, null, 60]
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.deepEqual(ctx2.castle.quarryBase, [61, null, 64, 59, 62, 62, null, 60])
   })
 })
