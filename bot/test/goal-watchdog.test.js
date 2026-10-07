@@ -309,7 +309,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     }
     assert.equal(ctx.goal.commit, null, 'window expired')
     assert.equal(outLogs().length, 1, 'one outcome line')
-    assert.match(outLogs()[0], /^goal outcome kind=castle choice=castlefetch dur=120s delta=cells8->8 result=flat$/)
+    assert.match(outLogs()[0], /^goal outcome kind=castle choice=castlefetch dur=120s delta=cells8->8 result=flat unlock=-$/)
     assert.equal(ctx.task.castle.wd.rounds, 1)
     t = advance(bot, ctx, t, 20)
     await flush()
@@ -581,18 +581,19 @@ describe('window pauses, preempts and generation (acceptance 3)', () => {
     }
   })
 
-  it('an order pauses the window instead of preempting it', async () => {
+  it('an order preempts the window as replaced (vmzq.22: orders are goals)', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const t0 = 1000000000000
     let { t } = await liveWindow(bot, ctx, t0)
-    const commit = ctx.goal.commit
-    const untilBefore = commit.until
-    ctx.bring = { kind: 'block', name: 'dirt', phase: 'find' } // errand owns the body
-    t = advance(bot, ctx, t, 30)
-    assert.ok(ctx.goal.commit, 'window survives the errand')
-    assert.equal(ctx.goal.commit.until, untilBefore + 30000, 'paused across the order')
-    assert.equal(outLogs().length, 0, 'no outcome while paused')
+    assert.ok(ctx.goal.commit, 'window live')
+    ctx.bring = { kind: 'block', name: 'dirt', want: 8, have: 0, phase: 'find' } // errand owns the body
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    // The castle window ends (its goal is no longer active) and bring is watched.
+    assert.ok(outLogs().some((l) => /result=preempted:replaced/.test(l)), `replaced: ${JSON.stringify(outLogs())}`)
+    assert.equal(ctx.task.active, 'bring', 'the order is now the goal')
+    assert.equal(ctx.goal.kind, 'bring')
   })
 
   it('a failed window step ends the window early with failed:<reason>', async () => {
@@ -885,7 +886,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     assert.equal(ctx.task.castle.wd.rounds, 6, 'the leg is not a round and does not fork')
     t = await fullRound(bot, ctx, t) // round 7 with the relocate outcome in history
     const h7 = calls[6].state.history
-    assert.equal(h7[h7.length - 1].choice, 'explore', 're-asked with the leg in history')
+    assert.equal(h7[h7.length - 1].choice, 'planb-relocate', 're-asked with the leg in history')
     assert.equal(h7[h7.length - 1].outcome, 'flat')
     assert.equal(ctx.castle.parked, true, 'still flat after the re-ask: switch')
     assert.ok(ctx.castle.planb && typeof ctx.castle.planb.at === 'number', 'switch stamp set')
@@ -974,7 +975,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
       taskMod.taskTick(bot, ctx, t)
     }
     assert.equal(outLogs().length, 1)
-    assert.match(outLogs()[0], /delta=cells8->8 result=flat$/, `top-up is flat: ${JSON.stringify(outLogs())}`)
+    assert.match(outLogs()[0], /delta=cells8->8 result=flat unlock=-$/, `top-up is flat: ${JSON.stringify(outLogs())}`)
     assert.equal(ctx.task.castle.wd.rounds, 1, 'the round cap still binds')
   })
 
