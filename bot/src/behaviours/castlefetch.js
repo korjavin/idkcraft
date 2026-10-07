@@ -281,6 +281,7 @@ function chestTick(bot, ctx, f, d) {
     return true
   }
   f.chestDone = true // one withdraw per leg: an empty chest falls through
+  ctx.castleFetchFlight = 'chest' // time-split label: in-flight ticks bucket below
   flight(ctx, async () => {
     let need = d.short
     for (const names of chestNames(bot, d.kind)) {
@@ -643,6 +644,7 @@ function digTick(bot, ctx, f) {
     f.lastCobble = have
   }
   spend(f, 'dig')
+  ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig below
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
     // batch was in); rock with the pickaxe.
@@ -659,7 +661,12 @@ function digTick(bot, ctx, f) {
 }
 
 function castlefetch(bot, ctx, target, state) {
-  if (ctx.castleFetchInFlight) return
+  // A dig (or chest op) spans ticks: the issue tick bucketed above, the
+  // continuation ticks here, so dig reads as duration, not starts.
+  if (ctx.castleFetchInFlight) {
+    if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
+    return
+  }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)

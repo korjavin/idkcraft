@@ -977,6 +977,17 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(s.dig + s.walk + s.other, 2, `buckets: ${JSON.stringify(s)}`)
   })
 
+  it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
+    const bot = makeBot({ items: TOOLS() })
+    const ctx = { castle: castleState(), castleFetch: { kind: 'stone', spend: { dig: 1, walk: 0, other: 0 } }, castleFetchInFlight: true, castleFetchFlight: 'dig' }
+    fetch(bot, ctx)
+    assert.deepEqual(ctx.castleFetch.spend, { dig: 2, walk: 0, other: 0 }, 'a spanning dig reads as duration')
+    assert.equal(ctx.stepStatus, undefined)
+    ctx.castleFetchFlight = 'chest'
+    fetch(bot, ctx)
+    assert.equal(ctx.castleFetch.spend.other, 1, 'a chest op is admin, not dig')
+  })
+
   it('the leg-over line reports the split and the block delta (vmzq.20 nudge2)', () => {
     const bot = makeBot({ items: [] }) // no pick: the leg ends on its first tick
     const ctx = { castle: castleState() }
