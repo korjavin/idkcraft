@@ -1113,21 +1113,22 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // Deterministic fallback ranking (idkcraft-vmzq.28): when JEV cannot
 // decide (low-confidence/none twice for the same flat goal), take the
 // top-ranked PROGRESS option — never park/ask-owner (they stall by
-// design). Far and unblock options outrank plain steps (the stall proves
-// the plain radius is exhausted); a full pack banks first (nothing
-// fetches into a full pack); plain steps ride FSM order; house side work
-// trails (no +castle). Orders: remembered finds before the blind spiral
-// before the hold retry. Options that already went flat or failed in the
-// passed history sort last (revmux 01 core-2: never re-pick the dead
-// option first — but still pick one when everything went flat, so there
-// is no dead end), as does the currently stalling step (revmux 02
-// core-1: fallback #1 must not re-commit the FSM's own flat step when an
-// unblock is offered). Work explore-far (blind) trails plain chain steps
-// (revmux 01 core-3); order explore-far keeps its unblock rank. Returns
-// the top option or null.
+// design). Tiers: targeted far/unblock first (bank, demand-matched far),
+// then the goal chain in FSM order, then the blind work spiral, then
+// side plain steps, then house side work, then the order hold retry.
+// Options that already went flat or failed in the passed history, the
+// currently stalling step, and held (failed) steps sort last within
+// their tier — but one is still picked when everything went flat, so
+// there is no dead end. Returns the top option or null.
 const FALLBACK_FAR_ORDER = ['bank', 'castlefetch-far', 'gather-far', 'forage-far', 'explore-far']
-const FALLBACK_FLAT_PENALTY = 1000
-function fallbackRank(kind, offered, history = null, currentStep = null) {
+const FALLBACK_FLAT_PENALTY = 10000
+// Chain steps per work kind: the STEP_EFFECT +metric/+chain set, plus the
+// night safety steps (a dusk stall must march/shelter, never blind-walk).
+const FALLBACK_CHAIN = {
+  castle: new Set(['castlefetch', 'castle', 'craft', 'equip', 'gather', 'stay', 'gohome', 'shelter']),
+  house: new Set(['build', 'beds', 'craft', 'equip', 'light', 'gather', 'stay', 'gohome', 'shelter']),
+}
+function fallbackRank(kind, offered, history = null, currentStep = null, held = null) {
   try {
     const list = Array.isArray(offered) ? offered.slice() : []
     const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner')
@@ -1146,8 +1147,18 @@ function fallbackRank(kind, offered, history = null, currentStep = null) {
         }
       }
       if (typeof currentStep === 'string' && currentStep) flat.add(currentStep)
+      if (held instanceof Set) {
+        for (const id of held) {
+          if (typeof id === 'string' && id) flat.add(id)
+        }
+      } else if (Array.isArray(held)) {
+        for (const id of held) {
+          if (typeof id === 'string' && id) flat.add(id)
+        }
+      }
     } catch (_) { /* flat set best-effort */ }
     const isWork = kind === 'castle' || kind === 'house'
+    const chain = (isWork && FALLBACK_CHAIN[kind]) || null
     const stepIdx = (o) => {
       const i = stepOrder.indexOf(o.step || o.id)
       return i === -1 ? stepOrder.length : i
@@ -1155,14 +1166,18 @@ function fallbackRank(kind, offered, history = null, currentStep = null) {
     const score = (o) => {
       let s = 0
       const far = FALLBACK_FAR_ORDER.indexOf(o.id)
-      if (far !== -1) {
-        s = (isWork && o.id === 'explore-far') ? FALLBACK_FAR_ORDER.length + stepOrder.length + 0.5 : far
+      if (far !== -1 && !(isWork && o.id === 'explore-far')) {
+        s = far
+      } else if (isWork && o.id === 'explore-far') {
+        s = 200
       } else if (o.id === 'house-build' || o.id === 'house-beds') {
-        s = FALLBACK_FAR_ORDER.length + 1 + stepOrder.length
+        s = 400
       } else if (typeof o.id === 'string' && o.id.startsWith('hold-')) {
-        s = FALLBACK_FAR_ORDER.length + 2 + stepOrder.length
+        s = 500
+      } else if (chain && chain.has(o.step || o.id)) {
+        s = 100 + stepIdx(o)
       } else {
-        s = FALLBACK_FAR_ORDER.length + stepIdx(o)
+        s = 300 + stepIdx(o)
       }
       if (flat.has(o.id)) s += FALLBACK_FLAT_PENALTY
       return s
@@ -1221,7 +1236,16 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
       try {
         const { goalOptions } = require('./goal-options')
         const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
-        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step)
+        const held = new Set()
+        try {
+          const sf = ctx && ctx.stepFail
+          if (sf && typeof sf === 'object') {
+            for (const k of Object.keys(sf)) {
+              if (sf[k] && typeof sf[k].status === 'string' && sf[k].status.startsWith('failed:')) held.add(k)
+            }
+          }
+        } catch (_) { /* held best-effort */ }
+        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step, held)
       } catch (_) { fb = null }
       if (fb) {
         const diagnosis = diagnose(bot, ctx)

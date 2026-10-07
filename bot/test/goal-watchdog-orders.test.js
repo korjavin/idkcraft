@@ -929,5 +929,19 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
       'gather',
       'only option still retries, penalized or not',
     )
+    // Blind work spiral beats side steps but trails the chain (revmux 03).
+    assert.equal(fallbackRank('castle', [o('explore-far', 'explore'), o('deliver', 'deliver')]).id, 'explore-far')
+    assert.equal(fallbackRank('castle', [o('forage', 'forage'), o('explore-far', 'explore')]).id, 'explore-far')
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('forage', 'forage')]).id, 'gather')
+    // Held (failed) steps sort last (revmux 03).
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, null, new Set(['gather'])).id,
+      'craft',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, null, ['gather', 'craft']).id,
+      'craft',
+      'all held still picks one, FSM order',
+    )
   })
 })
