@@ -231,6 +231,22 @@ async function main() {
       const p = follower.entity.position
       s.x = Math.round(p.x); s.y = Math.round(p.y); s.z = Math.round(p.z)
     } catch (_) { /* pos best-effort */ }
+    try {
+      let cobble = 0; let dirt = 0; let logs = 0
+      for (const it of (follower.inventory && follower.inventory.items()) || []) {
+        if (!it || typeof it.name !== 'string') continue
+        const n = typeof it.count === 'number' ? it.count : 1
+        if (it.name === 'cobblestone') cobble += n
+        else if (it.name === 'dirt') dirt += n
+        else if (/_log$/.test(it.name)) logs += n
+      }
+      s.cobble = cobble; s.dirt = dirt; s.logs = logs
+    } catch (_) { /* inventory best-effort */ }
+    try {
+      const c = follower._tickerCtx
+      const f = c && c.castleFetch
+      if (f) s.fetch = { kind: f.kind, quarry: !!(f.target && f.target.quarry), skips: f.skips || 0, dead: (f.quarry && f.quarry.dead) || [] }
+    } catch (_) { /* fetch best-effort */ }
     series.push(s)
     return s
   }

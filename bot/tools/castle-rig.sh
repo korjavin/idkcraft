@@ -175,7 +175,14 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_OUT="${CASTLE_OUT:-$HERE/last-castle.json}"
+# Absolute: node runs from bot/ after the cd below, so a relative default
+# would point at bot/bot/tools/ and every checkpoint would throw.
+case "${CASTLE_OUT:-}" in
+  /*) ;;
+  '') CASTLE_OUT="$TREE/bot/tools/last-castle.json" ;;
+  *) CASTLE_OUT="$(cd "$HERE/.." && pwd)/tools/$CASTLE_OUT" ;;
+esac
+export CASTLE_OUT
 export BOT_MEMORY_FILE="${BOT_MEMORY_FILE:-/tmp/castle-mem-${RIG_ID:-0}.json}"
 rm -f "$BOT_MEMORY_FILE"
 cd "$HERE/.."
