@@ -212,4 +212,52 @@ describe('vmzq.40 castle footprint is ours', () => {
     assert.ok(bot.chats.some((m) => /lost the drop of the chest, keeping its contents/.test(m)), bot.chats.join('|'))
     assert.equal(world.get(c0.x, c0.y, c0.z), 'cobblestone')
   })
+
+  it('round-1 guards: no interactive stow support, a slot for the box, furnaces stay holes', async () => {
+    // A crafting table under the nearest ring cell: the chest goes elsewhere.
+    {
+      const world = makeWorld()
+      world.set(c0.x, c0.y, c0.z, 'chest')
+      world.boxes.set(`${c0.x},${c0.y},${c0.z}`, [{ name: 'diamond', type: 500, count: 3 }])
+      for (let x = SITE.x - 6; x <= SITE.x + 16; x++) {
+        for (let z = SITE.z - 6; z <= SITE.z + 16; z++) world.set(x, 63, z, 'crafting_table')
+      }
+      const bot = mockBot(world, [{ name: 'cobblestone', type: 1, count: 64 }])
+      const ctx = { castle: { site: SITE, rot: 0 } }
+      await run(bot, ctx, 12)
+      for (const [k, box] of world.boxes) {
+        const [x, y, z] = k.split(',').map(Number)
+        if (box.length) assert.notEqual(world.get(x, y - 1, z), 'crafting_table', 'never placed on a table')
+      }
+      assert.ok(bot.chats.some((m) => /no spot outside for the chest/.test(m)), bot.chats.join('|'))
+    }
+    // A full pack: the contents go back, the cell stays a hole.
+    {
+      const world = makeWorld()
+      world.set(c0.x, c0.y, c0.z, 'chest')
+      const box = [{ name: 'diamond', type: 500, count: 3 }]
+      world.boxes.set(`${c0.x},${c0.y},${c0.z}`, box)
+      const items = [{ name: 'cobblestone', type: 1, count: 64 }]
+      const bot = mockBot(world, items)
+      bot.inventory.emptySlotCount = () => 0
+      const ctx = { castle: { site: SITE, rot: 0 } }
+      await run(bot, ctx, 3)
+      assert.equal(world.get(c0.x, c0.y, c0.z), 'chest')
+      assert.deepEqual(box.map((s) => [s.name, s.count]), [['diamond', 3]])
+      assert.equal(ctx.castle.blocked['1:0'].why, 'kept-chest')
+    }
+    // A furnace is never opened or dug.
+    {
+      const world = makeWorld()
+      world.set(c0.x, c0.y, c0.z, 'furnace')
+      const bot = mockBot(world, [{ name: 'cobblestone', type: 1, count: 64 }])
+      let opened = 0
+      bot.openContainer = async () => { opened++; throw new Error('no') }
+      const ctx = { castle: { site: SITE, rot: 0 } }
+      await run(bot, ctx, 3)
+      assert.equal(opened, 0)
+      assert.equal(world.get(c0.x, c0.y, c0.z), 'furnace')
+      assert.equal(ctx.castle.blocked['1:0'].why, 'kept-furnace')
+    }
+  })
 })

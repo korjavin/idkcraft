@@ -1179,7 +1179,9 @@ function stow(bot, ctx, st, now) {
     box = inv.find((it) => it && it.name === cr.name) || inv.find((it) => it && RELOCATE.test(it.name))
   } catch (_) { box = null }
   // pickup() ran first and is over; the server's pickup may lag a tick or two.
-  if (!box) { if (++cr.noBox > STOW_FAILS) giveUp('lost the drop of'); return false }
+  // A box already standing at the spot (placed, deposit failed) still counts.
+  const placed = cr.at && RELOCATE.test(nameAt(bot, cr.at) || '')
+  if (!box && !placed) { if (++cr.noBox > STOW_FAILS) giveUp('lost the drop of'); return false }
   if (!cr.bad) cr.bad = new Set()
   if (!cr.at) cr.at = stowSpot(bot, st, cr.bad)
   if (!cr.at) { giveUp('no spot outside for'); return false }
@@ -1208,7 +1210,11 @@ function stow(bot, ctx, st, now) {
       win = await bot.openContainer(bot.blockAt(p))
       for (const it of cr.items.slice()) {
         if (it.box) continue
-        await win.deposit(it.type, null, it.count)
+        // What the pack still holds of it: a stack spent meanwhile must not
+        // block the rest on every retry.
+        let have = 0
+        for (const s of bot.inventory.items() || []) if (s && s.type === it.type) have += s.count
+        if (Math.min(have, it.count) > 0) await win.deposit(it.type, null, Math.min(have, it.count))
         cr.items.splice(cr.items.indexOf(it), 1)
       }
       if (ctx.castleCarry === cr) ctx.castleCarry = null
