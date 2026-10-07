@@ -428,25 +428,38 @@ function resultOf(bot, recipe, item) {
 // remaining need frees, the first partial ends the walk). Under-counts on
 // ambiguity (unknown recipe, metadata mismatch): the safe direction is a
 // needless toss, never a tossed product.
+// Registry id -> name (mocks carry names, not types).
+function nameOfId(bot, id) {
+  try {
+    const byId = bot && bot.registry && bot.registry.items && bot.registry.items[id]
+    if (byId && typeof byId.name === 'string') return byId.name
+    const byName = bot && bot.registry && bot.registry.itemsByName
+    if (byName) for (const n of Object.keys(byName)) {
+      const e = byName[n]
+      if (e && e.id === id) return n
+    }
+  } catch (_) { /* nameless */ }
+  return null
+}
+// The recipe's ingredient names: a free-slot drop/shed never takes them
+// (vmzq.38 revmux 01: shedding the pickaxe's own cobble failed the craft).
+function ingredientNames(bot, recipe) {
+  const out = new Set()
+  try {
+    for (const v of placementsFor(recipe, 1).values()) {
+      const n = nameOfId(bot, v.id)
+      if (n) out.add(n)
+    }
+  } catch (_) { /* none known */ }
+  return out
+}
 function freedStacks(bot, stacks, recipe, opCount) {
   let needs = null
   try {
     needs = placementsFor(recipe, opCount)
   } catch (_) { return 0 }
   if (!needs || needs.size === 0) return 0
-  // Registry id -> name (mocks carry names, not types).
-  const nameOf = (id) => {
-    try {
-      const byId = bot && bot.registry && bot.registry.items && bot.registry.items[id]
-      if (byId && typeof byId.name === 'string') return byId.name
-      const byName = bot && bot.registry && bot.registry.itemsByName
-      if (byName) for (const n of Object.keys(byName)) {
-        const e = byName[n]
-        if (e && e.id === id) return n
-      }
-    } catch (_) { /* nameless */ }
-    return null
-  }
+  const nameOf = (id) => nameOfId(bot, id)
   let freed = 0
   for (const v of needs.values()) {
     const nm = nameOf(v.id)
@@ -535,14 +548,14 @@ function shedRank(name) {
 }
 // Pure victim pick: smallest shedable stack (rank, then count). Null when
 // nothing may shed. Exported for the unit assay.
-function shedVictim(items) {
+function shedVictim(items, skip) {
   try {
     if (!Array.isArray(items)) return null
     let best = null
     let bestRank = Infinity
     let bestCount = Infinity
     for (const s of items) {
-      if (!s || typeof s.name !== 'string') continue
+      if (!s || typeof s.name !== 'string' || (skip && skip.has(s.name))) continue
       const rank = shedRank(s.name)
       if (rank < 0) continue
       const n = typeof s.count === 'number' ? s.count : 1
@@ -580,8 +593,11 @@ function fundPlanks(bot) {
 // off the avoid column (the chest spot). Two rings, 16 columns: 64 cells
 // outdoors (any single stack), 32 in a 2-high room. Returns the smallest
 // victim plus the surveyed capacity, or null when nothing may shed.
-const SHED_RINGS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
-  [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [2, -2], [-2, 2], [-2, -2]]
+// Diagonals first (vmzq.38 revmux 01): a 16+ victim no longer walls all
+// four cardinal sides before ring 2.
+const SHED_RINGS = [[1, 1], [1, -1], [-1, 1], [-1, -1],
+  [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [2, -2], [-2, 2], [-2, -2],
+  [1, 0], [-1, 0], [0, 1], [0, -1]]
 const SHED_COL_MAX = 4
 function shedSurvey(bot, opts) {
   try {
@@ -590,7 +606,7 @@ function shedSurvey(bot, opts) {
     let items = null
     try { items = bot.inventory.items() } catch (_) { items = null }
     if (!Array.isArray(items)) return null
-    const victim = shedVictim(items)
+    const victim = shedVictim(items, opts && opts.recipe ? ingredientNames(bot, opts.recipe) : null)
     if (!victim) return null
     const avoid = opts && opts.avoid
     const fx = Math.floor(feet.x)
@@ -710,6 +726,64 @@ async function bootstrapShed(bot, opts) {
   } catch (_) {
     return false
   }
+}
+// Drop policy (owner 2026-10-07, vmzq.38) — the ONE list of what the bot
+// may toss to free a pack slot: leaves/leaf litter, sand/gravel, flora
+// (flowers, grass, saplings, seeds), rotten flesh, sticks, and dirt above a
+// one-stack scaffold reserve (dirt + castle stone). Everything else is never
+// dropped: tools, weapons, armour, food, ores/ingots, coal, logs/planks,
+// wool, beds, and castle stone (granite/diorite/andesite/cobble/stone).
+// Rank = drop order, cheapest first; -1 = never.
+const DROP_FLORA = new Set(['dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet', 'oxeye_daisy',
+  'cornflower', 'lily_of_the_valley', 'sunflower', 'lilac', 'rose_bush', 'peony', 'pink_petals', 'wildflowers',
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'pitcher_pod', 'mangrove_propagule'])
+const DROP_DIRT = new Set(['dirt', 'coarse_dirt', 'grass_block', 'rooted_dirt', 'podzol', 'mycelium'])
+const SCAFFOLD_KEEP = 64
+function dropRank(name) {
+  if (typeof name !== 'string') return -1
+  if (name === 'leaf_litter' || name.endsWith('_leaves')) return 0
+  if (name === 'sand' || name === 'red_sand' || name === 'gravel') return 1
+  if (DROP_FLORA.has(name) || name.endsWith('_tulip') || name.endsWith('_sapling') || name.endsWith('_seeds')) return 2
+  if (name === 'rotten_flesh') return 3
+  if (name === 'stick') return 4
+  if (DROP_DIRT.has(name)) return 5
+  return -1
+}
+// Pure victim pick: lowest rank, then smallest stack; never a recipe
+// ingredient (skip), never dirt that would cut the scaffold reserve.
+function dropVictim(items, skip) {
+  if (!Array.isArray(items)) return null
+  let scaffold = 0
+  for (const s of items) {
+    if (s && (DROP_DIRT.has(s.name) || isStone(s.name))) scaffold += stackCount(s)
+  }
+  let best = null
+  for (const s of items) {
+    if (!s || (skip && skip.has(s.name))) continue
+    const rank = dropRank(s.name)
+    if (rank < 0) continue
+    if (rank === 5 && scaffold - stackCount(s) < SCAFFOLD_KEEP) continue
+    if (!best || rank < best.rank || (rank === best.rank && stackCount(s) < stackCount(best.s))) best = { s, rank }
+  }
+  return best && best.s
+}
+// One free slot for a craft at a full pack (35+ stacks, ensureRoom found no
+// chest): toss one policy-junk stack, else place one (the shed). True iff
+// a slot freed.
+async function freeSlot(bot, opts) {
+  try {
+    const items = bot.inventory.items()
+    if (!Array.isArray(items) || items.length < 35) return false
+    const victim = dropVictim(items, opts && opts.recipe ? ingredientNames(bot, opts.recipe) : null)
+    if (victim && typeof bot.tossStack === 'function' && !cursorOccupied(bot)) {
+      try {
+        await bot.tossStack(victim)
+        try { console.log(`craft dropped ${victim.name}x${stackCount(victim)} (junk policy) to make room for ${(opts && opts.item) || 'a craft'}`) } catch (_) { /* logging best-effort */ }
+        return true
+      } catch (_) { /* toss refused: try the shed */ }
+    }
+  } catch (_) { /* unreadable pack: the shed decides */ }
+  return bootstrapShed(bot, opts)
 }
 // Quest shed (g0z.26 R4, revmux 03 major): the unfunded quest corner at 34+
 // stacks cannot chop (no free slots) — shed one junk stack per run until
@@ -1054,20 +1128,21 @@ async function pacedCraft(bot, recipe, count, table) {
 }
 
 async function safeCraft(bot, recipe, count, table, opts) {
-  // The reserved last slot sheds a junk stack too (vmzq.38): otherwise the
+  const room = { ...opts, recipe } // the free slot never takes an ingredient
+  // The reserved last slot frees a junk slot too (vmzq.38): otherwise the
   // table -> sticks -> pickaxe chain stalls one op after the first shed.
   if (reserveBlocks(bot, recipe, count, opts) &&
-    (!(await bootstrapShed(bot, opts)) || reserveBlocks(bot, recipe, count, opts))) throw new Error('inventory-full')
+    (!(await freeSlot(bot, room)) || reserveBlocks(bot, recipe, count, opts))) throw new Error('inventory-full')
   await paceWindowOp(bot)
   if (!table) await clearGrid(bot)
   await ensureStacks(bot, recipe, count)
   try {
     await ensureRoom(bot, recipe, count, opts)
   } catch (err) {
-    // Craft shed (g0z.26 R3, vmzq.38): any craft at zero empties sheds one
-    // junk stack into a pillar and retries room once — the 36/36 exit.
-    // Anything unshed keeps the honest inventory-full.
-    if (!err || err.message !== 'inventory-full' || !(await bootstrapShed(bot, opts))) throw err
+    // Free slot (g0z.26 R3, vmzq.38): any craft at zero empties drops one
+    // policy-junk stack, else sheds one into a pillar, and retries room
+    // once — the 36/36 exit. Anything else keeps the honest inventory-full.
+    if (!err || err.message !== 'inventory-full' || !(await freeSlot(bot, room))) throw err
     await ensureRoom(bot, recipe, count, opts)
   }
   try {
@@ -1222,6 +1297,8 @@ module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
 module.exports.shedVictim = shedVictim
+module.exports.dropVictim = dropVictim
+module.exports.dropRank = dropRank
 module.exports.shedForQuest = shedForQuest
 module.exports.syncInventory = syncInventory
 module.exports.slotSummary = slotSummary
