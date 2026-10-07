@@ -690,7 +690,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 2000 && ctx.stepStatus == null; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5) // the walk lands next to it
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5) // the walk lands next to it
       await settle(); await settle()
     }
     assert.equal(ctx.stepStatus, 'done')
@@ -742,7 +742,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 12; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
       await settle(); await settle()
     }
     assert.ok(dug.some(([n]) => n === 'stone') && dug.some(([n]) => n === 'dirt'))
@@ -767,7 +767,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 500 && ctx.stepStatus == null; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
       await settle(); await settle()
     }
     assert.equal(ctx.stepStatus, 'failed:castlefetch-dig-stall')
@@ -1013,8 +1013,8 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(bot.blockAt({ x, y, z }).name, 'air', 'the cell broke')
   })
 
-  it('a trench cell past pickup reach walks in instead of digging far (vmzq.20)', () => {
-    const bot = makeBot({ items: TOOLS(), at: pos(99, 64, 203) }) // ~3.3 from side-0 column 0
+  it('a trench cell off its stance walks in instead of digging far (vmzq.20/25)', () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(101, 64, 203) }) // off column 0's stance (vmzq.25)
     const ctx = { castle: castleState() }
     const orig = console.log
     console.log = () => {}
@@ -1025,6 +1025,58 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(f.starts, undefined, 'no dig from pickup-out-of-reach')
     assert.equal(f.spend.walk, 1)
     assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('trench walks never climb out: one dig per cell, none airborne (vmzq.25 rig: 161 digs for 115 cells)', async () => {
+    // Walker model from the rig: the pathfinder goes to the nearest
+    // standable cell inside the goal, and a climb of 2+ is a dirt pillar
+    // in the bot's own column (rig: 278,59..61 refilled, then re-dug).
+    // It lands airborne for one tick (rig: 5x digTime on the first dig).
+    const set = new Map()
+    const items = TOOLS()
+    const bot = makeBot({ items, set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const open = (x, y, z) => bot.blockAt({ x, y, z }).name === 'air'
+    let air = 0
+    const realDig = bot.dig
+    bot.dig = async (b) => { if (bot.entity.onGround === false) air++; await realDig(b) }
+    let last = null
+    const walk = () => {
+      const g = bot.calls.goals[bot.calls.goals.length - 1]
+      if (!g || g === last) return
+      last = g
+      const f = bot.entity.position.floored()
+      const r = Math.ceil(Math.sqrt(g.rangeSq))
+      let best = null
+      for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) for (let dz = -r; dz <= r; dz++) {
+        if (dx * dx + dy * dy + dz * dz > g.rangeSq) continue
+        const c = { x: g.x + dx, y: g.y + dy, z: g.z + dz }
+        if (!open(c.x, c.y, c.z) || !open(c.x, c.y + 1, c.z) || open(c.x, c.y - 1, c.z)) continue
+        const cost = Math.abs(c.x - f.x) + Math.abs(c.z - f.z) + Math.abs(c.y - f.y)
+        if (!best || cost < best.cost) best = { ...c, cost }
+      }
+      if (!best) return
+      for (let y = f.y; y < best.y - 1; y++) { set.set(`${f.x},${y},${f.z}`, 'dirt'); add(items, 'dirt', -1) } // the pillar
+      bot.entity.position = pos(best.x + 0.5, best.y, best.z + 0.5)
+      bot.entity.onGround = false
+    }
+    const ctx = { castle: castleState() }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      for (let i = 0; i < 3000 && ctx.stepStatus == null; i++) {
+        fetch(bot, ctx)
+        bot.entity.onGround = true
+        walk()
+        await settle(); await settle()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done')
+    const digs = bot.calls.dig.map((p) => `${p.x},${p.y},${p.z}`)
+    // Bead gate <= 1.3; the stance walk never refills a cell (pre-fix 1.23
+    // in this model, 1.40 on the rig).
+    const perBlock = digs.length / new Set(digs).size
+    assert.equal(perBlock, 1, `issues per block ${perBlock.toFixed(2)} (${digs.length} digs)`)
+    assert.equal(air, 0, 'no dig issued airborne')
   })
 
   it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
