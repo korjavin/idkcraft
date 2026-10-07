@@ -490,9 +490,13 @@ function pickQuarry(bot, ctx, f) {
           // digs for 115 cells). Column i's drops rest on its floor, the
           // stance the next column is dug from. A cell out of eye reach
           // from its stance (a hill top or a leaf over a deep column) stays
-          // standing: walking up to it pillared the same way (rig).
-          const stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
-          if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          // standing: walking up to it pillared the same way (rig). A stance
+          // that is not open body room (a stepped-around path, a skipped
+          // cell, column 0's outside cell) is never walked into (revmux 01:
+          // range 0 would dig it): that cell walks to itself as before.
+          let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
+          if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
+          else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
           return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }

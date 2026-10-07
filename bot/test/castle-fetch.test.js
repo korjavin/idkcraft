@@ -758,6 +758,25 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.deepEqual([t.x, t.y, t.z], [SITE.x - 4, 63, SITE.z + 3])
   })
 
+  it('revmux 01 (vmzq.25): a stepped-around path is never a stance; it stays, the leg digs on', async () => {
+    const path = `${SITE.x - 4},63,${SITE.z + 2}`
+    const set = new Map([[path, 'dirt_path']])
+    const bot = makeBot({ items: TOOLS(), set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const ctx = { castle: castleState() }
+    const stances = []
+    for (let i = 0; i < 60 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t && t.stance) stances.push(`${t.stance.x},${t.stance.y},${t.stance.z}`)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.ok(!stances.includes(path), 'the path cell is never walked into')
+    assert.equal(set.get(path), 'dirt_path', 'the path stands')
+    assert.ok(bot.calls.dig.some((p) => p.x === SITE.x - 5 && p.z === SITE.z + 2), 'column 1 lane 0 is dug')
+    assert.equal(ctx.stepStatus, undefined, 'no unreachable fail')
+  })
+
   it('revmux 01: trench stone that never reaches the pack fails dig-stall', async () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 63 ? 'stone' : 'air') })
