@@ -139,27 +139,12 @@ describe('vmzq.20 batch yield: a leg with a batch hands over, below it keeps fet
   })
 })
 
-describe('vmzq.20 bounded switching: some<->batch flaps never preempt, one cycle switches twice', () => {
-  it('fluctuating stone counts keep the running leg either way (no ping-pong)', async () => {
-    await quiet(async () => {
-      const items = [
-        { name: 'cobblestone', count: 20 }, // some: usable 4
-        { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
-      ]
-      const bot = makeBot({ items })
-      for (const leg of ['castlefetch', 'castle']) {
-        const ctx = { castle: castleState(), work: true, step: leg, stepStatus: 'running' }
-        ctx.goalText = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
-        assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: steady start`)
-        for (let i = 0; i < 6; i++) {
-          setCount(items, 'cobblestone', i % 2 === 0 ? 40 : 20) // batch <-> some
-          assert.equal((await goal.decide(bot, ctx)).action, leg, `${leg}: flap ${i} must not switch`)
-        }
-        assert.equal(bot.chats.length, 0, `${leg}: no step-change chat on a flap`)
-      }
-    })
-  })
-
+// (revmux 01: the goal-only flap test lived here. It exercised goal.js,
+// which this branch never changes, so it passed on master and proved
+// nothing about the batch yield. The handover test below pins the new
+// mechanism (expired batch leg yields done); the prod 10–40 s word flap
+// needs the gated-cell repro, which is follow-up scope.)
+describe('vmzq.20 bounded switching: one handover cycle switches exactly twice', () => {
   it('one handover cycle: fetch yields once, castle lays, fetch resumes — exactly two switches', async () => {
     await quiet(async () => {
       const items = [

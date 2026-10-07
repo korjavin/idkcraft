@@ -541,6 +541,8 @@ function consumePlan(bot, ctx, kind, done, total, state, now) {
   ctx.taskPlanStep = step
   state.stallMs = 0
   state.lastAt = now
+  state.placedStallMs = 0
+  state.placedLastAt = now
   state.lastL1At = null
   state.lastL1Diag = null
   // planTried stays: the forced step gets one fresh window, then the
