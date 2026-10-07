@@ -341,11 +341,24 @@ function addStall(state, now) {
   return billed
 }
 
+// Placed-clock advance (vmzq.20): its own lastAt, so material-only ticks
+// accrue it while the any-clock resets.
+function addPlacedStall(state, now) {
+  const lastAt = typeof state.placedLastAt === 'number' ? state.placedLastAt : now
+  state.placedStallMs = (state.placedStallMs || 0) + Math.min(Math.max(0, now - lastAt), STALL_TICK_CLAMP_MS)
+  state.placedLastAt = now
+}
+
 // L1 check + fire. Dedupes on the diagnosis string (sayBlocked precedent):
 // a repeated identical diagnosis stays silent instead of re-chatting every
 // 15 min; the throttle still moves so the next distinct diagnosis is fresh.
+// The castle L1 runs on the placed clock (vmzq.20): material on hand keeps
+// accruing it — flat placed progress with the bot busy still reports —
+// while L2 and the gauge stay on the any-progress clock, so steady
+// fetching never parks. The house has no material clock (falls back).
 function maybeL1(bot, ctx, kind, done, total, state, now) {
-  if (state.stallMs < TASK_STALL_L1_MS) return
+  const ms = kind === 'castle' && typeof state.placedStallMs === 'number' ? state.placedStallMs : (state.stallMs || 0)
+  if (ms < TASK_STALL_L1_MS) return
   if (state.lastL1At && now - state.lastL1At < TASK_STALL_L1_MS) return
   const diagnosis = diagnose(bot, ctx)
   if (diagnosis === state.lastL1Diag) {
@@ -358,7 +371,7 @@ function maybeL1(bot, ctx, kind, done, total, state, now) {
   let rounds = 0
   try { rounds = (state && state.wd && state.wd.rounds) || 0 } catch (_) { rounds = 0 }
   try {
-    console.log(`task ${kind} ${done}/${total} stall=${Math.floor(state.stallMs / 1000)}s${parked ? ' parked' : ''}${rounds > 0 ? ` rounds=${rounds}` : ''} step=${step} why=${diagnosis}`)
+    console.log(`task ${kind} ${done}/${total} stall=${Math.floor(ms / 1000)}s${parked ? ' parked' : ''}${rounds > 0 ? ` rounds=${rounds}` : ''} step=${step} why=${diagnosis}`)
   } catch (_) { /* log best-effort */ }
   try {
     bot.chat(chatL1(kind, done, total, diagnosis, parked, rounds))
@@ -646,6 +659,8 @@ function consumePlan(bot, ctx, kind, done, total, state, now) {
   ctx.taskPlanStep = step
   state.stallMs = 0
   state.lastAt = now
+  state.placedStallMs = 0
+  state.placedLastAt = now
   state.lastL1At = null
   state.lastL1Diag = null
   // planTried stays: the forced step gets one fresh window, then the
@@ -1610,6 +1625,19 @@ function castleSinkBaseline(state, cur) {
       state.matLeft = cur.matLeft
     }
   }
+  // The placed clock (vmzq.20) sinks its regress baseline the same way, so
+  // a repair past the hole re-arms it.
+  if (typeof cur.done === 'number' && (typeof state.placedDone !== 'number' || cur.done < state.placedDone)) state.placedDone = cur.done
+  if (typeof cur.prepLeft === 'number' && (typeof state.placedPrep !== 'number' || cur.prepLeft > state.placedPrep)) state.placedPrep = cur.prepLeft
+}
+
+// Placed progress only (vmzq.20): cells laid or prep cleared. Material on
+// hand does not count — the L1 must fire on flat placed progress while the
+// bot is busy fetching.
+function castlePlacedProgressed(state, cur) {
+  if (typeof cur.done === 'number' && typeof state.placedDone === 'number' && cur.done > state.placedDone) return true
+  if (typeof cur.prepLeft === 'number' && typeof state.placedPrep === 'number' && cur.prepLeft < state.placedPrep) return true
+  return false
 }
 
 // One tick, called from runTick before the inShelter/fight short-circuits.
@@ -1683,6 +1711,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           done: cur.done, total: cur.total, prepLeft: cur.prepLeft,
           matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft,
           stallMs: 0, lastAt: now, lastL1At: null, fails: [],
+          placedStallMs: 0, placedDone: cur.done, placedPrep: cur.prepLeft, placedLastAt: now,
         }
         seedMarks(t.castle, cur)
       } else if (houseCur) {
@@ -1713,10 +1742,12 @@ function taskTick(bot, ctx, now = Date.now()) {
         recordFail(ctx, state)
         if (!eligible(bot, ctx)) {
           state.lastAt = now
+          state.placedLastAt = now
           setStallGauge(kind, state.stallMs || 0)
           return
         }
         const billedUnread = addStall(state, now)
+        addPlacedStall(state, now)
         setStallGauge(kind, state.stallMs)
         try {
           commitEligible(bot, ctx, kind, state, billedUnread, now)
@@ -1736,11 +1767,40 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.matHave = cur.matHave
         state.matLeft = cur.matLeft
         seedMarks(state, cur)
+        state.placedDone = cur.done
+        state.placedPrep = cur.prepLeft
         state.lastAt = now
+        state.placedLastAt = now
         setStallGauge(kind, state.stallMs || 0)
         return
       }
+      // Placed progress resets both clocks; material-only progress resets
+      // the any-clock but accrues the placed one toward L1 (vmzq.20) — flat
+      // placed progress with the bot busy still reports. The verdict is
+      // vmzq.21's marks-aware castleProgressWhy; every any-clock reset logs
+      // its reason and ends the commitment window.
       const why = castleProgressWhy(state, cur)
+      const placed = castlePlacedProgressed(state, cur)
+      if (why && placed) {
+        state.done = cur.done
+        state.total = cur.total
+        state.prepLeft = cur.prepLeft
+        state.matKind = cur.matKind
+        state.matHave = cur.matHave
+        state.matLeft = cur.matLeft
+        seedMarks(state, cur)
+        state.placedStallMs = 0
+        state.placedDone = cur.done
+        state.placedPrep = cur.prepLeft
+        state.placedLastAt = now
+        progressReset(state, kind, now)
+        logReset(kind, why)
+        try {
+          const g = ctx && ctx.goal
+          if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+        } catch (_) { /* window best-effort */ }
+        return
+      }
       if (why) {
         state.done = cur.done
         state.total = cur.total
@@ -1749,12 +1809,29 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.matHave = cur.matHave
         state.matLeft = cur.matLeft
         seedMarks(state, cur)
-        progressReset(state, kind, now)
+        state.stallMs = 0
+        state.lastAt = now
+        state.fails = []
+        state.lastProgressAt = now
+        try {
+          wdOf(state).rounds = 0
+          wdOf(state).graceRuns = 0
+        } catch (_) { /* rounds best-effort */ }
+        clearPlan(state)
         logReset(kind, why)
         try {
           const g = ctx && ctx.goal
           if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
         } catch (_) { /* window best-effort */ }
+        if (!eligible(bot, ctx)) {
+          state.placedLastAt = now
+          setStallGauge(kind, state.stallMs || 0)
+          return
+        }
+        addPlacedStall(state, now)
+        setStallGauge(kind, state.stallMs)
+        maybeL2(bot, ctx, kind, cur.done, cur.total, state, now)
+        maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
         return
       }
       // Travel grace (vmzq.21, watchdog verdicts only): the first
@@ -1783,10 +1860,12 @@ function taskTick(bot, ctx, now = Date.now()) {
       recordFail(ctx, state)
       if (!eligible(bot, ctx)) {
         state.lastAt = now
+        state.placedLastAt = now
         setStallGauge(kind, state.stallMs || 0)
         return
       }
       const billed = addStall(state, now)
+      addPlacedStall(state, now)
       setStallGauge(kind, state.stallMs)
       try {
         commitEligible(bot, ctx, kind, state, billed, now)

@@ -127,7 +127,9 @@ describe('task stall clock (vmzq.2)', () => {
     assert.match(taskLogs()[0], /^task castle 9\/1722 stall=900s/)
   })
 
-  it('material on hand resets the clock (quarry trip is not a stall)', () => {
+  it('material on hand resets the any-clock, but L1 fires on flat placed progress (vmzq.20)', () => {
+    // Contract change (bead acceptance 3): a quarry trip is not an L2
+    // stall, but flat placed progress with the bot busy still reaches L1.
     const items = [{ name: 'cobblestone', count: 20 }]
     const bot = makeBot({ items })
     const { ctx } = castleCtx(bot)
@@ -136,12 +138,55 @@ describe('task stall clock (vmzq.2)', () => {
     for (let s = 1; s <= 14 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     items[0].count = 40 // +20 stone quarried, no cells laid yet
     taskMod.taskTick(bot, ctx, t0 + (14 * 60 + 1) * 1000)
-    assert.equal(taskLogs().length, 0, 'quarried stone resets')
-    // The demanded remainder shrinking resets too.
-    for (let s = 1; s <= 14 * 60; s++) taskMod.taskTick(bot, ctx, t0 + (14 * 60 + 1 + s) * 1000)
-    ctx.castleWord.left = 70
-    taskMod.taskTick(bot, ctx, t0 + (28 * 60 + 2) * 1000)
-    assert.equal(taskLogs().length, 0, 'shrinking remainder resets')
+    assert.equal(ctx.task.castle.stallMs, 0, 'quarried stone resets the any-clock (L2 protection)')
+    assert.equal(taskLogs().length, 0, 'no L1 before 15 min placed-flat')
+    // Keep quarrying without laying: the placed clock runs through it.
+    for (let s = 2; s <= 60; s++) {
+      items[0].count += 1
+      taskMod.taskTick(bot, ctx, t0 + (14 * 60 + s) * 1000)
+    }
+    assert.equal(taskLogs().length, 1, 'L1 fires at 15 min flat placed progress despite steady fetching')
+    assert.match(taskLogs()[0], /^task castle 8\/1722 stall=900s step=castlefetch why=step=castlefetch running/)
+    assert.equal(bot.chats.length, 1)
+    assert.match(bot.chats[0], /^castle: no progress for 15 min at 8\/1722 — step=castlefetch running.*; still trying$/)
+  })
+
+  it('steady fetching never parks: L2 stays on the any-clock (vmzq.20)', () => {
+    const items = [{ name: 'cobblestone', count: 20 }]
+    const bot = makeBot({ items })
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    for (let s = 1; s <= 50 * 60; s++) {
+      items[0].count += 1 // a cobble a tick, nothing laid, 50 min
+      taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    }
+    assert.equal(taskLogs().length, 1, 'one L1 (identical diagnosis dedups), then silence')
+    assert.equal(taskLogs().filter((l) => l.includes('parked')).length, 0, 'no L2 park while fetching')
+    assert.equal(bot.chats.filter((c) => c.includes('parked at')).length, 0)
+  })
+
+  it('a laid cell resets the placed clock mid-fetch (vmzq.20)', () => {
+    const items = [{ name: 'cobblestone', count: 20 }]
+    const bot = makeBot({ items })
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    for (let s = 1; s <= 10 * 60; s++) {
+      items[0].count += 1
+      taskMod.taskTick(bot, ctx, t0 + s * 1000)
+    }
+    assert.equal(ctx.task.castle.placedStallMs, 10 * 60 * 1000)
+    ctx.castle.progress.done = 9 // one placement lands
+    taskMod.taskTick(bot, ctx, t0 + (10 * 60 + 1) * 1000)
+    assert.equal(ctx.task.castle.placedStallMs, 0, 'placed progress resets')
+    assert.equal(taskLogs().length, 0)
+    // A fresh 15 min placed-flat from here trips again.
+    for (let s = 1; s <= 15 * 60; s++) {
+      items[0].count += 1
+      taskMod.taskTick(bot, ctx, t0 + (10 * 60 + 1 + s) * 1000)
+    }
+    assert.equal(taskLogs().length, 1)
   })
 
   it('prep progress resets the clock', () => {
@@ -210,6 +255,7 @@ describe('task stall clock (vmzq.2)', () => {
     for (let s = 1; s <= 20 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 0)
     assert.equal(ctx.task.castle.stallMs, 0)
+    assert.equal(ctx.task.castle.placedStallMs, 0, 'night pauses the placed clock too (vmzq.20)')
     // 20 min paused at day: silent.
     bot.time.timeOfDay = 6000
     ctx.paused = true
@@ -252,9 +298,12 @@ describe('task stall clock (vmzq.2)', () => {
     taskMod.taskTick(bot, ctx, t0 + (10 * 60 + 1) * 1000)
     assert.equal(ctx.task.castle.stallMs, 601000, 'stall continues through regress')
     assert.equal(ctx.task.castle.done, 5, 'baseline sinks')
+    assert.equal(ctx.task.castle.placedStallMs, 601000, 'placed stall continues too (vmzq.20)')
+    assert.equal(ctx.task.castle.placedDone, 5, 'placed baseline sinks (vmzq.20)')
     ctx.castle.progress.done = 6 // repair: first block back resets
     taskMod.taskTick(bot, ctx, t0 + (10 * 60 + 2) * 1000)
     assert.equal(ctx.task.castle.stallMs, 0)
+    assert.equal(ctx.task.castle.placedStallMs, 0, 'repair resets the placed clock (vmzq.20)')
   })
 
   it('failed reasons since progress ride the diagnosis (last 3 distinct)', () => {
