@@ -218,6 +218,22 @@ describe('vmzq.20 table footing: refused cells are skipped, water takes no place
     })
   })
 
+  it('a refused cell is still retried when it is the only viable spot (TABLE_TRIES)', async () => {
+    await quiet(async () => {
+      const bot = tableBot({
+        below: { '1,0': { name: 'dirt' }, '-1,0': { name: 'air' }, '0,1': { name: 'air' }, '0,-1': { name: 'air' } },
+        placeImpl: async (calls, land, ref, face) => {
+          calls.place.push({ x: ref.position.x, z: ref.position.z })
+          throw new Error('no room')
+        },
+      })
+      const ctx = {}
+      for (let i = 0; i < 3; i++) await assert.rejects(equipMod.tableFor(bot, ctx), /no room/)
+      assert.deepEqual(bot.calls.place, [{ x: 1, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 0 }], 'tried cell falls back, three attempts')
+      assert.ok(ctx.equipTableSkip.has('1,64,0'), 'still marked refused')
+    })
+  })
+
   it('non-solid footing (water) is never attempted; unknown shapes still place (fail-open)', async () => {
     await quiet(async () => {
       const bot = tableBot({
