@@ -771,19 +771,24 @@ function dropVictim(items, skip) {
 // chest): toss one policy-junk stack, else place one (the shed). True iff
 // a slot freed.
 async function freeSlot(bot, opts) {
+  const item = (opts && opts.item) || 'a craft'
+  let why = 'unreadable'
   try {
     const items = bot.inventory.items()
     if (!Array.isArray(items) || items.length < 35) return false
     const victim = dropVictim(items, opts && opts.recipe ? ingredientNames(bot, opts.recipe) : null)
+    why = victim ? (cursorOccupied(bot) ? 'cursor' : 'no-toss') : 'no-junk'
     if (victim && typeof bot.tossStack === 'function' && !cursorOccupied(bot)) {
       try {
         await bot.tossStack(victim)
-        try { console.log(`craft dropped ${victim.name}x${stackCount(victim)} (junk policy) to make room for ${(opts && opts.item) || 'a craft'}`) } catch (_) { /* logging best-effort */ }
+        try { console.log(`craft dropped ${victim.name}x${stackCount(victim)} (junk policy) to make room for ${item}`) } catch (_) { /* logging best-effort */ }
         return true
-      } catch (_) { /* toss refused: try the shed */ }
+      } catch (err) { why = `toss: ${err && err.message}` }
     }
   } catch (_) { /* unreadable pack: the shed decides */ }
-  return bootstrapShed(bot, opts)
+  if (await bootstrapShed(bot, opts)) return true
+  try { console.log(`craft free-slot failed for ${item} (${why}, no shed): ${slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
+  return false
 }
 // Quest shed (g0z.26 R4, revmux 03 major): the unfunded quest corner at 34+
 // stacks cannot chop (no free slots) — shed one junk stack per run until
