@@ -1144,6 +1144,8 @@ describe('castlefetch quarry: floating cells over the trench (vmzq.26 rig v26b)'
     // a dirt hill bump on column 1 at 64 (sits on the ground: dug).
     set.set(`${o.x},63,${o.z}`, 'air'); set.set(`${o.x + o.lx},63,${o.z + o.lz}`, 'air')
     set.set(`${o.x},67,${o.z}`, 'oak_leaves')
+    set.set(`${o.x + o.lx},66,${o.z + o.lz}`, 'oak_leaves') // a two-layer canopy
+    set.set(`${o.x + o.lx},67,${o.z + o.lz}`, 'oak_leaves')
     set.set(`${o.x + o.dx},64,${o.z + o.dz}`, 'dirt')
     const bot = makeBot({ items: TOOLS(), set })
     const ctx = { castle: castleState({ quarryBase: [64, null, null, null] }) }

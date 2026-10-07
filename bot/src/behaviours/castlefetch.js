@@ -494,7 +494,13 @@ function pickQuarry(bot, ctx, f) {
           // Floating above ground (leaves, an overhang): not trench ground,
           // and its only stance is a tower over the dug trench (rig v26b:
           // y68 leaves re-picked first every leg, scaffold spent, timeouts).
-          if (dep < 0 && open(at(x, y - 1, z))) continue
+          // Grounded = solid all the way down to the ground (a two-layer
+          // canopy's lower leaf would otherwise ground the upper one).
+          if (dep < 0) {
+            let floats = false
+            for (let yy = y - 1; yy >= base - 1 && !floats; yy--) floats = open(at(x, yy, z))
+            if (floats) continue
+          }
           if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; endWhy = `liquid by ${k}`; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,
