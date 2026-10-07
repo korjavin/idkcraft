@@ -906,10 +906,11 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
   })
 
   it('follow-up: blocked planks demand counts the infill run, not the whole remainder', () => {
-    // v2: a blocked planks cell P, an unlaid beam F past it (gated) and one
-    // undone planks cell Q past the beam (gated, higher): left is the run
-    // (1), not all undone planks (2). Laid beams never stop a run (material
-    // branch), so F stays unlaid.
+    // v2: a blocked planks cell P, an unlaid beam F past it and one undone
+    // planks cell Q past the beam (higher) — all three blocked, since
+    // skipping would otherwise work F and Q: left is the run (1), not all
+    // undone planks (2). Laid beams never stop a run (material branch),
+    // so F stays unlaid.
     const { cells } = blueprint.absPlan(SITE, 0, 2)
     const order = cells.map((c) => c.idx).sort((a, b) => castleMod.rank(cells[a]) - castleMod.rank(cells[b]) || a - b)
     let pick = null
@@ -935,7 +936,10 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
       if (c === P || c === F || c === Q) continue
       set.set(`${c.x},${c.y},${c.z}`, LAID2[c.kind] || 'air')
     }
-    const ctx = { castle: castleState({ blueprintVersion: 2, blocked: { [`2:${P.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } } }) }
+    const blocked = { [`2:${P.idx}`]: { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' } }
+    blocked[`2:${F.idx}`] = { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' }
+    blocked[`2:${Q.idx}`] = { tries: 1, until: Date.now() + 3600000, why: 'dig-refused' }
+    const ctx = { castle: castleState({ blueprintVersion: 2, blocked }) }
     const bot = makeBot({ items: TOOLS(), set })
     assert.equal(goal.goalFacts(bot, ctx).castle, 'blocked')
     assert.deepEqual(ctx.castleWord, { word: 'blocked', kind: 'planks', left: 1 })
@@ -954,12 +958,12 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     ctx.goalText = 'stale'
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'castlefetch')
-    const stuckLines = () => bot.chats.filter((m) => m.startsWith('castle: stuck at'))
-    assert.equal(stuckLines().length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(stuckLines()[0], new RegExp(`^castle: stuck at ${stuck.x} ${stuck.y} ${stuck.z} on dig-refused, retry in \\d+s$`))
-    assert.match(ctx.castle.status, new RegExp(`^blocked at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    const holeLines = () => bot.chats.filter((m) => m.startsWith('castle: 1 hole'))
+    assert.equal(holeLines().length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.match(holeLines()[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    assert.match(ctx.castle.status, new RegExp(`^holes: ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\)$`))
     await goal.decide(bot, ctx)
-    assert.equal(stuckLines().length, 1, 'the standing block stays silent')
+    assert.equal(holeLines().length, 1, 'the standing block stays silent')
   })
 
   it('every digTick lands in exactly one spend bucket (vmzq.20 nudge2)', () => {

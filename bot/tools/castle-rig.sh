@@ -12,6 +12,8 @@
 #   to run the natural day/night cycle instead of locked day,
 #   CASTLE_KIT (empty|seeded — seeded pre-fills cobble/planks/tools so a
 #   6-min window measures laying, not fetching),
+#   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
+#   order — protected oak logs + a foreign chest, vmzq.27's stall mix),
 #   CASTLE_TICKRATE (1 = wall-clock game; N > 1 runs /tick rate N for fast
 #   iteration — gates always run at 1).
 # Exit: 0 = measured (even 0 laid — the line says so),
@@ -75,6 +77,9 @@ case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; 
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
 KIT="${CASTLE_KIT:-empty}"
 case "$KIT" in empty|seeded) ;; *) echo "CASTLE_KIT: want empty|seeded, got '$KIT'"; exit 2 ;; esac
+BLOCKED="${CASTLE_BLOCKED:-0}"
+case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2 ;; esac
+{ [ "$BLOCKED" -ge 0 ] && [ "$BLOCKED" -le 16 ]; } || { echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2; }
 TICKRATE="${CASTLE_TICKRATE:-1}"
 case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
 { [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
@@ -196,7 +201,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE"
+export CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in
