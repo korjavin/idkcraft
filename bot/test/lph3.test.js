@@ -137,14 +137,12 @@ describe('lph3 handleRespawn stamps the grace', () => {
   })
 })
 
-describe('lph3 core-2: the phantom-descent arm unarms', () => {
-  it('perched hold + phantom overhead: descent arms with inShelter false, so fight ticks fight and work ticks dig', async () => {
-    // The arm tick that left inShelter=true with digs=0 (#345 core-2):
-    // the perched hold armed shelter, the descent set pillared=false
-    // and dig={extra:1} and returned — and every later fight tick idled
-    // at the index.js drive gate (digs > 0, but digs is 0) instead of
-    // driving the dig. The arm now unarms: fight ticks fight, the next
-    // work tick starts the dig.
+describe('lph3 core-2: the phantom descent drives under the hold', () => {
+  it('descent arm keeps the hold; a fight tick with a walker at the perch drives the dig, never pursues', async () => {
+    // #345 core-2, revmux 02: the arm tick left inShelter=true with
+    // digs=0 and fight ticks idled instead of driving. Unarming (round
+    // 1) pursued walkers off the perch and starved the dig. The hold
+    // stays and the drive gate covers descended: fight ticks drive.
     const phantom = { name: 'phantom', position: pos(5, 80, 0) }
     phantom.position.distanceTo = () => 20
     const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }, { entities: { 9: phantom }, placed: [[0, 64, 0]] })
@@ -160,11 +158,62 @@ describe('lph3 core-2: the phantom-descent arm unarms', () => {
     assert.equal(ctx.shelter.descended, true)
     assert.equal(ctx.shelter.pillared, false, 'off the perch')
     assert.ok(ctx.shelter.dig && ctx.shelter.dig.extra === 1, 'descent dig armed')
-    assert.equal(ctx.inShelter, false, 'unarmed: fight ticks fight, work ticks dig')
-    // The next work tick starts the dig (dirt column, veto passes).
-    await quiet(() => home.shelter(bot, ctx, null, null))
-    await flush()
-    assert.ok(ctx.shelter.dig && (ctx.shelter.dig.digs | 0) > 0, 'dig started')
+    assert.equal(ctx.inShelter, true, 'hold kept: fight ticks drive, never pursue')
+  })
+
+  it('ticker: perched descent + phantom + zombie within 8 + fight: digs, fight never runs', async () => {
+    const phantom = { name: 'phantom', position: pos(5, 80, 0) }
+    phantom.position.distanceTo = () => 20
+    const zp = pos(2, 64, 0)
+    zp.offset = (ox, oy, oz) => pos(zp.x + ox, zp.y + oy, zp.z + oz)
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }, { entities: { 9: phantom }, placed: [[0, 64, 0]] })
+    bot.players = { Steve: { username: 'Steve' } } // rostered but unseen
+    bot.spawnPoint = pos(0, 64, 0)
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    // Phase 1 (work): idle arms the descent. Phase 2 (fight): the drive
+    // gate runs the dig under the hold.
+    const seq = [
+      { action: 'idle', sprint: false, source: 'stub' },
+      { action: 'fight', sprint: false, source: 'stub' },
+      { action: 'fight', sprint: false, source: 'stub' },
+    ]
+    let i = 0
+    const brain = { calls: 0, async decide() { this.calls++; return seq[Math.min(i++, seq.length - 1)] } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const origLog = console.log
+    const lines = []
+    console.log = (l) => { lines.push(String(l)) }
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.home = v2home({ x: 200, y: 64, z: 200 })
+      ctx.adoptDone = true
+      // Perched hold, as a dusk pillar left it.
+      ctx.step = 'shelter'
+      ctx.stepStatus = 'running'
+      ctx.inShelter = true
+      ctx.shelter = { pillared: true, perched: true, dugIn: false, descendTried: false, pillarAt: { x: 0.5, z: 0.5 } }
+      ctx.goalText = 'seeded hold'
+      const r0 = await ticker.tick() // work: arms the descent
+      await flush()
+      assert.equal(ctx.shelter.descended, true, 'descent armed on the work tick')
+      assert.equal(ctx.inShelter, true, 'hold kept')
+      bot.entities[1] = { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 } // walker at the perch
+      const r1 = await ticker.tick() // fight: drives the dig
+      await flush()
+      assert.equal(r1.decision.action, 'idle', 'hold returns idle')
+      assert.equal(fightRan, 0, 'fight never dispatched off the perch')
+      assert.ok(ctx.shelter.dig && (ctx.shelter.dig.digs | 0) > 0, 'dig driven on the fight tick')
+    } finally {
+      console.log = origLog
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
   })
 })
 
@@ -302,7 +351,8 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'fight', 'falls back to fight')
       assert.equal(fightRan, 1)
-      assert.ok(lines.some((l) => l.includes('night-grace: work picked') && l.includes('fighting instead')), `fallback logged, got: ${lines.join(' | ')}`)
+      assert.ok(lines.some((l) => l.includes('night-grace:') && l.includes('fighting instead')), `fallback logged, got: ${lines.join(' | ')}`)
+      assert.equal(ctx.step, null, 'pre-check never ran goal.decide (no step, no chat)')
     } finally {
       BEHAVIOURS.fight = origFight
       ticker.destroy()

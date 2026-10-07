@@ -1032,8 +1032,10 @@ function shelter(bot, ctx, target, state) {
     // pillar stands turns every fight tick idle at the ticker gate — and
     // stopOnce kills the pillar jump — freezing the climb on the first
     // hostile. Fight and the retreat chain run during the climb; the
-    // shelter arms once the pillar stands.
-    ctx.inShelter = false
+    // shelter arms once the pillar stands. A phantom descent in progress
+    // (lph3: descended && dig) keeps the hold instead: the dig runs
+    // under the drive gate on fight ticks, never pursued off the perch.
+    if (!(st.descended && st.dig)) ctx.inShelter = false
     // A foreign live episode (a stuck flow's non-pillar prim) is never
     // touched: the hold is the point, the pillar best-effort.
     if (!ctx.recovery && !st.dig) {
@@ -1103,9 +1105,10 @@ function shelter(bot, ctx, target, state) {
         // stays set so the re-pillared top holds without re-descending.
         st.descended = false
         try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
-        // Already unsheltered: a set dig implies unpillared (both arm
-        // sites clear it), and the climb gate above clears inShelter on
-        // every unpillared tick before the dig runs.
+        // Unarm for the climb (lph3): the descent kept the hold (see the
+        // climb gate above), and with st.dig now null the drive gate
+        // would idle fight ticks instead of re-pillaring.
+        try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
         return
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
@@ -1144,11 +1147,11 @@ function shelter(bot, ctx, target, state) {
       bot.clearControlStates()
     } catch (_) { /* body best-effort */ }
     ctx.lastGoalKey = 'stay'
-    // Unarm for the descent (lph3 core-2 from #345): the perched hold
-    // armed inShelter, and with digs at 0 the index.js drive gate would
-    // idle every fight tick instead of driving the dig — the climb gate
-    // only clears on ticks that reach this handler.
-    try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
+    // Keep the hold (lph3 revmux 02): the perched hold armed inShelter,
+    // and the drive gate runs this dig on fight ticks (descended covers
+    // digs 0) — unarming here would pursue walkers off the perch and
+    // starve the dig. The climb gate above keeps it across work ticks;
+    // the failure branch below unarms for the re-pillar.
     try { console.log('shelter phantom overhead, digging in') } catch (_) { /* log best-effort */ }
     return
   }

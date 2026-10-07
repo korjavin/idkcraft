@@ -908,8 +908,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // advances, and a camping skeleton wins by arrows. Drive the
         // shelter handler so the dig finishes under melee cover (no
         // pursuit is dispatched here, same as the hold). Mirrors the
-        // comehome-exit exception above.
-        if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig && (ctx.shelter.dig.digs | 0) > 0) {
+        // comehome-exit exception above. A phantom descent in progress
+        // (lph3: descended) drives from digs 0 — the walk to the pit
+        // is committed too, or walkers at the perch starve it.
+        if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig &&
+          ((ctx.shelter.dig.digs | 0) > 0 || ctx.shelter.descended)) {
           try {
             const handler = BEHAVIOURS.shelter
             if (typeof handler === 'function') handler(bot, ctx, target, state)
@@ -1004,6 +1007,28 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           }
         }
         const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
+        // Pre-check (lph3 revmux 02 minor): with no feasible night step,
+        // fall back WITHOUT awaiting goal.decide — the await may brain.ask
+        // (up to the timeout, possibly paid) for a pick we then discard,
+        // and it chats/steps a day job that never runs. Fail open: an
+        // unreadable menu proceeds to the post-check below.
+        if (nightGraceHold) {
+          let nightFeasible = true
+          try {
+            const facts = goal.goalFacts(bot, ctx)
+            nightFeasible = !!(goal.MENU.stay.feasible(facts, bot, ctx) ||
+              goal.MENU.gohome.feasible(facts, bot, ctx) || goal.MENU.shelter.feasible(facts, bot, ctx))
+          } catch (_) { nightFeasible = true }
+          if (!nightFeasible) {
+            if (!ctx.nightGraceFallbackLogged) {
+              console.log('night-grace: no night step feasible, fighting instead')
+              ctx.nightGraceFallbackLogged = true
+            }
+            applyDecision(brainFight, target, state)
+            if (!ctx.paused) ctx.retreat = null
+            return { decision: brainFight, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
