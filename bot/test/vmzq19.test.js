@@ -411,6 +411,16 @@ describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () =
     // No castle: the leash never fires.
     assert.equal(goal.MENU.light.feasible(lightFacts, farBot, { home: ctx.home }), true)
   })
+
+  it('R3 major A: a full pack pierces the stockpile leash (the only drain)', () => {
+    const stockFacts = { home: 'built', chest: 'yes', surplus: 'yes', haul: 'none', chestParked: false }
+    const ctx = { home: { site: { ...HOME } }, castle: castleState() }
+    const full = Array.from({ length: 36 }, (_, i) => ({ name: `granite_${i}`, count: 64 }))
+    const fullBot = goalBot({ at: pos(CASTLE.x, 64, CASTLE.z), items: full })
+    assert.equal(goal.MENU.stockpile.feasible(stockFacts, fullBot, ctx), true, '36/36 banks instead of stalling to the park')
+    const roomyBot = goalBot({ at: pos(CASTLE.x, 64, CASTLE.z), items: [{ name: 'cobblestone', count: 64 }] })
+    assert.equal(goal.MENU.stockpile.feasible(stockFacts, roomyBot, ctx), false, 'room in the pack: leashed')
+  })
 })
 
 describe('vmzq.19 R2 minor 3: an L2 castle park leashes far beds/build side work', () => {
@@ -432,6 +442,16 @@ describe('vmzq.19 R2 minor 3: an L2 castle park leashes far beds/build side work
     const ownerCtx = { home, castle: castleState({ parked: true }) }
     assert.equal(goal.MENU.beds.feasible(bedsFacts, bot, ownerCtx), true)
     assert.equal(goal.MENU.build.feasible(buildFacts, bot, ownerCtx), true)
+  })
+
+  it('R3 major B: a latched 3rd park releases the leash (the day belongs to the house)', () => {
+    const { home, cells } = standingHomeCells([0])
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 16 }, { name: 'crafting_table', count: 1 }], cells })
+    const bedsFacts = { time: 'day', home: 'built', beds: 'none' }
+    const buildFacts = goal.goalFacts(bot, { home })
+    const latched = { home, castle: castleState({ parked: true, taskPark: { at: 1, auto: false, diag: 'stall' } }) }
+    assert.equal(goal.MENU.beds.feasible(bedsFacts, bot, latched), true)
+    assert.equal(goal.MENU.build.feasible(buildFacts, bot, latched), true)
   })
 })
 

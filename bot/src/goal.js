@@ -357,8 +357,11 @@ const MENU = {
     // forage leg just to fail at once (revmux 02-review).
     feasible: (facts, bot, ctx) => facts.home === 'built' && !facts.chestParked &&
       !(facts.haul === 'waiting' && facts.player !== 'none') &&
-      // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run.
-      !homeLegVetoed(bot, ctx) &&
+      // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run —
+      // unless the pack is full (R3, round-2 major A): stockpile is the
+      // only drain, and castlefetch/equip/gather yield pack-full counting
+      // on it, so a leashed full pack stalls to the L2 park.
+      (!homeLegVetoed(bot, ctx) || packFull(bot, ctx)) &&
       (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
@@ -538,14 +541,28 @@ function homeLegVetoed(bot, ctx) {
 // radius, beds/build side work marches 500 blocks home and back on
 // resume, so they stay vetoed then. An owner park (no episode) releases
 // fully: the owner stopped the castle, their call. Near-site side work
-// proceeds under either park.
+// proceeds under either park. Only the auto-resuming episode leashes (R3,
+// round-2 major B): a latched 3rd park lasts till the owner speaks, and
+// the day's fallback work is the house, not the stalled site.
 function castleParkLeash(ctx) {
   try {
     const st = ctx && ctx.castle
-    if (!st || !st.taskPark || !st.site || typeof st.site.x !== 'number') return false
+    if (!st || !st.taskPark || st.taskPark.auto !== true || !st.site || typeof st.site.x !== 'number') return false
     const h = ctx && ctx.home && ctx.home.site
     if (!h || typeof h.x !== 'number') return false
     return Math.hypot(h.x - st.site.x, h.z - st.site.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+// Pack-full pierce (vmzq.19 R3, round-2 major A): stockpile is the only
+// pack drain. The dig has no room exactly when castlefetch's own
+// roomForDrop says so (36 stacks with no cobble/dirt room, or the
+// chestless reserve corner) — then the banking trip is the unblock, not
+// drift. Deferred require (the demand precedent in castleFetchGo).
+function packFull(bot, ctx) {
+  try {
+    return !require('./behaviours/castlefetch').roomForDrop(bot, ctx)
   } catch (_) {
     return false
   }
