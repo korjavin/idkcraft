@@ -65,4 +65,11 @@ describe('dig_step behind lip (vmzq.41)', () => {
     assert.equal(r, 'failed:head-blocked')
     assert.deepEqual(dug, [])
   })
+
+  it('lava near the body (not at the lip): no dig, the mount veto, not failed:lava', () => {
+    const { bot, dug } = stairBot({ '2,37,0': 'lava' })
+    const r = recover.RECOVER_MENU.dig_step.run(bot, { recovery: {} })
+    assert.equal(r, 'failed:head-blocked')
+    assert.deepEqual(dug, [])
+  })
 })
