@@ -351,9 +351,9 @@ function huntAllowed(bot, ctx, drop) {
 }
 // Parked hunts (vmzq.3 R3/R5): a parked bot hunts only near animals —
 // the same anchor radius as cells. No hunger exemption (05-verify
-// major): hunts drop raw meat, which eatReflex never eats
-// (EDIBLE_FOODS has no raw), so a hungry bot would chain-hunt outward
-// without ever getting fed — pure drift, third raising of park drift.
+// major): a hungry bot would chain-hunt outward, pure drift, third raising
+// of park drift. Near hunts do feed now (vmzq.34: eatReflex takes safe raw
+// as a fallback), so the bound feeds without walking home-away.
 function parkedHuntOk(ctx, found) {
   try {
     const g = require('../goal')

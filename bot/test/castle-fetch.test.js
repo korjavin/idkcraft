@@ -117,14 +117,14 @@ describe('castlefetch arbiter step (g0z.4)', () => {
   })
 
   it('a running fetch keeps going to its stack target past the castle batch line', async () => {
-    const items = [...TOOLS(), { name: 'cobblestone', count: 16 + 20 }] // 20 usable: a castle batch
+    const items = [...TOOLS(), { name: 'cobblestone', count: 24 + 20 }] // 20 usable: a castle batch
     const bot = makeBot({ items })
     const fresh = { castle: castleState() }
     assert.equal(goal.goalFacts(bot, fresh).castle, 'stone-batch')
     assert.equal((await goal.decide(bot, fresh)).action, 'castle', 'fresh pick lays the batch on hand')
     const running = { castle: castleState(), step: 'castlefetch', stepStatus: 'running', goalText: 'stale' }
     assert.equal((await goal.decide(bot, running)).action, 'castlefetch', 'the fetch finishes its 64')
-    items[3].count = 16 + 64
+    items[3].count = 24 + 64
     running.stepStatus = 'done' // the behaviour's own done at the target
     assert.equal((await goal.decide(bot, running)).action, 'castle', 'target met: back to laying')
   })
@@ -160,7 +160,7 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.equal(bot.calls.opens.length, 1)
     assert.equal(bot.calls.opens[0].x, SITE.x)
     assert.equal(ctx.home.chest, homeChest)
-    assert.equal(count(items, 'cobblestone'), 64 + 16, 'stack target plus the scaffold reserve in one withdraw')
+    assert.equal(count(items, 'cobblestone'), 64 + 24, 'stack target plus the walk-buffer reserve in one withdraw')
     assert.equal(bot.calls.dig.length, 0)
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'done', 'target met ends the leg')
@@ -484,7 +484,7 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
   })
 
   it('a running fetch keeps the castle step off the model menu too', () => {
-    const items = [...TOOLS(), { name: 'cobblestone', count: 16 + 20 }]
+    const items = [...TOOLS(), { name: 'cobblestone', count: 24 + 20 }]
     const bot = makeBot({ items })
     const running = { castle: castleState(), step: 'castlefetch', stepStatus: 'running' }
     const facts = goal.goalFacts(bot, running)

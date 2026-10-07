@@ -362,8 +362,8 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(bot.food, 20)
     assert.equal(forageMod.planForage(bot, ctx), null, 'well-fed parked bot skips the far cow')
     assert.equal(goal.goalFacts(bot, ctx).known, 'none')
-    // Hungry (food 17): still no hunt — raw drops never feed the bot
-    // (EDIBLE_FOODS has no raw), so the exemption was pure drift.
+    // Hungry (food 17): still no hunt — a far exemption would chain-hunt
+    // outward, pure drift (near hunts do feed since vmzq.34's raw fallback).
     bot.food = 17
     assert.equal(forageMod.planForage(bot, ctx), null, 'hungry parked bot skips the far cow')
     assert.equal(goal.goalFacts(bot, ctx).known, 'none')
