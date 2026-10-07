@@ -97,12 +97,21 @@ function firstKeyPlanner(conf = 0.9) {
 
 let origLog = null
 let lines = []
+let savedWatchdog
 beforeEach(() => {
   lines = []
   origLog = console.log
   console.log = (m) => { lines.push(String(m)) }
+  // Legacy one-shot suite (vmzq.21 acceptance 5): the watchdog stays off,
+  // so the L2 plan/park path keeps its one-shot + same-step semantics.
+  savedWatchdog = process.env.GOAL_WATCHDOG_MS
+  process.env.GOAL_WATCHDOG_MS = '0'
 })
-afterEach(() => { console.log = origLog })
+afterEach(() => {
+  console.log = origLog
+  if (savedWatchdog === undefined) delete process.env.GOAL_WATCHDOG_MS
+  else process.env.GOAL_WATCHDOG_MS = savedWatchdog
+})
 
 function planLogs() {
   return lines.filter((l) => l.startsWith('task plan'))

@@ -166,4 +166,12 @@ const taskPlanTotal = new client.Counter({
   help: 'Stall-point plan resolutions by answer (menu step or park)',
   labelNames: ['answer']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, setVitals, serve }
+// Goal watchdog (idkcraft-vmzq.21): fast JEV rounds by goal kind, model
+// choice (menu step, park, or none on failure) and resolution source
+// (jev|single|timeout|http|invalid). One increment per `goal watchdog` line.
+const goalWatchdogTotal = new client.Counter({
+  name: 'idkcraft_bot_goal_watchdog_total',
+  help: 'Goal watchdog rounds by kind, choice and source',
+  labelNames: ['kind', 'choice', 'source']
+})
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }

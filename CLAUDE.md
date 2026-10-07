@@ -118,6 +118,11 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_AUTONOMOUS`: stay and work with nobody online (default empty = off; chat `autonomous on` lasts until restart)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
+  - `GOAL_WATCHDOG_MS`: Goal-metric flat window in ms before a fast JEV round fires (default `60000`; `0` = watchdog off, the shipped 15/45-min ladder)
+  - `GOAL_COMMIT_MS`: Bounded commitment window in ms for a watchdog choice (default `120000`)
+  - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
+  - `GOAL_TRAVEL_GRACE_MS`: Rate-limit floor for the castlefetch travel grace (default `90000`)
+  - `GOAL_PLANB_SWITCH_MS`: Plan-B goal-switch duration in ms when nobody is online (default `450000`)
 
 ## Conventions
 
