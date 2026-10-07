@@ -211,7 +211,7 @@ function finish(bot, ctx, status) {
     } catch (_) { /* delta best-effort */ }
     let wall = '?'
     try { wall = (typeof f.t0 === 'number' ? Math.round((Date.now() - f.t0) / 1000) + 's' : '?') } catch (_) { /* wall best-effort */ }
-    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} blocks=${delta} wall=${wall}`) } catch (_) { /* log best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} wall=${wall}`) } catch (_) { /* log best-effort */ }
   }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
@@ -245,13 +245,13 @@ function stalled(w, dist, limit) {
 // One async op at a time under ctx.castleFetchInFlight, with a deadline:
 // a hung window or dig must never wedge the flag (the step would read
 // feasible and never move). Settles quietly; the sync tick decides.
-function flight(ctx, run, ms, onFail) {
+function flight(ctx, run, ms, onFail, onOk) {
   ctx.castleFetchInFlight = true
   const timeout = new Promise((_, reject) => {
     const tm = setTimeout(() => reject(new Error('timeout')), ms)
     if (tm && typeof tm.unref === 'function') tm.unref()
   })
-  Promise.race([run(), timeout]).catch(() => { if (onFail) onFail() }).finally(() => { ctx.castleFetchInFlight = false })
+  Promise.race([run(), timeout]).then(() => { try { if (onOk) onOk() } catch (_) { /* ok-hook best-effort */ } }).catch(() => { if (onFail) onFail() }).finally(() => { ctx.castleFetchInFlight = false })
 }
 
 function near(bot, p, reach) {
@@ -650,6 +650,7 @@ function digTick(bot, ctx, f) {
     f.lastCobble = have
   }
   spend(f, 'dig')
+  try { f.starts = (f.starts | 0) + 1 } catch (_) { /* counter best-effort */ }
   ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig below
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
@@ -666,7 +667,7 @@ function digTick(bot, ctx, f) {
     try { console.log(`castlefetch stone: dig timed out at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
     skip.add(t.k)
     if (f.target === t) f.target = null
-  })
+  }, () => { try { f.dug = (f.dug | 0) + 1 } catch (_) { /* counter best-effort */ } })
 }
 
 function castlefetch(bot, ctx, target, state) {

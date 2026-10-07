@@ -991,6 +991,26 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.ok(f && f.target == null, 'the refused cell is dropped')
     assert.ok([...f.skip].length >= 1, '... and skipped')
     assert.ok(lines.some((m) => m.includes('cell refused 3x')), `lines: ${JSON.stringify(lines)}`)
+    assert.equal(f.starts, 3, 'three issues before the skip')
+  })
+
+  it('a real dig counts one start and one dug (vmzq.20)', async () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(96, 64, 203) }) // beside side-0 column 0
+    const ctx = { castle: castleState() }
+    const orig = console.log
+    console.log = () => {}
+    let k = null
+    try {
+      fetch(bot, ctx) // tick 1: issue on a side-0 column-0 cell
+      k = ctx.castleFetch.target && ctx.castleFetch.target.k
+      await settle() // the mock dig breaks it
+    } finally { console.log = orig }
+    const f = ctx.castleFetch
+    assert.equal(f.starts, 1, 'one issue')
+    assert.equal(f.dug, 1, 'one resolve')
+    assert.ok(k && k.startsWith('96,63,20'), `side-0 column-0 target, got ${k}`)
+    const [x, y, z] = k.split(',').map(Number)
+    assert.equal(bot.blockAt({ x, y, z }).name, 'air', 'the cell broke')
   })
 
   it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
@@ -1014,6 +1034,6 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(ctx.stepStatus, 'done')
     const line = lines.find((m) => m.includes('leg over'))
     assert.ok(line, `lines: ${JSON.stringify(lines)}`)
-    assert.match(line, /leg over \(done\) ticks dig=0 walk=0 other=1 blocks=\+0/)
+    assert.match(line, /leg over \(done\) ticks dig=0 walk=0 other=1 starts=0 dug=0 blocks=\+0/)
   })
 })
