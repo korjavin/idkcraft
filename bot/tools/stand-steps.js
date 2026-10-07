@@ -14,12 +14,13 @@
 //   STEPS_URL (override endpoint; default the local laya sidecar URL below),
 //   STEPS_ROWS (house|fixture|all; default all),
 //   STEPS_FIXTURE (fixture path; default ../test/fixtures/goal-context-eval.json).
-// JEV budget: ~1 call per row per rep (fixture: 32 rows); sequential posts,
+// JEV budget: ~1 call per row per rep (fixture: 44 rows); sequential posts,
 // the endpoint 429s under bursts.
 const fs = require('node:fs')
 const path = require('node:path')
 const { JEV_ENDPOINT, JEV_MODEL, sourceForUrl } = require('../src/brain')
 const { STEP_ORDER, STEP_CRITERIA, ASK_INSTRUCTIONS, goalText, goalFsm } = require('../src/goal')
+const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION } = require('../src/task')
 
 const LAYA_URL = process.env.STEPS_URL || 'http://127.0.0.1:8000/v1/systemone'
 
@@ -87,6 +88,24 @@ const VARIANTS = {
       facts: row.facts,
     }),
     menu: (row) => [...row.menu, PARK, ASK_OWNER],
+  },
+  // +history+options (vmzq.23): the exact .21 watchdog ask — the prod
+  // PLAN_INSTRUCTIONS, the full planState object (since_min + the watchdog
+  // decision-history ring), STEP_CRITERIA with the prod park criterion.
+  // Re-measures the TASK_PLAN_MIN_CONF gate on the new schema.
+  '+history+options': {
+    instr: () => PLAN_INSTRUCTIONS,
+    criteria: () => ({ ...STEP_CRITERIA, [PARK]: PLAN_PARK_CRITERION }),
+    state: (row) => ({
+      goal: row.context.goal,
+      progress: row.context.progress,
+      blocked_on: row.context.blocked_on,
+      recent: row.context.recent,
+      since_min: row.context.since_min,
+      facts: row.facts,
+      history: row.context.history || [],
+    }),
+    menu: (row) => row.menu,
   },
 }
 
@@ -287,4 +306,7 @@ async function main() {
   console.log(`confidence right=${mean(score.confRight)} (n=${score.confRight.length}) wrong=${mean(score.confWrong)} (n=${score.confWrong.length})`)
 }
 
-main().catch((err) => { console.error('stand failed:', err && err.message ? err.message : err); process.exit(1) })
+if (require.main === module) {
+  main().catch((err) => { console.error('stand failed:', err && err.message ? err.message : err); process.exit(1) })
+}
+module.exports = { VARIANTS }

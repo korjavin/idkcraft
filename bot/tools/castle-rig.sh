@@ -15,6 +15,9 @@
 #   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
 #   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
 #   100 = 5x — for fast iteration),
+#   RIG_PLANNER (jev|stub, default jev — the real JEV; the key comes from
+#   TYPESAFE_API_KEY or, when unset, the stash secrets/jev-api-key, never
+#   printed), GOAL_WATCHDOG_MS / GOAL_COMMIT_MS (pass through when set),
 #   CASTLE_INIT_MEMORY/CASTLE_MAX_MEMORY (JVM heap, default 512M/768M),
 #   CASTLE_VIEW_DISTANCE/CASTLE_SIM_DISTANCE (default 6/4).
 # Exit: 0 = measured (even 0 laid — the line says so),
@@ -82,6 +85,22 @@ case "$KIT" in empty|seeded) ;; *) echo "CASTLE_KIT: want empty|seeded, got '$KI
 TICKRATE="${CASTLE_TICKRATE:-1}"
 case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
 { [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
+RIG_PLANNER="${RIG_PLANNER:-jev}"
+case "$RIG_PLANNER" in jev|stub) ;; *) echo "RIG_PLANNER: want jev|stub, got '$RIG_PLANNER'"; exit 2 ;; esac
+export RIG_PLANNER
+if [ "$RIG_PLANNER" = jev ] && [ -z "${TYPESAFE_API_KEY:-}" ] && [ -x "$HOME/.local/bin/kv" ]; then
+  # Stash fallback (idkcraft-vmzq.23): the key travels as env only — this
+  # block prints nothing. A still-empty key fails below, before any
+  # docker or world work (revmux 01 core-2); the replay keeps its own
+  # check for direct invocations.
+  TYPESAFE_API_KEY="$("$HOME/.local/bin/kv" get secrets/jev-api-key 2>/dev/null || true)"
+  export TYPESAFE_API_KEY
+fi
+if [ "$RIG_PLANNER" = jev ] && [ -z "${TYPESAFE_API_KEY:-}" ]; then
+  echo "RIG_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)"; exit 2
+fi
+if [ -n "${GOAL_WATCHDOG_MS:-}" ]; then export GOAL_WATCHDOG_MS; fi
+if [ -n "${GOAL_COMMIT_MS:-}" ]; then export GOAL_COMMIT_MS; fi
 INIT_MEM="${CASTLE_INIT_MEMORY:-512M}"
 MAX_MEM="${CASTLE_MAX_MEMORY:-768M}"
 valid_mem() { _m="$1"; case "$_m" in *M|*G) _m="${_m%?}";; *) return 1;; esac; case "$_m" in ''|*[!0-9]*) return 1;; esac; }

@@ -8,8 +8,13 @@
 // parity: nobody online, autonomous on), the bot works CASTLE_MINS, and the
 // run prints ONE verdict line plus a JSON record (CASTLE_OUT).
 //
-// The bot runs the REAL stack (index.runOnce, stub brain — deterministic, no
-// paid LLM) on real Paper physics: gather/craft/equip/fetch/build all run.
+// The bot runs the REAL stack (index.runOnce) on real Paper physics:
+// gather/craft/equip/fetch/build all run. The planner is the REAL JEV by
+// default (RIG_PLANNER=jev, idkcraft-vmzq.23): the key arrives as
+// TYPESAFE_API_KEY (never printed, never logged), the tick brain steps
+// down to stub once the guide quits (prod-alone parity) while plan()
+// keeps reaching JEV. RIG_PLANNER=stub keeps the deterministic stub brain
+// for tests that need no network.
 // Day is locked by the wrapper (gamerule), so the window measures work, not
 // shelter. No baseline judging: this is a measurement loop instrument, the
 // verdict line is the product.
@@ -18,8 +23,10 @@
 //   CASTLE_CONTAINER (idk-castle), CASTLE_TAG (c + pid digits),
 //   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
+//   RIG_PLANNER (jev|stub, default jev), TYPESAFE_API_KEY (jev bearer).
 // Exit: 0 = measured (even at 0 laid — the line says so),
-//   2 = environment/setup failure (spawn, pad, order, dropped follower).
+//   2 = environment/setup failure (spawn, pad, order, dropped follower,
+//   jev without a key).
 
 const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
@@ -41,6 +48,7 @@ const OUT = process.env.CASTLE_OUT || `${__dirname}/last-castle.json`
 const LOGFILE = process.env.CASTLE_LOG || `/tmp/castle-rig-${TAG}.log`
 const KIT = process.env.CASTLE_KIT || 'empty'
 const TICKRATE = process.env.CASTLE_TICKRATE || '1'
+const PLANNER = process.env.RIG_PLANNER || 'jev'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -50,10 +58,21 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 const logStream = fs.createWriteStream(LOGFILE, { flags: 'w' })
 const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /,
   /^castle \d+\/\d+$/, /death/, /^castle-sample /, /^castle \d+\/\d+ in /,
-  /^CASTLE-RIG /, /^task castle /, /no progress for/]
+  /^CASTLE-RIG /, /^task castle /, /no progress for/,
+  /^goal watchdog /, /^goal outcome /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [] }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 } }
+function resetSeen() {
+  seen.flips = 0
+  seen.steps = {}
+  seen.fails = {}
+  seen.progress = []
+  seen.wdCalls = 0
+  seen.wdChoices = {}
+  seen.wdFirstAt = 0
+  seen.outcomes = { progress: 0, flat: 0, preempted: 0 }
+}
 function hookConsole() {
   console.log = (...a) => {
     const line = a.map(String).join(' ')
@@ -69,8 +88,9 @@ function hookConsole() {
   }
 }
 // Goal-step flips castle<->castlefetch, per-step decision counts, failure
-// reasons. Parsed from the bot's own log lines (in-process, loss-free).
-function classify(line) {
+// reasons, watchdog fires + choices, commitment outcomes. Parsed from the
+// bot's own log lines (in-process, loss-free). now is injectable for tests.
+function classify(line, now = Date.now()) {
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     const pair = [m[1], m[2]].sort().join('<>')
@@ -90,6 +110,26 @@ function classify(line) {
     // fire once per finish (dedup by reason per second is overkill for a
     // top-list; the ordering is what matters).
     seen.fails[r] = (seen.fails[r] || 0) + 1
+  }
+  // Watchdog resolutions (vmzq.21): every `goal watchdog` line is one
+  // consumed round; choice=none is a failure path (error/stale/low-conf),
+  // not an intervention — counted in calls, not in choices/first.
+  m = /^goal watchdog .* choice=(\S+)/.exec(line)
+  if (m) {
+    seen.wdCalls++
+    if (m[1] !== 'none') {
+      seen.wdChoices[m[1]] = (seen.wdChoices[m[1]] || 0) + 1
+      if (!seen.wdFirstAt) seen.wdFirstAt = now
+    }
+  }
+  // Commitment outcomes: progress moved the metric, flat covers flat +
+  // failed:* (no goal effect either way), preempted:* never ran its course.
+  m = /^goal outcome .* result=(\S+)/.exec(line)
+  if (m) {
+    const r = m[1]
+    if (r === 'progress') seen.outcomes.progress++
+    else if (r.startsWith('preempted:')) seen.outcomes.preempted++
+    else seen.outcomes.flat++
   }
 }
 
@@ -127,7 +167,20 @@ async function main() {
   hookConsole()
   const [px, pz] = PAD.map(Math.floor)
   const index = require('../src/index')
-  const brain = require('../src/brain').stubBrain
+  const brainMod = require('../src/brain')
+  let brain = brainMod.stubBrain
+  let brainEngine = ''
+  if (PLANNER === 'jev') {
+    const key = process.env.TYPESAFE_API_KEY
+    // Loud, never silent: a jev run without a key would measure the stub
+    // while the verdict claims JEV. The key itself is never printed.
+    if (!key) fail('planner-key', 'RIG_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)')
+    brain = brainMod.hybridBrain(brainMod.jevBrain(key, undefined, brainMod.brainTimeoutMs(process.env), brainMod.JEV_ENDPOINT))
+    brainEngine = 'jev'
+  } else if (PLANNER !== 'stub') {
+    fail('planner', `RIG_PLANNER: want jev|stub, got ${JSON.stringify(PLANNER)}`)
+  }
+  origLog(`CASTLE-RIG planner=${PLANNER}`)
 
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn').catch((e) => fail('guide-spawn', e.message))
@@ -147,7 +200,7 @@ async function main() {
   let deaths = 0
   index.runOnce({
     host: HOST, port: PORT, username: FOLLOWER, tickMs: 1000, idleTickMs: 1000,
-    brain, leaveAfterMs: 0, followName: '', autonomous: true, createBot: mk,
+    brain, brainEngine, leaveAfterMs: 0, followName: '', autonomous: true, createBot: mk,
     pingFn: async () => ({ players: {} }),
   }).then(() => {}, (e) => { origLog(`CASTLE-RIG follower runOnce rejected: ${e && e.message ? e.message : e}`); process.exit(2) })
   if (!follower) throw new Error('follower never created')
@@ -339,7 +392,8 @@ async function main() {
         flips: seen.flips, deaths, steps: seen.steps, fails: seen.fails,
         partial: Date.now() < endAt,
         tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-        kit: KIT, tickrate: TICKRATE, series,
+        kit: KIT, tickrate: TICKRATE, planner: PLANNER,
+        wdCalls: seen.wdCalls, wdChoices: seen.wdChoices, outcomes: seen.outcomes, series,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
@@ -361,12 +415,15 @@ async function main() {
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0
   const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}`
+  const first = seen.wdFirstAt ? Math.round((seen.wdFirstAt - t0) / 1000) : '-'
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
-    kit: KIT, tickrate: TICKRATE, series,
+    kit: KIT, tickrate: TICKRATE, planner: PLANNER,
+    wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
+    series,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -383,4 +440,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen }
+module.exports = { classify, seen, resetSeen }
