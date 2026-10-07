@@ -807,12 +807,15 @@ function shelterOwns(bot, ctx) {
 // anywhere away from home, so a bot caught mid-map pillars in place
 // instead of marching. Near home — or with the castle next to the house
 // (R2 major 1: a 60-block dusk walk to a standing house beats a pillar) —
-// the old steps win (walk in, stay). A sited home is required: the
-// shelter behaviour fails no-home without one, so a truly homeless bot
-// keeps the old night instead of a doomed pick.
+// the old steps win (walk in, stay). Homeless (idkcraft-vmzq.32: fresh
+// memory, and build — the only siter — is castle-vetoed; the rig spawn is
+// quarried, no flat 7x6 site) the night is the shelter's anywhere: there
+// is no house to walk to (rig: 113 deaths working every night).
 function castleSiteNight(bot, ctx) {
   try {
-    if (!castleFirst(ctx) || !castleFarFromHome(ctx)) return false
+    if (!castleFirst(ctx)) return false
+    if (!(ctx.home && ctx.home.site)) return true
+    if (!castleFarFromHome(ctx)) return false
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
