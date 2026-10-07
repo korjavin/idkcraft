@@ -36,7 +36,7 @@
 // sends the bot back to gather/craft for the next batch.
 
 const Vec3 = require('vec3')
-const { denyReason, logDeny } = require('./util')
+const { denyReason, logDeny, isInteractRef } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 
@@ -357,8 +357,7 @@ function findRef(bot, p) {
     try {
       block = bot.blockAt(q)
     } catch (_) { /* treat as open */ }
-    if (block && block.name !== 'air' && block.boundingBox !== 'empty' &&
-        !block.name.endsWith('_door') && block.name !== 'crafting_table') {
+    if (block && block.name !== 'air' && block.boundingBox !== 'empty' && !isInteractRef(block.name)) {
       return { ref: block, face: new Vec3(-ox, -oy, -oz) }
     }
   }

@@ -675,8 +675,42 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 60)
     assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'chest', 'the foreign block is never dug')
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    // The chest is skipped as a placement ref too, so the cell stacked on
+    // it holes no-ref until its sides lay (the heal is pinned below).
+    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
     assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
+    assert.match(bot.chats[1], /^castle: 2 holes: .*\(stone: kept-chest\), .*\(stone: no-ref\), retry in \d+s — remove those blocks or say castle stop$/)
+  })
+
+  it('vmzq.27: above a chest seed the cell lands via a side ref, never clicking the chest', async () => {
+    // Prod shape: the rig's chest seed sits in a stone cell; the cell
+    // above must not click it (the server opens the GUI instead of
+    // placing, and the stuck window desyncs every later equip). The mock
+    // refuses chest clicks like the server; sides are laid, so the cell
+    // lands against one of them while the seed stays a reported hole.
+    const world = makeWorld()
+    const plan = cells()
+    const stuck = plan.find((c) => c.kind === 'stone' && c.dy === 1)
+    const above = plan.find((c) => c.kind === 'stone' && c.x === stuck.x && c.z === stuck.z && c.dy === stuck.dy + 1)
+    assert.ok(above, 'a stone cell stacks on the seed cell')
+    paint(world, plan.length)
+    world.set(stuck.x, stuck.y, stuck.z, 'chest')
+    world.set(above.x, above.y, above.z, 'air')
+    const bot = mockBot(world)
+    const place0 = bot.placeBlock
+    bot.placeBlock = async (ref, face) => {
+      if (ref.position.x === stuck.x && ref.position.y === stuck.y && ref.position.z === stuck.z) {
+        throw new Error('Server refused: chest GUI opened')
+      }
+      return place0(ref, face)
+    }
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 30)
+    assert.equal(world.get(above.x, above.y, above.z), 'cobblestone', 'lands via a side ref')
+    assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'chest', 'the seed is never dug')
+    assert.ok(ctx.castle.blocked[`1:${stuck.idx}`], 'the seed stays a reported hole')
+    assert.equal(ctx.castle.blocked[`1:${above.idx}`], undefined, 'no hole for the landed cell')
+    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
   })
 
   it('g0z.23 round 2: a blocked keep-clear cell latches no kind; far reads blocked', () => {

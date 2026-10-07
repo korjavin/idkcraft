@@ -23,7 +23,7 @@ const bringMod = require('./bring')
 const craftItem = require('./craftany')
 const buildMod = require('./build')
 const stockpileMod = require('./stockpile')
-const { canBreak } = require('./util')
+const { canBreak, isInteractRef } = require('./util')
 
 // Two beds of ONE color: 6 wool + 6 planks, single crafts (mixed woods land
 // one bed at a time — a x2 plan would strand on 4 oak + 4 birch).
@@ -181,7 +181,7 @@ function fillRef(bot, g) {
     let ref = null
     try { ref = bot.blockAt && bot.blockAt(p) } catch (_) { ref = null }
     if (!ref || !ref.position || !ref.name) continue
-    if (ref.name === 'lava' || needsFillGround(ref.name)) continue
+    if (ref.name === 'lava' || needsFillGround(ref.name) || isInteractRef(ref.name)) continue
     return { ref, face }
   }
   return null
@@ -761,6 +761,7 @@ function beds(bot, ctx, target, state) {
 
 module.exports = beds
 module.exports.cellsOf = cellsOf
+module.exports.fillRef = fillRef
 module.exports.isBedroomCell = isBedroomCell
 module.exports.migrateClaims = migrateClaims
 module.exports.bedAt = bedAt

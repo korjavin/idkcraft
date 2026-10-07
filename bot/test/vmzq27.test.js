@@ -171,6 +171,61 @@ describe('vmzq.27 skip-and-continue: three holes, material word, one report line
   })
 })
 
+describe('vmzq.27 interactable refs: a placement click never opens a GUI', () => {
+  const Vec3 = require('vec3')
+  const buildMod = require('../src/behaviours/build')
+  const flatMod = require('../src/behaviours/flat')
+  const bedsMod = require('../src/behaviours/beds')
+  const { isInteractRef } = require('../src/behaviours/util')
+
+  function refBot(world) {
+    return {
+      blockAt: (p) => {
+        const n = world.get(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`) || 'air'
+        return { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), boundingBox: n === 'air' ? 'empty' : 'block' }
+      },
+    }
+  }
+
+  it('flags GUI/toggle/use blocks, not plain solids', () => {
+    for (const n of ['chest', 'trapped_chest', 'ender_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker',
+      'hopper', 'dropper', 'dispenser', 'crafter', 'crafting_table', 'oak_door', 'oak_button',
+      'oak_fence_gate', 'oak_trapdoor', 'red_bed', 'oak_sign', 'shulker_box', 'cauldron',
+      'water_cauldron', 'campfire', 'soul_campfire', 'lever', 'cake', 'respawn_anchor', 'vault']) {
+      assert.equal(isInteractRef(n), true, n)
+    }
+    for (const n of ['cobblestone', 'stone', 'dirt', 'oak_planks', 'oak_log', 'glass', 'torch', 'air', null, 42]) {
+      assert.equal(isInteractRef(n), false, String(n))
+    }
+  })
+
+  it('build.findRef steps around a chest to a side cobble, null when alone', () => {
+    const bot = refBot(new Map([['0,0,0', 'chest'], ['1,1,0', 'cobblestone']]))
+    const r = buildMod.findRef(bot, new Vec3(0, 1, 0))
+    assert.ok(r, 'a ref exists')
+    assert.equal(r.ref.name, 'cobblestone', 'the chest below is skipped')
+    assert.deepEqual([r.face.x, r.face.y, r.face.z], [-1, 0, 0])
+    const lone = refBot(new Map([['0,0,0', 'furnace']]))
+    assert.equal(buildMod.findRef(lone, new Vec3(0, 1, 0)), null, 'lone furnace: no ref, honestly')
+    // Pre-existing exclusions still hold.
+    const door = refBot(new Map([['0,0,0', 'oak_door'], ['1,1,0', 'dirt']]))
+    assert.equal(buildMod.findRef(door, new Vec3(0, 1, 0)).ref.name, 'dirt')
+  })
+
+  it('flat.findRef and beds.fillRef skip interactables too', () => {
+    const bot = refBot(new Map([['0,0,0', 'chest'], ['1,1,0', 'dirt']]))
+    const f = flatMod.findRef(bot, new Vec3(0, 1, 0))
+    assert.ok(f && f.ref.name === 'dirt', `flat ref: ${f && f.ref.name}`)
+    const lone = refBot(new Map([['0,0,0', 'barrel']]))
+    assert.equal(flatMod.findRef(lone, new Vec3(0, 1, 0)), null)
+    const bedBot = refBot(new Map([['0,-1,0', 'dirt'], ['1,0,0', 'chest'], ['-1,0,0', 'dirt']]))
+    const b = bedsMod.fillRef(bedBot, { x: 0, y: 0, z: 0 })
+    assert.ok(b, 'a fill ref exists')
+    assert.equal(b.ref.name, 'dirt')
+    assert.deepEqual([b.face.x, b.face.y, b.face.z], [1, 0, 0], 'the chest side is stepped around')
+  })
+})
+
 describe('vmzq.27 rig seeds: lowest stone cells, log/chest mix', () => {
   it('picks 3 lowest-(dy,idx) stone cells with alternating blocks', () => {
     const { pickBlockedSeeds } = require('../tools/castle-replay')
