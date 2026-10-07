@@ -491,6 +491,21 @@ function digTick(bot, ctx, f) {
   if (!bp) return
   if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
   if (!roomForDrop(bot, ctx)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
+  // wooden pick (~1.4x slower on stone) and no equip step ever interjects
+  // while castle legs are feasible, so upgrade in place once the pack
+  // funds it (craftany chains sticks + a table as needed). One attempt
+  // per leg: a short pack stays short for a stone leg.
+  if (!f.pickUp) {
+    let due = false
+    try { due = require('./equip').stoneUpgradeDue(bot) } catch (_) { due = false }
+    if (due) {
+      let r = null
+      try { r = deps.craftItem(bot, ctx, ['stone_pickaxe'], 1) } catch (_) { r = { done: false } }
+      if (r === 'running' || (r && r.done)) return // crafting across ticks; the landed pick ends it
+      f.pickUp = true
+    }
+  }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
   const stoneAt = (q) => {

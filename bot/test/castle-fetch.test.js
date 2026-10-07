@@ -303,6 +303,63 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.deepEqual([ctx.castleFetch.target.x, ctx.castleFetch.target.z], [o.x, o.z], 'still side 0')
   })
 
+  it('a funded wood pick upgrades mid-leg before the next dig (vmzq.20)', () => {
+    const items = [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }]
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    const real = fetch.deps.craftItem
+    const calls = []
+    fetch.deps.craftItem = (b, c, names, count) => {
+      calls.push([names, count])
+      if (calls.length === 1) return 'running'
+      items.push({ name: 'stone_pickaxe', count: 1 }) // the craft lands
+      const i = items.findIndex((o) => o.name === 'wooden_pickaxe')
+      if (i >= 0) items.splice(i, 1)
+      return { done: true }
+    }
+    try {
+      fetch(bot, ctx) // tick 1: crafting owns the tick, no target yet
+      assert.equal(ctx.castleFetch.target, undefined)
+      assert.equal(ctx.stepStatus, undefined)
+      fetch(bot, ctx) // tick 2: the craft lands, still owns the tick
+      assert.equal(ctx.castleFetch.target, undefined)
+      fetch(bot, ctx) // tick 3: stone in hand, digging resumes
+      assert.ok(ctx.castleFetch.target, 'digging resumes after the upgrade')
+      assert.deepEqual(calls[0], [['stone_pickaxe'], 1])
+      assert.equal(calls.length, 2, 'one attempt')
+    } finally { fetch.deps.craftItem = real }
+  })
+
+  it('a short pack skips the upgrade and digs without delay (vmzq.20)', () => {
+    const items = [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 2 }]
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    const real = fetch.deps.craftItem
+    let calls = 0
+    fetch.deps.craftItem = () => { calls++; return { done: false } }
+    try {
+      fetch(bot, ctx)
+      assert.equal(calls, 0, 'cobble < 3: not due, never attempted')
+      assert.ok(ctx.castleFetch.target, 'digging without delay')
+    } finally { fetch.deps.craftItem = real }
+  })
+
+  it('a failed upgrade latches for the leg and the leg digs on wood (vmzq.20)', () => {
+    const items = [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }]
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    const real = fetch.deps.craftItem
+    let calls = 0
+    fetch.deps.craftItem = () => { calls++; return { done: false } }
+    try {
+      fetch(bot, ctx)
+      fetch(bot, ctx)
+      assert.equal(calls, 1, 'one attempt per leg')
+      assert.equal(ctx.castleFetch.pickUp, true)
+      assert.ok(ctx.castleFetch.target, 'digging on wood anyway')
+    } finally { fetch.deps.craftItem = real }
+  })
+
   it('a pre-latch dug trench shifts one level on first probe, then holds (vmzq.20)', () => {
     const o = fetch.quarrySide(castleState(), 0)
     // Column 0 dug down to 62 with no latch (dug before the latch existed).
