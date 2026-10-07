@@ -488,10 +488,11 @@ function pickQuarry(bot, ctx, f) {
           // itself (ground level, the bot deep in the trench) pillared up
           // out of the trench and the quarry re-dug the pillar (rig: 161
           // digs for 115 cells). Column i's drops rest on its floor, the
-          // stance the next column is dug from. Out of eye reach (a hill
-          // top): no stance, the cell is walked to as before.
-          const sp = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
-          const stance = Math.hypot(sp.x - x, sp.y + EYE - (y + 0.5), sp.z - z) <= DIG_REACH + 0.5 ? sp : null
+          // stance the next column is dug from. A cell out of eye reach
+          // from its stance (a hill top or a leaf over a deep column) stays
+          // standing: walking up to it pillared the same way (rig).
+          const stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
+          if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
           return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
@@ -631,7 +632,10 @@ function digTick(bot, ctx, f) {
     ? sd <= 2 && Math.hypot(bp.x - (t.x + 0.5), bp.y + EYE - (t.y + 0.5), bp.z - (t.z + 0.5)) <= DIG_REACH + 0.5
     : dist <= PICKUP_REACH + 0.5
   if (!reach) {
-    const range = s ? 1 : dist > DIG_REACH ? 2 : 1
+    // The stance cell itself (range 0): a near-goal admits the cell one
+    // lower, i.e. digging the floor's support (rig: side 3 went dead
+    // mid-trench on range 1, carried the run on range 0).
+    const range = s ? 0 : dist > DIG_REACH ? 2 : 1
     if (s) walkTo(bot, ctx, `castlefetch-stance:${s.x},${s.y},${s.z}`, s, range)
     else walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
     if (stalled(t, s ? sd : dist, APPROACH_WAITS)) {
@@ -685,7 +689,7 @@ function digTick(bot, ctx, f) {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
-    await bot.dig(b, true) // instant look (pathfinder's own digs do the same): a smooth turn added ~0.25 s per dig
+    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig // instant look (pathfinder's own digs do the same): a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
     // A hung dig skips the block (no retry this leg); the no-gain strike
     // counts it. Loud: a 10 s hang per cell is the rig's prime suspect

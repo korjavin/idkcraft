@@ -1032,7 +1032,10 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     // standable cell inside the goal, and a climb of 2+ is a dirt pillar
     // in the bot's own column (rig: 278,59..61 refilled, then re-dug).
     // It lands airborne for one tick (rig: 5x digTime on the first dig).
+    // A hill over columns 6-7 of side 0 (rig side 3: the hill top and its
+    // leaves sit out of reach of the deep stance).
     const set = new Map()
+    for (const x of [90, 89]) for (const z of [202, 203]) for (let y = 64; y <= 67; y++) set.set(`${x},${y},${z}`, 'dirt')
     const items = TOOLS()
     const bot = makeBot({ items, set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
     const open = (x, y, z) => bot.blockAt({ x, y, z }).name === 'air'
