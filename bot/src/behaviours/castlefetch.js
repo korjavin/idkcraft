@@ -460,54 +460,27 @@ function pickQuarry(bot, ctx, f) {
       q.said.push(s)
       try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
     }
-    // Rolling staircase face (idkcraft-vmzq.26): cells go in diagonals
-    // s = column + depth, top first, so the face is always a 1-step stair
-    // and every cell has a walkable stance one column back at its own
-    // level. The old column-at-a-time order left a full-depth wall: each
-    // new column's top sat 6 over the floor, out of pickup reach, and the
-    // pathfinder towered up inside the dug trench — scaffold the next pick
-    // then mined back (rig cycle 12 leg 5: 9 min floor<->wall-top, +0).
-    // A dead column ends the trench there; the columns before it finish.
-    let end = QUARRY_LEN
-    let endWhy = ''
-    const colOk = []
-    const depthOf = (i) => Math.min(i, QUARRY_DEPTH - 1)
-    for (let sd = -(QUARRY_TOP + 1); sd < end + QUARRY_DEPTH - 1; sd++) {
-      for (let dep = -(QUARRY_TOP + 1); dep <= QUARRY_DEPTH - 1; dep++) {
-        const i = sd - dep
-        if (i < 0 || i >= end || dep > depthOf(i)) continue
-        const floor = trenchFloor(st, i, base)
-        if (colOk[i] == null) {
-          colOk[i] = true
-          for (let l = 0; l < QUARRY_W; l++) {
-            const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
-            if (!below || open(below) || wet(below)) colOk[i] = false
-          }
-          if (!colOk[i]) { end = i; endWhy = `hole/wet under column ${i} floor ${floor - 1}`; continue }
-        }
-        const y = base - 1 - dep
-        for (let l = 0; l < QUARRY_W && i < end; l++) {
+    let dead = false
+    let deadWhy = ''
+    for (let i = 0; i < QUARRY_LEN && !dead; i++) {
+      const floor = trenchFloor(st, i, base)
+      for (let l = 0; l < QUARRY_W && !dead; l++) {
+        const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
+        if (!below || open(below) || wet(below)) { dead = true; deadWhy = `${below ? (wet(below) ? 'water' : 'hole') : 'void'} under column ${i} floor at ${o.x + o.dx * i + o.lx * l} ${floor - 1} ${o.z + o.dz * i + o.lz * l}` }
+      }
+      for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
+        for (let l = 0; l < QUARRY_W && !dead; l++) {
           const x = o.x + o.dx * i + o.lx * l
           const z = o.z + o.dz * i + o.lz * l
           const k = `${x},${y},${z}`
           const b = at(x, y, z)
-          if (!b || wet(b)) { end = i; endWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
+          if (!b || wet(b)) { dead = true; deadWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
           if (open(b) || f.skip.has(k)) continue
-          // Floating above ground (leaves, an overhang): not trench ground,
-          // and its only stance is a tower over the dug trench (rig v26b:
-          // y68 leaves re-picked first every leg, scaffold spent, timeouts).
-          // Grounded = solid all the way down to the ground (a two-layer
-          // canopy's lower leaf would otherwise ground the upper one).
-          if (dep < 0) {
-            let floats = false
-            for (let yy = y - 1; yy >= base - 1 && !floats; yy--) floats = open(at(x, yy, z))
-            if (floats) continue
-          }
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; endWhy = `liquid by ${k}`; break }
+          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; deadWhy = `liquid by ${k}`; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,
             // a ruin block) is stepped around.
-            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { end = i; endWhy = `protected place at ${k}`; break }
+            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; deadWhy = `protected place at ${k}`; break }
             f.skip.add(k)
             continue
           }
@@ -529,9 +502,8 @@ function pickQuarry(bot, ctx, f) {
         }
       }
     }
-    const dead = end < QUARRY_LEN
     q.dead.push(s) // dug out or unusable mid-trench
-    try { console.log(`castlefetch quarry side ${s} ${dead ? `unusable (mid-trench: ${endWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    try { console.log(`castlefetch quarry side ${s} ${dead ? `unusable (mid-trench: ${deadWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }

@@ -241,9 +241,7 @@ describe('castlefetch sources (g0z.4)', () => {
     fetch(bot, ctx)
     const t = ctx.castleFetch.target
     assert.ok(t && t.quarry, 'the quarry takes the dipped side')
-    // Rolling face (vmzq.26): the bank above the dipped base goes first,
-    // top down along the diagonal; the dip floor follows on its diagonal.
-    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 63, o.z + o.dz], 'first cell is the bank top over the dip')
+    assert.deepEqual([t.x, t.y, t.z], [o.x, 60, o.z], 'first cell is the dip floor')
     assert.equal(ctx.castleFetch.quarry.level[0], 61, 'staircase base follows the ground')
     assert.deepEqual(ctx.castleFetch.quarry.dead, [])
   })
@@ -395,9 +393,7 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.deepEqual(ctx.castle.quarryBase[0], 63, 'first probe latches the dug floor')
     assert.equal(ctx.castleFetch.quarry.level[0], 63)
     const t = ctx.castleFetch.target
-    // Rolling face (vmzq.26): column 1's top shares column 0's floor
-    // diagonal and goes first; the shifted frame never digs deeper.
-    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 63, o.z + o.dz], 'the shifted frame digs from its new top, bounded')
+    assert.deepEqual([t.x, t.y, t.z], [o.x, 62, o.z], 'one level of stance-floor digging, bounded')
     ctx.castleFetch = null // leg 2: the latch holds, no further shift
     fetch(bot, ctx)
     assert.equal(ctx.castleFetch.quarry.level[0], 63)
@@ -1148,14 +1144,13 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
 })
 
 // idkcraft-vmzq.26: rig cycle 12 leg 5 — 9 min trench-floor <-> wall-top,
-// +0 banked. The column-at-a-time order left a full-depth face: past the
-// staircase every new column's top sat 6 over the floor, so its stance was
-// either a walk out of the trench and back along the rim (2x the trench
-// length) or a tower inside the dug trench — the pathfinder towers, and
-// the next pick mined the tower back (place_error/block_updated per tick).
-// The walker below is the pathfinder without scaffolding: it moves the
-// body only to a stance it can reach on foot (BFS over standable cells,
-// step up 1, drop 3) inside the GoalNear the step issued.
+// +0 banked. Past the staircase each new column's top sat 6 over the
+// floor; walking to the cell itself meant a walk out and back along the
+// rim or a tower inside the dug trench — the pathfinder towered, and the
+// next pick mined the tower back. The walker below is the pathfinder
+// without scaffolding: it moves the body only to a stance reachable on
+// foot (BFS over standable cells, step up 1, drop 3) inside the goal the
+// step issued. vmzq.25's floor stance must keep every walk short.
 describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
   it('a full-depth trench digs from walkable stances; every walk stays short', async () => {
     const under = (y) => (y <= 61 ? 'stone' : y <= 63 ? 'dirt' : 'air')
@@ -1223,26 +1218,6 @@ describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
     const far = Math.max(...bot.calls.dig.map((p) => SITE.x - 4 - p.x))
     assert.ok(far >= 10, `well past the staircase (column ${far})`)
     assert.equal(towers, 0, 'no stance that needs scaffolding')
-    assert.ok(maxWalk <= 12, `walks stay on the face's stair, longest ${maxWalk} steps`)
-  })
-})
-
-describe('castlefetch quarry: floating cells over the trench (vmzq.26 rig v26b)', () => {
-  it('a leaf hanging over a dug column is never a target; hill ground above base still is', () => {
-    const o = fetch.quarrySide(castleState(), 0)
-    const set = new Map()
-    // Column 0 dug out (both lanes, 63), a leaf at base+3 over it, and
-    // a dirt hill bump on column 1 at 64 (sits on the ground: dug).
-    set.set(`${o.x},63,${o.z}`, 'air'); set.set(`${o.x + o.lx},63,${o.z + o.lz}`, 'air')
-    set.set(`${o.x},67,${o.z}`, 'oak_leaves')
-    set.set(`${o.x + o.lx},66,${o.z + o.lz}`, 'oak_leaves') // a two-layer canopy
-    set.set(`${o.x + o.lx},67,${o.z + o.lz}`, 'oak_leaves')
-    set.set(`${o.x + o.dx},64,${o.z + o.dz}`, 'dirt')
-    const bot = makeBot({ items: TOOLS(), set })
-    const ctx = { castle: castleState({ quarryBase: [64, null, null, null] }) }
-    fetch(bot, ctx)
-    const t = ctx.castleFetch.target
-    assert.ok(t && t.quarry)
-    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 64, o.z + o.dz], 'the grounded bump, not the leaf')
+    assert.ok(maxWalk <= 12, `walks stay inside the trench, longest ${maxWalk} steps`)
   })
 })
