@@ -1087,6 +1087,9 @@ function shelter(bot, ctx, target, state) {
         // stays set so the re-pillared top holds without re-descending.
         st.descended = false
         try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
+        // Already unsheltered: a set dig implies unpillared (both arm
+        // sites clear it), and the climb gate above clears inShelter on
+        // every unpillared tick before the dig runs.
         return
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
@@ -1116,7 +1119,10 @@ function shelter(bot, ctx, target, state) {
     st.perched = false
     st.pillared = false
     st.pillarAt = null
-    st.dig = {}
+    // A cell above normal: the descent digs one deeper so the cap lands
+    // at ground level against dirt walls (3-deep caps in the open
+    // pillar cell and fails no-cap-ref).
+    st.dig = { extra: 1 }
     try {
       bot.pathfinder.setGoal(null)
       bot.clearControlStates()

@@ -36,6 +36,7 @@ function key(x, y, z) { return `${x},${y},${z}` }
 function flatBot(at, opts = {}) {
   const dug = new Set()
   const placed = new Set()
+  for (const c of opts.placed || []) placed.add(key(c[0], c[1], c[2]))
   const items = opts.items ? opts.items.map((i) => ({ ...i })) : []
   // stoneStance: the stance column is hand-undiggable stone, everything
   // else dirt — the dig walks to a nearby dirt column first.
@@ -71,6 +72,7 @@ function flatBot(at, opts = {}) {
     },
     async dig(b) {
       dug.add(key(b.position.x, b.position.y, b.position.z))
+      placed.delete(key(b.position.x, b.position.y, b.position.z))
       const d = items.find((i) => i.name === 'dirt')
       if (d) d.count++
       else items.push({ name: 'dirt', count: 1 })
@@ -227,6 +229,32 @@ describe('vmzq.30 phantom descent off a dusk pillar', () => {
     assert.ok(!ctx.shelter.dig, 'no second dig armed')
     assert.equal(ctx.shelter.dugIn, true)
   })
+  it('true perch geometry (y65, pillar placed): the descent digs one deeper and caps at ground level', async () => {
+    // Revmux 02 core-1: the earlier descent test stood the body on flat
+    // ground, where 3-deep caps fine. Perched a cell above normal the
+    // cap lands in the open pillar cell (no-cap-ref) unless the descent
+    // takes an extra cell — then it lands at ground level (y63, dirt
+    // walls) and the pit closes first try.
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }, {
+      items: [{ name: 'dirt', count: 12 }],
+      placed: [[0, 64, 0]],
+      entities: { 7: { name: 'phantom', position: pos(10, 80, 5) } },
+    })
+    const ctx = perchedCtx()
+    const logs = await quiet(async () => {
+      for (let t = 0; t < 25; t++) {
+        home.shelter(bot, ctx, null, null)
+        await flush()
+      }
+    })
+    assert.equal(ctx.shelter.dugIn, true)
+    assert.equal(ctx.shelter.perched, false)
+    assert.equal(ctx.shelter.descendTried, true, 'descent consumed')
+    assert.equal(ctx.shelter.descended, false, 'no re-arm pending after success')
+    assert.equal(Math.floor(bot.entity.position.y), 61, 'four deep off the perch')
+    assert.ok(!logs.some((m) => m.includes('re-pillaring')), 'first-try close, no re-pillar')
+    assert.equal(ctx.inShelter, true)
+  })
   it('perched + no phantom: holds the pillar', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     const ctx = perchedCtx()
@@ -244,15 +272,24 @@ describe('vmzq.30 phantom descent off a dusk pillar', () => {
       entities: { 7: { name: 'phantom', position: pos(2, 70, 1) } },
     })
     const ctx = perchedCtx()
-    const logs = await quiet(async () => {
-      for (let t = 0; t < 30; t++) {
+    // Per-tick logs: the unsheltered re-pillar tick is transient (the new
+    // top shelters again once it stands), so its flag is pinned here. The
+    // clear comes from the climb gate (unpillared ticks unshelter before
+    // the dig runs), not the fail branch — the pin guards that order.
+    const logs = []
+    let atRearm = 'unset'
+    for (let t = 0; t < 30; t++) {
+      const tickLogs = await quiet(async () => {
         home.shelter(bot, ctx, null, null)
         await flush()
-      }
-    })
+      })
+      logs.push(...tickLogs)
+      if (atRearm === 'unset' && tickLogs.some((m) => m.includes('re-pillaring'))) atRearm = ctx.inShelter
+    }
     // The re-arm is a one-time transition (no ctx residue by design —
     // the marker is consumed), so its firing is pinned on the log.
     assert.equal(logs.filter((m) => m.includes('re-pillaring')).length, 1, 'exactly one re-arm')
+    assert.equal(atRearm, false, 'the failed descent unshelters so the re-pillar runs under fight')
     assert.equal(ctx.shelter.descendTried, true)
     assert.equal(ctx.shelter.descended, false, 're-arm consumed')
     assert.equal(ctx.shelter.pillared, true, 'ends holding, not looping')
