@@ -1116,6 +1116,7 @@ function releaseMeet(bot, ctx) {
     return
   }
   ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0, home: order.home || ctx.home }
+  try { require('../task').carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
   ctx.lastGoalKey = ''
   ctx.inShelter = true
   // rw4.17 (#311 reuse): the exit may yet release unsheltered-while-inside
@@ -1183,6 +1184,8 @@ function finishExit(bot, ctx, order) {
   const by = order && order.by
   if (order && order.reseek && ctx.home && ctx.home.site) {
     ctx.comehome = startMeet(by, false, ctx.home)
+    // No stamp carry (R3 body-1): the destination changed to the new home,
+    // so the reseek re-baselines instead of inheriting the old dist clock.
     ctx.inShelter = false
     ctx.stepStatus = 'running'
     ctx.lastGoalKey = ''
@@ -1251,6 +1254,7 @@ function exitMeet(bot, ctx, home, order) {
       // drove — even through a gap or a pre-open door that never needed a
       // toggle — so dusk/night finishes instead of freezing behind it.
       ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false, committed: true }
+      try { require('../task').carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = ''
       return

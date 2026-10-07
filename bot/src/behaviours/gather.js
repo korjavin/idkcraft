@@ -140,12 +140,20 @@ function bodyPos(bot) {
 // Live and far search stay bot-centered (a march kits up where it stands);
 // only memory crosses the map. This step is always own work (there is no
 // owner gather order), so no owner exemption applies.
+// (.22) a gather-far unlock lifts the radius for the window only (clamped
+// to the outer disk around the stable anchor).
 function taskFar(ctx, it) {
   try {
     if (!exploreMod.taskActive(ctx)) return false
     const a = exploreMod.anchorOf(null, ctx)
     if (!a || typeof a.x !== 'number' || !it || typeof it.x !== 'number') return false
-    return Math.hypot(it.x - a.x, it.z - a.z) > (exploreMod.TASK_SEARCH_RADIUS || 64)
+    let radius = exploreMod.TASK_SEARCH_RADIUS || 64
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      const r = goalUnlock(ctx, 'radius')
+      if (typeof r === 'number' && r > radius) radius = r
+    } catch (_) { /* default radius */ }
+    return Math.hypot(it.x - a.x, it.z - a.z) > radius
   } catch (_) {
     return false
   }
@@ -474,3 +482,4 @@ function gather(bot, ctx, target, state) {
 }
 
 module.exports = gather
+module.exports.taskFar = taskFar
