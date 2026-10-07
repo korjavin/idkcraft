@@ -168,24 +168,27 @@ function movementTargets(bot, ctx) {
 
 // Castle stone (g0z.18): the pathfinder scaffolds with any cobblestone
 // (scafoldingBlocks = dirt + cobblestone), so the castle walk to its site
-// pillared/bridged the quarried batch away. On the castle step, while the
-// bot holds more cobblestone than the SCAFFOLD_LOW reserve, scaffolding is
-// dirt only; at or below the reserve cobble is scaffold again (that is the
-// reserve's job). The castle climbs its own stairs (reach invariant).
-// Dirt gate (vmzq.30, .29B): with no dirt at all a dirt-only set is empty
-// and A* wedges (run6: 4 min of partial/no_scaffolding_blocks in a pit) —
-// spending some cobble on the climb beats a parked castle.
+// pillared/bridged the quarried batch away. The castle climbs its own
+// stairs (reach invariant).
+// Walk-proof store (idkcraft-vmzq.31): g0z.18 put cobble back into the
+// scaffold set at or below the SCAFFOLD_LOW reserve ("that is the
+// reserve's job") — and the castle/castlefetch walks pillared the last 16
+// away (prod run6: scaffold 16 -> 0, then the night shelter pillar failed
+// with an empty kit). On the castle and castlefetch steps cobble is now
+// walk-proof while any dirt is held: dirt walks (fetch-leg spoil refills
+// it, below-16 equip too), cobble stays for laying and the night pillar.
+// Past the shield (zero dirt) the walks spend the 24-stone buffer first
+// (castle.js reserveOf). Cobble
+// scaffolds only with no dirt held (the vmzq.29 rule — the set never reads
+// effectively empty, so the run6 pit wedge cannot recur). Dirt is the
+// shield: the castle prep gate (castle.js SHELTER_RESERVE) never spends
+// the last dirt, so the shield holds between refills. Returns only the
+// step match; the otherScaffold gate in movementsFor does the dirt check,
+// so the strip never fires without dirt in hand.
 function castleStone(bot, ctx) {
   try {
-    if (!ctx || !ctx.work || ctx.step !== 'castle') return false
-    let n = 0
-    let dirt = 0
-    for (const it of bot.inventory.items() || []) {
-      if (!it) continue
-      if (it.name === 'cobblestone') n += it.count | 0
-      else if (it.name === 'dirt') dirt += it.count | 0
-    }
-    return dirt > 0 && n > require('./behaviours/equip').SCAFFOLD_LOW // deferred: equip loads inside the goal chain
+    if (!ctx || !ctx.work || (ctx.step !== 'castle' && ctx.step !== 'castlefetch')) return false
+    return true
   } catch (_) { return false }
 }
 

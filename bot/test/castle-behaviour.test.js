@@ -819,8 +819,8 @@ describe('g0z.2 castle executor', () => {
       return castle.menuFact(bot, ctx)
     }
     assert.equal(far([]), 'stone-none')
-    assert.equal(far([{ name: 'cobblestone', count: 17 }]), 'stone-some')
-    assert.equal(far([{ name: 'cobblestone', count: 27 }]), 'stone-batch')
+    assert.equal(far([{ name: 'cobblestone', count: 25 }]), 'stone-some')
+    assert.equal(far([{ name: 'cobblestone', count: 35 }]), 'stone-batch')
   })
 
   it('builds the whole slice tower to completion', async () => {
