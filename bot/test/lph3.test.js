@@ -161,6 +161,68 @@ describe('lph3 core-2: the phantom descent drives under the hold', () => {
     assert.equal(ctx.inShelter, true, 'hold kept: fight ticks drive, never pursue')
   })
 
+  it('ticker: stone-stance descent walk + zombie + fight: walk goal survives, fight never runs', async () => {
+    // Revmux 03: the drive gate drove the descent walk (digs 0) and then
+    // stopOnce cleared the walk goal in the same tick — a cobble-pillar
+    // (or stone-stance) descent with walkers at the perch never walked.
+    // The walk now keeps its goal live across fight ticks.
+    const phantom = { name: 'phantom', position: pos(5, 80, 0) }
+    phantom.position.distanceTo = () => 20
+    const zp = pos(2, 64, 0)
+    zp.offset = (ox, oy, oz) => pos(zp.x + ox, zp.y + oy, zp.z + oz)
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }, {
+      entities: { 9: phantom },
+      placed: [[0, 64, 0]],
+      groundAt: (x, y, z) => (x === 3 && z === 0 ? null : 'stone'),
+    })
+    bot.players = { Steve: { username: 'Steve' } }
+    bot.spawnPoint = pos(0, 64, 0)
+    bot.attackCalls = 0
+    bot.attack = () => { bot.attackCalls++ }
+    bot.lookAt = () => {}
+    const seq = [
+      { action: 'idle', sprint: false, source: 'stub' },
+      { action: 'fight', sprint: false, source: 'stub' },
+      { action: 'fight', sprint: false, source: 'stub' },
+    ]
+    let i = 0
+    const brain = { calls: 0, async decide() { this.calls++; return seq[Math.min(i++, seq.length - 1)] } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const origLog = console.log
+    console.log = () => {}
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.home = v2home({ x: 200, y: 64, z: 200 })
+      ctx.adoptDone = true
+      ctx.step = 'shelter'
+      ctx.stepStatus = 'running'
+      ctx.inShelter = true
+      ctx.shelter = { pillared: true, perched: true, dugIn: false, descendTried: false, pillarAt: { x: 0.5, z: 0.5 } }
+      ctx.goalText = 'seeded hold'
+      await ticker.tick() // work: arms the descent
+      await flush()
+      assert.equal(ctx.shelter.descended, true, 'descent armed')
+      bot.entities[1] = { id: 1, name: 'zombie', type: 'mob', position: zp, height: 1.95 }
+      for (let t = 0; t < 3; t++) {
+        const r = await ticker.tick() // fight: drives the walk
+        await flush()
+        assert.equal(r.decision.action, 'idle', `tick ${t} holds`)
+        assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, `tick ${t} still walking`)
+        assert.ok(bot.pathfinder.goal, `tick ${t} walk goal live (not stopOnce-cleared)`)
+        assert.equal(ctx.lastGoalKey, 'dig-in-walk', `tick ${t} walk key held`)
+      }
+      assert.equal(fightRan, 0, 'fight never dispatched')
+    } finally {
+      console.log = origLog
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
   it('ticker: perched descent + phantom + zombie within 8 + fight: digs, fight never runs', async () => {
     const phantom = { name: 'phantom', position: pos(5, 80, 0) }
     phantom.position.distanceTo = () => 20

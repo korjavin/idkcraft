@@ -917,6 +917,15 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             const handler = BEHAVIOURS.shelter
             if (typeof handler === 'function') handler(bot, ctx, target, state)
           } catch (_) { /* drive best-effort: hold below */ }
+          // Descent walk owns the goal (lph3 revmux 03): stopOnce below
+          // would clear the dig-in-walk goal in the same tick, so a
+          // cobble-pillar (or stone-stance) descent with walkers at the
+          // perch never walks. The walk needs its goal live; the hold
+          // still returns idle (no pursuit).
+          if (ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk) {
+            console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
         }
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
