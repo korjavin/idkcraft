@@ -44,6 +44,8 @@ const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no
 const STONE_ABOVE = 3
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
+const EYE = 1.62 // eye over feet: trench reach is measured from it
+const AIR_WAITS = 3 // ticks a dig waits for the feet to land
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const NOGAIN_STRIKES = 5 // digs without the cobble count growing
@@ -509,7 +511,21 @@ function pickQuarry(bot, ctx, f) {
             f.skip.add(k)
             continue
           }
-          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0 }
+          // Stance (idkcraft-vmzq.25): the previous column's floor, same
+          // lane, reached by walking down the staircase. A walk to the cell
+          // itself (ground level, the bot deep in the trench) pillared up
+          // out of the trench and the quarry re-dug the pillar (rig: 161
+          // digs for 115 cells). Column i's drops rest on its floor, the
+          // stance the next column is dug from. A cell out of eye reach
+          // from its stance (a hill top or a leaf over a deep column) stays
+          // standing: walking up to it pillared the same way (rig). A stance
+          // that is not open body room (a stepped-around path, a skipped
+          // cell, column 0's outside cell) is never walked into (revmux 01:
+          // range 0 would dig it): that cell walks to itself as before.
+          let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
+          if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
+          else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
     }
@@ -641,11 +657,21 @@ function digTick(bot, ctx, f) {
   // never collected: the stance advances along the trench while the drops
   // stay behind, and ~2/3 of dug blocks never reached the pack (rig: 368
   // issues banked +113). Linger-by-construction: a stance within 2.5 of
-  // every dug cell sits on the drops through the dig.
-  if (dist > PICKUP_REACH + 0.5) {
-    const range = dist > DIG_REACH ? 2 : 1
-    walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
-    if (stalled(t, dist, APPROACH_WAITS)) {
+  // every dug cell sits on the drops through the dig. A trench cell with a
+  // stance (vmzq.25) is dug from the stance instead: eye reach, no climb.
+  const s = t.stance
+  const sd = s ? Math.hypot(bp.x - (s.x + 0.5), bp.y - s.y, bp.z - (s.z + 0.5)) : 0
+  const reach = s
+    ? sd <= 2 && Math.hypot(bp.x - (t.x + 0.5), bp.y + EYE - (t.y + 0.5), bp.z - (t.z + 0.5)) <= DIG_REACH + 0.5
+    : dist <= PICKUP_REACH + 0.5
+  if (!reach) {
+    // The stance cell itself (range 0): a near-goal admits the cell one
+    // lower, i.e. digging the floor's support (rig: side 3 went dead
+    // mid-trench on range 1, carried the run on range 0).
+    const range = s ? 0 : dist > DIG_REACH ? 2 : 1
+    if (s) walkTo(bot, ctx, `castlefetch-stance:${s.x},${s.y},${s.z}`, s, range)
+    else walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
+    if (stalled(t, s ? sd : dist, APPROACH_WAITS)) {
       skip.add(t.k)
       f.target = null
       if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
@@ -663,6 +689,10 @@ function digTick(bot, ctx, f) {
     spend(f, 'other')
     return
   }
+  // Airborne digs take 5x (mineflayer digTime; rig: the first dig after
+  // each stance walk ran 3.75 s on 0.75 s dirt): let the feet land first,
+  // a bounded wait so a body that never reads grounded still digs.
+  if (bot.entity && bot.entity.onGround === false && (t.air = (t.air | 0) + 1) <= AIR_WAITS) { spend(f, 'other'); return }
   if (t.quarry) {
     // Drops land at the digging stance (pickup reach), so no
     // cobble-gain strike; a cell that survives its digs is skipped instead.
@@ -692,7 +722,7 @@ function digTick(bot, ctx, f) {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
-    await bot.dig(b)
+    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
     // A hung dig skips the block (no retry this leg); the no-gain strike
     // counts it. Loud: a 10 s hang per cell is the rig's prime suspect
