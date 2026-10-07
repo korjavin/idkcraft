@@ -1117,9 +1117,15 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // the plain radius is exhausted); a full pack banks first (nothing
 // fetches into a full pack); plain steps ride FSM order; house side work
 // trails (no +castle). Orders: remembered finds before the blind spiral
-// before the hold retry. Returns the top option or null.
+// before the hold retry. Options that already went flat or failed in the
+// passed history sort last (revmux 01 core-2: never re-pick the dead
+// option first — but still pick one when everything went flat, so there
+// is no dead end). Work explore-far (blind) trails plain chain steps
+// (revmux 01 core-3); order explore-far keeps its unblock rank. Returns
+// the top option or null.
 const FALLBACK_FAR_ORDER = ['bank', 'castlefetch-far', 'gather-far', 'forage-far', 'explore-far']
-function fallbackRank(kind, offered) {
+const FALLBACK_FLAT_PENALTY = 1000
+function fallbackRank(kind, offered, history = null) {
   try {
     const list = Array.isArray(offered) ? offered.slice() : []
     const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner')
@@ -1128,16 +1134,35 @@ function fallbackRank(kind, offered) {
     try {
       stepOrder = require('./goal').STEP_ORDER || []
     } catch (_) { /* FSM order best-effort */ }
+    const flat = new Set()
+    try {
+      if (Array.isArray(history)) {
+        for (const h of history) {
+          if (h && typeof h.choice === 'string' && (h.outcome === 'flat' || (typeof h.outcome === 'string' && h.outcome.startsWith('failed:')))) {
+            flat.add(h.choice)
+          }
+        }
+      }
+    } catch (_) { /* flat set best-effort */ }
+    const isWork = kind === 'castle' || kind === 'house'
     const stepIdx = (o) => {
       const i = stepOrder.indexOf(o.step || o.id)
       return i === -1 ? stepOrder.length : i
     }
     const score = (o) => {
+      let s = 0
       const far = FALLBACK_FAR_ORDER.indexOf(o.id)
-      if (far !== -1) return far
-      if (o.id === 'house-build' || o.id === 'house-beds') return FALLBACK_FAR_ORDER.length + 1 + stepOrder.length
-      if (typeof o.id === 'string' && o.id.startsWith('hold-')) return FALLBACK_FAR_ORDER.length + 2 + stepOrder.length
-      return FALLBACK_FAR_ORDER.length + stepIdx(o)
+      if (far !== -1) {
+        s = (isWork && o.id === 'explore-far') ? FALLBACK_FAR_ORDER.length + stepOrder.length + 0.5 : far
+      } else if (o.id === 'house-build' || o.id === 'house-beds') {
+        s = FALLBACK_FAR_ORDER.length + 1 + stepOrder.length
+      } else if (typeof o.id === 'string' && o.id.startsWith('hold-')) {
+        s = FALLBACK_FAR_ORDER.length + 2 + stepOrder.length
+      } else {
+        s = FALLBACK_FAR_ORDER.length + stepIdx(o)
+      }
+      if (flat.has(o.id)) s += FALLBACK_FLAT_PENALTY
+      return s
     }
     progress.sort((a, b) => score(a) - score(b))
     return progress[0]
@@ -1169,23 +1194,31 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     } catch (_) { /* streak best-effort */ }
   }
   const fail = (source, prefix) => {
-    // Two consecutive nones for the same flat goal fall back
-    // deterministically instead of backing off — the bot must never stall
-    // forever. The first none still backs off (fresh menu, transient
-    // error, or a better JEV round); progress and decisions clear it.
-    const goalKey = `${id}:${(g && typeof g.generation === 'number') ? g.generation : '?'}` 
-    try {
-      if (wd.lowConfGoal !== goalKey) {
-        wd.lowConf = 0
-        wd.lowConfGoal = goalKey
-      }
-    } catch (_) { /* streak best-effort */ }
-    wd.lowConf = (typeof wd.lowConf === 'number' ? wd.lowConf : 0) + 1
-    if (wd.lowConf >= 2) {
+    // Two consecutive UNDECIDED answers (low-confidence or stale — JEV
+    // answered but produced no usable choice) for the same flat goal fall
+    // back deterministically instead of backing off — the bot must never
+    // stall forever (revmux 01 core-1: transport/timeout errors keep the
+    // doubling backoff and never park on outage alone). The first
+    // undecided still backs off (fresh menu or a better JEV round);
+    // progress and decisions clear the streak. The fallback skips options
+    // the history already proved flat (revmux 01 core-2).
+    const undecided = typeof prefix === 'string' && (prefix.startsWith('low-confidence') || prefix.startsWith('stale:'))
+    if (undecided) {
+      const goalKey = `${id}:${(g && typeof g.generation === 'number') ? g.generation : '?'}` 
+      try {
+        if (wd.lowConfGoal !== goalKey) {
+          wd.lowConf = 0
+          wd.lowConfGoal = goalKey
+        }
+      } catch (_) { /* streak best-effort */ }
+      wd.lowConf = (typeof wd.lowConf === 'number' ? wd.lowConf : 0) + 1
+    }
+    if (undecided && wd.lowConf >= 2) {
       let fb = null
       try {
         const { goalOptions } = require('./goal-options')
-        fb = fallbackRank(kind, goalOptions(bot, ctx, kind))
+        const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
+        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist)
       } catch (_) { fb = null }
       if (fb) {
         const diagnosis = diagnose(bot, ctx)

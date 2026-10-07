@@ -899,5 +899,21 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
     assert.equal(fallbackRank('castle', [o('house-build', 'build'), o('gather', 'gather')]).id, 'gather')
     assert.equal(fallbackRank('bring', [o('hold-bring'), o('gather-far')]).id, 'gather-far')
     assert.equal(fallbackRank('bring', [o('hold-bring'), o('park')]).id, 'hold-bring')
+    // Work explore-far (blind) trails plain chain steps; order keeps it.
+    assert.equal(fallbackRank('castle', [o('explore-far', 'explore'), o('craft', 'craft')]).id, 'craft')
+    assert.equal(fallbackRank('bring', [o('hold-bring'), o('explore-far')]).id, 'explore-far')
+    // Flat history sorts last but never dead-ends.
+    const hist = [{ choice: 'castlefetch-far', outcome: 'flat', dur_s: 120, delta: 'x' }]
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('castlefetch-far', 'castlefetch')], hist).id,
+      'gather',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('castlefetch-far', 'castlefetch'), o('park')], hist).id,
+      'castlefetch-far',
+      'all flat still picks one',
+    )
+    const failed = [{ choice: 'gather', outcome: 'failed:gather-no-trees', dur_s: 10, delta: 'x' }]
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], failed).id, 'craft')
   })
 })

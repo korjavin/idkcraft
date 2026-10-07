@@ -776,7 +776,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
     assert.equal(bot.chats.filter((c) => c.includes('for the day')).length, 1)
   })
 
-  it('JEV timeouts back off once, then fall back deterministically; the FSM keeps ticking', async () => {
+  it('JEV timeouts back off exponentially; at most one call per interval; the FSM keeps ticking', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const { calls, brain } = failingBrain(new DOMException('brain timeout', 'TimeoutError'))
@@ -787,7 +787,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
     const firedAt = []
     for (let k = 0; k < 3; k++) {
       let guard = 0
-      while (!ctx.task.castle.wd?.pending && guard++ < 60) {
+      while (!ctx.task.castle.wd?.pending && guard++ < 40) {
         t += 10000
         taskMod.taskTick(bot, ctx, t)
       }
@@ -795,18 +795,17 @@ describe('rounds, park and backoff (acceptance 4)', () => {
       firedAt.push(ctx.task.castle.wd.firedAt)
       await flush()
       t += 10000
-      taskMod.taskTick(bot, ctx, t) // consume -> backoff, fallback, backoff
+      taskMod.taskTick(bot, ctx, t) // consume -> backoff line
     }
     assert.equal(calls.length, 3)
     assert.equal(wdLogs().length, 3)
-    assert.ok(wdLogs()[0].includes('choice=none') && wdLogs()[0].includes('source=timeout'), JSON.stringify(wdLogs()))
-    assert.ok(wdLogs()[1].includes('choice=castlefetch') && wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
-    assert.ok(wdLogs()[2].includes('choice=none') && wdLogs()[2].includes('source=timeout'), JSON.stringify(wdLogs()))
-    assert.equal(ctx.task.castle.wd.backoffMs, 30000, 'third timeout is a fresh streak')
+    assert.ok(wdLogs().every((l) => l.includes('choice=none') && l.includes('source=timeout')), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.backoffMs, 120000, '30 s doubling per failure')
     for (let k = 1; k < firedAt.length; k++) {
       assert.ok(firedAt[k] - firedAt[k - 1] >= 60000, 'at most one call per interval')
     }
-    assert.equal(ctx.task.castle.wd.rounds, 1, 'the fallback window went flat and counted')
+    assert.equal(ctx.task.castle.wd.rounds, 0, 'failures are not rounds')
+    assert.equal(ctx.task.castle.wd.lowConf, 0, 'transport errors never feed the fallback streak')
     assert.equal(ctx.castle.parked, false, 'no park on failures alone')
     const d = await goal.decide(bot, ctx)
     assert.ok(d && d.action, 'the FSM keeps ticking through the backoff')
@@ -1251,5 +1250,28 @@ describe('deterministic fallback (vmzq.28)', () => {
     inv[0].count = 90 // usable 74 > 57: material progress
     taskMod.taskTick(bot, ctx, t0 + 300000)
     assert.equal(ctx.task.castle.wd.lowConf, 0, 'progress starts a fresh episode')
+  })
+
+  it('fallback #2 skips the option fallback #1 proved flat', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
+    const t2 = await fireNext(bot, ctx, first.t, lowConf('gather'))
+    assert.ok(wdLogs()[1].includes('choice=castlefetch'), JSON.stringify(wdLogs()))
+    // Run the fallback window out flat: history names castlefetch.
+    let t = t2
+    let guard = 0
+    while (ctx.goal && ctx.goal.commit && guard++ < 40) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'fallback window ended')
+    assert.ok(outLogs().some((l) => l.includes('choice=castlefetch') && l.includes('result=flat')), JSON.stringify(outLogs()))
+    const t3 = await fireNext(bot, ctx, t, lowConf('gather'))
+    assert.ok(wdLogs()[2].includes('choice=none'), JSON.stringify(wdLogs()))
+    await fireNext(bot, ctx, t3, lowConf('gather'))
+    assert.ok(wdLogs()[3].includes('source=fallback'), JSON.stringify(wdLogs()))
+    assert.ok(wdLogs()[3].includes('choice=gather'), `second fallback moves on: ${JSON.stringify(wdLogs())}`)
   })
 })
