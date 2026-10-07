@@ -132,6 +132,27 @@ describe('movementsFor', () => {
     assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE], 'other steps keep the default')
   })
 
+  it('vmzq.29: castle step with cobble above the reserve but no dirt keeps cobble as scaffold', () => {
+    const DIRT = 9
+    const COBBLE = 14
+    let items = [{ name: 'cobblestone', count: 40 }]
+    const b = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { itemsByName: { dirt: { id: DIRT }, cobblestone: { id: COBBLE } } },
+      inventory: { items: () => items },
+    }
+    const ctx = ctxWithMov({ work: true, step: 'castle', castle: { site: { x: 0, y: 64, z: 0 } } })
+    ctx.movements.scafoldingBlocks = [DIRT, COBBLE]
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE], 'no dirt: cobble stays scaffold (never an empty set)')
+    items = [{ name: 'cobblestone', count: 40 }, { name: 'dirt', count: 2 }]
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT], 'dirt on hand: g0z.18 rule holds')
+    items = [{ name: 'cobblestone', count: 40 }]
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE], 'dirt spent: cobble returns')
+  })
+
   it('no-ops without movements', () => {
     assert.doesNotThrow(() => body.movementsFor('work', bot, {}))
   })

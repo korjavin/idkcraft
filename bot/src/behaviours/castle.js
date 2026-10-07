@@ -663,20 +663,22 @@ function stockWord(bot, kind, left) {
 // away the word is the last one read on site (stock re-read for a material
 // word); a complete castle reads done; never seen this session -> the
 // first plan cell's kind (walk back and build).
+// Loaded = all four footprint corners read (revmux 02): the v1 site
+// spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
+// chunks lie inside the corners' hull — the loaded area is convex.
+function siteLoaded(bot, st) {
+  try {
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    return [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+  } catch (_) { return false }
+}
+
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
   try {
-    // Loaded = all four footprint corners read (revmux 02): the v1 site
-    // spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
-    // chunks lie inside the corners' hull — the loaded area is convex.
-    let loaded = false
-    try {
-      const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-      loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
-    } catch (_) { loaded = false }
-    if (!loaded) {
+    if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') return 'done'
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
@@ -1110,27 +1112,31 @@ function guardCastle(bot, ctx) {
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
 function work(bot, ctx, st, c, now, status) {
+  // Far walk (vmzq.17): material sourcing is g0z.4, but a far step walks
+  // to the cell (running) instead of failing at once — prod run2 failed
+  // 500 blocks off and never approached. On site a short kit fails and
+  // castlefetch fetches. Unloaded goals ignore y: with stone in hand too
+  // (vmzq.29) — a GoalPlaceBlock into unloaded chunks 500 blocks off
+  // climbed toward castle height from y 36 and wedged.
+  try {
+    const bp = bodyPos(bot)
+    if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
+      st.status = 'walking to the site'
+      // Re-issue after a clear (revmux 01 core-1): approach() only
+      // re-arms on a new idx or a foreign goal — a goal cleared to
+      // null (recover, night break) would otherwise strand the step
+      // running with the bot standing still.
+      try { if (bot.pathfinder.goal == null && !bot.pathfinder.isMoving()) ctx.castleGoalIdx = -1 } catch (_) { /* latch best-effort */ }
+      // Own latch key: inside the range placeCell/digCell re-arm their
+      // own goal for the same cell instead of inheriting the XZ walk.
+      approach(bot, ctx, { idx: `far:${c.idx}` }, () => new goals.GoalNearXZ(c.x, c.z, 8))
+      return
+    }
+  } catch (_) { /* walk best-effort: fall through to the cell */ }
   let item = null
   if (!clearing(c)) {
     item = c.prep === 'fill' ? fillItem(bot) : findItem(bot, c.kind)
     if (!item) {
-      // Far walk (vmzq.17): material sourcing is g0z.4, but a far step
-      // walks to the cell (running) instead of failing at once — prod
-      // run2 failed 500 blocks off and never approached. On site it
-      // fails and castlefetch fetches. Unloaded goals ignore y.
-      try {
-        const bp = bodyPos(bot)
-        if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
-          st.status = 'walking to the site'
-          // Re-issue after a clear (revmux 01 core-1): approach() only
-          // re-arms on a new idx or a foreign goal — a goal cleared to
-          // null (recover, night break) would otherwise strand the step
-          // running with the bot standing still.
-          try { if (bot.pathfinder.goal == null && !bot.pathfinder.isMoving()) ctx.castleGoalIdx = -1 } catch (_) { /* latch best-effort */ }
-          approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))
-          return
-        }
-      } catch (_) { /* walk best-effort: fall through to the fail */ }
       st.status = `need ${c.kind}`
       ctx.stepStatus = `failed:no-${c.kind}`
       return
@@ -1202,7 +1208,10 @@ function castle(bot, ctx) {
   // on them, one shared line (sayHoles) that re-chats only on a new hole.
   const holes = holesOf(bot, st, cells)
   sayHoles(bot, ctx, st, holes, now)
-  if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
+  // Unloaded site (vmzq.29): null blocks read as undone, so a far respawn
+  // read 0/1722 and the walk back counted as fresh progress. Off-site the
+  // last value stands (as in menuFact).
+  if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) progress(bot, st, cells, ctx)
   if (r.idx < 0) {
     if (r.waiting) {
       // Every remaining cell is waiting out a backoff (or owed): the holes
