@@ -1,26 +1,27 @@
 'use strict'
 
 // Task executive, slices 1-2 (idkcraft-vmzq.2/.3) + re-plan (.5) + goal
-// watchdog (.21): progress invariant + stall clock + L1 honest line +
-// L2/L3 park ladder. No behaviour changes: this only measures (gauges),
-// times the stall, chats/logs the ladder lines, runs fast JEV rounds
-// while a goal's metric is flat (the answer rides a bounded commitment
-// window on ctx.goal, honoured by goal.js), and parks the task (a menu
+// watchdog (.21) + order goals (.22): progress invariant + stall clock +
+// L1 honest line + L2/L3 park ladder. No behaviour changes: this only
+// measures (gauges), times the stall, chats/logs the ladder lines, runs
+// fast JEV rounds while a goal's metric is flat (the answer rides a bounded
+// commitment window on ctx.goal, honoured by goal.js for work goals and by
+// the order dispatch seam for order goals), and parks the task (a menu
 // veto, honoured by goal.js) with a diagnosis.
 //
-// Active task: the castle while ordered, incomplete and not owner-parked
-// (castle outranks build in STEP_ORDER, vmzq.19 — the body works the
-// castle while the house stands unbuilt, so the clock watches the castle;
-// watching the house would L2-park it and veto the castle chain's
-// gather/craft), else the house while unbuilt, else none. A task-parked
-// (L2 episode) task STAYS active: the stall invariant
-// still applies to side work (owner Q2) — the clock runs, L1 keeps firing
-// with a parked suffix, L2 does not re-fire. Owner-parked (castle stop,
-// no episode) pauses. The stall clock advances only on day + work +
-// not-paused + no-order ticks — fight and shelter time COUNT (the hook sits
-// before those short-circuits), night/paused/orders (incl. a running flat
-// order, vmzq.8) pause it. Any progress resets it: castle place cells,
-// prep remaining, demanded-material on hand / remainder; house placed cells.
+// Active goal (.22): the body-owning order first (comehome, gocastle, lead,
+// bring, flat — index.js dispatch order), else the castle while ordered,
+// incomplete and not owner-parked (castle outranks build in STEP_ORDER,
+// vmzq.19), else the house while unbuilt, else none. A task-parked (L2
+// episode) task STAYS active: the stall invariant still applies to side
+// work (owner Q2). Owner-parked (castle stop, no episode) pauses. The
+// castle/house clock advances only on day + work + not-paused + no-order
+// ticks — fight and shelter time COUNT (the hook sits before those
+// short-circuits), night/paused/orders pause it. Order clocks advance
+// whenever the order runs (day or night, owner 2026-10-07), not-paused.
+// Any progress resets it: castle place cells, prep remaining,
+// demanded-material on hand / remainder; house placed cells; bring items
+// in hand; travel distance shrinking; flat cells levelled.
 
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
@@ -125,14 +126,62 @@ function timeDay(bot) {
   }
 }
 
-// Goal identity (vmzq.21): the active task as an ownable goal. The
-// generation counts foundings per session; every async JEV request and
-// every commitment carries {goalId, generation} and is dropped when they
-// no longer match (the .5 seq guard generalised). resetTask clears the
-// goal, so stop/go/forget/new order all invalidate in flight.
+// Order kinds (vmzq.22): owner orders as goals with tracked metrics.
+const ORDER_KINDS = ['bring', 'comehome', 'gocastle', 'lead', 'flat']
+function isOrderKind(kind) {
+  return kind === 'bring' || kind === 'comehome' || kind === 'gocastle' || kind === 'lead' || kind === 'flat'
+}
+
+// Active goal (vmzq.22): the body-owning order first (index.js dispatch
+// order: comehome, gocastle, lead, bring, flat), else the castle/house
+// task. A parked flat episode (stop) is not running.
+function goalKind(ctx) {
+  try {
+    if (ctx) {
+      if (ctx.comehome) return 'comehome'
+      if (ctx.gocastle) return 'gocastle'
+      if (ctx.lead) return 'lead'
+      if (ctx.bring) return 'bring'
+      if (ctx.flat && !ctx.flat.parked) return 'flat'
+    }
+  } catch (_) { /* no order */ }
+  try {
+    return taskKind(ctx)
+  } catch (_) {
+    return null
+  }
+}
+
+function goalTextFor(kind, ctx) {
+  try {
+    if (kind === 'castle') return 'build castle'
+    if (kind === 'house') return 'build home'
+    if (kind === 'bring') {
+      const o = ctx && ctx.bring
+      const want = o && typeof o.want === 'number' ? o.want : '?'
+      const name = (o && (o.name || o.drop)) || 'items'
+      const by = (o && o.by) || 'owner'
+      return `bring ${want} ${name} to ${by}`
+    }
+    if (kind === 'comehome') return 'come home'
+    if (kind === 'gocastle') return 'go castle'
+    if (kind === 'lead') {
+      const o = ctx && ctx.lead
+      return `lead to ${(o && o.name) || 'the find'}`
+    }
+    if (kind === 'flat') return 'flatten ground'
+  } catch (_) { /* fall through */ }
+  return kind
+}
+
+// Goal identity (vmzq.21, extended .22 for orders): the active goal as an
+// ownable goal. The generation counts foundings per session; every async
+// JEV request and every commitment carries {goalId, generation} and is
+// dropped when they no longer match (the .5 seq guard generalised).
+// resetTask clears the goal, so stop/go/forget/new order all invalidate.
 function ensureGoal(ctx, kind, now) {
   try {
-    if (!ctx || (kind !== 'castle' && kind !== 'house')) return null
+    if (!ctx || (kind !== 'castle' && kind !== 'house' && !isOrderKind(kind))) return null
     const g = ctx.goal
     if (g && g.kind === kind && typeof g.id === 'string' && typeof g.generation === 'number') return g
     // Replacing a goal with a live window should not happen (commitTickTop
@@ -144,7 +193,7 @@ function ensureGoal(ctx, kind, now) {
       } catch (_) { /* replace best-effort */ }
     }
     const seq = (ctx.goalSeq = (typeof ctx.goalSeq === 'number' ? ctx.goalSeq : 0) + 1)
-    const goal = { id: `${kind}-${seq}`, kind, generation: seq, text: kind === 'castle' ? 'build castle' : 'build home', startedAt: now }
+    const goal = { id: `${kind}-${seq}`, kind, generation: seq, text: goalTextFor(kind, ctx), startedAt: now }
     ctx.goal = goal
     return goal
   } catch (_) {
@@ -170,6 +219,143 @@ function eligible(bot, ctx) {
   // mid-order. A parked flat episode (stop) is not running.
   if (ctx.flat && !ctx.flat.parked) return false
   return true
+}
+
+// Eligible time for an order goal (vmzq.22): the order running, not
+// paused — day or night (owner 2026-10-07: orders run day and night).
+// Fight/shelter/recover time counts (the hook sits before those
+// short-circuits, same as the work clock).
+function eligibleOrder(ctx, kind) {
+  try {
+    if (!ctx || ctx.paused) return false
+    if (kind === 'bring') return !!ctx.bring
+    if (kind === 'comehome') return !!ctx.comehome
+    if (kind === 'gocastle') return !!ctx.gocastle
+    if (kind === 'lead') return !!ctx.lead
+    if (kind === 'flat') return !!(ctx.flat && !ctx.flat.parked)
+  } catch (_) { /* ineligible */ }
+  return false
+}
+
+function dist3(a, b) {
+  try {
+    if (!a || !b || typeof a.x !== 'number' || typeof b.x !== 'number') return null
+    if (typeof a.distanceTo === 'function') return a.distanceTo(b)
+    if (typeof b.distanceTo === 'function') return b.distanceTo(a)
+    return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+  } catch (_) {
+    return null
+  }
+}
+
+// Current order progress for the clock. done/total shape mirrors the
+// castle/house states so the watchdog lines read uniformly:
+// - bring: items in hand have/want (o.have, the delivery leg's distance
+//   rides dist for the travel grace, not the clock)
+// - comehome/gocastle/lead: blocks left to the semantic destination
+//   (arrival = done); total is the baseline distance at founding
+// - flat: cells levelled (filled+shaved) over total+totalBumps.
+function orderCurrent(bot, ctx, kind) {
+  const out = {}
+  try {
+    if (kind === 'bring') {
+      const o = ctx && ctx.bring
+      if (!o) return out
+      if (typeof o.have === 'number') out.done = o.have
+      else {
+        try {
+          const { countItems } = require('./perception')
+          out.done = o.drop ? countItems(bot, (n) => n === o.drop) : 0
+        } catch (_) { out.done = 0 }
+      }
+      out.total = typeof o.want === 'number' ? o.want : out.done
+      // Delivery-leg distance (return phase): the travel grace input.
+      try {
+        if (o.phase === 'return' && o.by && bot && bot.players && bot.players[o.by] && bot.players[o.by].entity) {
+          const bp = bot.entity && bot.entity.position
+          const tp = bot.players[o.by].entity.position
+          const d = dist3(bp, tp)
+          if (typeof d === 'number') out.dist = d
+        }
+      } catch (_) { /* no leg distance */ }
+      return out
+    }
+    if (kind === 'lead') {
+      const o = ctx && ctx.lead
+      if (!o || !o.pos) return out
+      const bp = bot && bot.entity && bot.entity.position
+      const d = dist3(bp, o.pos)
+      if (typeof d === 'number') {
+        out.done = 0
+        out.total = 0
+        out.dist = d
+      }
+      return out
+    }
+    if (kind === 'comehome') {
+      const home = (ctx && ctx.comehome && ctx.comehome.home) || (ctx && ctx.home)
+      if (!home || !home.site) return out
+      const bp = bot && bot.entity && bot.entity.position
+      const d = dist3(bp, { x: home.site.x, y: home.site.y, z: home.site.z })
+      if (typeof d === 'number') {
+        out.done = 0
+        out.total = 0
+        out.dist = d
+      }
+      return out
+    }
+    if (kind === 'gocastle') {
+      const st = (ctx && ctx.gocastle && ctx.gocastle.castle) || (ctx && ctx.castle)
+      if (!st || !st.site) return out
+      let ent = null
+      try {
+        ent = require('./behaviours/castle').entrance(st)
+      } catch (_) {
+        ent = st.site
+      }
+      const bp = bot && bot.entity && bot.entity.position
+      const d = dist3(bp, ent || st.site)
+      if (typeof d === 'number') {
+        out.done = 0
+        out.total = 0
+        out.dist = d
+      }
+      return out
+    }
+    if (kind === 'flat') {
+      const f = ctx && ctx.flat
+      if (!f) return out
+      const done = (f.filled || 0) + (f.shaved || 0)
+      const total = (f.total || 0) + (f.totalBumps || 0)
+      out.done = done
+      out.total = total
+      return out
+    }
+  } catch (_) { /* unreadable reads empty */ }
+  return out
+}
+
+// Order progress verdict with its reason (the castleProgressWhy shape):
+// - bring: have rising
+// - travel (comehome/gocastle/lead): distance shrinking past the 2-block
+//   displacement threshold (peer Q1: tiny improvements must not reset)
+// - flat: levelled cells rising.
+const ORDER_ARRIVE_BLOCKS = 2
+function orderProgressWhy(state, cur, kind) {
+  try {
+    if (kind === 'bring' || kind === 'flat') {
+      if (typeof cur.done === 'number' && typeof state.done === 'number' && cur.done > state.done) {
+        return kind === 'bring' ? 'have' : 'cells'
+      }
+      return null
+    }
+    if (kind === 'comehome' || kind === 'gocastle' || kind === 'lead') {
+      if (typeof cur.dist === 'number' && typeof state.dist === 'number' &&
+        cur.dist + ORDER_ARRIVE_BLOCKS < state.dist) return 'arrive'
+      return null
+    }
+  } catch (_) { /* no verdict */ }
+  return null
 }
 
 // Placed cells of the home plan (NOT nextCellIdx: an index treats skipped
@@ -493,8 +679,14 @@ function planState(bot, ctx, kind, done, total, state, withHistory) {
   } catch (_) {
     recent = []
   }
+  let goalText = 'build home'
+  try {
+    goalText = goalTextFor(kind, ctx)
+  } catch (_) {
+    goalText = kind === 'castle' ? 'build castle' : 'build home'
+  }
   const out = {
-    goal: kind === 'castle' ? 'build castle' : 'build home',
+    goal: goalText,
     progress: `${done}/${total}`,
     blocked_on: diagnose(bot, ctx),
     recent,
@@ -694,11 +886,18 @@ function wdOf(state) {
   }
 }
 
-// Watchdog menu: feasible + registered, failHolds IGNORED (retrying a
-// held step is the point), rest excluded — plus the CURRENT step as a
-// bounded hold (the run-4 answer the .5 menu could not offer) and park
-// as the deterministic out. Costed unlocks arrive in vmzq.22.
-function watchdogMenu(bot, ctx) {
+// Watchdog menu (.22): the option table ids (plain steps + costed
+// unlocks + park + ask-owner). The .21 shape (feasible steps + park) is
+// the table's subset for work goals without unlocks; orders get hold +
+// unlocks. `kind` selects the table; omitted keeps the .21 menu for
+// callers that predate orders (none in-tree, tests use taskTick).
+function watchdogMenu(bot, ctx, kind = null) {
+  if (kind && (kind === 'castle' || kind === 'house' || isOrderKind(kind))) {
+    try {
+      const { goalOptions } = require('./goal-options')
+      return goalOptions(bot, ctx, kind).map((o) => o.id)
+    } catch (_) { /* fall through to the .21 menu */ }
+  }
   const goal = require('./goal')
   const facts = goal.goalFacts(bot, ctx)
   const steps = goal.STEP_ORDER.filter((n) => {
@@ -715,7 +914,43 @@ function watchdogMenu(bot, ctx) {
 
 // Fire one async watchdog round for a flat goal. Off the tick path like
 // tryPlan: the answer lands in onWatchAnswer, the next tick consumes it.
+// (.22) the menu is the option table, the instructions are per-kind, and
+// unavailable options log their reason (so the model never picks a
+// promise the executor cannot keep).
 function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
+  let opts = []
+  const skips = []
+  try {
+    const { goalOptions, planInstructions } = require('./goal-options')
+    opts = goalOptions(bot, ctx, kind, skips)
+    if (opts.length === 0) return
+    const criteria = {}
+    for (const o of opts) criteria[o.id] = o.criterion
+    const instructions = planInstructions(kind, ctx, done, total)
+    for (const s of skips) {
+      try {
+        console.log(`goal options kind=${kind} skip=${s.id} why=${s.why}`)
+      } catch (_) { /* log best-effort */ }
+    }
+    const g = ctx && ctx.goal
+    const goalId = g && g.id
+    const generation = g && g.generation
+    const seq = (wd.seq = (wd.seq || 0) + 1)
+    wd.pending = seq
+    wd.firedAt = now
+    // Stash the fired table for the consume tick (availability re-checked
+    // then; the stash is the offered set for the log line).
+    wd.firedOpts = opts.map((o) => o.id)
+    const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions, criteria }
+    const brain = ctx.brain
+    Promise.resolve()
+      .then(() => brain.plan(req))
+      .then(
+        (ans) => onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, null),
+        (err) => onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, null, err),
+      )
+    return
+  } catch (_) { /* fall through to the .21 path when the table fails */ }
   let menu = []
   try {
     menu = watchdogMenu(bot, ctx)
@@ -771,11 +1006,13 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 
 // Consume a stored watchdog answer: apply the choice as a bounded
 // commitment, park on a park choice (owner online) or plan-B when alone
-// (owner: plan-B replaces the alone-park), or back off on any failure.
-// Every resolution logs one `goal watchdog` line with its metric increment.
-// An answer whose stall resolved mid-call (progress after the fire) is
-// moot: dropped silently, no pin and no backoff (a drop is not a
-// failure — the next stall fires fresh).
+// (owner: plan-B replaces the alone-park), ask-owner chats and waits, or
+// back off on any failure. Every resolution logs one `goal watchdog` line
+// with its metric increment. An answer whose stall resolved mid-call
+// (progress after the fire) is moot: dropped silently, no pin and no
+// backoff (a drop is not a failure — the next stall fires fresh).
+// (.22) the choice is an optionId from the table (plain step, hold-<order>,
+// *-far, house-<step>, bank, park, ask-owner); the commit carries step+unlock.
 function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const ans = wd.answer
   wd.answer = null
@@ -787,7 +1024,8 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const step = (ctx && ctx.step) || 'none'
   let options = ''
   try {
-    options = watchdogMenu(bot, ctx).join(',')
+    if (Array.isArray(wd.firedOpts) && wd.firedOpts.length > 0) options = wd.firedOpts.join(',')
+    else options = watchdogMenu(bot, ctx, kind).join(',')
   } catch (_) {
     options = ''
   }
@@ -827,31 +1065,47 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     maxRounds(bot, ctx, kind, state, wd, now)
     return
   }
-  let valid = typeof choice === 'string' && choice !== 'rest'
-  try {
-    const goal = require('./goal')
-    if (!goal.MENU[choice]) valid = false
-  } catch (_) {
-    valid = false
-  }
-  if (!valid) {
-    fail('invalid', 'invalid')
+  if (choice === 'ask-owner') {
+    const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
+    const diagnosis = diagnose(bot, ctx)
+    try {
+      console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=ask-owner conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      metrics.goalWatchdogTotal.inc({ kind, choice: 'ask-owner', source: ans.source || 'jev' })
+    } catch (_) { /* counter best-effort */ }
+    wd.backoffMs = 0
+    wd.backoffUntil = 0
+    askOwner(bot, ctx, kind, done, total, state, wd, now)
     return
   }
-  // Stale answer (the .5 rule): the menu moved between fire and consume,
-  // so decide() could not apply the force — back off instead of burning
-  // a round on it. Holds are NOT consulted (same rule as the force path).
-  let fresh = false
+  // Option-table lookup (.22): the choice must still be offered (the .5
+  // stale rule generalised — availability re-checked, holds ignored).
+  let opt = null
   try {
-    const goal = require('./goal')
-    const facts = goal.goalFacts(bot, ctx)
-    fresh = !!(goal.MENU[choice] && goal.MENU[choice].feasible(facts, bot, ctx) && goal.registered(choice))
+    const { goalOptions } = require('./goal-options')
+    const offered = goalOptions(bot, ctx, kind)
+    opt = offered.find((o) => o.id === choice) || null
   } catch (_) {
-    fresh = false
+    opt = null
   }
-  if (!fresh) {
-    fail('invalid', `stale:${choice}`)
-    return
+  if (!opt) {
+    // Legacy fallback: a plain step answered off-table (old brain, old test)
+    // still applies when feasible — the .21 contract.
+    let legacy = false
+    try {
+      const goal = require('./goal')
+      const facts = goal.goalFacts(bot, ctx)
+      legacy = typeof choice === 'string' && choice !== 'rest' && !!goal.MENU[choice] &&
+        !!goal.MENU[choice].feasible(facts, bot, ctx) && goal.registered(choice)
+    } catch (_) {
+      legacy = false
+    }
+    if (!legacy) {
+      fail('invalid', `stale:${choice}`)
+      return
+    }
+    opt = { id: choice, step: choice, unlock: null }
   }
   if (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) {
     fail('invalid', `low-confidence conf=${ans.conf.toFixed(2)}`)
@@ -867,21 +1121,25 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   } catch (_) { /* counter best-effort */ }
   wd.backoffMs = 0
   wd.backoffUntil = 0
-  applyCommit(bot, ctx, kind, choice, choice, now)
+  applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null)
 }
 
 // One tick of the fast watchdog: consume-first (the maybeL2 precedent),
 // then fire when the goal's metric sat flat for GOAL_WATCHDOG_MS of
 // eligible time. No planner, parked task, live window, in-flight call,
 // backoff or min-interval block the fire; the L1/L2 ladder below still
-// reports and parks.
+// reports and parks (work goals only — orders have no ladder).
 function maybeWatchdog(bot, ctx, kind, done, total, state, now) {
   try {
     if (!watchdogOn()) return
     const t = ctx && ctx.task
     if (!t || typeof t !== 'object') return
-    const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
-    if (!rec || rec.taskPark) return
+    if (isOrderKind(kind)) {
+      if (!eligibleOrder(ctx, kind)) return
+    } else {
+      const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
+      if (!rec || rec.taskPark) return
+    }
     const wd = wdOf(state)
     if (wd.answer) {
       consumeWatchdog(bot, ctx, kind, done, total, state, wd, now)
@@ -931,6 +1189,13 @@ function commitSnapshot(bot, ctx, kind) {
   if (kind === 'house') {
     return { done: st && st.done, total: st && st.total }
   }
+  if (isOrderKind(kind)) {
+    return {
+      done: st && st.done,
+      total: st && st.total,
+      dist: st && st.dist,
+    }
+  }
   let marks = {}
   try {
     marks = st ? { ...matMarksOf(st) } : {}
@@ -952,7 +1217,8 @@ function commitSnapshot(bot, ctx, kind) {
 // snapshot has the state shape, so the progress verdict is shared.
 function commitAdvanced(bot, ctx, kind, c) {
   const s = (c && c.snapshot) || {}
-  if ((kind || (c && c.kind)) === 'house') {
+  const k = kind || (c && c.kind)
+  if (k === 'house') {
     let done = null
     try {
       const home = ctx.home
@@ -961,6 +1227,15 @@ function commitAdvanced(bot, ctx, kind, c) {
       done = null
     }
     return typeof done === 'number' && typeof s.done === 'number' && done > s.done
+  }
+  if (isOrderKind(k)) {
+    let cur = {}
+    try {
+      cur = orderCurrent(bot, ctx, k)
+    } catch (_) {
+      cur = {}
+    }
+    return orderProgressWhy(s, cur, k) !== null
   }
   let cur = {}
   try {
@@ -974,7 +1249,8 @@ function commitAdvanced(bot, ctx, kind, c) {
 // First moved signal, before->after; flat windows name the primary one.
 function commitDelta(bot, ctx, kind, c) {
   const s = (c && c.snapshot) || {}
-  if ((kind || (c && c.kind)) === 'house') {
+  const k = kind || (c && c.kind)
+  if (k === 'house') {
     let done = null
     try {
       const home = ctx.home
@@ -984,6 +1260,27 @@ function commitDelta(bot, ctx, kind, c) {
     }
     const before = typeof s.done === 'number' ? s.done : '?'
     return `cells${before}->${typeof done === 'number' ? done : before}`
+  }
+  if (isOrderKind(k)) {
+    let cur = {}
+    try {
+      cur = orderCurrent(bot, ctx, k)
+    } catch (_) {
+      cur = {}
+    }
+    if (k === 'bring') {
+      const b = typeof s.done === 'number' ? s.done : '?'
+      const a = typeof cur.done === 'number' ? cur.done : b
+      return `have${b}->${a}`
+    }
+    if (k === 'flat') {
+      const b = typeof s.done === 'number' ? s.done : '?'
+      const a = typeof cur.done === 'number' ? cur.done : b
+      return `cells${b}->${a}`
+    }
+    const b = typeof s.dist === 'number' ? Math.round(s.dist) : '?'
+    const a = typeof cur.dist === 'number' ? Math.round(cur.dist) : b
+    return `dist${b}->${a}`
   }
   let cur = {}
   try {
@@ -1002,9 +1299,12 @@ function commitDelta(bot, ctx, kind, c) {
 }
 
 // Apply a watchdog choice as a bounded commitment window (GOAL_COMMIT_MS).
-// decide() honours it (safety-first); taskTick pauses, expires and ends
-// it. optionId seeds the .22 option table (plain steps here).
-function applyCommit(bot, ctx, kind, optionId, step, now) {
+// decide() honours it (safety-first) for work goals; order goals read the
+// unlock via goalUnlock in their dispatch/search policy. taskTick pauses,
+// expires and ends it. optionId is the table label (hold-<order>, *-far,
+// house-<step>, bank, plain step); step is the executor step or null for
+// order holds; unlock rides for the window only.
+function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null) {
   try {
     const g = ctx && ctx.goal
     if (!g || g.kind !== kind) return false
@@ -1013,6 +1313,7 @@ function applyCommit(bot, ctx, kind, optionId, step, now) {
       until: now + goalCommitMs(), appliedAt: now, lastTick: now,
       deaths: (ctx && ctx.deaths) || 0,
       snapshot: commitSnapshot(bot, ctx, kind),
+      unlock: unlock && typeof unlock === 'object' ? { ...unlock } : null,
     }
     return true
   } catch (_) {
@@ -1023,6 +1324,8 @@ function applyCommit(bot, ctx, kind, optionId, step, now) {
 // End a live window: one `goal outcome` line, one history entry, round
 // accounting (flat and failed count, progress clears, preempted stands),
 // then the round-cap fork. Idempotent: ending twice logs once.
+// (.22) the choice is the optionId (hold-<order>, *-far, house-<step>,
+// bank, plain step); the unlock keys ride unlock=<k1,k2> (or unlock=-).
 function endCommit(bot, ctx, kind, state, c, result, now) {
   try {
     const g = ctx && ctx.goal
@@ -1036,15 +1339,23 @@ function endCommit(bot, ctx, kind, state, c, result, now) {
     } catch (_) {
       delta = '?'
     }
-    const step = (c && c.step) || '?'
+    const choice = (c && (c.optionId || c.step)) || '?'
     const k = kind || (c && c.kind) || '?'
+    let unlock = '-'
     try {
-      console.log(`goal outcome kind=${k} choice=${step} dur=${Math.floor(durMs / 1000)}s delta=${delta} result=${result}`)
+      const u = c && c.unlock
+      if (u && typeof u === 'object') {
+        const ks = Object.keys(u).filter((kk) => u[kk] !== null && u[kk] !== undefined)
+        if (ks.length > 0) unlock = ks.sort().join(',')
+      }
+    } catch (_) { /* unlock best-effort */ }
+    try {
+      console.log(`goal outcome kind=${k} choice=${choice} dur=${Math.floor(durMs / 1000)}s delta=${delta} result=${result} unlock=${unlock}`)
     } catch (_) { /* log best-effort */ }
     const wd = state ? wdOf(state) : null
     if (wd) {
       try {
-        wd.history.push({ choice: step, outcome: result, dur_s: Math.floor(durMs / 1000), delta })
+        wd.history.push({ choice, outcome: result, dur_s: Math.floor(durMs / 1000), delta })
         while (wd.history.length > GOAL_HISTORY_KEPT) wd.history.shift()
       } catch (_) { /* history best-effort */ }
       if (result === 'progress') {
@@ -1098,6 +1409,9 @@ function commitFinished(bot, ctx, status) {
 
 // Top-of-tick window accounting (every tick, eligible or not): preempts
 // end the window, safety/night/order time pauses it by the billed delta.
+// (.22) order windows: the order IS the goal, so another order preempts
+// (replaced) instead of pausing, night never pauses (orders run day and
+// night), and a cancelled order preempts as replaced.
 function commitTickTop(bot, ctx, now) {
   try {
     const g = ctx && ctx.goal
@@ -1128,10 +1442,49 @@ function commitTickTop(bot, ctx, now) {
       endCommit(bot, ctx, c.kind, state, c, 'progress', now)
       return
     }
+    if (isOrderKind(c.kind)) {
+      // The order gone (done, cancelled, replaced): the window's goal is
+      // over. Done reads progress when the metric advanced (bring have,
+      // travel arrival, flat cells), else preempted:replaced — the
+      // order dispatch owns completion, the window only records it.
+      if (!eligibleOrder(ctx, c.kind)) {
+        let advanced = false
+        try {
+          advanced = commitAdvanced(bot, ctx, c.kind, c)
+        } catch (_) {
+          advanced = false
+        }
+        endCommit(bot, ctx, c.kind, state, c, advanced ? 'progress' : 'preempted:replaced', now)
+        return
+      }
+      // Another body-owning order preempts (the dispatch order wins).
+      try {
+        const active = goalKind(ctx)
+        if (active && active !== c.kind) {
+          endCommit(bot, ctx, c.kind, state, c, 'preempted:replaced', now)
+          return
+        }
+      } catch (_) { /* replace best-effort */ }
+      // A true mode change (follow with no order) preempts; work mode
+      // with the order running does not (the order owns the body).
+      if (!ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !(ctx.flat && !ctx.flat.parked)) {
+        endCommit(bot, ctx, c.kind, state, c, 'preempted:mode', now)
+        return
+      }
+      // Safety pauses the window (fight/shelter/recover time); night does
+      // not (orders run day and night).
+      let pausing = false
+      try {
+        const st = ctx.step
+        if (st === 'stay' || st === 'gohome' || st === 'shelter' || ctx.inShelter) pausing = true
+      } catch (_) { /* step best-effort */ }
+      if (pausing) c.until += delta
+      return
+    }
     // Replaced: the window's goal is no longer the active task and it is
     // not complete (a switch moved on without ending it).
     try {
-      const active = taskKind(ctx)
+      const active = goalKind(ctx)
       if (active && active !== c.kind) {
         endCommit(bot, ctx, c.kind, state, c, 'preempted:replaced', now)
         return
@@ -1202,14 +1555,108 @@ function commitEligible(bot, ctx, kind, state, billed, now) {
   } catch (_) { /* window never breaks the tick */ }
 }
 
+// Park an order goal (vmzq.22): cancel with the diagnosis (flat parks
+// resumably like stop, others clear). An unlock never undoes an owner
+// park — this is the automatic stall park releasing to other work.
+function parkOrder(bot, ctx, kind, done, total, now) {
+  void now
+  try {
+    const diagnosis = diagnose(bot, ctx)
+    const g = ctx && ctx.goal
+    if (g && g.commit) {
+      try {
+        const st = ctx.task && ctx.task[kind]
+        endCommit(bot, ctx, kind, st && typeof st === 'object' ? st : null, g.commit, 'preempted:park', Date.now())
+      } catch (_) { /* window best-effort */ }
+    }
+    try {
+      const st = ctx && ctx.task && ctx.task[kind]
+      if (st && st.wd) { st.wd.pending = null; st.wd.answer = null }
+    } catch (_) { /* watchdog best-effort */ }
+    const d = typeof done === 'number' || typeof done === 'string' ? done : '?'
+    const t = typeof total === 'number' || typeof total === 'string' ? total : '?'
+    try {
+      console.log(`goal park kind=${kind} progress=${d}/${t} why=${diagnosis}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      bot.chat(`${kind} parked at ${d}/${t} — ${diagnosis}`)
+    } catch (_) { /* chat best-effort */ }
+    try {
+      metrics.taskStallTotal.inc({ task: kind, level: 'L2' })
+    } catch (_) { /* counter best-effort */ }
+    try {
+      if (kind === 'bring' && ctx.bring) {
+        metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' })
+        ctx.bring = null
+        try {
+          require('./behaviours/bring').clearSearchLeg(ctx)
+        } catch (_) { /* legs best-effort */ }
+      } else if (kind === 'lead') {
+        ctx.lead = null
+        ctx.leadTargetGone = 0
+      } else if (kind === 'comehome') {
+        ctx.comehome = null
+      } else if (kind === 'gocastle') {
+        ctx.gocastle = null
+      } else if (kind === 'flat' && ctx.flat) {
+        ctx.flat.parked = true
+      }
+    } catch (_) { /* cancel best-effort */ }
+    try {
+      resetTask(ctx, 'park')
+    } catch (_) { /* reset best-effort */ }
+    return diagnosis
+  } catch (_) { /* park never breaks the tick */ }
+  return undefined
+}
+
+// Ask the owner (vmzq.22, online only): chat the diagnosis and wait —
+// the watchdog backs off 10x the window while the order/FSM keeps
+// running (a new order or stop preempts via generation/stop; the timeout
+// re-fires). The full rest-until-message idle is deferred: continuing is
+// safer than stranding the body 10 min on a missed chat.
+function askOwner(bot, ctx, kind, done, total, state, wd, now) {
+  try {
+    if (!ownerOnline(bot)) {
+      const next = wd.backoffMs ? Math.min(wd.backoffMs * 2, GOAL_BACKOFF_MAX_MS) : GOAL_BACKOFF_MIN_MS
+      wd.backoffMs = next
+      wd.backoffUntil = now + next
+      return
+    }
+    const diagnosis = diagnose(bot, ctx)
+    const d = typeof done === 'number' || typeof done === 'string' ? done : '?'
+    const t = typeof total === 'number' || typeof total === 'string' ? total : '?'
+    try {
+      console.log(`goal ask-owner kind=${kind} progress=${d}/${t} why=${diagnosis}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      const line = `${kind} stuck at ${d}/${t} — ${diagnosis} — waiting for you`
+      bot.chat(line.slice(0, CHAT_LIMIT))
+    } catch (_) { /* chat best-effort */ }
+    const wait = goalWatchdogMs() * 10
+    wd.backoffMs = 0
+    wd.backoffUntil = now + wait
+    try {
+      wd.history.push({ choice: 'ask-owner', outcome: 'waiting', dur_s: 0, delta: `${d}/${t}` })
+      while (wd.history.length > GOAL_HISTORY_KEPT) wd.history.shift()
+    } catch (_) { /* history best-effort */ }
+  } catch (_) { /* ask never breaks the tick */ }
+}
+
 // Round-cap fork (owner 2026-10-07): owner online -> park with the
 // diagnosis (today's L2 line asks them to resume); owner offline ->
 // plan-B, which replaces the alone park. Plan-B phase 1 relocates aside
 // for one window and re-asks JEV with the outcome in history; a still
 // flat non-relocate round moves to phase 2, the goal switch.
+// (.22) orders park (cancel) on the cap — the natural fallback to
+// castle/house is the switch, without return (the owner re-issues).
 function maxRounds(bot, ctx, kind, state, wd, now) {
-  const done = state && typeof state.done === 'number' ? state.done : '?'
+  const done = state && typeof state.done === 'number' ? state.done : (state && typeof state.dist === 'number' ? Math.round(state.dist) : '?')
   const total = state && typeof state.total === 'number' ? state.total : '?'
+  if (isOrderKind(kind)) {
+    parkOrder(bot, ctx, kind, done, total, now)
+    return
+  }
   if (!bot || ownerOnline(bot)) {
     parkTask(bot, ctx, kind, done, total, now)
     return
@@ -1390,14 +1837,25 @@ function clearTaskParks(ctx) {
 // Status line fragment: 'task castle 8/1722 stall=23m', or null when no task.
 // Unread yet (unloaded since reset) reads '?/?' with the live stall.
 // Watchdog rounds behind the stall append ' round=N'.
+// (.22) orders read the same: bring have/want, travel dist blocks left,
+// flat cells. A stale active (the order ended mid-tick, before the next
+// taskTick clears it) reads null — the line shows the live goal only.
 function taskLine(ctx) {
   try {
     const t = ctx && ctx.task
     const kind = t && t.active
     const st = kind && t[kind]
     if (!kind || !st) return null
-    const done = typeof st.done === 'number' ? st.done : '?'
-    const total = typeof st.total === 'number' ? st.total : '?'
+    try {
+      if (kind !== goalKind(ctx)) return null
+    } catch (_) { /* identity best-effort */ }
+    let done = typeof st.done === 'number' ? st.done : '?'
+    let total = typeof st.total === 'number' ? st.total : '?'
+    if (isOrderKind(kind) && (kind === 'comehome' || kind === 'gocastle' || kind === 'lead')) {
+      done = typeof st.dist === 'number' ? Math.round(st.dist) : '?'
+      total = typeof st.total === 'number' && st.total > 0 ? st.total : 'left'
+      return `task ${kind} ${done} blocks ${total === 'left' ? 'left' : `/ ${total}`} stall=${stallFmt(st.stallMs || 0)}${((st.wd && st.wd.rounds) || 0) > 0 ? ` round=${st.wd.rounds}` : ''}`
+    }
     let rounds = 0
     try { rounds = (st.wd && st.wd.rounds) || 0 } catch (_) { rounds = 0 }
     return `task ${kind} ${done}/${total} stall=${stallFmt(st.stallMs || 0)}${rounds > 0 ? ` round=${rounds}` : ''}`
@@ -1417,8 +1875,16 @@ function resetTask(ctx, why = 'generation') {
       const c = ctx.goal.commit
       ctx.goal.commit = null
       const dur = Math.max(0, Math.floor((Date.now() - (c.appliedAt || Date.now())) / 1000))
+      let unlock = '-'
       try {
-        console.log(`goal outcome kind=${(c && c.kind) || '?'} choice=${(c && c.step) || '?'} dur=${dur}s delta=? result=preempted:${why || 'generation'}`)
+        const u = c && c.unlock
+        if (u && typeof u === 'object') {
+          const ks = Object.keys(u).filter((kk) => u[kk] !== null && u[kk] !== undefined)
+          if (ks.length > 0) unlock = ks.sort().join(',')
+        }
+      } catch (_) { /* unlock best-effort */ }
+      try {
+        console.log(`goal outcome kind=${(c && c.kind) || '?'} choice=${(c && (c.optionId || c.step)) || '?'} dur=${dur}s delta=? result=preempted:${why || 'generation'} unlock=${unlock}`)
       } catch (_) { /* log best-effort */ }
     }
   } catch (_) { /* window best-effort */ }
@@ -1435,6 +1901,11 @@ function resetTask(ctx, why = 'generation') {
   try {
     metrics.taskStallSeconds.set({ task: 'castle' }, 0)
     metrics.taskStallSeconds.set({ task: 'house' }, 0)
+    for (const k of ORDER_KINDS) {
+      try {
+        metrics.taskStallSeconds.set({ task: k }, 0)
+      } catch (_) { /* gauge best-effort */ }
+    }
   } catch (_) { /* metrics best-effort */ }
 }
 
@@ -1622,7 +2093,7 @@ function taskTick(bot, ctx, now = Date.now()) {
     maybeResume(bot, ctx, now)
     if (!ctx.task || typeof ctx.task !== 'object') ctx.task = { active: null }
     const t = ctx.task
-    const kind = taskKind(ctx)
+    const kind = goalKind(ctx)
     // Commitment window accounting first (vmzq.21): preempts and pauses
     // apply on every tick, eligible or not, active task or none.
     try {
@@ -1642,6 +2113,22 @@ function taskTick(bot, ctx, now = Date.now()) {
         metrics.taskTotal.set({ task: 'castle' }, st.progress.total || 0)
       }
     } catch (_) { /* castle gauges best-effort */ }
+    // Order gauges (.22, the bring label): have/want and levelled cells
+    // move even while another goal is active.
+    try {
+      if (ctx.bring) {
+        const oc = orderCurrent(bot, ctx, 'bring')
+        if (typeof oc.done === 'number') metrics.taskProgress.set({ task: 'bring' }, oc.done)
+        if (typeof oc.total === 'number') metrics.taskTotal.set({ task: 'bring' }, oc.total)
+      }
+    } catch (_) { /* bring gauges best-effort */ }
+    try {
+      if (ctx.flat && !ctx.flat.parked) {
+        const oc = orderCurrent(bot, ctx, 'flat')
+        if (typeof oc.done === 'number') metrics.taskProgress.set({ task: 'flat' }, oc.done)
+        if (typeof oc.total === 'number') metrics.taskTotal.set({ task: 'flat' }, oc.total)
+      }
+    } catch (_) { /* flat gauges best-effort */ }
     let houseCur = null
     try {
       const home = ctx.home
@@ -1670,33 +2157,165 @@ function taskTick(bot, ctx, now = Date.now()) {
       try {
         if (ctx.castle && ctx.castle.site) setStallGauge('castle', 0)
         if (ctx.home && ctx.home.site) setStallGauge('house', 0)
+        for (const k of ORDER_KINDS) {
+          try {
+            setStallGauge(k, 0)
+          } catch (_) { /* gauge best-effort */ }
+        }
       } catch (_) { /* idle gauges best-effort */ }
       return
     }
 
     // Newly active task (or first tick): baseline now, no advance.
+    // (.22) a work goal resuming after an ORDER keeps its clock (the .21
+    // pause: order time never billed, the stale lastAt clamps to one tick).
+    // Work-to-work switches (plan-B return) re-baseline fresh; orders
+    // always baseline fresh (a new goal).
     if (t.active !== kind || !t[kind] || typeof t[kind] !== 'object') {
-      t.active = kind
-      if (kind === 'castle') {
-        const cur = castleCurrent(bot, ctx, ctx.castle, now)
-        t.castle = {
-          done: cur.done, total: cur.total, prepLeft: cur.prepLeft,
-          matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft,
-          stallMs: 0, lastAt: now, lastL1At: null, fails: [],
-        }
-        seedMarks(t.castle, cur)
-      } else if (houseCur) {
-        t.house = { done: houseCur.done, total: houseCur.total, stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+      if ((kind === 'castle' || kind === 'house') && t[kind] && typeof t[kind] === 'object' &&
+        isOrderKind(t.active)) {
+        t.active = kind
+        // Fall through to advance this tick (the .21 pause shape).
       } else {
-        // Unloaded and never read (core-1): wait for a loaded reading
-        // instead of baselining 0/0.
-        t.house = { stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+        t.active = kind
+        if (kind === 'castle') {
+          const cur = castleCurrent(bot, ctx, ctx.castle, now)
+          t.castle = {
+            done: cur.done, total: cur.total, prepLeft: cur.prepLeft,
+            matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft,
+            stallMs: 0, lastAt: now, lastL1At: null, fails: [],
+          }
+          seedMarks(t.castle, cur)
+        } else if (isOrderKind(kind)) {
+          const cur = orderCurrent(bot, ctx, kind)
+          t[kind] = {
+            done: cur.done, total: cur.total, dist: cur.dist,
+            stallMs: 0, lastAt: now, lastL1At: null, fails: [],
+          }
+          // Travel goals baseline the distance as the total (blocks left).
+          if ((kind === 'comehome' || kind === 'gocastle' || kind === 'lead') && typeof cur.dist === 'number') {
+            t[kind].total = Math.round(cur.dist)
+          }
+        } else if (houseCur) {
+          t.house = { done: houseCur.done, total: houseCur.total, stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+        } else {
+          // Unloaded and never read (core-1): wait for a loaded reading
+          // instead of baselining 0/0.
+          t.house = { stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+        }
+        setStallGauge(kind, 0)
+        return
       }
-      setStallGauge(kind, 0)
-      return
     }
 
     const state = t[kind]
+    // Order goals (.22): have/cells/dist metrics, watchdog only (no L1/L2
+    // ladder — the park is the watchdog's, the L1 stays the work summary).
+    if (isOrderKind(kind)) {
+      const cur = orderCurrent(bot, ctx, kind)
+      const readable = kind === 'bring' || kind === 'flat'
+        ? typeof cur.done === 'number'
+        : typeof cur.dist === 'number'
+      if (!readable) {
+        recordFail(ctx, state)
+        if (!eligibleOrder(ctx, kind)) {
+          state.lastAt = now
+          setStallGauge(kind, state.stallMs || 0)
+          return
+        }
+        const billedUnread = addStall(state, now)
+        setStallGauge(kind, state.stallMs)
+        try {
+          commitEligible(bot, ctx, kind, state, billedUnread, now)
+        } catch (_) { /* window best-effort */ }
+        try {
+          maybeWatchdog(bot, ctx, kind, '?', '?', state, now)
+        } catch (_) { /* watchdog best-effort */ }
+        return
+      }
+      if (typeof state.done !== 'number' && (kind === 'bring' || kind === 'flat')) {
+        state.done = cur.done
+        state.total = cur.total
+        state.lastAt = now
+        setStallGauge(kind, state.stallMs || 0)
+        return
+      }
+      if (typeof state.dist !== 'number' && typeof cur.dist === 'number') {
+        state.dist = cur.dist
+        if (typeof state.total !== 'number' || !(state.total > 0)) state.total = Math.round(cur.dist)
+        state.lastAt = now
+        setStallGauge(kind, state.stallMs || 0)
+        return
+      }
+      const why = orderProgressWhy(state, cur, kind)
+      if (why) {
+        if (typeof cur.done === 'number') state.done = cur.done
+        if (typeof cur.total === 'number') state.total = cur.total
+        if (typeof cur.dist === 'number') state.dist = cur.dist
+        progressReset(state, kind, now)
+        logReset(kind, why)
+        try {
+          const g = ctx && ctx.goal
+          if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+        } catch (_) { /* window best-effort */ }
+        return
+      }
+      // Travel grace for the bring delivery leg (.22, the .21 shape): the
+      // first return-phase run of a stall episode gets one clock reset
+      // for the walk to the player — without it every delivery reads as
+      // a stall. One grant per episode, floor rate-limits across episodes.
+      if (watchdogOn() && kind === 'bring') {
+        const wd = wdOf(state)
+        const o = ctx && ctx.bring
+        const returning = !!(o && o.phase === 'return' && typeof cur.dist === 'number')
+        const freshRun = returning && wd.lastStep !== 'bring-return'
+        wd.lastStep = returning ? 'bring-return' : (ctx.step || null)
+        if (returning && typeof state.dist === 'number' && cur.dist + ORDER_ARRIVE_BLOCKS < state.dist) {
+          // The walk advances: sink the baseline (low-water) without a
+          // progress reset — have owns the clock, distance owns the grace.
+          state.dist = cur.dist
+        }
+        if (freshRun && (wd.graceRuns || 0) < GOAL_GRACE_RUNS_PER_EPISODE && now - (wd.lastGraceAt || 0) >= goalGraceMs()) {
+          wd.graceRuns = (wd.graceRuns || 0) + 1
+          wd.lastGraceAt = now
+          if (typeof cur.dist === 'number') state.dist = cur.dist
+          state.stallMs = 0
+          state.lastAt = now
+          setStallGauge(kind, 0)
+          logReset(kind, 'grace')
+          return
+        }
+      }
+      // Regress/narrow moves the baseline without resetting: travel
+      // low-water (a detour around a wall may lengthen the walk), bring
+      // have never sinks (drops are progress lost, not baseline).
+      if ((kind === 'comehome' || kind === 'gocastle' || kind === 'lead') &&
+        typeof cur.dist === 'number' && typeof state.dist === 'number' && cur.dist < state.dist) {
+        state.dist = cur.dist
+      }
+      if (typeof cur.total === 'number' && (kind === 'bring' || kind === 'flat')) state.total = cur.total
+      recordFail(ctx, state)
+      if (!eligibleOrder(ctx, kind)) {
+        state.lastAt = now
+        setStallGauge(kind, state.stallMs || 0)
+        return
+      }
+      const billed = addStall(state, now)
+      setStallGauge(kind, state.stallMs)
+      try {
+        commitEligible(bot, ctx, kind, state, billed, now)
+      } catch (_) { /* window best-effort */ }
+      try {
+        const dd = (kind === 'comehome' || kind === 'gocastle' || kind === 'lead')
+          ? (typeof state.dist === 'number' ? Math.round(state.dist) : '?')
+          : cur.done
+        const tt = (kind === 'comehome' || kind === 'gocastle' || kind === 'lead')
+          ? (state.total || '?')
+          : cur.total
+        maybeWatchdog(bot, ctx, kind, dd, tt, state, now)
+      } catch (_) { /* watchdog best-effort */ }
+      return
+    }
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
       if (typeof cur.done !== 'number') {
@@ -1889,4 +2508,4 @@ function taskTick(bot, ctx, now = Date.now()) {
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, taskKind, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }

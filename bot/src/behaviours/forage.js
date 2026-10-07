@@ -165,7 +165,12 @@ function parkedCellSkipped(ctx, item) {
     const g = require('../goal')
     if (!g.taskParked(ctx)) return false
     if (!item || typeof item.x !== 'number' || typeof item.z !== 'number') return true
-    const radius = g.PARK_FORAGE_RADIUS || 64
+    let radius = g.PARK_FORAGE_RADIUS || 64
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      const r = goalUnlock(ctx, 'radius')
+      if (typeof r === 'number' && r > radius) radius = r
+    } catch (_) { /* default radius */ }
     const anchors = []
     if (ctx && ctx.home && ctx.home.site) anchors.push(ctx.home.site)
     if (ctx && ctx.castle && ctx.castle.site) anchors.push(ctx.castle.site)

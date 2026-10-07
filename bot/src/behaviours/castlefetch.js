@@ -284,7 +284,20 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   let found = []
   // Around the SITE (g0z.15): the window below is the site's, so a search
   // around a far body found nothing ever (prod: 14 instant no-stone).
-  const c = siteCenter(ctx.castle)
+  // (.22) a castlefetch-far unlock searches around the known candidate
+  // instead (the remembered stone the table validated), anchored on the
+  // candidate's ground — the window end snaps back to the site on the
+  // next pick.
+  let c = siteCenter(ctx.castle)
+  let gy = ctx.castle.site.y
+  try {
+    const { goalUnlock } = require('../goal-unlock')
+    const cand = goalUnlock(ctx, 'candidate')
+    if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') {
+      c = { x: cand.x, y: typeof cand.y === 'number' ? cand.y : gy, z: cand.z }
+      if (typeof cand.y === 'number') gy = cand.y
+    }
+  } catch (_) { /* site search */ }
   try { found = (e && bot.findBlocks({ point: new Vec3(c.x, c.y, c.z), matching: e.id, maxDistance: DIG_RADIUS, count: FIND_COUNT })) || [] } catch (_) { found = [] }
   const fx = Math.floor(bp.x)
   const fy = Math.floor(bp.y) // own feet column only
@@ -294,12 +307,11 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
     const k = `${p.x},${p.y},${p.z}`
     if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p) || inTrench(ctx.castle, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
-    // Near the castle's ground level only (revmux 02/03): a cave wall far
+    // Near the ground level only (revmux 02/03): a cave wall far
     // below is 'exposed' too and the canDig walk would shaft down to it; a
-    // cliff face far above means pillaring. Anchored on the site, never the
-    // live feet — a pick made from inside our own quarry pit would ratchet
-    // the window down a layer per pick.
-    const gy = ctx.castle.site.y
+    // cliff face far above means pillaring. Anchored on the site (or the
+    // far candidate), never the live feet — a pick made from inside our
+    // own quarry pit would ratchet the window down a layer per pick.
     if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) continue
     const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
     if (best && d >= best.d) continue
@@ -444,7 +456,16 @@ function digTick(bot, ctx, f) {
   if (t && !targetAt(t)) t = f.target = null // dug (or gone): pick the next
   if (!t) {
     // Far from the castle: walk there first, the stone is searched there.
-    const c = siteCenter(st)
+    // (.22) a castlefetch-far unlock walks to the known candidate instead
+    // (the fetcher walks to the candidate); a leg already past the bound
+    // finishes (the quarry precedent — the window end snaps back on the
+    // next leg, never mid-walk).
+    let c = siteCenter(st)
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      const cand = goalUnlock(ctx, 'candidate')
+      if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') c = { x: cand.x, y: cand.y, z: cand.z }
+    } catch (_) { /* site walk */ }
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
     // A leg already quarrying stays out: the trench runs past DIG_RADIUS
     // (revmux 02), and its own target walks have their own patience.
