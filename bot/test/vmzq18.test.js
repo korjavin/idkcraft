@@ -85,4 +85,59 @@ describe('vmzq.18 task-bound searches', () => {
     assert.equal(explore.anchorOf(bot, { ...ctx, castle: { site: { ...CASTLE }, parked: true, phase: 'body' } }).label, 'home')
     assert.equal(explore.anchorOf(bot, { ...ctx, castle: { site: { ...CASTLE }, parked: false, phase: 'complete' } }).label, 'home')
   })
+
+  it('R3a: an owner bring order keeps the home anchor and the full spiral', () => {
+    const bot = mockBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
+    const ctx = activeCastleCtx()
+    ctx.bring = { kind: 'block', name: 'diamond_ore' } // owner order: no self
+    assert.equal(explore.ownerBring(ctx), true)
+    assert.equal(explore.anchorOf(bot, ctx).label, 'home', 'owner orders never re-anchor')
+    // Rings 16/32/64 around home visited: uncapped the 128 leg still picks.
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(HOME.x + r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(HOME.z - r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+    explore(bot, ctx, null, null)
+    const t = ctx.explore.target
+    assert.ok(t, 'an owner leg still picks past 64')
+    assert.equal(Math.round(Math.hypot(t.x - HOME.x, t.z - HOME.z)), 128)
+  })
+
+  it('R3b: an unbuilt house site bounds own explore at 64 too', () => {
+    const bot = mockBot({ x: HOME.x, y: 64, z: HOME.z })
+    const ctx = {
+      home: { site: { ...HOME }, built: false, v: 2 },
+      explore: { visited: new Set(), target: null, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 },
+    }
+    assert.equal(explore.taskActive(ctx), true)
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(HOME.x + r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(HOME.z - r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+    explore(bot, ctx, null, null)
+    assert.equal(ctx.stepStatus, 'done', 'the 64 spiral is exhausted, no 128 leg')
+    assert.equal(ctx.explore.target, null)
+  })
+
+  it('R3c: the 64 clamp is proven — visited 16/32/64 at the castle ends the spiral', () => {
+    const bot = mockBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
+    const ctx = activeCastleCtx()
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(CASTLE.x + r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(CASTLE.z - r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+    explore(bot, ctx, null, null)
+    // Without the clamp this picks the 128 ring; with it the task spiral is done.
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.explore.target, null)
+  })
 })

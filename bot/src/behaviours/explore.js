@@ -28,12 +28,12 @@ const RAY_COUNT = 8 // compass rays per ring, north first
 const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
 const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
 const MAX_RADIUS = 256 // spiral reach cap, feet from anchor (dxl: no players)
-// Task bound (vmzq.18): while a castle build is active the spiral stays
-// within this of the site — prod run2 walked a wool search 500 blocks
-// castle->home. Matches the epic's own 64 (goal PARK_FORAGE_RADIUS);
-// bring self hunts keep their 96 cap but anchor here too, so they stay
-// within 96 of the site. House-unbuilt stays unbound (bring-wool pins 24
-// owner legs; the house anchor already holds those near home).
+// Task bound (vmzq.18): while a build task is active (castle ordered or
+// house sited but unbuilt) own side work stays within this of the task
+// site — prod run2 walked a wool search 500 blocks castle->home. Matches
+// the epic's own 64 (goal PARK_FORAGE_RADIUS); bring self hunts keep
+// their 96 cap but anchor at the site too. Owner bring orders are never
+// capped (R3a).
 const TASK_SEARCH_RADIUS = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
@@ -70,20 +70,38 @@ function compass(dx, dz) {
   return DIRS[idx]
 }
 
+// Owner bring in progress (vmzq.18 R3): an explicit owner order is the
+// owner's call — never anchored or capped to the task site. Self hunts
+// carry o.self ('beds'); owner orders leave it unset.
+function ownerBring(ctx) {
+  try {
+    return !!(ctx && ctx.bring && !ctx.bring.self)
+  } catch (_) {
+    return false
+  }
+}
 // Anchor: the active castle site first (vmzq.18), then home, then world
 // spawn. Null when none exists. A wool self-hunt from the castle used to
 // anchor at home 500 blocks off and walk there; now it spirals at the site.
+// Owner brings keep the home anchor (R3a).
 function taskActive(ctx) {
   try {
     const st = ctx && ctx.castle
     if (st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete') return true
   } catch (_) { /* no castle verdict */ }
+  // Active unbuilt house site (R3b, bead 18 house OR castle): strict
+  // built===false — anchor-only fixtures omit built (undefined) and stay
+  // unbound, so the explore/bring-wool spirals keep their full reach.
+  try {
+    const home = ctx && ctx.home
+    if (home && home.site && typeof home.site.x === 'number' && home.built === false) return true
+  } catch (_) { /* no house verdict */ }
   return false
 }
 function anchorOf(bot, ctx) {
   try {
     const st = ctx && ctx.castle
-    if (st && st.site && typeof st.site.x === 'number' && typeof st.site.z === 'number' && !st.parked && st.phase !== 'complete') {
+    if (!ownerBring(ctx) && st && st.site && typeof st.site.x === 'number' && typeof st.site.z === 'number' && !st.parked && st.phase !== 'complete') {
       return { x: st.site.x, z: st.site.z, label: 'castle' }
     }
     const site = ctx && ctx.home && ctx.home.site
@@ -146,9 +164,10 @@ function explore(bot, ctx, target, state) {
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    // Task bound (vmzq.18): a build task caps the spiral at the site.
+    // Task bound (vmzq.18): own side work caps the spiral at the site;
+    // owner bring orders walk the full spiral (R3a).
     let cap = e.maxRadius
-    try { if (taskActive(ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+    try { if (taskActive(ctx) && !ownerBring(ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
     const t = pickTarget(e.visited, anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
@@ -236,6 +255,7 @@ module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
 module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
 module.exports.taskActive = taskActive
+module.exports.ownerBring = ownerBring
 module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
 module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target
