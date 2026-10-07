@@ -228,6 +228,7 @@ describe('castlefetch sources (g0z.4)', () => {
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
     assert.equal(asks().length, 1, 'the retry never repeats the line')
+  })
 
   it('quarry origin in a dip adapts the trench down (vmzq.20)', () => {
     const o = fetch.quarrySide(castleState(), 0)
@@ -398,7 +399,6 @@ describe('castlefetch sources (g0z.4)', () => {
     fetch(bot, ctx)
     assert.equal(ctx.castleFetch.quarry.level[0], 63)
     assert.deepEqual(ctx.castle.quarryBase[0], 63)
-  })
   })
 
   it('a moving facts text never releases the fetch hold before the bound (g0z.12 rig churn)', async () => {
