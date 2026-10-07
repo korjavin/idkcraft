@@ -473,7 +473,11 @@ describe('g0z.2 castle executor', () => {
   it('an unreachable cell blocks after three stands that get no closer', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
-    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) } // never arrives
+    // Never arrives (static body, isMoving false) but arms the goal like
+    // the real setGoal (vmzq17's mock does the same): a goal that stays
+    // null reads as cleared-every-tick to the re-issue latch and the
+    // stand streak never runs.
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g); bot.pathfinder.goal = g }
     bot.entity.position = { x: SITE.x - 30, y: 64, z: SITE.z - 30 }
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 5)

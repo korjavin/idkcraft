@@ -480,6 +480,17 @@ function fleeReflex(bot, ctx) {
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
   // too), so require the body to be inside the home box.
   if (ctx.inShelter && ctx.home && require('./behaviours/home').isInside(bot, ctx.home)) return false // deferred: home loads reflexes
+  // vmzq.30: a capped pit or a pillar top is shelter too — fleeing
+  // pathfinds out through the cap (canDig) or off the top and abandons
+  // it (rig: dug in, fled a creeper, zombie kill 2 min later). A creeper
+  // outside the cap cannot reach in; the melee reflex still swings at
+  // anything adjacent. Same once the descent starts (digs > 0): the
+  // half-dug pit is committed. An unmarked hold (failed pillar and dig)
+  // keeps fleeing — exposure is the worse risk there.
+  try {
+    const sh = ctx && ctx.shelter
+    if (ctx && ctx.inShelter && sh && (sh.dugIn || sh.perched || (sh.dig && sh.dig.digs > 0))) return false
+  } catch (_) { /* scan best-effort: flee */ }
   let creeper = null
   try { creeper = findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
   if (!creeper) { ctx.fleeTargetId = null; return false }

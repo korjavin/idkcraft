@@ -19,6 +19,8 @@ const { Vec3 } = require('vec3')
 const home = require('../src/behaviours/home')
 const castle = require('../src/behaviours/castle')
 const body = require('../src/body')
+const goal = require('../src/goal')
+const { fleeReflex } = require('../src/reflexes')
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -35,6 +37,9 @@ function flatBot(at, opts = {}) {
   const dug = new Set()
   const placed = new Set()
   const items = opts.items ? opts.items.map((i) => ({ ...i })) : []
+  // stoneStance: the stance column is hand-undiggable stone, everything
+  // else dirt — the dig walks to a nearby dirt column first.
+  const groundName = (x, y, z) => (opts.stoneStance && Math.floor(x) === 0 && Math.floor(z) === 0 && y <= 63 ? 'stone' : (y === 63 ? 'grass_block' : 'dirt'))
   const solidAt = (x, y, z) => placed.has(key(x, y, z)) || (y <= 63 && !dug.has(key(x, y, z)))
   const bot = {
     username: 'IdkBot',
@@ -55,7 +60,7 @@ function flatBot(at, opts = {}) {
     blockAt(p) {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
       const s = solidAt(x, y, z)
-      const name = s ? (y === 63 ? 'grass_block' : 'dirt') : 'air'
+      const name = !s ? 'air' : (placed.has(key(x, y, z)) ? 'dirt' : groundName(x, y, z))
       return { name, position: new Vec3(x, y, z), boundingBox: s ? 'block' : 'empty' }
     },
     async dig(b) {
@@ -141,6 +146,39 @@ describe('vmzq.30 phantomNear', () => {
   it('true for a live phantom at circling height', () => {
     assert.equal(home.phantomNear(botWith({ 7: { name: 'phantom', position: pos(10, 80, 5) } })), true)
     assert.equal(home.PHANTOM_R, 32)
+  })
+})
+
+describe('vmzq.30 dig commits once the descent starts', () => {
+  it('walk to the pit fights; the descent shelters under melee cover', async () => {
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 }, { stoneStance: true, items: [{ name: 'dirt', count: 12 }] })
+    const ctx = {
+      home: v2home({ x: -48, y: 65, z: -208 }),
+      step: 'shelter',
+      stepStatus: 'running',
+      recovery: { action: 'pillar_up', status: 'failed:place-error', st: {} },
+    }
+    await quiet(async () => {
+      home.shelter(bot, ctx, null, null) // verdict: stone stance refuses, walk to dirt starts
+      await flush()
+    })
+    assert.ok(ctx.shelter.dig, 'dig armed')
+    assert.ok(ctx.shelter.dig.walk, 'walking to a dirt column')
+    assert.equal(ctx.shelter.dig.digs || 0, 0)
+    assert.equal(ctx.inShelter, false, 'exposed on the walk: fight runs')
+    assert.equal(bot.pathfinder.goal && bot.pathfinder.goal.constructor.name, 'GoalBlock')
+    // Arrive at the column: the walk completes, then the first descent
+    // dig issues and shelter arms.
+    const w = ctx.shelter.dig.walk
+    bot.entity.position = pos(w.x + 0.5, w.y, w.z + 0.5)
+    await quiet(async () => {
+      for (let t = 0; t < 3 && !(ctx.shelter.dig && ctx.shelter.dig.digs > 0); t++) {
+        home.shelter(bot, ctx, null, null)
+        await flush()
+      }
+    })
+    assert.equal(ctx.shelter.dig.digs, 1, 'descent issued')
+    assert.equal(ctx.inShelter, true, 'descent started: fight suppresses, melee covers')
   })
 })
 
@@ -270,6 +308,73 @@ describe('vmzq.30 castle return walk (.29B/.29C)', () => {
     }
     body.movementsFor('work', bot, ctx)
     assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT])
+  })
+})
+
+describe('vmzq.30 flee holds in a pit or on a pillar', () => {
+  function creeperBot() {
+    const goals = []
+    return {
+      goals,
+      entity: { position: pos(0, 64, 0) },
+      entities: { 9: { name: 'creeper', position: pos(4, 64, 0), isValid: true } },
+      pathfinder: { isMoving: () => false, setGoal(g) { goals.push(g) } },
+    }
+  }
+  it('dug in or perched: no flee goal (rig: flee excavated the pit)', () => {
+    for (const shelter of [{ pillared: true, dugIn: true }, { pillared: true, perched: true }]) {
+      const bot = creeperBot()
+      assert.equal(fleeReflex(bot, { inShelter: true, home: {}, shelter }), false)
+      assert.equal(bot.goals.length, 0)
+    }
+  })
+  it('unmarked hold: still flees (exposure is worse)', () => {
+    const bot = creeperBot()
+    assert.ok(fleeReflex(bot, { inShelter: true, home: {}, shelter: { pillared: true } }))
+    assert.equal(bot.goals.length, 1)
+    assert.equal(bot.goals[0].constructor.name, 'GoalNear')
+  })
+  it('descending dig: holds; pre-descent dig: still flees', () => {
+    const digging = creeperBot()
+    assert.equal(fleeReflex(digging, { inShelter: true, home: {}, shelter: { dig: { digs: 1 } } }), false)
+    assert.equal(digging.goals.length, 0)
+    const walking = creeperBot()
+    assert.ok(fleeReflex(walking, { inShelter: true, home: {}, shelter: { dig: { digs: 0 } } }))
+    assert.equal(walking.goals.length, 1)
+  })
+})
+
+describe('vmzq.30 shelter near a sited-but-unbuilt home', () => {
+  const SITE = { x: 200, y: 64, z: 200 }
+  const FAR_CASTLE = { x: 70, y: 64, z: 190 }
+  const NEAR = { x: 195, y: 64, z: 198 }
+  const FSH = goal.MENU.shelter.feasible
+  const FGO = goal.MENU.gohome.feasible
+  const facts = (time, home = 'site') => ({ time, home, inside: 'no' })
+  const botAt = (at) => ({ entity: { position: pos(at.x, at.y, at.z) } })
+  const unbuiltHome = () => ({ site: { ...SITE }, built: false, v: 1 })
+  const builtHome = () => ({ site: { ...SITE }, built: true, v: 2 })
+  const ctxWith = (home, castle) => ({ home, castle, step: 'gather', stepStatus: 'done' })
+  const activeCastle = (site) => ({ site: { ...site }, rot: 0, phase: 'body' })
+
+  it('castle + unbuilt home + near it at dusk/night: shelter in place', () => {
+    for (const t of ['dusk', 'night']) {
+      const ctx = ctxWith(unbuiltHome(), activeCastle(FAR_CASTLE))
+      assert.equal(FSH(facts(t), botAt(NEAR), ctx), true, t)
+      assert.equal(FGO(facts(t), botAt(NEAR), ctx), false, `${t}: nothing to walk into`)
+    }
+    assert.equal(FSH(facts('day'), botAt(NEAR), ctxWith(unbuiltHome(), activeCastle(FAR_CASTLE))), false, 'day works')
+  })
+  it('castle next to the unbuilt house: still shelters (no walk-in exists)', () => {
+    const ctx = ctxWith(unbuiltHome(), activeCastle({ x: SITE.x + 10, y: 64, z: SITE.z + 10 }))
+    assert.equal(FSH(facts('night'), botAt(NEAR), ctx), true)
+  })
+  it('no castle, built home, or no home at all: as before', () => {
+    assert.equal(FSH(facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), null)), false, 'house flow untouched')
+    assert.equal(FSH(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), false, 'near a built house: walk in')
+    assert.equal(FGO(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), true)
+    assert.equal(FSH(facts('night', 'none'), botAt(NEAR), ctxWith(null, activeCastle(FAR_CASTLE))), false, 'truly homeless: .32 sites first')
+    assert.equal(goal.stepWhy('gohome', facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), activeCastle(FAR_CASTLE)), ''), 'gohome: home not built')
   })
 })
 

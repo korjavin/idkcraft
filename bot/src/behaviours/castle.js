@@ -1118,7 +1118,9 @@ function work(bot, ctx, st, c, now, status) {
   // approached with GoalNearXZ even with stone in hand — GoalPlaceBlock
   // at an unloaded cell is y-aware and LOS-gated and wedges (run6: 4 min
   // of partial place_error/no_scaffolding after a 500-block respawn).
-  // Unloaded goals ignore y.
+  // Unloaded goals ignore y. The walk keeps placeCell's shape (approach,
+  // moving gate, far streak): a walk that stops getting closer blocks
+  // unreachable after three stands, same as before.
   try {
     const bp = bodyPos(bot)
     if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
@@ -1128,7 +1130,11 @@ function work(bot, ctx, st, c, now, status) {
       // null (recover, night break) would otherwise strand the step
       // running with the bot standing still.
       try { if (bot.pathfinder.goal == null && !bot.pathfinder.isMoving()) ctx.castleGoalIdx = -1 } catch (_) { /* latch best-effort */ }
-      approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))
+      if (approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))) return
+      let moving = false
+      try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+      if (moving) return
+      far(bot, ctx, st, c, 8, now)
       return
     }
   } catch (_) { /* walk best-effort: fall through to the fail */ }

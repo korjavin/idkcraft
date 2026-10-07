@@ -1065,7 +1065,14 @@ function shelter(bot, ctx, target, state) {
     if (st.dig) {
       let r = 'failed:error'
       try { r = recover.digInRun(bot, ctx, st.dig) } catch (_) { /* fail into the hold */ }
-      if (r === 'running') return
+      // Committed once the descent starts (rig: fight ticks abandoned a
+      // half-dug pit to chase, then died outside it): fight suppresses
+      // and the dig finishes under melee cover. The walk to the pit
+      // (digs 0) still fights — exposed and nothing to abandon.
+      if (r === 'running') {
+        try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
+        return
+      }
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
       if (r === 'done') st.dugIn = true // closed pit: covered from phantoms and walkers alike
