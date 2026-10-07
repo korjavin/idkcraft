@@ -241,7 +241,9 @@ describe('castlefetch sources (g0z.4)', () => {
     fetch(bot, ctx)
     const t = ctx.castleFetch.target
     assert.ok(t && t.quarry, 'the quarry takes the dipped side')
-    assert.deepEqual([t.x, t.y, t.z], [o.x, 60, o.z], 'first cell is the dip floor')
+    // Rolling face (vmzq.26): the bank above the dipped base goes first,
+    // top down along the diagonal; the dip floor follows on its diagonal.
+    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 63, o.z + o.dz], 'first cell is the bank top over the dip')
     assert.equal(ctx.castleFetch.quarry.level[0], 61, 'staircase base follows the ground')
     assert.deepEqual(ctx.castleFetch.quarry.dead, [])
   })
@@ -393,7 +395,9 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.deepEqual(ctx.castle.quarryBase[0], 63, 'first probe latches the dug floor')
     assert.equal(ctx.castleFetch.quarry.level[0], 63)
     const t = ctx.castleFetch.target
-    assert.deepEqual([t.x, t.y, t.z], [o.x, 62, o.z], 'one level of stance-floor digging, bounded')
+    // Rolling face (vmzq.26): column 1's top shares column 0's floor
+    // diagonal and goes first; the shifted frame never digs deeper.
+    assert.deepEqual([t.x, t.y, t.z], [o.x + o.dx, 63, o.z + o.dz], 'the shifted frame digs from its new top, bounded')
     ctx.castleFetch = null // leg 2: the latch holds, no further shift
     fetch(bot, ctx)
     assert.equal(ctx.castleFetch.quarry.level[0], 63)
@@ -1049,5 +1053,85 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     const line = lines.find((m) => m.includes('leg over'))
     assert.ok(line, `lines: ${JSON.stringify(lines)}`)
     assert.match(line, /leg over \(done\) ticks dig=0 walk=0 other=1 starts=0 dug=0 blocks=\+0/)
+  })
+})
+
+// idkcraft-vmzq.26: rig cycle 12 leg 5 — 9 min trench-floor <-> wall-top,
+// +0 banked. The column-at-a-time order left a full-depth face: past the
+// staircase every new column's top sat 6 over the floor, so its stance was
+// either a walk out of the trench and back along the rim (2x the trench
+// length) or a tower inside the dug trench — the pathfinder towers, and
+// the next pick mined the tower back (place_error/block_updated per tick).
+// The walker below is the pathfinder without scaffolding: it moves the
+// body only to a stance it can reach on foot (BFS over standable cells,
+// step up 1, drop 3) inside the GoalNear the step issued.
+describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
+  it('a full-depth trench digs from walkable stances; every walk stays short', async () => {
+    const under = (y) => (y <= 61 ? 'stone' : y <= 63 ? 'dirt' : 'air')
+    const items = TOOLS()
+    const set = new Map()
+    const bot = makeBot({ items, set, under, at: pos(SITE.x - 3 + 0.5, 64, SITE.z + 2.5) })
+    const ctx = { castle: castleState() }
+    const name = (x, y, z) => bot.blockAt(pos(x, y, z)).name
+    const open = (x, y, z) => name(x, y, z) === 'air'
+    const stand = (x, y, z) => open(x, y, z) && open(x, y + 1, z) && !open(x, y - 1, z)
+    // Shortest on-foot path from the feet block to any stance inside g.
+    function walk(g) {
+      const p = bot.entity.position
+      const start = [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)]
+      const key = (c) => c.join(',')
+      const seen = new Set([key(start)])
+      let front = [start]
+      for (let steps = 0; steps <= 200 && front.length; steps++) {
+        for (const [x, y, z] of front) {
+          const dx = x - g.x; const dy = y - g.y; const dz = z - g.z
+          if (dx * dx + dy * dy + dz * dz <= g.rangeSq) return { at: [x, y, z], steps }
+        }
+        const next = []
+        for (const [x, y, z] of front) {
+          for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + ax; const nz = z + az
+            if (nx < SITE.x - 60 || nx > SITE.x + 40 || nz < SITE.z - 10 || nz > SITE.z + 40) continue
+            for (let ny = y + 1; ny >= y - 3; ny--) {
+              if (ny > y && !open(x, y + 2, z)) continue
+              let clear = true
+              for (let yy = ny; yy <= Math.max(y, ny) + 1; yy++) if (!open(nx, yy, nz)) clear = false
+              if (!clear || !stand(nx, ny, nz)) continue
+              const c = [nx, ny, nz]
+              if (!seen.has(key(c))) { seen.add(key(c)); next.push(c) }
+              break
+            }
+          }
+        }
+        front = next
+      }
+      return null
+    }
+    const orig = console.log
+    console.log = () => {}
+    let towers = 0
+    let maxWalk = 0
+    try {
+      for (let i = 0; i < 6000 && ctx.stepStatus == null; i++) {
+        const n = bot.calls.goals.length
+        fetch(bot, ctx)
+        if (bot.calls.goals.length > n) {
+          const g = bot.calls.goals[bot.calls.goals.length - 1]
+          const w = walk(g)
+          if (!w) { towers++; const t = ctx.castleFetch.target; bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5); continue }
+          maxWalk = Math.max(maxWalk, w.steps)
+          bot.entity.position = pos(w.at[0] + 0.5, w.at[1], w.at[2] + 0.5)
+        }
+        await settle(); await settle()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done', 'the batch is met')
+    assert.ok(count(items, 'cobblestone') >= 64 + 16)
+    const deepest = Math.min(...bot.calls.dig.map((p) => p.y))
+    assert.equal(deepest, SITE.y - 6, 'the trench reached full depth')
+    const far = Math.max(...bot.calls.dig.map((p) => SITE.x - 4 - p.x))
+    assert.ok(far >= 10, `well past the staircase (column ${far})`)
+    assert.equal(towers, 0, 'no stance that needs scaffolding')
+    assert.ok(maxWalk <= 12, `walks stay on the face's stair, longest ${maxWalk} steps`)
   })
 })

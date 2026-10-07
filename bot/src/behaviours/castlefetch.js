@@ -458,26 +458,43 @@ function pickQuarry(bot, ctx, f) {
       q.said.push(s)
       try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
     }
-    let dead = false
-    for (let i = 0; i < QUARRY_LEN && !dead; i++) {
-      const floor = trenchFloor(st, i, base)
-      for (let l = 0; l < QUARRY_W && !dead; l++) {
-        const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
-        if (!below || open(below) || wet(below)) dead = true
-      }
-      for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
-        for (let l = 0; l < QUARRY_W && !dead; l++) {
+    // Rolling staircase face (idkcraft-vmzq.26): cells go in diagonals
+    // s = column + depth, top first, so the face is always a 1-step stair
+    // and every cell has a walkable stance one column back at its own
+    // level. The old column-at-a-time order left a full-depth wall: each
+    // new column's top sat 6 over the floor, out of pickup reach, and the
+    // pathfinder towered up inside the dug trench — scaffold the next pick
+    // then mined back (rig cycle 12 leg 5: 9 min floor<->wall-top, +0).
+    // A dead column ends the trench there; the columns before it finish.
+    let end = QUARRY_LEN
+    const colOk = []
+    const depthOf = (i) => Math.min(i, QUARRY_DEPTH - 1)
+    for (let sd = -(QUARRY_TOP + 1); sd < end + QUARRY_DEPTH - 1; sd++) {
+      for (let dep = -(QUARRY_TOP + 1); dep <= QUARRY_DEPTH - 1; dep++) {
+        const i = sd - dep
+        if (i < 0 || i >= end || dep > depthOf(i)) continue
+        const floor = trenchFloor(st, i, base)
+        if (colOk[i] == null) {
+          colOk[i] = true
+          for (let l = 0; l < QUARRY_W; l++) {
+            const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
+            if (!below || open(below) || wet(below)) colOk[i] = false
+          }
+          if (!colOk[i]) { end = i; continue }
+        }
+        const y = base - 1 - dep
+        for (let l = 0; l < QUARRY_W && i < end; l++) {
           const x = o.x + o.dx * i + o.lx * l
           const z = o.z + o.dz * i + o.lz * l
           const k = `${x},${y},${z}`
           const b = at(x, y, z)
-          if (!b || wet(b)) { dead = true; break }
+          if (!b || wet(b)) { end = i; break }
           if (open(b) || f.skip.has(k)) continue
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; break }
+          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,
             // a ruin block) is stepped around.
-            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; break }
+            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { end = i; break }
             f.skip.add(k)
             continue
           }
@@ -485,6 +502,7 @@ function pickQuarry(bot, ctx, f) {
         }
       }
     }
+    const dead = end < QUARRY_LEN
     q.dead.push(s) // dug out or unusable mid-trench
     try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable (mid-trench)' : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
