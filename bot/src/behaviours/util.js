@@ -338,10 +338,11 @@ const KEEP_OWN = /(chest|furnace|_door)$/
 // is cleared like terrain — planks, a building log, fences, foreign blocks
 // — instead of a permanent hole. Never beds, doors or containers (their
 // contents): RELOCATE ones the castle empties first (ctx.castleClear
-// 'emptied'), the rest stay holes. Laid castle blocks stay protected
+// 'emptied'), the rest stay holes. ponytail: furnaces stay holes — a
+// deposit by free slot cannot restore their fuel/output slots. Laid castle blocks stay protected
 // (castleProtects runs first); outside the footprint default-deny stands.
 const CASTLE_KEEP = /(_bed|_door|chest|barrel|furnace|smoker|shulker_box|hopper|dropper|dispenser|crafter|lectern|chiseled_bookshelf|decorated_pot|jukebox|brewing_stand|campfire|vault|spawner)$/
-const RELOCATE = /^(chest|trapped_chest|barrel|furnace|blast_furnace|smoker)$/
+const RELOCATE = /^(chest|trapped_chest|barrel)$/
 function castleClears(ctx, pos, name) {
   if (typeof name !== 'string' || !ctx || !ctx.castleClear || !ctx.castle || !castle.inFootprint(ctx.castle, pos)) return false
   return !CASTLE_KEEP.test(name) || (ctx.castleClear === 'emptied' && RELOCATE.test(name))

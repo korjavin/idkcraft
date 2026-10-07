@@ -271,15 +271,15 @@ describe('g0z.2 castle executor', () => {
     assert.deepEqual(ctx.castle.blocked, {})
   })
 
-  it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
+  it('a kept occupant (ender chest: vmzq.40 never digs it) is blocked, never dug', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const c = cells()[0]
-    world.set(c.x, c.y, c.z, 'chest')
+    world.set(c.x, c.y, c.z, 'ender_chest')
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 2)
     assert.equal(bot.calls.digs.length, 0)
-    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-chest')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-ender_chest')
   })
 
   it('g0z.13 + vmzq.40: a moat cell holding ore/tuff/planks is dug; a bed in a place cell stays kept', async () => {
@@ -366,10 +366,10 @@ describe('g0z.2 castle executor', () => {
     const ring = v2.filter((c) => blueprint.isPlaceTarget(c.kind)).slice(0, 5).map((c) => `${c.x},${c.y},${c.z}`)
     assert.deepEqual(bot.calls.places.slice(0, 5).map((p) => `${p.x},${p.y},${p.z}`), ring)
     const w2 = makeWorld()
-    w2.set(v2[0].x, v2[0].y, v2[0].z, 'chest')
+    w2.set(v2[0].x, v2[0].y, v2[0].z, 'ender_chest')
     const ctx2 = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
     await run(mockBot(w2), ctx2, 2)
-    assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-chest')
+    assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-ender_chest')
   })
 
   it('g0z.6 + vmzq.27: v2 moat digs past a blocked hole; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {

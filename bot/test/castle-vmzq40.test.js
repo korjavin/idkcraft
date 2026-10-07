@@ -183,4 +183,33 @@ describe('vmzq.40 castle footprint is ours', () => {
     assert.equal(ctx.castleCarry, null)
     assert.equal(ctx.castle.blocked['1:0'].why, 'kept-chest')
   })
+
+  it('someone\'s block is never destroyed by hand: no harvest tool, no dig', async () => {
+    const world = makeWorld()
+    world.set(c0.x, c0.y, c0.z, 'iron_block')
+    const at = world.blockAt.bind(world)
+    world.blockAt = (p) => { const b = at(p); if (b.name === 'iron_block') b.harvestTools = { 999: true }; return b }
+    const bot = mockBot(world, [{ name: 'cobblestone', type: 1, count: 64 }])
+    bot.pathfinder.bestHarvestTool = () => ({ name: 'cobblestone', type: 1 }) // any pack item, not a pick
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 3)
+    assert.equal(world.get(c0.x, c0.y, c0.z), 'iron_block')
+    assert.equal(ctx.castle.blocked['1:0'].why, 'no-tool-iron_block')
+  })
+
+  it('a lost box drop ends the carry: contents stay in the pack, the castle builds on', async () => {
+    const world = makeWorld()
+    world.set(c0.x, c0.y, c0.z, 'chest')
+    world.boxes.set(`${c0.x},${c0.y},${c0.z}`, [{ name: 'diamond', type: 500, count: 3 }])
+    const items = [{ name: 'cobblestone', type: 1, count: 64 }]
+    const bot = mockBot(world, items)
+    const dig = bot.dig
+    bot.dig = async (b) => { await dig(b); items.splice(items.findIndex((s) => s.name === 'chest'), 1) } // never picked up
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 16)
+    assert.equal(ctx.castleCarry, null)
+    assert.ok(items.some((s) => s.name === 'diamond' && s.count === 3), 'contents kept in the pack')
+    assert.ok(bot.chats.some((m) => /lost the drop of the chest, keeping its contents/.test(m)), bot.chats.join('|'))
+    assert.equal(world.get(c0.x, c0.y, c0.z), 'cobblestone')
+  })
 })

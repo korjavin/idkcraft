@@ -30,7 +30,7 @@ const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const build = require('./build')
 const flat = require('./flat')
-const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE } = require('./util')
+const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef } = require('./util')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -988,7 +988,8 @@ function digCell(bot, ctx, st, c, now) {
   // castle step (util.castleClears), a box relocates with its contents.
   const clear = { ...ctx, castleClear: true }
   if (name != null && RELOCATE.test(name) && castleClears({ ...ctx, castleClear: 'emptied' }, c, name)) { relocate(bot, ctx, st, c, name, now); return }
-  if (name != null && !ours && !natural && !castleClears(clear, c, name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  const footprintOnly = name != null && !ours && !natural
+  if (footprintOnly && !castleClears(clear, c, name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
@@ -1018,12 +1019,13 @@ function digCell(bot, ctx, st, c, now) {
     else strike(ctx, st, c, deny, now)
     return
   }
+  // Harvest tool first (flat digFlight): stone by hand drops nothing,
+  // and the spoil is kept — cobble counts for the castle (g0z.6).
+  const tool = harvestTool(bot, b)
+  // Someone's block (vmzq.40) is never destroyed by hand: it waits for the tool.
+  if (footprintOnly && !canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
     try {
-      // Harvest tool first (flat digFlight): stone by hand drops nothing,
-      // and the spoil is kept — cobble counts for the castle (g0z.6).
-      let tool = null
-      try { tool = typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { tool = null }
       if (tool) await bot.equip(tool, 'hand')
       await bot.dig(b)
       if (live(ctx, token)) {
@@ -1036,8 +1038,17 @@ function digCell(bot, ctx, st, c, now) {
   })
 }
 
-// Relocate (idkcraft-vmzq.40, owner rule: never lose items): a chest,
-// barrel or furnace in a castle cell moves out. One flight empties it into
+// pathfinder.bestHarvestTool returns any pack item (lowest dig time), so
+// the harvest check reads the block's own tool list (revmux 01).
+function harvestTool(bot, b) {
+  try { return typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { return null }
+}
+function canHarvest(b, tool) {
+  return !b.harvestTools || !!(tool && b.harvestTools[tool.type])
+}
+
+// Relocate (idkcraft-vmzq.40, owner rule: never lose items): a chest or
+// barrel in a castle cell moves out. One flight empties it into
 // the pack (all or nothing — what does not fit goes back and the cell stays
 // a kept-<name> hole), digs it and walks onto the drop; stow() then places
 // it outside the footprint and the door path and puts the contents back.
@@ -1062,22 +1073,24 @@ function relocate(bot, ctx, st, c, name, now) {
     else strike(ctx, st, c, deny, now)
     return
   }
-  // A furnace by hand drops nothing: the box itself would be lost.
-  let tool = null
-  try { tool = typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { tool = null }
-  if (!tool && b.harvestTools) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
+  const tool = harvestTool(bot, b)
+  if (!canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
     let win = null
     let carry = null
     try {
       win = await bot.openContainer(b)
-      carry = { name, items: [] }
+      carry = { name, items: [], noBox: 0 }
       ctx.castleCarry = carry
       for (const it of win.containerItems()) {
         await win.withdraw(it.type, it.metadata, it.count)
         carry.items.push({ name: it.name, type: it.type, count: it.count })
       }
       if (win.containerItems().length) throw new Error('pack full')
+      // A slot for the dug box itself, or it lies on the ground (revmux 01).
+      const inv = bot.inventory
+      if (typeof inv.emptySlotCount === 'function' && inv.emptySlotCount() < 1 &&
+        !inv.items().some((it) => it.name === name && it.count < 64)) throw new Error('no slot for the box')
       win.close()
       win = null
       if (tool) await bot.equip(tool, 'hand')
@@ -1111,7 +1124,7 @@ function relocate(bot, ctx, st, c, name, now) {
 // Stow spot (vmzq.40): the nearest standable air cell 2..5 out of the site
 // box, off the door path (the entrance's way out to the nearest site edge
 // and 4 beyond, 2 to either side). Air above too: a chest lid needs it.
-function stowSpot(bot, st) {
+function stowSpot(bot, st, bad) {
   const bp = bodyPos(bot)
   if (!bp) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
@@ -1135,7 +1148,9 @@ function stowSpot(bot, st) {
           if (!AIR.has(nameAt(bot, { x, y, z })) || !AIR.has(nameAt(bot, { x, y: y + 1, z }))) continue
           let below = null
           try { below = bot.blockAt(new Vec3(x, y - 1, z)) } catch (_) { below = null }
-          if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) continue
+          // An interactive support opens its GUI on the place click (vmzq.27).
+          if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name) || isInteractRef(below.name)) continue
+          if (bad && bad.has(`${x},${y},${z}`)) continue
           const dist = Math.hypot(x + 0.5 - bp.x, y - bp.y, z + 0.5 - bp.z)
           if (!best || dist < best.dist) best = { x, y, z, dist }
         }
@@ -1146,24 +1161,27 @@ function stowSpot(bot, st) {
   return null
 }
 
-// Put the carried box down (vmzq.40): owns the tick while it walks/places;
-// false when it cannot (no box in the pack yet, no spot: build on, the
-// contents stay carried and reserved).
+// Put the carried box down (vmzq.40): owns the tick while it walks/places.
+// When it cannot (the drop was never picked up, no spot, 9 failed puts)
+// the carry ends: the contents stay in the pack — kept, not put back —
+// and are ordinary pack items from then on (a stuck reserve would stall
+// the castle on material it holds, revmux 01).
 const STOW_FAILS = 3
 function stow(bot, ctx, st, now) {
   const cr = ctx.castleCarry
-  if (cr.gaveUp) return false
+  const giveUp = (why) => {
+    if (ctx.castleCarry === cr) ctx.castleCarry = null
+    try { bot.chat(`castle: ${why} the ${cr.name}, keeping its contents in my pack`) } catch (_) { /* chat best-effort */ }
+  }
   let box = null
   try {
     const inv = bot.inventory.items() || []
     box = inv.find((it) => it && it.name === cr.name) || inv.find((it) => it && RELOCATE.test(it.name))
   } catch (_) { box = null }
-  if (!box) return false
-  const giveUp = (why) => {
-    cr.gaveUp = true
-    try { bot.chat(`castle: ${why} the ${cr.name}, keeping its contents in my pack`) } catch (_) { /* chat best-effort */ }
-  }
-  if (!cr.at) cr.at = stowSpot(bot, st)
+  // pickup() ran first and is over; the server's pickup may lag a tick or two.
+  if (!box) { if (++cr.noBox > STOW_FAILS) giveUp('lost the drop of'); return false }
+  if (!cr.bad) cr.bad = new Set()
+  if (!cr.at) cr.at = stowSpot(bot, st, cr.bad)
   if (!cr.at) { giveUp('no spot outside for'); return false }
   const c = { idx: 'stow', kind: 'stow', ...cr.at }
   const p = new Vec3(c.x, c.y, c.z)
@@ -1174,7 +1192,7 @@ function stow(bot, ctx, st, now) {
   const fail = () => {
     cr.fails = (cr.fails || 0) + 1
     ctx.castleGoalIdx = -1
-    if (cr.fails % STOW_FAILS === 0) cr.at = null // try another spot
+    if (cr.fails % STOW_FAILS === 0 && cr.at) { cr.bad.add(`${cr.at.x},${cr.at.y},${cr.at.z}`); cr.at = null } // try another spot
     if (cr.fails >= STOW_FAILS * 3) giveUp('could not put down')
   }
   const bp = bodyPos(bot)
