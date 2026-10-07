@@ -179,4 +179,9 @@ export CASTLE_OUT="${CASTLE_OUT:-$HERE/last-castle.json}"
 export BOT_MEMORY_FILE="${BOT_MEMORY_FILE:-/tmp/castle-mem-${RIG_ID:-0}.json}"
 rm -f "$BOT_MEMORY_FILE"
 cd "$HERE/.."
-node tools/castle-replay.js
+# Tee: the verdict must survive on disk even if the caller only keeps a
+# tail (or the pipe dies with the run). pipefail keeps node's exit code.
+RIGOUT="/tmp/castle-rig-out-${RIG_ID:-0}.log"
+: > "$RIGOUT"
+set -o pipefail 2>/dev/null || true
+node tools/castle-replay.js 2>&1 | tee -a "$RIGOUT"

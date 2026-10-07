@@ -234,13 +234,31 @@ async function main() {
     series.push(s)
     return s
   }
+  const checkpoint = () => {
+    const last = series[series.length - 1] || {}
+    try {
+      fs.writeFileSync(OUT, JSON.stringify({
+        date: new Date().toISOString(), mins: MINS,
+        done: typeof last.done === 'number' ? last.done : 0,
+        total: typeof last.total === 'number' ? last.total : 0,
+        flips: seen.flips, deaths, steps: seen.steps, fails: seen.fails,
+        partial: Date.now() < endAt,
+        tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE, series,
+      }))
+    } catch (_) { /* checkpoint best-effort */ }
+  }
   sample()
+  checkpoint()
+  origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
   while (Date.now() < endAt) {
     await sleep(15000)
     const s = sample()
+    checkpoint()
+    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
+    try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
     if (Date.now() - lastSampleLine > 300000) {
       lastSampleLine = Date.now()
-      origLog(`castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`)
+      origLog(line)
     }
   }
   const last = series[series.length - 1] || {}
