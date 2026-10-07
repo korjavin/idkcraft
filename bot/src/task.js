@@ -60,6 +60,12 @@ const GOAL_PLANB_SWITCH_MS_DEFAULT = 450000
 const GOAL_HISTORY_KEPT = 5
 const GOAL_BACKOFF_MIN_MS = 30000
 const GOAL_BACKOFF_MAX_MS = 5 * 60 * 1000
+// Travel grace bound (revmux 01 core-2): at most one grace reset per
+// stall episode. A second castlefetch leg without intervening progress
+// is definitionally the stuck pattern the watchdog exists for —
+// uncapped, flip-flops would silence the L1/L2 ladder (their thresholds
+// dwarf the grace floor). Progress opens a new episode.
+const GOAL_GRACE_RUNS_PER_EPISODE = 1
 function envMs(name, def) {
   try {
     const raw = process.env && process.env[name]
@@ -674,16 +680,17 @@ function clearPlan(state) {
 // Watchdog round state, lazily attached per task (vmzq.21): consecutive
 // flat rounds, the decision history ring, the in-flight marker, the last
 // fire time (the min call interval), the failure backoff, the travel
-// grace stamps, and the plan-B phase.
+// grace stamps (grants this episode + floor + run tracking), and the
+// plan-B phase.
 function wdOf(state) {
   try {
     if (!state.wd || typeof state.wd !== 'object') {
-      state.wd = { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceFor: null, lastGraceAt: 0, planb: null }
+      state.wd = { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null }
     }
     if (!Array.isArray(state.wd.history)) state.wd.history = []
     return state.wd
   } catch (_) {
-    return { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceFor: null, lastGraceAt: 0, planb: null }
+    return { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null }
   }
 }
 
@@ -765,9 +772,13 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // Consume a stored watchdog answer: apply the choice as a bounded
 // commitment, park on a park choice, or back off on any failure. Every
 // resolution logs one `goal watchdog` line with its metric increment.
+// An answer whose stall resolved mid-call (progress after the fire) is
+// moot: dropped silently, no pin and no backoff (a drop is not a
+// failure — the next stall fires fresh).
 function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const ans = wd.answer
   wd.answer = null
+  if ((state && state.lastProgressAt) > (wd.firedAt || 0)) return
   const g = ctx && ctx.goal
   const id = (g && g.id) || '?'
   const stallS = Math.floor((state.stallMs || 0) / 1000)
@@ -904,33 +915,33 @@ function maybeWatchdog(bot, ctx, kind, done, total, state, now) {
   } catch (_) { /* watchdog never breaks the tick */ }
 }
 
-// Snapshot the goal-result signals a window outcome is measured against.
+// Snapshot the CLOCK's marks a window outcome is measured against —
+// never the point reading (revmux 01 core-1): the window verdict must
+// match the stall verdict, or an oscillation top-up (53->57 against a
+// 57 high-water mark) reads progress here while the clock correctly
+// stays flat, and the round cap never binds. The marks map rides along
+// so cross-kind compares share the clock's semantics exactly.
 function commitSnapshot(bot, ctx, kind) {
+  void bot
+  const st = (ctx && ctx.task && ctx.task[kind]) || null
   if (kind === 'house') {
-    let done = null
-    let total = null
-    try {
-      const home = ctx.home
-      if (home && home.site && houseLoaded(bot, home)) {
-        const p = houseProgress(bot, home)
-        done = p.done
-        total = p.total
-      }
-    } catch (_) { /* snapshot best-effort */ }
-    if (done === null || typeof done !== 'number') {
-      const st = ctx && ctx.task && ctx.task.house
-      done = st && typeof st.done === 'number' ? st.done : null
-      total = st && typeof st.total === 'number' ? st.total : total
-    }
-    return { done, total }
+    return { done: st && st.done, total: st && st.total }
   }
-  let cur = {}
+  let marks = {}
   try {
-    cur = castleCurrent(bot, ctx, ctx.castle, Date.now())
+    marks = st ? { ...matMarksOf(st) } : {}
   } catch (_) {
-    cur = {}
+    marks = {}
   }
-  return { done: cur.done, total: cur.total, prepLeft: cur.prepLeft, matKind: cur.matKind, matHave: cur.matHave, matLeft: cur.matLeft }
+  return {
+    done: st && st.done,
+    total: st && st.total,
+    prepLeft: st && st.prepLeft,
+    matKind: st && st.matKind,
+    matHave: st && st.matHave,
+    matLeft: st && st.matLeft,
+    marks,
+  }
 }
 
 // Did the goal-result signals advance past the window's snapshot? The
@@ -1424,16 +1435,20 @@ function resetTask(ctx, why = 'generation') {
 }
 
 // Shared progress reset (vmzq.21): the stall clock, the L1 dedupe, the
-// failure list, the legacy plan markers and the watchdog round count.
-// The signal fields are the caller's (they differ per site).
+// failure list, the legacy plan markers, the watchdog round count and
+// the travel-grace grants (a new stall episode). The signal fields are
+// the caller's (they differ per site). lastProgressAt moots watchdog
+// answers whose stall resolved mid-call.
 function progressReset(state, kind, now) {
   state.stallMs = 0
   state.lastAt = now
   state.lastL1At = null
   state.lastL1Diag = null
   state.fails = []
+  state.lastProgressAt = now
   try {
     wdOf(state).rounds = 0
+    wdOf(state).graceRuns = 0
   } catch (_) { /* rounds best-effort */ }
   clearPlan(state)
   setStallGauge(kind, 0)
@@ -1681,6 +1696,13 @@ function taskTick(bot, ctx, now = Date.now()) {
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
       if (typeof cur.done !== 'number') {
+        // Run tracking for the travel grace (unread ticks count: a run
+        // may start while the signals are unreadable).
+        if (watchdogOn()) {
+          try {
+            wdOf(state).lastStep = ctx.step
+          } catch (_) { /* run best-effort */ }
+        }
         // Never read since connect (verify core-1): st.progress is not
         // persisted, so an off-site stall would never advance. Advance with
         // ?/? like the house; the first loaded reading baselines clean.
@@ -1731,17 +1753,20 @@ function taskTick(bot, ctx, now = Date.now()) {
         } catch (_) { /* window best-effort */ }
         return
       }
-      // Travel grace (vmzq.21, watchdog verdicts only): a fresh
-      // castlefetch leg gets one clock reset per grace window for the
-      // quarry walk — without it every trip out reads as a stall. The
-      // floor (not per-leg) keeps flip-flops flat: run-4 flipped every
-      // ~30 s, the 90 s floor grants only the first leg.
-      if (watchdogOn() && ctx.step === 'castlefetch') {
+      // Travel grace (vmzq.21, watchdog verdicts only): the first
+      // castlefetch run of a stall episode gets one clock reset for the
+      // quarry walk — without it every trip out reads as a stall. Runs
+      // are step transitions, never stepPick.at (decide() re-stamps that
+      // on every facts-changed re-pick, which would grant per re-pick),
+      // and grants cap at one per episode (revmux 01 core-2): flip-flops
+      // stay flat for the watchdog but can no longer silence the ladder.
+      // The floor survives as a rate limit across episodes.
+      if (watchdogOn()) {
         const wd = wdOf(state)
-        const pick = ctx.stepPick
-        const leg = pick && pick.step === 'castlefetch' && typeof pick.at === 'number' ? pick.at : null
-        if (leg !== null && wd.graceFor !== leg && now - (wd.lastGraceAt || 0) >= goalGraceMs()) {
-          wd.graceFor = leg
+        const freshRun = ctx.step === 'castlefetch' && wd.lastStep !== 'castlefetch'
+        wd.lastStep = ctx.step
+        if (freshRun && (wd.graceRuns || 0) < GOAL_GRACE_RUNS_PER_EPISODE && now - (wd.lastGraceAt || 0) >= goalGraceMs()) {
+          wd.graceRuns = (wd.graceRuns || 0) + 1
           wd.lastGraceAt = now
           state.stallMs = 0
           state.lastAt = now

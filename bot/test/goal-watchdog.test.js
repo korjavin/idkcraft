@@ -924,6 +924,184 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     assert.ok(bot.chats.some((c) => c.includes('parked at')), JSON.stringify(bot.chats))
   })
 
+  it('an oscillation top-up inside the window reads flat against the high-water mark (revmux 01 core-1)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const { brain } = answerBrain('castlefetch')
+    ctx.brain = brain
+    const inv = bot.inventory.items()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0) // stone mark 57
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.task.castle.wd.pending, 'round fired')
+    // Dip before the answer lands, so the point reading at consume time
+    // (53) sits below the clock's high-water mark (57).
+    inv[0].count = 69
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume
+    assert.ok(ctx.goal.commit, 'window live')
+    assert.equal(ctx.goal.commit.snapshot.matHave, 57, 'snapshot carries the mark, not the dip')
+    // Rise back to the mark mid-window: movement, but no clock progress.
+    t += 10000
+    inv[0].count = 73
+    taskMod.taskTick(bot, ctx, t)
+    guard = 0
+    while (ctx.goal.commit && guard++ < 40) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.equal(outLogs().length, 1)
+    assert.match(outLogs()[0], /delta=cells8->8 result=flat$/, `top-up is flat: ${JSON.stringify(outLogs())}`)
+    assert.equal(ctx.task.castle.wd.rounds, 1, 'the round cap still binds')
+  })
+
+  it('endless flips grant exactly one grace; progress re-arms the cap (revmux 01 core-2)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const { brain } = answerBrain('castlefetch')
+    ctx.brain = brain
+    const inv = bot.inventory.items()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    // Flip castle<->castlefetch on EVERY tick with fresh picks, stone
+    // oscillating: the old floor granted every ~90 s and silenced the
+    // ladder; the cap grants once and the watchdog fires on time.
+    let t = t0
+    for (let s = 0; s < 10; s++) {
+      t += 10000
+      inv[0].count = s % 2 === 0 ? 69 : 73
+      ctx.step = s % 2 === 0 ? 'castle' : 'castlefetch'
+      ctx.stepStatus = 'running'
+      ctx.stepPick = { step: ctx.step, at: t, source: 'goal-fsm', why: 'flip' }
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.equal(resetLogs().filter((l) => l.endsWith('why=grace')).length, 1, `one grace: ${JSON.stringify(resetLogs())}`)
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      inv[0].count = inv[0].count === 73 ? 69 : 73
+      ctx.step = 'castlefetch'
+      ctx.stepStatus = 'running'
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.task.castle.wd.pending, 'watchdog fires despite the flips')
+    assert.ok(ctx.task.castle.wd.firedAt - t0 <= 200000, 'fire is not pushed out by re-grants')
+    // Progress opens a new episode: the next fresh run grants again.
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume (commit live, details unasserted)
+    inv[0].count = 90 // usable 74: genuine growth past the 57 mark
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    assert.ok(resetLogs().some((l) => l === 'goal reset kind=castle why=material:stone'))
+    assert.equal(ctx.goal.commit, null, 'progress ends the window')
+    ctx.step = 'castle'
+    ctx.stepStatus = 'running'
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    ctx.stepPick = { step: 'castlefetch', at: t + 10000, source: 'goal-fsm', why: 'new leg' }
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    assert.equal(resetLogs().filter((l) => l.endsWith('why=grace')).length, 2, 'new episode re-arms the cap')
+  })
+
+  it('a degraded pin neither churns nor asks; a pinable one still forces on static facts (revmux 01 core-3)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const asks = []
+    const { brain } = answerBrain('gather')
+    brain.ask = async (q) => {
+      asks.push(q)
+      return 'castlefetch'
+    }
+    ctx.brain = brain
+    const inv = bot.inventory.items()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume: gather pinned, step still on the fetch
+    assert.ok(ctx.goal.commit, 'window live')
+    assert.equal(ctx.goal.commit.step, 'gather')
+    // Static facts, body elsewhere (shelter leg just ended): the force
+    // applies the pin without waiting for a facts change.
+    ctx.step = 'shelter'
+    ctx.stepStatus = 'running'
+    restampRealtime(ctx)
+    const facts = goal.goalFacts(bot, ctx)
+    ctx.goalText = goal.goalText(facts, ctx.home)
+    ctx.askedKey = `${ctx.goalText}\nrunning`
+    let d = await goal.decide(bot, ctx)
+    assert.equal(d.action, 'gather', 'force applies the pin on static facts')
+    assert.equal(ctx.stepPick.source, 'task-plan')
+    assert.equal(asks.length, 0, 'the singleton pin asks nothing')
+    // Gather dies (failed hold): the pin degrades, one honest re-decide
+    // moves the menu on, and the window must NOT force a re-decide
+    // every tick behind it.
+    inv.push({ name: 'oak_log', count: 1 }) // flip the facts text...
+    ctx.gather = { final: 'failed:no-trees', atLogs: 1 } // ...and hold gather there
+    d = await goal.decide(bot, ctx)
+    assert.notEqual(d.action, 'gather', 'degraded pin releases the step')
+    // From here the facts are static: the shortcut must re-issue (ask
+    // lives only behind the re-decide branch, so no branch means no ask).
+    const at = ctx.stepPick.at
+    const askCount = asks.length
+    d = await goal.decide(bot, ctx)
+    assert.equal(d.source, 'goal-fsm', 'shortcut, not force')
+    assert.equal(ctx.stepPick.at, at, 'no re-stamp without a re-decide')
+    assert.equal(asks.length, askCount, 'no ask behind a degraded pin')
+    d = await goal.decide(bot, ctx)
+    assert.equal(d.source, 'goal-fsm')
+    assert.equal(ctx.stepPick.at, at, 'still quiet on the third tick')
+    assert.equal(asks.length, askCount)
+    assert.ok(ctx.goal.commit, 'the window itself survives the degrade')
+  })
+
+  it('an answer whose stall resolved mid-call is moot: dropped, no pin, no backoff', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const { calls, brain } = answerBrain('castlefetch')
+    ctx.brain = brain
+    const inv = bot.inventory.items()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.task.castle.wd.pending, 'round fired')
+    await flush()
+    // Progress lands on the consume tick: the progress block runs first
+    // and returns, so the answer waits one more tick — over a resolved
+    // stall.
+    inv[0].count = 90 // usable 74 > 57
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    assert.ok(resetLogs().some((l) => l === 'goal reset kind=castle why=material:stone'))
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume attempt: moot
+    assert.equal(calls.length, 1, 'the call fired, wasted')
+    assert.equal(wdLogs().length, 0, 'no line for a moot answer')
+    assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'no pin on a resolved stall')
+    assert.equal(ctx.task.castle.wd.backoffMs, 0, 'a drop is not a failure')
+  })
+
   it('an owner castle stop over a switch clears the stamp (no auto-expiry of an owner park)', async () => {
     const { handleChat } = require('../src/index')
     const bot = makeBot()

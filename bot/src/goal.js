@@ -2026,11 +2026,36 @@ async function decide(bot, ctx) {
     commitStep = null
     commitActive = false
   }
+  // Force gate (revmux 01 core-3): a live window forces a re-decide past
+  // the shortcut ONLY when the pin would apply right now — feasible +
+  // registered, the safety choice from the ordinary menu not a night
+  // step — and the body is not already on it. Forcing past a degraded
+  // pin (or a safety win) would re-decide every tick for the whole
+  // window: a brain.ask per tick plus a stepPick re-stamp each time.
+  let commitForce = false
+  if (commitActive && ctx.step !== commitStep) {
+    try {
+      const pinable = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
+      if (pinable) {
+        const earlyNames = Object.keys(MENU).filter((n) => {
+          try {
+            return MENU[n].feasible(facts, bot, ctx) && registered(n) && !failHolds(ctx, n, text, bot)
+          } catch (_) {
+            return false
+          }
+        })
+        const safety = goalFsm(facts, earlyNames)
+        commitForce = safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter'
+      }
+    } catch (_) {
+      commitForce = false
+    }
+  }
   // A finished window step ends the window early (before any re-pick, so
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.
   const commitEnded = commitActive && finished && prev && prev === commitStep
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep || (commitActive && ctx.step !== commitStep)) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./task').commitFinished(bot, ctx, status)
@@ -2062,7 +2087,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !(commitActive && ctx.step !== commitStep) && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {
