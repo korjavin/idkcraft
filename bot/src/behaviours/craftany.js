@@ -526,3 +526,4 @@ function craftItem(bot, ctx, name, count) {
 
 module.exports = craftItem
 module.exports.planCraft = planCraft
+module.exports.standingTable = standingTable

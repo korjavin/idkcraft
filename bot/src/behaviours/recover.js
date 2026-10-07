@@ -220,7 +220,9 @@ const PICK_DIG = new Set([
 // block (deepslate ~15, inside DIG_TIMEOUT_TICKS), no drop — the slow hand
 // staircase out of a buried pocket beats a wedge with no tool at all (prod:
 // y~37, pickaxe=no, 17 min in place). Equip crafts a pick first when the
-// pack funds one (castle pickRearm); this is the no-materials floor.
+// pack funds one (castle pickRearm); this is the no-materials floor — and
+// the slow one: rig CASTLE_BURY=25 NOWOOD surfaced in ~285 s (the funded
+// rearm in 60 s), bare-hand stone is ~7.5 s a block.
 // Only while buried (rock over the head column): an open pit keeps the
 // jsf.4 rule — no pick, no stone ladder; sidestep/call_player own it.
 function capped(bot) {

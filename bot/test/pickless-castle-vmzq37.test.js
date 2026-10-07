@@ -18,10 +18,11 @@ const equip = require('../src/behaviours/equip')
 const recover = require('../src/behaviours/recover')
 
 let planOk = true
+let craftResult = null
 const crafted = []
 const stub = Object.assign((bot, ctx, names, n) => {
   crafted.push([...names])
-  return { done: true, target: names[0] }
+  return craftResult || { done: true, target: names[0] }
 }, { planCraft: () => (planOk ? { ok: true } : { ok: false, fail: 'missing' }) })
 require.cache[craftanyPath].exports = stub
 after(() => { require.cache[craftanyPath].exports = realCraftany })
@@ -67,6 +68,35 @@ describe('pickless buried castle rearms first (vmzq.37)', () => {
     const ctx = { ...CASTLE, step: 'equip' }
     equip(bot, ctx)
     assert.deepEqual(crafted, [['stone_pickaxe', 'wooden_pickaxe']])
+  })
+
+  it('a failed rearm is a spot verdict, never the equip day latch', () => {
+    planOk = true
+    craftResult = { done: false, line: 'need a crafting table' }
+    const bot = { entity: { position: new Vec3(0, 37, 0) }, time: { day: 1, timeOfDay: 6000 }, inventory: { items: () => [{ name: 'oak_planks', count: 9 }] } }
+    const ctx = { ...CASTLE, step: 'equip' }
+    try {
+      for (let i = 0; i < 3; i++) {
+        ctx.stepStatus = null
+        equip(bot, ctx)
+        assert.equal(ctx.stepStatus, 'failed:equip-pickaxe')
+      }
+      assert.equal(equip.equipLatched(ctx, bot), false)
+    } finally { craftResult = null }
+  })
+
+  it('craftany under craftanyLocal ignores a standing table out of reach', () => {
+    const table = { x: 0, y: 57, z: 0 }
+    const bot = {
+      entity: { position: new Vec3(0.5, 37, 0.5) },
+      blockAt: (q) => ({ name: Math.floor(q.y) === 57 ? 'crafting_table' : 'stone', position: q }),
+    }
+    const ctx = { claimedTable: table }
+    assert.ok(realCraftany.standingTable(bot, ctx), 'normal crafts walk to it')
+    ctx.craftanyLocal = true
+    assert.equal(realCraftany.standingTable(bot, ctx), null, 'the buried rearm places its own')
+    bot.entity.position = new Vec3(0.5, 55, 0.5)
+    assert.ok(realCraftany.standingTable(bot, ctx), 'in reach it still counts')
   })
 
   it('decide: buried pickless body rearms even over a castle plan pin; at the site the batch lays', async () => {
