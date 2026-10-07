@@ -811,6 +811,22 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log('shelter-run: holding fight preemption, walking home')
         ctx.shelterRunLogged = true
       }
+      // Post-respawn night grace (idkcraft-lph3): the shelter-run mirror
+      // for a night (re)spawn — fight would win every tick while hostiles
+      // stay adjacent and the shelter never builds (the bed-loop). While
+      // the respawn stamp is fresh the work step below runs first and digs
+      // now (melee reflex defends); a stale stamp resumes fight. Alone
+      // only (!target: player protection still fights), no order override
+      // (comehome/gocastle doorway legs own their ticks, like dayDivert).
+      let graceFresh = false
+      try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
+      if (!graceFresh) ctx.nightGraceLogged = false
+      const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter &&
+        decision.action === 'fight' && !target && graceFresh
+      if (nightGraceHold && !ctx.nightGraceLogged) {
+        console.log('night-grace: holding fight preemption, sheltering')
+        ctx.nightGraceLogged = true
+      }
       // 33vm: a hostile already INSIDE the interior box is fought (prod: six
       // deaths standing idle in stay with a zombie at 0.7). Scanned, not
       // state.hostile: the nearest may stand outside the wall. The pin and
@@ -918,7 +934,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || underFire || dayDivert)) {
+      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
@@ -1427,6 +1443,13 @@ function handleDeath(bot, ticker) {
 function handleRespawn(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+  // Post-respawn night grace (idkcraft-lph3): stamp the reappearance so
+  // dispatch holds fight preemption while the night step digs in. Each
+  // death re-stamps; the stamp goes stale on its own after the window.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (ctx) ctx.lastRespawnAt = Date.now()
+  } catch (_) { /* stamp best-effort */ }
 }
 
 function handlePlayerLeft(bot, ticker, player) {

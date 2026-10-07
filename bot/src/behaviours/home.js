@@ -448,6 +448,22 @@ function stepThrough(bot, ctx, st, legs, arrived, laneDX) {
 // the run as live while the stamp is fresher than this — a step switch
 // away simply lets it go stale, so no ticker clearing is needed.
 const SHELTER_RUN_FRESH_MS = 2500
+// Post-respawn night grace (idkcraft-lph3): after a night death the bed (or
+// world spawn) lands in a swarm, fight wins every tick while hostiles stay
+// adjacent, and the shelter (~30-60 s to close) never builds before the
+// unarmored bot dies (~20 s) — the N2-N5 bed-loop cascade. Dispatch holds
+// fight preemption while this stamp is fresh (like the shelter run above),
+// so the night step (shelter/gohome/stay) runs first and digs now. One
+// shot per respawn: each death re-stamps, each dawn lets it go stale. The
+// window covers a walk (15 s) + pillar (~10 s) + dig-in (~5 s) + cap lag.
+const NIGHT_GRACE_MS = 60000
+function nightGrace(bot, ctx) {
+  try {
+    if (typeof ctx.lastRespawnAt !== 'number') return false
+    if (Date.now() - ctx.lastRespawnAt >= NIGHT_GRACE_MS) return false
+    return timeWord(bot) === 'night'
+  } catch (_) { return false }
+}
 function freshGo() {
   return { phase: '', stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 }
 }
@@ -1087,9 +1103,12 @@ function shelter(bot, ctx, target, state) {
         // stays set so the re-pillared top holds without re-descending.
         st.descended = false
         try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
-        // Already unsheltered: a set dig implies unpillared (both arm
-        // sites clear it), and the climb gate above clears inShelter on
-        // every unpillared tick before the dig runs.
+        // Unarm for the climb (lph3 core-2): while the descent dug
+        // (digs > 0) the running branch above armed inShelter, and with
+        // st.dig now null the index.js drive gate (digs > 0) would idle
+        // every fight tick instead of re-pillaring — the climb gate
+        // above only clears on ticks that reach the shelter handler.
+        try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
         return
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
@@ -1551,4 +1570,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, phantomNear, PHANTOM_R }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R }
