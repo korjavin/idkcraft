@@ -2239,8 +2239,8 @@ function setStallGauge(kind, ms) {
 // Far-walk progress (vmzq.35, the travel-grace idea for the castle step's
 // own walk): past the castle far-walk range, the distance to the footprint
 // sinking CASTLE_TRAVEL_STEP below its low-water mark is progress. Low-water
-// only, so a wedge or an out-and-back trip never counts; on site the mark
-// clears and the next far respawn baselines fresh.
+// only, so a wedge or an out-and-back trip never counts; on site or after a
+// death the mark rebaselines.
 const CASTLE_TRAVEL_STEP = 8
 function castleTravel(bot, ctx, state) {
   try {
@@ -2250,8 +2250,12 @@ function castleTravel(bot, ctx, state) {
       state.siteDist = null
       return false
     }
-    if (typeof state.siteDist !== 'number') {
+    // A death rebaselines (revmux 01): task state survives a respawn, and a
+    // mark sunk before it would deny the walk back from spawn.
+    const deaths = (ctx && ctx.deaths) || 0
+    if (typeof state.siteDist !== 'number' || state.siteDeaths !== deaths) {
       state.siteDist = d
+      state.siteDeaths = deaths
       return false
     }
     if (d + CASTLE_TRAVEL_STEP > state.siteDist) return false

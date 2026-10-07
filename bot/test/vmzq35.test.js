@@ -92,6 +92,21 @@ describe('vmzq.35 far castle respawn', () => {
       taskMod.taskTick(bot, ctx, t)
     }
     assert.ok(st.stallMs >= 80000, `a wedge stalls: ${st.stallMs}`)
+    // Death mid-walk, respawn 500 off again: the low-water mark rebaselines
+    // (revmux 01), so the second walk back counts too.
+    ctx.deaths = (ctx.deaths || 0) + 1
+    x = SITE.x + 500
+    bot.entity.position = pos(x, 64, SITE.z)
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    const before = lines.filter((l) => l.endsWith('why=travel')).length
+    for (let i = 0; i < 5; i++) {
+      t += 10000
+      x -= 4
+      bot.entity.position = pos(x, 64, SITE.z)
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(lines.filter((l) => l.endsWith('why=travel')).length > before, 'the walk back after a death is progress')
   })
 
   it('3: castlefetch 500 off walks to the site with an XZ goal (prod: failed:castlefetch-unreachable)', () => {
