@@ -606,6 +606,7 @@ function equip(bot, ctx) {
     digTick(bot, ctx, st, bp)
     return
   }
+  if (kind === 'pickaxe' && pickRearm(bot, ctx)) return
   const op = toolOp(bot, kind)
   if (!op) return
   if (op.fail) {
@@ -638,6 +639,33 @@ function equip(bot, ctx) {
     return
   }
   craftOne(bot, ctx, op)
+}
+
+// Pickless castle (idkcraft-vmzq.37, prod: the pick wore out in a forage
+// tunnel at y~40 and the castle walk wedged a no-dig body there for 17
+// min). With no pickaxe at all on an active castle the pick goes through
+// craftany, which also makes and places the table beside the body — the
+// tool path below waits for a station the far castle site never has.
+// True while it owns the tick; a pack that cannot fund it keeps the old path.
+const PICK_REARM = ['stone_pickaxe', 'wooden_pickaxe']
+const PICK_REARM_KEY = `${PICK_REARM.join(',')}x1`
+function pickRearm(bot, ctx) {
+  if (hasPickaxe(bot)) return false
+  let craftany = null
+  try {
+    if (!require('./explore').castleActive(ctx)) return false
+    craftany = require('./craftany') // deferred: craftany requires equip
+    const running = !!(ctx.craftany && ctx.craftany.key === PICK_REARM_KEY)
+    if (!running && !craftany.planCraft(bot, ctx, PICK_REARM, 1).ok) return false
+  } catch (_) { return false }
+  const r = craftany(bot, ctx, PICK_REARM, 1)
+  if (r === 'running') return true
+  if (r && r.done) {
+    try { console.log(`equip rearmed ${r.target} (pickless castle)`) } catch (_) { /* log best-effort */ }
+    return true
+  }
+  fail(bot, ctx, 'pickaxe', new Error((r && r.line) || 'craft-failed'))
+  return true
 }
 
 // g0z.25 slow-path settle (gear PHANTOM_SETTLE_MS parity): the fast-path
@@ -911,3 +939,4 @@ module.exports.tableReady = tableReady
 // reads it, the behaviour counts it (beds sheepLatched mirror).
 module.exports.equipLatched = equipLatched
 module.exports.EQUIP_LATCH = EQUIP_LATCH
+module.exports.PICK_REARM = PICK_REARM
