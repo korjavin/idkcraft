@@ -46,6 +46,36 @@ describe('castle-rig.sh anti-noise', () => {
     assert.equal(badRate.status, 2)
     assert.match(badRate.stdout, /tickrate: want an integer/)
   })
+
+  it('fails loud on a bad memory or distance trim (idkcraft-vmzq.24)', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-trim-'))
+    const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), ...env } })
+    const badMax = run({ CASTLE_MAX_MEMORY: 'huge' })
+    assert.equal(badMax.status, 2)
+    assert.match(badMax.stdout, /memory: want <n>M\|<n>G/)
+    const badInit = run({ CASTLE_INIT_MEMORY: '512' })
+    assert.equal(badInit.status, 2)
+    assert.match(badInit.stdout, /memory: want <n>M\|<n>G/)
+    const inv = run({ CASTLE_INIT_MEMORY: '2G', CASTLE_MAX_MEMORY: '768M' })
+    assert.equal(inv.status, 2)
+    assert.match(inv.stdout, /INIT .* must be/)
+    const badView = run({ CASTLE_VIEW_DISTANCE: 'far' })
+    assert.equal(badView.status, 2)
+    assert.match(badView.stdout, /view-distance: want an integer/)
+    const badSim = run({ CASTLE_SIM_DISTANCE: '1' })
+    assert.equal(badSim.status, 2)
+    assert.match(badSim.stdout, /sim-distance: want an integer/)
+  })
+
+  it('derives the rig START.sh with the trimmed heap (idkcraft-vmzq.24)', () => {
+    const script = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-rig.sh'), 'utf8')
+    assert.ok(script.includes('INIT_MEMORY=$INIT_MEM -e MAX_MEMORY=$MAX_MEM'), 'heap not injected into derived START.sh')
+    assert.ok(script.includes('MAX_MEMORY=$MAX_MEM'), 'heap injection not asserted')
+    assert.ok(script.includes('CASTLE_SLOTS:-0 a b c'), 'auto slots missing the 4th rig')
+  })
 })
 
 describe('castle-rig.sh rig lock', () => {
