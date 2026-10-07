@@ -157,6 +157,25 @@ function cobble(bot) {
   return countItems(bot, (n) => n === 'cobblestone')
 }
 
+// Per-leg time split (idkcraft-vmzq.20 nudge2): every digTick lands in
+// exactly one bucket — dig (a dig issued this tick), walk (a walk
+// issued), other (admin/terminal/craft ticks) — so the rig can see where
+// the quarry's ticks go. Lazily initialised: unit fakes pass a bare {}.
+function spend(f, bucket) {
+  try {
+    const s = f.spend || (f.spend = { dig: 0, walk: 0, other: 0 })
+    if (s && typeof s[bucket] === 'number') s[bucket]++
+  } catch (_) { /* counters best-effort */ }
+}
+
+// Quarry output on hand (null when unreadable): the leg-over line diffs
+// it against the leg-start count, so dig-ticks-per-block is measurable.
+function blocksOnHand(bot) {
+  try {
+    return countItems(bot, (n) => n === 'cobblestone' || n === 'dirt')
+  } catch (_) { return null }
+}
+
 // Site box with a one-block margin, foundation layers included: never dig
 // the castle's own ground or walls for its stone.
 function onSite(st, p, margin = 1, below = 3) {
@@ -181,6 +200,17 @@ function castleChest(bot, st) {
 }
 
 function finish(bot, ctx, status) {
+  const f = ctx.castleFetch
+  if (f && f.spend) {
+    let delta = '?'
+    try {
+      const now = blocksOnHand(bot)
+      delta = (typeof f.blocks0 === 'number' && typeof now === 'number')
+        ? ((now - f.blocks0 >= 0 ? '+' : '') + (now - f.blocks0))
+        : String(now)
+    } catch (_) { /* delta best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} blocks=${delta}`) } catch (_) { /* log best-effort */ }
+  }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
   }
@@ -488,9 +518,9 @@ function roomForDrop(bot, ctx) {
 }
 function digTick(bot, ctx, f) {
   const bp = bodyPos(bot)
-  if (!bp) return
-  if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
-  if (!roomForDrop(bot, ctx)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  if (!bp) { spend(f, 'other'); return }
+  if (!hasPickaxe(bot)) { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
+  if (!roomForDrop(bot, ctx)) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
   // wooden pick (~1.4x slower on stone) and no equip step ever interjects
   // while castle legs are feasible, so upgrade in place once the pack
@@ -502,10 +532,10 @@ function digTick(bot, ctx, f) {
     if (due) {
       let r = null
       try { r = deps.craftItem(bot, ctx, ['stone_pickaxe'], 1) } catch (_) { r = { done: false } }
-      if (r === 'running') return // crafting across ticks; the terminal outcome latches below
+      if (r === 'running') { spend(f, 'other'); return } // crafting across ticks; the terminal outcome latches below
       f.pickUp = true
       try { console.log(`castlefetch stone: pick upgrade ${r && r.done ? 'done' : 'failed'}, digging on`) } catch (_) { /* log best-effort */ }
-      if (r && r.done) return
+      if (r && r.done) { spend(f, 'other'); return }
     }
   }
   const st = ctx.castle
@@ -532,6 +562,7 @@ function digTick(bot, ctx, f) {
       if (f.chestRelook == null) f.chestRelook = true
       walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2)
       if (stalled(f.siteWalk || (f.siteWalk = {}), far, APPROACH_WAITS)) finish(bot, ctx, 'failed:castlefetch-unreachable')
+      spend(f, 'walk')
       return
     }
     f.siteWalk = null
@@ -540,6 +571,7 @@ function digTick(bot, ctx, f) {
       f.chestDone = false
       f.chest = null
       f.chestWalk = null
+      spend(f, 'other')
       return // the chest source goes first next tick
     }
     t = pickStone(bot, ctx, f, bp, stoneAt)
@@ -553,7 +585,7 @@ function digTick(bot, ctx, f) {
       }
       t = pickQuarry(bot, ctx, f)
     }
-    if (!t) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+    if (!t) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
     f.target = t
   }
   const b = targetAt(t)
@@ -568,6 +600,7 @@ function digTick(bot, ctx, f) {
       f.target = null
       if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
     }
+    spend(f, 'walk')
     return
   }
   // Stance rules (below-feet trap, gravity, submerged, protection) at dig
@@ -577,23 +610,25 @@ function digTick(bot, ctx, f) {
     logDeny(b, deny)
     skip.add(t.k)
     f.target = null
+    spend(f, 'other')
     return
   }
   if (t.quarry) {
     // Trench drops are collected a stance later, so no cobble-gain strike;
     // a cell that survives its digs is skipped instead.
-    if (++t.tries > QUARRY_TRIES) { skip.add(t.k); f.target = null; return }
+    if (++t.tries > QUARRY_TRIES) { spend(f, 'other'); skip.add(t.k); f.target = null; return }
     // Drops never reaching the pack (revmux 01): a trench's worth of stone
     // dug with no cobble gained ends the leg instead of digging all day.
     const have = cobble(bot)
-    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
   } else {
     const have = cobble(bot)
     if (f.lastCobble != null && have <= f.lastCobble) {
-      if (++f.noGain >= NOGAIN_STRIKES) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+      if (++f.noGain >= NOGAIN_STRIKES) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
     } else f.noGain = 0
     f.lastCobble = have
   }
+  spend(f, 'dig')
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
     // batch was in); rock with the pickaxe.
@@ -617,7 +652,7 @@ function castlefetch(bot, ctx, target, state) {
   if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
-    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now() }
+    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot) }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but

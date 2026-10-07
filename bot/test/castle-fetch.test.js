@@ -938,4 +938,32 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     await goal.decide(bot, ctx)
     assert.equal(stuckLines().length, 1, 'the standing block stays silent')
   })
+
+  it('every digTick lands in exactly one spend bucket (vmzq.20 nudge2)', () => {
+    const bot = makeBot({ items: TOOLS() })
+    const ctx = { castle: castleState() }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      fetch(bot, ctx) // tick 1: quarry target picked, walk or dig
+      fetch(bot, ctx) // tick 2: same leg, one more bucketed tick
+    } finally { console.log = orig }
+    assert.ok(ctx.castleFetch, 'the leg survives two ticks')
+    const s = ctx.castleFetch.spend
+    assert.deepEqual([s.dig, s.walk, s.other].map((n) => typeof n), ['number', 'number', 'number'])
+    assert.equal(s.dig + s.walk + s.other, 2, `buckets: ${JSON.stringify(s)}`)
+  })
+
+  it('the leg-over line reports the split and the block delta (vmzq.20 nudge2)', () => {
+    const bot = makeBot({ items: [] }) // no pick: the leg ends on its first tick
+    const ctx = { castle: castleState() }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try { fetch(bot, ctx) } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done')
+    const line = lines.find((m) => m.includes('leg over'))
+    assert.ok(line, `lines: ${JSON.stringify(lines)}`)
+    assert.match(line, /leg over \(done\) ticks dig=0 walk=0 other=1 blocks=\+0/)
+  })
 })
