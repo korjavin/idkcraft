@@ -2235,6 +2235,51 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(h2) vmzq.30 revmux 01 body-1: committed dig drives on the suppressed tick, no pursuit', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.step = 'shelter'
+    bot._tickerCtx.shelter = { dig: { digs: 1 } }
+    const origShelter = BEHAVIOURS.shelter
+    let shelterRan = 0
+    BEHAVIOURS.shelter = () => { shelterRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(shelterRan, 1, 'the committed dig drives, no frozen pit')
+      assert.equal(bot.calls.setGoal, 0, 'no pursuit')
+    } finally {
+      BEHAVIOURS.shelter = origShelter
+      ticker.destroy()
+    }
+  })
+
+  it('(h3) vmzq.30 revmux 01 body-1: plain hold drives nothing', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.step = 'shelter'
+    bot._tickerCtx.shelter = { pillared: true }
+    const origShelter = BEHAVIOURS.shelter
+    let shelterRan = 0
+    BEHAVIOURS.shelter = () => { shelterRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(shelterRan, 0, 'a hold with no dig stays a hold')
+    } finally {
+      BEHAVIOURS.shelter = origShelter
+      ticker.destroy()
+    }
+  })
+
   it('(i) sheltered + hostile at 2: reflex still swings', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }

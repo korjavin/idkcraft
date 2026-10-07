@@ -810,12 +810,18 @@ function shelterOwns(bot, ctx) {
 // the old steps win (walk in, stay). A sited home is required: the
 // shelter behaviour fails no-home without one, so a truly homeless bot
 // keeps the old night instead of a doomed pick.
+// Unbuilt home (vmzq.30): near a SITED-but-unbuilt home the old steps
+// cannot run either (gohome/stay need built), and working the dark
+// there dies (run6, rig: zombie spawn-loops) — so the night belongs to
+// shelter in place at any distance, even next to the house or the site.
 function castleSiteNight(bot, ctx) {
   try {
-    if (!castleFirst(ctx) || !castleFarFromHome(ctx)) return false
+    if (!castleFirst(ctx)) return false
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    if (ctx.home.built !== true) return true
+    if (!castleFarFromHome(ctx)) return false
     return Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST
   } catch (_) {
     return false

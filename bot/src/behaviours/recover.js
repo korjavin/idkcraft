@@ -923,9 +923,13 @@ function digInHazard(bot, ox, dy, oz) {
 // A fresh column must take the whole descent (rig: a grass skin over stone
 // dug 1 deep and capped nothing): all DIG_IN_DEPTH cells hand-dig. Deeper
 // steps re-check the next cell only. The reach check (canDigBlock) is for
-// the cell right under the body; scan cells are judged by name.
-function digInVeto(bot, ctx, ox, oy, oz, fresh) {
-  const n = fresh ? DIG_IN_DEPTH : 1
+// the cell right under the body; scan cells are judged by name. extra: the
+// phantom descent starts a pillar-cell above normal, so its fresh column
+// takes one more cell — the cap then lands at ground level against dirt
+// walls instead of in the open pillar cell (no-cap-ref). Walk targets are
+// ground columns and always veto at the normal depth.
+function digInVeto(bot, ctx, ox, oy, oz, fresh, extra = 0) {
+  const n = fresh ? DIG_IN_DEPTH + (extra | 0) : 1
   for (let k = 1; k <= n; k++) {
     const c = cellAt(bot, ox, oy - k, oz)
     const here = ox === 0 && oz === 0 && k === 1
@@ -1020,7 +1024,7 @@ function digInRun(bot, ctx, st) {
     return 'running'
   }
   const below = cellAt(bot, 0, -1, 0)
-  if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
+  if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH + (st.extra | 0)) {
     if (!solid(below)) {
       // Dug out but the body still stands on a neighbour's edge (or is mid
       // fall): walk to the cell centre, the walls stop the overshoot.
@@ -1055,11 +1059,11 @@ function digInRun(bot, ctx, st) {
     }
     setForward(bot, false)
     st.steer = 0
-    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs)
+    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs, st.extra | 0)
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
       // A server that reverts the break (protection) would re-dig forever.
-      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + 2) return 'failed:dig-refused'
+      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + (st.extra | 0) + 2) return 'failed:dig-refused'
       st.digInFlight = true
       void (async () => {
         try { await bot.dig(below) } catch (_) { st.digError = true } finally { st.digInFlight = false }
@@ -1071,6 +1075,7 @@ function digInRun(bot, ctx, st) {
       const spot = !st.digs && !st.walked ? digInSpot(bot, ctx) : null
       if (!spot || typeof goals.GoalBlock !== 'function') return 'failed:' + veto
       st.walked = true
+      st.extra = 0 // the perch geometry goes with the walk: arrival digs a ground column
       st.walkTicks = 0
       st.walk = { x: Math.floor(bp.x) + spot[0], y: Math.floor(bp.y) + spot[1], z: Math.floor(bp.z) + spot[2] }
       try { digInWalk(bot, ctx, st.walk) } catch (_) { return 'failed:' + veto }
