@@ -526,16 +526,30 @@ function digTick(bot, ctx, f) {
   // while castle legs are feasible, so upgrade in place once the pack
   // funds it (craftany chains sticks + a table as needed). One attempt
   // per leg: a short pack stays short for a stone leg.
-  if (!f.pickUp) {
+  if (!f.pickUpLogged) {
     let due = false
     try { due = require('./equip').stoneUpgradeDue(bot) } catch (_) { due = false }
+    if (due && !f.pickUpArmed) {
+      f.pickUpArmed = true
+      try { console.log('castlefetch stone: pick upgrade started (wood->stone)') } catch (_) { /* log best-effort */ }
+    }
     if (due) {
       let r = null
       try { r = deps.craftItem(bot, ctx, ['stone_pickaxe'], 1) } catch (_) { r = { done: false } }
-      if (r === 'running') { spend(f, 'other'); return } // crafting across ticks; the terminal outcome latches below
-      f.pickUp = true
+      if (r === 'running') { spend(f, 'other'); return } // crafting across ticks; the landing is seen below
+      f.pickUpLogged = true
       try { console.log(`castlefetch stone: pick upgrade ${r && r.done ? 'done' : 'failed'}, digging on`) } catch (_) { /* log best-effort */ }
       if (r && r.done) { spend(f, 'other'); return }
+    } else if (f.pickUpArmed) {
+      // The craft landed between ticks (async): due flips false on the
+      // stone pick before any call returns terminal, so the started line
+      // would dangle without this (rig: stone in hand, no line).
+      let stone = false
+      try { stone = countItems(bot, (n) => n === 'stone_pickaxe') > 0 } catch (_) { stone = false }
+      if (stone) {
+        f.pickUpLogged = true
+        try { console.log('castlefetch stone: pick upgrade done, digging on') } catch (_) { /* log best-effort */ }
+      }
     }
   }
   const st = ctx.castle

@@ -330,6 +330,29 @@ describe('castlefetch sources (g0z.4)', () => {
     } finally { fetch.deps.craftItem = real }
   })
 
+  it('an async landing still logs started+done, never dangling (vmzq.20)', () => {
+    const items = [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'oak_planks', count: 4 }]
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    const real = fetch.deps.craftItem
+    fetch.deps.craftItem = () => 'running' // the craft lands between ticks, never terminal in-call
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      fetch(bot, ctx) // tick 1: due, armed, crafting owns the tick
+      assert.equal(ctx.castleFetch.target, undefined)
+      items.push({ name: 'stone_pickaxe', count: 1 }) // between-tick landing
+      const i = items.findIndex((o) => o.name === 'wooden_pickaxe')
+      if (i >= 0) items.splice(i, 1)
+      fetch(bot, ctx) // tick 2: due flips false, the landing is seen
+      fetch(bot, ctx) // tick 3: logged once, digging resumes
+    } finally { fetch.deps.craftItem = real; console.log = orig }
+    assert.ok(ctx.castleFetch.target, 'digging resumes after the upgrade')
+    assert.equal(lines.filter((m) => m.includes('pick upgrade started')).length, 1, `lines: ${JSON.stringify(lines)}`)
+    assert.equal(lines.filter((m) => m.includes('pick upgrade done')).length, 1, `lines: ${JSON.stringify(lines)}`)
+  })
+
   it('a short pack skips the upgrade and digs without delay (vmzq.20)', () => {
     const items = [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 2 }]
     const bot = makeBot({ items })
@@ -355,7 +378,7 @@ describe('castlefetch sources (g0z.4)', () => {
       fetch(bot, ctx)
       fetch(bot, ctx)
       assert.equal(calls, 1, 'one attempt per leg')
-      assert.equal(ctx.castleFetch.pickUp, true)
+      assert.equal(ctx.castleFetch.pickUpLogged, true)
       assert.ok(ctx.castleFetch.target, 'digging on wood anyway')
     } finally { fetch.deps.craftItem = real }
   })
