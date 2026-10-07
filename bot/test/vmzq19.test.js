@@ -303,6 +303,38 @@ describe('vmzq.19 own legs stay within the task radius', () => {
     assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) <= explore.TASK_SEARCH_RADIUS, `site pick ${t.x},${t.z}`)
   })
 
+  it('the 64 task cap replaces a stale 65-96 leg (send-back: fails at 96)', async () => {
+    // A pending leg 80 out sits inside the old SELF_SEARCH_RADIUS (96)
+    // but outside the task radius (64): the anchor-shift transition
+    // (home-anchored leg, then the castle order moves the anchor) leaves
+    // exactly such legs. The 64 cap must replace it with a site pick.
+    const bot = huntBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
+    const ctx = huntCtx()
+    const stale = { x: CASTLE.x + 80, z: CASTLE.z }
+    ctx.explore = { visited: new Set(), target: stale, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchwalk')
+    const t = ctx.explore.target
+    assert.ok(t && t !== stale, 'the stale leg is replaced')
+    assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) <= explore.TASK_SEARCH_RADIUS, `site pick ${t.x},${t.z}`)
+  })
+
+  it('owner wool orders keep the home-anchored full spiral under a castle (R3a)', async () => {
+    const bot = huntBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
+    const ctx = {
+      home: { site: { ...HOME }, built: true, v: 2 },
+      castle: castleState(),
+      bring: { kind: 'wool', phase: 'find', want: 3, drop: null, have: 0, announced: false }, // no self: owner's order
+    }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchwalk')
+    await bring(bot, ctx, null, {})
+    const t = ctx.explore && ctx.explore.target
+    assert.ok(t, 'the owner hunt walks a leg')
+    assert.ok(Math.hypot(t.x - HOME.x, t.z - HOME.z) <= 32, `home-anchored leg ${t.x},${t.z}`)
+    assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) > 400, 'not task-capped')
+  })
+
   it('gather ignores home-ground memory while a task is active, walks near trees', () => {
     const bot = {
       entity: { position: pos(CASTLE.x, 64, CASTLE.z), onGround: true },
