@@ -16,11 +16,21 @@
 #           for a castle spot` reply waits for the search (`found a castle
 #           spot` / `I found no castle spot`) before quitting — the asker
 #           leaving cancels the search (orders.js clearLead). Default 480 min.
+# Search area (vmzq.15): both orders centre on the SPEAKER (chat.js —
+# `build here` siteFor(bot, speakerPos), `build castle`
+# startSiteSearch(speakerPos)), so TASK_RUN_AT=x,y,z walks the puppet
+# there after the meet and waits for the bot to follow into range before
+# the order. A walk that never arrives, or a bot that never follows,
+# exits 2. TASK_RUN_PROBE=1 (castle only) is the dry mode: meet, walk,
+# ask, report, quit — a site this probe started is `castle forget` again
+# (exit 0), no site exits 1, an already-have reports without touching it
+# (exit 0, no `castle go`).
 # Exit codes:
 #   0  done within budget (`home done at` / `castle done at` in the window;
-#      a house done over unhealed `build skip` lines is PARTIAL, not done)
+#      a house done over unhealed `build skip` lines is PARTIAL, not done);
+#      a probe that found a site (forgot again) or met an existing castle
 #   1  budget exceeded (prints the last 20 bot lines + the last progress
-#      line), castle with no site, or a partial house
+#      line), castle with no site (a probe too), or a partial house
 #   2  environment: bad args, stash/kv/logs unreachable (up front or 3
 #      degraded polls mid-run — either stream failing), puppet refused
 #      (human online), the bot never seen, no order reply (incl. an
@@ -46,6 +56,7 @@
 #   TASK_RUN_PUPPET_NAME (IdkTester), TASK_RUN_POLL_SECS (600),
 #   TASK_RUN_BUDGET_SECS, TASK_RUN_MEET_SECS (720), TASK_RUN_REPLY_SECS (90),
 #   TASK_RUN_BOT_WAIT_SECS (60), TASK_RUN_SEARCH_SECS (600),
+#   TASK_RUN_AT (empty), TASK_RUN_AT_SECS (600), TASK_RUN_PROBE (empty),
 #   TASK_RUN_SKIP_HORIZON_SECS (3900),
 #   TASK_RUN_LOGS_SCHEME (https), TASK_RUN_RESUMES (3), TASK_RUN_OUTDIR (/tmp)
 #
@@ -78,6 +89,7 @@ MEET_SECS="${TASK_RUN_MEET_SECS:-720}"
 REPLY_SECS="${TASK_RUN_REPLY_SECS:-90}"
 BOT_WAIT_SECS="${TASK_RUN_BOT_WAIT_SECS:-60}"
 SEARCH_SECS="${TASK_RUN_SEARCH_SECS:-600}"
+AT_SECS="${TASK_RUN_AT_SECS:-600}"
 SKIP_HORIZON_SECS="${TASK_RUN_SKIP_HORIZON_SECS:-3900}"
 LOGS_SCHEME="${TASK_RUN_LOGS_SCHEME:-https}"
 MAX_RESUMES="${TASK_RUN_RESUMES:-3}"
@@ -89,6 +101,26 @@ command -v curl >/dev/null 2>&1 || { echo "task-run: need curl" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "task-run: need python3" >&2; exit 2; }
 case "$PUPPET_CMD" in node\ *) command -v node >/dev/null 2>&1 || { echo "task-run: need node" >&2; exit 2; } ;; esac
 [ -d "$OUTDIR" ] && [ -w "$OUTDIR" ] || { echo "task-run: OUTDIR not writable: $OUTDIR" >&2; exit 2; }
+
+# --- operator options (vmzq.15): validated before touching prod ---
+AT="${TASK_RUN_AT:-}"
+AT_X=""; AT_Y=""; AT_Z=""
+if [ -n "$AT" ]; then
+  AT_X="${AT%%,*}"; _rest="${AT#*,}"; AT_Y="${_rest%%,*}"; AT_Z="${_rest#*,}"
+  bad_at=0
+  [ "$AT_X,$AT_Y,$AT_Z" = "$AT" ] || bad_at=1
+  for _p in "$AT_X" "$AT_Y" "$AT_Z"; do
+    case "$_p" in
+      ''|-) bad_at=1 ;;
+      -*) case "${_p#-}" in ''|*[!0-9]*) bad_at=1 ;; esac ;;
+      *) case "$_p" in *[!0-9]*) bad_at=1 ;; esac ;;
+    esac
+  done
+  if [ "$bad_at" = 1 ]; then echo "task-run: TASK_RUN_AT must be x,y,z integers (got '$AT')" >&2; exit 2; fi
+fi
+PROBE="${TASK_RUN_PROBE:-}"
+case "$PROBE" in ''|0) PROBE="" ;; 1) : ;; *) echo "task-run: TASK_RUN_PROBE must be 1 (got '$PROBE')" >&2; exit 2 ;; esac
+if [ -n "$PROBE" ] && [ "$TASK" != castle ]; then echo "task-run: TASK_RUN_PROBE is castle-only" >&2; exit 2; fi
 
 now_epoch() { date +%s; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -323,6 +355,65 @@ EOF
   return 1
 }
 
+# --- search area (vmzq.15): walk the puppet to TASK_RUN_AT before the order ---
+# Both orders centre on the speaker (chat.js), so the puppet's feet pick the
+# search area. The bot trails on 'follow me' from the meet; the order needs
+# mutual visibility, so after the puppet arrives it waits for the bot to
+# follow into range. Quiet unless AT is set; 0 on ready (or unset), 3 on
+# human, 1 otherwise.
+goto_at() {
+  [ -z "$AT" ] && return 0
+  pctl POST /goto "{\"x\":$AT_X,\"y\":$AT_Y,\"z\":$AT_Z}" >/dev/null 2>&1 || return 1
+  if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$PSTAT" != 200 ]; then echo "task-run: puppet refused the walk to $AT" >&2; return 1; fi
+  echo "task-run: walking the search area to $AT"
+  arrived=0
+  deadline=$(( $(now_epoch) + AT_SECS ))
+  while [ "$(now_epoch)" -lt "$deadline" ]; do
+    if ! kill -0 "$PUPPET_PID" 2>/dev/null; then echo "task-run: puppet died walking to $AT" >&2; return 1; fi
+    pctl GET "/state?n=5" >/dev/null 2>&1 || { sleep 5; continue; }
+    if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+    if [ "$PSTAT" != 200 ]; then sleep 5; continue; fi
+    if python3 - "$PBODY" "$AT_X" "$AT_Y" "$AT_Z" <<'EOF'
+import json,sys
+try:
+  p = (json.load(open(sys.argv[1])) or {}).get("pos") or {}
+  dx = float(p.get("x")) - float(sys.argv[2])
+  dy = float(p.get("y")) - float(sys.argv[3])
+  dz = float(p.get("z")) - float(sys.argv[4])
+except Exception:
+  sys.exit(1)
+sys.exit(0 if dx * dx + dy * dy + dz * dz <= 9 else 1)
+EOF
+    then arrived=1; break; fi
+    sleep 5
+  done
+  if [ "$arrived" = 0 ]; then echo "task-run: puppet never arrived at $AT within ${AT_SECS}s" >&2; return 1; fi
+  # Re-arm the puppet idle clock (900 s, and polls do not reset it): the walk
+  # above may have eaten most of it, and the follow-wait below only polls.
+  pctl POST /goto "{\"x\":$AT_X,\"y\":$AT_Y,\"z\":$AT_Z}" >/dev/null 2>&1 || return 1
+  if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$PSTAT" != 200 ]; then echo "task-run: puppet lost at $AT" >&2; return 1; fi
+  deadline=$(( $(now_epoch) + AT_SECS ))
+  while [ "$(now_epoch)" -lt "$deadline" ]; do
+    if ! kill -0 "$PUPPET_PID" 2>/dev/null; then echo "task-run: puppet died waiting for the bot at $AT" >&2; return 1; fi
+    pctl GET "/state?n=5" >/dev/null 2>&1 || { sleep 5; continue; }
+    if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+    if [ "$PSTAT" = 200 ] && python3 - "$PBODY" <<'EOF'
+import json,sys
+try:
+  d = json.load(open(sys.argv[1]))
+except Exception:
+  sys.exit(1)
+sys.exit(0 if (d.get("bot") or {}).get("dist") is not None else 1)
+EOF
+    then return 0; fi
+    sleep 5
+  done
+  echo "task-run: bot never followed to $AT within ${AT_SECS}s" >&2
+  return 1
+}
+
 # --- order + reply: sets ORDER_REPLY (the ack line) + ORDER_SEEN (the chat
 # length before the order, so a castle search wait sees a resolution that
 # landed before its first fetch), 0 on ack ---
@@ -440,6 +531,22 @@ castle_go() {
   got="$(wait_for_bot_line 'castle resumed' "$REPLY_SECS" "$seen")"
   if [ "$got" = HUMAN ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
   if [ "$got" != 1 ]; then echo "task-run: no castle-go reply within ${REPLY_SECS}s" >&2; return 1; fi
+  return 0
+}
+
+# Dry probe cleanup (vmzq.15): this probe started the castle (an immediate
+# ack or a resolved search — the already-have path never lands here), so
+# drop it again. `castle forget` needs no visibility (chat.js castleChat),
+# only the order does. 0 on `forgotten`, 3 on human, else 1.
+probe_forget() {
+  pctl GET "/state?n=100" >/dev/null 2>&1 || return 1
+  if [ "$PSTAT" = 409 ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$PSTAT" != 200 ]; then echo "task-run: puppet not answering" >&2; return 1; fi
+  seen="$(chat_len)"
+  say 'castle forget' || return $?
+  got="$(wait_for_bot_line 'forgotten' "$REPLY_SECS" "$seen")"
+  if [ "$got" = HUMAN ]; then echo "task-run: human online (409), voiding" >&2; return 3; fi
+  if [ "$got" != 1 ]; then echo "task-run: probe started a castle but 'castle forget' went unanswered — a build may be running" >&2; return 1; fi
   return 0
 }
 
@@ -734,9 +841,11 @@ if [ "$TASK" = house ]; then ORDER_TEXT="build here"; else ORDER_TEXT="build cas
 
 start_puppet order || exit 2
 meet_bot || { stop_puppet; exit 2; }
+goto_at || { stop_puppet; exit 2; }
 if ! order_and_wait "$ORDER_TEXT"; then
-  # One re-meet: the bot may have walked out of range between meet and order.
-  if ! meet_bot || ! order_and_wait "$ORDER_TEXT"; then stop_puppet; exit 2; fi
+  # One re-meet: the bot may have walked out of range between meet and order
+  # (with AT the re-meet walks back to the bot, so walk out again).
+  if ! meet_bot || ! goto_at || ! order_and_wait "$ORDER_TEXT"; then stop_puppet; exit 2; fi
 fi
 if [ "$TASK" = castle ]; then
   case "$ORDER_REPLY" in
@@ -746,6 +855,12 @@ if [ "$TASK" = castle ]; then
       if [ "$code" = 2 ]; then # the search refused: no site, no run
         WINDOW_START="$(now_utc)"
         stop_puppet
+        if [ -n "$PROBE" ]; then
+          write_series probe
+          echo "task-run: probe: no castle site: $ORDER_REPLY"
+          echo "series: $SERIES"
+          exit 1
+        fi
         write_series no-site
         echo "task-run: no castle site: $ORDER_REPLY"
         echo "series: $SERIES"
@@ -754,7 +869,28 @@ if [ "$TASK" = castle ]; then
       ;;
   esac
   case "$ORDER_REPLY" in
-    *'I already have a castle at '*) castle_go || { stop_puppet; exit 2; } ;;
+    *'I already have a castle at '*)
+      if [ -n "$PROBE" ]; then # report without touching it: no `castle go`
+        WINDOW_START="$(now_utc)"
+        stop_puppet
+        write_series probe
+        echo "task-run: probe: $ORDER_REPLY"
+        echo "series: $SERIES"
+        exit 0
+      fi
+      castle_go || { stop_puppet; exit 2; }
+      ;;
+    *)
+      if [ -n "$PROBE" ]; then # a site this probe started: forget it again
+        probe_forget || { stop_puppet; exit 2; }
+        WINDOW_START="$(now_utc)"
+        stop_puppet
+        write_series probe
+        echo "task-run: probe: site found and forgotten: $ORDER_REPLY"
+        echo "series: $SERIES"
+        exit 0
+      fi
+      ;;
   esac
 fi
 WINDOW_START="$(now_utc)"

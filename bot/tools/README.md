@@ -446,6 +446,16 @@ Rules:
   quitting — the asker leaving cancels the search; `I already have a castle`
   is followed by `castle go` (the bot is still following, `castle go` puts it
   to work).
+- Search area (vmzq.15): both orders centre on the speaker, so
+  `TASK_RUN_AT=x,y,z` walks the puppet there after the meet and waits for
+  the bot to follow into range before the order (a walk that never arrives,
+  or a bot that never follows, exits 2). `TASK_RUN_PROBE=1` (castle only)
+  is the dry mode: meet, walk, ask, report, quit — a site the probe
+  started is `castle forget` again (exit 0), no site exits 1, and an
+  already-have reports without touching it (exit 0, no `castle go`).
+  Known-good ground: the 10-05 castle area near 276,64,177 (found 1 block
+  away 2026-10-05T21:41Z, ran 8/1722):
+  `TASK_RUN_AT=276,64,177 sh bot/tools/task-run.sh castle 480`.
 - Fail-closed polling (vmzq.11): a poll judges only when both log streams
   answer (a one-stream failure is transient, 3 in a row is logs-lost, never
   a pass); the lookback covers the last good poll, so failed polls and slow
