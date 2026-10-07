@@ -1022,6 +1022,11 @@ function pickup(bot, ctx) {
 // cost (the lib has no place veto); a site whose stance needs a pillar
 // still pillars, the reach invariant keeps that off the plan.
 const SITE_TOP = 16 // crenellation dy 13 + headroom
+// Far walk (vmzq.17): work() failed no-<kind> on the empty kit before
+// approach(), so a step 500 blocks off never walked to the site. Past this
+// range a material-short cell walks to itself (running, never failed); on
+// site it fails and castlefetch fetches.
+const SITE_WALK_DIST = 32
 function guardCastle(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -1064,7 +1069,18 @@ function work(bot, ctx, st, c, now, status) {
   if (!clearing(c)) {
     item = c.prep === 'fill' ? fillItem(bot) : findItem(bot, c.kind)
     if (!item) {
-      // Material sourcing is g0z.4: report before walking anywhere.
+      // Far walk (vmzq.17): material sourcing is g0z.4, but a far step
+      // walks to the cell (running) instead of failing at once — prod
+      // run2 failed 500 blocks off and never approached. On site it
+      // fails and castlefetch fetches. Unloaded goals ignore y.
+      try {
+        const bp = bodyPos(bot)
+        if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
+          st.status = 'walking to the site'
+          approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))
+          return
+        }
+      } catch (_) { /* walk best-effort: fall through to the fail */ }
       st.status = `need ${c.kind}`
       ctx.stepStatus = `failed:no-${c.kind}`
       return
@@ -1196,5 +1212,6 @@ module.exports.BATCH = BATCH
 module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
 module.exports.entrance = entrance
+module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets

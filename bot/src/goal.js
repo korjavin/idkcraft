@@ -302,8 +302,16 @@ const MENU = {
         // and the batch gate with nothing converting them). Bounded by the
         // bed need: once both beds are in (or the planks cover them), the bot
         // never farms again.
-        if (facts.beds !== 'none' && facts.beds !== 'one') return false
-        return (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS
+        if ((facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
+        // Castle chain (vmzq.17): a stone-none word with no pickaxe starves —
+        // castlefetch yields for the pick, equip wants table+material, craft
+        // wants a full load, and nothing chops it (prod run2: empty kit
+        // cycled castle(fail)->explore forever). Chop one load for the
+        // pickaxe/table chain; castlefetch/castle outrank this when they can
+        // run. Torch excluded (it wants coal, not logs); blocked/clear/
+        // finish/batch words never reach here.
+        if (typeof facts.castle === 'string' && /^(stone|planks|frame|door|fence|chest)-(none|some)$/.test(facts.castle) && (facts.logs || 0) < NEED_LOGS) return true
+        return false
       }
       const total = facts.planks + facts.logs * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)

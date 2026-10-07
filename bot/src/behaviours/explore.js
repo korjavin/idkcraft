@@ -28,6 +28,13 @@ const RAY_COUNT = 8 // compass rays per ring, north first
 const ARRIVE_DIST = 3 // horizontal feet, same envelope as follow range
 const ARRIVE_NEAR = 8 // stalled inside this: covered, not failed (see below)
 const MAX_RADIUS = 256 // spiral reach cap, feet from anchor (dxl: no players)
+// Task bound (vmzq.18): while a castle build is active the spiral stays
+// within this of the site — prod run2 walked a wool search 500 blocks
+// castle->home. Matches the epic's own 64 (goal PARK_FORAGE_RADIUS);
+// bring self hunts keep their 96 cap but anchor here too, so they stay
+// within 96 of the site. House-unbuilt stays unbound (bring-wool pins 24
+// owner legs; the house anchor already holds those near home).
+const TASK_SEARCH_RADIUS = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const CHAT_MS = 30000 // departure chat at most this often
@@ -63,9 +70,22 @@ function compass(dx, dz) {
   return DIRS[idx]
 }
 
-// Anchor: home site first, world spawn below. Null when neither exists.
+// Anchor: the active castle site first (vmzq.18), then home, then world
+// spawn. Null when none exists. A wool self-hunt from the castle used to
+// anchor at home 500 blocks off and walk there; now it spirals at the site.
+function taskActive(ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete') return true
+  } catch (_) { /* no castle verdict */ }
+  return false
+}
 function anchorOf(bot, ctx) {
   try {
+    const st = ctx && ctx.castle
+    if (st && st.site && typeof st.site.x === 'number' && typeof st.site.z === 'number' && !st.parked && st.phase !== 'complete') {
+      return { x: st.site.x, z: st.site.z, label: 'castle' }
+    }
     const site = ctx && ctx.home && ctx.home.site
     if (site && typeof site.x === 'number' && typeof site.z === 'number') {
       return { x: site.x, z: site.z, label: 'home' }
@@ -126,7 +146,10 @@ function explore(bot, ctx, target, state) {
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    const t = pickTarget(e.visited, anchor, e.maxRadius, (x, z) => danger.covers(ctx, { x, z }))
+    // Task bound (vmzq.18): a build task caps the spiral at the site.
+    let cap = e.maxRadius
+    try { if (taskActive(ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+    const t = pickTarget(e.visited, anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
       // across restarts, a done-log every tick forever): start over from
@@ -135,7 +158,7 @@ function explore(bot, ctx, target, state) {
       e.visited = new Set([chunkOf(bp.x, bp.z)])
       e.markStart = e.visited.size
       ctx.stepStatus = 'done' // nowhere new within 512: the outward job is over
-      console.log('explore done: all chunks within ' + e.maxRadius + ' blocks visited')
+      console.log('explore done: all chunks within ' + cap + ' blocks visited')
       return
     }
     e.target = t
@@ -211,6 +234,8 @@ function nextTarget(bot, ctx, cap) {
 
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
+module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
+module.exports.taskActive = taskActive
 module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
 module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target
