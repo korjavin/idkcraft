@@ -674,13 +674,22 @@ function siteLoaded(bot, st) {
 // away the word is the last one read on site (stock re-read for a material
 // word); a complete castle reads done; never seen this session -> the
 // first plan cell's kind (walk back and build).
+// Loaded = all four footprint corners read (revmux 02): the v1 site
+// spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
+// chunks lie inside the corners' hull — the loaded area is convex.
+function siteLoaded(bot, st) {
+  try {
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    return [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
+  } catch (_) { return false }
+}
+
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
   try {
-    const loaded = siteLoaded(bot, st)
-    if (!loaded) {
+    if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') return 'done'
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
@@ -1076,6 +1085,14 @@ const SITE_TOP = 16 // crenellation dy 13 + headroom
 // range a material-short cell walks to itself (running, never failed); on
 // site it fails and castlefetch fetches.
 const SITE_WALK_DIST = 32
+// XZ distance from the body to the site footprint (0 on it), null unknown.
+// Also the task clock's far-walk progress signal (vmzq.35).
+function siteDist(bot, st) {
+  const bp = bodyPos(bot)
+  if (!bp || !st || !st.site) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  return Math.hypot(Math.max(st.site.x - bp.x, 0, bp.x - (st.site.x + w)), Math.max(st.site.z - bp.z, 0, bp.z - (st.site.z + d)))
+}
 function guardCastle(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
@@ -1114,30 +1131,29 @@ function guardCastle(bot, ctx) {
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
 function work(bot, ctx, st, c, now, status) {
-  // Far walk regardless of item (vmzq.30, .29C): a cell 32+ blocks off is
-  // approached with GoalNearXZ even with stone in hand — GoalPlaceBlock
-  // at an unloaded cell is y-aware and LOS-gated and wedges (run6: 4 min
-  // of partial place_error/no_scaffolding after a 500-block respawn).
-  // Unloaded goals ignore y. The walk keeps placeCell's shape (approach,
-  // moving gate, far streak): a walk that stops getting closer blocks
-  // unreachable after three stands, same as before.
+  // Far walk (vmzq.17): material sourcing is g0z.4, but a far step walks
+  // to the cell (running) instead of failing at once — prod run2 failed
+  // 500 blocks off and never approached. On site a short kit fails and
+  // castlefetch fetches. Unloaded goals ignore y: with stone in hand too
+  // (vmzq.29) — a GoalPlaceBlock into unloaded chunks 500 blocks off
+  // climbed toward castle height from y 36 and wedged.
   try {
-    const bp = bodyPos(bot)
-    if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
+    // Measured to the footprint, not the cell (revmux 01): on site a
+    // cross-corner cell (~41 off on v2) never flips to the XZ walk.
+    const sd = siteDist(bot, st)
+    if (sd != null && sd > SITE_WALK_DIST) {
       st.status = 'walking to the site'
       // Re-issue after a clear (revmux 01 core-1): approach() only
       // re-arms on a new idx or a foreign goal — a goal cleared to
       // null (recover, night break) would otherwise strand the step
       // running with the bot standing still.
       try { if (bot.pathfinder.goal == null && !bot.pathfinder.isMoving()) ctx.castleGoalIdx = -1 } catch (_) { /* latch best-effort */ }
-      if (approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))) return
-      let moving = false
-      try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
-      if (moving) return
-      far(bot, ctx, st, c, 8, now)
+      // Own latch key: inside the range placeCell/digCell re-arm their
+      // own goal for the same cell instead of inheriting the XZ walk.
+      approach(bot, ctx, { idx: `far:${c.idx}` }, () => new goals.GoalNearXZ(c.x, c.z, 8))
       return
     }
-  } catch (_) { /* walk best-effort: fall through to the fail */ }
+  } catch (_) { /* walk best-effort: fall through to the cell */ }
   let item = null
   if (!clearing(c)) {
     item = c.prep === 'fill' ? fillItem(bot) : findItem(bot, c.kind)
@@ -1213,9 +1229,9 @@ function castle(bot, ctx) {
   // on them, one shared line (sayHoles) that re-chats only on a new hole.
   const holes = holesOf(bot, st, cells)
   sayHoles(bot, ctx, st, holes, now)
-  // Loaded-site guard (vmzq.30, .29A): unloaded blockAt reads null, so a
-  // far step would recount every cell undone (run6: 0/1722 off site, then
-  // a bogus 0->328 "progress" on return). Off site the last value stands.
+  // Unloaded site (vmzq.29): null blocks read as undone, so a far respawn
+  // read 0/1722 and the walk back counted as fresh progress. Off-site the
+  // last value stands (as in menuFact).
   if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) progress(bot, st, cells, ctx)
   if (r.idx < 0) {
     if (r.waiting) {
@@ -1277,5 +1293,6 @@ module.exports.batchOf = batchOf
 module.exports.entrance = entrance
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 module.exports.siteLoaded = siteLoaded
+module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets

@@ -955,18 +955,32 @@ function clearPlan(state) {
 // Watchdog round state, lazily attached per task (vmzq.21): consecutive
 // flat rounds, the decision history ring, the in-flight marker, the last
 // fire time (the min call interval), the failure backoff, the travel
-// grace stamps (grants this episode + floor + run tracking), and the
-// plan-B phase.
+// grace stamps (grants this episode + floor + run tracking), the plan-B
+// phase, and the low-confidence streak for the deterministic fallback
+// (vmzq.28: count + goal identity it belongs to).
 function wdOf(state) {
   try {
     if (!state.wd || typeof state.wd !== 'object') {
-      state.wd = { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null }
+      state.wd = { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null, lowConf: 0, lowConfGoal: null }
     }
     if (!Array.isArray(state.wd.history)) state.wd.history = []
+    if (typeof state.wd.lowConf !== 'number') state.wd.lowConf = 0
     return state.wd
   } catch (_) {
-    return { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null }
+    return { rounds: 0, history: [], seq: 0, pending: null, answer: null, firedAt: 0, backoffMs: 0, backoffUntil: 0, graceRuns: 0, lastGraceAt: 0, lastStep: null, planb: null, lowConf: 0, lowConfGoal: null }
   }
+}
+
+// Reset the progress-linked watchdog counters (rounds + the low-confidence
+// streak): any goal-result advance starts a fresh stall episode.
+function resetWdProgress(wd) {
+  try {
+    if (wd && typeof wd === 'object') {
+      wd.rounds = 0
+      wd.lowConf = 0
+      wd.lowConfGoal = null
+    }
+  } catch (_) { /* reset best-effort */ }
 }
 
 // Watchdog menu (.22): the option table ids (plain steps + costed
@@ -1096,6 +1110,87 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // backoff (a drop is not a failure — the next stall fires fresh).
 // (.22) the choice is an optionId from the table (plain step, hold-<order>,
 // *-far, house-<step>, bank, park, ask-owner); the commit carries step+unlock.
+// Deterministic fallback ranking (idkcraft-vmzq.28): when JEV cannot
+// decide (low-confidence/none twice for the same flat goal), take the
+// top-ranked PROGRESS option — never park/ask-owner (they stall by
+// design). Tiers: targeted far/unblock first (bank, demand-matched far),
+// then the goal chain in FSM order, then the blind work spiral, then
+// side plain steps, then house side work, then the order hold retry.
+// Options that already went flat or failed in the passed history and
+// held (failed) steps sort last within their tier — but one is still
+// picked when everything went flat, so there is no dead end. The
+// currently stalling step itself is never picked (vmzq.35, prod: the
+// fallback re-chose the running castle step twice, a no-op); with
+// nothing else left the caller takes the park fork. Returns the top
+// option or null.
+const FALLBACK_FAR_ORDER = ['bank', 'castlefetch-far', 'gather-far', 'forage-far', 'explore-far']
+const FALLBACK_FLAT_PENALTY = 10000
+// Chain steps per work kind: the STEP_EFFECT +metric/+chain set, plus the
+// night safety steps (a dusk stall must march/shelter, never blind-walk).
+const FALLBACK_CHAIN = {
+  castle: new Set(['castlefetch', 'castle', 'craft', 'equip', 'gather', 'stay', 'gohome', 'shelter']),
+  house: new Set(['build', 'beds', 'craft', 'equip', 'light', 'gather', 'stay', 'gohome', 'shelter']),
+}
+function fallbackRank(kind, offered, history = null, currentStep = null, held = null) {
+  try {
+    const list = Array.isArray(offered) ? offered.slice() : []
+    const progress = list.filter((o) => o && o.id !== 'park' && o.id !== 'ask-owner' && !(currentStep && o.id === currentStep))
+    if (progress.length === 0) return null
+    let stepOrder = []
+    try {
+      stepOrder = require('./goal').STEP_ORDER || []
+    } catch (_) { /* FSM order best-effort */ }
+    const flat = new Set()
+    try {
+      if (Array.isArray(history)) {
+        for (const h of history) {
+          if (h && typeof h.choice === 'string' && (h.outcome === 'flat' || (typeof h.outcome === 'string' && h.outcome.startsWith('failed:')))) {
+            flat.add(h.choice)
+          }
+        }
+      }
+      if (held instanceof Set) {
+        for (const id of held) {
+          if (typeof id === 'string' && id) flat.add(id)
+        }
+      } else if (Array.isArray(held)) {
+        for (const id of held) {
+          if (typeof id === 'string' && id) flat.add(id)
+        }
+      }
+    } catch (_) { /* flat set best-effort */ }
+    const isWork = kind === 'castle' || kind === 'house'
+    const chain = (isWork && FALLBACK_CHAIN[kind]) || null
+    const stepIdx = (o) => {
+      const i = stepOrder.indexOf(o.step || o.id)
+      return i === -1 ? stepOrder.length : i
+    }
+    const score = (o) => {
+      let s = 0
+      const far = FALLBACK_FAR_ORDER.indexOf(o.id)
+      if (far !== -1 && !(isWork && o.id === 'explore-far')) {
+        s = far
+      } else if (isWork && o.id === 'explore-far') {
+        s = 200
+      } else if (o.id === 'house-build' || o.id === 'house-beds') {
+        s = 400
+      } else if (typeof o.id === 'string' && o.id.startsWith('hold-')) {
+        s = 500
+      } else if (chain && chain.has(o.step || o.id)) {
+        s = 100 + stepIdx(o)
+      } else {
+        s = 300 + stepIdx(o)
+      }
+      if (flat.has(o.id)) s += FALLBACK_FLAT_PENALTY
+      return s
+    }
+    progress.sort((a, b) => score(a) - score(b))
+    return progress[0]
+  } catch (_) {
+    return null
+  }
+}
+
 function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const ans = wd.answer
   wd.answer = null
@@ -1112,7 +1207,78 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   } catch (_) {
     options = ''
   }
+  const clearLowConf = () => {
+    try {
+      wd.lowConf = 0
+      wd.lowConfGoal = null
+    } catch (_) { /* streak best-effort */ }
+  }
   const fail = (source, prefix) => {
+    // Two consecutive UNDECIDED answers (low-confidence or stale — JEV
+    // answered but produced no usable choice) for the same flat goal fall
+    // back deterministically instead of backing off — the bot must never
+    // stall forever (revmux 01 core-1: transport/timeout errors keep the
+    // doubling backoff and never park on outage alone). The first
+    // undecided still backs off (fresh menu or a better JEV round);
+    // progress and decisions clear the streak. The fallback skips options
+    // the history already proved flat (revmux 01 core-2).
+    const undecided = typeof prefix === 'string' && (prefix.startsWith('low-confidence') || prefix.startsWith('stale:'))
+    if (undecided) {
+      const goalKey = `${id}:${(g && typeof g.generation === 'number') ? g.generation : '?'}` 
+      try {
+        if (wd.lowConfGoal !== goalKey) {
+          wd.lowConf = 0
+          wd.lowConfGoal = goalKey
+        }
+      } catch (_) { /* streak best-effort */ }
+      wd.lowConf = (typeof wd.lowConf === 'number' ? wd.lowConf : 0) + 1
+    }
+    if (undecided && wd.lowConf >= 2) {
+      let fb = null
+      try {
+        const { goalOptions } = require('./goal-options')
+        const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
+        const held = new Set()
+        try {
+          const sf = ctx && ctx.stepFail
+          if (sf && typeof sf === 'object') {
+            for (const k of Object.keys(sf)) {
+              if (sf[k] && typeof sf[k].status === 'string' && sf[k].status.startsWith('failed:')) held.add(k)
+            }
+          }
+        } catch (_) { /* held best-effort */ }
+        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step, held)
+      } catch (_) { fb = null }
+      if (fb) {
+        const diagnosis = diagnose(bot, ctx)
+        const why = `fallback after ${wd.lowConf}x none (${prefix || source}) ${diagnosis}`
+        try {
+          console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=${fb.id} conf=? source=fallback why=${why}`)
+        } catch (_) { /* log best-effort */ }
+        try {
+          metrics.goalWatchdogTotal.inc({ kind, choice: fb.id, source: 'fallback' })
+        } catch (_) { /* counter best-effort */ }
+        clearLowConf()
+        wd.backoffMs = 0
+        wd.backoffUntil = 0
+        applyCommit(bot, ctx, kind, fb.id, fb.step || null, now, fb.unlock || null)
+        return
+      }
+      // Nothing but the stalling step (or park) left (vmzq.35): re-running
+      // it is a no-op, so take the park fork (owner online parks, alone
+      // runs plan-B) — the one option that changes circumstances.
+      try {
+        console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=park conf=? source=fallback why=fallback after ${wd.lowConf}x none (${prefix || source}) only the stalling step left`)
+      } catch (_) { /* log best-effort */ }
+      try {
+        metrics.goalWatchdogTotal.inc({ kind, choice: 'park', source: 'fallback' })
+      } catch (_) { /* counter best-effort */ }
+      clearLowConf()
+      wd.backoffMs = 0
+      wd.backoffUntil = 0
+      maxRounds(bot, ctx, kind, state, wd, now)
+      return
+    }
     const diagnosis = diagnose(bot, ctx)
     const why = prefix ? `${prefix} ${diagnosis}` : diagnosis
     try {
@@ -1142,6 +1308,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     } catch (_) { /* counter best-effort */ }
     wd.backoffMs = 0
     wd.backoffUntil = 0
+    clearLowConf()
     // A park choice is a fork, not a park: owner online parks, owner
     // offline runs plan-B (relocate, re-ask, switch, return) — the same
     // fork as the round cap, so an early park never bypasses plan-B.
@@ -1159,6 +1326,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     } catch (_) { /* counter best-effort */ }
     wd.backoffMs = 0
     wd.backoffUntil = 0
+    clearLowConf()
     askOwner(bot, ctx, kind, done, total, state, wd, now)
     return
   }
@@ -1204,6 +1372,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   } catch (_) { /* counter best-effort */ }
   wd.backoffMs = 0
   wd.backoffUntil = 0
+  clearLowConf()
   applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null)
 }
 
@@ -1417,7 +1586,7 @@ function keepUnlockWindow(state, c) {
     if (!u || typeof u !== 'object' || Object.keys(u).length === 0) return false
     c.sawProgress = true
     const wd = state ? wdOf(state) : null
-    if (wd) wd.rounds = 0
+    if (wd) resetWdProgress(wd)
     return true
   } catch (_) {
     return false
@@ -1462,7 +1631,7 @@ function endCommit(bot, ctx, kind, state, c, result, now) {
         while (wd.history.length > GOAL_HISTORY_KEPT) wd.history.shift()
       } catch (_) { /* history best-effort */ }
       if (result === 'progress') {
-        wd.rounds = 0
+        resetWdProgress(wd)
         wd.planb = null
       } else if (result === 'flat' || (typeof result === 'string' && result.startsWith('failed:'))) {
         // A relocate leg is plan-B, not a JEV round: it is recorded in
@@ -2028,8 +2197,9 @@ function progressReset(state, kind, now) {
   state.fails = []
   state.lastProgressAt = now
   try {
-    wdOf(state).rounds = 0
-    wdOf(state).graceRuns = 0
+    const wd = wdOf(state)
+    resetWdProgress(wd)
+    wd.graceRuns = 0
   } catch (_) { /* rounds best-effort */ }
   clearPlan(state)
   setStallGauge(kind, 0)
@@ -2061,6 +2231,39 @@ function setStallGauge(kind, ms) {
   try {
     metrics.taskStallSeconds.set({ task: kind }, Math.max(0, (ms || 0) / 1000))
   } catch (_) { /* metrics best-effort */ }
+}
+
+// Far-walk progress (vmzq.35, the travel-grace idea for the castle step's
+// own walk): past the castle far-walk range, the distance to the footprint
+// sinking CASTLE_TRAVEL_STEP below its low-water mark is progress. Low-water
+// only, so a wedge or an out-and-back trip never counts; on site or after a
+// teleport (respawn) the mark rebaselines.
+const CASTLE_TRAVEL_STEP = 8
+function castleTravel(bot, ctx, state) {
+  try {
+    const castle = require('./behaviours/castle')
+    const d = castle.siteDist(bot, ctx.castle)
+    if (d == null || d <= castle.SITE_WALK_DIST) {
+      state.siteDist = null
+      state.siteLast = d
+      return false
+    }
+    // A one-tick jump rebaselines (revmux 01/02): task state survives a
+    // death, and a mark sunk before it would deny the walk back from the
+    // respawn. Keyed on the position, not the death event — that fires
+    // before the respawn teleport lands.
+    const last = state.siteLast
+    state.siteLast = d
+    if (typeof state.siteDist !== 'number' || (typeof last === 'number' && Math.abs(d - last) > 2 * castle.SITE_WALK_DIST)) {
+      state.siteDist = d
+      return false
+    }
+    if (d + CASTLE_TRAVEL_STEP > state.siteDist) return false
+    state.siteDist = d
+    return true
+  } catch (_) {
+    return false
+  }
 }
 
 // Current castle progress for the clock. Prep remaining only in prep phase
@@ -2467,6 +2670,18 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
+      if (castleTravel(bot, ctx, state)) {
+        // Far walk back to the site (vmzq.35, prod: a respawn 500 off read
+        // flat for 20 min): the any-clock resets, the placed clock accrues.
+        state.stallMs = 0
+        state.lastAt = now
+        state.lastProgressAt = now
+        try { resetWdProgress(wdOf(state)) } catch (_) { /* rounds best-effort */ }
+        setStallGauge(kind, 0)
+        addPlacedStall(state, now)
+        logReset(kind, 'travel')
+        return
+      }
       if (typeof cur.done !== 'number') {
         // Run tracking for the travel grace (unread ticks count: a run
         // may start while the signals are unreadable).
@@ -2553,8 +2768,9 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.fails = []
         state.lastProgressAt = now
         try {
-          wdOf(state).rounds = 0
-          wdOf(state).graceRuns = 0
+          const wd = wdOf(state)
+          resetWdProgress(wd)
+          wd.graceRuns = 0
         } catch (_) { /* rounds best-effort */ }
         clearPlan(state)
         logReset(kind, why)
@@ -2710,4 +2926,4 @@ function taskTick(bot, ctx, now = Date.now()) {
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank }

@@ -191,6 +191,23 @@ function fail(bot, ctx, item, err) {
     } catch (_) { /* logging best-effort */ }
     return
   }
+  // Transient table geometry (idkcraft-u07s): a carried table with no
+  // viable neighbour cell (or no body position to scan from) is a spot
+  // verdict, not a broken plan — the failHolds spot hold paces retries at
+  // new ground, so the day latch must not eat it (rig cycle: two woods
+  // no-tables held equip all day, no pickaxe, castle chain never started).
+  // Only no-table-item (no table anywhere) latches.
+  try {
+    const tmsg = err && err.message ? String(err.message) : ''
+    if (tmsg === 'no-table-ref' || tmsg === 'no-table-pos') {
+      ctx.stepStatus = `failed:equip-${item}`
+      resetRunCounters(ctx)
+      try {
+        console.error(`equip failed item=${item} error=${tmsg}`)
+      } catch (_) { /* logging best-effort */ }
+      return
+    }
+  } catch (_) { /* transient check best-effort: fall through to latch */ }
   try {
     const msg = err && err.message ? String(err.message) : String(err)
     noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
@@ -210,7 +227,7 @@ function fail(bot, ctx, item, err) {
 const FAR_TABLE = 32
 function tableFar(bot, ctx, bp, t) {
   try {
-    if (dist3(bp, t) > FAR_TABLE) return true
+    if (dist3(bp, t) > (ctx && ctx.craftanyLocal ? TABLE_REACH : FAR_TABLE)) return true // vmzq.37 buried rearm
     const u = ctx && ctx.equipTableUnreachable
     return !!u && u.day === dayOf(bot) && u.x === t.x && u.y === t.y && u.z === t.z
   } catch (_) { return false }
@@ -268,10 +285,26 @@ function ownTableOp(bot, ctx, op) {
 // the menu from re-picking us). Name checks are load-bearing: an air or
 // wrong block reads truthy, and activating it waits out the window timeout
 // instead of failing (live 26.1 lesson).
+// Placement-replaceable flora (idkcraft-u07s revmux 02 core-1): the ONLY
+// non-air cells vanilla Java overwrites when a placement targets them.
+// NOT build.js REPLACEABLE: that list means "the place flow may break
+// these first" and includes flowers and torches, which vanilla placement
+// REFUSES (BlockPlaceContext.canPlace is false — the click dies and the
+// pick fails). Those read as occupied, as before.
+const PLACE_OVER = new Set([
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'snow',
+  'vine', 'glow_lichen', 'leaf_litter', 'bush', 'short_dry_grass',
+  'tall_dry_grass',
+])
+
 function tableFor(bot, ctx) {
   const nope = (why) => Promise.reject(new Error(why))
   const bp = bot.entity && bot.entity.position
-  if (!bp) return nope('no-table')
+  // Named sites (idkcraft-u07s): the log says which leg failed — pos (no
+  // body position), item (no table anywhere to place), ref (a carried
+  // table with no viable neighbour cell). The spot verdicts are transient
+  // (fail() does not day-latch them); only no-table-item latches.
+  if (!bp) return nope('no-table-pos')
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
   // Candidate stations: the home table, our own placed one, the menu
   // claim. Ghost entries (mined away) fall through to the inventory branch
@@ -344,7 +377,7 @@ function tableFor(bot, ctx) {
     if (claimedDead) delete ctx.claimedTable
   } catch (_) { /* retract best-effort */ }
   const tableItem = itemsOf(bot).find((i) => i && i.name === 'crafting_table')
-  if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table')
+  if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table-item')
   // Beside the body, not under it: the feet cell collides with the bot and
   // the server rejects the placement. First free neighbour with solid
   // ground wins.
@@ -379,7 +412,13 @@ function tableFor(bot, ctx) {
     // placement (the packet dies and the item with it). Fail-open on an
     // unknown shape — old test doubles carry no boundingBox.
     if (below.boundingBox != null && below.boundingBox !== 'block') continue
-    if (cell && cell.name && cell.name !== 'air') continue
+    // Flora takes a placement (idkcraft-u07s revmux 01 core-1): the server
+    // replaces grass and its kin, so a grassy neighbour is a free spot,
+    // not an occupied one — in the woods all four neighbours are flora and
+    // the strict air check failed every pick with the table in the pack.
+    // cave_air/void_air are air-likes.
+    if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air' &&
+        !PLACE_OVER.has(cell.name)) continue
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Deferred require
     // (beds->craftany->equip cycle); unreadable reads as placeable.
@@ -401,7 +440,7 @@ function tableFor(bot, ctx) {
     ref = fallback
     at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
-  if (!ref) return nope('no-table')
+  if (!ref) return nope('no-table-ref')
   // mineflayer places the HELD item: hold the table or a planks block lands
   // (and reads truthy) where the table should be.
   const run = async () => {
@@ -567,6 +606,7 @@ function equip(bot, ctx) {
     digTick(bot, ctx, st, bp)
     return
   }
+  if (kind === 'pickaxe' && pickRearm(bot, ctx)) return
   const op = toolOp(bot, kind)
   if (!op) return
   if (op.fail) {
@@ -599,6 +639,52 @@ function equip(bot, ctx) {
     return
   }
   craftOne(bot, ctx, op)
+}
+
+// Pickless castle (idkcraft-vmzq.37, prod: the pick wore out in a forage
+// tunnel at y~40 and the castle walk wedged a no-dig body there for 17
+// min). With no pickaxe at all, an active castle and the body underground
+// (REARM_BELOW under the site floor) the pick goes through craftany, which
+// also makes and places the table beside the body — the tool path below
+// waits for a station a far site never has. At the site a ready batch
+// still lays first (vmzq.19: castle outranks equip). goal.js reads the
+// same probe (facts.rearm); a pack that cannot fund it keeps the old path.
+const PICK_REARM = ['stone_pickaxe', 'wooden_pickaxe']
+const PICK_REARM_KEY = `${PICK_REARM.join(',')}x1`
+const REARM_BELOW = 4
+function pickRearmDue(bot, ctx) {
+  try {
+    if (!require('./explore').castleActive(ctx) || hasPickaxe(bot)) return false // castle first: no inventory read off-castle
+    const p = bot.entity.position
+    if (!(p.y < ctx.castle.site.y - REARM_BELOW)) return false
+    if (ctx.craftany && ctx.craftany.key === PICK_REARM_KEY) return true
+    ctx.craftanyLocal = true
+    try {
+      return !!require('./craftany').planCraft(bot, ctx, PICK_REARM, 1).ok // deferred: craftany requires equip
+    } finally { ctx.craftanyLocal = false }
+  } catch (_) { return false }
+}
+// Local only (revmux 01): ctx.craftanyLocal makes craftany/tableFor skip a
+// known table out of reach — a buried body cannot walk to the surface
+// one, it places its own beside it. A failed rearm is a spot verdict
+// (sealed pocket, no table cell), never the day latch: the hand staircase
+// moves the body and the next equip retries.
+function pickRearm(bot, ctx) {
+  if (!pickRearmDue(bot, ctx)) return false
+  const fresh = !(ctx.craftany && ctx.craftany.key === PICK_REARM_KEY)
+  let r = null
+  try {
+    ctx.craftanyLocal = true
+    r = require('./craftany')(bot, ctx, PICK_REARM, 1)
+  } finally { ctx.craftanyLocal = false }
+  if (fresh && r === 'running') {
+    try { console.log('equip rearm: pickless underground castle, crafting a pick here') } catch (_) { /* log best-effort */ }
+  }
+  if (r === 'running' || (r && r.done)) return true
+  ctx.stepStatus = 'failed:equip-pickaxe'
+  resetRunCounters(ctx)
+  try { console.error(`equip rearm failed: ${(r && r.line) || 'craft-failed'}`) } catch (_) { /* log best-effort */ }
+  return true
 }
 
 // g0z.25 slow-path settle (gear PHANTOM_SETTLE_MS parity): the fast-path
@@ -872,3 +958,4 @@ module.exports.tableReady = tableReady
 // reads it, the behaviour counts it (beds sheepLatched mirror).
 module.exports.equipLatched = equipLatched
 module.exports.EQUIP_LATCH = EQUIP_LATCH
+module.exports.pickRearmDue = pickRearmDue

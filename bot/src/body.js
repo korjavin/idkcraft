@@ -189,6 +189,18 @@ function castleStone(bot, ctx) {
   } catch (_) { return false }
 }
 
+// vmzq.29: dirt-only with no dirt is an EMPTY scaffold set — prod run6 sat
+// 4 min wedged in a pit (no_scaffolding_blocks) 500 blocks off, then
+// parked. Holding no other scaffold item, cobble scaffolds again: the walk
+// spends at most its climb.
+function otherScaffold(bot, mov) {
+  try {
+    const byName = bot.registry.itemsByName
+    return (bot.inventory.items() || []).some((it) => it && it.name !== 'cobblestone' && (it.count | 0) > 0 &&
+      byName[it.name] && mov.scafoldingBlocks.includes(byName[it.name].id))
+  } catch (_) { return false }
+}
+
 function scaffoldCobble(bot, mov, on) {
   const list = mov.scafoldingBlocks
   const it = bot && bot.registry && bot.registry.itemsByName && bot.registry.itemsByName.cobblestone
@@ -224,7 +236,7 @@ function movementsFor(owner, bot, ctx, extra) {
   const keepStone = castleStone(bot, ctx)
   for (const mov of movs) {
     try {
-      scaffoldCobble(bot, mov, !keepStone)
+      scaffoldCobble(bot, mov, !(keepStone && otherScaffold(bot, mov)))
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
