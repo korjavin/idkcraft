@@ -145,6 +145,16 @@ describe('stockpile depositPlan', () => {
     assert.equal(stockpile.surplusCount(bot), 7)
   })
 
+  it('keeps safe raw meat as food for the eat reflex (vmzq.34)', () => {
+    const bot = mockBot({ inv: [{ name: 'beef', count: 14 }] })
+    assert.deepEqual(stockpile.depositPlan(bot), [{ name: 'beef', count: 4 }])
+  })
+
+  it('fills the food keep with cooked before raw, whatever the slot order (vmzq.34 R2)', () => {
+    const bot = mockBot({ inv: [{ name: 'beef', count: 12 }, { name: 'cooked_beef', count: 8 }] })
+    assert.deepEqual(stockpile.depositPlan(bot), [{ name: 'beef', count: 10 }])
+  })
+
   it('keeps the 32-block pillar reserve, dirt first', () => {
     const bot = mockBot({ inv: [{ name: 'dirt', count: 20 }, { name: 'cobblestone', count: 20 }] })
     assert.deepEqual(stockpile.depositPlan(bot), [{ name: 'cobblestone', count: 8 }])
