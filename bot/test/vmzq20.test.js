@@ -74,6 +74,33 @@ async function quiet(fn) {
   try { return await fn() } finally { console.log = orig }
 }
 
+// Minimal tableFor double: below layer from a map (name + optional
+// boundingBox), y=64 reads air unless a placement landed there.
+function tableBot({ below = {}, placeImpl }) {
+  const calls = { place: [] }
+  let placed = null
+  const bot = {
+    calls,
+    entity: { position: pos(0, 64, 0) },
+    inventory: { items: () => [{ name: 'crafting_table', count: 2 }] },
+    blockAt: (p) => {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      if (placed && x === placed.x && y === placed.y && z === placed.z) {
+        return { name: 'crafting_table', position: pos(x, y, z), boundingBox: 'block' }
+      }
+      if (y === 64) return { name: 'air', position: pos(x, y, z), boundingBox: 'empty' }
+      if (y === 63) {
+        const b = below[`${x},${z}`] || { name: 'dirt' }
+        return { name: b.name, position: pos(x, y, z), boundingBox: b.boundingBox }
+      }
+      return { name: 'air', position: pos(x, y, z), boundingBox: 'empty' }
+    },
+    equip: async () => {},
+    placeBlock: async (ref, face) => placeImpl(calls, (at) => { placed = at }, ref, face),
+  }
+  return bot
+}
+
 describe('vmzq.20 batch yield: a leg with a batch hands over, below it keeps fetching', () => {
   it('expired leg with a batch yields done (the castle lays the partial next)', async () => {
     await quiet(async () => {
@@ -163,6 +190,57 @@ describe('vmzq.20 bounded switching: some<->batch flaps never preempt, one cycle
       assert.equal(switches, 2, 'one cycle is exactly two switches — bounded')
       fetch(bot, ctx) // fresh leg clock: no instant re-yield
       assert.equal(ctx.stepStatus, 'running', 'the resumed leg commits again')
+    })
+  })
+})
+
+describe('vmzq.20 table footing: refused cells are skipped, water takes no placement', () => {
+  const equipMod = require('../src/behaviours/equip')
+
+  it('a refused cell is skipped next pick; a later success clears the set', async () => {
+    await quiet(async () => {
+      let n = 0
+      const bot = tableBot({
+        placeImpl: async (calls, land, ref, face) => {
+          calls.place.push({ x: ref.position.x, z: ref.position.z })
+          n++
+          if (n === 1) throw new Error('Server refused to place crafting_table at (1, 64, 0): the block is still air')
+          land({ x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z })
+        },
+      })
+      const ctx = {}
+      await assert.rejects(equipMod.tableFor(bot, ctx), /Server refused/)
+      assert.ok(ctx.equipTableSkip instanceof Set && ctx.equipTableSkip.has('1,64,0'), 'refused cell skipped')
+      const r = await equipMod.tableFor(bot, ctx)
+      assert.deepEqual(bot.calls.place, [{ x: 1, z: 0 }, { x: -1, z: 0 }], 'second pick tries the next neighbour')
+      assert.equal(r.pos.x, -1)
+      assert.equal(ctx.equipTableSkip.size, 0, 'success clears the set')
+    })
+  })
+
+  it('non-solid footing (water) is never attempted; unknown shapes still place (fail-open)', async () => {
+    await quiet(async () => {
+      const bot = tableBot({
+        below: { '1,0': { name: 'water', boundingBox: 'empty' }, '-1,0': { name: 'dirt', boundingBox: 'block' } },
+        placeImpl: async (calls, land, ref, face) => {
+          calls.place.push({ x: ref.position.x, z: ref.position.z })
+          land({ x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z })
+        },
+      })
+      const r = await equipMod.tableFor(bot, {})
+      assert.deepEqual(bot.calls.place, [{ x: -1, z: 0 }], 'water footing skipped outright')
+      assert.equal(r.pos.x, -1)
+    })
+    await quiet(async () => {
+      const bot = tableBot({ // old doubles carry no boundingBox: old behavior
+        placeImpl: async (calls, land, ref, face) => {
+          calls.place.push({ x: ref.position.x, z: ref.position.z })
+          land({ x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z })
+        },
+      })
+      const r = await equipMod.tableFor(bot, {})
+      assert.deepEqual(bot.calls.place, [{ x: 1, z: 0 }])
+      assert.equal(r.pos.x, 1)
     })
   })
 })
