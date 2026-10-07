@@ -315,7 +315,8 @@ describe('g0z.16 levelling prep (±2)', () => {
   it('a 1-deep dip and a 1-high bump level too; fills take dirt when no stone is spare', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
-    bot.inventory = { items: () => [{ name: 'dirt', count: 5 }] }
+    // Above the night-shelter floor (vmzq.31): 9 dirt spends one, then holds.
+    bot.inventory = { items: () => [{ name: 'dirt', count: 9 }] }
     world.set(SITE.x + 3, 63, SITE.z + 6, 'air')
     world.set(SITE.x + 9, 64, SITE.z + 3, 'dirt')
     const ctx = ctxOf(1)

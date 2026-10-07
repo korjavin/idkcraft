@@ -94,11 +94,30 @@ function findItem(bot, kind) {
   return any
 }
 
+// Night-shelter scaffold floor (idkcraft-vmzq.31): the castle never spends
+// the last SHELTER_RESERVE dirt+cobble — recover's pillar fuel (pillar_up
+// counts the same two names). Prod run6 laid to the stone reserve,
+// pillared the rest away walking, and the night shelter pillar failed with
+// an empty kit. Stone already floors at 16 (reserveOf); dirt (prep fill)
+// is the hole this closes. Shelter and recover spend the floor freely —
+// the gate is castle-only, so the vmzq.29 empty-set wedge cannot recur.
+const SHELTER_RESERVE = 8
+function scaffoldOnHand(bot) {
+  let n = 0
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (it && (it.name === 'dirt' || it.name === 'cobblestone')) n += typeof it.count === 'number' ? it.count : 1
+    }
+  } catch (_) { /* no inventory: none */ }
+  return n
+}
+
 // Prep fill (g0z.16): castle stone above the reserve, else dirt (the cut
-// spoil of a grass hill).
+// spoil of a grass hill) — but never the shelter floor above.
 function fillItem(bot) {
   const s = findItem(bot, 'stone')
   if (s) return s
+  if (scaffoldOnHand(bot) <= SHELTER_RESERVE) return null
   try { return (bot.inventory.items() || []).find((it) => it && it.name === 'dirt') || null } catch (_) { return null }
 }
 
@@ -1269,6 +1288,9 @@ module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
 module.exports.usable = usable
 module.exports.findItem = findItem
+module.exports.fillItem = fillItem
+module.exports.scaffoldOnHand = scaffoldOnHand
+module.exports.SHELTER_RESERVE = SHELTER_RESERVE
 module.exports.held = held
 module.exports.reserveOf = reserveOf
 module.exports.BATCH = BATCH
