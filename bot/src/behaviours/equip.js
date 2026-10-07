@@ -643,22 +643,27 @@ function equip(bot, ctx) {
 
 // Pickless castle (idkcraft-vmzq.37, prod: the pick wore out in a forage
 // tunnel at y~40 and the castle walk wedged a no-dig body there for 17
-// min). With no pickaxe at all on an active castle the pick goes through
-// craftany, which also makes and places the table beside the body — the
-// tool path below waits for a station the far castle site never has.
-// True while it owns the tick; a pack that cannot fund it keeps the old path.
+// min). With no pickaxe at all, an active castle and the body underground
+// (REARM_BELOW under the site floor) the pick goes through craftany, which
+// also makes and places the table beside the body — the tool path below
+// waits for a station a far site never has. At the site a ready batch
+// still lays first (vmzq.19: castle outranks equip). goal.js reads the
+// same probe (facts.rearm); a pack that cannot fund it keeps the old path.
 const PICK_REARM = ['stone_pickaxe', 'wooden_pickaxe']
 const PICK_REARM_KEY = `${PICK_REARM.join(',')}x1`
-function pickRearm(bot, ctx) {
-  if (hasPickaxe(bot)) return false
-  let craftany = null
+const REARM_BELOW = 4
+function pickRearmDue(bot, ctx) {
   try {
-    if (!require('./explore').castleActive(ctx)) return false
-    craftany = require('./craftany') // deferred: craftany requires equip
-    const running = !!(ctx.craftany && ctx.craftany.key === PICK_REARM_KEY)
-    if (!running && !craftany.planCraft(bot, ctx, PICK_REARM, 1).ok) return false
+    if (!require('./explore').castleActive(ctx) || hasPickaxe(bot)) return false // castle first: no inventory read off-castle
+    const p = bot.entity.position
+    if (!(p.y < ctx.castle.site.y - REARM_BELOW)) return false
+    if (ctx.craftany && ctx.craftany.key === PICK_REARM_KEY) return true
+    return !!require('./craftany').planCraft(bot, ctx, PICK_REARM, 1).ok // deferred: craftany requires equip
   } catch (_) { return false }
-  const r = craftany(bot, ctx, PICK_REARM, 1)
+}
+function pickRearm(bot, ctx) {
+  if (!pickRearmDue(bot, ctx)) return false
+  const r = require('./craftany')(bot, ctx, PICK_REARM, 1)
   if (r === 'running') return true
   if (r && r.done) {
     try { console.log(`equip rearmed ${r.target} (pickless castle)`) } catch (_) { /* log best-effort */ }
@@ -939,4 +944,4 @@ module.exports.tableReady = tableReady
 // reads it, the behaviour counts it (beds sheepLatched mirror).
 module.exports.equipLatched = equipLatched
 module.exports.EQUIP_LATCH = EQUIP_LATCH
-module.exports.PICK_REARM = PICK_REARM
+module.exports.pickRearmDue = pickRearmDue

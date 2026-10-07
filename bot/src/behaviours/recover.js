@@ -221,10 +221,16 @@ const PICK_DIG = new Set([
 // staircase out of a buried pocket beats a wedge with no tool at all (prod:
 // y~37, pickaxe=no, 17 min in place). Equip crafts a pick first when the
 // pack funds one (castle pickRearm); this is the no-materials floor.
+// Only while buried (rock over the head column): an open pit keeps the
+// jsf.4 rule — no pick, no stone ladder; sidestep/call_player own it.
+function capped(bot) {
+  return solid(cellAt(bot, 0, 2, 0)) || solid(cellAt(bot, 0, 3, 0)) || solid(cellAt(bot, 0, 4, 0))
+}
 function diggable(bot, b) {
   if (handDiggable(bot, b)) return true
   if (!b || typeof b.name !== 'string') return false
   if (!PICK_DIG.has(b.name)) return false
+  if (!hasPickaxe(bot) && !capped(bot)) return false
   try {
     if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
   } catch (_) { /* reach check best-effort */ }

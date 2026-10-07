@@ -27,36 +27,40 @@ require.cache[craftanyPath].exports = stub
 after(() => { require.cache[craftanyPath].exports = realCraftany })
 
 const CASTLE = { castle: { site: { x: 300, y: 64, z: 300 }, phase: 'build' } }
+const R = { time: 'day', pickaxe: 0, rearm: true }
 
-describe('pickless castle rearms first (vmzq.37)', () => {
-  it('goalFsm puts equip ahead of the castle legs only while pickless', () => {
-    assert.equal(goal.goalFsm({ time: 'day', pickaxe: 0 }, ['castle', 'equip', 'rest']), 'equip')
-    assert.equal(goal.goalFsm({ time: 'day', pickaxe: 0 }, ['castlefetch', 'equip', 'rest']), 'equip')
-    assert.equal(goal.goalFsm({ time: 'day', pickaxe: 1 }, ['castle', 'equip', 'rest']), 'castle')
-    assert.equal(goal.goalFsm({ time: 'day', pickaxe: 0 }, ['castle', 'rest']), 'castle', 'no feasible equip: castle as before')
+describe('pickless buried castle rearms first (vmzq.37)', () => {
+  it('goalFsm puts equip ahead of the castle legs only on facts.rearm', () => {
+    assert.equal(goal.goalFsm(R, ['castle', 'equip', 'rest']), 'equip')
+    assert.equal(goal.goalFsm(R, ['castlefetch', 'equip', 'rest']), 'equip')
+    assert.equal(goal.goalFsm({ ...R, rearm: false }, ['castle', 'equip', 'rest']), 'castle', 'vmzq.19: at the site the batch lays first')
+    assert.equal(goal.goalFsm(R, ['castle', 'rest']), 'castle', 'no feasible equip: castle as before')
   })
 
   it('chooseStep makes the rearm a castle rule — the model is not asked', async () => {
     let asked = 0
     const brain = { source: 'laya', ask: async () => { asked++; return 'castle' } }
-    const r = await goal.chooseStep(brain, { time: 'day', pickaxe: 0 }, ['castle', 'equip', 'rest'], null)
+    const r = await goal.chooseStep(brain, R, ['castle', 'equip', 'rest'], null)
     assert.equal(r.step, 'equip')
     assert.equal(r.source, 'castle-rule')
     assert.equal(asked, 0)
   })
 
-  it('equip is feasible without a table station when the pack funds the pick', () => {
-    const bot = { entity: { position: new Vec3(0, 37, 0) }, inventory: { items: () => [] }, blockAt: () => null }
-    const facts = { time: 'day', pickaxe: 0, sword: 1, table: 0, tablePlaced: false, planks: 9, logs: 0, sticks: 0, cobble: 0, scaffold: 40 }
+  it('pickRearmDue: pickless, castle active, underground, funded', () => {
+    const at = (y, items = []) => ({ entity: { position: new Vec3(0, y, 0) }, inventory: { items: () => items } })
     planOk = true
-    assert.equal(goal.MENU.equip.feasible(facts, bot, { ...CASTLE }), true)
+    assert.equal(equip.pickRearmDue(at(37), { ...CASTLE }), true)
+    assert.equal(equip.pickRearmDue(at(64), { ...CASTLE }), false, 'at the site floor: castle lays first')
+    assert.equal(equip.pickRearmDue(at(37, [{ name: 'wooden_pickaxe', count: 1 }]), { ...CASTLE }), false)
+    assert.equal(equip.pickRearmDue(at(37), {}), false, 'no castle')
     planOk = false
-    assert.equal(goal.MENU.equip.feasible(facts, bot, { ...CASTLE }), false, 'unfunded: the old table gate stands')
+    assert.equal(equip.pickRearmDue(at(37), { ...CASTLE }), false, 'unfunded: the old table gate stands')
     planOk = true
-    assert.equal(goal.MENU.equip.feasible(facts, bot, {}), false, 'no castle: the old table gate stands')
+    const facts = { time: 'day', pickaxe: 0, sword: 1, table: 0, tablePlaced: false, planks: 9, scaffold: 40 }
+    assert.equal(goal.MENU.equip.feasible({ ...facts, rearm: true }, at(37), { ...CASTLE }), true)
   })
 
-  it('equip crafts the pick through craftany on a pickless castle', () => {
+  it('equip crafts the pick through craftany when buried pickless', () => {
     crafted.length = 0
     planOk = true
     const bot = { entity: { position: new Vec3(0, 37, 0) }, inventory: { items: () => [{ name: 'oak_planks', count: 9 }] } }

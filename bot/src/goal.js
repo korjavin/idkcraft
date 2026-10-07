@@ -124,7 +124,7 @@ const MENU = {
       // Same-reason day latch (ipn.11, beds sheepLatched mirror): a repeated
       // identical failure yields the rest of the day (gear starves otherwise).
       try { if (require('./behaviours/equip').equipLatched(ctx, bot)) return false } catch (_) { /* unlatched */ }
-      if (pickRearm(facts, bot, ctx)) return true
+      if (facts && facts.rearm) return true // vmzq.37 pickless castle, buried
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
         if (!upgrade && !equipWant(facts)) return false
@@ -530,23 +530,14 @@ function castleFirst(ctx, step = null) {
     return false
   }
 }
-// Pickless castle (idkcraft-vmzq.37): an active castle with no pickaxe and
-// a pack that funds one (craftany plans the table too) makes equip
-// feasible without a station — equip.js pickRearm crafts it the same way.
-// goalFsm/chooseStep then rank it ahead of the castle legs: prod's pick
-// wore out in a forage tunnel at y~40 and the castle-rule walked the
-// no-dig body there for 17 min while equip waited for a table.
-function pickRearm(facts, bot, ctx) {
-  if ((facts && facts.pickaxe) > 0 || !castleFirst(ctx)) return false
-  try {
-    const equipMod = require('./behaviours/equip')
-    return !!require('./behaviours/craftany').planCraft(bot, ctx, equipMod.PICK_REARM, 1).ok
-  } catch (_) {
-    return false
-  }
-}
+// Pickless castle (idkcraft-vmzq.37): facts.rearm (equip.pickRearmDue —
+// no pickaxe, active castle, body underground, pack funds one) makes equip
+// feasible without a station and goalFsm/chooseStep rank it ahead of the
+// castle legs: prod's pick wore out in a forage tunnel at y~40 and the
+// castle-rule walked the no-dig body there for 17 min while equip waited
+// for a table.
 function picklessCastle(facts, names) {
-  return !((facts && facts.pickaxe) > 0) && names.includes('equip') &&
+  return !!(facts && facts.rearm) && names.includes('equip') &&
     (names.includes('castle') || names.includes('castlefetch'))
 }
 // Home-leg leash (vmzq.19 R2, major 2): the home-anchored steps (light,
@@ -1315,7 +1306,9 @@ function goalFacts(bot, ctx) {
     const fd = bot && typeof bot.food === 'number' ? bot.food : NaN
     food = !(fd >= 0) ? 20 : fd
   } catch (_) { /* unknown food reads full */ }
-  return { time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  let rearm = false
+  try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
+  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below

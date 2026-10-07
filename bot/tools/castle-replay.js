@@ -63,6 +63,9 @@ const FAR_AFTER = Math.max(1, parseInt(process.env.CASTLE_FAR_AFTER || '4', 10) 
 // seconds. 0 = off.
 const BURY = Math.max(0, parseInt(process.env.CASTLE_BURY || '0', 10) || 0)
 const BURY_AFTER = Math.max(1, parseInt(process.env.CASTLE_BURY_AFTER || '4', 10) || 4)
+// CASTLE_BURY_NOWOOD=1 also clears planks/logs/sticks/tables: no pick can
+// be crafted, so only the bare-hand staircase (recover dig_step) gets out.
+const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -503,16 +506,22 @@ async function main() {
       for (const m of ['wooden', 'stone', 'golden', 'iron', 'diamond', 'netherite']) {
         await rcon(`clear ${FOLLOWER} minecraft:${m}_pickaxe`).catch(() => { /* none held */ })
       }
+      if (BURY_NOWOOD) {
+        for (const it of ['#minecraft:planks', '#minecraft:logs', 'minecraft:stick', 'minecraft:crafting_table']) {
+          await rcon(`clear ${FOLLOWER} ${it}`).catch(() => { /* none held */ })
+        }
+      }
+      await sleep(2000) // the pack read lags the clears
       buryAt = Date.now()
       buryPre = st.progress && typeof st.progress.done === 'number' ? st.progress.done : 0
       const k = sample()
-      origLog(`CASTLE-RIG bury: at ${(buryAt - t0) / 1000 | 0}s ${buryPre}/${(st.progress && st.progress.total) ?? '?'} -> pocket ${px} ${py} ${pz} (${BURY} below ${gy}), picks cleared, pack cobble=${k.cobble} planks=${k.planks} logs=${k.logs} pick=${k.pick}`)
+      origLog(`CASTLE-RIG bury: at ${(buryAt - t0) / 1000 | 0}s ${buryPre}/${(st.progress && st.progress.total) ?? '?'} -> pocket ${px} ${py} ${pz} (${BURY} below ${gy}), picks cleared${BURY_NOWOOD ? ' + wood' : ''}, pack cobble=${k.cobble} planks=${k.planks} logs=${k.logs} pick=${k.pick}`)
     }
     const s = sample()
     if (buryAt) {
       const since = Math.round((Date.now() - buryAt) / 1000)
       if (surfacedS == null && typeof s.y === 'number' && s.y >= gy - 2) surfacedS = since
-      if (resumedS == null && typeof s.done === 'number' && s.done > buryPre) resumedS = since
+      if (surfacedS != null && resumedS == null && typeof s.done === 'number' && s.done > buryPre) resumedS = since // laid after surfacing
     }
     drainSaid()
     checkpoint()
