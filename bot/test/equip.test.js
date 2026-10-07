@@ -250,6 +250,64 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  // Flora spots (idkcraft-u07s revmux 01 core-1): the rig failed with the
+  // table in the pack because every grassy neighbour read as occupied.
+  it('u07s: short_grass in every neighbour still places the carried table', async () => {
+    let placed = null
+    const bot = mockBot({
+      items: [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: (p) => {
+        if (placed && p.x === placed.x && p.y === placed.y && p.z === placed.z) {
+          return { name: 'crafting_table', position: { ...placed } }
+        }
+        if (p.y === 63) return { name: 'dirt', position: { x: p.x, y: p.y, z: p.z } }
+        return { name: 'short_grass' }
+      },
+      placeBlockImpl: async (ref, face) => {
+        bot.calls.placeBlock.push({ ref, face })
+        placed = { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z }
+      },
+    })
+    const ctx = freshCtx() // home=none: the castle-rig repro
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.placeBlock.length, 1, `errs: ${bot.errs}`)
+    assert.deepEqual(placed, { x: 1, y: 64, z: 0 })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('wooden_pickaxe'))
+    bot.restoreError()
+  })
+
+  it('u07s: cave_air neighbours read as free', async () => {
+    let placed = null
+    const bot = mockBot({
+      items: [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: (p) => {
+        if (placed && p.x === placed.x && p.y === placed.y && p.z === placed.z) {
+          return { name: 'crafting_table', position: { ...placed } }
+        }
+        if (p.y === 63) return { name: 'dirt', position: { x: p.x, y: p.y, z: p.z } }
+        return { name: 'cave_air' }
+      },
+      placeBlockImpl: async (ref, face) => {
+        bot.calls.placeBlock.push({ ref, face })
+        placed = { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z }
+      },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.placeBlock.length, 1, `errs: ${bot.errs}`)
+    assert.equal(bot.calls.craft.length, 1)
+    bot.restoreError()
+  })
+
   it('far home table: walks into reach, crafts nothing yet, one goal', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],

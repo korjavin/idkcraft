@@ -400,7 +400,17 @@ function tableFor(bot, ctx) {
     // placement (the packet dies and the item with it). Fail-open on an
     // unknown shape — old test doubles carry no boundingBox.
     if (below.boundingBox != null && below.boundingBox !== 'block') continue
-    if (cell && cell.name && cell.name !== 'air') continue
+    // Flora takes a placement (idkcraft-u07s revmux 01 core-1): the server
+    // replaces grass/flowers/snow, so a grassy neighbour is a free spot,
+    // not an occupied one — in the woods all four neighbours are flora and
+    // the strict air check failed every pick with the table in the pack.
+    // cave_air/void_air are air-likes. Deferred require (the
+    // beds->craftany->equip cycle); an unreadable require reads occupied.
+    if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air') {
+      let clearable = false
+      try { clearable = require('./build').isReplaceable(cell.name) } catch (_) { /* untestable: occupied as before */ }
+      if (!clearable) continue
+    }
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Deferred require
     // (beds->craftany->equip cycle); unreadable reads as placeable.
