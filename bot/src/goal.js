@@ -302,8 +302,16 @@ const MENU = {
         // and the batch gate with nothing converting them). Bounded by the
         // bed need: once both beds are in (or the planks cover them), the bot
         // never farms again.
-        if (facts.beds !== 'none' && facts.beds !== 'one') return false
-        return (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS
+        if ((facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
+        // Castle chain (vmzq.17): a stone-none word with no pickaxe starves —
+        // castlefetch yields for the pick, equip wants table+material, craft
+        // wants a full load, and nothing chops it (prod run2: empty kit
+        // cycled castle(fail)->explore forever). Chop one load for the
+        // pickaxe/table chain; castlefetch/castle outrank this when they can
+        // run. Torch excluded (it wants coal, not logs); blocked/clear/
+        // finish/batch words never reach here.
+        if (typeof facts.castle === 'string' && /^(stone|planks|frame|door|fence|chest)-(none|some)$/.test(facts.castle) && (facts.logs || 0) < NEED_LOGS) return true
+        return false
       }
       const total = facts.planks + facts.logs * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
@@ -1317,7 +1325,7 @@ function goalFsm(facts, feasibleNames) {
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
-  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few: chop trees',
+  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few, or castle is a -none or -some word other than torch and logs is none or few: chop trees',
   craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
