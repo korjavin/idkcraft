@@ -609,8 +609,10 @@ function castleChat(bot, ticker, playerName, cmd) {
     // Owner takes over (vmzq.3): drop any L2 episode with it, or the
     // auto-resume timer would unpark an owner-stopped castle.
     st.taskPark = null
+    // (vmzq.21) an owner park is not a plan-B switch: no auto-expiry.
+    st.planb = null
     ticker.saveMemory()
-    try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
+    try { taskMod.resetTask(ctx, 'stop') } catch (_) { /* task reset best-effort */ }
     return 'castle parked — say castle go to resume'
   }
   if (cmd === 'castle go') {

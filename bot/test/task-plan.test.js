@@ -97,12 +97,21 @@ function firstKeyPlanner(conf = 0.9) {
 
 let origLog = null
 let lines = []
+let savedWatchdog
 beforeEach(() => {
   lines = []
   origLog = console.log
   console.log = (m) => { lines.push(String(m)) }
+  // Legacy one-shot suite (vmzq.21 acceptance 5): the watchdog stays off,
+  // so the L2 plan/park path keeps its one-shot + same-step semantics.
+  savedWatchdog = process.env.GOAL_WATCHDOG_MS
+  process.env.GOAL_WATCHDOG_MS = '0'
 })
-afterEach(() => { console.log = origLog })
+afterEach(() => {
+  console.log = origLog
+  if (savedWatchdog === undefined) delete process.env.GOAL_WATCHDOG_MS
+  else process.env.GOAL_WATCHDOG_MS = savedWatchdog
+})
 
 function planLogs() {
   return lines.filter((l) => l.startsWith('task plan'))
@@ -137,6 +146,7 @@ describe('stall-point planner (vmzq.5)', () => {
     taskMod.taskTick(bot, ctx, t2)
     assert.equal(ctx.taskPlanStep, step, 'forced step handed to decide()')
     assert.equal(ctx.task.castle.stallMs, 0, 'fresh window for the retry')
+    assert.equal(ctx.task.castle.placedStallMs, 0, 'placed clock joins the fresh window (revmux 01 minor)')
     assert.equal(ctx.task.castle.planTried, true)
     assert.equal(ctx.castle.parked, false, 'planned step preempts the park')
     assert.equal(parkChats(bot).length, 0)
@@ -474,6 +484,7 @@ describe('stall-point planner (vmzq.5)', () => {
     taskMod.taskTick(bot, ctx, t1 + 10000)
     assert.equal(ctx.taskPlanStep, 'gather', 'held step forced one-shot')
     assert.equal(ctx.task.castle.stallMs, 0, 'fresh window for the retry')
+    assert.equal(ctx.task.castle.placedStallMs, 0, 'placed clock joins the fresh window (revmux 01 minor)')
     assert.equal(ctx.castle.parked, false)
     assert.ok(planLogs().some((l) => l.includes('disagree')), 'disagree line on a real retry')
   })

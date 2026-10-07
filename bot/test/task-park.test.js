@@ -92,12 +92,20 @@ function stallCounter(task, level) {
 
 let origLog = null
 let lines = []
+let savedWatchdog
 beforeEach(() => {
   lines = []
   origLog = console.log
   console.log = (m) => { lines.push(String(m)) }
+  // Legacy ladder suite (vmzq.21 acceptance 5): the watchdog stays off.
+  savedWatchdog = process.env.GOAL_WATCHDOG_MS
+  process.env.GOAL_WATCHDOG_MS = '0'
 })
-afterEach(() => { console.log = origLog })
+afterEach(() => {
+  console.log = origLog
+  if (savedWatchdog === undefined) delete process.env.GOAL_WATCHDOG_MS
+  else process.env.GOAL_WATCHDOG_MS = savedWatchdog
+})
 
 function taskLogs() {
   return lines.filter((l) => l.startsWith('task castle ') || l.startsWith('task house '))

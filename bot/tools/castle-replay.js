@@ -14,7 +14,7 @@
 // shelter. No baseline judging: this is a measurement loop instrument, the
 // verdict line is the product.
 //
-// Env: CASTLE_HOST (127.0.0.1), CASTLE_PORT (25581),
+// Env: CASTLE_HOST (localhost), CASTLE_PORT (25581),
 //   CASTLE_CONTAINER (idk-castle), CASTLE_TAG (c + pid digits),
 //   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
@@ -29,7 +29,7 @@ const { promisify } = require('node:util')
 
 const execFileAsync = promisify(execFile)
 
-const HOST = process.env.CASTLE_HOST || '127.0.0.1'
+const HOST = process.env.CASTLE_HOST || 'localhost'
 const PORT = parseInt(process.env.CASTLE_PORT || '25581', 10)
 const CONTAINER = process.env.CASTLE_CONTAINER || 'idk-castle'
 const TAG = process.env.CASTLE_TAG || `c${Math.floor(Math.random() * 1000)}`

@@ -12,8 +12,9 @@ const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const JEV_MODEL = 'jev-latest'
 const LAYA_URL_DEFAULT = 'http://laya:8000/v1/systemone'
 // Stall-point planner (idkcraft-vmzq.5): off the tick path, so its own
-// deadline, not BRAIN_TIMEOUT_MS.
-const PLAN_TIMEOUT_MS = 20000
+// deadline, not BRAIN_TIMEOUT_MS. 10 s since vmzq.21: the watchdog's
+// commit window is 120 s, an answer later than 10 s is stale.
+const PLAN_TIMEOUT_MS = 10000
 
 // Remote-brain source name: the JEV hostname stays 'jev', anything else
 // (e.g. the compose service laya) is addressed by its own hostname.
