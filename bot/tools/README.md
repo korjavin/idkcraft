@@ -378,10 +378,12 @@ sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
 ```
 
-One call = reset the disposable world copy, boot Paper, flatten a dirt pad
-at `CASTLE_PAD` (default `300,300`), join guide + follower, empty the
-follower's kit (or seed it, see below), order `build castle` through the
-real chat path, quit the
+One call = reset the disposable world copy, boot Paper, scan nine
+candidate 48x48 pads around `CASTLE_PAD` (default `300,300`, the preferred
+centre) from loaded chunks and flatten a dirt pad on the flattest
+(liquid-penalised; deterministic per world), join guide + follower, empty
+the follower's kit (or seed it, see below), order `build castle` through
+the real chat path, quit the
 guide (prod-alone parity: nobody online, autonomous on), work `mins`
 minutes, print ONE verdict line:
 

@@ -159,15 +159,56 @@ async function main() {
   const tickCtx = () => follower._tickerCtx
   if (tickCtx()) tickCtx().paused = true
 
-  // Pad probe: drop the guide, read the landing, flatten around it. Pad top
-  // = landing (dirt box below, air above in <=17k-block fills — the fill cap
-  // is 32768). 48x48 holds the 31x27 site plus the search centre.
+  // Pad probe: drop the guide over the preferred centre (loads chunks
+  // around it), pick the flattest 48x48 among candidates, read the landing
+  // there, flatten around it. Flat matters: prod's castle search wants
+  // level ground, and a mesa pad strands the gather return under sheer
+  // dirt walls (rig cycle 8: the bot sat 14 below the trench, unreachable).
+  // Pad top = landing (dirt box below, air above in <=17k-block fills —
+  // the fill cap is 32768). 48x48 holds the 31x27 site plus the search.
   await rcon(`tp ${GUIDE} ${px} 150 ${pz}`).catch((e) => fail('pad-probe', e.message))
+  await sleep(6000) // fall + chunks in (view distance covers the candidates)
+  const scanRelief = (qx, qz) => {
+    let lo = Infinity; let hi = -Infinity; let liquid = 0; let n = 0
+    for (let x = qx - 24; x <= qx + 24; x += 3) {
+      for (let z = qz - 24; z <= qz + 24; z += 3) {
+        let top = null; let topY = null
+        for (let y = 110; y >= 45; y--) {
+          let b = null
+          try { b = guide.blockAt({ x, y, z }) } catch (_) { b = null }
+          if (!b) return null // unloaded: candidate unreadable
+          if (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air') continue
+          top = b.name; topY = y
+          break
+        }
+        if (top == null) return null
+        n++
+        if (top === 'water' || top === 'lava') liquid++
+        if (topY < lo) lo = topY
+        if (topY > hi) hi = topY
+      }
+    }
+    if (n === 0) return null
+    return { span: hi - lo, liquid, score: (hi - lo) + liquid * 2 }
+  }
+  let bx = px; let bz = pz; let brel = null
+  {
+    const cands = [[px, pz], [px - 50, pz], [px + 50, pz], [px, pz - 50], [px, pz + 50],
+      [px - 50, pz - 50], [px + 50, pz - 50], [px - 50, pz + 50], [px + 50, pz + 50]]
+    let best = null
+    for (const [qx, qz] of cands) {
+      const r = scanRelief(qx, qz)
+      if (r && (!best || r.score < best.score)) best = { ...r, x: qx, z: qz }
+    }
+    if (best) { bx = best.x; bz = best.z; brel = best }
+    origLog(`CASTLE-RIG padspot ${bx},${bz} span=${brel ? brel.span : '?'} liquid=${brel ? brel.liquid : '?'}${best ? '' : ' (preferred, unreadable)'}`)
+  }
+  await rcon(`tp ${GUIDE} ${bx} 150 ${bz}`).catch((e) => fail('pad-probe', e.message))
   await sleep(4000)
   let gy = null
   try { gy = Math.floor(guide.entity.position.y) } catch (_) { gy = null }
-  if (gy == null || gy < 40 || gy > 140) fail('pad-probe', `no landing at ${px},150,${pz} (y=${gy})`)
-  const x0 = px - 24; const x1 = px + 24; const z0 = pz - 24; const z1 = pz + 24
+  if (gy == null || gy < 40 || gy > 140) fail('pad-probe', `no landing at ${bx},150,${bz} (y=${gy})`)
+  const x0 = bx - 24; const x1 = bx + 24; const z0 = bz - 24; const z1 = bz + 24
   origLog(`CASTLE-RIG pad ${x0}..${x1} top ${gy} ${z0}..${z1}`)
   for (const cmd of [
     `fill ${x0} ${gy - 5} ${z0} ${x1} ${gy} ${z1} dirt`,
@@ -176,8 +217,8 @@ async function main() {
   ]) {
     await rcon(cmd).catch((e) => fail('pad-fill', e.message))
   }
-  await rcon(`tp ${GUIDE} ${px + 0.5} ${gy + 1} ${pz + 0.5}`).catch((e) => fail('pad-tp', e.message))
-  await rcon(`tp ${FOLLOWER} ${px + 2.5} ${gy + 1} ${pz + 0.5}`).catch((e) => fail('pad-tp', e.message))
+  await rcon(`tp ${GUIDE} ${bx + 0.5} ${gy + 1} ${bz + 0.5}`).catch((e) => fail('pad-tp', e.message))
+  await rcon(`tp ${FOLLOWER} ${bx + 2.5} ${gy + 1} ${bz + 0.5}`).catch((e) => fail('pad-tp', e.message))
   await rcon(`clear ${FOLLOWER}`).catch((e) => fail('clear', e.message))
   // Seeded kit (pace split: laying measured independent of fetching): a
   // complete castle-opening kit — batch stone, planks, scaffold dirt and a
@@ -298,7 +339,7 @@ async function main() {
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
-    steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy },
+    steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
     kit: KIT, tickrate: TICKRATE, series,
   }
