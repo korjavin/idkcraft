@@ -360,8 +360,10 @@ const MENU = {
       // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run —
       // unless the pack is full (R3, round-2 major A): stockpile is the
       // only drain, and castlefetch/equip/gather yield pack-full counting
-      // on it, so a leashed full pack stalls to the L2 park.
-      (!homeLegVetoed(bot, ctx) || packFull(bot, ctx)) &&
+      // on it, so a leashed full pack stalls to the L2 park. The pierce
+      // latches for the trip (R4, round-3 major): one placed block must
+      // not turn the walk around, and dusk must not strand it.
+      (!homeLegVetoed(bot, ctx) || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
       (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
@@ -1910,6 +1912,11 @@ async function decide(bot, ctx) {
       try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
     }
   }
+  // Pack-full pierce latch (vmzq.19 R4, round-3 major): a finished banking
+  // trip releases — done banked, failed re-latches on the next full pick.
+  if (finished && prev === 'stockpile' && ctx) {
+    try { ctx.stockpilePierced = false } catch (_) { /* latch best-effort */ }
+  }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
   // them mid-phase: stepping inside flips inside, which would hand stay the
@@ -2092,6 +2099,12 @@ async function decide(bot, ctx) {
     // The step rides along (01 core-2): orders and retreat move ctx.step
     // without re-stamping, and must not inherit the age/source.
     ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
+    // A banking trip picked under the pierce latches for the trip (R4):
+    // set on the fresh pick only, so the shortcut re-issue below never
+    // arms it and only stockpile's own finish releases it above.
+    if (choice.step === 'stockpile') {
+      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx) } catch (_) { /* latch best-effort */ }
+    }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)

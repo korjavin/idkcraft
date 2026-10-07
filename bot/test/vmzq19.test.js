@@ -412,6 +412,55 @@ describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () =
     assert.equal(goal.MENU.light.feasible(lightFacts, farBot, { home: ctx.home }), true)
   })
 
+  it('R4 round-3 major: the pierce latches the banking trip across flips, dusk and dawn', async () => {
+    await quiet(async () => {
+      // Built far house, both beds in (no beds top-up), chest adopted.
+      const { home, cells } = standingHomeCells()
+      for (const dx of [1, 2, 4, 5]) cells.set(`${HOME.x + dx},64,${HOME.z + 4}`, 'white_bed')
+      home.chest = { x: HOME.x + 1, y: HOME.y, z: HOME.z + 1 }
+      // 38 stacks, no room: the quarry fill. Dirt over its keep is surplus.
+      const items = Array.from({ length: 35 }, (_, i) => ({ name: `granite_${i}`, count: 64 }))
+      items.push({ name: 'dirt', count: 64 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 })
+      const at = pos(CASTLE.x + 2, 64, CASTLE.z + 2)
+      const bot = goalBot({ items, cells, at })
+      const ctx = {
+        home, castle: castleState(), work: true, step: 'explore', stepStatus: 'done',
+        gather: { final: 'failed:unreachable', atLogs: 0, failPos: { x: at.x, y: at.y, z: at.z } },
+      }
+      // Castlefetch held too (bounded demand hold + menu hold).
+      const stamp = () => {
+        const t = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+        ctx.stepFail = { castlefetch: { status: 'failed:castlefetch-pack-full', text: t, pos: { x: at.x, y: at.y, z: at.z }, at: Date.now() } }
+      }
+      stamp()
+      assert.equal(goal.goalFacts(bot, ctx).surplus, 'yes', 'the fill is surplus')
+      assert.equal((await goal.decide(bot, ctx)).action, 'stockpile', 'the full pack banks')
+      assert.equal(ctx.stockpilePierced, true, 'the pierce latches the trip')
+      // One slot freed + a text flip: the trip holds on the latch, not room.
+      for (let i = 0; i < 4; i++) items.shift()
+      items.push({ name: 'oak_planks', count: 2 })
+      assert.equal((await goal.decide(bot, ctx)).action, 'stockpile', 'a freed slot turns nothing around')
+      // Control: without the latch the same state is leashed.
+      ctx.stockpilePierced = false
+      ctx.stepStatus = 'done'
+      assert.notEqual((await goal.decide(bot, ctx)).action, 'stockpile', 'unlatch re-leashes')
+      // Dusk drops the walk for shelter but keeps the latch; dawn resumes it.
+      ctx.stockpilePierced = true
+      ctx.step = 'stockpile'
+      ctx.stepStatus = 'running'
+      bot.time.timeOfDay = 12500
+      assert.equal((await goal.decide(bot, ctx)).action, 'shelter', 'dusk shelters mid-trip')
+      assert.equal(ctx.stockpilePierced, true, 'the night keeps the latch')
+      bot.time.timeOfDay = 6000
+      ctx.stepStatus = 'done'
+      assert.equal((await goal.decide(bot, ctx)).action, 'stockpile', 'dawn resumes the bank walk')
+      // The banked trip releases.
+      ctx.stepStatus = 'done'
+      await goal.decide(bot, ctx)
+      assert.equal(ctx.stockpilePierced, false, 'stockpile done clears the latch')
+    })
+  })
+
   it('R3 major A: a full pack pierces the stockpile leash (the only drain)', () => {
     const stockFacts = { home: 'built', chest: 'yes', surplus: 'yes', haul: 'none', chestParked: false }
     const ctx = { home: { site: { ...HOME } }, castle: castleState() }
