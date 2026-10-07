@@ -14,6 +14,8 @@ bot/node_modules/
 
 # Stuck oracle: last gate run results (recorded, never committed)
 bot/tools/last-replay.json
+# Castle rig: last throughput run (recorded, never committed)
+bot/tools/last-castle.json
 
 # Environment configurations
 .env

@@ -371,6 +371,45 @@ never drift. `RIG_ID=auto` takes the first free of `RIG_SLOTS` (default
 Each Paper takes ~1.5 GB; three fit Docker's 8 GB next to the stand. Runs
 from one worktree in parallel need distinct `REPLAY_OUT`.
 
+## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
+
+```sh
+sh bot/tools/castle-rig.sh [mins]   # default 30
+```
+
+One call = reset the disposable world copy, boot Paper, flatten a dirt pad
+at `CASTLE_PAD` (default `300,300`), join guide + follower, empty the
+follower's kit, order `build castle` through the real chat path, quit the
+guide (prod-alone parity: nobody online, autonomous on), work `mins`
+minutes, print ONE verdict line:
+
+```
+castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>
+```
+
+`flips` counts goal-step transitions castle<->castlefetch; the JSON record
+lands in `CASTLE_OUT` (default `bot/tools/last-castle.json`, gitignored —
+check; if not ignored, don't commit it), the full log in `CASTLE_LOG`. The
+bot runs the real stack on the stub brain (deterministic, no paid LLM).
+Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle), difficulty
+peaceful, fall damage off, keepInventory on — the window measures build
+throughput, not survival. No `/tick` acceleration by design: the bot ticks
+on wall-clock seconds, so a faster game clock would distort physics
+without speeding decisions.
+
+Own containers/ports/locks, so a castle run and a stuck run share the box:
+container `idk-castle[-<id>]`, port 25581 + letter index, lock
+`/tmp/idkcraft-castle-rig.lock[-<id>]`, data under
+`$PRODWORLD/castle-rigs/<id>/` (seeded once from `replay-data/paper-base`
+minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b` (or `auto` over
+`CASTLE_SLOTS`, default `0 a b`) runs 2-3 rigs in parallel; runs from one
+worktree need distinct `CASTLE_OUT`. Exit 0 = measured (even 0 laid),
+2 = environment/setup failure, 130 = interrupted (never a pass).
+
+This is a measurement loop instrument, not a gate: no baseline judging.
+`test/castle-rig.test.js` pins the wrapper (lock, rig derivation,
+anti-noise asserts) and the verdict-line contract without docker.
+
 ## Puppet player (`puppet.js`, idkcraft-jlw7)
 
 Agents run real prod play sessions without the owner: the puppet joins as
