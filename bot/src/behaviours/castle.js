@@ -18,11 +18,12 @@
 // exponential backoff in ctx.castle.blocked["<blueprintVersion>:<idx>"] =
 // {tries, until}, and the build goes on past it — the rest lays at the
 // normal rate while the hole waits out its backoff, then retries. Holes
-// are reported in one chat line (sayHoles); retries are rare (BACKOFF_MAX)
-// and bounded, so a protected block stalls nothing. Planned air/dig cells
-// are enforced only before phase 'complete': afterwards the bot never
-// clears what the owner puts inside. Laid castle blocks are protected for
-// every executor (util.protectedReason + guardCastle below).
+// are reported in one chat line (sayHoles); retries are rare (BACKOFF_MAX_MS)
+// and bounded (MAX_HOLE_TRIES, then the hole retires: still reported, no
+// longer waited on, so the moat digs and the castle completes). Planned
+// air/dig cells are enforced only before phase 'complete': afterwards the
+// bot never clears what the owner puts inside. Laid castle blocks are
+// protected for every executor (util.protectedReason + guardCastle below).
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
@@ -123,6 +124,13 @@ function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
 function ver(st) { return blueprint.blueprintOf(st && st.blueprintVersion).version }
 function bkey(st, idx) { return `${ver(st)}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
+// Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
+// retires — still listed by holesOf, never picked or waited on — so a
+// permanent hole (protected log, kept chest) finishes as a reported gap
+// instead of holding the moat and 'complete' forever. ~35 min of rare
+// retries first (backoffs 30s..600s), covering a play session in which the
+// owner might clear the cell. Rebuild (cancel + build) un-retires.
+const MAX_HOLE_TRIES = 8
 
 function bodyPos(bot) {
   const p = bot.entity && bot.entity.position
@@ -135,12 +143,15 @@ function blockCell(ctx, st, c, why, now) {
   e.tries++
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
+  // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
+  // hole — still reported, never picked or waited on again.
+  if (e.tries >= MAX_HOLE_TRIES) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
   ctx.castleFar = null
   ctx.castleGoalIdx = -1
-  console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`)
+  console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
 }
 
 function strike(ctx, st, c, why, now) {
@@ -151,9 +162,12 @@ function strike(ctx, st, c, why, now) {
 }
 
 // Open holes (vmzq.27): on-plan cells with a blocked entry that haven't
-// landed yet — active backoffs and expired ones awaiting their retry
-// alike, so the set is stable across a retry gap. Off-plan entries (prep,
-// litter) are best-effort and never listed.
+// landed yet — active backoffs, expired ones awaiting their retry, and
+// retired ones alike, so the set is stable across a retry gap and a
+// retired hole stays reported after 'complete'. Off-plan entries (prep,
+// litter) are best-effort and never listed. First-try no-ref stays
+// unlisted (revmux 01): out-of-order attempts fail it transiently and heal
+// on the first retry; a no-ref that survives to try 2 is listed.
 function holesOf(bot, st, cells) {
   const out = []
   const bl = (st && st.blocked) || {}
@@ -163,7 +177,8 @@ function holesOf(bot, st, cells) {
     const c = cells[Number(i)]
     const e = bl[k]
     if (!c || !e || done(bot, c)) continue
-    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, why: String(e.why || '?'), until: e.until })
+    if (e.why === 'no-ref' && (e.tries || 0) < 2) continue
+    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, why: String(e.why || '?'), until: e.until, retired: !!e.retired })
   }
   return out.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z)
 }
@@ -173,21 +188,24 @@ function holesOf(bot, st, cells) {
 // from castle() after every pick — while building past holes and while
 // waiting on them — and from menuFact's waiting branch (decide() drops the
 // castle step on the flip, so the executor's branch never runs in prod);
-// the shared latch dedupes across both. Only a new cell+why re-chats: a
-// retry gap and a resolve both stay silent (g0z.23 round 3), the latch
-// syncing to the current set either way. False when no open hole.
+// the shared latch dedupes across both. Only a new cell (or a newly
+// retired one) re-chats: a retry gap, a resolve and a why-change between
+// retries all stay silent (revmux 01), the latch syncing either way.
+// False when no open hole.
 function sayHoles(bot, ctx, st, holes, now) {
   if (!holes.length) { ctx.castleBlockedSaid = null; return false }
-  const toks = holes.map((h) => `${h.x},${h.y},${h.z}:${h.kind}:${h.why}`)
-  st.status = `holes: ${holes.map((h) => `${h.x} ${h.y} ${h.z} (${h.kind}: ${h.why})`).join(', ')}`
+  const toks = holes.map((h) => `${h.x},${h.y},${h.z}${h.retired ? 'R' : ''}`)
+  const desc = (h) => `${h.x} ${h.y} ${h.z} (${h.kind}: ${h.why}${h.retired ? ', retired' : ''})`
+  st.status = `holes: ${holes.map(desc).join(', ')}`
   const said = new Set(String(ctx.castleBlockedSaid || '').split('|').filter(Boolean))
   const fresh = toks.filter((t) => !said.has(t))
   ctx.castleBlockedSaid = toks.join('|')
   if (!fresh.length) return true
-  const retry = Math.max(0, Math.round((Math.min(...holes.map((h) => (typeof h.until === 'number' ? h.until : now))) - now) / 1000))
-  let line = holes.length === 1
-    ? `castle: 1 hole at ${holes[0].x} ${holes[0].y} ${holes[0].z} (${holes[0].kind}: ${holes[0].why}), retry in ${retry}s`
-    : `castle: ${holes.length} holes: ${holes.map((h) => `${h.x} ${h.y} ${h.z} (${h.kind}: ${h.why})`).join(', ')}, retry in ${retry}s`
+  const live = holes.filter((h) => !h.retired)
+  const tail = live.length
+    ? `, retry in ${Math.max(0, Math.round((Math.min(...live.map((h) => (typeof h.until === 'number' ? h.until : now))) - now) / 1000))}s`
+    : ', no retries left'
+  let line = holes.length === 1 ? `castle: 1 hole at ${desc(holes[0])}${tail}` : `castle: ${holes.length} holes: ${holes.map(desc).join(', ')}${tail}`
   const kept = [...new Set(holes.map((h) => /^kept-(.+)$/.exec(h.why)).filter(Boolean).map((m) => m[1]))]
   if (kept.length === 1 && holes.length === 1) line += ` — remove the ${kept[0]} there or say castle stop`
   else if (kept.length) line += ' — remove those blocks or say castle stop'
@@ -208,9 +226,11 @@ function sayHoles(bot, ctx, st, holes, now) {
 const RANK = { torch: 0.5, door: 1, air: 2, dig: 3, fence: 4 }
 function rank(c) { return RANK[c.kind] || 0 }
 // Interior work (g0z.6): an undone cell ranked before the moat. While one
-// is left — a skipped hole or not — no moat cell is dug, so the bot never
-// has to cross a dug moat to finish the castle; later repairs cross the
-// bridge, which is laid before any dig.
+// is left, no moat cell is dug, so the bot never has to cross a dug moat
+// to finish the castle; later repairs cross the bridge, which is laid
+// before any dig. Blocked holes never feed `inside` (revmux 01) — active
+// or retired, the moat digs while they wait — and work order still
+// sequences real interior work first.
 function interior(c) { return rank(c) < RANK.dig }
 let orderCache = null
 function workOrder(cells, key) {
@@ -255,11 +275,18 @@ function pick(bot, ctx, st, cells, key, now) {
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
-      if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
+      if (torchOwed(bot, c, owed)) {
+        const bo = st.blocked[bkey(st, c.idx)]
+        if (!bo || !bo.retired) owed = owed || c
+        continue
+      }
+      // Holes never feed `inside` (revmux 01): retired cells pass through
+      // silently, active ones wait — either way the moat digs past them.
+      const b = st.blocked[bkey(st, c.idx)]
+      if (b && b.retired) continue
+      if (b && b.until > now) { waiting = waiting || c; continue }
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
-      const b = st.blocked[bkey(st, c.idx)]
-      if (b && b.until > now) { waiting = waiting || c; continue }
       ctx.castleCursor = first
       return { idx: c.idx }
     }
@@ -291,11 +318,16 @@ function peek(bot, st, now, ctx) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
-    if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
+    if (torchOwed(bot, c, owed)) {
+      const bo = blocked[bkey(st, c.idx)]
+      if (!bo || !bo.retired) owed = owed || c
+      continue
+    }
+    const b = blocked[bkey(st, c.idx)]
+    if (b && b.retired) continue
+    if (b && b.until > now) { waiting = waiting || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
-    const b = blocked[bkey(st, c.idx)]
-    if (b && b.until > now) { waiting = waiting || c; continue }
     return { cell: c, waiting: null, cells }
   }
   return { cell: owed, waiting: owed ? null : waiting, cells }
@@ -1185,7 +1217,9 @@ function castle(bot, ctx) {
       const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
       if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     }
-    st.status = 'complete'
+    // Holes stay on the status past completion (sayHoles set it above),
+    // so 'castle' keeps reporting the gaps, not just 'complete'.
+    if (!holes.length) st.status = 'complete'
     ctx.stepStatus = 'done'
     if (st.phase !== 'complete') {
       st.phase = 'complete'
@@ -1199,6 +1233,7 @@ function castle(bot, ctx) {
 module.exports = castle
 module.exports.holesOf = holesOf
 module.exports.sayHoles = sayHoles
+module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
 module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES

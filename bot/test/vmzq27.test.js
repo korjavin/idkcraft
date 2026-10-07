@@ -226,6 +226,47 @@ describe('vmzq.27 interactable refs: a placement click never opens a GUI', () =>
   })
 })
 
+describe('vmzq.27 revmux 01: the latch is per cell, transient no-ref stays silent', () => {
+  it('a why-change stays silent, a new cell and a retire re-chat', () => {
+    const chats = []
+    const bot = { chats, chat(m) { chats.push(String(m)) } }
+    const ctx = {}
+    const st = { status: '' }
+    const hole = (x, why, retired = false) => ({ x, y: 64, z: 200, kind: 'stone', why, until: Date.now() + 30000, retired })
+    assert.ok(castleMod.sayHoles(bot, ctx, st, [hole(100, 'protected')], Date.now()))
+    assert.equal(chats.length, 1)
+    assert.match(chats[0], /^castle: 1 hole at 100 64 200 \(stone: protected\), retry in \d+s$/)
+    assert.ok(castleMod.sayHoles(bot, ctx, st, [hole(100, 'below-feet')], Date.now()))
+    assert.equal(chats.length, 1, 'same cell, new why: silent')
+    assert.ok(castleMod.sayHoles(bot, ctx, st, [hole(100, 'below-feet'), hole(101, 'dig-refused')], Date.now()))
+    assert.equal(chats.length, 2, 'new cell re-chats the full list')
+    assert.match(chats[1], /^castle: 2 holes: .*\(stone: below-feet\), .*\(stone: dig-refused\), retry in \d+s$/)
+    assert.ok(castleMod.sayHoles(bot, ctx, st, [hole(100, 'below-feet', true), hole(101, 'dig-refused')], Date.now()))
+    assert.equal(chats.length, 3, 'retire re-chats once')
+    assert.match(chats[2], /100 64 200 \(stone: below-feet, retired\)/)
+  })
+
+  it('holesOf skips first-try no-ref but lists it from try 2 and when retired', () => {
+    const cells = blueprint.absPlan(SITE, 0, 1).cells
+    const stones = cells.filter((c) => c.kind === 'stone').slice(0, 3)
+    const bot = makeBot({})
+    const st = castleState({
+      blocked: {
+        [`1:${stones[0].idx}`]: { tries: 1, until: Date.now() + 30000, why: 'no-ref' },
+        [`1:${stones[1].idx}`]: { tries: 2, until: Date.now() + 60000, why: 'no-ref' },
+        [`1:${stones[2].idx}`]: { tries: 1, until: Date.now() + 30000, why: 'protected' },
+      },
+    })
+    let holes = castleMod.holesOf(bot, st, cells)
+    assert.deepEqual(holes.map((h) => h.x).sort((a, b) => a - b),
+      [stones[1].x, stones[2].x].sort((a, b) => a - b), 'try-1 no-ref filtered')
+    st.blocked[`1:${stones[0].idx}`] = { tries: 9, until: 0, why: 'no-ref', retired: true }
+    holes = castleMod.holesOf(bot, st, cells)
+    assert.equal(holes.length, 3, 'retired no-ref listed')
+    assert.ok(holes.find((h) => h.x === stones[0].x).retired)
+  })
+})
+
 describe('vmzq.27 rig seeds: lowest stone cells, log/chest mix', () => {
   it('picks 3 lowest-(dy,idx) stone cells with alternating blocks', () => {
     const { pickBlockedSeeds } = require('../tools/castle-replay')
