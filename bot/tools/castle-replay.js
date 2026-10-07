@@ -50,6 +50,12 @@ const KIT = process.env.CASTLE_KIT || 'empty'
 const TICKRATE = process.env.CASTLE_TICKRATE || '1'
 const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
+// Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
+// window the follower lands CASTLE_FAR blocks off the half-built site in a
+// 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
+// with cobble and progress must never read 0 meanwhile. 0 = off.
+const FAR = Math.max(0, parseInt(process.env.CASTLE_FAR || '0', 10) || 0)
+const FAR_AFTER = Math.max(1, parseInt(process.env.CASTLE_FAR_AFTER || '4', 10) || 4)
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -451,8 +457,29 @@ async function main() {
     }
   }
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
+  let farAt = 0
+  let farPre = null
   while (Date.now() < endAt) {
     await sleep(15000)
+    if (FAR > 0 && !farAt && Date.now() - t0 >= FAR_AFTER * 60000) {
+      farAt = Date.now()
+      const st = follower._tickerCtx && follower._tickerCtx.castle
+      if (!st || !st.site) fail('far', 'no castle site')
+      const fx = st.site.x + FAR
+      const fz = st.site.z
+      await rcon(`tp ${FOLLOWER} ${fx + 0.5} 200 ${fz + 0.5}`).catch((e) => fail('far', e.message))
+      let fy = null
+      for (let i = 0; i < 40; i++) {
+        await sleep(500)
+        try { if (follower.entity.onGround) { fy = Math.floor(follower.entity.position.y); break } } catch (_) { /* landing */ }
+      }
+      if (fy == null) fail('far', 'never landed')
+      await rcon(`fill ${fx - 1} ${fy - 7} ${fz - 1} ${fx + 1} ${fy - 1} ${fz + 1} air`).catch((e) => fail('far', e.message))
+      await rcon(`clear ${FOLLOWER} minecraft:dirt`).catch((e) => fail('far', e.message))
+      await rcon(`give ${FOLLOWER} cobblestone 64`).catch((e) => fail('far', e.message))
+      farPre = st.progress && typeof st.progress.done === 'number' ? st.progress.done : null
+      origLog(`CASTLE-RIG far: at ${(Date.now() - t0) / 1000 | 0}s ${(st.progress && st.progress.done) ?? '?'}/${(st.progress && st.progress.total) ?? '?'} -> pit ${fx} ${fy - 8} ${fz} (${FAR} off), dirt cleared, +64 cobble`)
+    }
     const s = sample()
     drainSaid()
     checkpoint()
@@ -469,7 +496,11 @@ async function main() {
   const total = typeof last.total === 'number' ? last.total : 0
   const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
   const first = seen.wdFirstAt ? Math.round((seen.wdFirstAt - t0) / 1000) : '-'
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}`
+  // Far event readout (vmzq.29): done at the jump / lowest sample after it
+  // (must never drop: an unloaded site keeps the last read) / final.
+  const farMin = farAt ? Math.min(...series.filter((x) => x.t * 1000 >= farAt - t0 && typeof x.done === 'number').map((x) => x.done)) : null
+  const farTag = farAt ? `, far=${farPre}/${farMin}/${done}${farMin < farPre ? ' DROPPED' : ''}` : ''
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },

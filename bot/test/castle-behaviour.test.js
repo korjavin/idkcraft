@@ -474,7 +474,7 @@ describe('g0z.2 castle executor', () => {
     const world = makeWorld()
     const bot = mockBot(world)
     bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) } // never arrives
-    bot.entity.position = { x: SITE.x - 30, y: 64, z: SITE.z - 30 }
+    bot.entity.position = { x: SITE.x - 15, y: 64, z: SITE.z - 15 } // inside SITE_WALK_DIST: past it the XZ far walk runs (vmzq.29)
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 5)
     assert.equal(ctx.castle.blocked[`${1}:0`], undefined, 'approach ticks never strike')
