@@ -8,7 +8,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const taskMod = require('../src/task')
 const goal = require('../src/goal')
-const { goalOptions, planInstructions } = require('../src/goal-options')
+const { goalOptions, planInstructions, flatSummary } = require('../src/goal-options')
 const { goalUnlock, clampRadius } = require('../src/goal-unlock')
 const { createTicker } = require('../src/index')
 const bringMod = require('../src/behaviours/bring')
@@ -789,5 +789,159 @@ describe('far-fetch leg walks the candidate (findings 9+10)', () => {
     const g2 = goalsSeen[goalsSeen.length - 1]
     assert.ok(Math.hypot(g2.x - 100, g2.z - 200) < 32, `site walk: ${g2.x},${g2.z}`)
     assert.ok(Math.hypot(g2.x - 190, g2.z - 200) > 50, `not the candidate: ${g2.x},${g2.z}`)
+  })
+})
+
+describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', () => {
+  function castleFixture28({ items = null, word = null } = {}) {
+    const bot = makeBot({ items: items || [{ name: 'cobblestone', count: 73 }, { name: 'stone_pickaxe', count: 1 }] })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } }
+    ticker.setCastle(st)
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.castleWord = word || { kind: 'stone', left: 80 }
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
+    return { bot, ctx }
+  }
+
+  it('plain steps name their goal effect for castle', () => {
+    const { bot, ctx } = castleFixture28()
+    const opts = goalOptions(bot, ctx, 'castle')
+    const byId = (id) => opts.find((o) => o.id === id)
+    assert.ok(byId('castlefetch').criterion.includes('+castle material'), JSON.stringify(byId('castlefetch')))
+    assert.ok(byId('gather').criterion.includes('+castle chain'), JSON.stringify(byId('gather')))
+    const forage = byId('forage')
+    if (forage) assert.ok(forage.criterion.includes('unlikely +castle'), JSON.stringify(forage))
+  })
+
+  it('stone demand + live stone + NO pickaxe skips far (the leg ends done at once)', () => {
+    const { bot, ctx } = castleFixture28({ items: [{ name: 'cobblestone', count: 73 }] })
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    bot.findBlocks = () => [{ x: 100, y: 64, z: 136 }]
+    stoneWorld(bot, [[100, 64, 136]])
+    const skips = []
+    const opts = goalOptions(bot, ctx, 'castle', skips)
+    assert.ok(!opts.some((o) => o.id === 'castlefetch-far'), JSON.stringify(opts.map((o) => o.id)))
+    assert.ok(skips.some((s) => s.id === 'castlefetch-far' && /no pickaxe for stone/.test(s.why)), JSON.stringify(skips))
+  })
+
+  it('stone demand + live stone + pickaxe offers far naming the blocked material', () => {
+    const { bot, ctx } = castleFixture28()
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    bot.findBlocks = () => [{ x: 100, y: 64, z: 136 }]
+    stoneWorld(bot, [[100, 64, 136]])
+    const opts = goalOptions(bot, ctx, 'castle')
+    const far = opts.find((o) => o.id === 'castlefetch-far')
+    assert.ok(far, JSON.stringify(opts.map((o) => o.id)))
+    assert.match(far.criterion, /blocked stone/)
+    assert.match(far.criterion, /\+castle material/)
+  })
+
+  it('wood demand + remembered logs offers far without a pickaxe', () => {
+    const { bot, ctx } = castleFixture28({ items: [{ name: 'cobblestone', count: 5 }], word: { kind: 'planks', left: 40 } })
+    ctx.resources = { items: new Map([['oak_log@180,200', { name: 'oak_log', x: 100, y: 64, z: 140 }]]) }
+    const opts = goalOptions(bot, ctx, 'castle')
+    const far = opts.find((o) => o.id === 'castlefetch-far')
+    assert.ok(far, JSON.stringify(opts.map((o) => o.id)))
+    assert.match(far.criterion, /blocked oak_log/)
+  })
+
+  it('first stall keeps the .21 instructions verbatim; flat history names the loop', () => {
+    const { ctx } = castleFixture28()
+    ctx.task = { castle: { wd: { history: [] } } }
+    assert.equal(planInstructions('castle', ctx, 8, 1722), taskMod.PLAN_INSTRUCTIONS)
+    ctx.task.castle.wd.history = [
+      { choice: 'gather', outcome: 'flat', dur_s: 120, delta: 'cells8->8' },
+      { choice: 'gather', outcome: 'flat', dur_s: 16, delta: 'cells8->8' },
+    ]
+    const instr = planInstructions('castle', ctx, 8, 1722)
+    assert.match(instr, /gather flat 2 rounds/)
+    assert.match(instr, /avoid repeating flat steps/)
+  })
+
+  it('flatSummary shortens failed reasons and ignores progress tails', () => {
+    const ctx = (hist) => ({ task: { castle: { wd: { history: hist } } } })
+    assert.equal(flatSummary(ctx([]), 'castle'), null)
+    assert.equal(
+      flatSummary(ctx([{ choice: 'castlefetch', outcome: 'failed:castlefetch-no-stone', dur_s: 90, delta: 'x' }]), 'castle'),
+      'castlefetch failed no-stone',
+    )
+    assert.equal(
+      flatSummary(ctx([
+        { choice: 'gather', outcome: 'flat', dur_s: 120, delta: 'x' },
+        { choice: 'craft', outcome: 'progress', dur_s: 30, delta: 'y' },
+      ]), 'castle'),
+      null,
+      'a progress tail is not a flat loop',
+    )
+    assert.equal(
+      flatSummary(ctx([
+        { choice: 'gather', outcome: 'flat', dur_s: 120, delta: 'x' },
+        { choice: 'craft', outcome: 'flat', dur_s: 120, delta: 'x' },
+        { choice: 'craft', outcome: 'flat', dur_s: 120, delta: 'x' },
+      ]), 'castle'),
+      'craft flat 2 rounds',
+      'trailing choice only',
+    )
+  })
+
+  it('fallbackRank: bank > far > FSM order > house > hold; park excluded', () => {
+    const { fallbackRank } = taskMod
+    const o = (id, step = null) => ({ id, step, unlock: null })
+    assert.equal(fallbackRank('castle', [o('park')]), null)
+    assert.equal(fallbackRank('castle', [o('park'), o('ask-owner')]), null)
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('park'), o('craft', 'craft')]).id, 'craft')
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('castlefetch-far', 'castlefetch')]).id, 'castlefetch-far')
+    assert.equal(fallbackRank('castle', [o('castlefetch-far', 'castlefetch'), o('bank', 'stockpile')]).id, 'bank')
+    assert.equal(fallbackRank('castle', [o('house-build', 'build'), o('gather', 'gather')]).id, 'gather')
+    assert.equal(fallbackRank('bring', [o('hold-bring'), o('gather-far')]).id, 'gather-far')
+    assert.equal(fallbackRank('bring', [o('hold-bring'), o('park')]).id, 'hold-bring')
+    // Work explore-far (blind) trails plain chain steps; order keeps it.
+    assert.equal(fallbackRank('castle', [o('explore-far', 'explore'), o('craft', 'craft')]).id, 'craft')
+    assert.equal(fallbackRank('bring', [o('hold-bring'), o('explore-far')]).id, 'explore-far')
+    // Flat history sorts last but never dead-ends.
+    const hist = [{ choice: 'castlefetch-far', outcome: 'flat', dur_s: 120, delta: 'x' }]
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('castlefetch-far', 'castlefetch')], hist).id,
+      'gather',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('castlefetch-far', 'castlefetch'), o('park')], hist).id,
+      'castlefetch-far',
+      'all flat still picks one',
+    )
+    const failed = [{ choice: 'gather', outcome: 'failed:gather-no-trees', dur_s: 10, delta: 'x' }]
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], failed).id, 'craft')
+    // The stalling step sorts last even with no history (revmux 02 core-1).
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('explore-far', 'explore')], null, 'gather').id,
+      'explore-far',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, 'gather').id,
+      'craft',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('park')], null, 'gather').id,
+      'gather',
+      'only option still retries, penalized or not',
+    )
+    // Blind work spiral beats side steps but trails the chain (revmux 03).
+    assert.equal(fallbackRank('castle', [o('explore-far', 'explore'), o('deliver', 'deliver')]).id, 'explore-far')
+    assert.equal(fallbackRank('castle', [o('forage', 'forage'), o('explore-far', 'explore')]).id, 'explore-far')
+    assert.equal(fallbackRank('castle', [o('gather', 'gather'), o('forage', 'forage')]).id, 'gather')
+    // Held (failed) steps sort last (revmux 03).
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, null, new Set(['gather'])).id,
+      'craft',
+    )
+    assert.equal(
+      fallbackRank('castle', [o('gather', 'gather'), o('craft', 'craft')], null, null, ['gather', 'craft']).id,
+      'craft',
+      'all held still picks one, FSM order',
+    )
   })
 })

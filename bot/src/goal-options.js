@@ -232,10 +232,54 @@ function probeFeasible(bot, ctx, step, unlock) {
   }
 }
 
+// Expected goal effect per plain step (idkcraft-vmzq.28): the watchdog
+// criterion names what the step does FOR THE GOAL METRIC, not just its
+// trigger — R3 showed JEV picking gather (trigger match) over craft (the
+// chain bottleneck) because craft never said it unblocks the castle.
+// Kept out of STEP_CRITERIA so the tick path keeps its exact words.
+const STEP_EFFECT = {
+  castle: {
+    castle: ' (+castle laid, the goal metric)',
+    castlefetch: ' (+castle material)',
+    craft: ' (+castle chain: table unblocks pickaxe for stone)',
+    equip: ' (+castle chain: pickaxe unblocks stone digging)',
+    gather: ' (+castle chain when logs short)',
+    build: ' (no +castle now)',
+    beds: ' (no +castle now)',
+    light: ' (no +castle now)',
+    deliver: ' (no +castle now)',
+    stockpile: ' (no +castle now)',
+    gear: ' (no +castle now)',
+    forage: ' (unlikely +castle now)',
+    explore: ' (unlikely +castle now)',
+    gohome: ' (night safety, no +castle now)',
+    shelter: ' (night safety, no +castle now)',
+    stay: ' (night safety, no +castle now)',
+  },
+  house: {
+    build: ' (+home built, the goal metric)',
+    beds: ' (+home bedroom)',
+    gather: ' (+home chain when logs short)',
+    craft: ' (+home chain: table/door/planks)',
+    equip: ' (+home chain: tools/blocks)',
+    light: ' (+home lighting)',
+    castle: ' (castle work, no +home now)',
+    castlefetch: ' (castle work, no +home now)',
+    deliver: ' (no +home now)',
+    stockpile: ' (no +home now)',
+    gear: ' (no +home now)',
+    forage: ' (unlikely +home now)',
+    explore: ' (unlikely +home now)',
+    gohome: ' (night safety, no +home now)',
+    shelter: ' (night safety, no +home now)',
+    stay: ' (night safety, no +home now)',
+  },
+}
+
 // Plain-step menu for work goals (the .21 watchdogMenu): feasible +
 // registered, failHolds ignored, rest excluded, current step included as
 // a bounded hold. Returns [{ id, step, criterion }].
-function plainSteps(bot, ctx) {
+function plainSteps(bot, ctx, kind = null) {
   const goal = require('./goal')
   const facts = goal.goalFacts(bot, ctx)
   const steps = goal.STEP_ORDER.filter((n) => {
@@ -246,8 +290,10 @@ function plainSteps(bot, ctx) {
       return false
     }
   })
+  const eff = (kind && STEP_EFFECT[kind]) || {}
   return steps.map((n) => {
     let criterion = goal.STEP_CRITERIA[n] || n
+    if (eff[n]) criterion += eff[n]
     // Held steps ride as retry with their failure named (bead FIX 2).
     try {
       const sf = ctx && ctx.stepFail && ctx.stepFail[n]
@@ -273,7 +319,7 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
   const isWork = kind === 'castle' || kind === 'house'
 
   if (isWork) {
-    for (const p of plainSteps(bot, ctx)) out.push(p)
+    for (const p of plainSteps(bot, ctx, kind)) out.push(p)
   } else if (isOrder) {
     // Hold the current order leg (the run-4 answer for orders).
     const holdText = {
@@ -301,10 +347,11 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     } else if (isWork && !probeFeasible(bot, ctx, 'explore', { radius: OUTER_DISK })) {
       skip('explore-far', 'explore not feasible')
     } else {
+      const eff = kind === 'castle' ? ' (may find the blocked material)' : kind === 'house' ? ' (may find wood)' : ''
       out.push({
         id: 'explore-far', step: isWork ? 'explore' : null, orderKind: isWork ? null : kind,
         unlock: { radius: OUTER_DISK },
-        criterion: 'search beyond the task radius up to 256 blocks; costs a long walk and a night out',
+        criterion: `search beyond the task radius up to 256 blocks${eff}; costs a long walk and a night out`,
       })
     }
   }
@@ -341,10 +388,11 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     } else if (isWork && !probeFeasible(bot, ctx, 'gather', { radius: OUTER_DISK })) {
       skip('gather-far', 'gather not feasible')
     } else {
+      const eff = kind === 'castle' ? ' (+castle wood when wood short)' : kind === 'house' ? ' (+home wood)' : kind === 'bring' ? ' (+have when brought back)' : ''
       out.push({
         id: 'gather-far', step: isWork ? 'gather' : null, orderKind: isWork ? null : kind,
         unlock: { radius: OUTER_DISK },
-        criterion: `walk to the remembered ${cand.name} ${Math.round(cand.dist)} blocks out; costs a long walk and a night out`,
+        criterion: `walk to the remembered ${cand.name} ${Math.round(cand.dist)} blocks out${eff}; costs a long walk and a night out`,
       })
     }
   }
@@ -359,27 +407,43 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     } else if (!probeFeasible(bot, ctx, 'forage', { radius: OUTER_DISK })) {
       skip('forage-far', 'forage not feasible')
     } else {
+      const eff = kind === 'castle'
+        ? (isLogName(cand.name) ? ' (+castle wood when wood short)' : ' (unlikely +castle now)')
+        : kind === 'house' ? (isLogName(cand.name) ? ' (+home wood)' : ' (unlikely +home now)') : ''
       out.push({
         id: 'forage-far', step: 'forage', unlock: { radius: OUTER_DISK },
-        criterion: `dig the remembered ${cand.name} ${Math.round(cand.dist)} blocks out; costs a long walk and a night out`,
+        criterion: `dig the remembered ${cand.name} ${Math.round(cand.dist)} blocks out${eff}; costs a long walk and a night out`,
       })
     }
   }
 
   // castlefetch-far: ONLY with a demand-matched candidate past DIG_RADIUS
   // (finding 1) — live exposed stone for stone demand, remembered logs
-  // for wood demand.
+  // for wood demand. Stone needs the pickaxe like the local leg
+  // (vmzq.28: R3 offered far stone to a pickless bot — the leg ends done
+  // at once, so the offer is a promise the executor cannot keep).
   if (kind === 'castle') {
     const found = castleFarCandidate(bot, ctx)
     const cand = found && found.candidate
+    let demand = null
+    try {
+      demand = ctx && ctx.castleWord && ctx.castleWord.kind
+    } catch (_) { /* demand best-effort */ }
+    let hasPick = true
+    try {
+      const facts = require('./goal').goalFacts(bot, ctx)
+      hasPick = ((facts && facts.pickaxe) || 0) > 0
+    } catch (_) { /* readable pickaxe */ }
     if (!registered('castlefetch')) {
       skip('castlefetch-far', 'castlefetch off')
     } else if (!cand) {
       skip('castlefetch-far', (found && found.why) || 'no far candidate')
+    } else if (demand === 'stone' && !hasPick) {
+      skip('castlefetch-far', 'no pickaxe for stone')
     } else {
       out.push({
         id: 'castlefetch-far', step: 'castlefetch', unlock: { radius: OUTER_DISK, candidate: { x: cand.x, y: cand.y, z: cand.z } },
-        criterion: `fetch ${cand.name} ${Math.round(cand.dist)} blocks out; costs a long walk and a night out`,
+        criterion: `fetch the blocked ${cand.name} from ${Math.round(cand.dist)} blocks out (+castle material, unblocks laying); costs a long walk and a night out`,
       })
     }
   }
@@ -402,7 +466,7 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
       }
       out.push({
         id: `house-${hs}`, step: hs, unlock: { houseStep: hs },
-        criterion: `work on the house ${hs} instead (castle-first veto lifted for this step only); costs the castle a day`,
+        criterion: `work on the house ${hs} instead (castle-first veto lifted for this step only); costs the castle a day (no +castle now)`,
       })
     }
   }
@@ -414,9 +478,10 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     } else if (!packFull(bot, ctx)) {
       skip('bank', 'pack not full')
     } else {
+      const eff = kind === 'castle' ? ' (+castle chain: frees room for the batch)' : kind === 'house' ? ' (+home chain: frees room)' : ''
       out.push({
         id: 'bank', step: 'stockpile', unlock: null,
-        criterion: 'bank the full pack at home before fetching more',
+        criterion: `bank the full pack at home before fetching more${eff}`,
       })
     }
   }
@@ -442,29 +507,73 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
   return out
 }
 
-// Instructions per goal kind (castle/house keep the .21 words verbatim).
+// Trailing flat/failed summary from the watchdog history ring
+// (idkcraft-vmzq.28): R3 showed JEV re-picking gather at conf 0.29 after
+// two flat gathers — the history rode the request but the model ignored
+// it. Naming it in the instructions flips R3 to craft at 0.9. Returns
+// e.g. 'gather flat 2 rounds' or 'castlefetch failed no-stone', else null.
+function flatSummary(ctx, kind) {
+  try {
+    const st = ctx && ctx.task && ctx.task[kind]
+    const hist = st && st.wd && Array.isArray(st.wd.history) ? st.wd.history : []
+    if (hist.length === 0) return null
+    const last = hist[hist.length - 1]
+    if (!last || typeof last.choice !== 'string') return null
+    const isFlat = (o) => o === 'flat' || (typeof o === 'string' && o.startsWith('failed:'))
+    if (!isFlat(last.outcome)) return null
+    let n = 1
+    for (let i = hist.length - 2; i >= 0; i--) {
+      const h = hist[i]
+      if (!h || h.choice !== last.choice || !isFlat(h.outcome)) break
+      n++
+    }
+    if (last.outcome === 'flat') return `${last.choice} flat ${n} round${n > 1 ? 's' : ''}`
+    let reason = String(last.outcome.slice('failed:'.length) || 'unknown')
+    const prefix = `${last.choice}-`
+    if (reason.startsWith(prefix)) reason = reason.slice(prefix.length)
+    return n > 1 ? `${last.choice} failed ${reason} ${n} rounds` : `${last.choice} failed ${reason}`
+  } catch (_) {
+    return null
+  }
+}
+
+// Instructions per goal kind (castle/house keep the .21 words verbatim on
+// the first stall — the summary rides only once history names a flat).
 function planInstructions(kind, ctx, done, total) {
   const { PLAN_INSTRUCTIONS } = require('./task')
-  if (kind === 'castle' || kind === 'house') return PLAN_INSTRUCTIONS
+  const summary = flatSummary(ctx, kind)
+  if (kind === 'castle' || kind === 'house') {
+    if (!summary) return PLAN_INSTRUCTIONS
+    return `The goal is stalled: ${summary}. Pick the step most likely to move its progress metric now; avoid repeating flat steps; park only if no step can help`
+  }
   try {
+    let base = null
     if (kind === 'bring') {
       const o = ctx && ctx.bring
       const want = o && typeof o.want === 'number' ? o.want : '?'
       const name = (o && (o.name || o.drop)) || 'items'
       const by = (o && o.by) || 'owner'
       const have = typeof done === 'number' ? done : '?'
-      return `Goal: bring ${want} ${name} to ${by}; have ${have}/${want}. Pick the option most likely to move have now; park only if no option can help`
-    }
-    if (kind === 'comehome') return `Goal: come home; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
-    if (kind === 'gocastle') return `Goal: go to the castle; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
-    if (kind === 'lead') {
+      base = `Goal: bring ${want} ${name} to ${by}; have ${have}/${want}. Pick the option most likely to move have now; park only if no option can help`
+    } else if (kind === 'comehome') {
+      base = `Goal: come home; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
+    } else if (kind === 'gocastle') {
+      base = `Goal: go to the castle; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
+    } else if (kind === 'lead') {
       const o = ctx && ctx.lead
       const name = (o && o.name) || 'the find'
-      return `Goal: lead to ${name}; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
+      base = `Goal: lead to ${name}; ${done}/${total} blocks left. Pick the option most likely to arrive now; park only if no option can help`
+    } else if (kind === 'flat') {
+      base = `Goal: flatten ${done}/${total} cells levelled. Pick the option most likely to level more now; park only if no option can help`
     }
-    if (kind === 'flat') return `Goal: flatten ${done}/${total} cells levelled. Pick the option most likely to level more now; park only if no option can help`
+    if (base) {
+      if (!summary) return base
+      return base
+        .replace('. Pick the option', `. ${summary}. Pick the option`)
+        .replace('; park only', '; avoid repeating flat options; park only')
+    }
   } catch (_) { /* fall through to the generic */ }
   return PLAN_INSTRUCTIONS
 }
 
-module.exports = { goalOptions, planInstructions, rememberedPast, castleFarCandidate, ownerOnline }
+module.exports = { goalOptions, planInstructions, flatSummary, rememberedPast, castleFarCandidate, ownerOnline }
