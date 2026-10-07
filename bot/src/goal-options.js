@@ -88,40 +88,101 @@ function isForageName(n) {
   return false
 }
 
-// Stone/log candidate past DIG_RADIUS of the SITE (castlefetch-far), within
-// the outer disk of the anchor. Reads memory/finds only — no world scan.
-function castleFarCandidate(bot, ctx) {
+// Fetch kinds whose world source is logs (castlefetch gathers a load for
+// all of these; stone digs, torch has no far path).
+const WOOD_FETCH_KINDS = ['planks', 'door', 'fence', 'chest', 'frame']
+
+// Bounded live scan for EXPOSED stone past DIG_RADIUS of the castle site
+// (finding 1): resource memory never holds stone in prod (the arrival scan
+// notes ores + logs only), so a remembered "stone" would send the fetcher
+// to a tree. Rings sample 8 compass points each, nearest ring first; every
+// hit is verified exposed (diggable) at fire time. Runs only on watchdog
+// fire, never per tick. Returns { x, y, z, name, dist } or null.
+function liveStonePast(bot, ctx) {
   try {
     const st = ctx && ctx.castle
     if (!st || !st.site || typeof st.site.x !== 'number') return null
+    const reg = bot && bot.registry && bot.registry.blocksByName
+    const e = reg && reg.stone
+    if (!e || typeof e.id !== 'number' || typeof bot.findBlocks !== 'function') return null
+    const Vec3 = require('vec3')
+    const scout = require('./behaviours/scout')
+    const a = anchorOf(bot, ctx)
     const DIG = 32
-    try {
-      const cf = require('./behaviours/castlefetch')
-      void cf
-    } catch (_) { /* DIG stays 32 */ }
+    for (const r of [64, 128, 192]) {
+      for (let k = 0; k < 8; k++) {
+        const x = Math.round(st.site.x + r * Math.sin((k * Math.PI) / 4))
+        const z = Math.round(st.site.z - r * Math.cos((k * Math.PI) / 4))
+        let hits = []
+        try {
+          hits = bot.findBlocks({ point: new Vec3(x, st.site.y, z), matching: e.id, maxDistance: 24, count: 16 }) || []
+        } catch (_) {
+          hits = []
+        }
+        for (const p of hits) {
+          if (!p || typeof p.x !== 'number') continue
+          const dSite = Math.hypot(p.x - st.site.x, p.z - st.site.z)
+          if (dSite <= DIG) continue
+          if (a && typeof a.x === 'number' && Math.hypot(p.x - a.x, p.z - a.z) > OUTER_DISK) continue
+          let exposed = false
+          try {
+            exposed = !!scout.isExposed(bot, p)
+          } catch (_) {
+            exposed = false
+          }
+          if (!exposed) continue
+          return { x: p.x, y: p.y, z: p.z, name: 'stone', dist: dSite }
+        }
+      }
+    }
+    return null
+  } catch (_) {
+    return null
+  }
+}
+
+// Far-fetch candidate past DIG_RADIUS of the SITE (castlefetch-far), within
+// the outer disk of the anchor — matched to the CURRENT demand (finding
+// 1): stone demand gets live exposed stone only (memory never holds stone
+// in prod); wood demand gets remembered logs (the scan writes logs); any
+// other demand gets nothing. Returns { candidate, why } — why names the
+// miss for the skip log.
+function castleFarCandidate(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || !st.site || typeof st.site.x !== 'number') return { candidate: null, why: 'no castle site' }
+    const cw = ctx && ctx.castleWord
+    const demand = cw && cw.kind
+    if (demand === 'stone') {
+      const hit = liveStonePast(bot, ctx)
+      return hit ? { candidate: hit, why: null } : { candidate: null, why: 'no exposed stone past 32' }
+    }
+    if (!demand || WOOD_FETCH_KINDS.indexOf(demand) === -1) {
+      return { candidate: null, why: demand ? `no far path for ${demand}` : 'no castle demand' }
+    }
+    const DIG = 32
     const a = anchorOf(bot, ctx)
     const mem = ctx && ctx.resources
-    if (!mem || !(mem.items instanceof Map)) return null
+    if (!mem || !(mem.items instanceof Map)) return { candidate: null, why: 'no remembered logs past 32' }
     let best = null
     let bestD = Infinity
     for (const it of mem.items.values()) {
       if (!it || typeof it.x !== 'number') continue
-      if (!isStoneName(it.name) && !isLogName(it.name)) continue
+      if (!isLogName(it.name)) continue
       const dSite = Math.hypot(it.x - st.site.x, it.z - st.site.z)
       if (dSite <= DIG) continue
       if (a && typeof a.x === 'number') {
         const dA = Math.hypot(it.x - a.x, it.z - a.z)
         if (dA > OUTER_DISK) continue
       }
-      const d = dSite
-      if (d < bestD) {
-        bestD = d
-        best = { x: it.x, y: it.y, z: it.z, name: it.name, dist: d }
+      if (dSite < bestD) {
+        bestD = dSite
+        best = { x: it.x, y: it.y, z: it.z, name: it.name, dist: dSite }
       }
     }
-    return best
+    return best ? { candidate: best, why: null } : { candidate: null, why: 'no remembered logs past 32' }
   } catch (_) {
-    return null
+    return { candidate: null, why: 'candidate unreadable' }
   }
 }
 
@@ -137,6 +198,30 @@ function registered(name) {
   try {
     const table = require('./index').BEHAVIOURS
     return !!table && typeof table[name] === 'function'
+  } catch (_) {
+    return false
+  }
+}
+
+// Feasibility under a would-be unlock (finding 3): temporarily arm the
+// window, probe MENU feasibility, restore. No state mutated. A pin
+// decide() would refuse is never offered, so a chosen round can't burn
+// on an infeasible step.
+function probeFeasible(bot, ctx, step, unlock) {
+  try {
+    const goal = require('./goal')
+    const facts = goal.goalFacts(bot, ctx)
+    const g = ctx && ctx.goal
+    if (!g) return !!(goal.MENU[step] && goal.MENU[step].feasible(facts, bot, ctx))
+    const saved = g.commit
+    const fakeUntil = Date.now() + 60000
+    g.commit = { goalId: g.id, generation: g.generation, step, until: fakeUntil, unlock: unlock || null }
+    try {
+      return !!(goal.MENU[step] && goal.MENU[step].feasible(facts, bot, ctx))
+    } finally {
+      if (saved === undefined) delete g.commit
+      else g.commit = saved
+    }
   } catch (_) {
     return false
   }
@@ -196,14 +281,20 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     out.push({ id: `hold-${kind}`, step: null, orderKind: kind, unlock: null, criterion: holdText })
   }
 
-  // explore-far: the spiral cap to the outer disk. Available when explore
-  // is registered and an anchor exists (the cap binds only under taskActive,
-  // but the option is harmless otherwise — the unlock is a no-op off-task).
+  // explore-far: the spiral cap to the outer disk. Work goals probe step
+  // feasibility under the unlock (finding 3); bring offers it only to
+  // capped self hunts (finding 8 — owner legs are already uncapped, so
+  // the unlock would be a no-op alias).
   if (isWork || kind === 'bring') {
+    const bringOrder = kind === 'bring' ? ctx && ctx.bring : null
     if (!registered('explore')) {
       skip('explore-far', 'explore off')
     } else if (!anchorOf(bot, ctx)) {
       skip('explore-far', 'no anchor')
+    } else if (kind === 'bring' && !(bringOrder && bringOrder.self)) {
+      skip('explore-far', 'owner bring already uncapped')
+    } else if (isWork && !probeFeasible(bot, ctx, 'explore', { radius: OUTER_DISK })) {
+      skip('explore-far', 'explore not feasible')
     } else {
       out.push({
         id: 'explore-far', step: isWork ? 'explore' : null, orderKind: isWork ? null : kind,
@@ -213,18 +304,37 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     }
   }
 
-  // gather-far: a remembered tree past the task radius.
+  // gather-far: a remembered tree past the task radius — for bring, the
+  // tree must match the ordered item (findings 7, 8), else the criterion
+  // promises a walk the executor never takes.
   if (isWork || kind === 'bring') {
     const TASK_R = 64
     try {
       const ex = require('./behaviours/explore')
       void ex
     } catch (_) { /* radius stays 64 */ }
-    const cand = rememberedPast(bot, ctx, TASK_R, isLogName)
-    if (!registered('gather') && isWork) {
+    const bringOrder = kind === 'bring' ? ctx && ctx.bring : null
+    let matchNames = null
+    if (kind === 'bring' && bringOrder && bringOrder.self) {
+      try {
+        matchNames = require('./behaviours/bring').memoryNames(bot, bringOrder.name || bringOrder.drop) || []
+      } catch (_) {
+        matchNames = []
+      }
+    }
+    const cand = kind === 'bring'
+      ? (matchNames && matchNames.length > 0 ? rememberedPast(bot, ctx, TASK_R, (n) => matchNames.indexOf(n) !== -1) : null)
+      : rememberedPast(bot, ctx, TASK_R, isLogName)
+    if (isWork && !registered('gather')) {
       skip('gather-far', 'gather off')
+    } else if (kind === 'bring' && !(bringOrder && bringOrder.self)) {
+      skip('gather-far', 'owner bring already uncapped')
+    } else if (kind === 'bring' && (!matchNames || matchNames.length === 0)) {
+      skip('gather-far', 'bring item has no memory names')
     } else if (!cand) {
-      skip('gather-far', 'no remembered tree past 64')
+      skip('gather-far', kind === 'bring' ? 'no remembered matching find past 64' : 'no remembered tree past 64')
+    } else if (isWork && !probeFeasible(bot, ctx, 'gather', { radius: OUTER_DISK })) {
+      skip('gather-far', 'gather not feasible')
     } else {
       out.push({
         id: 'gather-far', step: isWork ? 'gather' : null, orderKind: isWork ? null : kind,
@@ -241,6 +351,8 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
       skip('forage-far', 'forage off')
     } else if (!cand) {
       skip('forage-far', 'no remembered find past 64')
+    } else if (!probeFeasible(bot, ctx, 'forage', { radius: OUTER_DISK })) {
+      skip('forage-far', 'forage not feasible')
     } else {
       out.push({
         id: 'forage-far', step: 'forage', unlock: { radius: OUTER_DISK },
@@ -249,13 +361,16 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     }
   }
 
-  // castlefetch-far: ONLY with a known stone/log candidate past DIG_RADIUS.
+  // castlefetch-far: ONLY with a demand-matched candidate past DIG_RADIUS
+  // (finding 1) — live exposed stone for stone demand, remembered logs
+  // for wood demand.
   if (kind === 'castle') {
-    const cand = castleFarCandidate(bot, ctx)
+    const found = castleFarCandidate(bot, ctx)
+    const cand = found && found.candidate
     if (!registered('castlefetch')) {
       skip('castlefetch-far', 'castlefetch off')
     } else if (!cand) {
-      skip('castlefetch-far', 'no remembered stone past 32')
+      skip('castlefetch-far', (found && found.why) || 'no far candidate')
     } else {
       out.push({
         id: 'castlefetch-far', step: 'castlefetch', unlock: { radius: OUTER_DISK, candidate: { x: cand.x, y: cand.y, z: cand.z } },
@@ -266,7 +381,6 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
 
   // house-build / house-beds: ONE house step with castleFirst lifted.
   if (kind === 'castle') {
-    const goal = require('./goal')
     for (const hs of ['build', 'beds']) {
       if (!registered(hs)) {
         skip(`house-${hs}`, `${hs} off`)
@@ -276,29 +390,8 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
         skip(`house-${hs}`, 'no castle-first veto')
         continue
       }
-      // Otherwise-feasible: the veto is the only block. Probe by calling
-      // feasible with a temporary unlock (no state mutated).
-      let feasible = false
-      try {
-        const facts = goal.goalFacts(bot, ctx)
-        // Temporarily arm the unlock, probe, disarm. The helper reads the
-        // live window, so stamp a fake one and restore.
-        const g = ctx && ctx.goal
-        const saved = g ? g.commit : undefined
-        const fakeUntil = Date.now() + 60000
-        if (g) g.commit = { goalId: g.id, generation: g.generation, step: hs, until: fakeUntil, unlock: { houseStep: hs } }
-        try {
-          feasible = !!(goal.MENU[hs] && goal.MENU[hs].feasible(facts, bot, ctx))
-        } finally {
-          if (g) {
-            if (saved === undefined) delete g.commit
-            else g.commit = saved
-          }
-        }
-      } catch (_) {
-        feasible = false
-      }
-      if (!feasible) {
+      // Otherwise-feasible: the veto is the only block.
+      if (!probeFeasible(bot, ctx, hs, { houseStep: hs })) {
         skip(`house-${hs}`, `${hs} not feasible even unlocked`)
         continue
       }

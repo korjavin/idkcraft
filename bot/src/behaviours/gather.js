@@ -482,3 +482,4 @@ function gather(bot, ctx, target, state) {
 }
 
 module.exports = gather
+module.exports.taskFar = taskFar

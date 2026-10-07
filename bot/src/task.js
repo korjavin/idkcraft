@@ -221,13 +221,28 @@ function eligible(bot, ctx) {
   return true
 }
 
+// Arrival hold (finding 2): comehome/gocastle sit in phase 'hold' after
+// arrival (never cleared), and lead waits for a lagging player — the
+// distance flatlines while the order is exactly where it should be, so
+// the stall clock must not run and the watchdog must not fire (a park
+// would cancel an order that already succeeded).
+function orderHolding(ctx, kind) {
+  try {
+    if (kind === 'comehome') return !!(ctx && ctx.comehome && ctx.comehome.phase === 'hold')
+    if (kind === 'gocastle') return !!(ctx && ctx.gocastle && ctx.gocastle.phase === 'hold')
+    if (kind === 'lead') return !!(ctx && ctx.lead && ctx.lead.waiting)
+  } catch (_) { /* not holding */ }
+  return false
+}
+
 // Eligible time for an order goal (vmzq.22): the order running, not
-// paused — day or night (owner 2026-10-07: orders run day and night).
-// Fight/shelter/recover time counts (the hook sits before those
-// short-circuits, same as the work clock).
+// paused, not arrival-holding — day or night (owner 2026-10-07: orders
+// run day and night). Fight/shelter/recover time counts (the hook sits
+// before those short-circuits, same as the work clock).
 function eligibleOrder(ctx, kind) {
   try {
     if (!ctx || ctx.paused) return false
+    if (orderHolding(ctx, kind)) return false
     if (kind === 'bring') return !!ctx.bring
     if (kind === 'comehome') return !!ctx.comehome
     if (kind === 'gocastle') return !!ctx.gocastle
@@ -235,6 +250,31 @@ function eligibleOrder(ctx, kind) {
     if (kind === 'flat') return !!(ctx.flat && !ctx.flat.parked)
   } catch (_) { /* ineligible */ }
   return false
+}
+
+// Arrival hold settles the clock (finding 2): the stall clears and any
+// in-flight round drops — the order already succeeded, so a stale answer
+// must never park it.
+function holdReset(state) {
+  try {
+    state.stallMs = 0
+    const wd = wdOf(state)
+    wd.pending = null
+    wd.answer = null
+  } catch (_) { /* reset best-effort */ }
+}
+
+// The live order object behind a goal kind (finding 4: identity source).
+function orderObj(ctx, kind) {
+  try {
+    if (!ctx) return null
+    if (kind === 'bring') return ctx.bring || null
+    if (kind === 'comehome') return ctx.comehome || null
+    if (kind === 'gocastle') return ctx.gocastle || null
+    if (kind === 'lead') return ctx.lead || null
+    if (kind === 'flat') return ctx.flat || null
+  } catch (_) { /* no order */ }
+  return null
 }
 
 function dist3(a, b) {
@@ -1321,6 +1361,26 @@ function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null) {
   }
 }
 
+// An unlock window survives goal progress (finding 5): the far leg keeps
+// its bounds until `until` (expiry) or leg end (done/failed/preempt) —
+// snap-back is for the window end, not the first increment (ending on one
+// dug stone would cost a ~180-block round trip plus a paid JEV round per
+// block). Records the progress (rounds clear) and marks the window so the
+// expiry verdict reads progress. Plain-step and hold windows still end on
+// first progress. Returns true when the caller must keep, not end.
+function keepUnlockWindow(state, c) {
+  try {
+    const u = c && c.unlock
+    if (!u || typeof u !== 'object' || Object.keys(u).length === 0) return false
+    c.sawProgress = true
+    const wd = state ? wdOf(state) : null
+    if (wd) wd.rounds = 0
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 // End a live window: one `goal outcome` line, one history entry, round
 // accounting (flat and failed count, progress clears, preempted stands),
 // then the round-cap fork. Idempotent: ending twice logs once.
@@ -1550,6 +1610,9 @@ function commitEligible(bot, ctx, kind, state, billed, now) {
       } catch (_) {
         advanced = false
       }
+      try {
+        if (c.sawProgress) advanced = true
+      } catch (_) { /* verdict best-effort */ }
       endCommit(bot, ctx, kind, state, c, advanced ? 'progress' : 'flat', now)
     }
   } catch (_) { /* window never breaks the tick */ }
@@ -2092,6 +2155,20 @@ function taskTick(bot, ctx, now = Date.now()) {
     // eligibility below. May resetTask, so before the state init.
     maybeResume(bot, ctx, now)
     if (!ctx.task || typeof ctx.task !== 'object') ctx.task = { active: null }
+    // Order identity (finding 4): a new order object over a running one of
+    // the same kind is a NEW goal — the setters replace without resetTask,
+    // so re-baseline here: the old baseline, stall, rounds and live unlock
+    // all end with the replaced preempt instead of leaking across.
+    try {
+      const k0 = goalKind(ctx)
+      if (k0 && isOrderKind(k0)) {
+        const st0 = ctx.task[k0]
+        if (st0 && typeof st0 === 'object' && st0.orderRef !== orderObj(ctx, k0)) {
+          resetTask(ctx, 'replaced')
+          ctx.task = { active: null }
+        }
+      }
+    } catch (_) { /* identity best-effort */ }
     const t = ctx.task
     const kind = goalKind(ctx)
     // Commitment window accounting first (vmzq.21): preempts and pauses
@@ -2191,6 +2268,7 @@ function taskTick(bot, ctx, now = Date.now()) {
           t[kind] = {
             done: cur.done, total: cur.total, dist: cur.dist,
             stallMs: 0, lastAt: now, lastL1At: null, fails: [],
+            orderRef: orderObj(ctx, kind),
           }
           // Travel goals baseline the distance as the total (blocks left).
           if ((kind === 'comehome' || kind === 'gocastle' || kind === 'lead') && typeof cur.dist === 'number') {
@@ -2219,6 +2297,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       if (!readable) {
         recordFail(ctx, state)
         if (!eligibleOrder(ctx, kind)) {
+          if (orderHolding(ctx, kind)) holdReset(state)
           state.lastAt = now
           setStallGauge(kind, state.stallMs || 0)
           return
@@ -2256,7 +2335,8 @@ function taskTick(bot, ctx, now = Date.now()) {
         logReset(kind, why)
         try {
           const g = ctx && ctx.goal
-          if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+          const c0 = g && g.commit
+          if (c0 && !keepUnlockWindow(state, c0)) endCommit(bot, ctx, kind, state, c0, 'progress', now)
         } catch (_) { /* window best-effort */ }
         return
       }
@@ -2296,6 +2376,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       if (typeof cur.total === 'number' && (kind === 'bring' || kind === 'flat')) state.total = cur.total
       recordFail(ctx, state)
       if (!eligibleOrder(ctx, kind)) {
+        if (orderHolding(ctx, kind)) holdReset(state)
         state.lastAt = now
         setStallGauge(kind, state.stallMs || 0)
         return
@@ -2372,7 +2453,8 @@ function taskTick(bot, ctx, now = Date.now()) {
         logReset(kind, why)
         try {
           const g = ctx && ctx.goal
-          if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+          const c0 = g && g.commit
+          if (c0 && !keepUnlockWindow(state, c0)) endCommit(bot, ctx, kind, state, c0, 'progress', now)
         } catch (_) { /* window best-effort */ }
         return
       }
@@ -2468,7 +2550,8 @@ function taskTick(bot, ctx, now = Date.now()) {
             logReset(kind, crossWhy)
             try {
               const g = ctx && ctx.goal
-              if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+              const c0 = g && g.commit
+              if (c0 && !keepUnlockWindow(state, c0)) endCommit(bot, ctx, kind, state, c0, 'progress', now)
             } catch (_) { /* window best-effort */ }
             return
           }
@@ -2483,7 +2566,8 @@ function taskTick(bot, ctx, now = Date.now()) {
       logReset(kind, 'cells')
       try {
         const g = ctx && ctx.goal
-        if (g && g.commit) endCommit(bot, ctx, kind, state, g.commit, 'progress', now)
+        const c0 = g && g.commit
+        if (c0 && !keepUnlockWindow(state, c0)) endCommit(bot, ctx, kind, state, c0, 'progress', now)
       } catch (_) { /* window best-effort */ }
       return
     }
@@ -2508,4 +2592,4 @@ function taskTick(bot, ctx, now = Date.now()) {
   } catch (_) { /* task clock never breaks the tick */ }
 }
 
-module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }
+module.exports = { TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION }

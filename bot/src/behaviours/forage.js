@@ -975,4 +975,5 @@ module.exports.questExempt = questExempt
 module.exports.gearWantCell = gearWantCell
 module.exports.bestDiamondCell = bestDiamondCell
 module.exports.skipCell = skipCell
+module.exports.parkedCellSkipped = parkedCellSkipped
 module.exports.FORAGE_WANT = FORAGE_WANT

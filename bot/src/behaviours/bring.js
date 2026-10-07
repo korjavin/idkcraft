@@ -1799,6 +1799,7 @@ module.exports.verdictLine = verdictLine
 module.exports.verdictFacts = verdictFacts
 module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
+module.exports.enterSearch = enterSearch
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase

@@ -285,19 +285,27 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   // Around the SITE (g0z.15): the window below is the site's, so a search
   // around a far body found nothing ever (prod: 14 instant no-stone).
   // (.22) a castlefetch-far unlock searches around the known candidate
-  // instead (the remembered stone the table validated), anchored on the
-  // candidate's ground — the window end snaps back to the site on the
-  // next pick.
+  // instead (the live exposed stone the table validated), anchored on the
+  // candidate's ground — latched onto the leg, so re-picks after each dug
+  // block keep searching the candidate ground until the leg ends.
   let c = siteCenter(ctx.castle)
   let gy = ctx.castle.site.y
+  let cand = null
   try {
     const { goalUnlock } = require('../goal-unlock')
-    const cand = goalUnlock(ctx, 'candidate')
-    if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') {
-      c = { x: cand.x, y: typeof cand.y === 'number' ? cand.y : gy, z: cand.z }
-      if (typeof cand.y === 'number') gy = cand.y
-    }
-  } catch (_) { /* site search */ }
+    cand = goalUnlock(ctx, 'candidate')
+  } catch (_) { cand = null }
+  if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') {
+    f.farCandidate = { x: cand.x, y: cand.y, z: cand.z }
+  } else if (f.farCandidate && typeof f.farCandidate.x === 'number') {
+    cand = f.farCandidate
+  } else {
+    cand = null
+  }
+  if (cand) {
+    c = { x: cand.x, y: typeof cand.y === 'number' ? cand.y : gy, z: cand.z }
+    if (typeof cand.y === 'number') gy = cand.y
+  }
   try { found = (e && bot.findBlocks({ point: new Vec3(c.x, c.y, c.z), matching: e.id, maxDistance: DIG_RADIUS, count: FIND_COUNT })) || [] } catch (_) { found = [] }
   const fx = Math.floor(bp.x)
   const fy = Math.floor(bp.y) // own feet column only
@@ -457,15 +465,23 @@ function digTick(bot, ctx, f) {
   if (!t) {
     // Far from the castle: walk there first, the stone is searched there.
     // (.22) a castlefetch-far unlock walks to the known candidate instead
-    // (the fetcher walks to the candidate); a leg already past the bound
-    // finishes (the quarry precedent — the window end snaps back on the
-    // next leg, never mid-walk).
+    // (the fetcher walks to the candidate). The candidate latches onto the
+    // leg (finding 9, the f.quarry precedent): a window that expires — or
+    // a first stone that lands — mid-walk must not turn the bot around; a
+    // leg already past the bound finishes. finish() drops the latch with
+    // the leg (fetch failed, pack full, nothing left).
     let c = siteCenter(st)
+    let farCand = null
     try {
       const { goalUnlock } = require('../goal-unlock')
-      const cand = goalUnlock(ctx, 'candidate')
-      if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') c = { x: cand.x, y: cand.y, z: cand.z }
-    } catch (_) { /* site walk */ }
+      farCand = goalUnlock(ctx, 'candidate')
+    } catch (_) { farCand = null }
+    if (farCand && typeof farCand.x === 'number' && typeof farCand.z === 'number') {
+      f.farCandidate = { x: farCand.x, y: farCand.y, z: farCand.z }
+      c = f.farCandidate
+    } else if (f.farCandidate && typeof f.farCandidate.x === 'number' && typeof f.farCandidate.z === 'number') {
+      c = f.farCandidate
+    }
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
     // A leg already quarrying stays out: the trench runs past DIG_RADIUS
     // (revmux 02), and its own target walks have their own patience.
@@ -487,6 +503,12 @@ function digTick(bot, ctx, f) {
     }
     t = pickStone(bot, ctx, f, bp, stoneAt)
     if (!t) {
+      // A far leg whose candidate ground is dry ends here (finding 9): no
+      // stone left around the candidate finishes the leg — starting the
+      // site trench instead would walk the bot back to the dead ground the
+      // window was bought to escape. An already-running trench keeps going.
+      const farLatched = !!(f.farCandidate && typeof f.farCandidate.x === 'number')
+      if (farLatched && !f.quarry) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
       // No exposed stone by the site: quarry it, and ask the owner once
       // per site per session (owner 2026-10-02: the chest is the shortcut).
       const key = `${st.site.x},${st.site.y},${st.site.z}`
@@ -586,6 +608,7 @@ function castlefetch(bot, ctx, target, state) {
 }
 
 module.exports = castlefetch
+module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest

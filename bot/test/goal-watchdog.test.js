@@ -257,7 +257,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.equal(wdLogs().length, 1, 'ONE goal watchdog line')
     assert.match(
       wdLogs()[0],
-      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,gather,explore-far,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/,
+      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,gather,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/,
     )
     assert.equal(await watchdogCounter('castle', 'castlefetch', 'jev'), before + 1)
     // The request: goal + history=[] + situation + options, watchdog words.
@@ -268,7 +268,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.match(req.state.facts, /time=day/)
     assert.equal(req.instructions, taskMod.PLAN_INSTRUCTIONS)
     assert.notEqual(req.instructions, goal.ASK_INSTRUCTIONS, 'watchdog words, not the tick words')
-    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'gather', 'explore-far', 'park'])
+    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'gather', 'park'])
     assert.equal(req.criteria.park, taskMod.PLAN_PARK_CRITERION)
     // The same-step answer applies as a commit (no same-step park).
     const commit = ctx.goal && ctx.goal.commit
