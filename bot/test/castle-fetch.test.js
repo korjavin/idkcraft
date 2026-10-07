@@ -777,6 +777,23 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.equal(ctx.stepStatus, undefined, 'no unreachable fail')
   })
 
+  it('revmux 02 (vmzq.25): a path in a stance head slot is never walked under; it stays', async () => {
+    const path = `${SITE.x - 4},64,${SITE.z + 3}` // column 0 lane 1, floor(0) + 1
+    const set = new Map([[path, 'dirt_path']])
+    const bot = makeBot({ items: TOOLS(), set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const ctx = { castle: castleState() }
+    const heads = []
+    for (let i = 0; i < 60 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t && t.stance) heads.push(`${t.stance.x},${t.stance.y + 1},${t.stance.z}`)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.ok(!heads.includes(path), 'no stance has the path as its head cell')
+    assert.equal(set.get(path), 'dirt_path', 'the path stands')
+  })
+
   it('revmux 01: trench stone that never reaches the pack fails dig-stall', async () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 63 ? 'stone' : 'air') })
