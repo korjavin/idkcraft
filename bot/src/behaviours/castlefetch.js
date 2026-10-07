@@ -44,6 +44,8 @@ const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no
 const STONE_ABOVE = 3
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
+const EYE = 1.62 // eye over feet: trench reach is measured from it
+const AIR_WAITS = 3 // ticks a dig waits for the feet to land
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const NOGAIN_STRIKES = 5 // digs without the cobble count growing
@@ -318,12 +320,59 @@ function craftTick(bot, ctx, f, d) {
 // danger spot, or our own feet column.
 const EXPOSE = [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
 const AIRISH = new Set(['air', 'cave_air'])
+// Shared stone acceptance (R2 core-2): the ground window, exposure,
+// danger and break checks in one predicate so pickStone and the
+// watchdog's live scan accept the same blocks. gy is the ground anchor
+// (the site y, or the latched far candidate's y inside a far leg). at
+// resolves the block (pickStone's stoneAt); default is bot.blockAt.
+function acceptStone(bot, ctx, p, gy, at) {
+  try {
+    if (!bot || !p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+    if (typeof gy !== 'number') return false
+    if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) return false
+    const open = EXPOSE.some(([x, y, z]) => {
+      try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && AIRISH.has(n.name) } catch (_) { return false }
+    })
+    if (!open) return false
+    try { if (danger.near(ctx, p)) return false } catch (_) { return false }
+    let b = null
+    try {
+      b = typeof at === 'function' ? at(p) : bot.blockAt(new Vec3(p.x, p.y, p.z))
+    } catch (_) { b = null }
+    if (!b) return false
+    try { if (!canBreak(bot, b, ctx)) return false } catch (_) { return false }
+    return true
+  } catch (_) {
+    return false
+  }
+}
 function pickStone(bot, ctx, f, bp, stoneAt) {
   const e = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName.stone
   let found = []
   // Around the SITE (g0z.15): the window below is the site's, so a search
   // around a far body found nothing ever (prod: 14 instant no-stone).
-  const c = siteCenter(ctx.castle)
+  // (.22) a castlefetch-far unlock searches around the known candidate
+  // instead (the live exposed stone the table validated), anchored on the
+  // candidate's ground — latched onto the leg, so re-picks after each dug
+  // block keep searching the candidate ground until the leg ends.
+  let c = siteCenter(ctx.castle)
+  let gy = ctx.castle.site.y
+  let cand = null
+  try {
+    const { goalUnlock } = require('../goal-unlock')
+    cand = goalUnlock(ctx, 'candidate')
+  } catch (_) { cand = null }
+  if (cand && typeof cand.x === 'number' && typeof cand.z === 'number') {
+    f.farCandidate = { x: cand.x, y: cand.y, z: cand.z }
+  } else if (f.farCandidate && typeof f.farCandidate.x === 'number') {
+    cand = f.farCandidate
+  } else {
+    cand = null
+  }
+  if (cand) {
+    c = { x: cand.x, y: typeof cand.y === 'number' ? cand.y : gy, z: cand.z }
+    if (typeof cand.y === 'number') gy = cand.y
+  }
   try { found = (e && bot.findBlocks({ point: new Vec3(c.x, c.y, c.z), matching: e.id, maxDistance: DIG_RADIUS, count: FIND_COUNT })) || [] } catch (_) { found = [] }
   const fx = Math.floor(bp.x)
   const fy = Math.floor(bp.y) // own feet column only
@@ -331,23 +380,16 @@ function pickStone(bot, ctx, f, bp, stoneAt) {
   let best = null
   for (const p of found) {
     const k = `${p.x},${p.y},${p.z}`
-    if (f.skip.has(k) || onSite(ctx.castle, p) || danger.near(ctx, p) || inTrench(ctx.castle, p)) continue
+    if (f.skip.has(k) || onSite(ctx.castle, p) || inTrench(ctx.castle, p)) continue
     if (p.x === fx && p.z === fz && p.y < fy) continue
-    // Near the castle's ground level only (revmux 02/03): a cave wall far
-    // below is 'exposed' too and the canDig walk would shaft down to it; a
-    // cliff face far above means pillaring. Anchored on the site, never the
-    // live feet — a pick made from inside our own quarry pit would ratchet
-    // the window down a layer per pick.
-    const gy = ctx.castle.site.y
-    if (p.y < gy - STONE_BELOW || p.y > gy + STONE_ABOVE) continue
     const d = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
     if (best && d >= best.d) continue
-    const open = EXPOSE.some(([x, y, z]) => {
-      try { const n = bot.blockAt(new Vec3(p.x + x, p.y + y, p.z + z)); return !!n && AIRISH.has(n.name) } catch (_) { return false }
-    })
-    if (!open) continue
-    const b = stoneAt(p)
-    if (!b || !canBreak(bot, b, ctx)) continue
+    // Ground window + exposure + danger + break (R2 core-2): the shared
+    // predicate, so the watchdog's live scan accepts the same blocks.
+    // Anchored on the site (or the far candidate), never the live feet —
+    // a pick made from inside our own quarry pit would ratchet the
+    // window down a layer per pick.
+    if (!acceptStone(bot, ctx, p, gy, stoneAt)) continue
     best = { x: p.x, y: p.y, z: p.z, k, d, waits: 0 }
   }
   return best
@@ -459,11 +501,12 @@ function pickQuarry(bot, ctx, f) {
       try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
     }
     let dead = false
+    let deadWhy = ''
     for (let i = 0; i < QUARRY_LEN && !dead; i++) {
       const floor = trenchFloor(st, i, base)
       for (let l = 0; l < QUARRY_W && !dead; l++) {
         const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
-        if (!below || open(below) || wet(below)) dead = true
+        if (!below || open(below) || wet(below)) { dead = true; deadWhy = `${below ? (wet(below) ? 'water' : 'hole') : 'void'} under column ${i} floor at ${o.x + o.dx * i + o.lx * l} ${floor - 1} ${o.z + o.dz * i + o.lz * l}` }
       }
       for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
         for (let l = 0; l < QUARRY_W && !dead; l++) {
@@ -471,22 +514,36 @@ function pickQuarry(bot, ctx, f) {
           const z = o.z + o.dz * i + o.lz * l
           const k = `${x},${y},${z}`
           const b = at(x, y, z)
-          if (!b || wet(b)) { dead = true; break }
+          if (!b || wet(b)) { dead = true; deadWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
           if (open(b) || f.skip.has(k)) continue
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; break }
+          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; deadWhy = `liquid by ${k}`; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,
             // a ruin block) is stepped around.
-            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; break }
+            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; deadWhy = `protected place at ${k}`; break }
             f.skip.add(k)
             continue
           }
-          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0 }
+          // Stance (idkcraft-vmzq.25): the previous column's floor, same
+          // lane, reached by walking down the staircase. A walk to the cell
+          // itself (ground level, the bot deep in the trench) pillared up
+          // out of the trench and the quarry re-dug the pillar (rig: 161
+          // digs for 115 cells). Column i's drops rest on its floor, the
+          // stance the next column is dug from. A cell out of eye reach
+          // from its stance (a hill top or a leaf over a deep column) stays
+          // standing: walking up to it pillared the same way (rig). A stance
+          // that is not open body room (a stepped-around path, a skipped
+          // cell, column 0's outside cell) is never walked into (revmux 01:
+          // range 0 would dig it): that cell walks to itself as before.
+          let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
+          if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
+          else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
     }
     q.dead.push(s) // dug out or unusable mid-trench
-    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable (mid-trench)' : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    try { console.log(`castlefetch quarry side ${s} ${dead ? `unusable (mid-trench: ${deadWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
@@ -569,7 +626,24 @@ function digTick(bot, ctx, f) {
   if (t && !targetAt(t)) t = f.target = null // dug (or gone): pick the next
   if (!t) {
     // Far from the castle: walk there first, the stone is searched there.
-    const c = siteCenter(st)
+    // (.22) a castlefetch-far unlock walks to the known candidate instead
+    // (the fetcher walks to the candidate). The candidate latches onto the
+    // leg (finding 9, the f.quarry precedent): a window that expires — or
+    // a first stone that lands — mid-walk must not turn the bot around; a
+    // leg already past the bound finishes. finish() drops the latch with
+    // the leg (fetch failed, pack full, nothing left).
+    let c = siteCenter(st)
+    let farCand = null
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      farCand = goalUnlock(ctx, 'candidate')
+    } catch (_) { farCand = null }
+    if (farCand && typeof farCand.x === 'number' && typeof farCand.z === 'number') {
+      f.farCandidate = { x: farCand.x, y: farCand.y, z: farCand.z }
+      c = f.farCandidate
+    } else if (f.farCandidate && typeof f.farCandidate.x === 'number' && typeof f.farCandidate.z === 'number') {
+      c = f.farCandidate
+    }
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
     // A leg already quarrying stays out: the trench runs past DIG_RADIUS
     // (revmux 02), and its own target walks have their own patience.
@@ -593,6 +667,12 @@ function digTick(bot, ctx, f) {
     }
     t = pickStone(bot, ctx, f, bp, stoneAt)
     if (!t) {
+      // A far leg whose candidate ground is dry ends here (finding 9): no
+      // stone left around the candidate finishes the leg — starting the
+      // site trench instead would walk the bot back to the dead ground the
+      // window was bought to escape. An already-running trench keeps going.
+      const farLatched = !!(f.farCandidate && typeof f.farCandidate.x === 'number')
+      if (farLatched && !f.quarry) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
       // No exposed stone by the site: quarry it, and ask the owner once
       // per site per session (owner 2026-10-02: the chest is the shortcut).
       const key = `${st.site.x},${st.site.y},${st.site.z}`
@@ -612,11 +692,21 @@ function digTick(bot, ctx, f) {
   // never collected: the stance advances along the trench while the drops
   // stay behind, and ~2/3 of dug blocks never reached the pack (rig: 368
   // issues banked +113). Linger-by-construction: a stance within 2.5 of
-  // every dug cell sits on the drops through the dig.
-  if (dist > PICKUP_REACH + 0.5) {
-    const range = dist > DIG_REACH ? 2 : 1
-    walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
-    if (stalled(t, dist, APPROACH_WAITS)) {
+  // every dug cell sits on the drops through the dig. A trench cell with a
+  // stance (vmzq.25) is dug from the stance instead: eye reach, no climb.
+  const s = t.stance
+  const sd = s ? Math.hypot(bp.x - (s.x + 0.5), bp.y - s.y, bp.z - (s.z + 0.5)) : 0
+  const reach = s
+    ? sd <= 2 && Math.hypot(bp.x - (t.x + 0.5), bp.y + EYE - (t.y + 0.5), bp.z - (t.z + 0.5)) <= DIG_REACH + 0.5
+    : dist <= PICKUP_REACH + 0.5
+  if (!reach) {
+    // The stance cell itself (range 0): a near-goal admits the cell one
+    // lower, i.e. digging the floor's support (rig: side 3 went dead
+    // mid-trench on range 1, carried the run on range 0).
+    const range = s ? 0 : dist > DIG_REACH ? 2 : 1
+    if (s) walkTo(bot, ctx, `castlefetch-stance:${s.x},${s.y},${s.z}`, s, range)
+    else walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
+    if (stalled(t, s ? sd : dist, APPROACH_WAITS)) {
       skip.add(t.k)
       f.target = null
       if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
@@ -634,6 +724,10 @@ function digTick(bot, ctx, f) {
     spend(f, 'other')
     return
   }
+  // Airborne digs take 5x (mineflayer digTime; rig: the first dig after
+  // each stance walk ran 3.75 s on 0.75 s dirt): let the feet land first,
+  // a bounded wait so a body that never reads grounded still digs.
+  if (bot.entity && bot.entity.onGround === false && (t.air = (t.air | 0) + 1) <= AIR_WAITS) { spend(f, 'other'); return }
   if (t.quarry) {
     // Drops land at the digging stance (pickup reach), so no
     // cobble-gain strike; a cell that survives its digs is skipped instead.
@@ -663,7 +757,7 @@ function digTick(bot, ctx, f) {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
-    await bot.dig(b)
+    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
     // A hung dig skips the block (no retry this leg); the no-gain strike
     // counts it. Loud: a 10 s hang per cell is the rig's prime suspect
@@ -728,9 +822,14 @@ module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
+module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
 module.exports.onSite = onSite
 module.exports.deps = deps
 module.exports.FETCH = FETCH
+module.exports.acceptStone = acceptStone
+module.exports.FIND_COUNT = FIND_COUNT
+module.exports.STONE_BELOW = STONE_BELOW
+module.exports.STONE_ABOVE = STONE_ABOVE

@@ -153,7 +153,7 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       // Castle first (vmzq.19): an active castle vetoes the house build,
       // and an L2 park keeps the veto past the task radius (R2 minor 3).
-      if (castleFirst(ctx) || castleParkLeash(ctx)) return false
+      if (castleFirst(ctx, 'build') || castleParkLeash(ctx)) return false
       // Parked house (vmzq.3): the L2 episode vetoes the house chain —
       // the bot does side work instead until resume.
       if (ctx && ctx.home && ctx.home.parked) return false
@@ -226,7 +226,7 @@ const MENU = {
       // Castle first (vmzq.19): an active castle vetoes the wool hunt —
       // its place/bank legs walk home, 500 blocks in run3 — and an L2
       // park keeps the veto past the task radius (R2 minor 3).
-      if (castleFirst(ctx) || castleParkLeash(ctx)) return false
+      if (castleFirst(ctx, 'beds') || castleParkLeash(ctx)) return false
       if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
       try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
     },
@@ -240,7 +240,7 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       if (facts.time !== 'day') return false
       // Home-leg leash (vmzq.19 R2, major 2): no cross-map torch run.
-      if (homeLegVetoed(bot, ctx)) return false
+      if (homeLegVetoed(bot, ctx, 'light')) return false
       const home = ctx && ctx.home
       if (!home || !home.site) return false
       // Built only (revmux 01 majors): on an unbuilt site light outranks
@@ -363,7 +363,7 @@ const MENU = {
       // on it, so a leashed full pack stalls to the L2 park. The pierce
       // latches for the trip (R4, round-3 major): one placed block must
       // not turn the walk around, and dusk must not strand it.
-      (!homeLegVetoed(bot, ctx) || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
+      (!homeLegVetoed(bot, ctx, 'stockpile') || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
       (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
@@ -377,7 +377,7 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       if (facts.home !== 'built') return false
       // Home-leg leash (vmzq.19 R2, major 2): the ladder waits for the castle.
-      if (homeLegVetoed(bot, ctx)) return false
+      if (homeLegVetoed(bot, ctx, 'gear')) return false
       let plan = null
       try {
         plan = require('./behaviours/gear').menuPlan(facts, ctx)
@@ -514,8 +514,16 @@ const PARK_FORAGE_RADIUS = 64
 // vetoed: the castle chain needs its kit. Parked/complete releases (the
 // L2 park's side work IS house work). Deferred require (the beds
 // precedent — goal.js loads inside the behaviour chain).
-function castleFirst(ctx) {
+// (.22) a house-<step> unlock lifts the veto for that step only — never
+// wholesale (peer Q3). Pass the step name; omitted keeps the veto.
+function castleFirst(ctx, step = null) {
   try {
+    if (step) {
+      try {
+        const { goalUnlock } = require('./goal-unlock')
+        if (goalUnlock(ctx, 'houseStep') === step) return false
+      } catch (_) { /* no unlock */ }
+    }
     return !!require('./behaviours/explore').castleActive(ctx)
   } catch (_) {
     return false
@@ -527,8 +535,16 @@ function castleFirst(ctx) {
 // below only skips for a runnable castle) would pick them over the
 // chain's gather/craft/equip. Unreadable position reads near (fail open,
 // the nightFarFromHome rule).
-function homeLegVetoed(bot, ctx) {
+// (.22) same per-step unlock seam as castleFirst (houseStep is build or
+// beds, so light/stockpile/gear never lift — they stay vetoed by shape).
+function homeLegVetoed(bot, ctx, step = null) {
   try {
+    if (step) {
+      try {
+        const { goalUnlock } = require('./goal-unlock')
+        if (goalUnlock(ctx, 'houseStep') === step) return false
+      } catch (_) { /* no unlock */ }
+    }
     if (!castleFirst(ctx)) return false
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
@@ -1633,7 +1649,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
-      if (castleFirst(ctx) || castleParkLeash(ctx)) return 'build: castle comes first'
+      if (castleFirst(ctx, 'build') || castleParkLeash(ctx)) return 'build: castle comes first'
       if (ctx && ctx.home && ctx.home.parked) return 'build: house parked'
       if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
       // Facts-level wording; the exact remainder gate lives in the rule.
@@ -1656,7 +1672,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'build: nothing left to build'
     }
     case 'beds':
-      if (castleFirst(ctx) || castleParkLeash(ctx)) return 'beds: castle comes first'
+      if (castleFirst(ctx, 'beds') || castleParkLeash(ctx)) return 'beds: castle comes first'
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
@@ -1664,7 +1680,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'beds: not feasible'
     case 'light': {
       if (facts.time !== 'day') return 'light: daytime job'
-      if (homeLegVetoed(bot, ctx)) return 'light: castle comes first'
+      if (homeLegVetoed(bot, ctx, 'light')) return 'light: castle comes first'
       const home = ctx && ctx.home
       if (!home || !home.site) return 'light: no home site'
       if (facts.home !== 'built') return 'light: home not built'
@@ -1713,7 +1729,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'deliver: nobody to deliver to'
     case 'stockpile':
       if (facts.home !== 'built') return 'stockpile: house not built yet'
-      if (homeLegVetoed(bot, ctx)) return 'stockpile: castle comes first'
+      if (homeLegVetoed(bot, ctx, 'stockpile')) return 'stockpile: castle comes first'
       if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
       if (facts.chestParked) {
         // A blocked lid seals like a full chest but must not read as one.
@@ -1726,7 +1742,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'stockpile: nothing to bank'
     case 'gear': {
       if (facts.home !== 'built') return 'gear: house not built yet'
-      if (homeLegVetoed(bot, ctx)) return 'gear: castle comes first'
+      if (homeLegVetoed(bot, ctx, 'gear')) return 'gear: castle comes first'
       let plan = null
       try {
         plan = require('./behaviours/gear').menuPlan(facts, ctx)
@@ -2181,7 +2197,7 @@ async function decide(bot, ctx) {
     // set on the fresh pick only, so the shortcut re-issue below never
     // arms it and only stockpile's own finish releases it above.
     if (choice.step === 'stockpile') {
-      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx) } catch (_) { /* latch best-effort */ }
+      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { /* latch best-effort */ }
     }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })

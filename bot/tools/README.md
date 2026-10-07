@@ -376,6 +376,7 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 ```sh
 sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
+CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
 ```
 
 One call = reset the disposable world copy, boot Paper, scan nine
@@ -388,37 +389,71 @@ guide (prod-alone parity: nobody online, autonomous on), work `mins`
 minutes, print ONE verdict line:
 
 ```
-castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>
+castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>, watchdog=<calls>, first=<s>, choices=<...>, outcomes=progress:<n>,flat:<n>,preempted:<n>
 ```
 
 `flips` counts goal-step transitions castle<->castlefetch; the JSON record
 lands in `CASTLE_OUT` (default `bot/tools/last-castle.json`, gitignored —
 check; if not ignored, don't commit it), the full log in `CASTLE_LOG`. The
-bot runs the real stack on the stub brain (deterministic, no paid LLM).
-Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle), difficulty
-peaceful, fall damage off, keepInventory on — the window measures build
-throughput, not survival. `CASTLE_KIT=seeded` pre-fills 128 cobble,
-64 planks, 64 dirt and a stone pick+sword after the clear, so a 6-min
-window measures laying (equip is kit-complete, the first word is a batch)
-independent of the fetch chain; `empty` (default) runs the full chain
-from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast iteration
-(a Paper that rejects it warns loudly and runs at wall clock; the record
-carries the effective rate) — gates always run at 1, since the bot ticks
-on wall-clock seconds and a faster game clock changes what a minute of
-play means.
+bot runs the real stack with the REAL JEV planner by default
+(`RIG_PLANNER=jev`, idkcraft-vmzq.23): the key arrives as
+`TYPESAFE_API_KEY`, or — when unset — from the stash
+`secrets/jev-api-key` at run time, and travels as env only (never
+printed, never logged; a jev run without a key fails loud instead of
+silently measuring the stub). Once the guide quits, the tick brain steps
+down to stub (prod-alone parity, no paid tick asks) while the
+stall-point `plan()` keeps reaching JEV. `RIG_PLANNER=stub` keeps the
+deterministic stub brain for tests that need no network.
+`GOAL_WATCHDOG_MS` / `GOAL_COMMIT_MS` pass through when set (defaults 60 s
+/ 120 s). The watchdog tail parses the bot's own `.21` lines:
+`watchdog` = consumed `goal watchdog` rounds, `first` = seconds from
+window start to the first real intervention (`-` when none;
+`choice=none` failure paths count as calls, not interventions),
+`choices` = top-3 intervention choices, `outcomes` buckets the
+`goal outcome` results (`failed:*` reads as flat — no goal effect either
+way). Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle),
+difficulty peaceful, fall damage off, keepInventory on — the window
+measures build throughput, not survival. `CASTLE_KIT=seeded` pre-fills
+128 cobble, 64 planks, 64 dirt and a stone pick+sword after the clear, so
+a 6-min window measures laying (equip is kit-complete, the first word is
+a batch) independent of the fetch chain; `empty` (default) runs the full
+chain from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast
+iteration — literal ticks/sec (20 = normal, 60 = 3x, 100 = 5x; 2..19
+warns, it runs slower than wall clock). A Paper that rejects it warns
+loudly and runs at wall clock; the record carries the effective rate.
+Gates always run at 1, since the bot ticks on wall-clock seconds and a
+faster game clock changes what a minute of play means (tested 20/60/100
+tps: identical laying, no speedup; the cycle win is 3-4 parallel rigs, 3
+proven overlapping with no degradation).
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock
 `/tmp/idkcraft-castle-rig.lock[-<id>]`, data under
 `$PRODWORLD/castle-rigs/<id>/` (seeded once from `replay-data/paper-base`
-minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b` (or `auto` over
-`CASTLE_SLOTS`, default `0 a b`) runs 2-3 rigs in parallel; runs from one
-worktree need distinct `CASTLE_OUT`. Exit 0 = measured (even 0 laid),
+minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b|c` (or `auto` over
+`CASTLE_SLOTS`, default `0 a b c`) runs up to 4 rigs in parallel; runs
+from one worktree need distinct `CASTLE_OUT`. Each rig is trimmed
+(`CASTLE_INIT_MEMORY`/`CASTLE_MAX_MEMORY`, default 512M/768M;
+`CASTLE_VIEW_DISTANCE`/`CASTLE_SIM_DISTANCE`, default 6/4; no extra
+plugins) so 3+ fit the host. Exit 0 = measured (even 0 laid),
 2 = environment/setup failure, 130 = interrupted (never a pass).
 
 This is a measurement loop instrument, not a gate: no baseline judging.
 `test/castle-rig.test.js` pins the wrapper (lock, rig derivation,
 anti-noise asserts) and the verdict-line contract without docker.
+
+`cycles.sh N [mins]` runs N cycles unattended into one table (sequential
+— no JEV bursts; `CASTLE_RIG_ID=auto` + `CASTLE_LOCK_WAIT` to share the
+box). Exit 0 when every cycle measured, 1 otherwise; per-cycle output in
+`/tmp/castle-cycle-<i>-<pid>.log`.
+
+The watchdog asks themselves are measured offline by
+`stand-steps.js jev +history+options` over
+`test/fixtures/goal-context-eval.json` (the `wd-*` rows are the run-2/3/4
+stall shapes with reviewer labels and decision-history rings): JEV
+budget ~1 call/row, sequential. The confidence split it prints re-sets
+`TASK_PLAN_MIN_CONF` (`test/stand-steps.test.js` pins the variant shape
+and the fixture cache without network).
 
 ## Puppet player (`puppet.js`, idkcraft-jlw7)
 

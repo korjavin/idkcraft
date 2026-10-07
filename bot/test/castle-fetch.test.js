@@ -690,7 +690,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 2000 && ctx.stepStatus == null; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5) // the walk lands next to it
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5) // the walk lands next to it
       await settle(); await settle()
     }
     assert.equal(ctx.stepStatus, 'done')
@@ -742,7 +742,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 12; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
       await settle(); await settle()
     }
     assert.ok(dug.some(([n]) => n === 'stone') && dug.some(([n]) => n === 'dirt'))
@@ -758,6 +758,42 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     assert.deepEqual([t.x, t.y, t.z], [SITE.x - 4, 63, SITE.z + 3])
   })
 
+  it('revmux 01 (vmzq.25): a stepped-around path is never a stance; it stays, the leg digs on', async () => {
+    const path = `${SITE.x - 4},63,${SITE.z + 2}`
+    const set = new Map([[path, 'dirt_path']])
+    const bot = makeBot({ items: TOOLS(), set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const ctx = { castle: castleState() }
+    const stances = []
+    for (let i = 0; i < 60 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t && t.stance) stances.push(`${t.stance.x},${t.stance.y},${t.stance.z}`)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.ok(!stances.includes(path), 'the path cell is never walked into')
+    assert.equal(set.get(path), 'dirt_path', 'the path stands')
+    assert.ok(bot.calls.dig.some((p) => p.x === SITE.x - 5 && p.z === SITE.z + 2), 'column 1 lane 0 is dug')
+    assert.equal(ctx.stepStatus, undefined, 'no unreachable fail')
+  })
+
+  it('revmux 02 (vmzq.25): a path in a stance head slot is never walked under; it stays', async () => {
+    const path = `${SITE.x - 4},64,${SITE.z + 3}` // column 0 lane 1, floor(0) + 1
+    const set = new Map([[path, 'dirt_path']])
+    const bot = makeBot({ items: TOOLS(), set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const ctx = { castle: castleState() }
+    const heads = []
+    for (let i = 0; i < 60 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t && t.stance) heads.push(`${t.stance.x},${t.stance.y + 1},${t.stance.z}`)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.ok(!heads.includes(path), 'no stance has the path as its head cell')
+    assert.equal(set.get(path), 'dirt_path', 'the path stands')
+  })
+
   it('revmux 01: trench stone that never reaches the pack fails dig-stall', async () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 63 ? 'stone' : 'air') })
@@ -767,7 +803,7 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     for (let i = 0; i < 500 && ctx.stepStatus == null; i++) {
       fetch(bot, ctx)
       const t = ctx.castleFetch && ctx.castleFetch.target
-      if (t) bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
       await settle(); await settle()
     }
     assert.equal(ctx.stepStatus, 'failed:castlefetch-dig-stall')
@@ -1017,8 +1053,8 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(bot.blockAt({ x, y, z }).name, 'air', 'the cell broke')
   })
 
-  it('a trench cell past pickup reach walks in instead of digging far (vmzq.20)', () => {
-    const bot = makeBot({ items: TOOLS(), at: pos(99, 64, 203) }) // ~3.3 from side-0 column 0
+  it('a trench cell off its stance walks in instead of digging far (vmzq.20/25)', () => {
+    const bot = makeBot({ items: TOOLS(), at: pos(101, 64, 203) }) // off column 0's stance (vmzq.25)
     const ctx = { castle: castleState() }
     const orig = console.log
     console.log = () => {}
@@ -1029,6 +1065,61 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     assert.equal(f.starts, undefined, 'no dig from pickup-out-of-reach')
     assert.equal(f.spend.walk, 1)
     assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('trench walks never climb out: one dig per cell, none airborne (vmzq.25 rig: 161 digs for 115 cells)', async () => {
+    // Walker model from the rig: the pathfinder goes to the nearest
+    // standable cell inside the goal, and a climb of 2+ is a dirt pillar
+    // in the bot's own column (rig: 278,59..61 refilled, then re-dug).
+    // It lands airborne for one tick (rig: 5x digTime on the first dig).
+    // A hill over columns 6-7 of side 0 (rig side 3: the hill top and its
+    // leaves sit out of reach of the deep stance).
+    const set = new Map()
+    for (const x of [90, 89]) for (const z of [202, 203]) for (let y = 64; y <= 67; y++) set.set(`${x},${y},${z}`, 'dirt')
+    const items = TOOLS()
+    const bot = makeBot({ items, set, under: (y) => (y <= 60 ? 'stone' : y <= 63 ? 'dirt' : 'air') })
+    const open = (x, y, z) => bot.blockAt({ x, y, z }).name === 'air'
+    let air = 0
+    const realDig = bot.dig
+    bot.dig = async (b) => { if (bot.entity.onGround === false) air++; await realDig(b) }
+    let last = null
+    const walk = () => {
+      const g = bot.calls.goals[bot.calls.goals.length - 1]
+      if (!g || g === last) return
+      last = g
+      const f = bot.entity.position.floored()
+      const r = Math.ceil(Math.sqrt(g.rangeSq))
+      let best = null
+      for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) for (let dz = -r; dz <= r; dz++) {
+        if (dx * dx + dy * dy + dz * dz > g.rangeSq) continue
+        const c = { x: g.x + dx, y: g.y + dy, z: g.z + dz }
+        if (!open(c.x, c.y, c.z) || !open(c.x, c.y + 1, c.z) || open(c.x, c.y - 1, c.z)) continue
+        const cost = Math.abs(c.x - f.x) + Math.abs(c.z - f.z) + Math.abs(c.y - f.y)
+        if (!best || cost < best.cost) best = { ...c, cost }
+      }
+      if (!best) return
+      for (let y = f.y; y < best.y - 1; y++) { set.set(`${f.x},${y},${f.z}`, 'dirt'); add(items, 'dirt', -1) } // the pillar
+      bot.entity.position = pos(best.x + 0.5, best.y, best.z + 0.5)
+      bot.entity.onGround = false
+    }
+    const ctx = { castle: castleState() }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      for (let i = 0; i < 3000 && ctx.stepStatus == null; i++) {
+        fetch(bot, ctx)
+        bot.entity.onGround = true
+        walk()
+        await settle(); await settle()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done')
+    const digs = bot.calls.dig.map((p) => `${p.x},${p.y},${p.z}`)
+    // Bead gate <= 1.3; the stance walk never refills a cell (pre-fix 1.23
+    // in this model, 1.40 on the rig).
+    const perBlock = digs.length / new Set(digs).size
+    assert.equal(perBlock, 1, `issues per block ${perBlock.toFixed(2)} (${digs.length} digs)`)
+    assert.equal(air, 0, 'no dig issued airborne')
   })
 
   it('in-flight continuation ticks bucket by op label (vmzq.20 nudge2)', () => {
@@ -1053,5 +1144,84 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     const line = lines.find((m) => m.includes('leg over'))
     assert.ok(line, `lines: ${JSON.stringify(lines)}`)
     assert.match(line, /leg over \(done\) ticks dig=0 walk=0 other=1 starts=0 dug=0 blocks=\+0/)
+  })
+})
+
+// idkcraft-vmzq.26: rig cycle 12 leg 5 — 9 min trench-floor <-> wall-top,
+// +0 banked. Past the staircase each new column's top sat 6 over the
+// floor; walking to the cell itself meant a walk out and back along the
+// rim or a tower inside the dug trench — the pathfinder towered, and the
+// next pick mined the tower back. The walker below is the pathfinder
+// without scaffolding: it moves the body only to a stance reachable on
+// foot (BFS over standable cells, step up 1, drop 3) inside the goal the
+// step issued. vmzq.25's floor stance must keep every walk short.
+describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
+  it('a full-depth trench digs from walkable stances; every walk stays short', async () => {
+    const under = (y) => (y <= 61 ? 'stone' : y <= 63 ? 'dirt' : 'air')
+    const items = TOOLS()
+    const set = new Map()
+    const bot = makeBot({ items, set, under, at: pos(SITE.x - 3 + 0.5, 64, SITE.z + 2.5) })
+    const ctx = { castle: castleState() }
+    const name = (x, y, z) => bot.blockAt(pos(x, y, z)).name
+    const open = (x, y, z) => name(x, y, z) === 'air'
+    const stand = (x, y, z) => open(x, y, z) && open(x, y + 1, z) && !open(x, y - 1, z)
+    // Shortest on-foot path from the feet block to any stance inside g.
+    function walk(g) {
+      const p = bot.entity.position
+      const start = [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)]
+      const key = (c) => c.join(',')
+      const seen = new Set([key(start)])
+      let front = [start]
+      for (let steps = 0; steps <= 200 && front.length; steps++) {
+        for (const [x, y, z] of front) {
+          const dx = x - g.x; const dy = y - g.y; const dz = z - g.z
+          if (dx * dx + dy * dy + dz * dz <= g.rangeSq) return { at: [x, y, z], steps }
+        }
+        const next = []
+        for (const [x, y, z] of front) {
+          for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + ax; const nz = z + az
+            if (nx < SITE.x - 60 || nx > SITE.x + 40 || nz < SITE.z - 10 || nz > SITE.z + 40) continue
+            for (let ny = y + 1; ny >= y - 3; ny--) {
+              if (ny > y && !open(x, y + 2, z)) continue
+              let clear = true
+              for (let yy = ny; yy <= Math.max(y, ny) + 1; yy++) if (!open(nx, yy, nz)) clear = false
+              if (!clear || !stand(nx, ny, nz)) continue
+              const c = [nx, ny, nz]
+              if (!seen.has(key(c))) { seen.add(key(c)); next.push(c) }
+              break
+            }
+          }
+        }
+        front = next
+      }
+      return null
+    }
+    const orig = console.log
+    console.log = () => {}
+    let towers = 0
+    let maxWalk = 0
+    try {
+      for (let i = 0; i < 6000 && ctx.stepStatus == null; i++) {
+        const n = bot.calls.goals.length
+        fetch(bot, ctx)
+        if (bot.calls.goals.length > n) {
+          const g = bot.calls.goals[bot.calls.goals.length - 1]
+          const w = walk(g)
+          if (!w) { towers++; const t = ctx.castleFetch.target; bot.entity.position = pos(t.x + 0.5, t.y + 1, t.z + 0.5); continue }
+          maxWalk = Math.max(maxWalk, w.steps)
+          bot.entity.position = pos(w.at[0] + 0.5, w.at[1], w.at[2] + 0.5)
+        }
+        await settle(); await settle()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done', 'the batch is met')
+    assert.ok(count(items, 'cobblestone') >= 64 + 16)
+    const deepest = Math.min(...bot.calls.dig.map((p) => p.y))
+    assert.equal(deepest, SITE.y - 6, 'the trench reached full depth')
+    const far = Math.max(...bot.calls.dig.map((p) => SITE.x - 4 - p.x))
+    assert.ok(far >= 10, `well past the staircase (column ${far})`)
+    assert.equal(towers, 0, 'no stance that needs scaffolding')
+    assert.ok(maxWalk <= 12, `walks stay inside the trench, longest ${maxWalk} steps`)
   })
 })

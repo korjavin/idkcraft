@@ -176,8 +176,15 @@ function explore(bot, ctx, target, state) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
     // Task bound (vmzq.18): own side work caps the spiral at the site;
     // owner bring orders walk the full spiral (R3a).
+    // (.22) an explore-far unlock lifts the cap to the outer disk for the
+    // window only; the radius clamps to 256 around the stable anchor.
     let cap = e.maxRadius
     try { if (taskActive(ctx) && !ownerBring(ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      const r = goalUnlock(ctx, 'radius')
+      if (typeof r === 'number' && r > cap) cap = Math.min(e.maxRadius, r)
+    } catch (_) { /* default cap */ }
     const t = pickTarget(e.visited, anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent

@@ -910,8 +910,14 @@ async function enterSearch(bot, ctx, o, legacy) {
   // 61 deaths). No unvisited ground in reach is an exhausted search.
   // While a build task is active (vmzq.19) the cap is the task radius, the
   // same 64 the explore legs walk under — one radius for every own leg.
+  // (.22) a radius unlock lifts the cap for the window only (clamped).
   if (o.self) {
-    const cap = exploreMod.taskActive(ctx) ? exploreMod.TASK_SEARCH_RADIUS : SELF_SEARCH_RADIUS
+    let cap = exploreMod.taskActive(ctx) ? exploreMod.TASK_SEARCH_RADIUS : SELF_SEARCH_RADIUS
+    try {
+      const { goalUnlock } = require('../goal-unlock')
+      const r = goalUnlock(ctx, 'radius')
+      if (typeof r === 'number' && r > cap) cap = r
+    } catch (_) { /* default cap */ }
     const t = exploreMod.nextTarget(bot, ctx, cap)
     if (!t) {
       s.capped = true
@@ -1793,6 +1799,7 @@ module.exports.verdictLine = verdictLine
 module.exports.verdictFacts = verdictFacts
 module.exports.choiceRes = choiceRes
 module.exports.clearSearchLeg = clearSearchLeg
+module.exports.enterSearch = enterSearch
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase
