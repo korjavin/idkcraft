@@ -467,6 +467,7 @@ function pickQuarry(bot, ctx, f) {
     // then mined back (rig cycle 12 leg 5: 9 min floor<->wall-top, +0).
     // A dead column ends the trench there; the columns before it finish.
     let end = QUARRY_LEN
+    let endWhy = ''
     const colOk = []
     const depthOf = (i) => Math.min(i, QUARRY_DEPTH - 1)
     for (let sd = -(QUARRY_TOP + 1); sd < end + QUARRY_DEPTH - 1; sd++) {
@@ -480,7 +481,7 @@ function pickQuarry(bot, ctx, f) {
             const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
             if (!below || open(below) || wet(below)) colOk[i] = false
           }
-          if (!colOk[i]) { end = i; continue }
+          if (!colOk[i]) { end = i; endWhy = `hole/wet under column ${i} floor ${floor - 1}`; continue }
         }
         const y = base - 1 - dep
         for (let l = 0; l < QUARRY_W && i < end; l++) {
@@ -488,13 +489,13 @@ function pickQuarry(bot, ctx, f) {
           const z = o.z + o.dz * i + o.lz * l
           const k = `${x},${y},${z}`
           const b = at(x, y, z)
-          if (!b || wet(b)) { end = i; break }
+          if (!b || wet(b)) { end = i; endWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
           if (open(b) || f.skip.has(k)) continue
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; break }
+          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { end = i; endWhy = `liquid by ${k}`; break }
           if (protectedReason(bot, b, ctx)) {
             // Where (house apron, castle) kills the side; what (a path,
             // a ruin block) is stepped around.
-            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { end = i; break }
+            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { end = i; endWhy = `protected place at ${k}`; break }
             f.skip.add(k)
             continue
           }
@@ -504,7 +505,7 @@ function pickQuarry(bot, ctx, f) {
     }
     const dead = end < QUARRY_LEN
     q.dead.push(s) // dug out or unusable mid-trench
-    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable (mid-trench)' : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    try { console.log(`castlefetch quarry side ${s} ${dead ? `unusable (mid-trench: ${endWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
