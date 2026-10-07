@@ -351,9 +351,23 @@ function tableFor(bot, ctx) {
   const bx = Math.floor(bp.x)
   const by = Math.floor(bp.y)
   const bz = Math.floor(bp.z)
+  // Refused spots (idkcraft-vmzq.20): a server-refused placement eats the
+  // table item, and the deterministic scan re-picks the identical cell on
+  // every pick — rig cycle 5 burned its whole window in a
+  // craft→equip-fail loop on one cell. Refused cells sort last (a later
+  // success clears the set: the area places again), so the next pick tries
+  // the next neighbour instead of re-burning — but a refused cell is still
+  // attempted when nothing else is viable, keeping the TABLE_TRIES
+  // contract (transient refusals in a one-cell world retry like before).
+  if (!(ctx.equipTableSkip instanceof Set)) {
+    try { ctx.equipTableSkip = new Set() } catch (_) { /* skip best-effort */ }
+  }
+  const skip = ctx.equipTableSkip instanceof Set ? ctx.equipTableSkip : new Set()
   let ref = null
   let at = null
+  let fallback = null
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const tried = skip.has(`${bx + dx},${by},${bz + dz}`)
     let below = null
     let cell = null
     try {
@@ -361,6 +375,10 @@ function tableFor(bot, ctx) {
       cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
     } catch (_) { below = null; cell = null }
     if (!below || !below.position || !below.name || below.name === 'air') continue
+    // Solid footing only: water, snow and flora are non-air but take no
+    // placement (the packet dies and the item with it). Fail-open on an
+    // unknown shape — old test doubles carry no boundingBox.
+    if (below.boundingBox != null && below.boundingBox !== 'block') continue
     if (cell && cell.name && cell.name !== 'air') continue
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Deferred require
@@ -371,9 +389,17 @@ function tableFor(bot, ctx) {
       // doorway left the house doorless).
       if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
     } catch (_) { /* untestable home: place as before */ }
+    if (tried) {
+      if (!fallback) fallback = below
+      continue
+    }
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
+  }
+  if (!ref && fallback) {
+    ref = fallback
+    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
   if (!ref) return nope('no-table')
   // mineflayer places the HELD item: hold the table or a planks block lands
@@ -384,10 +410,26 @@ function tableFor(bot, ctx) {
         await bot.equip(tableItem, 'hand')
       } catch (_) { /* held already or bust: placement decides */ }
     }
-    await bot.placeBlock(ref, new Vec3(0, 1, 0))
+    try {
+      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+    } catch (err) {
+      // The item is eaten with the refusal: never re-try this cell (the
+      // scan above skips it next pick).
+      try {
+        skip.add(`${at.x},${at.y},${at.z}`)
+        console.log(`equip table spot ${at.x} ${at.y} ${at.z} refused, skipping`)
+      } catch (_) { /* skip best-effort */ }
+      throw err
+    }
     let block = null
     try { block = bot.blockAt(at) } catch (_) { block = null }
-    if (!block || block.name !== 'crafting_table') throw new Error('table-place')
+    if (!block || block.name !== 'crafting_table') {
+      // Mislanded (or a lost update): same no-retry rule — a neighbour is
+      // cheaper than a second table on a cell that mislands deterministically.
+      try { skip.add(`${at.x},${at.y},${at.z}`) } catch (_) { /* skip best-effort */ }
+      throw new Error('table-place')
+    }
+    try { skip.clear() } catch (_) { /* skip best-effort */ }
     // Claim the placed station (craft-step contract, read by tablePlaced
     // in goalFacts): the menu stops rebuilding tables from planks while we
     // arm. Build overwrites the home claim with its own site table when it

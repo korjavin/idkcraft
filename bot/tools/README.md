@@ -371,6 +371,60 @@ never drift. `RIG_ID=auto` takes the first free of `RIG_SLOTS` (default
 Each Paper takes ~1.5 GB; three fit Docker's 8 GB next to the stand. Runs
 from one worktree in parallel need distinct `REPLAY_OUT`.
 
+## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
+
+```sh
+sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
+CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
+CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
+```
+
+One call = reset the disposable world copy, boot Paper, scan nine
+candidate 48x48 pads around `CASTLE_PAD` (default `300,300`, the preferred
+centre) from loaded chunks and flatten a dirt pad on the flattest
+(liquid-penalised; deterministic per world), join guide + follower, empty
+the follower's kit (or seed it, see below), order `build castle` through
+the real chat path, quit the
+guide (prod-alone parity: nobody online, autonomous on), work `mins`
+minutes, print ONE verdict line:
+
+```
+castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>
+```
+
+`flips` counts goal-step transitions castle<->castlefetch; the JSON record
+lands in `CASTLE_OUT` (default `bot/tools/last-castle.json`, gitignored —
+check; if not ignored, don't commit it), the full log in `CASTLE_LOG`. The
+bot runs the real stack on the stub brain (deterministic, no paid LLM).
+Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle), difficulty
+peaceful, fall damage off, keepInventory on — the window measures build
+throughput, not survival. `CASTLE_KIT=seeded` pre-fills 128 cobble,
+64 planks, 64 dirt and a stone pick+sword after the clear, so a 6-min
+window measures laying (equip is kit-complete, the first word is a batch)
+independent of the fetch chain; `empty` (default) runs the full chain
+from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast iteration
+— literal ticks/sec (20 = normal, 60 = 3x, 100 = 5x; 2..19 warns, it runs
+slower than wall clock). A Paper that rejects it warns loudly and runs at
+wall clock; the record carries the effective rate. Gates always run at 1,
+since the bot ticks on wall-clock seconds and a faster game clock changes
+what a minute of play means (tested 20/60/100 tps: identical laying, no speedup; the cycle win is 3-4 parallel rigs, 3 proven overlapping with no degradation).
+
+Own containers/ports/locks, so a castle run and a stuck run share the box:
+container `idk-castle[-<id>]`, port 25581 + letter index, lock
+`/tmp/idkcraft-castle-rig.lock[-<id>]`, data under
+`$PRODWORLD/castle-rigs/<id>/` (seeded once from `replay-data/paper-base`
+minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b|c` (or `auto` over
+`CASTLE_SLOTS`, default `0 a b c`) runs up to 4 rigs in parallel; runs
+from one worktree need distinct `CASTLE_OUT`. Each rig is trimmed
+(`CASTLE_INIT_MEMORY`/`CASTLE_MAX_MEMORY`, default 512M/768M;
+`CASTLE_VIEW_DISTANCE`/`CASTLE_SIM_DISTANCE`, default 6/4; no extra
+plugins) so 3+ fit the host. Exit 0 = measured (even 0 laid),
+2 = environment/setup failure, 130 = interrupted (never a pass).
+
+This is a measurement loop instrument, not a gate: no baseline judging.
+`test/castle-rig.test.js` pins the wrapper (lock, rig derivation,
+anti-noise asserts) and the verdict-line contract without docker.
+
 ## Puppet player (`puppet.js`, idkcraft-jlw7)
 
 Agents run real prod play sessions without the owner: the puppet joins as

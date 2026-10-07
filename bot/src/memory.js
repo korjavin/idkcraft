@@ -229,6 +229,13 @@ function castleOf(c) {
       if (pb) out.planb = pb
     } catch (_) { /* park best-effort */ }
     if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
+    // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side
+    // (null = unprobed). A restart resumes the same frame instead of
+    // re-probing dug floors as ground and walking the trench down.
+    if (Array.isArray(c.quarryBase) && c.quarryBase.length === 4 &&
+        c.quarryBase.every((b) => b === null || Number.isInteger(b))) {
+      out.quarryBase = [...c.quarryBase]
+    }
     if (c.blocked && typeof c.blocked === 'object') {
       for (const k of Object.keys(c.blocked).slice(0, CASTLE_BLOCKED_MAX)) {
         const e = c.blocked[k]

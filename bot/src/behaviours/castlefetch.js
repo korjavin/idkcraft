@@ -31,6 +31,11 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // frame (g0z.12): one gather load — gather stops at NEED_LOGS, so a bigger
 // target could never be met from the world (castle BATCH_OF.frame matches).
 const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1 }
+// Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
+// castle after this long instead of running to its full target. Five
+// minutes ≈ one stone batch at the measured quarry rate, and bounds the
+// castle<->castlefetch switch rate from below no matter how the words flap.
+const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1 }
 const DIG_RADIUS = 32
@@ -39,6 +44,8 @@ const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no
 const STONE_ABOVE = 3
 const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
+const EYE = 1.62 // eye over feet: trench reach is measured from it
+const AIR_WAITS = 3 // ticks a dig waits for the feet to land
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const NOGAIN_STRIKES = 5 // digs without the cobble count growing
@@ -58,6 +65,7 @@ const QUARRY_DEPTH = 6
 const QUARRY_LEN = 40
 const QUARRY_W = 2
 const QUARRY_TOP = 3 // a hill is cut up to site.y + this
+const QUARRY_ADAPT = 8 // a trench starts at real ground up to this far below site level (dips, pad edges)
 const QUARRY_TRIES = 3 // digs on one quarry cell before it is skipped
 const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble picked up
 const LIQUID = new Set(['water', 'lava', 'bubble_column'])
@@ -151,6 +159,25 @@ function cobble(bot) {
   return countItems(bot, (n) => n === 'cobblestone')
 }
 
+// Per-leg time split (idkcraft-vmzq.20 nudge2): every digTick lands in
+// exactly one bucket — dig (a dig issued this tick), walk (a walk
+// issued), other (admin/terminal/craft ticks) — so the rig can see where
+// the quarry's ticks go. Lazily initialised: unit fakes pass a bare {}.
+function spend(f, bucket) {
+  try {
+    const s = f.spend || (f.spend = { dig: 0, walk: 0, other: 0 })
+    if (s && typeof s[bucket] === 'number') s[bucket]++
+  } catch (_) { /* counters best-effort */ }
+}
+
+// Quarry output on hand (null when unreadable): the leg-over line diffs
+// it against the leg-start count, so dig-ticks-per-block is measurable.
+function blocksOnHand(bot) {
+  try {
+    return countItems(bot, (n) => n === 'cobblestone' || n === 'dirt')
+  } catch (_) { return null }
+}
+
 // Site box with a one-block margin, foundation layers included: never dig
 // the castle's own ground or walls for its stone.
 function onSite(st, p, margin = 1, below = 3) {
@@ -175,6 +202,19 @@ function castleChest(bot, st) {
 }
 
 function finish(bot, ctx, status) {
+  const f = ctx.castleFetch
+  if (f && f.spend) {
+    let delta = '?'
+    try {
+      const now = blocksOnHand(bot)
+      delta = (typeof f.blocks0 === 'number' && typeof now === 'number')
+        ? ((now - f.blocks0 >= 0 ? '+' : '') + (now - f.blocks0))
+        : String(now)
+    } catch (_) { /* delta best-effort */ }
+    let wall = '?'
+    try { wall = (typeof f.t0 === 'number' ? Math.round((Date.now() - f.t0) / 1000) + 's' : '?') } catch (_) { /* wall best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} wall=${wall}`) } catch (_) { /* log best-effort */ }
+  }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
   }
@@ -207,13 +247,13 @@ function stalled(w, dist, limit) {
 // One async op at a time under ctx.castleFetchInFlight, with a deadline:
 // a hung window or dig must never wedge the flag (the step would read
 // feasible and never move). Settles quietly; the sync tick decides.
-function flight(ctx, run, ms, onFail) {
+function flight(ctx, run, ms, onFail, onOk) {
   ctx.castleFetchInFlight = true
   const timeout = new Promise((_, reject) => {
     const tm = setTimeout(() => reject(new Error('timeout')), ms)
     if (tm && typeof tm.unref === 'function') tm.unref()
   })
-  Promise.race([run(), timeout]).catch(() => { if (onFail) onFail() }).finally(() => { ctx.castleFetchInFlight = false })
+  Promise.race([run(), timeout]).then(() => { try { if (onOk) onOk() } catch (_) { /* ok-hook best-effort */ } }).catch(() => { if (onFail) onFail() }).finally(() => { ctx.castleFetchInFlight = false })
 }
 
 function near(bot, p, reach) {
@@ -245,6 +285,7 @@ function chestTick(bot, ctx, f, d) {
     return true
   }
   f.chestDone = true // one withdraw per leg: an empty chest falls through
+  ctx.castleFetchFlight = 'chest' // time-split label: in-flight ticks bucket below
   flight(ctx, async () => {
     let need = d.short
     for (const names of chestNames(bot, d.kind)) {
@@ -372,18 +413,19 @@ function quarrySide(st, s) {
   return { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
 }
 
-function trenchFloor(st, i) {
-  return st.site.y - 1 - Math.min(i, QUARRY_DEPTH - 1)
+function trenchFloor(st, i, base) {
+  return (base == null ? st.site.y : base) - 1 - Math.min(i, QUARRY_DEPTH - 1)
 }
 
 // A trench cell or the block a trench stance stands on (revmux 01): the
-// exposed-stone pick must never undermine our own staircase.
+// exposed-stone pick must never undermine our own staircase. The band runs
+// QUARRY_ADAPT below the unadapted floor: an adapted trench digs there.
 function inTrench(st, p) {
   for (let s = 0; s < 4; s++) {
     const o = quarrySide(st, s)
     const i = (p.x - o.x) * o.dx + (p.z - o.z) * o.dz
     const l = (p.x - o.x) * o.lx + (p.z - o.z) * o.lz
-    if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 && p.y <= st.site.y + QUARRY_TOP) return true
+    if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
   }
   return false
 }
@@ -397,21 +439,75 @@ function inTrench(st, p) {
 // session latch) — a restart or a retry resumes the same trench.
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
-  const q = f.quarry || (f.quarry = { dead: [] })
+  const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null], said: [] })
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
   for (let s = 0; s < 4; s++) {
     if (q.dead.includes(s)) continue
     const o = quarrySide(st, s)
+    // Adaptive start (idkcraft-vmzq.20): the ring assumes flat ground at
+    // site level, but a pad edge or a dip hangs the origin in air — rig
+    // cycle 7 died all four sides this way and failed no-stone twice.
+    // Scan down for real ground and start the staircase there; liquid in
+    // the working band, or no ground in range, still kills the side.
+    let base = null
+    let why = null
+    let whyAt = null
+    let probed = false
+    if (Array.isArray(st.quarryBase) && Number.isInteger(st.quarryBase[s])) {
+      base = st.quarryBase[s] // latched: resume the same frame, no re-probe
+    } else {
+      probed = true
+      let liquid = false
+      let g = null
+      for (let y = st.site.y + QUARRY_TOP; y >= st.site.y - QUARRY_ADAPT; y--) {
+        const b = at(o.x, y, o.z)
+        if (!b) { why = 'void'; whyAt = [o.x, y, o.z]; break }
+        if (wet(b)) { liquid = true; continue }
+        if (!open(b)) { g = y; break }
+      }
+      if (!why && g == null) { why = liquid ? 'wet' : 'hole'; whyAt = [o.x, st.site.y, o.z] }
+      if (!why) {
+        const under = at(o.x, g - 1, o.z)
+        const head = at(o.x, g + 1, o.z)
+        if (!under || open(under)) { why = 'hole'; whyAt = [o.x, g - 1, o.z] }
+        else if (wet(under) || wet(head)) { why = 'wet'; whyAt = [o.x, g, o.z] }
+        else base = g + 1
+      }
+    }
+    if (why) {
+      q.dead.push(s)
+      try { console.log(`castlefetch quarry side ${s} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
+      continue
+    }
+    // Latched, never re-probed: our own dug floors read as ground, so a
+    // fresh probe every leg would walk the staircase down one level per
+    // leg and eat the stance floors (castle-fetch trench regression). The
+    // latch rides the persisted castle (memory.js), so a restart resumes
+    // the same frame; a side that dies stays unlatched and re-probes next
+    // leg (a transient void revives). Pre-latch trenches (dug before this
+    // change) shift one level on first probe, then hold.
+    if (probed) {
+      if (!Array.isArray(st.quarryBase) || st.quarryBase.length !== 4) {
+        try { st.quarryBase = [null, null, null, null] } catch (_) { /* latch best-effort */ }
+      }
+      if (Array.isArray(st.quarryBase) && st.quarryBase.length === 4) st.quarryBase[s] = base
+    }
+    if (!Array.isArray(q.level)) q.level = [null, null, null, null]
+    q.level[s] = base
+    if (probed && Array.isArray(q.said) && !q.said.includes(s)) {
+      q.said.push(s)
+      try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
+    }
     let dead = false
     for (let i = 0; i < QUARRY_LEN && !dead; i++) {
-      const floor = trenchFloor(st, i)
+      const floor = trenchFloor(st, i, base)
       for (let l = 0; l < QUARRY_W && !dead; l++) {
         const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
         if (!below || open(below) || wet(below)) dead = true
       }
-      for (let y = st.site.y + QUARRY_TOP; y >= floor && !dead; y--) {
+      for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
         for (let l = 0; l < QUARRY_W && !dead; l++) {
           const x = o.x + o.dx * i + o.lx * l
           const z = o.z + o.dz * i + o.lz * l
@@ -427,12 +523,26 @@ function pickQuarry(bot, ctx, f) {
             f.skip.add(k)
             continue
           }
-          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0 }
+          // Stance (idkcraft-vmzq.25): the previous column's floor, same
+          // lane, reached by walking down the staircase. A walk to the cell
+          // itself (ground level, the bot deep in the trench) pillared up
+          // out of the trench and the quarry re-dug the pillar (rig: 161
+          // digs for 115 cells). Column i's drops rest on its floor, the
+          // stance the next column is dug from. A cell out of eye reach
+          // from its stance (a hill top or a leaf over a deep column) stays
+          // standing: walking up to it pillared the same way (rig). A stance
+          // that is not open body room (a stepped-around path, a skipped
+          // cell, column 0's outside cell) is never walked into (revmux 01:
+          // range 0 would dig it): that cell walks to itself as before.
+          let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
+          if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
+          else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
     }
-    q.dead.push(s) // dug out or unusable
-    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable' : 'dug out'}`) } catch (_) { /* log best-effort */ }
+    q.dead.push(s) // dug out or unusable mid-trench
+    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable (mid-trench)' : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
@@ -467,9 +577,40 @@ function roomForDrop(bot, ctx) {
 }
 function digTick(bot, ctx, f) {
   const bp = bodyPos(bot)
-  if (!bp) return
-  if (!hasPickaxe(bot)) { finish(bot, ctx, 'done'); return } // equip rearms first
-  if (!roomForDrop(bot, ctx)) { finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  if (!bp) { spend(f, 'other'); return }
+  if (!hasPickaxe(bot)) { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
+  if (!roomForDrop(bot, ctx)) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
+  // wooden pick (~1.4x slower on stone) and no equip step ever interjects
+  // while castle legs are feasible, so upgrade in place once the pack
+  // funds it (craftany chains sticks + a table as needed). One attempt
+  // per leg: a short pack stays short for a stone leg.
+  if (!f.pickUpLogged) {
+    let due = false
+    try { due = require('./equip').stoneUpgradeDue(bot) } catch (_) { due = false }
+    if (due && !f.pickUpArmed) {
+      f.pickUpArmed = true
+      try { console.log('castlefetch stone: pick upgrade started (wood->stone)') } catch (_) { /* log best-effort */ }
+    }
+    if (due) {
+      let r = null
+      try { r = deps.craftItem(bot, ctx, ['stone_pickaxe'], 1) } catch (_) { r = { done: false } }
+      if (r === 'running') { spend(f, 'other'); return } // crafting across ticks; the landing is seen below
+      f.pickUpLogged = true
+      try { console.log(`castlefetch stone: pick upgrade ${r && r.done ? 'done' : 'failed'}, digging on`) } catch (_) { /* log best-effort */ }
+      if (r && r.done) { spend(f, 'other'); return }
+    } else if (f.pickUpArmed) {
+      // The craft landed between ticks (async): due flips false on the
+      // stone pick before any call returns terminal, so the started line
+      // would dangle without this (rig: stone in hand, no line).
+      let stone = false
+      try { stone = countItems(bot, (n) => n === 'stone_pickaxe') > 0 } catch (_) { stone = false }
+      if (stone) {
+        f.pickUpLogged = true
+        try { console.log('castlefetch stone: pick upgrade done, digging on') } catch (_) { /* log best-effort */ }
+      }
+    }
+  }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
   const stoneAt = (q) => {
@@ -511,6 +652,7 @@ function digTick(bot, ctx, f) {
       if (f.chestRelook == null) f.chestRelook = true
       walkTo(bot, ctx, `castlefetch-site:${c.x},${c.z}`, c, DIG_RADIUS / 2)
       if (stalled(f.siteWalk || (f.siteWalk = {}), far, APPROACH_WAITS)) finish(bot, ctx, 'failed:castlefetch-unreachable')
+      spend(f, 'walk')
       return
     }
     f.siteWalk = null
@@ -519,6 +661,7 @@ function digTick(bot, ctx, f) {
       f.chestDone = false
       f.chest = null
       f.chestWalk = null
+      spend(f, 'other')
       return // the chest source goes first next tick
     }
     t = pickStone(bot, ctx, f, bp, stoneAt)
@@ -538,21 +681,36 @@ function digTick(bot, ctx, f) {
       }
       t = pickQuarry(bot, ctx, f)
     }
-    if (!t) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+    if (!t) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
     f.target = t
   }
   const b = targetAt(t)
   const dist = Math.hypot(bp.x - (t.x + 0.5), bp.y - (t.y + 0.5), bp.z - (t.z + 0.5))
-  // A trench cell is dug from dig reach (the next stance steps over the
-  // drops); surface stone from pickup reach.
-  if (dist > (t.quarry ? DIG_REACH : PICKUP_REACH + 0.5)) {
-    const range = dist > DIG_REACH ? 2 : 1
-    walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
-    if (stalled(t, dist, APPROACH_WAITS)) {
+  // Every cell is dug from pickup reach — trench cells included. The old
+  // trench exception (dig from 4, "the next stance steps over the drops")
+  // never collected: the stance advances along the trench while the drops
+  // stay behind, and ~2/3 of dug blocks never reached the pack (rig: 368
+  // issues banked +113). Linger-by-construction: a stance within 2.5 of
+  // every dug cell sits on the drops through the dig. A trench cell with a
+  // stance (vmzq.25) is dug from the stance instead: eye reach, no climb.
+  const s = t.stance
+  const sd = s ? Math.hypot(bp.x - (s.x + 0.5), bp.y - s.y, bp.z - (s.z + 0.5)) : 0
+  const reach = s
+    ? sd <= 2 && Math.hypot(bp.x - (t.x + 0.5), bp.y + EYE - (t.y + 0.5), bp.z - (t.z + 0.5)) <= DIG_REACH + 0.5
+    : dist <= PICKUP_REACH + 0.5
+  if (!reach) {
+    // The stance cell itself (range 0): a near-goal admits the cell one
+    // lower, i.e. digging the floor's support (rig: side 3 went dead
+    // mid-trench on range 1, carried the run on range 0).
+    const range = s ? 0 : dist > DIG_REACH ? 2 : 1
+    if (s) walkTo(bot, ctx, `castlefetch-stance:${s.x},${s.y},${s.z}`, s, range)
+    else walkTo(bot, ctx, `castlefetch-dig:${t.k}:${range}`, t, range)
+    if (stalled(t, s ? sd : dist, APPROACH_WAITS)) {
       skip.add(t.k)
       f.target = null
       if (++f.skips >= SKIPS_TO_FAIL) finish(bot, ctx, 'failed:castlefetch-unreachable')
     }
+    spend(f, 'walk')
     return
   }
   // Stance rules (below-feet trap, gravity, submerged, protection) at dig
@@ -562,23 +720,35 @@ function digTick(bot, ctx, f) {
     logDeny(b, deny)
     skip.add(t.k)
     f.target = null
+    spend(f, 'other')
     return
   }
+  // Airborne digs take 5x (mineflayer digTime; rig: the first dig after
+  // each stance walk ran 3.75 s on 0.75 s dirt): let the feet land first,
+  // a bounded wait so a body that never reads grounded still digs.
+  if (bot.entity && bot.entity.onGround === false && (t.air = (t.air | 0) + 1) <= AIR_WAITS) { spend(f, 'other'); return }
   if (t.quarry) {
-    // Trench drops are collected a stance later, so no cobble-gain strike;
-    // a cell that survives its digs is skipped instead.
-    if (++t.tries > QUARRY_TRIES) { skip.add(t.k); f.target = null; return }
+    // Drops land at the digging stance (pickup reach), so no
+    // cobble-gain strike; a cell that survives its digs is skipped instead.
+    if (++t.tries > QUARRY_TRIES) {
+      spend(f, 'other')
+      try { console.log(`castlefetch stone: cell refused ${QUARRY_TRIES}x at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
+      skip.add(t.k); f.target = null; return
+    }
     // Drops never reaching the pack (revmux 01): a trench's worth of stone
     // dug with no cobble gained ends the leg instead of digging all day.
     const have = cobble(bot)
-    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
   } else {
     const have = cobble(bot)
     if (f.lastCobble != null && have <= f.lastCobble) {
-      if (++f.noGain >= NOGAIN_STRIKES) { finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+      if (++f.noGain >= NOGAIN_STRIKES) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
     } else f.noGain = 0
     f.lastCobble = have
   }
+  spend(f, 'dig')
+  try { f.starts = (f.starts | 0) + 1 } catch (_) { /* counter best-effort */ }
+  ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig below
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
     // batch was in); rock with the pickaxe.
@@ -586,24 +756,44 @@ function digTick(bot, ctx, f) {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
     } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
-    await bot.dig(b)
+    await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
-    // A refused/hung dig skips the block; the no-gain strike counts it.
+    // A hung dig skips the block (no retry this leg); the no-gain strike
+    // counts it. Loud: a 10 s hang per cell is the rig's prime suspect
+    // for the quarry's missing ticks (cycle 11: ~350 standing ticks).
+    try { console.log(`castlefetch stone: dig timed out at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
     skip.add(t.k)
     if (f.target === t) f.target = null
-  })
+  }, () => { try { f.dug = (f.dug | 0) + 1 } catch (_) { /* counter best-effort */ } })
 }
 
 function castlefetch(bot, ctx, target, state) {
-  if (ctx.castleFetchInFlight) return
+  // A dig (or chest op) spans ticks: the issue tick bucketed above, the
+  // continuation ticks here, so dig reads as duration, not starts.
+  if (ctx.castleFetchInFlight) {
+    if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
+    return
+  }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)
   if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
-    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0 }
+    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot) }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
+  }
+  // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
+  // not its full target hands over after LEG_MAX_MS, so the castle lays
+  // the partial instead of starving behind an 80-cobble fetch (rig: the
+  // first fetch never finished in 15 min, 0 laid). 'done', never failed:
+  // no hold parks the re-pick after the castle drains. Below a batch the
+  // leg keeps fetching — yielding to a castle that cannot lay would flip
+  // straight back. 'some'/'none'/'blocked' never yield by construction.
+  if (d.word === 'batch' && typeof f.t0 === 'number' && Date.now() - f.t0 > LEG_MAX_MS) {
+    try { console.log(`castlefetch ${d.kind}: batch ready, yielding`) } catch (_) { /* log best-effort */ }
+    finish(bot, ctx, 'done')
+    return
   }
   st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
@@ -628,6 +818,9 @@ function castlefetch(bot, ctx, target, state) {
 }
 
 module.exports = castlefetch
+module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.QUARRY_ADAPT = QUARRY_ADAPT
+module.exports.quarrySide = quarrySide
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop

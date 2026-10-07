@@ -498,4 +498,20 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     assert.equal(ctx2.castle.blocked['1:5'].why, undefined)
     assert.equal(ctx2.castle.blocked['1:5'].tries, 1)
   })
+
+  it('round-trips the quarry frame latch, drops a malformed one (vmzq.20)', () => {
+    const now = Date.now()
+    const ctx1 = castleCtx({})
+    ctx1.castle.quarryBase = [61, null, 64, 59]
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.deepEqual(ctx2.castle.quarryBase, [61, null, 64, 59])
+    const ctx3 = castleCtx({})
+    ctx3.castle.quarryBase = [61, 'x', 64]
+    assert.equal(memory.save(botAt(SPAWN_A), ctx3, file, now + 1), true)
+    const ctx4 = {}
+    memory.restore(botAt(SPAWN_A), ctx4, file, now + 1)
+    assert.equal(ctx4.castle.quarryBase, undefined)
+  })
 })
