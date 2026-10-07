@@ -776,7 +776,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
     assert.equal(bot.chats.filter((c) => c.includes('for the day')).length, 1)
   })
 
-  it('JEV timeouts back off exponentially; at most one call per interval; the FSM keeps ticking', async () => {
+  it('JEV timeouts back off once, then fall back deterministically; the FSM keeps ticking', async () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const { calls, brain } = failingBrain(new DOMException('brain timeout', 'TimeoutError'))
@@ -787,7 +787,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
     const firedAt = []
     for (let k = 0; k < 3; k++) {
       let guard = 0
-      while (!ctx.task.castle.wd?.pending && guard++ < 40) {
+      while (!ctx.task.castle.wd?.pending && guard++ < 60) {
         t += 10000
         taskMod.taskTick(bot, ctx, t)
       }
@@ -795,16 +795,18 @@ describe('rounds, park and backoff (acceptance 4)', () => {
       firedAt.push(ctx.task.castle.wd.firedAt)
       await flush()
       t += 10000
-      taskMod.taskTick(bot, ctx, t) // consume -> backoff line
+      taskMod.taskTick(bot, ctx, t) // consume -> backoff, fallback, backoff
     }
     assert.equal(calls.length, 3)
     assert.equal(wdLogs().length, 3)
-    assert.ok(wdLogs().every((l) => l.includes('choice=none') && l.includes('source=timeout')), JSON.stringify(wdLogs()))
-    assert.equal(ctx.task.castle.wd.backoffMs, 120000, '30 s doubling per failure')
+    assert.ok(wdLogs()[0].includes('choice=none') && wdLogs()[0].includes('source=timeout'), JSON.stringify(wdLogs()))
+    assert.ok(wdLogs()[1].includes('choice=castlefetch') && wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
+    assert.ok(wdLogs()[2].includes('choice=none') && wdLogs()[2].includes('source=timeout'), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.backoffMs, 30000, 'third timeout is a fresh streak')
     for (let k = 1; k < firedAt.length; k++) {
       assert.ok(firedAt[k] - firedAt[k - 1] >= 60000, 'at most one call per interval')
     }
-    assert.equal(ctx.task.castle.wd.rounds, 0, 'failures are not rounds')
+    assert.equal(ctx.task.castle.wd.rounds, 1, 'the fallback window went flat and counted')
     assert.equal(ctx.castle.parked, false, 'no park on failures alone')
     const d = await goal.decide(bot, ctx)
     assert.ok(d && d.action, 'the FSM keeps ticking through the backoff')
@@ -1135,5 +1137,119 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
     assert.ok(bot.chats.some((c) => c.includes('castle parked')), JSON.stringify(bot.chats))
     taskMod.taskTick(bot, ctx, t0 + 600000)
     assert.equal(ctx.castle.parked, true, 'owner park stands past the switch timer')
+  })
+})
+
+describe('deterministic fallback (vmzq.28)', () => {
+  async function firedAnswer(bot, ctx, t0, answer) {
+    const calls = []
+    ctx.brain = {
+      plan: async (req) => {
+        calls.push(req)
+        if (answer instanceof Error) throw answer
+        return answer
+      },
+    }
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 60) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.task.castle.wd.pending, 'round fired')
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume
+    return { t, calls }
+  }
+
+  async function fireNext(bot, ctx, t, answer) {
+    ctx.brain = {
+      plan: async (req) => {
+        if (answer instanceof Error) throw answer
+        return answer
+      },
+    }
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 60) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.task.castle.wd.pending, 'next round fired')
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t) // consume
+    return t
+  }
+
+  const lowConf = (step) => ({ step, confidence: 0.2, probabilities: { [step]: 0.3 }, source: 'jev' })
+
+  it('first low-conf backs off, second applies the top plain step by FSM order', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
+    assert.equal(wdLogs().length, 1)
+    assert.ok(wdLogs()[0].includes('choice=none'), JSON.stringify(wdLogs()))
+    assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'first none backs off')
+    assert.equal(ctx.task.castle.wd.lowConf, 1)
+    await fireNext(bot, ctx, first.t, lowConf('gather'))
+    assert.equal(wdLogs().length, 2)
+    assert.ok(wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
+    // castleCtx offers castlefetch + gather: FSM order takes castlefetch.
+    assert.ok(wdLogs()[1].includes('choice=castlefetch'), JSON.stringify(wdLogs()))
+    const commit = ctx.goal && ctx.goal.commit
+    assert.ok(commit, 'fallback applied')
+    assert.equal(commit.optionId, 'castlefetch')
+    assert.equal(ctx.task.castle.wd.lowConf, 0, 'streak cleared on fallback')
+    assert.equal(ctx.task.castle.wd.backoffMs, 0, 'no backoff on fallback')
+  })
+
+  it('fallback takes the far option when offered', async () => {
+    const bot = makeBot()
+    bot.registry = { blocksByName: { stone: { id: 1 } } }
+    bot.findBlocks = () => [{ x: 100, y: 64, z: 136 }]
+    const set = new Set(['100,64,136'])
+    bot.blockAt = (p) => {
+      const x = Math.floor(p.x)
+      const y = Math.floor(p.y)
+      const z = Math.floor(p.z)
+      const name = set.has(`${x},${y},${z}`) ? 'stone' : (y >= 65 ? 'air' : 'dirt')
+      return { name, position: pos(x, y, z), boundingBox: name === 'air' ? 'empty' : 'block' }
+    }
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
+    assert.ok(wdLogs()[0].includes('castlefetch-far'), `far offered: ${wdLogs()[0]}`)
+    await fireNext(bot, ctx, first.t, lowConf('gather'))
+    assert.ok(wdLogs()[1].includes('choice=castlefetch-far'), JSON.stringify(wdLogs()))
+    assert.ok(wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
+    const commit = ctx.goal && ctx.goal.commit
+    assert.ok(commit && commit.unlock && commit.unlock.candidate, 'far unlock rides')
+    assert.deepEqual(commit.unlock.candidate, { x: 100, y: 64, z: 136 })
+  })
+
+  it('a confident JEV choice clears the streak', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
+    assert.equal(ctx.task.castle.wd.lowConf, 1)
+    await fireNext(bot, ctx, first.t, { step: 'gather', confidence: 0.9, probabilities: { gather: 0.9 }, source: 'jev' })
+    assert.ok(wdLogs()[1].includes('choice=gather') && wdLogs()[1].includes('source=jev'), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.lowConf, 0, 'a decision clears the streak')
+  })
+
+  it('progress clears the streak', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    const t0 = 1000000000000
+    await firedAnswer(bot, ctx, t0, lowConf('gather'))
+    assert.equal(ctx.task.castle.wd.lowConf, 1)
+    const inv = bot.inventory.items()
+    inv[0].count = 90 // usable 74 > 57: material progress
+    taskMod.taskTick(bot, ctx, t0 + 300000)
+    assert.equal(ctx.task.castle.wd.lowConf, 0, 'progress starts a fresh episode')
   })
 })
