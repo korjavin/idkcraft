@@ -162,7 +162,7 @@ describe('quarry second ring (vmzq.31)', () => {
   })
 })
 
-describe('castle shelter scaffold floor (vmzq.31)', () => {
+describe('castle night-shelter dirt floor (vmzq.31)', () => {
   const pack = (dirt, cobble, extra = []) => [
     ...(dirt > 0 ? [{ name: 'dirt', count: dirt }] : []),
     ...(cobble > 0 ? [{ name: 'cobblestone', count: cobble }] : []),
@@ -170,18 +170,21 @@ describe('castle shelter scaffold floor (vmzq.31)', () => {
   ]
   const botWith = (items) => makeBot({ items })
 
-  it('scaffoldOnHand counts dirt + cobblestone only', () => {
-    assert.equal(castleMod.scaffoldOnHand(botWith(pack(5, 3, [{ name: 'stone', count: 20 }]))), 8)
+  it('dirtOnHand counts dirt only; the floor is 8', () => {
+    assert.equal(castleMod.dirtOnHand(botWith(pack(5, 30, [{ name: 'stone', count: 20 }]))), 5)
     assert.equal(castleMod.SHELTER_RESERVE, 8)
   })
 
-  it('fillItem keeps dirt above the floor and refuses at it', () => {
+  it('fillItem keeps dirt above the floor and refuses at it, whatever the cobble', () => {
     const ok = castleMod.fillItem(botWith(pack(9, 0)))
     assert.ok(ok && ok.name === 'dirt', '9 dirt spends one')
     assert.equal(castleMod.fillItem(botWith(pack(8, 0))), null, '8 dirt is the floor')
-    assert.equal(castleMod.fillItem(botWith(pack(5, 3))), null, '5 dirt + 3 cobble is the floor')
-    const mixed = castleMod.fillItem(botWith(pack(6, 3)))
-    assert.ok(mixed && mixed.name === 'dirt', '6 dirt + 3 cobble spends dirt down toward the floor')
+    // Revmux 01 core-1: cobble at the stone reserve must not read as dirt
+    // savings — the dirt would drain to zero and unlock cobble walking.
+    assert.equal(castleMod.fillItem(botWith(pack(8, 16))), null, '8 dirt + 16 cobble still refuses')
+    assert.equal(castleMod.fillItem(botWith(pack(5, 3))), null, '5 dirt refuses with any cobble')
+    const mixed = castleMod.fillItem(botWith(pack(9, 16)))
+    assert.ok(mixed && mixed.name === 'dirt', '9 dirt + 16 cobble spends one dirt')
   })
 
   it('fillItem still lays smelted stone at the floor (not pillar fuel)', () => {

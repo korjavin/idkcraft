@@ -94,30 +94,34 @@ function findItem(bot, kind) {
   return any
 }
 
-// Night-shelter scaffold floor (idkcraft-vmzq.31): the castle never spends
-// the last SHELTER_RESERVE dirt+cobble — recover's pillar fuel (pillar_up
-// counts the same two names). Prod run6 laid to the stone reserve,
-// pillared the rest away walking, and the night shelter pillar failed with
-// an empty kit. Stone already floors at 16 (reserveOf); dirt (prep fill)
-// is the hole this closes. Shelter and recover spend the floor freely —
-// the gate is castle-only, so the vmzq.29 empty-set wedge cannot recur.
+// Night-shelter dirt floor (idkcraft-vmzq.31): the castle never spends the
+// last SHELTER_RESERVE dirt. Dirt is the shield for the cobble store:
+// body.js keeps cobble walk-proof while any dirt is held, so the cobble
+// (the 16 laying reserve plus the night pillar fuel) survives the walks,
+// and quarry spoil plus equip refill the dirt the walks do spend. Prod
+// run6 laid to the stone reserve, pillared the rest away walking, and the
+// night shelter pillar failed with an empty kit. Counting cobble toward
+// the floor would not hold it: cobble at the reserve reads as savings
+// while the dirt drains to zero, and zero dirt unlocks cobble walking
+// (revmux 01 core-1) — so the floor counts dirt only. Shelter and recover
+// spend the floor freely.
 const SHELTER_RESERVE = 8
-function scaffoldOnHand(bot) {
+function dirtOnHand(bot) {
   let n = 0
   try {
     for (const it of bot.inventory.items() || []) {
-      if (it && (it.name === 'dirt' || it.name === 'cobblestone')) n += typeof it.count === 'number' ? it.count : 1
+      if (it && it.name === 'dirt') n += typeof it.count === 'number' ? it.count : 1
     }
   } catch (_) { /* no inventory: none */ }
   return n
 }
 
 // Prep fill (g0z.16): castle stone above the reserve, else dirt (the cut
-// spoil of a grass hill) — but never the shelter floor above.
+// spoil of a grass hill) — but never the dirt floor above.
 function fillItem(bot) {
   const s = findItem(bot, 'stone')
   if (s) return s
-  if (scaffoldOnHand(bot) <= SHELTER_RESERVE) return null
+  if (dirtOnHand(bot) <= SHELTER_RESERVE) return null
   try { return (bot.inventory.items() || []).find((it) => it && it.name === 'dirt') || null } catch (_) { return null }
 }
 
@@ -1289,7 +1293,7 @@ module.exports.progressByKind = progressByKind
 module.exports.usable = usable
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
-module.exports.scaffoldOnHand = scaffoldOnHand
+module.exports.dirtOnHand = dirtOnHand
 module.exports.SHELTER_RESERVE = SHELTER_RESERVE
 module.exports.held = held
 module.exports.reserveOf = reserveOf
