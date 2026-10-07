@@ -952,6 +952,7 @@ function shelter(bot, ctx, target, state) {
       st.perched = false
       st.dugIn = false
       st.descendTried = false
+      st.descended = false
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1075,7 +1076,19 @@ function shelter(bot, ctx, target, state) {
       }
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
-      if (r === 'done') st.dugIn = true // closed pit: covered from phantoms and walkers alike
+      if (r === 'done') {
+        st.dugIn = true // closed pit: covered from phantoms and walkers alike
+        st.descended = false
+      } else if (st.descended) {
+        // Descent dig failed (short dirt pillar: no-cap-ref at the
+        // surface; walked column: walk/dig/cap failed): climb back up
+        // once instead of holding where the dig died. Consumed — a
+        // second failure holds (no pillar-dig loop); descendTried
+        // stays set so the re-pillared top holds without re-descending.
+        st.descended = false
+        try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
+        return
+      }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
     // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
@@ -1094,8 +1107,12 @@ function shelter(bot, ctx, target, state) {
     // Late phantoms over a dusk pillar (they spawn after arming): the top
     // is exposed and fight is suppressed up here. Come down by digging
     // in — own dirt pillar digs by hand, cobble/stone walks to a dirt
-    // column — one shot per arming, a failed dig holds (no loop).
+    // column — one shot per arming (revmux 01 core-1: a failed descent
+    // re-pillars once below instead of holding where the dig died —
+    // the top beats open ground against walkers even with the phantom
+    // still up).
     st.descendTried = true
+    st.descended = true
     st.perched = false
     st.pillared = false
     st.pillarAt = null

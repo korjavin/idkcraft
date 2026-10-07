@@ -39,7 +39,13 @@ function flatBot(at, opts = {}) {
   const items = opts.items ? opts.items.map((i) => ({ ...i })) : []
   // stoneStance: the stance column is hand-undiggable stone, everything
   // else dirt — the dig walks to a nearby dirt column first.
-  const groundName = (x, y, z) => (opts.stoneStance && Math.floor(x) === 0 && Math.floor(z) === 0 && y <= 63 ? 'stone' : (y === 63 ? 'grass_block' : 'dirt'))
+  // ground: 'stone': all ground is stone — every dig refuses.
+  const groundName = (x, y, z) => {
+    if (y > 63) return 'dirt'
+    if (opts.ground === 'stone') return 'stone'
+    if (opts.stoneStance && Math.floor(x) === 0 && Math.floor(z) === 0) return 'stone'
+    return y === 63 ? 'grass_block' : 'dirt'
+  }
   const solidAt = (x, y, z) => placed.has(key(x, y, z)) || (y <= 63 && !dug.has(key(x, y, z)))
   const bot = {
     username: 'IdkBot',
@@ -128,7 +134,6 @@ describe('vmzq.30 shelter digs in on any pillar failure', () => {
     assert.ok(!ctx.shelter.perched, 'a failed pillar never marks perched')
     assert.equal(Math.floor(bot.entity.position.y), 61, 'three deep')
     assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-error err=refused, digging in')), JSON.stringify(logs))
-    assert.ok(logs.includes('shelter dig-in done'), JSON.stringify(logs))
     assert.ok(!logs.some((m) => m.includes('holding on the ground')), 'no open-ground hold')
   })
 })
@@ -200,27 +205,58 @@ describe('vmzq.30 phantom descent off a dusk pillar', () => {
       entities: { 7: { name: 'phantom', position: pos(10, 80, 5) } },
     })
     const ctx = perchedCtx()
-    const logs = await quiet(async () => {
+    await quiet(async () => {
       for (let t = 0; t < 25; t++) {
         home.shelter(bot, ctx, null, null)
         await flush()
       }
     })
-    assert.ok(logs.includes('shelter phantom overhead, digging in'), JSON.stringify(logs))
-    assert.ok(logs.includes('shelter dig-in done'), JSON.stringify(logs))
     assert.equal(ctx.shelter.dugIn, true)
     assert.equal(ctx.shelter.perched, false)
+    assert.equal(ctx.shelter.descendTried, true, 'descent consumed')
+    assert.equal(ctx.shelter.descended, false, 'no re-arm pending after success')
     assert.equal(ctx.inShelter, true)
-    assert.equal(logs.filter((m) => m.includes('phantom overhead')).length, 1, 'one shot, no loop')
+    // One shot, no loop: ten more ticks with the phantom still up arm
+    // no second dig.
+    await quiet(async () => {
+      for (let t = 0; t < 10; t++) {
+        home.shelter(bot, ctx, null, null)
+        await flush()
+      }
+    })
+    assert.ok(!ctx.shelter.dig, 'no second dig armed')
+    assert.equal(ctx.shelter.dugIn, true)
   })
   it('perched + no phantom: holds the pillar', async () => {
     const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
     const ctx = perchedCtx()
-    const logs = await quiet(() => home.shelter(bot, ctx, null, null))
+    await quiet(() => home.shelter(bot, ctx, null, null))
     assert.equal(ctx.shelter.pillared, true)
     assert.equal(ctx.shelter.perched, true)
     assert.ok(!ctx.shelter.dig, 'no dig armed')
-    assert.ok(!logs.some((m) => m.includes('phantom overhead')), JSON.stringify(logs))
+    assert.ok(!ctx.shelter.descendTried, 'no descent without a phantom')
+  })
+  it('failed descent re-pillars once, then holds (no pillar-dig loop)', async () => {
+    // All stone: the descent dig refuses, the re-pillar has no scaffold
+    // (empty kit) so its dig refuses too — one re-arm, then a hold.
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 }, {
+      ground: 'stone',
+      entities: { 7: { name: 'phantom', position: pos(2, 70, 1) } },
+    })
+    const ctx = perchedCtx()
+    const logs = await quiet(async () => {
+      for (let t = 0; t < 30; t++) {
+        home.shelter(bot, ctx, null, null)
+        await flush()
+      }
+    })
+    // The re-arm is a one-time transition (no ctx residue by design —
+    // the marker is consumed), so its firing is pinned on the log.
+    assert.equal(logs.filter((m) => m.includes('re-pillaring')).length, 1, 'exactly one re-arm')
+    assert.equal(ctx.shelter.descendTried, true)
+    assert.equal(ctx.shelter.descended, false, 're-arm consumed')
+    assert.equal(ctx.shelter.pillared, true, 'ends holding, not looping')
+    assert.equal(ctx.inShelter, true)
   })
   it('dug in + phantom overhead: holds (already covered)', async () => {
     const bot = flatBot({ x: 0.5, y: 61, z: 0.5 }, {
@@ -228,10 +264,10 @@ describe('vmzq.30 phantom descent off a dusk pillar', () => {
     })
     const ctx = perchedCtx()
     ctx.shelter = { pillared: true, perched: false, dugIn: true, pillarAt: { x: 0.5, z: 0.5 } }
-    const logs = await quiet(() => home.shelter(bot, ctx, null, null))
+    await quiet(() => home.shelter(bot, ctx, null, null))
     assert.equal(ctx.shelter.pillared, true)
     assert.ok(!ctx.shelter.dig, 'no re-dig')
-    assert.ok(!logs.some((m) => m.includes('phantom overhead')), JSON.stringify(logs))
+    assert.ok(!ctx.shelter.descendTried, 'covered pit never descends')
   })
 })
 
