@@ -669,13 +669,30 @@ describe('watchdog consume paths', () => {
     }
   })
 
-  it('a park choice parks through the watchdog line', async () => {
-    const bot = makeBot()
+  it('a park choice parks through the watchdog line when the owner is online', async () => {
+    const bot = makeBot({ players: { Steve: {} } })
     const { ctx } = castleCtx(bot)
     await firedAnswer(bot, ctx, 1000000000000, { step: 'park', confidence: 0.9, probabilities: { park: 0.9 }, source: 'jev' })
     assert.equal(ctx.castle.parked, true)
     assert.ok(bot.chats.some((c) => c.includes('parked at')), JSON.stringify(bot.chats))
     assert.ok(wdLogs().some((l) => l.includes('choice=park') && l.includes('source=jev')), JSON.stringify(wdLogs()))
+  })
+
+  it('a park choice routes to plan-B when the owner is offline (no alone-park)', async () => {
+    const bot = makeBot() // players {} = owner offline
+    const { ctx } = castleCtx(bot)
+    // Stranded gather (gyw): opens the pre-house explore spiral, the
+    // relocate leg (same setup as the round-cap plan-B test).
+    ctx.gather = { final: 'failed:no-trees', atLogs: 0 }
+    await firedAnswer(bot, ctx, 1000000000000, { step: 'park', confidence: 0.9, probabilities: { park: 0.9 }, source: 'jev' })
+    assert.equal(ctx.castle.parked, false, 'offline: plan-B, not park')
+    assert.equal(ctx.castle.taskPark || null, null, 'no parkTask record')
+    assert.equal(ctx.task.castle.wd.planb, 'relocate')
+    assert.match(planbLogs()[0], /phase=relocate step=explore/)
+    const reloc = ctx.goal.commit
+    assert.ok(reloc, 'relocate window live')
+    assert.equal(reloc.optionId, 'planb-relocate')
+    assert.ok(wdLogs().some((l) => l.includes('choice=park') && l.includes('source=jev')), 'choice still logged')
   })
 
   it('a held step is offered as a retry and applies past the hold', async () => {

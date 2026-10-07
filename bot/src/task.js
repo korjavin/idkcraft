@@ -770,8 +770,9 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 }
 
 // Consume a stored watchdog answer: apply the choice as a bounded
-// commitment, park on a park choice, or back off on any failure. Every
-// resolution logs one `goal watchdog` line with its metric increment.
+// commitment, park on a park choice (owner online) or plan-B when alone
+// (owner: plan-B replaces the alone-park), or back off on any failure.
+// Every resolution logs one `goal watchdog` line with its metric increment.
 // An answer whose stall resolved mid-call (progress after the fire) is
 // moot: dropped silently, no pin and no backoff (a drop is not a
 // failure — the next stall fires fresh).
@@ -820,7 +821,10 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     } catch (_) { /* counter best-effort */ }
     wd.backoffMs = 0
     wd.backoffUntil = 0
-    parkTask(bot, ctx, kind, done, total, now)
+    // A park choice is a fork, not a park: owner online parks, owner
+    // offline runs plan-B (relocate, re-ask, switch, return) — the same
+    // fork as the round cap, so an early park never bypasses plan-B.
+    maxRounds(bot, ctx, kind, state, wd, now)
     return
   }
   let valid = typeof choice === 'string' && choice !== 'rest'
