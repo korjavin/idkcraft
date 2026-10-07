@@ -79,6 +79,43 @@ describe('vmzq.17 far castle walks instead of failing no-material', () => {
     const { w, d } = blueprint.siteDimensions(0, 1)
     assert.ok(gx >= SITE.x - 8 && gx <= SITE.x + w + 8 && gz >= SITE.z - 8 && gz <= SITE.z + d + 8, `goal ${gx},${gz} at the site`)
   })
+
+  it('decide picks the far castle on a stale clear word; a cleared goal re-issues (revmux 01)', async () => {
+    // Far, unloaded site + stale on-site word + empty kit: the prod path.
+    const { w, d } = blueprint.siteDimensions(0, 1)
+    const cells = new Map()
+    const key = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
+    const home = builtHome()
+    const buildMod = require('../src/behaviours/build')
+    for (const cell of buildMod.blueprintFor(home)) {
+      const x = home.site.x + cell.dx
+      const y = home.site.y + cell.dy
+      const z = home.site.z + cell.dz
+      cells.set(key(x, y, z), cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : cell.kind === 'fill' ? 'dirt' : 'oak_planks')
+    }
+    const bot = goalBot({ items: [], at: pos(0, 64, 0) })
+    bot.blockAt = (p) => {
+      const fx = Math.floor(p.x)
+      const fy = Math.floor(p.y)
+      const fz = Math.floor(p.z)
+      if (fx >= SITE.x - 2 && fx <= SITE.x + w + 1 && fz >= SITE.z - 2 && fz <= SITE.z + d + 1) return null // unloaded site
+      const k = key(fx, fy, fz)
+      const name = cells.has(k) ? cells.get(k) : (fy <= 63 ? 'dirt' : 'air')
+      return { name, position: pos(fx, fy, fz), boundingBox: name === 'air' ? 'empty' : 'block' }
+    }
+    const setGoals = []
+    bot.pathfinder = { goal: null, setGoal: (g) => { setGoals.push(g); bot.pathfinder.goal = g }, isMoving: () => false, movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] } }
+    bot.world = { getBlock: () => null }
+    const ctx = { home, castle: castleState(), castleWord: { word: 'clear' }, work: true }
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'clear', 'far reads the stale on-site word')
+    assert.equal((await goal.decide(bot, ctx)).action, 'castle', 'the far castle is picked, not explore')
+    castle(bot, ctx)
+    assert.equal(setGoals.length, 1, 'the walk goal issues')
+    assert.equal(ctx.castle.status, 'walking to the site')
+    bot.pathfinder.goal = null // recover/night cleared it mid-walk
+    castle(bot, ctx)
+    assert.equal(setGoals.length, 2, 'the walk goal re-issues after a clear (core-1)')
+  })
 })
 
 describe('vmzq.17 gather chops the castle chain', () => {
@@ -90,6 +127,7 @@ describe('vmzq.17 gather chops the castle chain', () => {
 
   it('built home + beds both + stone-none + no logs: gather feasible (the pickaxe chain)', () => {
     assert.equal(F('gather', facts(), null, { home: builtHome() }), true)
+    assert.ok(goal.STEP_CRITERIA.gather.includes('castle'), 'the model menu names the castle chain (revmux 01 body-2)')
   })
 
   it('stays narrow: batch/clear/blocked words and full loads never farm', () => {

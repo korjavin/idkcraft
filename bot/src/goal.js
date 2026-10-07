@@ -1325,7 +1325,7 @@ function goalFsm(facts, feasibleNames) {
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
-  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few: chop trees',
+  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few, or castle is a -none or -some word other than torch and logs is none or few: chop trees',
   craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',

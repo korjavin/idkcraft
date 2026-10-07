@@ -1077,6 +1077,11 @@ function work(bot, ctx, st, c, now, status) {
         const bp = bodyPos(bot)
         if (bp && Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5)) > SITE_WALK_DIST) {
           st.status = 'walking to the site'
+          // Re-issue after a clear (revmux 01 core-1): approach() only
+          // re-arms on a new idx or a foreign goal — a goal cleared to
+          // null (recover, night break) would otherwise strand the step
+          // running with the bot standing still.
+          try { if (bot.pathfinder.goal == null && !bot.pathfinder.isMoving()) ctx.castleGoalIdx = -1 } catch (_) { /* latch best-effort */ }
           approach(bot, ctx, c, () => new goals.GoalNearXZ(c.x, c.z, 8))
           return
         }
