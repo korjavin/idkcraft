@@ -137,25 +137,34 @@ describe('lph3 handleRespawn stamps the grace', () => {
   })
 })
 
-describe('lph3 core-2: a failed descent unarms for the re-pillar', () => {
-  it('descent failure clears inShelter so fight ticks re-pillar instead of idling', async () => {
-    // A phantom descent whose dig cannot run (all-stone ground, no walk
-    // spot): the re-pillar branch must leave inShelter false, or the
-    // index.js drive gate (digs > 0, but dig is now null) idles every
-    // fight tick and the climb never runs.
-    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 }, { ground: 'stone' })
+describe('lph3 core-2: the phantom-descent arm unarms', () => {
+  it('perched hold + phantom overhead: descent arms with inShelter false, so fight ticks fight and work ticks dig', async () => {
+    // The arm tick that left inShelter=true with digs=0 (#345 core-2):
+    // the perched hold armed shelter, the descent set pillared=false
+    // and dig={extra:1} and returned — and every later fight tick idled
+    // at the index.js drive gate (digs > 0, but digs is 0) instead of
+    // driving the dig. The arm now unarms: fight ticks fight, the next
+    // work tick starts the dig.
+    const phantom = { name: 'phantom', position: pos(5, 80, 0) }
+    phantom.position.distanceTo = () => 20
+    const bot = flatBot({ x: 0.5, y: 65, z: 0.5 }, { entities: { 9: phantom }, placed: [[0, 64, 0]] })
     const ctx = {
       home: v2home({ x: 200, y: 64, z: 200 }),
       step: 'shelter',
       stepStatus: 'running',
-      inShelter: true, // armed while the descent dug (digs > 0)
-      shelter: { pillared: false, perched: false, dugIn: false, descendTried: true, descended: true, dig: { extra: 1 } },
+      inShelter: true, // the perched hold
+      shelter: { pillared: true, perched: true, dugIn: false, descendTried: false, pillarAt: { x: 0.5, z: 0.5 } },
     }
     await quiet(() => home.shelter(bot, ctx, null, null))
-    assert.equal(ctx.shelter.descended, false, 'consumed')
-    assert.equal(ctx.shelter.pillared, false, 're-pillar armed')
-    assert.equal(ctx.shelter.dig, null, 'dig cleared')
-    assert.equal(ctx.inShelter, false, 'unarmed: the next work tick climbs, fight ticks fight')
+    assert.equal(ctx.shelter.descendTried, true, 'one shot consumed')
+    assert.equal(ctx.shelter.descended, true)
+    assert.equal(ctx.shelter.pillared, false, 'off the perch')
+    assert.ok(ctx.shelter.dig && ctx.shelter.dig.extra === 1, 'descent dig armed')
+    assert.equal(ctx.inShelter, false, 'unarmed: fight ticks fight, work ticks dig')
+    // The next work tick starts the dig (dirt column, veto passes).
+    await quiet(() => home.shelter(bot, ctx, null, null))
+    await flush()
+    assert.ok(ctx.shelter.dig && (ctx.shelter.dig.digs | 0) > 0, 'dig started')
   })
 })
 
@@ -271,6 +280,29 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'fight')
       assert.equal(fightRan, 1)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('fresh grace but work picks a day step (no home, no castle): fights instead of working the dark', async () => {
+    const bot = graceBot()
+    const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = null // no home, no castle: stay/gohome/shelter infeasible
+    ctx.castle = null
+    ctx.adoptDone = true // past the spawn-chunk adopt grace: goal decides now
+    ctx.lastRespawnAt = Date.now()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', 'falls back to fight')
+      assert.equal(fightRan, 1)
+      assert.ok(lines.some((l) => l.includes('night-grace: work picked') && l.includes('fighting instead')), `fallback logged, got: ${lines.join(' | ')}`)
     } finally {
       BEHAVIOURS.fight = origFight
       ticker.destroy()

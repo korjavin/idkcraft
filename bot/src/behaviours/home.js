@@ -1103,12 +1103,9 @@ function shelter(bot, ctx, target, state) {
         // stays set so the re-pillared top holds without re-descending.
         st.descended = false
         try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
-        // Unarm for the climb (lph3 core-2): while the descent dug
-        // (digs > 0) the running branch above armed inShelter, and with
-        // st.dig now null the index.js drive gate (digs > 0) would idle
-        // every fight tick instead of re-pillaring — the climb gate
-        // above only clears on ticks that reach the shelter handler.
-        try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
+        // Already unsheltered: a set dig implies unpillared (both arm
+        // sites clear it), and the climb gate above clears inShelter on
+        // every unpillared tick before the dig runs.
         return
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
@@ -1147,6 +1144,11 @@ function shelter(bot, ctx, target, state) {
       bot.clearControlStates()
     } catch (_) { /* body best-effort */ }
     ctx.lastGoalKey = 'stay'
+    // Unarm for the descent (lph3 core-2 from #345): the perched hold
+    // armed inShelter, and with digs at 0 the index.js drive gate would
+    // idle every fight tick instead of driving the dig — the climb gate
+    // only clears on ticks that reach this handler.
+    try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
     try { console.log('shelter phantom overhead, digging in') } catch (_) { /* log best-effort */ }
     return
   }

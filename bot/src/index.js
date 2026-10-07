@@ -820,7 +820,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // (comehome/gocastle doorway legs own their ticks, like dayDivert).
       let graceFresh = false
       try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
-      if (!graceFresh) ctx.nightGraceLogged = false
+      if (!graceFresh) { ctx.nightGraceLogged = false; ctx.nightGraceFallbackLogged = false }
       const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter &&
         decision.action === 'fight' && !target && graceFresh
       if (nightGraceHold && !ctx.nightGraceLogged) {
@@ -1003,12 +1003,26 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             return { decision: rd, calledBrain }
           }
         }
+        const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
           // stale-decision guard as after the brain await above.
           stopOnce()
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
+        // Night grace holds only for night steps (lph3 revmux 01): with no
+        // home (and no castle) the work block picks a day step — working
+        // the dark with fight suppressed for 60 s. Fall back to the
+        // brain's fight instead; a night step runs the hold as usual.
+        if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter') {
+          if (!ctx.nightGraceFallbackLogged) {
+            console.log(`night-grace: work picked ${decision.action}, fighting instead`)
+            ctx.nightGraceFallbackLogged = true
+          }
+          applyDecision(brainFight, target, state)
+          if (!ctx.paused) ctx.retreat = null
+          return { decision: brainFight, calledBrain }
         }
         // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
         try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
