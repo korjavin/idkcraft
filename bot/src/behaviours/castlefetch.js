@@ -63,6 +63,7 @@ const QUARRY_DEPTH = 6
 const QUARRY_LEN = 40
 const QUARRY_W = 2
 const QUARRY_TOP = 3 // a hill is cut up to site.y + this
+const QUARRY_ADAPT = 8 // a trench starts at real ground up to this far below site level (dips, pad edges)
 const QUARRY_TRIES = 3 // digs on one quarry cell before it is skipped
 const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble picked up
 const LIQUID = new Set(['water', 'lava', 'bubble_column'])
@@ -337,18 +338,19 @@ function quarrySide(st, s) {
   return { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
 }
 
-function trenchFloor(st, i) {
-  return st.site.y - 1 - Math.min(i, QUARRY_DEPTH - 1)
+function trenchFloor(st, i, base) {
+  return (base == null ? st.site.y : base) - 1 - Math.min(i, QUARRY_DEPTH - 1)
 }
 
 // A trench cell or the block a trench stance stands on (revmux 01): the
-// exposed-stone pick must never undermine our own staircase.
+// exposed-stone pick must never undermine our own staircase. The band runs
+// QUARRY_ADAPT below the unadapted floor: an adapted trench digs there.
 function inTrench(st, p) {
   for (let s = 0; s < 4; s++) {
     const o = quarrySide(st, s)
     const i = (p.x - o.x) * o.dx + (p.z - o.z) * o.dz
     const l = (p.x - o.x) * o.lx + (p.z - o.z) * o.lz
-    if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 && p.y <= st.site.y + QUARRY_TOP) return true
+    if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
   }
   return false
 }
@@ -362,21 +364,75 @@ function inTrench(st, p) {
 // session latch) — a restart or a retry resumes the same trench.
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
-  const q = f.quarry || (f.quarry = { dead: [] })
+  const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null], said: [] })
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
   for (let s = 0; s < 4; s++) {
     if (q.dead.includes(s)) continue
     const o = quarrySide(st, s)
+    // Adaptive start (idkcraft-vmzq.20): the ring assumes flat ground at
+    // site level, but a pad edge or a dip hangs the origin in air — rig
+    // cycle 7 died all four sides this way and failed no-stone twice.
+    // Scan down for real ground and start the staircase there; liquid in
+    // the working band, or no ground in range, still kills the side.
+    let base = null
+    let why = null
+    let whyAt = null
+    let probed = false
+    if (Array.isArray(st.quarryBase) && Number.isInteger(st.quarryBase[s])) {
+      base = st.quarryBase[s] // latched: resume the same frame, no re-probe
+    } else {
+      probed = true
+      let liquid = false
+      let g = null
+      for (let y = st.site.y + QUARRY_TOP; y >= st.site.y - QUARRY_ADAPT; y--) {
+        const b = at(o.x, y, o.z)
+        if (!b) { why = 'void'; whyAt = [o.x, y, o.z]; break }
+        if (wet(b)) { liquid = true; continue }
+        if (!open(b)) { g = y; break }
+      }
+      if (!why && g == null) { why = liquid ? 'wet' : 'hole'; whyAt = [o.x, st.site.y, o.z] }
+      if (!why) {
+        const under = at(o.x, g - 1, o.z)
+        const head = at(o.x, g + 1, o.z)
+        if (!under || open(under)) { why = 'hole'; whyAt = [o.x, g - 1, o.z] }
+        else if (wet(under) || wet(head)) { why = 'wet'; whyAt = [o.x, g, o.z] }
+        else base = g + 1
+      }
+    }
+    if (why) {
+      q.dead.push(s)
+      try { console.log(`castlefetch quarry side ${s} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
+      continue
+    }
+    // Latched, never re-probed: our own dug floors read as ground, so a
+    // fresh probe every leg would walk the staircase down one level per
+    // leg and eat the stance floors (castle-fetch trench regression). The
+    // latch rides the persisted castle (memory.js), so a restart resumes
+    // the same frame; a side that dies stays unlatched and re-probes next
+    // leg (a transient void revives). Pre-latch trenches (dug before this
+    // change) shift one level on first probe, then hold.
+    if (probed) {
+      if (!Array.isArray(st.quarryBase) || st.quarryBase.length !== 4) {
+        try { st.quarryBase = [null, null, null, null] } catch (_) { /* latch best-effort */ }
+      }
+      if (Array.isArray(st.quarryBase) && st.quarryBase.length === 4) st.quarryBase[s] = base
+    }
+    if (!Array.isArray(q.level)) q.level = [null, null, null, null]
+    q.level[s] = base
+    if (probed && Array.isArray(q.said) && !q.said.includes(s)) {
+      q.said.push(s)
+      try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
+    }
     let dead = false
     for (let i = 0; i < QUARRY_LEN && !dead; i++) {
-      const floor = trenchFloor(st, i)
+      const floor = trenchFloor(st, i, base)
       for (let l = 0; l < QUARRY_W && !dead; l++) {
         const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
         if (!below || open(below) || wet(below)) dead = true
       }
-      for (let y = st.site.y + QUARRY_TOP; y >= floor && !dead; y--) {
+      for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
         for (let l = 0; l < QUARRY_W && !dead; l++) {
           const x = o.x + o.dx * i + o.lx * l
           const z = o.z + o.dz * i + o.lz * l
@@ -396,8 +452,8 @@ function pickQuarry(bot, ctx, f) {
         }
       }
     }
-    q.dead.push(s) // dug out or unusable
-    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable' : 'dug out'}`) } catch (_) { /* log best-effort */ }
+    q.dead.push(s) // dug out or unusable mid-trench
+    try { console.log(`castlefetch quarry side ${s} ${dead ? 'unusable (mid-trench)' : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
@@ -583,6 +639,8 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.QUARRY_ADAPT = QUARRY_ADAPT
+module.exports.quarrySide = quarrySide
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest

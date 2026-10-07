@@ -228,6 +228,97 @@ describe('castlefetch sources (g0z.4)', () => {
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
     assert.equal(asks().length, 1, 'the retry never repeats the line')
+
+  it('quarry origin in a dip adapts the trench down (vmzq.20)', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    const set = new Map()
+    for (let y = 61; y <= 63; y++) { // dip: ground at 60, both width columns
+      set.set(`${o.x},${y},${o.z}`, 'air')
+      set.set(`${o.x + o.lx},${y},${o.z + o.lz}`, 'air')
+    }
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    const t = ctx.castleFetch.target
+    assert.ok(t && t.quarry, 'the quarry takes the dipped side')
+    assert.deepEqual([t.x, t.y, t.z], [o.x, 60, o.z], 'first cell is the dip floor')
+    assert.equal(ctx.castleFetch.quarry.level[0], 61, 'staircase base follows the ground')
+    assert.deepEqual(ctx.castleFetch.quarry.dead, [])
+  })
+
+  it('quarry origin past QUARRY_ADAPT dies with a why; the next side takes over (vmzq.20)', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    const o1 = fetch.quarrySide(castleState(), 1)
+    const set = new Map()
+    for (let y = SITE.y - fetch.QUARRY_ADAPT; y <= 63; y++) set.set(`${o.x},${y},${o.z}`, 'air')
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try { fetch(bot, ctx) } finally { console.log = orig }
+    assert.ok(ctx.castleFetch.quarry.dead.includes(0), 'side 0 dead')
+    assert.equal(ctx.castleFetch.quarry.level[0], null)
+    assert.ok(lines.some((m) => new RegExp(`quarry side 0 unusable \\(hole at ${o.x} `).test(m)), `diagnostic line, got: ${lines.join(' | ')}`)
+    const t = ctx.castleFetch.target
+    assert.ok(t && t.quarry, 'side 1 takes over')
+    assert.deepEqual([t.x, t.y, t.z], [o1.x, 63, o1.z])
+  })
+
+  it('water in the working band kills the side; overburden water still kills mid-trench (vmzq.20)', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    const o1 = fetch.quarrySide(castleState(), 1)
+    for (const [wy, note] of [[64, 'pond at head height'], [66, 'waterfall overburden']]) {
+      const set = new Map([[`${o.x},${wy},${o.z}`, 'water']])
+      const bot = makeBot({ items: TOOLS(), set })
+      const ctx = { castle: castleState() }
+      const lines = []
+      const orig = console.log
+      console.log = (m) => { lines.push(String(m)) }
+      try { fetch(bot, ctx) } finally { console.log = orig }
+      assert.ok(ctx.castleFetch.quarry.dead.includes(0), `${note}: side 0 dead`)
+      const t = ctx.castleFetch.target
+      assert.ok(t && t.quarry, `${note}: side 1 takes over`)
+      assert.deepEqual([t.x, t.y, t.z], [o1.x, 63, o1.z])
+      assert.ok(lines.some((m) => m.includes('quarry side 0 unusable')), `${note}: logged`)
+    }
+  })
+
+  it('the frame latch holds across legs: a latched side never re-probes (vmzq.20)', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    const bot = makeBot({ items: TOOLS() })
+    const st = castleState({ quarryBase: [64, null, null, null] })
+    const ctx = { castle: st }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      fetch(bot, ctx) // leg 1: latched, silent
+      assert.equal(ctx.castleFetch.quarry.level[0], 64)
+      ctx.castleFetch = null
+      fetch(bot, ctx) // leg 2: same frame, still silent
+      assert.equal(ctx.castleFetch.quarry.level[0], 64)
+    } finally { console.log = orig }
+    assert.ok(!lines.some((m) => m.includes('quarry side 0 live')), 'latched reuse logs nothing')
+    assert.deepEqual([ctx.castleFetch.target.x, ctx.castleFetch.target.z], [o.x, o.z], 'still side 0')
+  })
+
+  it('a pre-latch dug trench shifts one level on first probe, then holds (vmzq.20)', () => {
+    const o = fetch.quarrySide(castleState(), 0)
+    // Column 0 dug down to 62 with no latch (dug before the latch existed).
+    const set = new Map([[`${o.x},63,${o.z}`, 'air'], [`${o.x + o.lx},63,${o.z + o.lz}`, 'air']])
+    const bot = makeBot({ items: TOOLS(), set })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.deepEqual(ctx.castle.quarryBase[0], 63, 'first probe latches the dug floor')
+    assert.equal(ctx.castleFetch.quarry.level[0], 63)
+    const t = ctx.castleFetch.target
+    assert.deepEqual([t.x, t.y, t.z], [o.x, 62, o.z], 'one level of stance-floor digging, bounded')
+    ctx.castleFetch = null // leg 2: the latch holds, no further shift
+    fetch(bot, ctx)
+    assert.equal(ctx.castleFetch.quarry.level[0], 63)
+    assert.deepEqual(ctx.castle.quarryBase[0], 63)
+  })
   })
 
   it('a moving facts text never releases the fetch hold before the bound (g0z.12 rig churn)', async () => {
@@ -540,7 +631,9 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     const under = (y) => (y <= 62 ? 'stone' : y <= 63 ? 'dirt' : 'air') // one sod over stone
     const set = new Map([[`${SITE.x - 4},63,${SITE.z + 2}`, 'air'], [`${SITE.x - 4},63,${SITE.z + 3}`, 'air'], [`${SITE.x - 4},62,${SITE.z + 2}`, 'stone']]) // column 0 dug, its stance floor exposed (findBlocks sees set only)
     const bot = makeBot({ items: TOOLS(), set, under })
-    const ctx = { castle: castleState() }
+    // The leg that dug column 0 latched the frame first (vmzq.20 quarryBase):
+    // a resumed trench reuses it instead of re-probing the dug floor.
+    const ctx = { castle: castleState({ quarryBase: [64, null, null, null] }) }
     fetch(bot, ctx)
     const t = ctx.castleFetch.target
     assert.ok(t.quarry, 'the exposed column-0 floor stone is the trench, not a pick')
