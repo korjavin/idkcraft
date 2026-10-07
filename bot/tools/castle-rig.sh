@@ -6,23 +6,27 @@
 # Usage: sh castle-rig.sh [mins]   (default 6; CASTLE_MINS also works;
 #   gate runs pass 30+ explicitly)
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
-#   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b"),
+#   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b c"),
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
 #   CASTLE_KIT (empty|seeded — seeded pre-fills cobble/planks/tools so a
 #   6-min window measures laying, not fetching),
-#   CASTLE_TICKRATE (1 = wall-clock game; N > 1 runs /tick rate N for fast
-#   iteration — gates always run at 1),
+#   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
+#   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
+#   100 = 5x — for fast iteration),
 #   RIG_PLANNER (jev|stub, default jev — the real JEV; the key comes from
 #   TYPESAFE_API_KEY or, when unset, the stash secrets/jev-api-key, never
-#   printed), GOAL_WATCHDOG_MS / GOAL_COMMIT_MS (pass through when set).
+#   printed), GOAL_WATCHDOG_MS / GOAL_COMMIT_MS (pass through when set),
+#   CASTLE_INIT_MEMORY/CASTLE_MAX_MEMORY (JVM heap, default 512M/768M),
+#   CASTLE_VIEW_DISTANCE/CASTLE_SIM_DISTANCE (default 6/4).
 # Exit: 0 = measured (even 0 laid — the line says so),
 #   2 = environment/setup failure, 130 = interrupted (never a pass).
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf); a
-# sha move fails the run (exit 2) so runs stay comparable. No /tick
-# acceleration by design: the bot ticks on wall-clock seconds, so a faster
-# game clock would distort physics timing without speeding decisions.
+# sha move fails the run (exit 2) so runs stay comparable. Acceleration
+# caveat: the bot ticks on wall-clock seconds, so a faster game clock gives
+# it more game-time per decision — gates run at 1; the max safe rate is
+# measured in the vmzq.24 report, not assumed here.
 # One castle run per rig (own containers/ports/locks, so a castle run and a
 # stuck run can share the box): container idk-castle[-<id>], host port
 # 25581 + letter index (a=25582, b=25583), data under
@@ -48,7 +52,7 @@ rig_try() { # $1 = lock dir; 0 = taken (a dead holder's lock is reclaimed)
   return 1
 }
 if [ "${RIG_LOCK_HELD:-}" != 1 ]; then
-  _auto=; if [ "$RIG_ID" = auto ]; then _auto=1; _slots="${CASTLE_SLOTS:-0 a b}"; else _slots="${RIG_ID:-0}"; fi
+  _auto=; if [ "$RIG_ID" = auto ]; then _auto=1; _slots="${CASTLE_SLOTS:-0 a b c}"; else _slots="${RIG_ID:-0}"; fi
   _waited=0
   while :; do
     for _s in $_slots; do
@@ -97,6 +101,19 @@ if [ "$RIG_PLANNER" = jev ] && [ -z "${TYPESAFE_API_KEY:-}" ]; then
 fi
 if [ -n "${GOAL_WATCHDOG_MS:-}" ]; then export GOAL_WATCHDOG_MS; fi
 if [ -n "${GOAL_COMMIT_MS:-}" ]; then export GOAL_COMMIT_MS; fi
+INIT_MEM="${CASTLE_INIT_MEMORY:-512M}"
+MAX_MEM="${CASTLE_MAX_MEMORY:-768M}"
+valid_mem() { _m="$1"; case "$_m" in *M|*G) _m="${_m%?}";; *) return 1;; esac; case "$_m" in ''|*[!0-9]*) return 1;; esac; }
+valid_mem "$INIT_MEM" || { echo "memory: want <n>M|<n>G, got INIT '$INIT_MEM'"; exit 2; }
+valid_mem "$MAX_MEM" || { echo "memory: want <n>M|<n>G, got MAX '$MAX_MEM'"; exit 2; }
+mem_mb() { case "$1" in *G) echo $(( ${1%?} * 1024 ));; *) echo "${1%?}";; esac; }
+{ [ "$(mem_mb "$INIT_MEM")" -gt 0 ] && [ "$(mem_mb "$INIT_MEM")" -le "$(mem_mb "$MAX_MEM")" ]; } || { echo "memory: INIT $INIT_MEM must be >0 and <= MAX $MAX_MEM"; exit 2; }
+VIEW_DIST="${CASTLE_VIEW_DISTANCE:-6}"
+SIM_DIST="${CASTLE_SIM_DISTANCE:-4}"
+case "$VIEW_DIST" in ''|*[!0-9]*) echo "view-distance: want an integer 2..32, got '$VIEW_DIST'"; exit 2 ;; esac
+{ [ "$VIEW_DIST" -ge 2 ] && [ "$VIEW_DIST" -le 32 ]; } || { echo "view-distance: want an integer 2..32, got '$VIEW_DIST'"; exit 2; }
+case "$SIM_DIST" in ''|*[!0-9]*) echo "sim-distance: want an integer 2..32, got '$SIM_DIST'"; exit 2 ;; esac
+{ [ "$SIM_DIST" -ge 2 ] && [ "$SIM_DIST" -le 32 ]; } || { echo "sim-distance: want an integer 2..32, got '$SIM_DIST'"; exit 2; }
 PRODWORLD="${PRODWORLD:-/Users/iv/Projects/.idkcraft-prodworld}"
 HERE="$(dirname "$0")"
 TREE="$(cd "$HERE/../.." && pwd)"
@@ -119,11 +136,27 @@ if [ ! -d "$RIGDIR/replay-data/$VARIANT" ]; then
   rsync -a --exclude /world --exclude /logs "$SRC/" "$RIGDIR/replay-data/.$VARIANT.tmp/"
   mv "$RIGDIR/replay-data/.$VARIANT.tmp" "$RIGDIR/replay-data/$VARIANT"
 fi
-sed -e "s/--name idk-replay /--name $CONTAINER /" -e "s/-p 25571:/-p $RIG_PORT:/" "$PRODWORLD/START.sh" > "$RIGDIR/START.sh"
+sed -e "s/--name idk-replay /--name $CONTAINER /" -e "s/-p 25571:/-p $RIG_PORT:/" \
+  -e "s/-e EULA=TRUE/-e EULA=TRUE -e INIT_MEMORY=$INIT_MEM -e MAX_MEMORY=$MAX_MEM/" \
+  "$PRODWORLD/START.sh" > "$RIGDIR/START.sh"
 grep -q -- "--name $CONTAINER " "$RIGDIR/START.sh" && grep -q -- "-p $RIG_PORT:" "$RIGDIR/START.sh" \
-  || { echo "START.sh no longer has '--name idk-replay ' / '-p 25571:' — cannot derive rig ${RIG_ID:-0}"; exit 2; }
+  && grep -q -- "MAX_MEMORY=$MAX_MEM" "$RIGDIR/START.sh" \
+  || { echo "START.sh no longer has '--name idk-replay ' / '-p 25571:' / '-e EULA=TRUE' — cannot derive rig ${RIG_ID:-0}"; exit 2; }
 D="$RIGDIR/replay-data/$VARIANT"
+# Per-rig trim (idkcraft-vmzq.24): smaller view/simulation distances cap
+# chunk memory so 3-4 rigs fit the host; set every run (idempotent — the
+# server rewrites this file on boot, so seed-time only would drift).
+for _kv in "view-distance=$VIEW_DIST" "simulation-distance=$SIM_DIST"; do
+  _key="${_kv%%=*}"
+  if grep -q "^$_key=" "$D/server.properties" 2>/dev/null; then
+    sed "s/^$_key=.*/$_kv/" "$D/server.properties" > "$D/server.properties.tmp" \
+      && mv "$D/server.properties.tmp" "$D/server.properties"
+  else
+    echo "$_kv" >> "$D/server.properties"
+  fi
+done
 echo "rig ${RIG_ID:-0}: container $CONTAINER, port $RIG_PORT, data $D"
+echo "trim: heap $INIT_MEM/$MAX_MEM, view-distance=$VIEW_DIST, simulation-distance=$SIM_DIST"
 if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   echo "$CONTAINER already running — one run per rig"; exit 2
 fi
@@ -200,6 +233,11 @@ boot() {
     rcon_assert "time set 1000"
   fi
   if [ "$TICKRATE" != 1 ]; then
+    # /tick rate is literal ticks/sec (20 = normal): 2..19 runs SLOWER than
+    # wall clock — warn loud, it is almost never what the caller wanted.
+    if [ "$TICKRATE" -lt 20 ]; then
+      echo "tickrate [$TICKRATE]: BELOW normal 20 tps — the game runs SLOWER than wall clock (60 = 3x, 100 = 5x)"
+    fi
     # Accelerator, not regime: a Paper that rejects /tick runs on at wall
     # clock with a loud line (never a silent confound, never a failed run).
     if _out=$(docker exec "$CONTAINER" rcon-cli "tick rate $TICKRATE" 2>&1) && \

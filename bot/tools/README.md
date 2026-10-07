@@ -376,6 +376,7 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 ```sh
 sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
+CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
 ```
 
 One call = reset the disposable world copy, boot Paper, scan nine
@@ -417,18 +418,24 @@ measures build throughput, not survival. `CASTLE_KIT=seeded` pre-fills
 a 6-min window measures laying (equip is kit-complete, the first word is
 a batch) independent of the fetch chain; `empty` (default) runs the full
 chain from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast
-iteration (a Paper that rejects it warns loudly and runs at wall clock;
-the record carries the effective rate) — gates always run at 1, since
-the bot ticks on wall-clock seconds and a faster game clock changes what
-a minute of play means.
+iteration — literal ticks/sec (20 = normal, 60 = 3x, 100 = 5x; 2..19
+warns, it runs slower than wall clock). A Paper that rejects it warns
+loudly and runs at wall clock; the record carries the effective rate.
+Gates always run at 1, since the bot ticks on wall-clock seconds and a
+faster game clock changes what a minute of play means (tested 20/60/100
+tps: identical laying, no speedup; the cycle win is 3-4 parallel rigs, 3
+proven overlapping with no degradation).
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock
 `/tmp/idkcraft-castle-rig.lock[-<id>]`, data under
 `$PRODWORLD/castle-rigs/<id>/` (seeded once from `replay-data/paper-base`
-minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b` (or `auto` over
-`CASTLE_SLOTS`, default `0 a b`) runs 2-3 rigs in parallel; runs from one
-worktree need distinct `CASTLE_OUT`. Exit 0 = measured (even 0 laid),
+minus `world/` and `logs/`). `CASTLE_RIG_ID=a|b|c` (or `auto` over
+`CASTLE_SLOTS`, default `0 a b c`) runs up to 4 rigs in parallel; runs
+from one worktree need distinct `CASTLE_OUT`. Each rig is trimmed
+(`CASTLE_INIT_MEMORY`/`CASTLE_MAX_MEMORY`, default 512M/768M;
+`CASTLE_VIEW_DISTANCE`/`CASTLE_SIM_DISTANCE`, default 6/4; no extra
+plugins) so 3+ fit the host. Exit 0 = measured (even 0 laid),
 2 = environment/setup failure, 130 = interrupted (never a pass).
 
 This is a measurement loop instrument, not a gate: no baseline judging.
