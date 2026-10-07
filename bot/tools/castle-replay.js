@@ -56,8 +56,27 @@ const PLANNER = process.env.RIG_PLANNER || 'jev'
 // with cobble and progress must never read 0 meanwhile. 0 = off.
 const FAR = Math.max(0, parseInt(process.env.CASTLE_FAR || '0', 10) || 0)
 const FAR_AFTER = Math.max(1, parseInt(process.env.CASTLE_FAR_AFTER || '4', 10) || 4)
+// Buried pickless (vmzq.37, prod y~37): after CASTLE_BURY_AFTER min the
+// follower lands in a sealed 3x2x3 air pocket CASTLE_BURY blocks below the
+// pad top, 12 off the site, every pickaxe cleared — it must craft a pick
+// (or hand-dig) out and lay again. The verdict gets surfaced/resumed
+// seconds. 0 = off.
+const BURY = Math.max(0, parseInt(process.env.CASTLE_BURY || '0', 10) || 0)
+const BURY_AFTER = Math.max(1, parseInt(process.env.CASTLE_BURY_AFTER || '4', 10) || 4)
+// CASTLE_BURY_NOWOOD=1 also clears planks/logs/sticks/tables: no pick can
+// be crafted, so only the bare-hand staircase (recover dig_step) gets out.
+const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
+
+// Carried-food census (idkcraft-vmzq.34): mirror of reflexes.js EDIBLE_FOODS
+// (the source of truth — update both). The 15 s sample reads hunger + carried
+// edibles so long runs evidence the food economy, not just the build.
+const SAMPLE_EDIBLES = new Set([
+  'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
+  'cooked_rabbit', 'apple', 'carrot', 'baked_potato',
+  'beef', 'porkchop', 'mutton', 'rabbit',
+])
 
 // Full log to a file; stdout keeps the cycle-readable lines (goal steps,
 // fetch needs, blocked cells, progress, deaths, verdict). Ticker chatter
@@ -400,11 +419,16 @@ async function main() {
       s.x = Math.round(p.x); s.y = Math.round(p.y); s.z = Math.round(p.z)
     } catch (_) { /* pos best-effort */ }
     try {
+      s.hunger = (follower && typeof follower.food === 'number') ? follower.food : null
+    } catch (_) { /* hunger best-effort */ }
+    try {
       let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
+      let edibles = 0
       let pick = 'none'
       for (const it of (follower.inventory && follower.inventory.items()) || []) {
         if (!it || typeof it.name !== 'string') continue
         const n = typeof it.count === 'number' ? it.count : 1
+        if (SAMPLE_EDIBLES.has(it.name)) edibles += n
         if (it.name === 'cobblestone') cobble += n
         else if (it.name === 'dirt') dirt += n
         else if (/_log$/.test(it.name)) logs += n
@@ -415,7 +439,7 @@ async function main() {
           else if (pick === 'none' && it.name === 'wooden_pickaxe') pick = 'wood'
         }
       }
-      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick
+      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick; s.edibles = edibles
     } catch (_) { /* inventory best-effort */ }
     try {
       // Ground-drop census (vmzq.20): non-player entities near the bot.
@@ -471,6 +495,10 @@ async function main() {
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
   let farAt = 0
   let farPre = null
+  let buryAt = 0
+  let buryPre = null
+  let surfacedS = null
+  let resumedS = null
   while (Date.now() < endAt) {
     await sleep(15000)
     if (FAR > 0 && !farAt && Date.now() - t0 >= FAR_AFTER * 60000) {
@@ -492,10 +520,38 @@ async function main() {
       farPre = st.progress && typeof st.progress.done === 'number' ? st.progress.done : null
       origLog(`CASTLE-RIG far: at ${(Date.now() - t0) / 1000 | 0}s ${(st.progress && st.progress.done) ?? '?'}/${(st.progress && st.progress.total) ?? '?'} -> pit ${fx} ${fy - 8} ${fz} (${FAR} off), dirt cleared, +64 cobble`)
     }
+    if (BURY > 0 && !buryAt && Date.now() - t0 >= BURY_AFTER * 60000) {
+      const st = follower._tickerCtx && follower._tickerCtx.castle
+      if (!st || !st.site) fail('bury', 'no castle site')
+      const px = st.site.x - 12
+      const pz = st.site.z
+      const py = gy - BURY
+      await rcon(`fill ${px - 2} ${py - 1} ${pz - 2} ${px + 2} ${py + 3} ${pz + 2} minecraft:stone`).catch((e) => fail('bury', e.message))
+      await rcon(`fill ${px - 1} ${py} ${pz - 1} ${px + 1} ${py + 1} ${pz + 1} air`).catch((e) => fail('bury', e.message))
+      await rcon(`tp ${FOLLOWER} ${px + 0.5} ${py} ${pz + 0.5}`).catch((e) => fail('bury', e.message))
+      for (const m of ['wooden', 'stone', 'golden', 'iron', 'diamond', 'netherite']) {
+        await rcon(`clear ${FOLLOWER} minecraft:${m}_pickaxe`).catch(() => { /* none held */ })
+      }
+      if (BURY_NOWOOD) {
+        for (const it of ['#minecraft:planks', '#minecraft:logs', 'minecraft:stick', 'minecraft:crafting_table']) {
+          await rcon(`clear ${FOLLOWER} ${it}`).catch(() => { /* none held */ })
+        }
+      }
+      await sleep(2000) // the pack read lags the clears
+      buryAt = Date.now()
+      buryPre = st.progress && typeof st.progress.done === 'number' ? st.progress.done : 0
+      const k = sample()
+      origLog(`CASTLE-RIG bury: at ${(buryAt - t0) / 1000 | 0}s ${buryPre}/${(st.progress && st.progress.total) ?? '?'} -> pocket ${px} ${py} ${pz} (${BURY} below ${gy}), picks cleared${BURY_NOWOOD ? ' + wood' : ''}, pack cobble=${k.cobble} planks=${k.planks} logs=${k.logs} pick=${k.pick}`)
+    }
     const s = sample()
+    if (buryAt) {
+      const since = Math.round((Date.now() - buryAt) / 1000)
+      if (surfacedS == null && typeof s.y === 'number' && s.y >= gy - 2) surfacedS = since
+      if (surfacedS != null && resumedS == null && typeof s.done === 'number' && s.done > buryPre) resumedS = since // laid after surfacing
+    }
     drainSaid()
     checkpoint()
-    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
+    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths} hunger=${s.hunger ?? '?'} edibles=${s.edibles ?? '?'}`
     try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
     if (Date.now() - lastSampleLine > 300000) {
       lastSampleLine = Date.now()
@@ -512,7 +568,8 @@ async function main() {
   // (must never drop: an unloaded site keeps the last read) / final.
   const farMin = farAt ? Math.min(...series.filter((x) => x.t * 1000 >= farAt - t0 && typeof x.done === 'number').map((x) => x.done)) : null
   const farTag = farAt ? `, far=${farPre}/${farMin}/${done}${farMin < farPre ? ' DROPPED' : ''}` : ''
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}`
+  const buryTag = buryAt ? `, bury=surfaced@${surfacedS ?? 'never'}s,resumed@${resumedS ?? 'never'}s` : ''
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },

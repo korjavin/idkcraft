@@ -16,7 +16,7 @@ fightMod.equipGear = function(bot) {
   return origEquipGear(bot)
 }
 
-// Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
+// Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the best
 // edible item from inventory on the every-tick seam when food < 18 and no
 // hostile is within swing reach. Equips food to hand, consumes, then
 // restores gear via fightMod.equipGear.
@@ -25,10 +25,39 @@ const EDIBLE_FOODS = new Set([
   'cooked_beef',
   'cooked_porkchop',
   'cooked_chicken',
+  'cooked_mutton',
+  'cooked_rabbit',
   'apple',
   'carrot',
   'baked_potato',
+  // Safe raw fallback (idkcraft-vmzq.34): hunts drop raw meat and no cooking
+  // loop feeds the pack yet, so the eater takes safe raw when nothing better
+  // is on hand. Raw chicken stays out (30% hunger), like rotten flesh and
+  // the poisonous foods.
+  'beef',
+  'porkchop',
+  'mutton',
+  'rabbit',
 ])
+
+// Raw meats eatReflex only touches as a fallback (vmzq.34 above): safe to
+// eat, but less hunger per slot than cooked, so anything else wins.
+const RAW_FALLBACK = new Set(['beef', 'porkchop', 'mutton', 'rabbit'])
+
+// Best edible: the first preferred item in inventory order, else the first
+// raw fallback. Pure, so the preference mutant dies here.
+function pickEdible(items) {
+  let raw = null
+  for (const i of items || []) {
+    if (!i || typeof i.name !== 'string' || !EDIBLE_FOODS.has(i.name)) continue
+    if (RAW_FALLBACK.has(i.name)) {
+      if (!raw) raw = i
+      continue
+    }
+    return i
+  }
+  return raw
+}
 
 function installEquipGuard(bot, ctx) {
   if (!bot || bot._equipGuardInstalled) return
@@ -60,7 +89,7 @@ function eatReflex(bot, ctx, state) {
   let items
   try { items = bot.inventory.items() } catch (_) { return false }
   if (!Array.isArray(items)) return false
-  const foodItem = items.find((i) => i && typeof i.name === 'string' && EDIBLE_FOODS.has(i.name))
+  const foodItem = pickEdible(items)
   if (!foodItem) return false
   if (typeof bot.consume !== 'function') return false
 
@@ -510,4 +539,4 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }

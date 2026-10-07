@@ -59,7 +59,15 @@ const SITE_TOP = 16
 // ground, then level, QUARRY_W wide, cut top-down (dirt included).
 // ponytail: four straight trenches (one per side) of QUARRY_LEN columns,
 // ~6 stone per column -> roughly 1000 cobble; a v2 castle that exhausts
-// them needs longer trenches or a second row, not a new search.
+// them digs the second ring, not a new search.
+// Second ring (idkcraft-vmzq.31): prod run6 trenched all four ring-0 sides
+// into water and caves within ~4-12 columns (snapshot probe at the castle
+// site: a lake, an aquifer, a cave mouth, a ravine edge) and the quarry
+// never recovered — stone came only from the slower far fetch. Ring 1
+// re-trenches each edge from its opposite lateral end once ring 0 is dead
+// or dug; deeper is wetter on that ground (water below the staircase), so
+// the next ring, not the next depth. Flat sides 0..7 (4..7 are ring 1).
+const QUARRY_RINGS = 2
 const QUARRY_GAP = 3 // trench start outside the footprint (v2: past the fence)
 const QUARRY_DEPTH = 6
 const QUARRY_LEN = 40
@@ -402,17 +410,21 @@ function siteCenter(st) {
   return { x: st.site.x + Math.floor(w / 2), y: st.site.y, z: st.site.z + Math.floor(d / 2) }
 }
 
-// Trench side s (0..3): origin column just outside the footprint near a
-// corner (the entrance sits mid-side, never in front of it), the outward
-// direction and the width axis.
-function quarrySide(st, s) {
+// Trench side s (0..3) on ring (0..1, vmzq.31): origin column just
+// outside the footprint near a corner (the entrance sits mid-side, never
+// in front of it), the outward direction and the width axis. Ring 1 works
+// the same edge from its opposite lateral end — fresh ground at the same
+// outward gap (shifting the origin outward would re-dig the ring-0 line:
+// the trench runs outward, so the lines would overlap 36 of 40 columns).
+function quarrySide(st, s, ring = 0) {
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, z: sz } = st.site
   const g = QUARRY_GAP + 1
-  if (s === 0) return { x: sx - g, z: sz + 2, dx: -1, dz: 0, lx: 0, lz: 1 }
-  if (s === 1) return { x: sx + w - 1 + g, z: sz + d - 2 - QUARRY_W, dx: 1, dz: 0, lx: 0, lz: 1 }
-  if (s === 2) return { x: sx + w - 2 - QUARRY_W, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 }
-  return { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
+  const r1 = (ring | 0) === 1
+  if (s === 0) return { x: sx - g, z: r1 ? sz + d - 2 - QUARRY_W : sz + 2, dx: -1, dz: 0, lx: 0, lz: 1 }
+  if (s === 1) return { x: sx + w - 1 + g, z: r1 ? sz + 2 : sz + d - 2 - QUARRY_W, dx: 1, dz: 0, lx: 0, lz: 1 }
+  if (s === 2) return { x: r1 ? sx + 2 : sx + w - 2 - QUARRY_W, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 }
+  return { x: r1 ? sx + w - 2 - QUARRY_W : sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
 }
 
 function trenchFloor(st, i, base) {
@@ -422,12 +434,15 @@ function trenchFloor(st, i, base) {
 // A trench cell or the block a trench stance stands on (revmux 01): the
 // exposed-stone pick must never undermine our own staircase. The band runs
 // QUARRY_ADAPT below the unadapted floor: an adapted trench digs there.
+// Both rings (vmzq.31): the opposite-end staircase is ours too.
 function inTrench(st, p) {
+  for (let ring = 0; ring < QUARRY_RINGS; ring++) {
   for (let s = 0; s < 4; s++) {
-    const o = quarrySide(st, s)
+    const o = quarrySide(st, s, ring)
     const i = (p.x - o.x) * o.dx + (p.z - o.z) * o.dz
     const l = (p.x - o.x) * o.lx + (p.z - o.z) * o.lz
     if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
+  }
   }
   return false
 }
@@ -439,15 +454,20 @@ function inTrench(st, p) {
 // around. Stance rules are checked at dig time (they depend on where we
 // stand). Recomputed from the world every pick and per leg (revmux 01: no
 // session latch) — a restart or a retry resumes the same trench.
+// Flat sides 0..7 across QUARRY_RINGS (vmzq.31): ring 1 (4..7) is only
+// reached when every ring-0 side is dead or dug, nearest stone first.
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
-  const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null], said: [] })
+  const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null, null, null, null, null], said: [] })
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
-  for (let s = 0; s < 4; s++) {
-    if (q.dead.includes(s)) continue
-    const o = quarrySide(st, s)
+  for (let rs = 0; rs < QUARRY_RINGS * 4; rs++) {
+    if (q.dead.includes(rs)) continue
+    const ring = rs >> 2
+    const s = rs & 3
+    const tag = ring === 0 ? `side ${s}` : `side ${s} ring 1`
+    const o = quarrySide(st, s, ring)
     // Adaptive start (idkcraft-vmzq.20): the ring assumes flat ground at
     // site level, but a pad edge or a dip hangs the origin in air — rig
     // cycle 7 died all four sides this way and failed no-stone twice.
@@ -457,8 +477,8 @@ function pickQuarry(bot, ctx, f) {
     let why = null
     let whyAt = null
     let probed = false
-    if (Array.isArray(st.quarryBase) && Number.isInteger(st.quarryBase[s])) {
-      base = st.quarryBase[s] // latched: resume the same frame, no re-probe
+    if (Array.isArray(st.quarryBase) && Number.isInteger(st.quarryBase[rs])) {
+      base = st.quarryBase[rs] // latched: resume the same frame, no re-probe
     } else {
       probed = true
       let liquid = false
@@ -479,8 +499,8 @@ function pickQuarry(bot, ctx, f) {
       }
     }
     if (why) {
-      q.dead.push(s)
-      try { console.log(`castlefetch quarry side ${s} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
+      q.dead.push(rs)
+      try { console.log(`castlefetch quarry ${tag} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
       continue
     }
     // Latched, never re-probed: our own dug floors read as ground, so a
@@ -491,16 +511,20 @@ function pickQuarry(bot, ctx, f) {
     // leg (a transient void revives). Pre-latch trenches (dug before this
     // change) shift one level on first probe, then hold.
     if (probed) {
-      if (!Array.isArray(st.quarryBase) || st.quarryBase.length !== 4) {
-        try { st.quarryBase = [null, null, null, null] } catch (_) { /* latch best-effort */ }
+      // Grows a pre-ring latch (4 entries) to 8 in place (vmzq.31): ring-0
+      // frames keep their indices, ring 1 latches at 4..7.
+      if (!Array.isArray(st.quarryBase)) {
+        try { st.quarryBase = [null, null, null, null, null, null, null, null] } catch (_) { /* latch best-effort */ }
+      } else {
+        try { while (st.quarryBase.length < QUARRY_RINGS * 4) st.quarryBase.push(null) } catch (_) { /* grow best-effort */ }
       }
-      if (Array.isArray(st.quarryBase) && st.quarryBase.length === 4) st.quarryBase[s] = base
+      if (Array.isArray(st.quarryBase) && st.quarryBase.length >= QUARRY_RINGS * 4) st.quarryBase[rs] = base
     }
-    if (!Array.isArray(q.level)) q.level = [null, null, null, null]
-    q.level[s] = base
-    if (probed && Array.isArray(q.said) && !q.said.includes(s)) {
-      q.said.push(s)
-      try { console.log(`castlefetch quarry side ${s} live (level ${base})`) } catch (_) { /* log best-eff */ }
+    if (!Array.isArray(q.level)) q.level = [null, null, null, null, null, null, null, null]
+    q.level[rs] = base
+    if (probed && Array.isArray(q.said) && !q.said.includes(rs)) {
+      q.said.push(rs)
+      try { console.log(`castlefetch quarry ${tag} live (level ${base})`) } catch (_) { /* log best-eff */ }
     }
     let dead = false
     let deadWhy = ''
@@ -544,8 +568,8 @@ function pickQuarry(bot, ctx, f) {
         }
       }
     }
-    q.dead.push(s) // dug out or unusable mid-trench
-    try { console.log(`castlefetch quarry side ${s} ${dead ? `unusable (mid-trench: ${deadWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    q.dead.push(rs) // dug out or unusable mid-trench
+    try { console.log(`castlefetch quarry ${tag} ${dead ? `unusable (mid-trench: ${deadWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
@@ -824,6 +848,7 @@ module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
+module.exports.QUARRY_RINGS = QUARRY_RINGS
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop

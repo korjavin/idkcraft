@@ -15,6 +15,9 @@
 #   36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no cobble),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
 #   order — protected oak logs + a foreign chest, vmzq.27's stall mix),
+#   CASTLE_BURY / CASTLE_BURY_AFTER (vmzq.37: N > 0 buries the bot pickless
+#   N below the pad after M min; the verdict adds surfaced/resumed seconds;
+#   CASTLE_BURY_NOWOOD=1 also clears the wood: the hand staircase only),
 #   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
 #   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
 #   100 = 5x — for fast iteration),
