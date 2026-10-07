@@ -285,6 +285,18 @@ function ownTableOp(bot, ctx, op) {
 // the menu from re-picking us). Name checks are load-bearing: an air or
 // wrong block reads truthy, and activating it waits out the window timeout
 // instead of failing (live 26.1 lesson).
+// Placement-replaceable flora (idkcraft-u07s revmux 02 core-1): the ONLY
+// non-air cells vanilla Java overwrites when a placement targets them.
+// NOT build.js REPLACEABLE: that list means "the place flow may break
+// these first" and includes flowers and torches, which vanilla placement
+// REFUSES (BlockPlaceContext.canPlace is false — the click dies and the
+// pick fails). Those read as occupied, as before.
+const PLACE_OVER = new Set([
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'snow',
+  'vine', 'glow_lichen', 'leaf_litter', 'bush', 'short_dry_grass',
+  'tall_dry_grass',
+])
+
 function tableFor(bot, ctx) {
   const nope = (why) => Promise.reject(new Error(why))
   const bp = bot.entity && bot.entity.position
@@ -401,16 +413,12 @@ function tableFor(bot, ctx) {
     // unknown shape — old test doubles carry no boundingBox.
     if (below.boundingBox != null && below.boundingBox !== 'block') continue
     // Flora takes a placement (idkcraft-u07s revmux 01 core-1): the server
-    // replaces grass/flowers/snow, so a grassy neighbour is a free spot,
+    // replaces grass and its kin, so a grassy neighbour is a free spot,
     // not an occupied one — in the woods all four neighbours are flora and
     // the strict air check failed every pick with the table in the pack.
-    // cave_air/void_air are air-likes. Deferred require (the
-    // beds->craftany->equip cycle); an unreadable require reads occupied.
-    if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air') {
-      let clearable = false
-      try { clearable = require('./build').isReplaceable(cell.name) } catch (_) { /* untestable: occupied as before */ }
-      if (!clearable) continue
-    }
+    // cave_air/void_air are air-likes.
+    if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air' &&
+        !PLACE_OVER.has(cell.name)) continue
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Deferred require
     // (beds->craftany->equip cycle); unreadable reads as placeable.

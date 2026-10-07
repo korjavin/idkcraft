@@ -308,6 +308,40 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
+  // Non-replaceable flora (idkcraft-u07s revmux 02 core-1): vanilla
+  // placement REFUSES flowers and torches (BlockPlaceContext.canPlace is
+  // false), so those neighbours read as occupied and plain air wins.
+  it('u07s: poppy and torch neighbours are skipped, air wins', async () => {
+    let placed = null
+    const bot = mockBot({
+      items: [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: (p) => {
+        if (placed && p.x === placed.x && p.y === placed.y && p.z === placed.z) {
+          return { name: 'crafting_table', position: { ...placed } }
+        }
+        if (p.y === 63) return { name: 'dirt', position: { x: p.x, y: p.y, z: p.z } }
+        if (p.y !== 64) return { name: 'air' }
+        if (p.x === 1 && p.z === 0) return { name: 'poppy' }
+        if (p.x === -1 && p.z === 0) return { name: 'torch' }
+        return { name: 'air' }
+      },
+      placeBlockImpl: async (ref, face) => {
+        bot.calls.placeBlock.push({ ref, face })
+        placed = { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z }
+      },
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.placeBlock.length, 1, `errs: ${bot.errs}`)
+    assert.deepEqual(placed, { x: 0, y: 64, z: 1 }, 'air at +z wins over poppy at +x and torch at -x')
+    assert.equal(bot.calls.craft.length, 1)
+    bot.restoreError()
+  })
+
   it('far home table: walks into reach, crafts nothing yet, one goal', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
