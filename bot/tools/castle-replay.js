@@ -69,11 +69,20 @@ const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
+// Carried-food census (idkcraft-vmzq.34): mirror of reflexes.js EDIBLE_FOODS
+// (the source of truth — update both). The 15 s sample reads hunger + carried
+// edibles so long runs evidence the food economy, not just the build.
+const SAMPLE_EDIBLES = new Set([
+  'bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
+  'cooked_rabbit', 'apple', 'carrot', 'baked_potato',
+  'beef', 'porkchop', 'mutton', 'rabbit',
+])
+
 // Full log to a file; stdout keeps the cycle-readable lines (goal steps,
 // fetch needs, blocked cells, progress, deaths, verdict). Ticker chatter
 // (decision/scout/kit/eat) would bury the verdict on a 30+ min run.
 const logStream = fs.createWriteStream(LOGFILE, { flags: 'w' })
-const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /,
+const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^castle relocate /,
   /^castle \d+\/\d+$/, /death/, /^castle-sample /, /^castle \d+\/\d+ in /,
   /^CASTLE-RIG /, /^task castle /, /no progress for/,
   /^goal watchdog /, /^goal outcome /]
@@ -175,7 +184,10 @@ function fail(kind, detail) {
 // first: all three land in the work order's first-16 prefix, so the old
 // layer gate stalls on them within minutes and the skip fix must build
 // past. Pure (unit-tested): the rcon writes + readback live in main().
-const SEED_MATS = ['oak_log', 'chest']
+// vmzq.40: planks join the mix and the chest is seeded filled (SEED_NBT) —
+// the footprint rule clears both and relocates the chest, contents intact.
+const SEED_MATS = ['oak_log', 'chest', 'oak_planks']
+const SEED_NBT = { chest: '{Items:[{Slot:0b,id:"minecraft:diamond",count:3},{Slot:1b,id:"minecraft:oak_planks",count:20}]}' }
 function pickBlockedSeeds(site, rot, version, n) {
   const blueprint = require('../src/castle')
   const { cells } = blueprint.absPlan(site, rot, version)
@@ -364,7 +376,7 @@ async function main() {
     await rcon(`tp ${GUIDE} ${st.site.x + 15.5} ${st.site.y + 10} ${st.site.z + 13.5}`).catch((e) => fail('seed-blocked', e.message))
     await sleep(3000)
     for (const s of blockedSeeds) {
-      await rcon(`setblock ${s.x} ${s.y} ${s.z} minecraft:${s.block}`).catch((e) => fail('seed-blocked', `${s.x} ${s.y} ${s.z}: ${e.message}`))
+      await rcon(`setblock ${s.x} ${s.y} ${s.z} minecraft:${s.block}${SEED_NBT[s.block] || ''}`).catch((e) => fail('seed-blocked', `${s.x} ${s.y} ${s.z}: ${e.message}`))
     }
     await sleep(1000)
     for (const s of blockedSeeds) {
@@ -398,11 +410,16 @@ async function main() {
       s.x = Math.round(p.x); s.y = Math.round(p.y); s.z = Math.round(p.z)
     } catch (_) { /* pos best-effort */ }
     try {
+      s.hunger = (follower && typeof follower.food === 'number') ? follower.food : null
+    } catch (_) { /* hunger best-effort */ }
+    try {
       let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
+      let edibles = 0
       let pick = 'none'
       for (const it of (follower.inventory && follower.inventory.items()) || []) {
         if (!it || typeof it.name !== 'string') continue
         const n = typeof it.count === 'number' ? it.count : 1
+        if (SAMPLE_EDIBLES.has(it.name)) edibles += n
         if (it.name === 'cobblestone') cobble += n
         else if (it.name === 'dirt') dirt += n
         else if (/_log$/.test(it.name)) logs += n
@@ -413,7 +430,7 @@ async function main() {
           else if (pick === 'none' && it.name === 'wooden_pickaxe') pick = 'wood'
         }
       }
-      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick
+      s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick; s.edibles = edibles
     } catch (_) { /* inventory best-effort */ }
     try {
       // Ground-drop census (vmzq.20): non-player entities near the bot.
@@ -525,7 +542,7 @@ async function main() {
     }
     drainSaid()
     checkpoint()
-    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths}`
+    const line = `castle-sample t=${Math.round(s.t / 60)}min ${s.done ?? '?'}/${s.total ?? '?'} step=${s.step} flips=${seen.flips} deaths=${deaths} hunger=${s.hunger ?? '?'} edibles=${s.edibles ?? '?'}`
     try { logStream.write(line + '\n') } catch (_) { /* log best-effort */ }
     if (Date.now() - lastSampleLine > 300000) {
       lastSampleLine = Date.now()
@@ -533,6 +550,13 @@ async function main() {
     }
   }
   drainSaid()
+  // Relocated boxes (vmzq.40): read the contents back where the bot says it put them.
+  for (const m of seen.said) {
+    const mv = /moved the (\S+) out of the castle to (-?\d+) (-?\d+) (-?\d+)/.exec(m)
+    if (!mv) continue
+    const got = await rcon(`data get block ${mv[2]} ${mv[3]} ${mv[4]} Items`).catch((e) => `error ${e.message}`)
+    origLog(`CASTLE-RIG relocated ${mv[1]} at ${mv[2]} ${mv[3]} ${mv[4]}: ${String(got).slice(0, 300)}`)
+  }
   const last = series[series.length - 1] || {}
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0

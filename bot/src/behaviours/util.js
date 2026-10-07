@@ -333,6 +333,21 @@ function castleProtects(state, pos, name) {
 
 const KEEP_OWN = /(chest|furnace|_door)$/
 
+// Castle footprint is ours (idkcraft-vmzq.40): for the castle step only
+// (ctx.castleClear, set by castle.js digCell), a blocker in the footprint
+// is cleared like terrain — planks, a building log, fences, foreign blocks
+// — instead of a permanent hole. Never beds, doors or containers (their
+// contents): RELOCATE ones the castle empties first (ctx.castleClear
+// 'emptied'), the rest stay holes. ponytail: furnaces stay holes — a
+// deposit by free slot cannot restore their fuel/output slots. Laid castle blocks stay protected
+// (castleProtects runs first); outside the footprint default-deny stands.
+const CASTLE_KEEP = /(_bed|_door|chest|barrel|furnace|smoker|shulker_box|hopper|dropper|dispenser|crafter|lectern|chiseled_bookshelf|decorated_pot|jukebox|brewing_stand|campfire|vault|spawner)$/
+const RELOCATE = /^(chest|trapped_chest|barrel)$/
+function castleClears(ctx, pos, name) {
+  if (typeof name !== 'string' || !ctx || !ctx.castleClear || !ctx.castle || !castle.inFootprint(ctx.castle, pos)) return false
+  return !CASTLE_KEEP.test(name) || (ctx.castleClear === 'emptied' && RELOCATE.test(name))
+}
+
 // Our own placement this session (idkcraft-dahd): the positional key plus
 // the laid-name check (a swap while the chunk was unloaded fires no
 // blockUpdate, so a mismatched name is someone else's block). No recorded
@@ -363,6 +378,7 @@ function protectedReason(bot, block, ctx) {
     // placedByBot exemption — the bot laid them, and that must not license
     // a recover/gather dig through the castle wall.
     if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name)) return 'protected'
+    if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // House footprint (idkcraft-e5ba): natural ground under/around our own
     // house is its floor and door support, never scaffold. Solid ground only:
     // build's own clears (flora, snow) stay legal.
@@ -585,4 +601,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }
+module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }

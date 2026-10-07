@@ -947,6 +947,10 @@ function shelter(bot, ctx, target, state) {
       st.pillared = false
       st.pillarAt = null
       st.dig = null
+      st.perched = false
+      st.dugIn = false
+      st.descendTried = false
+      st.descended = false
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1033,30 +1037,61 @@ function shelter(bot, ctx, target, state) {
       // Terminal verdict (pillar-wrapper mirror): pillared or not, the hold
       // starts — even a failed pillar beats the march. Release the episode
       // so a later stuck flow never adopts this stale record.
-      if (rec === 'failed:no-scaffold') {
-        // Empty kit (ed88: world-spawn respawn, 7 deaths in 3 min holding
-        // on the ground): dig in instead. Stop any live path first so the
-        // walk cannot drag the body off the pit column.
+      if (rec === 'done') {
+        st.perched = true // atop the pillar: walkers cannot reach, phantoms can (descent below)
+      } else {
+        // Any terminal pillar failure digs in by hand (vmzq.30: run6
+        // place-error with scaffold on hand held on open ground and a
+        // phantom killed the bot; ed88 covered no-scaffold only). The
+        // dig-in vetoes still refuse stone/water/protected ground into
+        // the hold below. Stop any live path first so the walk cannot
+        // drag the body off the pit column.
         // setGoal(null), never stop(): stop() on a live path only latches,
         // and the latch would swallow a same-tick dig-in walk goal (revmux 03).
+        let err = ''
+        try {
+          const se = ctx.recovery && ctx.recovery.st && ctx.recovery.st.placeErr
+          if (se) err = ` err=${se}`
+        } catch (_) { /* token best-effort */ }
+        try { console.log(`shelter pillar ${rec}${err}, digging in`) } catch (_) { /* log best-effort */ }
         st.dig = {}
         try {
           bot.pathfinder.setGoal(null)
           bot.clearControlStates()
         } catch (_) { /* body best-effort */ }
         ctx.lastGoalKey = 'stay'
-      } else if (rec !== 'done' && !st.pillarLogged) {
-        st.pillarLogged = true
-        try { console.log(`shelter pillar ${rec}, holding on the ground`) } catch (_) { /* log best-effort */ }
       }
       try { ctx.recovery = null } catch (_) { /* release best-effort */ }
     }
     if (st.dig) {
       let r = 'failed:error'
       try { r = recover.digInRun(bot, ctx, st.dig) } catch (_) { /* fail into the hold */ }
-      if (r === 'running') return
+      // Committed once the descent starts (rig: fight ticks abandoned a
+      // half-dug pit to chase, then died outside it): fight suppresses
+      // and the dig finishes under melee cover. The walk to the pit
+      // (digs 0) still fights — exposed and nothing to abandon.
+      if (r === 'running') {
+        try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
+        return
+      }
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
+      if (r === 'done') {
+        st.dugIn = true // closed pit: covered from phantoms and walkers alike
+        st.descended = false
+      } else if (st.descended) {
+        // Descent dig failed (short dirt pillar: no-cap-ref at the
+        // surface; walked column: walk/dig/cap failed): climb back up
+        // once instead of holding where the dig died. Consumed — a
+        // second failure holds (no pillar-dig loop); descendTried
+        // stays set so the re-pillared top holds without re-descending.
+        st.descended = false
+        try { console.log(`shelter descent ${r}, re-pillaring`) } catch (_) { /* log best-effort */ }
+        // Already unsheltered: a set dig implies unpillared (both arm
+        // sites clear it), and the climb gate above clears inShelter on
+        // every unpillared tick before the dig runs.
+        return
+      }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
     // Anchor the hold (revmux 02): a foreign live episode skips beginPillar
@@ -1071,8 +1106,52 @@ function shelter(bot, ctx, target, state) {
     }
     st.pillared = true
   }
+  if (st.pillared && st.perched && !st.dugIn && time !== 'day' && !st.descendTried && phantomNear(bot)) {
+    // Late phantoms over a dusk pillar (they spawn after arming): the top
+    // is exposed and fight is suppressed up here. Come down by digging
+    // in — own dirt pillar digs by hand, cobble/stone walks to a dirt
+    // column — one shot per arming (revmux 01 core-1: a failed descent
+    // re-pillars once below instead of holding where the dig died —
+    // the top beats open ground against walkers even with the phantom
+    // still up).
+    st.descendTried = true
+    st.descended = true
+    st.perched = false
+    st.pillared = false
+    st.pillarAt = null
+    // A cell above normal: the descent digs one deeper so the cap lands
+    // at ground level against dirt walls (3-deep caps in the open
+    // pillar cell and fails no-cap-ref).
+    st.dig = { extra: 1 }
+    try {
+      bot.pathfinder.setGoal(null)
+      bot.clearControlStates()
+    } catch (_) { /* body best-effort */ }
+    ctx.lastGoalKey = 'stay'
+    try { console.log('shelter phantom overhead, digging in') } catch (_) { /* log best-effort */ }
+    return
+  }
   ctx.inShelter = true
   holdStill(bot, ctx)
+}
+
+// Any live phantom within PHANTOM_R of the body. Phantoms circle high
+// (20-30 up) before they swoop, so the fight radius (8) sees them only
+// on the dive — too late to dig. Alone at night every phantom targets
+// the bot, so any one in range is a threat.
+const PHANTOM_R = 32
+function phantomNear(bot) {
+  try {
+    const bp = botPos(bot)
+    if (!bp) return false
+    for (const e of Object.values((bot && bot.entities) || {})) {
+      if (!e || e.isValid === false || !e.position || (e.name || '') !== 'phantom') continue
+      let d = null
+      try { d = bp.distanceTo ? bp.distanceTo(e.position) : Math.hypot(bp.x - e.position.x, bp.y - e.position.y, bp.z - e.position.z) } catch (_) { continue }
+      if (typeof d === 'number' && d <= PHANTOM_R) return true
+    }
+  } catch (_) { /* no scan: hold */ }
+  return false
 }
 
 // Meet target (jr2.3 'come home'): the common-room cell behind the door on a
@@ -1472,4 +1551,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, phantomNear, PHANTOM_R }

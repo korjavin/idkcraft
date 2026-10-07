@@ -2235,6 +2235,51 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(h2) vmzq.30 revmux 01 body-1: committed dig drives on the suppressed tick, no pursuit', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.step = 'shelter'
+    bot._tickerCtx.shelter = { dig: { digs: 1 } }
+    const origShelter = BEHAVIOURS.shelter
+    let shelterRan = 0
+    BEHAVIOURS.shelter = () => { shelterRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(shelterRan, 1, 'the committed dig drives, no frozen pit')
+      assert.equal(bot.calls.setGoal, 0, 'no pursuit')
+    } finally {
+      BEHAVIOURS.shelter = origShelter
+      ticker.destroy()
+    }
+  })
+
+  it('(h3) vmzq.30 revmux 01 body-1: plain hold drives nothing', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    bot.entities = { 1: zombie(1, 5) }
+    const ticker = createTicker({ bot, brain: mockBrain({ action: 'fight', sprint: false, source: 'stub' }), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    bot._tickerCtx.inShelter = true
+    bot._tickerCtx.step = 'shelter'
+    bot._tickerCtx.shelter = { pillared: true }
+    const origShelter = BEHAVIOURS.shelter
+    let shelterRan = 0
+    BEHAVIOURS.shelter = () => { shelterRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.deepEqual(r.decision, { action: 'idle', sprint: false, source: 'local-idle' })
+      assert.equal(shelterRan, 0, 'a hold with no dig stays a hold')
+    } finally {
+      BEHAVIOURS.shelter = origShelter
+      ticker.destroy()
+    }
+  })
+
   it('(i) sheltered + hostile at 2: reflex still swings', async () => {
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
@@ -3748,6 +3793,16 @@ describe('kit inventory log line', () => {
     assert.equal(kitLine(bot), 'kit scaffold=0 pickaxe=no sword=yes food=80')
   })
 
+  it('counts safe raw meat as food, raw chicken as none (vmzq.34)', () => {
+    const bot = kitBot([
+      { name: 'beef', count: 3 },
+      { name: 'mutton', count: 2 },
+      { name: 'chicken', count: 9 },
+      { name: 'iron_sword', count: 1 },
+    ])
+    assert.equal(kitLine(bot), 'kit scaffold=0 pickaxe=no sword=yes food=5')
+  })
+
   it('empty inventory still prints zeros', () => {
     assert.equal(kitLine(kitBot([])), 'kit scaffold=0 pickaxe=no sword=no food=0')
   })
@@ -3894,6 +3949,35 @@ describe('eat reflex', () => {
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(bot.consumeCalls, 1)
     assert.deepEqual(eatLines(), ['eat cooked_beef food=14'])
+  })
+
+  it('eats safe raw meat (beef) at hunger 17 when nothing better is on hand (vmzq.34)', async () => {
+    const bot = eatBot({ food: 17, items: [{ name: 'beef', count: 3 }] })
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+    assert.deepEqual(eatLines(), ['eat beef food=17'])
+  })
+
+  it('prefers cooked over raw even when raw comes first in inventory (vmzq.34)', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'porkchop', count: 2 }, { name: 'cooked_beef', count: 5 }] })
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+    assert.deepEqual(eatLines(), ['eat cooked_beef food=12'])
+  })
+
+  it('raw chicken alone is not eaten (hunger risk stays out, vmzq.34)', async () => {
+    const bot = eatBot({ food: 12, items: [{ name: 'chicken', count: 4 }] })
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 0)
+    assert.deepEqual(eatLines(), [])
   })
 
   it('re-equips gear after consume finishes', async () => {

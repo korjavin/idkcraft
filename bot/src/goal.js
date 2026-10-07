@@ -811,14 +811,19 @@ function shelterOwns(bot, ctx) {
 // memory, and build — the only siter — is castle-vetoed; the rig spawn is
 // quarried, no flat 7x6 site) the night is the shelter's anywhere: there
 // is no house to walk to (rig: 113 deaths working every night).
+// Unbuilt home (vmzq.30): near a SITED-but-unbuilt home the old steps
+// cannot run either (gohome/stay need built), and working the dark
+// there dies (run6, rig: zombie spawn-loops) — so the night belongs to
+// shelter in place at any distance, even next to the house or the site.
 function castleSiteNight(bot, ctx) {
   try {
     if (!castleFirst(ctx)) return false
     if (!(ctx.home && ctx.home.site)) return true
-    if (!castleFarFromHome(ctx)) return false
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    if (ctx.home.built !== true) return true
+    if (!castleFarFromHome(ctx)) return false
     return Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST
   } catch (_) {
     return false

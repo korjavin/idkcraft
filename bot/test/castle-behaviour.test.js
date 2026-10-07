@@ -271,18 +271,18 @@ describe('g0z.2 castle executor', () => {
     assert.deepEqual(ctx.castle.blocked, {})
   })
 
-  it('a foreign occupant (player build) is kept and blocked, never dug', async () => {
+  it('a kept occupant (ender chest: vmzq.40 never digs it) is blocked, never dug', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const c = cells()[0]
-    world.set(c.x, c.y, c.z, 'chest')
+    world.set(c.x, c.y, c.z, 'ender_chest')
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 2)
     assert.equal(bot.calls.digs.length, 0)
-    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-chest')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-ender_chest')
   })
 
-  it('g0z.13: a moat cell holding ore/tuff is dug; planks in it and ore in a place cell stay kept', async () => {
+  it('g0z.13 + vmzq.40: a moat cell holding ore/tuff/planks is dug; a bed in a place cell stays kept', async () => {
     const v2 = blueprint.absPlan(SITE, 0, 2).cells
     const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch', door: 'oak_door', fence: 'oak_fence' }
     const moat = v2.find((c) => c.kind === 'dig' && c.dy === -1)
@@ -293,24 +293,19 @@ describe('g0z.2 castle executor', () => {
       const bot = mockBot(world)
       const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
       await run(bot, ctx, 6)
-      if (ore === 'oak_planks') {
-        assert.equal(world.get(moat.x, moat.y, moat.z), 'oak_planks')
-        assert.equal(ctx.castle.blocked[`2:${moat.idx}`].why, 'kept-oak_planks')
-        continue
-      }
       assert.equal(world.get(moat.x, moat.y, moat.z), 'air', ore)
       assert.deepEqual(ctx.castle.blocked, {}, ore)
       assert.equal(ctx.stepStatus, 'done', ore)
     }
-    // Place cells keep flat's narrow allowlist (pinned, g0z.2).
+    // Beds are never dug (vmzq.40 keeps them out of the footprint rule).
     const world = makeWorld()
     const c = cells()[0]
-    world.set(c.x, c.y, c.z, 'coal_ore')
+    world.set(c.x, c.y, c.z, 'red_bed')
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 2)
     assert.equal(bot.calls.digs.length, 0)
-    assert.equal(ctx.castle.blocked['1:0'].why, 'kept-coal_ore')
+    assert.equal(ctx.castle.blocked['1:0'].why, 'kept-red_bed')
   })
 
   it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {
@@ -371,10 +366,10 @@ describe('g0z.2 castle executor', () => {
     const ring = v2.filter((c) => blueprint.isPlaceTarget(c.kind)).slice(0, 5).map((c) => `${c.x},${c.y},${c.z}`)
     assert.deepEqual(bot.calls.places.slice(0, 5).map((p) => `${p.x},${p.y},${p.z}`), ring)
     const w2 = makeWorld()
-    w2.set(v2[0].x, v2[0].y, v2[0].z, 'chest')
+    w2.set(v2[0].x, v2[0].y, v2[0].z, 'ender_chest')
     const ctx2 = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
     await run(mockBot(w2), ctx2, 2)
-    assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-chest')
+    assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-ender_chest')
   })
 
   it('g0z.6 + vmzq.27: v2 moat digs past a blocked hole; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
@@ -819,8 +814,8 @@ describe('g0z.2 castle executor', () => {
       return castle.menuFact(bot, ctx)
     }
     assert.equal(far([]), 'stone-none')
-    assert.equal(far([{ name: 'cobblestone', count: 17 }]), 'stone-some')
-    assert.equal(far([{ name: 'cobblestone', count: 27 }]), 'stone-batch')
+    assert.equal(far([{ name: 'cobblestone', count: 25 }]), 'stone-some')
+    assert.equal(far([{ name: 'cobblestone', count: 35 }]), 'stone-batch')
   })
 
   it('builds the whole slice tower to completion', async () => {

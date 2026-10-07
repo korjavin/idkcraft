@@ -16,7 +16,7 @@ fightMod.equipGear = function(bot) {
   return origEquipGear(bot)
 }
 
-// Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the first
+// Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the best
 // edible item from inventory on the every-tick seam when food < 18 and no
 // hostile is within swing reach. Equips food to hand, consumes, then
 // restores gear via fightMod.equipGear.
@@ -25,10 +25,39 @@ const EDIBLE_FOODS = new Set([
   'cooked_beef',
   'cooked_porkchop',
   'cooked_chicken',
+  'cooked_mutton',
+  'cooked_rabbit',
   'apple',
   'carrot',
   'baked_potato',
+  // Safe raw fallback (idkcraft-vmzq.34): hunts drop raw meat and no cooking
+  // loop feeds the pack yet, so the eater takes safe raw when nothing better
+  // is on hand. Raw chicken stays out (30% hunger), like rotten flesh and
+  // the poisonous foods.
+  'beef',
+  'porkchop',
+  'mutton',
+  'rabbit',
 ])
+
+// Raw meats eatReflex only touches as a fallback (vmzq.34 above): safe to
+// eat, but less hunger per slot than cooked, so anything else wins.
+const RAW_FALLBACK = new Set(['beef', 'porkchop', 'mutton', 'rabbit'])
+
+// Best edible: the first preferred item in inventory order, else the first
+// raw fallback. Pure, so the preference mutant dies here.
+function pickEdible(items) {
+  let raw = null
+  for (const i of items || []) {
+    if (!i || typeof i.name !== 'string' || !EDIBLE_FOODS.has(i.name)) continue
+    if (RAW_FALLBACK.has(i.name)) {
+      if (!raw) raw = i
+      continue
+    }
+    return i
+  }
+  return raw
+}
 
 function installEquipGuard(bot, ctx) {
   if (!bot || bot._equipGuardInstalled) return
@@ -60,7 +89,7 @@ function eatReflex(bot, ctx, state) {
   let items
   try { items = bot.inventory.items() } catch (_) { return false }
   if (!Array.isArray(items)) return false
-  const foodItem = items.find((i) => i && typeof i.name === 'string' && EDIBLE_FOODS.has(i.name))
+  const foodItem = pickEdible(items)
   if (!foodItem) return false
   if (typeof bot.consume !== 'function') return false
 
@@ -480,6 +509,17 @@ function fleeReflex(bot, ctx) {
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
   // too), so require the body to be inside the home box.
   if (ctx.inShelter && ctx.home && require('./behaviours/home').isInside(bot, ctx.home)) return false // deferred: home loads reflexes
+  // vmzq.30: a capped pit or a pillar top is shelter too — fleeing
+  // pathfinds out through the cap (canDig) or off the top and abandons
+  // it (rig: dug in, fled a creeper, zombie kill 2 min later). A creeper
+  // outside the cap cannot reach in; the melee reflex still swings at
+  // anything adjacent. Same once the descent starts (digs > 0): the
+  // half-dug pit is committed. An unmarked hold (failed pillar and dig)
+  // keeps fleeing — exposure is the worse risk there.
+  try {
+    const sh = ctx && ctx.shelter
+    if (ctx && ctx.inShelter && sh && (sh.dugIn || sh.perched || (sh.dig && sh.dig.digs > 0))) return false
+  } catch (_) { /* scan best-effort: flee */ }
   let creeper = null
   try { creeper = findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
   if (!creeper) { ctx.fleeTargetId = null; return false }
@@ -510,4 +550,4 @@ function fleeReflex(bot, ctx) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }

@@ -232,9 +232,12 @@ function castleOf(c) {
     // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side
     // (null = unprobed). A restart resumes the same frame instead of
     // re-probing dug floors as ground and walking the trench down.
-    if (Array.isArray(c.quarryBase) && c.quarryBase.length === 4 &&
+    // Eight entries since the second ring (idkcraft-vmzq.31, 4..7 are
+    // ring 1); a pre-ring latch of 4 pads with nulls.
+    if (Array.isArray(c.quarryBase) && (c.quarryBase.length === 4 || c.quarryBase.length === 8) &&
         c.quarryBase.every((b) => b === null || Number.isInteger(b))) {
       out.quarryBase = [...c.quarryBase]
+      while (out.quarryBase.length < 8) out.quarryBase.push(null)
     }
     if (c.blocked && typeof c.blocked === 'object') {
       for (const k of Object.keys(c.blocked).slice(0, CASTLE_BLOCKED_MAX)) {

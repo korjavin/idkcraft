@@ -886,6 +886,19 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             return { decision: { ...decision, action: 'comehome' }, calledBrain }
           }
         }
+        // Committed dig-in (vmzq.30, revmux 01 body-1): the descent
+        // suppresses fight, so without this the half-dug pit freezes on
+        // fight ticks — the work block below never runs, digInRun never
+        // advances, and a camping skeleton wins by arrows. Drive the
+        // shelter handler so the dig finishes under melee cover (no
+        // pursuit is dispatched here, same as the hold). Mirrors the
+        // comehome-exit exception above.
+        if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig && (ctx.shelter.dig.digs | 0) > 0) {
+          try {
+            const handler = BEHAVIOURS.shelter
+            if (typeof handler === 'function') handler(bot, ctx, target, state)
+          } catch (_) { /* drive best-effort: hold below */ }
+        }
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
