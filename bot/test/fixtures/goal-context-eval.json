@@ -62,7 +62,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 13,
@@ -89,7 +89,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 11,
@@ -115,7 +115,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 5,
@@ -345,7 +345,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -371,7 +371,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -397,7 +397,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -424,7 +424,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -452,7 +452,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "stockpile",
   "prod_n": 1,
@@ -503,7 +503,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -529,7 +529,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -582,7 +582,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -609,7 +609,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -635,7 +635,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castlefetch",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -716,7 +716,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "equip",
+  "fsm": "castle",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -820,6 +820,465 @@
     "5 deaths tonight"
    ],
    "since_min": 120
+  }
+ },
+ {
+  "id": "wd-r4-osc",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castlefetch",
+   "castle",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "castlefetch",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone 54 short, quarry candidate open",
+   "recent": [
+    "castlefetch stone: need 54 more",
+    "castle<>castlefetch flip x6"
+   ],
+   "since_min": 12,
+   "history": [
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 45,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r4-long",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castlefetch",
+   "castle",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "castlefetch",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone 57 short, quarry candidate open",
+   "recent": [
+    "castlefetch stone: need 57 more",
+    "castle<>castlefetch flip x14",
+    "no L1 in 26 min"
+   ],
+   "since_min": 26,
+   "history": [
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 60,
+     "delta": "+0"
+    },
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+2"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 60,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r4-nocand",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-none sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castlefetch",
+   "castle",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone 61 short, quarry refused all faces",
+   "recent": [
+    "castlefetch quarry dead: refused x9",
+    "no progress 31 min"
+   ],
+   "since_min": 31,
+   "history": [
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 60,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r4-protected",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=blocked sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castle",
+   "equip",
+   "park"
+  ],
+  "fsm": "castle",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "oak_log in castle cell (protected)",
+   "recent": [
+    "castle blocked 301 63 205 air (protected) try 5",
+    "no progress 33 min"
+   ],
+   "since_min": 33,
+   "history": [
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r4-unreach",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=blocked sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castle",
+   "castlefetch",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone in castle cell (unreachable)",
+   "recent": [
+    "castle blocked 298 63 205 stone (unreachable) try 3",
+    "no progress 28 min"
+   ],
+   "since_min": 28,
+   "history": [
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+3"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r3-castle",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=none castle=stone-batch sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "beds",
+   "castle",
+   "park"
+  ],
+  "fsm": "castle",
+  "reviewer": "castle",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "beds wool hunt walking off-site",
+   "recent": [
+    "beds: no sheep nearby, searching",
+    "500 blocks from site"
+   ],
+   "since_min": 9,
+   "history": [
+    {
+     "choice": "beds",
+     "outcome": "flat",
+     "dur_s": 300,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r3-fetch",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=none castle=stone-none sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "beds",
+   "castlefetch",
+   "explore",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "castlefetch",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone 70 short, quarry candidate open",
+   "recent": [
+    "castlefetch stone: need 70 more",
+    "beds wool hunt crossed the map"
+   ],
+   "since_min": 14,
+   "history": [
+    {
+     "choice": "beds",
+     "outcome": "flat",
+     "dur_s": 300,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r3-dusk",
+  "source": "synthetic",
+  "facts": "time=dusk logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "gohome",
+   "shelter",
+   "park"
+  ],
+  "fsm": "gohome",
+  "reviewer": "shelter",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "dusk pull to the house, site 170 blocks on",
+   "recent": [
+    "gohome walk 170 blocks short of site",
+    "castle word clear at dusk"
+   ],
+   "since_min": 6,
+   "history": [
+    {
+     "choice": "gohome",
+     "outcome": "flat",
+     "dur_s": 180,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r2-wool",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=none castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "beds",
+   "castlefetch",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "castlefetch",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "wool hunt 500 blocks from site",
+   "recent": [
+    "beds: exploring north, 32 blocks from home",
+    "castle 0/1722"
+   ],
+   "since_min": 11,
+   "history": [
+    {
+     "choice": "beds",
+     "outcome": "flat",
+     "dur_s": 300,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-r2-night",
+  "source": "synthetic",
+  "facts": "time=night logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "gohome",
+   "shelter",
+   "park"
+  ],
+  "fsm": "gohome",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "cannot-reach-home, shelter dig-in protected",
+   "recent": [
+    "gohome failed:cannot-reach-home x2",
+    "shelter dig-in failed:protected"
+   ],
+   "since_min": 38,
+   "history": [
+    {
+     "choice": "gohome",
+     "outcome": "failed:cannot-reach-home",
+     "dur_s": 240,
+     "delta": "+0"
+    },
+    {
+     "choice": "shelter",
+     "outcome": "failed:protected",
+     "dur_s": 120,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-amb-prep",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=blocked sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castle",
+   "castlefetch",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "prep cell protected, stone 40 short",
+   "recent": [
+    "castle blocked prep cell (protected) try 4",
+    "castlefetch stone: need 40 more"
+   ],
+   "since_min": 22,
+   "history": [
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+1"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wd-amb-flat",
+  "source": "synthetic",
+  "facts": "time=day logs=few planks=few table=yes door=yes home=built inside=no unlit=none health=ok food=ok known=none haul=none player=none chest=yes surplus=no handover=none gear=none beds=both castle=stone-some sword=yes pickaxe=stone blocks=low",
+  "menu": [
+   "castlefetch",
+   "castle",
+   "equip",
+   "park"
+  ],
+  "fsm": "castlefetch",
+  "reviewer": "park",
+  "context": {
+   "goal": "build castle",
+   "progress": "0/1722",
+   "blocked_on": "stone oscillating 53-57, quarry refused",
+   "recent": [
+    "no progress 40 min",
+    "castlefetch quarry dead"
+   ],
+   "since_min": 40,
+   "history": [
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "castle",
+     "outcome": "flat",
+     "dur_s": 60,
+     "delta": "+0"
+    },
+    {
+     "choice": "castlefetch",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    },
+    {
+     "choice": "equip",
+     "outcome": "flat",
+     "dur_s": 120,
+     "delta": "+0"
+    }
+   ]
   }
  }
 ]
