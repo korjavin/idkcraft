@@ -93,8 +93,7 @@ describe('vmzq.35 far castle respawn', () => {
     }
     assert.ok(st.stallMs >= 80000, `a wedge stalls: ${st.stallMs}`)
     // Death mid-walk, respawn 500 off again: the low-water mark rebaselines
-    // (revmux 01), so the second walk back counts too.
-    ctx.deaths = (ctx.deaths || 0) + 1
+    // on the teleport (revmux 01/02), so the second walk back counts too.
     x = SITE.x + 500
     bot.entity.position = pos(x, 64, SITE.z)
     t += 10000

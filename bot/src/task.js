@@ -2233,14 +2233,11 @@ function setStallGauge(kind, ms) {
   } catch (_) { /* metrics best-effort */ }
 }
 
-// Current castle progress for the clock. Prep remaining only in prep phase
-// (a body-phase prepTargets call would scan the whole site volume cold);
-// material only while a demanded kind is latched.
 // Far-walk progress (vmzq.35, the travel-grace idea for the castle step's
 // own walk): past the castle far-walk range, the distance to the footprint
 // sinking CASTLE_TRAVEL_STEP below its low-water mark is progress. Low-water
 // only, so a wedge or an out-and-back trip never counts; on site or after a
-// death the mark rebaselines.
+// teleport (respawn) the mark rebaselines.
 const CASTLE_TRAVEL_STEP = 8
 function castleTravel(bot, ctx, state) {
   try {
@@ -2248,14 +2245,17 @@ function castleTravel(bot, ctx, state) {
     const d = castle.siteDist(bot, ctx.castle)
     if (d == null || d <= castle.SITE_WALK_DIST) {
       state.siteDist = null
+      state.siteLast = d
       return false
     }
-    // A death rebaselines (revmux 01): task state survives a respawn, and a
-    // mark sunk before it would deny the walk back from spawn.
-    const deaths = (ctx && ctx.deaths) || 0
-    if (typeof state.siteDist !== 'number' || state.siteDeaths !== deaths) {
+    // A one-tick jump rebaselines (revmux 01/02): task state survives a
+    // death, and a mark sunk before it would deny the walk back from the
+    // respawn. Keyed on the position, not the death event — that fires
+    // before the respawn teleport lands.
+    const last = state.siteLast
+    state.siteLast = d
+    if (typeof state.siteDist !== 'number' || (typeof last === 'number' && Math.abs(d - last) > 2 * castle.SITE_WALK_DIST)) {
       state.siteDist = d
-      state.siteDeaths = deaths
       return false
     }
     if (d + CASTLE_TRAVEL_STEP > state.siteDist) return false
@@ -2266,6 +2266,9 @@ function castleTravel(bot, ctx, state) {
   }
 }
 
+// Current castle progress for the clock. Prep remaining only in prep phase
+// (a body-phase prepTargets call would scan the whole site volume cold);
+// material only while a demanded kind is latched.
 function castleCurrent(bot, ctx, st, now) {
   const out = {}
   try {
