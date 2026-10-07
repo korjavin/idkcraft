@@ -216,11 +216,23 @@ const PICK_DIG = new Set([
   'stone', 'andesite', 'granite', 'diorite', 'cobblestone',
   'deepslate', 'tuff', 'calcite', 'sandstone', 'dripstone_block',
 ])
+// Pickless (idkcraft-vmzq.37): the same stone digs bare-handed — ~7.5 s a
+// block (deepslate ~15, inside DIG_TIMEOUT_TICKS), no drop — the slow hand
+// staircase out of a buried pocket beats a wedge with no tool at all (prod:
+// y~37, pickaxe=no, 17 min in place). Equip crafts a pick first when the
+// pack funds one (castle pickRearm); this is the no-materials floor — and
+// the slow one: rig CASTLE_BURY=25 NOWOOD surfaced in ~285 s (the funded
+// rearm in 60 s), bare-hand stone is ~7.5 s a block.
+// Only while buried (rock over the head column): an open pit keeps the
+// jsf.4 rule — no pick, no stone ladder; sidestep/call_player own it.
+function capped(bot) {
+  return solid(cellAt(bot, 0, 2, 0)) || solid(cellAt(bot, 0, 3, 0)) || solid(cellAt(bot, 0, 4, 0))
+}
 function diggable(bot, b) {
   if (handDiggable(bot, b)) return true
   if (!b || typeof b.name !== 'string') return false
-  if (!hasPickaxe(bot)) return false
   if (!PICK_DIG.has(b.name)) return false
+  if (!hasPickaxe(bot) && !capped(bot)) return false
   try {
     if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
   } catch (_) { /* reach check best-effort */ }
@@ -318,6 +330,11 @@ function pitChain(facts, hemmed) {
 // Lava in or around the mount head: digging the cap would open a flow
 // onto the mount, and standing under lava is death either way. Mirrors the
 // executor's dontCreateFlow refusal (liquid above or beside the break).
+// The body's own jump head (vmzq.37): lava over it or beside it would flow
+// into the dug cell and down onto the body.
+function headLavaAt(bot) {
+  return isLava(cellAt(bot, 0, 3, 0)) || SIDES.some(([dx, dz]) => isLava(cellAt(bot, dx, 2, dz)))
+}
 function capLavaAt(bot, dx, dz) {
   return isLava(cellAt(bot, dx, 2, dz)) || isLava(cellAt(bot, dx, 3, dz)) ||
     isLava(cellAt(bot, dx + 1, 2, dz)) || isLava(cellAt(bot, dx - 1, 2, dz)) ||
@@ -340,7 +357,10 @@ function farLavaAt(bot, dx, dz) {
 // head in (dx,2,dz)), no lava in or around the head, none behind the dig,
 // and the head has room to jump. Returns the side [dx, dz] or null.
 function findDigStepDir(bot) {
-  if (solid(cellAt(bot, 0, 2, 0))) return null
+  // vmzq.37: a solid jump head digs first (the buried 1x2 pocket), like the
+  // side cells — only when it digs and no lava sits on it.
+  const own = cellAt(bot, 0, 2, 0)
+  if (solid(own) && (!diggable(bot, own) || headLavaAt(bot))) return null
   let cobbleSide = null
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
@@ -614,7 +634,9 @@ function recoverFsm(facts, names) {
   // the climb is a one-way door (4jr: the goal sits inside the pit, height
   // gained is never given back), and hop/sidestep own the level case.
   if ((facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && pick('water_up')) return 'water_up'
-  if (facts.goalDy >= 2 && pick('dig_step')) return 'dig_step'
+  // vmzq.37: the hemmed far-goal pit climbs by staircase too (the pitClimb
+  // arm of the climbers above) — a pickless buried body has nothing else.
+  if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_step')) return 'dig_step'
   // High goal, no climb primitive, enclosed pit, player online: asking beats
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
   // the open (walls < 3) sidestep keeps its turn: walking goalward can still
@@ -1120,6 +1142,30 @@ function digUpRun(bot, ctx) {
   return 'running'
 }
 
+// One dig of the staircase (vmzq.37 jump head; the above/cap digs below
+// run the same steps inline).
+function digStepCell(bot, ctx, st, cell) {
+  if (lavaNearAt(bot)) { setJump(bot, false); return 'failed:lava' }
+  if (st.digError) { setJump(bot, false); return 'failed:dig-error' }
+  if (st.digInFlight) {
+    if (++st.waited > DIG_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:dig-timeout' }
+    return 'running'
+  }
+  if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
+  const deny = denyReason(bot, cell, ctx)
+  if (deny) { setJump(bot, false); logDeny(cell, deny); return 'failed:' + deny } // idkcraft-drq
+  st.digInFlight = true
+  st.waited = 0
+  void (async () => {
+    try {
+      const tool = digTool(bot, cell)
+      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      await bot.dig(cell)
+    } catch (_) { st.digError = true } finally { st.digInFlight = false }
+  })()
+  return 'running'
+}
+
 // Dig a step and mount it (9sh hand, jsf.4 pickaxe ladder): no scaffold,
 // dirt pit bare-handed, stone pit with a pick. One cycle digs the wall
 // above the side step plus the mount head above that (adv), then mounts
@@ -1174,6 +1220,12 @@ function digStepRun(bot, ctx) {
   // these sides, so this terminates.
   if (capLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
   if (farLavaAt(bot, st.dir[0], st.dir[1])) { st.dir = null; return 'running' }
+  // Jump head first (vmzq.37): the mount leap needs it clear.
+  const own = cellAt(bot, 0, 2, 0)
+  if (own && solid(own)) {
+    if (!diggable(bot, own) || headLavaAt(bot)) { setJump(bot, false); return 'failed:no-step' }
+    return digStepCell(bot, ctx, st, own)
+  }
   const above = cellAt(bot, st.dir[0], 1, st.dir[1])
   if (above && solid(above)) {
     if (!diggable(bot, above)) { st.dir = null; return 'running' }
@@ -1575,7 +1627,7 @@ const RECOVER_MENU = {
   dig_step: {
     feasible: (facts) => facts.digStep != null && !facts.lavaNear,
     run: digStepRun,
-    repeatable: (facts) => facts.goalDy >= 1 && facts.digStep != null,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.digStep != null,
     verb: 'digging a step',
   },
   hop_step: {
