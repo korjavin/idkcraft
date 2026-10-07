@@ -249,6 +249,9 @@ function castleOf(c) {
         // a short reason token stays dropped.
         out.blocked[k] = { tries: Math.floor(tries), until: Math.min(until, Date.now() + 600000) }
         if (typeof e.why === 'string' && /^[a-z0-9_-]{1,64}$/.test(e.why)) out.blocked[k].why = e.why
+        // Retired holes stay retired (vmzq.27 revmux 02): without the flag
+        // a rejoin re-waits retired holes up to the clamped backoff.
+        if (e.retired === true) out.blocked[k].retired = true
       }
     }
     return out

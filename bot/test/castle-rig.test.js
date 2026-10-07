@@ -47,6 +47,20 @@ describe('castle-rig.sh anti-noise', () => {
     assert.match(badRate.stdout, /tickrate: want an integer/)
   })
 
+  it('fails loud on a bad blocked count (vmzq.27)', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-blocked-'))
+    const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    const bad = run({ CASTLE_BLOCKED: 'many' })
+    assert.equal(bad.status, 2)
+    assert.match(bad.stdout, /blocked: want an integer/)
+    const over = run({ CASTLE_BLOCKED: '99' })
+    assert.equal(over.status, 2)
+    assert.match(over.stdout, /blocked: want an integer/)
+  })
+
   it('defaults RIG_PLANNER to jev, rejects anything but jev|stub', () => {
     const { spawnSync } = require('node:child_process')
     const os = require('node:os')
@@ -200,12 +214,16 @@ describe('castle-replay.js verdict contract', () => {
   it('prints the one-line verdict shape and names its env seams', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(src.includes('castle ${done}/${total} in ${MINS} min, flips='), 'verdict line shape drifted')
-    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_OUT']) {
+    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_OUT', 'CASTLE_BLOCKED']) {
       assert.ok(src.includes(seam), `missing env seam ${seam}`)
     }
     // Usernames cap at 16 chars (stuck-replay precedent): the length guard
     // must stay, or an overlong TAG dies in the hello decode server-side.
     assert.ok(src.includes('exceed 16 chars'), 'missing 16-char name guard')
+    // Holes report (vmzq.27): the follower's `castle: ` chats land in the
+    // log + OUT record, or the one-line acceptance has no rig evidence.
+    assert.ok(src.includes('CASTLE-RIG say: '), 'missing holes say-capture')
+    assert.ok(src.includes('said: seen.said'), 'missing said record field')
   })
 
   it('counts castle<->castlefetch flips in both directions (one-char join bug)', () => {

@@ -13,14 +13,17 @@
 // its own skip/refusal semantics; we reuse only its pure geometry
 // (findRef, isReplaceable, PLACE_RANGE/PLACE_REACH, the cell budgets).
 //
-// No permanent skips: a cell that refuses three times (or blows its tick
-// budget, or hangs a flight) is BLOCKED with bounded exponential backoff
-// in ctx.castle.blocked["<blueprintVersion>:<idx>"] = {tries, until}, and
-// a blocked structural cell stops progress above its layer — it is
-// reported, never built past. Planned air/dig cells are enforced only
-// before phase 'complete': afterwards the bot never clears what the owner
-// puts inside. Laid castle blocks are protected for every executor
-// (util.protectedReason + guardCastle below).
+// Skip-and-continue (idkcraft-vmzq.27): a cell that refuses three times
+// (or blows its tick budget, or hangs a flight) is BLOCKED with bounded
+// exponential backoff in ctx.castle.blocked["<blueprintVersion>:<idx>"] =
+// {tries, until}, and the build goes on past it — the rest lays at the
+// normal rate while the hole waits out its backoff, then retries. Holes
+// are reported in one chat line (sayHoles); retries are rare (BACKOFF_MAX_MS)
+// and bounded (MAX_HOLE_TRIES, then the hole retires: still reported, no
+// longer waited on, so the moat digs and the castle completes). Planned
+// air/dig cells are enforced only before phase 'complete': afterwards the
+// bot never clears what the owner puts inside. Laid castle blocks are
+// protected for every executor (util.protectedReason + guardCastle below).
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
@@ -121,6 +124,13 @@ function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
 function ver(st) { return blueprint.blueprintOf(st && st.blueprintVersion).version }
 function bkey(st, idx) { return `${ver(st)}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
+// Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
+// retires — still listed by holesOf, never picked or waited on — so a
+// permanent hole (protected log, kept chest) finishes as a reported gap
+// instead of holding the moat and 'complete' forever. ~35 min of rare
+// retries first (backoffs 30s..600s), covering a play session in which the
+// owner might clear the cell. Rebuild (cancel + build) un-retires.
+const MAX_HOLE_TRIES = 8
 
 function bodyPos(bot) {
   const p = bot.entity && bot.entity.position
@@ -133,12 +143,15 @@ function blockCell(ctx, st, c, why, now) {
   e.tries++
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
+  // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
+  // hole — still reported, never picked or waited on again.
+  if (e.tries >= MAX_HOLE_TRIES) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
   ctx.castleFar = null
   ctx.castleGoalIdx = -1
-  console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`)
+  console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
 }
 
 function strike(ctx, st, c, why, now) {
@@ -148,23 +161,54 @@ function strike(ctx, st, c, why, now) {
   if (f.n >= STRIKES) blockCell(ctx, st, c, why, now)
 }
 
-// Blocked-state announcement (g0z.23, core-1): the status line (the 'castle'
-// command shows it) and one chat line per distinct cell+why. Called from
-// menuFact — decide() drops the castle step on the flip, so the executor's
-// waiting branch never runs in prod — and from that branch (direct-castle
-// flows); the shared latch dedupes across both. False when no live entry.
-function sayBlocked(bot, ctx, st, cell, now) {
+// Open holes (vmzq.27): on-plan cells with a blocked entry that haven't
+// landed yet — active backoffs, expired ones awaiting their retry, and
+// retired ones alike, so the set is stable across a retry gap and a
+// retired hole stays reported after 'complete'. Off-plan entries (prep,
+// litter) are best-effort and never listed. First-try no-ref stays
+// unlisted (revmux 01): out-of-order attempts fail it transiently and heal
+// on the first retry; a no-ref that survives to try 2 is listed.
+function holesOf(bot, st, cells) {
+  const out = []
   const bl = (st && st.blocked) || {}
-  const e = bl[bkey(st, cell.idx)]
-  if (!e || e.until <= now) return false
-  const retry = Math.round((e.until - now) / 1000)
-  st.status = `blocked at ${cell.x} ${cell.y} ${cell.z} (${cell.kind}: ${e.why}), retry in ${retry}s`
-  const said = `${bkey(st, cell.idx)}:${e.why}`
-  if (ctx.castleBlockedSaid === said) return true
-  ctx.castleBlockedSaid = said
-  let line = `castle: stuck at ${cell.x} ${cell.y} ${cell.z} on ${e.why}, retry in ${retry}s`
-  const kept = /^kept-(.+)$/.exec(e.why)
-  if (kept) line += ` — remove the ${kept[1]} there or say castle stop`
+  for (const k of Object.keys(bl)) {
+    const [v, i] = k.split(':')
+    if (Number(v) !== ver(st)) continue
+    const c = cells[Number(i)]
+    const e = bl[k]
+    if (!c || !e || done(bot, c)) continue
+    if (e.why === 'no-ref' && (e.tries || 0) < 2) continue
+    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, why: String(e.why || '?'), until: e.until, retired: !!e.retired })
+  }
+  return out.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z)
+}
+
+// Holes announcement (vmzq.27, g0z.23 core-1 shape): the status line (the
+// 'castle' command shows it) and ONE chat line listing every hole. Called
+// from castle() after every pick — while building past holes and while
+// waiting on them — and from menuFact's waiting branch (decide() drops the
+// castle step on the flip, so the executor's branch never runs in prod);
+// the shared latch dedupes across both. Only a new cell (or a newly
+// retired one) re-chats: a retry gap, a resolve and a why-change between
+// retries all stay silent (revmux 01), the latch syncing either way.
+// False when no open hole.
+function sayHoles(bot, ctx, st, holes, now) {
+  if (!holes.length) { ctx.castleBlockedSaid = null; return false }
+  const toks = holes.map((h) => `${h.x},${h.y},${h.z}${h.retired ? 'R' : ''}`)
+  const desc = (h) => `${h.x} ${h.y} ${h.z} (${h.kind}: ${h.why}${h.retired ? ', retired' : ''})`
+  st.status = `holes: ${holes.map(desc).join(', ')}`
+  const said = new Set(String(ctx.castleBlockedSaid || '').split('|').filter(Boolean))
+  const fresh = toks.filter((t) => !said.has(t))
+  ctx.castleBlockedSaid = toks.join('|')
+  if (!fresh.length) return true
+  const live = holes.filter((h) => !h.retired)
+  const tail = live.length
+    ? `, retry in ${Math.max(0, Math.round((Math.min(...live.map((h) => (typeof h.until === 'number' ? h.until : now))) - now) / 1000))}s`
+    : ', no retries left'
+  let line = holes.length === 1 ? `castle: 1 hole at ${desc(holes[0])}${tail}` : `castle: ${holes.length} holes: ${holes.map(desc).join(', ')}${tail}`
+  const kept = [...new Set(holes.map((h) => /^kept-(.+)$/.exec(h.why)).filter(Boolean).map((m) => m[1]))]
+  if (kept.length === 1 && holes.length === 1) line += ` — remove the ${kept[0]} there or say castle stop`
+  else if (kept.length) line += ' — remove those blocks or say castle stop'
   try { bot.chat(line) } catch (_) { /* chat best-effort */ }
   return true
 }
@@ -182,9 +226,11 @@ function sayBlocked(bot, ctx, st, cell, now) {
 const RANK = { torch: 0.5, door: 1, air: 2, dig: 3, fence: 4 }
 function rank(c) { return RANK[c.kind] || 0 }
 // Interior work (g0z.6): an undone cell ranked before the moat. While one
-// is left — blocked, gated or not — no moat cell is dug, so the bot never
-// has to cross a dug moat to finish the castle; later repairs cross the
-// bridge, which is laid before any dig.
+// is left, no moat cell is dug, so the bot never has to cross a dug moat
+// to finish the castle; later repairs cross the bridge, which is laid
+// before any dig. Blocked holes never feed `inside` (revmux 01) — active
+// or retired, the moat digs while they wait — and work order still
+// sequences real interior work first.
 function interior(c) { return rank(c) < RANK.dig }
 let orderCache = null
 function workOrder(cells, key) {
@@ -208,17 +254,14 @@ function torchOwed(bot, c, owed) {
 function pick(bot, ctx, st, cells, key, now) {
   const order = workOrder(cells, key)
   const complete = st.phase === 'complete'
-  // Structural gate: an actively blocked place cell stops everything above
-  // its layer. Done or stale-version entries drop here. The gate cell rides
-  // along for the stuck chat (g0z.23): a gated-above waiting cell is not it.
-  let gateDy = Infinity
-  let gate = null
+  // Prune landed cells and stale-version entries. Blocked-active cells are
+  // skipped below (vmzq.27 skip-and-continue) — no layer gate: the rest
+  // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
     const c = cells[Number(i)]
     // Off-plan entries (prep, litter) live until they expire (g0z.14).
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
-    if (c && st.blocked[k].until > now && !clearing(c) && c.dy < gateDy) { gateDy = c.dy; gate = c }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
   for (;;) {
@@ -232,25 +275,31 @@ function pick(bot, ctx, st, cells, key, now) {
       if (clearing(c) && complete) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
-      if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
+      if (torchOwed(bot, c, owed)) {
+        const bo = st.blocked[bkey(st, c.idx)]
+        if (!bo || !bo.retired) owed = owed || c
+        continue
+      }
+      // Holes never feed `inside` (revmux 01): retired cells pass through
+      // silently, active ones wait — either way the moat digs past them.
+      const b = st.blocked[bkey(st, c.idx)]
+      if (b && b.retired) continue
+      if (b && b.until > now) { waiting = waiting || c; continue }
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
-      const b = st.blocked[bkey(st, c.idx)]
-      if (b && b.until > now) { waiting = waiting || c; continue }
-      if (!clearing(c) && c.dy > gateDy) { waiting = waiting || c; break }
       ctx.castleCursor = first
       return { idx: c.idx }
     }
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
     if (owed) return { idx: owed.idx }
-    return { idx: -1, waiting, gate }
+    return { idx: -1, waiting }
   }
 }
 
 // Read-only twin of pick() for the work arbiter (g0z.3): the next cell the
-// executor would work now, or why there is none — same work order, layer
-// gate and backoff, no cursor/scan/blocked-map writes. Full scan from 0.
+// executor would work now, or why there is none — same work order, skip
+// and backoff, no cursor/scan/blocked-map writes. Full scan from 0.
 // ponytail: O(plan) blockAt per decide; cache per tick if g0z.11's ~2000
 // cells ever show in the tick timer.
 function peek(bot, st, now, ctx) {
@@ -262,14 +311,6 @@ function peek(bot, st, now, ctx) {
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const blocked = st.blocked && typeof st.blocked === 'object' ? st.blocked : {}
   const complete = st.phase === 'complete'
-  let gateDy = Infinity
-  let gate = null
-  for (const k of Object.keys(blocked)) {
-    const [v, i] = k.split(':')
-    const c = cells[Number(i)]
-    if (Number(v) !== ver(st) || !c || !blocked[k] || done(bot, c)) continue
-    if (blocked[k].until > now && !clearing(c) && c.dy < gateDy) { gateDy = c.dy; gate = c }
-  }
   let waiting = null
   let inside = false
   let owed = null
@@ -277,15 +318,19 @@ function peek(bot, st, now, ctx) {
     const c = cells[idx]
     if (clearing(c) && complete) continue
     if (done(bot, c)) continue
-    if (torchOwed(bot, c, owed)) { owed = owed || c; continue }
+    if (torchOwed(bot, c, owed)) {
+      const bo = blocked[bkey(st, c.idx)]
+      if (!bo || !bo.retired) owed = owed || c
+      continue
+    }
+    const b = blocked[bkey(st, c.idx)]
+    if (b && b.retired) continue
+    if (b && b.until > now) { waiting = waiting || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
-    const b = blocked[bkey(st, c.idx)]
-    if (b && b.until > now) { waiting = waiting || c; continue }
-    if (!clearing(c) && c.dy > gateDy) return { cell: null, waiting: waiting || c, cells, gate }
-    return { cell: c, waiting: null, cells, gate }
+    return { cell: c, waiting: null, cells }
   }
-  return { cell: owed, waiting: owed ? null : waiting, cells, gate }
+  return { cell: owed, waiting: owed ? null : waiting, cells }
 }
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
@@ -663,11 +708,12 @@ function menuFact(bot, ctx, now = Date.now()) {
     } catch (_) { /* progress best-effort */ }
     let word = null
     if (!r.cell) {
-      // Blocked (g0z.23): the gated kind and its remainder stay on the word,
-      // so a far site reads stock (walk back) and castlefetch quarries the
-      // gated kind while the build stands. On site the word stays 'blocked'.
-      // Announced here (core-1): decide() drops the castle step on the flip,
-      // so castle()'s waiting branch never runs in prod.
+      // Blocked (g0z.23): the waiting kind and its remainder stay on the
+      // word, so a far site reads stock (walk back) and castlefetch
+      // quarries the waiting kind while the build stands. On site the word
+      // stays 'blocked'. Announced here (core-1): decide() drops the
+      // castle step on the flip, so castle()'s waiting branch never runs
+      // in prod.
       if (r.waiting) {
         // core-3: only a material kind latches — a blocked keep-clear
         // ('air') or moat ('dig') cell keeps { word: 'blocked' }, so a far
@@ -695,9 +741,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         } else {
           ctx.castleWord = { word: 'blocked' }
         }
-        const w = r.waiting
-        const live = (st.blocked || {})[bkey(st, w.idx)]
-        sayBlocked(bot, ctx, st, (live && live.until > now) ? w : (r.gate || w), now)
+        sayHoles(bot, ctx, st, holesOf(bot, st, r.cells), now)
         return 'blocked'
       }
       word = st.phase === 'complete' ? 'done' : 'finish'
@@ -917,7 +961,8 @@ function digCell(bot, ctx, st, c, now) {
   // pillared into a landing cell on the rig) must clear like terrain.
   // placedByBot is session-only, so cobblestone (Movements' scaffold item)
   // in a castle cell clears by name too: after a restart the leftover
-  // pillar would otherwise gate every layer above it forever.
+  // pillar's key is gone, and without the name rule it would read as a
+  // foreign build and block its cell.
   let ours = name === 'cobblestone'
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
   // Air/dig cells (moat, keep-clear, prep logs) take any natural block —
@@ -1153,24 +1198,18 @@ function castle(bot, ctx) {
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
-  // core-2 (round 3): re-arm only when the latched cell is resolved — its
-  // blocked entry is gone (landed/dug, pruned by pick above) — never on a
-  // mere retry pick. Two stuck cells re-blocking must stay silent.
-  if (ctx.castleBlockedSaid) {
-    const cellKey = ctx.castleBlockedSaid.split(':').slice(0, 2).join(':')
-    if (!st.blocked[cellKey]) ctx.castleBlockedSaid = null
-  }
+  // Holes ride along on every pick (vmzq.27): building past them or waiting
+  // on them, one shared line (sayHoles) that re-chats only on a new hole.
+  const holes = holesOf(bot, st, cells)
+  sayHoles(bot, ctx, st, holes, now)
   if (ctx.castleScanAt !== fullBefore) progress(bot, st, cells, ctx)
   if (r.idx < 0) {
     if (r.waiting) {
-      // The stuck cell: waiting itself when its block is live, else the
-      // structural gate cell holding the layers above (g0z.23). Shared
-      // with menuFact (core-1): one line per distinct cell+why.
-      const w = r.waiting
-      const live = st.blocked[bkey(st, w.idx)]
-      if (!sayBlocked(bot, ctx, st, (live && live.until > now) ? w : (r.gate || w), now)) {
-        st.status = `blocked at ${w.x} ${w.y} ${w.z} (${w.kind})`
-      }
+      // Every remaining cell is waiting out a backoff (or owed): the holes
+      // line above says which; the step fails so the body does side work
+      // until a retry comes due. A waiting dig with no hole is held by
+      // interior work (never by a backoff), so it keeps its own status.
+      if (!holes.length) st.status = `waiting on ${r.waiting.x} ${r.waiting.y} ${r.waiting.z} (${r.waiting.kind})`
       ctx.stepStatus = 'failed:blocked'
       return
     }
@@ -1178,7 +1217,9 @@ function castle(bot, ctx) {
       const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
       if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     }
-    st.status = 'complete'
+    // Holes stay on the status past completion (sayHoles set it above),
+    // so 'castle' keeps reporting the gaps, not just 'complete'.
+    if (!holes.length) st.status = 'complete'
     ctx.stepStatus = 'done'
     if (st.phase !== 'complete') {
       st.phase = 'complete'
@@ -1190,6 +1231,9 @@ function castle(bot, ctx) {
 }
 
 module.exports = castle
+module.exports.holesOf = holesOf
+module.exports.sayHoles = sayHoles
+module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
 module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES

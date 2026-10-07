@@ -172,7 +172,7 @@ describe('ipn.11 same-reason equip failures latch equip for the day', () => {
     delete ctx.home.table
     bot.blockAt = () => ({ name: 'air' })
     assert.equal(await runToFail(bot, ctx), 'failed:equip-stone_pickaxe')
-    assert.deepEqual(ctx.equipLatch, { day: 5, key: 'stone_pickaxe:no-table', fails: 1 }, 'new reason restarts the count')
+    assert.deepEqual(ctx.equipLatch, { day: 5, key: 'stone_pickaxe:no-table-item', fails: 1 }, 'new reason restarts the count')
     assert.equal(equip.equipLatched(ctx, bot), false)
   })
 
