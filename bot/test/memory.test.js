@@ -489,6 +489,19 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     assert.equal(ctx2.castle.blocked['1:5'].tries, 2)
   })
 
+  it('round-trips a retired hole, drops a non-boolean flag (vmzq.27 revmux 02)', () => {
+    const now = Date.now()
+    const ctx1 = castleCtx({
+      '1:5': { tries: 8, until: now + 600000, why: 'protected', retired: true },
+      '1:9': { tries: 8, until: now + 600000, why: 'protected', retired: 'yes' },
+    })
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    assert.ok(memory.restore(botAt(SPAWN_A), ctx2, file, now))
+    assert.equal(ctx2.castle.blocked['1:5'].retired, true)
+    assert.equal(ctx2.castle.blocked['1:9'].retired, undefined)
+  })
+
   it('drops a non-string why instead of persisting it', () => {
     const now = Date.now()
     const ctx1 = castleCtx({ '1:5': { tries: 1, until: now + 60000, why: { evil: true } } })
