@@ -74,9 +74,11 @@ const MENU = {
   },
   gohome: {
     // Night-far (ipn.12): at night a far march is a death march — shelter
-    // owns it (see nightFarFromHome). Dusk marches at any distance.
+    // owns it (see nightFarFromHome). Dusk marches at any distance —
+    // except away from home with an active castle (vmzq.19): the night
+    // belongs to the site, never to a 500-block march back.
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
-      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx),
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx) && !castleSiteNight(bot, ctx),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -84,7 +86,10 @@ const MENU = {
     // Night shelter (ipn.12): the night-far complement of gohome — pillar
     // up and hold where you are till dawn instead of marching the dark.
     // Castle night (g0z.21): at the far castle it shelters from dusk on.
-    feasible: (facts, bot, ctx) => facts.home === 'built' && facts.inside === 'no' && shelterFits(facts, bot, ctx),
+    // Castle site (vmzq.19): with an active castle and the bot away from
+    // home it shelters from dusk anywhere — mid-map it pillars in place —
+    // and the built-home gate lifts (an unbuilt far house still shelters).
+    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -146,6 +151,8 @@ const MENU = {
     // plank remainder passes with any plank count. Skipped (given-up) cells
     // count as done, the same as in the build behaviour.
     feasible: (facts, bot, ctx) => {
+      // Castle first (vmzq.19): an active castle vetoes the house build.
+      if (castleFirst(ctx)) return false
       // Parked house (vmzq.3): the L2 episode vetoes the house chain —
       // the bot does side work instead until resume.
       if (ctx && ctx.home && ctx.home.parked) return false
@@ -215,6 +222,9 @@ const MENU = {
     // (beds.sheepLatched; death-respawns release the stepFail hold, so it
     // cannot hold this).
     feasible: (facts, bot, ctx) => {
+      // Castle first (vmzq.19): an active castle vetoes the wool hunt —
+      // its place/bank legs walk home, 500 blocks in run3.
+      if (castleFirst(ctx)) return false
       if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
       try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
     },
@@ -484,6 +494,20 @@ function castleBlocked(facts) {
 // bot cannot chain to a 300-block remembered diamond. 64 is the epic's
 // own bound (stage-2: ends at home/site, not >64 away).
 const PARK_FORAGE_RADIUS = 64
+// Castle-first veto (idkcraft-vmzq.19): while an unfinished, unparked
+// castle stands, the house-side steps (beds, build) yield — run3 picked
+// equip then beds over a feasible castle, walked 500 blocks to the house,
+// and never laid a cell. Equip is only outranked (STEP_ORDER), never
+// vetoed: the castle chain needs its kit. Parked/complete releases (the
+// L2 park's side work IS house work). Deferred require (the beds
+// precedent — goal.js loads inside the behaviour chain).
+function castleFirst(ctx) {
+  try {
+    return !!require('./behaviours/explore').castleActive(ctx)
+  } catch (_) {
+    return false
+  }
+}
 function taskParked(ctx) {
   try {
     if (ctx && ctx.castle && ctx.castle.parked) return true
@@ -668,17 +692,44 @@ function castleNight(bot, ctx) {
 function shelterOwns(bot, ctx) {
   return nightFarFromHome(bot, ctx) || gohomeLatched(ctx, bot) || castleNight(bot, ctx)
 }
-// Shelter fits now: the night it owns, or a castle dusk (g0z.21).
+// Castle-site night (idkcraft-vmzq.19): while an unfinished, unparked
+// castle stands and the bot is away from home, dusk and night belong to
+// the site — run3's dusk gohome marched 500 blocks at every dusk (twice
+// caught mid-map) and the latched night looped at the house. castleNight
+// above only fires within 48 of the site; this fires anywhere away from
+// home, so a bot caught mid-map pillars in place instead of marching.
+// Near home the old steps win (walk in, stay). A sited home is required:
+// the shelter behaviour fails no-home without one, so a truly homeless
+// bot keeps the old night instead of a doomed pick.
+function castleSiteNight(bot, ctx) {
+  try {
+    if (!castleFirst(ctx)) return false
+    const h = ctx && ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST
+  } catch (_) {
+    return false
+  }
+}
+// Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
+// night away from home with an active castle (vmzq.19, castleSiteNight) —
+// the stickiness and the night-near force below read this too, so a
+// mid-map dusk shelter holds instead of re-deciding every tick.
 function shelterFits(facts, bot, ctx) {
   const t = facts && facts.time
-  return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx))
+  return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
+    ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
 
-// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then craft,
-// rearm (equip), build, gather, then unload (deliver), dig (forage), search
+// Priority order (epic rw4 + atl.2 + atl.6): night steps first, then the
+// castle chain (vmzq.19: castlefetch, castle — an ordered castle outranks
+// the house chain, which run3 proved by losing every day to beds/build at
+// the far house while the castle never laid a cell), then craft, rearm
+// (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'craft', 'equip', 'build', 'beds', 'light', 'castlefetch', 'castle', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1465,6 +1516,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.inside !== 'no') return 'gohome: already inside'
       if (gohomeLatched(ctx, bot)) return 'gohome: failed at the same spot tonight'
       if (castleNight(bot, ctx)) return 'gohome: sheltering at the castle'
+      if (castleSiteNight(bot, ctx)) return 'gohome: sheltering at the castle'
       return 'gohome: too far to walk at night'
     case 'shelter':
       if (facts.time === 'day') return 'shelter: daytime'
@@ -1494,6 +1546,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
+      if (castleFirst(ctx)) return 'build: castle comes first'
       if (ctx && ctx.home && ctx.home.parked) return 'build: house parked'
       if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
       // Facts-level wording; the exact remainder gate lives in the rule.
@@ -1516,6 +1569,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'build: nothing left to build'
     }
     case 'beds':
+      if (castleFirst(ctx)) return 'beds: castle comes first'
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'

@@ -92,12 +92,19 @@ describe('g0z.21 castle night: shelter by the far castle, not the march home', (
       ['parked', AT_CASTLE, { site: { ...CASTLE }, rot: 0, parked: true }],
       ['complete', AT_CASTLE, { site: { ...CASTLE }, rot: 0, phase: 'complete' }],
       ['near home', near, undefined],
-      ['far from both', { x: 400, y: 64, z: 400 }, undefined], // exploring the other way: the old dusk march
     ]
     for (const [name, at, castle] of cases) {
       const b = bot(at, 12500)
       assert.equal(FGO(facts('dusk'), b, ctxWith(castle)), true, `${name}: dusk marches`)
       assert.equal(FSH(facts('dusk'), b, ctxWith(castle)), false, `${name}: no dusk shelter`)
+    }
+    // Far from both with an active castle (vmzq.19, reverses the old dusk
+    // march): run3 was caught mid-map at two dusks and marched 500 blocks
+    // home each time — now it shelters in place.
+    {
+      const b = bot({ x: 400, y: 64, z: 400 }, 12500)
+      assert.equal(FGO(facts('dusk'), b, ctxWith()), false, 'far from both: no dusk march')
+      assert.equal(FSH(facts('dusk'), b, ctxWith()), true, 'far from both: shelter in place')
     }
     assert.equal(goal.stepWhy('shelter', facts('dusk'), bot(AT_CASTLE), ctxWith(null), ''), 'shelter: dusk marches home')
     // A castle next to the house: home is close, walk in.

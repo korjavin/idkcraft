@@ -390,7 +390,7 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.castle.stallMs, 0)
   })
 
-  it('castle growth resets the house clock while the castle step runs (body-2)', () => {
+  it('castle is active over an unbuilt house; its growth resets its own clock (body-2, vmzq.19)', () => {
     const bot = makeBot()
     bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
@@ -403,12 +403,12 @@ describe('task stall clock (vmzq.2)', () => {
     ctx.castleWord = { kind: 'stone', left: 80 }
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
-    assert.equal(ctx.task.active, 'house')
+    assert.equal(ctx.task.active, 'castle', 'the body works the castle, so the clock watches it')
     taskMod.taskTick(bot, ctx, t0 + 1000)
-    assert.equal(ctx.task.house.stallMs, 1000)
+    assert.equal(ctx.task.castle.stallMs, 1000)
     ctx.castle.progress.done = 9 // the castle grew under the castle step
     taskMod.taskTick(bot, ctx, t0 + 2000)
-    assert.equal(ctx.task.house.stallMs, 0, 'castle progress resets the house clock')
+    assert.equal(ctx.task.castle.stallMs, 0, 'castle progress resets the castle clock')
   })
 
   it('unloaded house with no cache still reports (round-2 core-1)', () => {

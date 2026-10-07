@@ -905,11 +905,14 @@ async function enterSearch(bot, ctx, o, legacy) {
     refuseExhausted(bot, ctx, o)
     return
   }
-  // Self hunts (9qt0) stay within SELF_SEARCH_RADIUS of home: prod legs ran
-  // 129-256 blocks out and the night caught the bot there (~50 of 61
-  // deaths). No unvisited ground in reach is an exhausted search.
+  // Self hunts (9qt0) stay within SELF_SEARCH_RADIUS of the anchor: prod
+  // legs ran 129-256 blocks out and the night caught the bot there (~50 of
+  // 61 deaths). No unvisited ground in reach is an exhausted search.
+  // While a build task is active (vmzq.19) the cap is the task radius, the
+  // same 64 the explore legs walk under — one radius for every own leg.
   if (o.self) {
-    const t = exploreMod.nextTarget(bot, ctx, SELF_SEARCH_RADIUS)
+    const cap = exploreMod.taskActive(ctx) ? exploreMod.TASK_SEARCH_RADIUS : SELF_SEARCH_RADIUS
+    const t = exploreMod.nextTarget(bot, ctx, cap)
     if (!t) {
       s.capped = true
       refuseExhausted(bot, ctx, o)
