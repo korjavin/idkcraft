@@ -145,6 +145,22 @@ function parkHistOf(v) {
   }
 }
 
+// Plan-B switch stamp (vmzq.21): the at-time rides with the parked flag
+// so a restart mid-switch resumes the timer instead of fossilizing the
+// park as owner-stopped. The duration stays code-side (read from
+// GOAL_PLANB_SWITCH_MS at expiry time), so a hand-edited far-future
+// stamp cannot freeze a goal.
+function planbOf(v) {
+  try {
+    if (!v || typeof v !== 'object') return null
+    const at = num(v.at)
+    if (at === null || at <= 0) return null
+    return { at: Math.min(at, Date.now()) }
+  } catch (_) {
+    return null
+  }
+}
+
 function homeOf(h) {
   if (!h || !h.site) return null
   const site = v3(h.site)
@@ -158,6 +174,8 @@ function homeOf(h) {
     if (tp) out.taskPark = tp
     const ph = parkHistOf(h.parkHist)
     if (ph) out.parkHist = ph
+    const pb = planbOf(h.planb)
+    if (pb) out.planb = pb
   } catch (_) { /* park best-effort */ }
   try {
     const skip = skipOf(h.skip)
@@ -207,6 +225,8 @@ function castleOf(c) {
       if (tp) out.taskPark = tp
       const ph = parkHistOf(c.parkHist)
       if (ph) out.parkHist = ph
+      const pb = planbOf(c.planb)
+      if (pb) out.planb = pb
     } catch (_) { /* park best-effort */ }
     if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
     // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side

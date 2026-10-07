@@ -9,7 +9,7 @@ const assert = require('node:assert/strict')
 const { stubBrain, jevBrain, makeBrain, hybridBrain, planner, JEV_ENDPOINT, JEV_MODEL, PLAN_TIMEOUT_MS } = require('../src/brain')
 const metrics = require('../src/metrics')
 
-assert.equal(PLAN_TIMEOUT_MS, 20000, 'plan has its own 20 s deadline, off the tick path')
+assert.equal(PLAN_TIMEOUT_MS, 10000, 'plan has its own 10 s deadline, off the tick path (vmzq.21: the 120 s commit window makes older answers stale)')
 assert.equal(JEV_MODEL, 'jev-latest')
 
 const LAYA_URL = 'http://laya:8000/v1/systemone'

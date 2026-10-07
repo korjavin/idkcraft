@@ -354,17 +354,20 @@ function tableFor(bot, ctx) {
   // Refused spots (idkcraft-vmzq.20): a server-refused placement eats the
   // table item, and the deterministic scan re-picks the identical cell on
   // every pick — rig cycle 5 burned its whole window in a
-  // craft→equip-fail loop on one cell. Refused cells are skipped (a later
+  // craft→equip-fail loop on one cell. Refused cells sort last (a later
   // success clears the set: the area places again), so the next pick tries
-  // the next neighbour instead of re-burning.
+  // the next neighbour instead of re-burning — but a refused cell is still
+  // attempted when nothing else is viable, keeping the TABLE_TRIES
+  // contract (transient refusals in a one-cell world retry like before).
   if (!(ctx.equipTableSkip instanceof Set)) {
     try { ctx.equipTableSkip = new Set() } catch (_) { /* skip best-effort */ }
   }
   const skip = ctx.equipTableSkip instanceof Set ? ctx.equipTableSkip : new Set()
   let ref = null
   let at = null
+  let fallback = null
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (skip.has(`${bx + dx},${by},${bz + dz}`)) continue
+    const tried = skip.has(`${bx + dx},${by},${bz + dz}`)
     let below = null
     let cell = null
     try {
@@ -386,9 +389,17 @@ function tableFor(bot, ctx) {
       // doorway left the house doorless).
       if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
     } catch (_) { /* untestable home: place as before */ }
+    if (tried) {
+      if (!fallback) fallback = below
+      continue
+    }
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
+  }
+  if (!ref && fallback) {
+    ref = fallback
+    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
   if (!ref) return nope('no-table')
   // mineflayer places the HELD item: hold the table or a planks block lands
