@@ -209,7 +209,9 @@ function finish(bot, ctx, status) {
         ? ((now - f.blocks0 >= 0 ? '+' : '') + (now - f.blocks0))
         : String(now)
     } catch (_) { /* delta best-effort */ }
-    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} blocks=${delta}`) } catch (_) { /* log best-effort */ }
+    let wall = '?'
+    try { wall = (typeof f.t0 === 'number' ? Math.round((Date.now() - f.t0) / 1000) + 's' : '?') } catch (_) { /* wall best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} blocks=${delta} wall=${wall}`) } catch (_) { /* log best-effort */ }
   }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
