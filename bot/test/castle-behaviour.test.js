@@ -282,7 +282,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked[`${1}:0`].why, 'kept-chest')
   })
 
-  it('g0z.13: a moat cell holding ore/tuff is dug; planks in it and ore in a place cell stay kept', async () => {
+  it('g0z.13 + vmzq.40: a moat cell holding ore/tuff/planks is dug; a bed in a place cell stays kept', async () => {
     const v2 = blueprint.absPlan(SITE, 0, 2).cells
     const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch', door: 'oak_door', fence: 'oak_fence' }
     const moat = v2.find((c) => c.kind === 'dig' && c.dy === -1)
@@ -293,24 +293,19 @@ describe('g0z.2 castle executor', () => {
       const bot = mockBot(world)
       const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
       await run(bot, ctx, 6)
-      if (ore === 'oak_planks') {
-        assert.equal(world.get(moat.x, moat.y, moat.z), 'oak_planks')
-        assert.equal(ctx.castle.blocked[`2:${moat.idx}`].why, 'kept-oak_planks')
-        continue
-      }
       assert.equal(world.get(moat.x, moat.y, moat.z), 'air', ore)
       assert.deepEqual(ctx.castle.blocked, {}, ore)
       assert.equal(ctx.stepStatus, 'done', ore)
     }
-    // Place cells keep flat's narrow allowlist (pinned, g0z.2).
+    // Beds are never dug (vmzq.40 keeps them out of the footprint rule).
     const world = makeWorld()
     const c = cells()[0]
-    world.set(c.x, c.y, c.z, 'coal_ore')
+    world.set(c.x, c.y, c.z, 'red_bed')
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 2)
     assert.equal(bot.calls.digs.length, 0)
-    assert.equal(ctx.castle.blocked['1:0'].why, 'kept-coal_ore')
+    assert.equal(ctx.castle.blocked['1:0'].why, 'kept-red_bed')
   })
 
   it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {

@@ -442,6 +442,20 @@ function groundCell(state, pos) {
   } catch (_) { return false }
 }
 
+// Castle footprint (idkcraft-vmzq.40): the site box at and above site.y
+// (the entrance apron and door path lie inside it), plus any plan cell
+// (moat digs below). What the castle step may clear there: util.protectedReason.
+function inFootprint(state, pos) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos) return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    if (x < site.x || x >= site.x + w || z < site.z || z >= site.z + d) return false
+    return y >= site.y || absPlan(site, state.rot, state.blueprintVersion).at.has(`${x},${y},${z}`)
+  } catch (_) { return false }
+}
+
 function billOfMaterials(plan) {
   const bom = {}
   for (const c of plan) bom[c.kind] = (bom[c.kind] || 0) + 1
@@ -470,4 +484,5 @@ module.exports = {
   absPlan,
   protects,
   groundCell,
+  inFootprint,
 }

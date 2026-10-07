@@ -273,7 +273,7 @@ describe('vmzq.27 rig seeds: lowest stone cells, log/chest mix', () => {
     for (const version of [1, 2]) {
       const seeds = pickBlockedSeeds(SITE, 0, version, 3)
       assert.equal(seeds.length, 3)
-      assert.deepEqual(seeds.map((s) => s.block), ['oak_log', 'chest', 'oak_log'])
+      assert.deepEqual(seeds.map((s) => s.block), ['oak_log', 'chest', 'oak_planks'])
       assert.ok(seeds.every((s) => s.kind === 'stone'))
       const cells = blueprint.absPlan(SITE, 0, version).cells
       const at = new Map(cells.map((c) => [`${c.x},${c.y},${c.z}`, c]))

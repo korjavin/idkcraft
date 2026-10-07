@@ -30,7 +30,7 @@ const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const build = require('./build')
 const flat = require('./flat')
-const { denyReason, logDeny, NATURAL_SOLID, castleProtects } = require('./util')
+const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE } = require('./util')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -75,14 +75,22 @@ function held(bot, kind) {
   } catch (_) { /* no inventory: none */ }
   return n
 }
-function usable(bot, kind) {
-  return Math.max(0, held(bot, kind) - reserveOf(kind))
+// Relocated box contents (vmzq.40) are the owner's, not castle material:
+// with ctx, the carried stacks never count as usable.
+function carried(ctx, kind) {
+  const want = ITEM[kind]
+  let n = 0
+  for (const it of (ctx && ctx.castleCarry && ctx.castleCarry.items) || []) if (want(it.name)) n += it.count
+  return n
+}
+function usable(bot, kind, ctx) {
+  return Math.max(0, held(bot, kind) - reserveOf(kind) - carried(ctx, kind))
 }
 
 // Birch first (g0z.4: the Fachwerk infill prefers light wood), else any.
-function findItem(bot, kind) {
+function findItem(bot, kind, ctx) {
   const want = ITEM[kind]
-  if (!want || usable(bot, kind) <= 0) return null
+  if (!want || usable(bot, kind, ctx) <= 0) return null
   let any = null
   try {
     for (const it of bot.inventory.items() || []) {
@@ -96,8 +104,8 @@ function findItem(bot, kind) {
 
 // Prep fill (g0z.16): castle stone above the reserve, else dirt (the cut
 // spoil of a grass hill).
-function fillItem(bot) {
-  const s = findItem(bot, 'stone')
+function fillItem(bot, ctx) {
+  const s = findItem(bot, 'stone', ctx)
   if (s) return s
   try { return (bot.inventory.items() || []).find((it) => it && it.name === 'dirt') || null } catch (_) { return null }
 }
@@ -976,7 +984,11 @@ function digCell(bot, ctx, st, c, now) {
   // Unreadable (an unloaded chunk while far) is not a foreign build: it
   // falls through to the approach below, which loads the cell, and a cell
   // that never reads strikes 'unreadable' instead (g0z.22).
-  if (name != null && !ours && !natural) { blockCell(ctx, st, c, `kept-${name}`, now); return }
+  // The footprint is ours (vmzq.40): a foreign blocker clears for the
+  // castle step (util.castleClears), a box relocates with its contents.
+  const clear = { ...ctx, castleClear: true }
+  if (name != null && RELOCATE.test(name) && castleClears({ ...ctx, castleClear: 'emptied' }, c, name)) { relocate(bot, ctx, st, c, name, now); return }
+  if (name != null && !ours && !natural && !castleClears(clear, c, name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
@@ -996,7 +1008,7 @@ function digCell(bot, ctx, st, c, now) {
   // Ours (above) passes the type rules like placedByBot does; the trap,
   // gravity, submerged and castle-block rules still apply.
   const k = `${c.x},${c.y},${c.z}`
-  const dctx = ours ? { ...ctx, placedByBot: new Set([k]) } : ctx
+  const dctx = ours ? { ...clear, placedByBot: new Set([k]) } : clear
   const deny = b ? denyReason(bot, b, dctx) : 'unreadable'
   if (deny) {
     if (b) logDeny(b, deny)
@@ -1022,6 +1034,174 @@ function digCell(bot, ctx, st, c, now) {
       if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
     }
   })
+}
+
+// Relocate (idkcraft-vmzq.40, owner rule: never lose items): a chest,
+// barrel or furnace in a castle cell moves out. One flight empties it into
+// the pack (all or nothing — what does not fit goes back and the cell stays
+// a kept-<name> hole), digs it and walks onto the drop; stow() then places
+// it outside the footprint and the door path and puts the contents back.
+// ctx.castleCarry keeps the carried stacks out of castle material (usable).
+// ponytail: carry is in-memory — a restart mid-move leaves the contents in
+// the pack (kept, not lost, just no longer put back).
+function relocate(bot, ctx, st, c, name, now) {
+  if (ctx.castleCarry) { blockCell(ctx, st, c, 'carrying', now); return } // one box at a time
+  if (approach(bot, ctx, c, () => new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) return
+  if (flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
+  if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
+  if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
+  let b = null
+  try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
+  const deny = b ? denyReason(bot, b, { ...ctx, castleClear: 'emptied' }) : 'unreadable'
+  if (deny) {
+    if (b) logDeny(b, deny)
+    if (deny === 'below-feet' || deny === 'gravity') sidestep(bot, ctx, st, c, now, deny)
+    else strike(ctx, st, c, deny, now)
+    return
+  }
+  // A furnace by hand drops nothing: the box itself would be lost.
+  let tool = null
+  try { tool = typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(b) : null } catch (_) { tool = null }
+  if (!tool && b.harvestTools) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
+  flight(ctx, 'digInFlight', c, async (token) => {
+    let win = null
+    let carry = null
+    try {
+      win = await bot.openContainer(b)
+      carry = { name, items: [] }
+      ctx.castleCarry = carry
+      for (const it of win.containerItems()) {
+        await win.withdraw(it.type, it.metadata, it.count)
+        carry.items.push({ name: it.name, type: it.type, count: it.count })
+      }
+      if (win.containerItems().length) throw new Error('pack full')
+      win.close()
+      win = null
+      if (tool) await bot.equip(tool, 'hand')
+      await bot.dig(b)
+      carry.items.push({ name, count: 1, box: true })
+      console.log(`castle relocate ${c.x} ${c.y} ${c.z} ${name}: carrying ${carry.items.length - 1} stacks`)
+      if (live(ctx, token)) {
+        ctx.castleFails = null
+        ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
+      }
+    } catch (_) {
+      // Not dug: everything goes back into the box it came from.
+      try {
+        if (carry && carry.items.length) {
+          if (!win) win = await bot.openContainer(b)
+          while (carry.items.length) {
+            const it = carry.items[carry.items.length - 1]
+            await win.deposit(it.type, null, it.count)
+            carry.items.pop()
+          }
+        }
+      } catch (_) { /* what did not go back stays carried, stow puts it down */ }
+      if (carry && !carry.items.length && ctx.castleCarry === carry) ctx.castleCarry = null
+      if (live(ctx, token)) blockCell(ctx, st, c, `kept-${name}`, Date.now())
+    } finally {
+      try { if (win) win.close() } catch (_) { /* closed */ }
+    }
+  })
+}
+
+// Stow spot (vmzq.40): the nearest standable air cell 2..5 out of the site
+// box, off the door path (the entrance's way out to the nearest site edge
+// and 4 beyond, 2 to either side). Air above too: a chest lid needs it.
+function stowSpot(bot, st) {
+  const bp = bodyPos(bot)
+  if (!bp) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const { x: sx, y: sy, z: sz } = st.site
+  const ent = entrance(st)
+  const [reach, ox, oz] = [[ent.x - sx + 1, -1, 0], [sx + w - ent.x, 1, 0], [ent.z - sz + 1, 0, -1], [sz + d - ent.z, 0, 1]]
+    .sort((a, b) => a[0] - b[0])[0]
+  const onPath = (x, z) => {
+    const along = (x - ent.x) * ox + (z - ent.z) * oz
+    const lat = ox ? Math.abs(z - ent.z) : Math.abs(x - ent.x)
+    return along >= 0 && along <= reach + 4 && lat <= 2
+  }
+  const y0 = Math.max(Math.floor(bp.y), sy)
+  let best = null
+  for (let r = 2; r <= 5; r++) {
+    for (let x = sx - r; x <= sx + w - 1 + r; x++) {
+      for (let z = sz - r; z <= sz + d - 1 + r; z++) {
+        if (x > sx - r && x < sx + w - 1 + r && z > sz - r && z < sz + d - 1 + r) continue // ring r only
+        if (onPath(x, z)) continue
+        for (let y = y0 - 2; y <= y0 + 2; y++) {
+          if (!AIR.has(nameAt(bot, { x, y, z })) || !AIR.has(nameAt(bot, { x, y: y + 1, z }))) continue
+          let below = null
+          try { below = bot.blockAt(new Vec3(x, y - 1, z)) } catch (_) { below = null }
+          if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) continue
+          const dist = Math.hypot(x + 0.5 - bp.x, y - bp.y, z + 0.5 - bp.z)
+          if (!best || dist < best.dist) best = { x, y, z, dist }
+        }
+      }
+    }
+    if (best) return { x: best.x, y: best.y, z: best.z }
+  }
+  return null
+}
+
+// Put the carried box down (vmzq.40): owns the tick while it walks/places;
+// false when it cannot (no box in the pack yet, no spot: build on, the
+// contents stay carried and reserved).
+const STOW_FAILS = 3
+function stow(bot, ctx, st, now) {
+  const cr = ctx.castleCarry
+  if (cr.gaveUp) return false
+  let box = null
+  try {
+    const inv = bot.inventory.items() || []
+    box = inv.find((it) => it && it.name === cr.name) || inv.find((it) => it && RELOCATE.test(it.name))
+  } catch (_) { box = null }
+  if (!box) return false
+  const giveUp = (why) => {
+    cr.gaveUp = true
+    try { bot.chat(`castle: ${why} the ${cr.name}, keeping its contents in my pack`) } catch (_) { /* chat best-effort */ }
+  }
+  if (!cr.at) cr.at = stowSpot(bot, st)
+  if (!cr.at) { giveUp('no spot outside for'); return false }
+  const c = { idx: 'stow', kind: 'stow', ...cr.at }
+  const p = new Vec3(c.x, c.y, c.z)
+  if (approach(bot, ctx, c, () => new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE }))) return true
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) return true
+  const fail = () => {
+    cr.fails = (cr.fails || 0) + 1
+    ctx.castleGoalIdx = -1
+    if (cr.fails % STOW_FAILS === 0) cr.at = null // try another spot
+    if (cr.fails >= STOW_FAILS * 3) giveUp('could not put down')
+  }
+  const bp = bodyPos(bot)
+  if (!bp || Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5)) > build.PLACE_REACH) { fail(); return true }
+  flight(ctx, 'placeInFlight', c, async () => {
+    let win = null
+    try {
+      if (!RELOCATE.test(nameAt(bot, c) || '')) {
+        const below = bot.blockAt(new Vec3(c.x, c.y - 1, c.z))
+        await bot.equip(box, 'hand')
+        await bot.placeBlock(below, new Vec3(0, 1, 0))
+      }
+      win = await bot.openContainer(bot.blockAt(p))
+      for (const it of cr.items.slice()) {
+        if (it.box) continue
+        await win.deposit(it.type, null, it.count)
+        cr.items.splice(cr.items.indexOf(it), 1)
+      }
+      if (ctx.castleCarry === cr) ctx.castleCarry = null
+      try { bot.chat(`castle: moved the ${cr.name} out of the castle to ${c.x} ${c.y} ${c.z}, contents kept`) } catch (_) { /* chat best-effort */ }
+    } catch (_) {
+      fail()
+    } finally {
+      try { if (win) win.close() } catch (_) { /* closed */ }
+    }
+  })
+  return true
 }
 
 // Spoil pickup (g0z.6, flat's shave-pickup pattern): after a moat dig, walk
@@ -1145,7 +1325,7 @@ function work(bot, ctx, st, c, now, status) {
   } catch (_) { /* walk best-effort: fall through to the cell */ }
   let item = null
   if (!clearing(c)) {
-    item = c.prep === 'fill' ? fillItem(bot) : findItem(bot, c.kind)
+    item = c.prep === 'fill' ? fillItem(bot, ctx) : findItem(bot, c.kind, ctx)
     if (!item) {
       st.status = `need ${c.kind}`
       ctx.stepStatus = `failed:no-${c.kind}`
@@ -1189,6 +1369,7 @@ function castle(bot, ctx) {
   guardCastle(bot, ctx)
   if (st.announce) arrive(bot, st)
   if (ctx.castlePickup && pickup(bot, ctx)) return
+  if (ctx.castleCarry && stow(bot, ctx, st, now)) return
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
     const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
