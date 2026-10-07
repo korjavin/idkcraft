@@ -203,7 +203,7 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
-  it('no table anywhere fails no-table', async () => {
+  it('no table anywhere fails no-table-item', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
       ids: IDS,
@@ -214,7 +214,7 @@ describe('equip step', () => {
     await flush()
     assert.equal(bot.calls.craft.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'))
+    assert.ok(bot.errs[0].includes('no-table-item'))
     bot.restoreError()
   })
 
@@ -506,7 +506,7 @@ describe('equip step', () => {
     bot.restoreError()
   })
 
-  it('ghost home table with no spare fails no-table instead of stalling', async () => {
+  it('ghost home table with no spare fails no-table-item instead of stalling', async () => {
     const bot = mockBot({
       items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
       ids: IDS,
@@ -519,7 +519,7 @@ describe('equip step', () => {
     await flush()
     assert.equal(bot.calls.craft.length, 0)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs.some((e) => e.includes('no-table')))
+    assert.ok(bot.errs.some((e) => e.includes('no-table-item')))
     assert.equal(ctx.claimedTable, undefined)
     bot.restoreError()
   })
@@ -807,7 +807,7 @@ describe('equip failure edges (idkcraft-pun)', () => {
     bot.restoreError()
   })
 
-  it('flaky inventory degrades the table hunt to no-table', async () => {
+  it('flaky inventory degrades the table hunt to no-table-item', async () => {
     // items() dies mid-tick: tableFor reads [] and fails loudly instead of
     // crashing the tick. 6 = hasPickaxe + 4 toolOp reads, so the 6th call is
     // tableFor's itemsOf; the calls assert below keeps this honest if a read
@@ -828,7 +828,7 @@ describe('equip failure edges (idkcraft-pun)', () => {
     await flush()
     assert.ok(calls >= 6, `items() throw reached tableFor, calls=${calls}`)
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-item'), `errs: ${bot.errs}`)
     bot.restoreError()
   })
 
@@ -1029,7 +1029,7 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     bot.restoreError()
   })
 
-  it('a table in hand without placeBlock fails no-table', async () => {
+  it('a table in hand without placeBlock fails no-table-item', async () => {
     const bot = mockBot({
       items: [
         { name: 'oak_planks', count: 3 },
@@ -1049,13 +1049,13 @@ describe('equip helper residuals (idkcraft-17a)', () => {
     equip(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs.join(' ').includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs.join(' ').includes('no-table-item'), `errs: ${bot.errs}`)
     bot.restoreError()
   })
 })
 
 describe('equip table-branch residuals (idkcraft-17a)', () => {
-  it('no solid ground anywhere fails no-table', async () => {
+  it('no solid ground anywhere fails no-table-ref', async () => {
     const bot = mockBot({
       items: [
         { name: 'oak_planks', count: 3 },
@@ -1070,7 +1070,7 @@ describe('equip table-branch residuals (idkcraft-17a)', () => {
     equip(bot, ctx, null, {})
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs.join(' ').includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs.join(' ').includes('no-table-ref'), `errs: ${bot.errs}`)
     assert.equal(bot.calls.placeBlock.length, 0)
     bot.restoreError()
   })
@@ -1437,7 +1437,7 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     { name: 'stick', count: 2 },
   ]
 
-  it('Q01 ground without a position is skipped, no-table', async () => {
+  it('Q01 ground without a position is skipped, no-table-ref', async () => {
     const bot = mockBot({
       items: PLACE_ITEMS,
       ids: IDS,
@@ -1449,12 +1449,12 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-ref'), `errs: ${bot.errs}`)
     assert.equal(bot.calls.placeBlock.length, 0)
     bot.restoreError()
   })
 
-  it('Q02 ground without a name is skipped, no-table', async () => {
+  it('Q02 ground without a name is skipped, no-table-ref', async () => {
     const bot = mockBot({
       items: PLACE_ITEMS,
       ids: IDS,
@@ -1466,12 +1466,12 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-ref'), `errs: ${bot.errs}`)
     assert.equal(bot.calls.placeBlock.length, 0)
     bot.restoreError()
   })
 
-  it('Q03 air ground is skipped, no-table', async () => {
+  it('Q03 air ground is skipped, no-table-ref', async () => {
     const bot = mockBot({
       items: PLACE_ITEMS,
       ids: IDS,
@@ -1485,12 +1485,12 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-ref'), `errs: ${bot.errs}`)
     assert.equal(bot.calls.placeBlock.length, 0)
     bot.restoreError()
   })
 
-  it('Q04 occupied cells are skipped, no-table', async () => {
+  it('Q04 occupied cells are skipped, no-table-ref', async () => {
     const bot = mockBot({
       items: PLACE_ITEMS,
       ids: IDS,
@@ -1502,7 +1502,7 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-ref'), `errs: ${bot.errs}`)
     assert.equal(bot.calls.placeBlock.length, 0)
     bot.restoreError()
   })
@@ -1861,7 +1861,7 @@ describe('equip reset/fail residuals (idkcraft-17a batch R)', () => {
 describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
   const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
 
-  it('S-noblockat ghost station plus no lookup fails no-table, never throws', async () => {
+  it('S-noblockat ghost station plus no lookup fails no-table-item, never throws', async () => {
     const bot = mockBot({
       items: [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
       ids: IDS,
@@ -1873,7 +1873,7 @@ describe('equip place/dig guard residuals (idkcraft-17a batch S)', () => {
     await flush()
     await flush()
     assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
-    assert.ok(bot.errs[0].includes('no-table'), `errs: ${bot.errs}`)
+    assert.ok(bot.errs[0].includes('no-table-item'), `errs: ${bot.errs}`)
     bot.restoreError()
   })
 
@@ -2649,3 +2649,55 @@ describe('equip verify-after-resync (idkcraft-g0z.25)', () => {
 //   the try/catch around its use (S-noblockat* pin the behaviour).
 // - tableFor's st-init and resetRunCounters' guards: equip normalises
 //   ctx.equip first, so the false arms are unreachable via the step.
+
+describe('equip no-table spot transience (idkcraft-u07s)', () => {
+  it('no-table-ref twice does not day-latch (spot verdict, retried at new ground)', async () => {
+    // Rig cycle: two woods no-tables held equip all day — no pickaxe, the
+    // castle chain never started. The spot failure fails the step but never
+    // arms the ipn.11 day latch (the failHolds spot hold paces retries).
+    const bot = mockBot({
+      items: [
+        { name: 'oak_planks', count: 3 },
+        { name: 'stick', count: 2 },
+        { name: 'crafting_table', count: 1 },
+      ],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => null, // void below, air cells: nowhere to stand a table
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs.join(' ').includes('no-table-ref'), `errs: ${bot.errs}`)
+    assert.equal(ctx.equipLatch, undefined, 'first spot failure latches')
+    ctx.stepStatus = 'running' // same-day repeat at the same spot: still no latch
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.equal(ctx.equipLatch, undefined, 'second spot failure latches')
+    assert.equal(equip.equipLatched(ctx, bot), false)
+    bot.restoreError()
+  })
+
+  it('no-table-item twice still latches (no table anywhere)', async () => {
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }],
+      ids: IDS,
+      recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
+      blockAtImpl: () => null,
+    })
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.ok(bot.errs.join(' ').includes('no-table-item'), `errs: ${bot.errs}`)
+    assert.equal(equip.equipLatched(ctx, bot), false, 'first failure latches')
+    ctx.stepStatus = 'running'
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:equip-wooden_pickaxe')
+    assert.equal(equip.equipLatched(ctx, bot), true, 'same reason twice must latch')
+    bot.restoreError()
+  })
+})

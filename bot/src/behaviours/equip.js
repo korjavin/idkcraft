@@ -191,6 +191,23 @@ function fail(bot, ctx, item, err) {
     } catch (_) { /* logging best-effort */ }
     return
   }
+  // Transient table geometry (idkcraft-u07s): a carried table with no
+  // viable neighbour cell (or no body position to scan from) is a spot
+  // verdict, not a broken plan — the failHolds spot hold paces retries at
+  // new ground, so the day latch must not eat it (rig cycle: two woods
+  // no-tables held equip all day, no pickaxe, castle chain never started).
+  // Only no-table-item (no table anywhere) latches.
+  try {
+    const tmsg = err && err.message ? String(err.message) : ''
+    if (tmsg === 'no-table-ref' || tmsg === 'no-table-pos') {
+      ctx.stepStatus = `failed:equip-${item}`
+      resetRunCounters(ctx)
+      try {
+        console.error(`equip failed item=${item} error=${tmsg}`)
+      } catch (_) { /* logging best-effort */ }
+      return
+    }
+  } catch (_) { /* transient check best-effort: fall through to latch */ }
   try {
     const msg = err && err.message ? String(err.message) : String(err)
     noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
@@ -271,7 +288,11 @@ function ownTableOp(bot, ctx, op) {
 function tableFor(bot, ctx) {
   const nope = (why) => Promise.reject(new Error(why))
   const bp = bot.entity && bot.entity.position
-  if (!bp) return nope('no-table')
+  // Named sites (idkcraft-u07s): the log says which leg failed — pos (no
+  // body position), item (no table anywhere to place), ref (a carried
+  // table with no viable neighbour cell). The spot verdicts are transient
+  // (fail() does not day-latch them); only no-table-item latches.
+  if (!bp) return nope('no-table-pos')
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
   // Candidate stations: the home table, our own placed one, the menu
   // claim. Ghost entries (mined away) fall through to the inventory branch
@@ -344,7 +365,7 @@ function tableFor(bot, ctx) {
     if (claimedDead) delete ctx.claimedTable
   } catch (_) { /* retract best-effort */ }
   const tableItem = itemsOf(bot).find((i) => i && i.name === 'crafting_table')
-  if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table')
+  if (!tableItem || typeof bot.placeBlock !== 'function' || !bot.blockAt) return nope('no-table-item')
   // Beside the body, not under it: the feet cell collides with the bot and
   // the server rejects the placement. First free neighbour with solid
   // ground wins.
@@ -401,7 +422,7 @@ function tableFor(bot, ctx) {
     ref = fallback
     at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
-  if (!ref) return nope('no-table')
+  if (!ref) return nope('no-table-ref')
   // mineflayer places the HELD item: hold the table or a planks block lands
   // (and reads truthy) where the table should be.
   const run = async () => {
