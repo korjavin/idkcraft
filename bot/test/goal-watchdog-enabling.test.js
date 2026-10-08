@@ -123,7 +123,7 @@ describe('enabling credit (idkcraft-m1yb)', () => {
     assert.equal((ctx.task.castle.wd && ctx.task.castle.wd.rounds) || 0, 0, 'no rounds burned')
   })
 
-  it('each enabling category resets with its reason; consumption accrues; regather resets (delta)', () => {
+  it('each enabling category resets with its reason; consumption accrues; regather resets (delta, kit-open)', () => {
     const bot = makeBot({ items: [] })
     const { ctx } = castleCtx(bot)
     const inv = bot.inventory.items()
@@ -139,30 +139,71 @@ describe('enabling credit (idkcraft-m1yb)', () => {
     tick()
     assert.equal(lastReset(), 'goal reset kind=castle why=enabling:planks')
     assert.equal(ctx.task.castle.stallMs, 0)
+    // Consumption is not progress: the clock accrues (no grace on gather).
+    const openBefore = resetLogs().length
+    inv[0].count = 0 // planks 4 -> 0, crafted away
+    tick()
+    assert.equal(resetLogs().length, openBefore, 'no reset on consumption')
+    assert.equal(ctx.task.castle.stallMs, 10000)
+    // Regather below the old peak still resets while the kit is open:
+    // last-tick delta, not high-water.
+    inv[0].count = 2
+    tick()
+    assert.equal(lastReset(), 'goal reset kind=castle why=enabling:planks')
+    assert.equal(ctx.task.castle.stallMs, 0)
     inv.push({ name: 'stick', count: 4 })
     tick()
     assert.equal(lastReset(), 'goal reset kind=castle why=enabling:sticks')
     inv.push({ name: 'crafting_table', count: 1 })
     tick()
     assert.equal(lastReset(), 'goal reset kind=castle why=enabling:gear')
+    // The first pick completes the kit and still credits (baseline open).
     inv.push({ name: 'wooden_pickaxe', count: 1 })
     tick()
     assert.equal(lastReset(), 'goal reset kind=castle why=enabling:gear')
+    assert.equal(ctx.task.castle.enReady, true, 'baseline holds the pick')
+    // Bound: past a ready baseline, further gear growth stays flat.
+    const resetsBefore = resetLogs().length
     inv.push({ name: 'stone_pickaxe', count: 1 })
     tick()
-    assert.equal(lastReset(), 'goal reset kind=castle why=enabling:gear')
-    // Consumption is not progress: the clock accrues (no grace on gather).
-    const resetsBefore = resetLogs().length
-    inv[0].count = 0 // planks 4 -> 0, crafted away
-    tick()
-    assert.equal(resetLogs().length, resetsBefore, 'no reset on consumption')
+    assert.equal(resetLogs().length, resetsBefore, 'no reset past kit-ready')
     assert.equal(ctx.task.castle.stallMs, 10000)
-    // Regather below the old peak still resets: last-tick delta, not
-    // high-water (a death-wiped kit re-gathers the same way).
+    // Regather past a ready baseline stays flat too.
+    inv[0].count = 0
+    tick()
     inv[0].count = 2
     tick()
-    assert.equal(lastReset(), 'goal reset kind=castle why=enabling:planks')
-    assert.equal(ctx.task.castle.stallMs, 0)
+    assert.equal(resetLogs().length, resetsBefore, 'regather past ready stays flat')
+  })
+
+  it('past a ready kit, log/plank/stick growth does NOT reset the stall (the livelock bound)', async () => {
+    // Verifier: unbounded enabling let a chop loop silence the watchdog.
+    // Once the baseline holds any pickaxe, only castle metrics count.
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 0 }, { name: 'stone_pickaxe', count: 1 }] })
+    const { ctx } = castleCtx(bot)
+    const { calls, brain } = answerBrain('gather')
+    ctx.brain = brain
+    const inv = bot.inventory.items()
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0) // baseline, kit ready
+    assert.equal(ctx.task.castle.enReady, true, 'baseline ready')
+    const resetsBefore = resetLogs().length
+    // Steady chops across the 60 s window: no reset, the stall accrues,
+    // and the watchdog still fires.
+    advance(bot, ctx, t0, 130, (t, s) => {
+      if (s % 3 === 2) inv[0].count += 2
+    })
+    await flush()
+    assert.equal(resetLogs().length, resetsBefore, 'no enabling reset past ready')
+    assert.ok(ctx.task.castle.stallMs >= 60000, `stall accrues, got ${ctx.task.castle.stallMs}`)
+    assert.ok(calls.length >= 1, 'watchdog fires past a ready-kit chop loop')
+    // Planks and sticks past ready stay flat too.
+    const t1 = t0 + 140000
+    inv.push({ name: 'oak_planks', count: 4 })
+    taskMod.taskTick(bot, ctx, t1)
+    inv.push({ name: 'stick', count: 4 })
+    taskMod.taskTick(bot, ctx, t1 + 10000)
+    assert.equal(resetLogs().length, resetsBefore, 'planks/sticks past ready stay flat')
   })
 
   it('enabling is material-class: the any-clock resets while the placed clock accrues', () => {
@@ -203,6 +244,7 @@ describe('enabling credit (idkcraft-m1yb)', () => {
     assert.equal(snap.enPlanks, 0)
     assert.equal(snap.enSticks, 0)
     assert.equal(snap.enGear, 0)
+    assert.equal(snap.enReady, false, 'snapshot carries the readiness gate')
   })
 
   it('a done window with enabling-only growth reads progress with a logs delta', () => {
@@ -211,7 +253,7 @@ describe('enabling credit (idkcraft-m1yb)', () => {
     const inv = bot.inventory.items()
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0) // baseline
-    const arm = (enLogs) => {
+    const arm = (enLogs, enReady = false) => {
       ctx.goal = { id: 'castle-1', kind: 'castle', generation: 1 }
       ctx.goal.commit = {
         goalId: 'castle-1', generation: 1, kind: 'castle', optionId: 'gather', step: 'gather',
@@ -219,7 +261,7 @@ describe('enabling credit (idkcraft-m1yb)', () => {
         deaths: 0, unlock: null,
         snapshot: {
           done: 0, total: 1722, prepLeft: 0, matKind: 'stone', matHave: 0, matLeft: 80,
-          enLogs, enPlanks: 0, enSticks: 0, enGear: 0, marks: {},
+          enLogs, enPlanks: 0, enSticks: 0, enGear: 0, enReady, marks: {},
         },
       }
     }
@@ -235,6 +277,12 @@ describe('enabling credit (idkcraft-m1yb)', () => {
     assert.equal(outLogs().length, 2, 'two outcome lines')
     assert.match(outLogs()[1], /result=flat/, outLogs()[1])
     assert.equal(ctx.task.castle.wd.rounds, 1, 'flat counts')
+    // Bound: the same logs growth past a ready snapshot reads flat.
+    inv[0].count = 9
+    arm(5, true)
+    taskMod.commitFinished(bot, ctx, 'done')
+    assert.equal(outLogs().length, 3, 'three outcome lines')
+    assert.match(outLogs()[2], /result=flat/, outLogs()[2])
   })
 
   it('house clock cross-resets on castle enabling growth (castleWatch, revmux 01 core-2)', () => {
