@@ -437,7 +437,11 @@ of the server's at any rate. Every run logs `CASTLE-RIG time: <dusk|
 nightfall|dawn> server=<daytime> bot=<daytime> +<s>s` crossings plus a
 `time-resync: tickrate=<N> mode=<correct|track>` line (rate 1 tracks only
 and never writes the clock); the JSON record carries `timeEvents` and each
-15 s sample carries server (`srv`) vs bot (`bt`) daytime.
+15 s sample carries server (`srv`) vs bot (`bt`) daytime. The crossing's
+bot value is read back after the write (never the counted value), and a
+sample past 100 ticks of drift prints `CASTLE-RIG time-drift` loud — the
+record keeps the run max, so a correction that stops landing fails loud
+instead of printing agreement by construction.
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock

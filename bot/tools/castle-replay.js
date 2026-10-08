@@ -99,7 +99,7 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [] }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0 }
 function resetSeen() {
   seen.flips = 0
   seen.steps = {}
@@ -111,6 +111,7 @@ function resetSeen() {
   seen.wdFirstAt = 0
   seen.outcomes = { progress: 0, flat: 0, preempted: 0 }
   seen.timeEvents = []
+  seen.timeMaxDrift = 0
 }
 function hookConsole() {
   console.log = (...a) => {
@@ -191,6 +192,7 @@ function classify(line, now = Date.now()) {
 // synchronously at its end — the correction always lands last.
 const RESYNC_TICKS_PER_EMPTY = 20
 const RESYNC_JUMP_TICKS = 1000 // bigger anchor moves are time-sets: re-arm silently
+const RESYNC_DRIFT_TICKS = 100 // srv/bt breach: the correction stopped landing
 function resyncDimName(bot, id) {
   try { return bot.registry.dimensionsById[id] && bot.registry.dimensionsById[id].name } catch (_) { return null }
 }
@@ -206,11 +208,18 @@ function resyncWrite(bot, total) { // exact mirror of mineflayer time.js
 function resyncWord(daytime) { // goal.js timeWord cutoffs
   return daytime < 12000 ? 'day' : daytime <= 13000 ? 'dusk' : 'night'
 }
+// Circular |srv - bt| in daytime ticks, null when either clock is unreadable
+// (the midnight straddle reads 10 ticks, not 23990).
+function timeDrift(srv, bt) {
+  if (typeof srv !== 'number' || typeof bt !== 'number' || !Number.isFinite(srv) || !Number.isFinite(bt)) return null
+  const d = Math.abs(srv - bt) % 24000
+  return Math.min(d, 24000 - d)
+}
 // onEvent({ event, server, bot, at }) — event is dusk|nightfall|dawn,
 // server/bot are daytimes, at is a wall epoch. now is injectable for tests
 // (classify precedent).
 function createTimeResync({ write = true, onEvent = null } = {}) {
-  const st = { anchor: null, rate: 0, empties: 0, dim: null, word: null }
+  const st = { anchor: null, rate: 0, empties: 0, dim: null, word: null, pending: null }
   const total = () => st.anchor == null ? null : st.anchor + st.empties * RESYNC_TICKS_PER_EMPTY
   const daytime = () => {
     const t = total()
@@ -225,10 +234,12 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
     if (!onEvent || prev == null || prev === w) return
     const fwd = (prev === 'day' && w === 'dusk') || (prev === 'dusk' && w === 'night') || (prev === 'night' && w === 'day')
     if (!fwd) return // non-forward word changes re-arm silently
-    // In write mode the event's bot is the corrected daytime itself: apply()
-    // lands before any brain read, so the brain never sees the 20 ticks
-    // between the count and the write.
-    onEvent({ event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, bot: write ? d : bot && bot.time ? bot.time.timeOfDay : null, at: now })
+    const ev = { event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, at: now }
+    // In write mode the event waits for apply() and reports the live
+    // read-back, never the counted value: if the correction ever stops
+    // landing last, the report shows the stale clock (revmux 01 major).
+    if (write) { st.pending = ev; return }
+    onEvent({ ...ev, bot: bot && bot.time ? bot.time.timeOfDay : null })
   }
   return {
     state: st,
@@ -240,9 +251,10 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
         const cur = bot && bot.game && bot.game.dimension
         const hit = cu.find((c) => resyncDimName(bot, c.id) === cur)
         const tot = hit ? Number(hit.totalTicks) : NaN
-        if (!hit || !Number.isFinite(tot)) { st.anchor = null; st.word = null; return }
+        if (!hit || !Number.isFinite(tot)) { st.anchor = null; st.word = null; st.pending = null; return }
         const prev = total()
         st.anchor = tot; st.rate = Number(hit.rate) || 0; st.empties = 0; st.dim = cur
+        st.pending = null // a new anchor invalidates any queued crossing
         if (prev != null && Math.abs(tot - prev) > RESYNC_JUMP_TICKS) {
           st.word = resyncWord(daytime()) // time-set jump (a night->day set is not a dawn)
           return
@@ -259,6 +271,8 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
       if (!write || st.anchor == null || !(st.rate > 0)) return
       if (!bot || !bot.game || bot.game.dimension !== st.dim) return
       resyncWrite(bot, st.anchor + st.empties * RESYNC_TICKS_PER_EMPTY)
+      if (st.pending && onEvent) onEvent({ ...st.pending, bot: bot.time.timeOfDay })
+      st.pending = null
     },
   }
 }
@@ -564,9 +578,15 @@ async function main() {
     try {
       // vmzq.45: server daytime (re-anchored + counted) vs the bot's own
       // clock as the brain reads it. srv=null means the resync never
-      // anchored (pre-26.1 shape or unknown dimension).
+      // anchored (pre-26.1 shape or unknown dimension). A breach is loud:
+      // the correction stopped landing (revmux 01 major).
       s.srv = timeResync.daytime()
       s.bt = (follower && follower.time && typeof follower.time.timeOfDay === 'number') ? follower.time.timeOfDay : null
+      const drift = timeDrift(s.srv, s.bt)
+      if (drift != null) {
+        if (drift > seen.timeMaxDrift) seen.timeMaxDrift = drift
+        if (drift > RESYNC_DRIFT_TICKS) origErr(`CASTLE-RIG time-drift: srv=${s.srv} bt=${s.bt} (+${s.t}s)`)
+      }
     } catch (_) { /* time best-effort */ }
     try {
       let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
@@ -622,7 +642,7 @@ async function main() {
         tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
         kit: KIT, tickrate: TICKRATE, planner: PLANNER, said: seen.said,
         wdCalls: seen.wdCalls, wdChoices: seen.wdChoices, outcomes: seen.outcomes, series,
-        timeEvents: seen.timeEvents,
+        timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
@@ -937,7 +957,7 @@ async function main() {
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
     kit: KIT, tickrate: TICKRATE, planner: PLANNER, blocked: blockedSeeds, said: seen.said,
     wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
-    series, timeEvents: seen.timeEvents,
+    series, timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -954,4 +974,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createTimeResync }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createTimeResync, timeDrift }
