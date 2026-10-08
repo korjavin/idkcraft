@@ -208,6 +208,32 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.equal(ctx.inShelter, false, 'exposed: fight preempts')
   })
 
+  it('a walk-off that descends and times out (downhill no-walk) holds exposed', async () => {
+    // Revmux 03 core-1: floor0 seeds when the walk starts, so walk
+    // descent is not pit descent — a timed-out downhill walk must not
+    // arm the open hold.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => {
+        if (x === 5 && z === 5) return 'dirt'
+        return Math.hypot(x - 5, z - 5) <= 12 ? 'stone' : 'dirt'
+      },
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, 'relocation launched')
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+    await flush() // one walk tick seeds floor0 at the start ...
+    bot.entity.position = pos(0.5, 62, 0.5) // ... then the walk descends, never arrives
+    for (let t = 0; t < 20 && ctx.shelter.dig; t++) {
+      logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+      await flush()
+    }
+    assert.ok(logs.includes('shelter dig-in failed:no-walk'), JSON.stringify(logs))
+    assert.equal(ctx.inShelter, false, 'walk descent is not a dug pit: fight preempts')
+  })
+
   it('a protected failure off the castle (house ground) keeps the armed hold', async () => {
     // Revmux 01 core-3b: the castleGroundHere gate — exposing every
     // protected failure would break the house-porch hold.

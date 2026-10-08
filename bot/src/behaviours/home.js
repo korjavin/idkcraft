@@ -1158,13 +1158,17 @@ function shelter(bot, ctx, target, state) {
         try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
         return
       }
-      // Committed pits keep the armed hold below: measured descent, not
-      // dig attempts — st.digs counts dispatched digs, and a refused or
-      // reverted first break leaves the body on the surface (revmux 02
-      // core-1). floor0 re-seeds on walk arrival, so this reads the
-      // arrival column for walks. Unknown reads as surface (exposed).
+      // Committed pits keep the armed hold below: measured descent once
+      // the dig column is reached and a dig was sent. st.digs counts
+      // dispatched digs, and a refused first break leaves the body on
+      // the surface (revmux 02 core-1); floor0 seeds when the walk
+      // starts, so a walk that descends and times out is not a dug pit
+      // either (revmux 03 core-1: a failed walk keeps st.walk set, so
+      // !walk reads arrival — or no walk at all). Unknown reads as
+      // surface (exposed).
       const bp0 = botPos(bot)
-      const dugDown = (st.dig.floor0 != null && bp0) ? Math.max(0, st.dig.floor0 - Math.floor(bp0.y)) : 0
+      const dugDown = (!st.dig.walk && (st.dig.digs | 0) > 0 && st.dig.floor0 != null && bp0)
+        ? Math.max(0, st.dig.floor0 - Math.floor(bp0.y)) : 0
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
       if (r === 'done') {
