@@ -92,17 +92,18 @@ function groundedNow(bot) {
 function progressed(bot, ctx, bp) {
   const last = ctx && ctx.lastPos
   if (!bp || !last) return false
-  if (horiz(bp, last) > MOVE_TOLERANCE) {
-    // Buried with no working path (vmzq.42): pocket shuffles are flail,
-    // not progress — only leaving the pocket past the buried bar counts,
-    // and a climb/descent still counts via the floor check below. The scan
-    // runs only on would-be-progress ticks, so healthy ticks cost nothing
-    // further; working legs read a success path and keep the old bar.
-    if (!recover.buriedFlail(bot, ctx)) return true
-    if (horiz(bp, last) > BURIED_PROGRESS_DIST) return true
-  }
-  return !!(groundedNow(bot) && typeof bp.y === 'number' && typeof last.y === 'number' &&
-    Math.floor(bp.y) !== Math.floor(last.y))
+  const moved = horiz(bp, last) > MOVE_TOLERANCE
+  const rose = groundedNow(bot) && typeof bp.y === 'number' && typeof last.y === 'number' &&
+    Math.floor(bp.y) !== Math.floor(last.y)
+  if (!moved && !rose) return false
+  // Buried with no working path (vmzq.42): pocket motion is flail, not
+  // progress — a tunnel crawl (floor changes included) toward an
+  // unreachable goal never arrives (rig: 2 blocks in a minute while the
+  // detector slept), so only leaving the pocket past the buried bar
+  // counts. The scan runs only on would-be-progress ticks; working legs
+  // read a success path and keep the old bar.
+  if (recover.buriedFlail(bot, ctx)) return horiz(bp, last) > BURIED_PROGRESS_DIST
+  return true
 }
 
 // Still ticks only: an apex-size 3D move from the anchor re-arms the jump
@@ -444,7 +445,8 @@ function update(bot, ctx) {
       else ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       // Buried fast streak (vmzq.42): a flail tick accrues here too, so the
       // raise below beats the dig hold instead of waiting it out. Progress
-      // zeroes via zeroCounters; any non-flail tick restarts the streak.
+      // zeroes via zeroCounters; a counting non-flail tick restarts the
+      // streak, while idle ticks (parked/at-goal/mid-plan) merely pause it.
       if (recover.buriedFlail(bot, ctx)) ctx.buriedStills = (ctx.buriedStills || 0) + 1
       else ctx.buriedStills = 0
       ctx.stuckState = 'SUSPECT'

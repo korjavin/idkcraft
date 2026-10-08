@@ -37,6 +37,9 @@ const HOP_STALL_VY = 0.08 // stall band: a jump apex crosses it for one sample a
 const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held while stalled
 const HOP_RETRY_BACK_MS = 100 // short back-off to leap stance: gap 0.25-0.5 off the face (wqt assay)
 const HOP_PRESS_DIST = 1.0 // pressed: closer than this to the anchor a leap goes into the face (flush is 0.8)
+const DIG_PILLAR_CENTRE_HALF = 0.1 // centred window: frac within 0.5±0.1 both axes (lip reach needs 0.35)
+const DIG_PILLAR_PULSE_MS = 50 // centre-steer pulse: ~0.15 a step, lands inside the window
+const DIG_PILLAR_CENTRE_TICKS = 8 // steer budget: the worst stance needs 4 pulses, then the veto decides
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
 const RECOVER_BAN_FAILS = 3 // same-spot consecutive fails before a kind leaves the menu (vmzq.47)
 const RECOVER_BAN_ANCHOR_DIST = 3 // 3D blocks from the ban anchor: past this the situation is new
@@ -144,11 +147,15 @@ function ownHeadBlockedAt(bot) {
 // past which centered stances (frac 0.5) would catch the side columns and
 // veto working chimney jumps.
 const HEAD_DRIFT_MARGIN = 0.05
-function headBlockedAt(bot) {
-  if (ownHeadBlockedAt(bot)) return true
+// The neighbouring lip threatening the jump head (vmzq.43 r2): [dx, dz] of
+// the neighbour whose dy+2 rock the drifting body can reach, or null. The
+// exact neighbour half of the oz8 scan in headBlockedAt below (same reach,
+// corner seals and two-cell rule) — headBlockedAt stays the boolean gate,
+// this names the threat the dig_pillar centre phase steers away from.
+function jumpLipAt(bot) {
   let bp = null
   try { bp = botPos(bot) } catch (_) { bp = null }
-  if (!bp) return false
+  if (!bp) return null
   const reach = 0.3 + HEAD_DRIFT_MARGIN
   const fx = Math.floor(bp.x)
   const fz = Math.floor(bp.z)
@@ -167,10 +174,14 @@ function headBlockedAt(bot) {
       // solid the 1.8 body can never be inside the column at any jump
       // phase, so that neighbour is a wall to slide along, never a bonk.
       if (!solid(cellAt(bot, dx, 0, dz)) && !solid(cellAt(bot, dx, 1, dz)) &&
-        solid(cellAt(bot, dx, 2, dz))) return true
+        solid(cellAt(bot, dx, 2, dz))) return [dx, dz]
     }
   }
-  return false
+  return null
+}
+function headBlockedAt(bot) {
+  if (ownHeadBlockedAt(bot)) return true
+  return jumpLipAt(bot) !== null
 }
 
 // Goalward 1x2 solidity for the dig_through menu fact (9sq F1): stuck.goal
@@ -271,6 +282,28 @@ function diggable(bot, b) {
   if (!b || typeof b.name !== 'string') return false
   if (!PICK_DIG.has(b.name)) return false
   if (!hasPickaxe(bot) && !capped(bot)) return false
+  try {
+    if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
+  } catch (_) { /* reach check best-effort */ }
+  return true
+}
+// Bare-hand through an ore vein (vmzq.43 r2): a 1-wide shaft cannot route
+// around an ore cell the way the staircase does (side choice), and the
+// escalation (sidestep tunnels) costs minutes — digging through at ~15 s
+// a cell beats it. Pickless head-dig only; forage still owns ores
+// everywhere else (PICK_DIG keeps excluding them). No ancient debris
+// (150 s bare-hand) or budding amethyst (unbreakable).
+const ORE_DIG = new Set([
+  'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore',
+  'lapis_ore', 'diamond_ore', 'emerald_ore',
+  'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_copper_ore',
+  'deepslate_gold_ore', 'deepslate_redstone_ore', 'deepslate_lapis_ore',
+  'deepslate_diamond_ore', 'deepslate_emerald_ore',
+])
+function pillarHeadDiggable(bot, b) {
+  if (diggable(bot, b)) return true
+  if (hasPickaxe(bot) || !b || typeof b.name !== 'string') return false
+  if (!ORE_DIG.has(b.name)) return false
   try {
     if (bot && typeof bot.canDigBlock === 'function') return !!bot.canDigBlock(b)
   } catch (_) { /* reach check best-effort */ }
@@ -526,14 +559,14 @@ function findDigStepDir(bot) {
 // it (idkcraft-vmzq.43): the lowest solid of the two cells the 1.8 body
 // rises through, or null when there is nothing to dig (pillar_up owns
 // free headroom) or the head does not dig. Same gate as findDigStepDir's
-// jump head: it must dig bare-handed (HAND_DIG, or PICK_DIG stone while
-// capped, via diggable) with no lava sitting on it.
+// jump head, plus the ore vein a shaft cannot route around (r2): it must
+// dig bare-handed via pillarHeadDiggable with no lava sitting on it.
 function findDigPillarHead(bot) {
   const head1 = cellAt(bot, 0, 1, 0)
   const head2 = cellAt(bot, 0, 2, 0)
   const cell = solid(head1) ? head1 : (solid(head2) ? head2 : null)
   if (!cell) return null
-  if (!diggable(bot, cell) || headLavaAt(bot)) return null
+  if (!pillarHeadDiggable(bot, cell) || headLavaAt(bot)) return null
   return cell
 }
 
@@ -900,7 +933,13 @@ function pillarUpRun(bot, ctx) {
   if (!bp) return 'failed:no-pos'
   // Runtime veto double-check: feasibility said yes, the world may disagree.
   if (scaffoldCount(bot) === 0) { setJump(bot, false); return 'failed:no-scaffold' }
-  if (headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
+  // The veto guards the rise only (vmzq.43 r2): once the body is past the
+  // start floor — a placed pillar underfoot, or a mid-air sample past it —
+  // the new head is rock by construction in a sealed mass, and vetoing
+  // there fails a working climb. Open-air pillars never read a blocked
+  // risen head, so their ticks keep the exact old gate.
+  const risen = st.startFloor !== null && Math.floor(bp.y) > st.startFloor
+  if (!risen && headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
   if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
   if (st.phase === 'jump') {
     // Descending floor anchor (cm0.2): the cycle may arm mid-flight — an
@@ -1328,11 +1367,12 @@ function digUpRun(bot, ctx) {
 // boxed climb — one bare-hand dig per block instead of the staircase's
 // three digs plus a mount. Phase 'dig' clears the own head through the
 // shared digStepCell (same deny/lava/timeout shape as every other dig);
-// phase 'pillar' runs the shared pillarUpRun IN PLACE on this same rec.st
-// (its jump-start timer keys on st identity, so no sub-state swap —
-// digStepCell borrows st.waited, and the transition resets the whole
-// pillar field set before the first pillar tick). Done on the pillar
-// verify, chainable to the mouth.
+// phase 'centre' walks to the cell centre while a lip is in reach (a
+// sealed 1-wide shaft reads none and skips free); phase 'pillar' runs the
+// shared pillarUpRun IN PLACE on this same rec.st (its jump-start timer
+// keys on st identity, so no sub-state swap — digStepCell borrows
+// st.waited, and the transition resets the whole pillar field set before
+// the first pillar tick). Done on the pillar verify, chainable to the mouth.
 function digPillarRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { dphase: 'dig', startFloor: null, digInFlight: false, digError: false })
@@ -1343,11 +1383,43 @@ function digPillarRun(bot, ctx) {
     const head2 = cellAt(bot, 0, 2, 0)
     const cell = solid(head1) ? head1 : (solid(head2) ? head2 : null)
     if (cell) {
-      if (!diggable(bot, cell) || headLavaAt(bot)) { setJump(bot, false); return 'failed:no-head-dig' }
+      if (!pillarHeadDiggable(bot, cell) || headLavaAt(bot)) { setJump(bot, false); return 'failed:no-head-dig' }
       return digStepCell(bot, ctx, st, cell)
     }
-    // Headroom clear: reset the pillar field set on the shared st and fall
-    // into the pillar cycle below, same tick — the jump starts now.
+    // Headroom clear: centre next (lips), the pillar after that.
+    st.dphase = 'centre'
+    st.steer = 0
+  }
+  if (st.dphase === 'centre') {
+    // Off-centre in a wide pocket (vmzq.43 r2): every neighbour is a lip
+    // (air below, rock two up), and the pillar veto fails the jump. Walk
+    // to the cell centre, where no neighbour is within jump reach — the
+    // sealed shaft above needs no walk and skips at once. Bounded: past
+    // the budget the veto below decides (a real bonk still fails).
+    const fx = bp.x - Math.floor(bp.x)
+    const fz = bp.z - Math.floor(bp.z)
+    const centred = Math.abs(fx - 0.5) <= DIG_PILLAR_CENTRE_HALF && Math.abs(fz - 0.5) <= DIG_PILLAR_CENTRE_HALF
+    const grounded = !bot.entity || !!bot.entity.onGround
+    st.steer = (st.steer || 0) + 1
+    if (!centred && grounded && jumpLipAt(bot) !== null && st.steer <= DIG_PILLAR_CENTRE_TICKS) {
+      try {
+        if (typeof bot.lookAt === 'function') {
+          const p = bot.lookAt(new Vec3(Math.floor(bp.x) + 0.5, bp.y, Math.floor(bp.z) + 0.5), true)
+          if (p && typeof p.catch === 'function') p.catch(() => {})
+        }
+      } catch (_) { /* look best-effort */ }
+      // A short step, not a held walk: a 1 Hz tick of forward is ~4 blocks
+      // and would carry the body past the centre (dig-in precedent).
+      setForward(bot, true)
+      try {
+        const t = setTimeout(() => setForward(bot, false), DIG_PILLAR_PULSE_MS)
+        if (t && typeof t.unref === 'function') t.unref()
+      } catch (_) { /* release next tick */ }
+      return 'running'
+    }
+    // Centred (or nothing to walk from): reset the pillar field set on the
+    // shared st and fall into the pillar cycle below, same tick.
+    setForward(bot, false)
     st.dphase = 'pillar'
     st.phase = 'jump'
     st.waited = 0
@@ -2267,6 +2339,7 @@ function release(bot, ctx, how) {
   // uqhp round 2: the streak family resets together — a stale 60-tick budget
   // would wedge the next dig leg after 30 ticks (the pre-fix shape).
   ctx.digStills = 0
+  ctx.buriedStills = 0 // vmzq.42 r2: or every buried episode after the first re-raises on its first tick
   ctx.stuck = null
   ctx.recovery = null
   // Terminal dones are already counted by decide() per finished primitive;
@@ -2344,6 +2417,12 @@ async function decide(bot, ctx, state, target) {
     // kind that keeps failing at this spot leaves future menus.
     if (outcome !== 'done') {
       try { noteRecoverFail(ctx, botPos(bot), prev, outcome) } catch (_) { /* bans best-effort */ }
+      // vmzq.43 r2: a placement refusal breaks the SPOT, not the kind — a
+      // dig_pillar refusal retires pillar_up there too (its head is dug,
+      // so pillar_up would otherwise retry the same refused cell next).
+      if (prev === 'dig_pillar' && outcome === 'failed:place-error') {
+        try { noteRecoverFail(ctx, botPos(bot), 'pillar_up', outcome) } catch (_) { /* bans best-effort */ }
+      }
     }
     // A finished goal-owner (sidestep) leaves its GoalNear live, and the
     // next primitive's direct drive would fight the lib at 20 Hz (7gt:

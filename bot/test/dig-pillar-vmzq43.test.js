@@ -35,6 +35,8 @@ function pocketBot({ items = [{ name: 'cobblestone', count: 64 }], cells = {}, a
     heldItem: null,
     controls: {},
     setControlState(c, v) { this.controls[c] = !!v },
+    looks: [],
+    lookAt(p) { bot.looks.push([p.x, p.z]) },
     blockAt(p) {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
       const k = `${x},${y},${z}`
@@ -199,8 +201,15 @@ describe('dig_pillar guards (vmzq.43)', () => {
     assert.ok(!menuOf(bot, pocketCtx()).names.includes('dig_pillar'))
   })
 
-  it('an undiggable head (ore) is not offered', () => {
+  it('an ore vein head is offered: shafts cannot route around (r2)', () => {
     const bot = pocketBot({ cells: { '0,47,0': 'coal_ore' } })
+    const { facts: f, names } = menuOf(bot, pocketCtx())
+    assert.equal(f.digPillar, true)
+    assert.ok(names.includes('dig_pillar'))
+  })
+
+  it('an unbreakable head (obsidian) is not offered', () => {
+    const bot = pocketBot({ cells: { '0,47,0': 'obsidian' } })
     const { facts: f, names } = menuOf(bot, pocketCtx())
     assert.equal(f.digPillar, false)
     assert.ok(!names.includes('dig_pillar'))
@@ -287,6 +296,71 @@ describe('dig_pillar run (vmzq.43)', () => {
     } finally { cap.release() }
   })
 
+  it('an off-centre stance steers to the middle before pillaring (r2)', async () => {
+    // Revmux 01 major 2: at frac-x 0.2 the west lip is in jump reach and
+    // the pillar veto would fail the handoff — the centre phase walks out
+    // of reach first. The mock has no physics: the test moves the body.
+    const bot = pocketBot({ at: [0.2, 45, 0.5] })
+    const ctx = pocketCtx()
+    const cap = capture()
+    try {
+      const r = await recover.decide(bot, ctx, null, null)
+      assert.equal(r.action, 'dig_pillar')
+      for (let t = 0; t < 6 && bot.dug.length < 1; t++) {
+        recover.run(bot, ctx)
+        await flush()
+      }
+      assert.deepEqual(bot.dug, ['0,47,0'])
+      recover.run(bot, ctx) // head clear -> centre steers, not pillars
+      assert.equal(ctx.recovery.st.dphase, 'centre')
+      assert.equal(ctx.recovery.status, 'running')
+      assert.equal(bot.controls.forward, true)
+      assert.deepEqual(bot.looks, [[0.5, 0.5]])
+      bot.entity.position = pos(0.5, 45, 0.5) // the walk lands mid-cell
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.st.dphase, 'pillar')
+      assert.equal(bot.controls.forward, false)
+      assert.equal(bot.controls.jump, true)
+    } finally { cap.release() }
+  })
+
+  it('a sealed shaft skips the walk: no lips, no cost (r2)', async () => {
+    const cells = {}
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      cells[`${x},45,${z}`] = 'stone'
+      cells[`${x},46,${z}`] = 'stone'
+    }
+    const bot = pocketBot({ cells, at: [0.2, 45, 0.5] })
+    const ctx = pocketCtx()
+    const cap = capture()
+    try {
+      await recover.decide(bot, ctx, null, null)
+      for (let t = 0; t < 6 && bot.dug.length < 1; t++) {
+        recover.run(bot, ctx)
+        await flush()
+      }
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.st.dphase, 'pillar', 'no lips in reach: straight to the jump')
+      assert.ok(!bot.controls.forward)
+      assert.deepEqual(bot.looks, [])
+    } finally { cap.release() }
+  })
+
+  it('the steer is bounded: past the budget the veto decides (r2)', async () => {
+    const bot = pocketBot({ at: [0.2, 45, 0.5] })
+    await bot.dig({ position: new Vec3(0, 47, 0) }) // head already clear
+    const ctx = {
+      stuck: { by: 'castle', goal: { x: 0, y: 70, z: 0 }, key: 'ticker' },
+      recovery: {
+        action: 'dig_pillar', source: 'fsm', model: null, status: 'running',
+        st: { dphase: 'centre', steer: 8, startFloor: null, digInFlight: false, digError: false },
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.st.dphase, 'pillar', 'budget out: jump anyway, the veto guards a real bonk')
+    assert.ok(!bot.controls.forward)
+  })
+
   it('chains one block per cycle while the new head is rock', async () => {
     const bot = pocketBot()
     const ctx = pocketCtx()
@@ -339,6 +413,52 @@ describe('dig_pillar run (vmzq.43)', () => {
     } finally { cap.release() }
     assert.deepEqual(seen, [['sidestep', 'wait']])
     assert.equal(r.action, 'sidestep')
+  })
+
+  it('a dig_pillar refusal retires pillar_up at the spot too (r2)', async () => {
+    // The refusal breaks the spot, not the kind: with the head dug,
+    // pillar_up would otherwise retry the same refused cell next.
+    const bot = pocketBot()
+    const ctx = pocketCtx()
+    ctx.recovery = {
+      action: 'dig_pillar', source: 'fsm', model: null, status: 'failed:place-error',
+      st: { dphase: 'pillar', startFloor: 45 }, attempts: 1, fails: 0, repeats: 0,
+      last: null, calledPlayer: false, endEpisode: false, lastDy: null, lastY: null,
+      flats: 0, placeError: false,
+    }
+    const cap = capture()
+    let r
+    try {
+      r = await recover.decide(bot, ctx, null, null)
+    } finally { cap.release() }
+    assert.equal(recover.recoverBanned(ctx, 'pillar_up'), true)
+    assert.notEqual(r.action, 'pillar_up')
+  })
+
+  it('the rise veto fires pre-rise and only pre-rise (r2)', () => {
+    // Pre-rise with a blocked head: the old gate stands.
+    const pre = pocketBot()
+    const preCtx = {
+      stuck: { by: 'test', goal: { x: 0, y: 70, z: 0 }, key: 'test' },
+      recovery: {
+        action: 'pillar_up', source: 'fsm', model: null, status: 'running',
+        st: { phase: 'jump', startFloor: 45, waited: 0, timerArmed: true, placeInFlight: false, placed: false, placeError: false },
+      },
+    }
+    recover.run(pre, preCtx)
+    assert.equal(preCtx.recovery.status, 'failed:head-blocked')
+    // Risen with a blocked new head and the pillar underfoot: the climb
+    // verifies instead of vetoing (rig c42b: every post-rise tick failed).
+    const post = pocketBot({ at: [0.5, 46, 0.5], cells: { '0,45,0': 'cobblestone' } })
+    const postCtx = {
+      stuck: { by: 'test', goal: { x: 0, y: 70, z: 0 }, key: 'test' },
+      recovery: {
+        action: 'pillar_up', source: 'fsm', model: null, status: 'running',
+        st: { phase: 'place', startFloor: 45, waited: 0, timerArmed: false, placeInFlight: false, placed: true, placeError: false },
+      },
+    }
+    recover.run(post, postCtx)
+    assert.equal(postCtx.recovery.status, 'done')
   })
 
   it('registry parity: order, menu, criteria and the climb chain cap', () => {

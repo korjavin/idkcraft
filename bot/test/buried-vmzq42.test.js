@@ -25,8 +25,11 @@ function pos(x, y, z) {
 function buriedBot({ at = [0.5, 45, 0.5], status = 'partial', digging = false, ceiling = true } = {}) {
   const blocks = {}
   if (ceiling) {
+    // Four thick: tunnel crawls stay capped after climbing a block.
     for (let x = -2; x <= 2; x++) {
-      for (let z = -2; z <= 2; z++) blocks[`${x},47,${z}`] = 'stone'
+      for (let z = -2; z <= 2; z++) {
+        for (let y = 47; y <= 50; y++) blocks[`${x},${y},${z}`] = 'stone'
+      }
     }
   }
   const bot = {
@@ -112,21 +115,36 @@ describe('buried flail gate (vmzq.42)', () => {
     assert.equal(stuck.verdict(ctx).state, 'MOVING')
   })
 
-  it('a floor change still counts as progress while buried', () => {
+  it('a tunnel crawl (floor change) does not reset the buried streak', () => {
+    // r2: the rig tunneled up 2 blocks in a minute while the detector
+    // slept — a crawl toward an unreachable goal never arrives.
     const { bot, ctx } = buriedBot({})
     for (let i = 0; i < 10; i++) stuck.update(bot, ctx)
-    bot.entity.position = pos(0.5, 46.2, 0.5) // climbed a block: progress
-    stuck.update(bot, ctx)
-    assert.equal(ctx.buriedStills || 0, 0)
-    assert.equal(stuck.verdict(ctx).state, 'MOVING')
+    bot.entity.position = pos(0.5, 46.2, 0.5) // crawled up a block
+    const cap = capture()
+    try {
+      for (let i = 0; i < 5; i++) stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK', 'streak survives the crawl')
+    assert.equal(ctx.stuckTicks, 15)
   })
 
-  it('a climb with sideways drift still counts while buried', () => {
+  it('a crawl with sideways drift does not reset either', () => {
     const { bot, ctx } = buriedBot({})
     for (let i = 0; i < 10; i++) stuck.update(bot, ctx)
     bot.entity.position = pos(1.5, 46.2, 0.5) // drifted 1 and rose a floor
+    const cap = capture()
+    try {
+      for (let i = 0; i < 5; i++) stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK')
+  })
+
+  it('a floor change still resets on open ground (master parity)', () => {
+    const { bot, ctx } = buriedBot({ ceiling: false })
+    for (let i = 0; i < 10; i++) stuck.update(bot, ctx)
+    bot.entity.position = pos(0.5, 46.2, 0.5)
     stuck.update(bot, ctx)
-    assert.equal(ctx.buriedStills || 0, 0)
     assert.equal(ctx.stuckTicks || 0, 0)
     assert.equal(stuck.verdict(ctx).state, 'MOVING')
   })
@@ -154,5 +172,35 @@ describe('buried flail gate (vmzq.42)', () => {
     for (let i = 0; i < 20; i++) stuck.update(bot, ctx) // past the streak
     assert.equal(ctx.stuck || null, null)
     assert.equal(stuck.verdict(ctx).state, 'SUSPECT')
+  })
+
+  it('release resets the streak: the next episode takes the full entry', () => {
+    // r2 (revmux 01 major): release() left buriedStills alone, so every
+    // buried episode after the first re-raised on its first counting tick.
+    // Airtight stone around a 3x3 pocket: boxed, so release skips the
+    // latch and the ticks below measure the streak, not the latch.
+    const { bot, ctx } = buriedBot({})
+    const keep = bot.blockAt
+    bot.blockAt = (p) => {
+      const hit = keep(p)
+      if (hit) return hit
+      const f = p.floored()
+      if (Math.abs(f.x) <= 6 && Math.abs(f.z) <= 6 && f.y >= 44 && f.y <= 49 &&
+        !(Math.abs(f.x) <= 1 && Math.abs(f.z) <= 1 && (f.y === 45 || f.y === 46))) {
+        return { name: 'stone', position: f, boundingBox: 'block' }
+      }
+      return null
+    }
+    const cap = capture()
+    try {
+      for (let i = 0; i < stuck.BURIED_STILLS_ENTRY; i++) stuck.update(bot, ctx)
+      assert.equal(ctx.stuckState, 'STUCK')
+      recover.release(bot, ctx, 'gave-up')
+      assert.equal(ctx.buriedStills || 0, 0)
+      for (let i = 0; i < stuck.BURIED_STILLS_ENTRY - 1; i++) stuck.update(bot, ctx)
+      assert.equal(ctx.stuck || null, null, 'no instant re-raise')
+      stuck.update(bot, ctx)
+      assert.equal(ctx.stuckState, 'STUCK', 'the streak refills and raises')
+    } finally { cap.release() }
   })
 })

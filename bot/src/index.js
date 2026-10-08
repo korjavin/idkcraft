@@ -532,12 +532,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // or it re-raises by=home this same tick (the key flips later).
         ctx.stuck = null
         ctx.stuckTicks = 0
+        ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
         ctx.stuckState = 'MOVING'
       }
       if (homeReached()) {
         // Arrived means the homing goal is met, not stuck: pin the still
         // streak at zero and drop a stale home fact/latch (2oe).
         ctx.stuckTicks = 0
+        ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
         if (!ctx.recovery) ctx.stuckState = 'MOVING'
         if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
         if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') ctx.recoverLatch = null
