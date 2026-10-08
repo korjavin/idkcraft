@@ -20,6 +20,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget } = require('../perception')
+const { botPos } = require('./util')
 const recover = require('./recover')
 
 // Question order = owner list (1tj notes). Feasibility, not priority:
@@ -249,9 +250,16 @@ function pillar(bot, ctx) {
   const st = ctx.recovery && ctx.recovery.status
   if (st === 'done') {
     ctx.stepStatus = 'done'
+    // Placement works again: clear the pillar streak (vmzq.47).
+    try { recover.noteRecoverDone(ctx, botPos(bot), 'pillar_up') } catch (_) { /* bans best-effort */ }
   } else if (typeof st === 'string' && st !== 'running' && st !== 'starting') {
     ctx.stepStatus = `failed:pillar-${st.replace(/^failed:/, '')}`
     ctx.retreatFailed = 'pillar'
+    // A refused retreat pillar bans the recover pillar here too (vmzq.47):
+    // the same server says no to the same feet cell one tick later.
+    if (st === 'failed:place-error') {
+      try { recover.noteRecoverFail(ctx, botPos(bot), 'pillar_up', st) } catch (_) { /* bans best-effort */ }
+    }
   } else {
     return // still running: the live episode keeps owning ctx.recovery
   }
