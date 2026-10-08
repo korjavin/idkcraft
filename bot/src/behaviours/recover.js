@@ -198,6 +198,19 @@ const HAND_DIG = new Set([
   'mud', 'muddy_mangrove_roots', 'sand', 'red_sand', 'suspicious_sand',
   'gravel', 'suspicious_gravel', 'clay', 'snow', 'snow_block', 'moss_block',
 ])
+// Gravity blocks (idkcraft-lph3): sand/gravel/concrete-powder fall when the
+// dig updates them — a gravity floor over a cave drops the pit into it
+// (rig: y54-57 samples), gravity walls slump the 1x1 into a 2-wide that
+// admits spiders. The dig-in vetoes them (dig, floor and walls alike);
+// the walk then seeks a dirt column instead. Leaves stay diggable (they
+// never fall) but never count as walls or floor (see the veto).
+const GRAVITY_DIG = new Set([
+  'sand', 'red_sand', 'suspicious_sand', 'gravel', 'suspicious_gravel',
+  'dragon_egg',
+])
+function isGravityName(n) {
+  return typeof n === 'string' && (GRAVITY_DIG.has(n) || n.endsWith('_concrete_powder'))
+}
 function handDiggable(bot, b) {
   // Round-1 finding 1: mineflayer canDigBlock checks only diggable+reach,
   // never the tool — trusting it alone calls stone hand-diggable in prod.
@@ -935,15 +948,31 @@ function digInVeto(bot, ctx, ox, oy, oz, fresh, extra = 0) {
     const here = ox === 0 && oz === 0 && k === 1
     const nameOk = !!c && typeof c.name === 'string' && (HAND_DIG.has(c.name) || c.name.endsWith('_leaves'))
     if (!(here ? handDiggable(bot, c) : nameOk)) return 'undiggable:' + ((c && c.name) || 'none')
+    if (c && isGravityName(c.name)) return 'gravity-dig' // sand/gravel slumps the 1x1 into a 2-wide (lph3)
     if (protectedReason(bot, c, ctx)) return 'protected'
     if (digInHazard(bot, ox, oy - k, oz)) return 'fluid'
   }
-  if (!solid(cellAt(bot, ox, oy - n - 1, oz))) return 'no-floor' // cave/water under: never drop into it
+  const floor = cellAt(bot, ox, oy - n - 1, oz)
+  if (!solid(floor)) return 'no-floor' // cave/water under: never drop into it
+  if (floor && isGravityName(floor.name)) return 'gravity-floor' // gravel over a cave drops the pit (lph3: y54-57)
+  if (!solid(cellAt(bot, ox, oy - n - 2, oz))) return 'cave-below' // thin floor over a void (lph3 probe)
   if (fresh) {
     // The finished pit's walls (feet + head at the bottom) must stand:
     // a hillside column opens sideways (rig: dug and capped, east side air).
-    for (const [dx, dz] of SIDES) {
-      if (!solid(cellAt(bot, ox + dx, oy - n, oz + dz)) || !solid(cellAt(bot, ox + dx, oy - n + 1, oz + dz))) return 'open-side'
+    // The full 3x3 ring (sides + diagonals) must stand too (lph3): a pit
+    // one block from a quarry, cave mouth or last night's pit shares a
+    // 1-thin wall that slumps or admits spiders — a 2-wide is not a pit.
+    // Gravity walls (sand/gravel) and leaf walls never count: the first
+    // slumps when the dig updates it, the second is a canopy, not ground.
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue
+        for (const dy of [oy - n, oy - n + 1]) {
+          const w = cellAt(bot, ox + dx, dy, oz + dz)
+          if (!solid(w)) return 'open-side'
+          if (w && (isGravityName(w.name) || (typeof w.name === 'string' && w.name.endsWith('_leaves')))) return 'open-side'
+        }
+      }
     }
   }
   if (digInHazard(bot, ox, oy - n - 1, oz) ||
