@@ -235,9 +235,10 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
     const fwd = (prev === 'day' && w === 'dusk') || (prev === 'dusk' && w === 'night') || (prev === 'night' && w === 'day')
     if (!fwd) return // non-forward word changes re-arm silently
     const ev = { event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, at: now }
-    // In write mode the event waits for apply() and reports the live
-    // read-back, never the counted value: if the correction ever stops
-    // landing last, the report shows the stale clock (revmux 01 major).
+    // In write mode the event waits for the next physicsTick and reports
+    // the live clock as the brain would read it — never the counted value
+    // (revmux 02 minor: a read-back on the line after the write agrees by
+    // construction, a live-tick read can fail).
     if (write) { st.pending = ev; return }
     onEvent({ ...ev, bot: bot && bot.time ? bot.time.timeOfDay : null })
   }
@@ -271,7 +272,10 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
       if (!write || st.anchor == null || !(st.rate > 0)) return
       if (!bot || !bot.game || bot.game.dimension !== st.dim) return
       resyncWrite(bot, st.anchor + st.empties * RESYNC_TICKS_PER_EMPTY)
-      if (st.pending && onEvent) onEvent({ ...st.pending, bot: bot.time.timeOfDay })
+    },
+    onTick(bot) { // physicsTick tap: flushes queued crossings with the live clock
+      if (!write || !st.pending || !onEvent) return
+      onEvent({ ...st.pending, bot: bot && bot.time ? bot.time.timeOfDay : null })
       st.pending = null
     },
   }
@@ -371,6 +375,7 @@ async function main() {
     follower = b
     b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
     b.on('time', () => timeResync.apply(b))
+    b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
       const origChat = b.chat.bind(b)
       b.chat = (msg) => { chats.push(String(msg)); return origChat(msg) }

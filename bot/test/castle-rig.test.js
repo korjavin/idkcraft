@@ -337,24 +337,34 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     assert.equal(bot.time.timeOfDay, 1020)
   })
 
-  it('defers write-mode events to apply() with the live read-back (revmux 01)', () => {
+  it('defers write-mode events to the live tick with the brain-read clock (revmux 02)', () => {
     const bot = mkBot()
     const events = []
     const r = createTimeResync({ onEvent: (ev) => events.push(ev) })
     r.onPacket(bot, full(11990), 0)
     r.apply(bot)
+    r.onTick(bot)
     assert.deepEqual(events, [])
-    r.onPacket(bot, empty(), 200) // 12010: queued, not yet reported
+    r.onPacket(bot, empty(), 200) // 12010: queued
+    r.apply(bot) // writes, but reports nothing yet
     assert.deepEqual(events, [])
-    r.apply(bot)
+    r.onTick(bot)
     assert.equal(events.length, 1)
     assert.equal(events[0].event, 'dusk')
     assert.equal(events[0].server, 12010)
-    assert.equal(events[0].bot, 12010) // read back from bot.time after the write
+    assert.equal(events[0].bot, 12010)
     assert.equal(events[0].at, 200)
-    for (let i = 0; i < 50; i++) { r.onPacket(bot, empty(), 400 + i); r.apply(bot) } // -> 13010
+    // The report can fail: a post-apply overwrite shows up on the line.
+    r.onPacket(bot, full(12990), 1000)
+    r.apply(bot)
+    r.onPacket(bot, empty(), 1200) // 13010: nightfall queued
+    r.apply(bot)
+    bot.time.timeOfDay = 999 // a later listener overwrote the correction
+    r.onTick(bot)
     assert.equal(events.length, 2)
     assert.equal(events[1].event, 'nightfall')
+    assert.equal(events[1].server, 13010)
+    assert.equal(events[1].bot, 999)
   })
 
   it('drops queued crossings on time-set jumps and fires dawn once', () => {
@@ -363,15 +373,19 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     const r = createTimeResync({ onEvent: (ev) => events.push(ev) })
     r.onPacket(bot, full(12990), 0)
     r.apply(bot)
+    r.onTick(bot)
     r.onPacket(bot, empty(), 200) // 13010: nightfall queued
     r.onPacket(bot, full(6000), 300) // jump before the flush: queued crossing dropped
     r.apply(bot)
+    r.onTick(bot)
     assert.deepEqual(events, [])
     r.onPacket(bot, full(23990), 200000) // jump to night: silent
     r.apply(bot)
+    r.onTick(bot)
     assert.deepEqual(events, [])
     r.onPacket(bot, empty(), 200200) // 24010 -> daytime 10: dawn
     r.apply(bot)
+    r.onTick(bot)
     assert.equal(events.length, 1)
     assert.equal(events[0].event, 'dawn')
     assert.equal(events[0].server, 10)
@@ -405,13 +419,16 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     client.on('update_time', (packet) => r.onPacket(bot, packet)) // rig tap first (mk order)
     timePlugin(bot) // mineflayer injects deferred: its tap lands second
     bot.on('time', () => r.apply(bot))
+    bot.on('physicsTick', () => r.onTick(bot))
     const mfull = (total, rate = 1) => ({ age: [0, 0], clockUpdates: [{ id: 0, totalTicks: total, partialTick: 0, rate }] })
     const mempty = () => ({ age: [0, 0], clockUpdates: [] })
     client.emit('update_time', mfull(11990))
     assert.equal(bot.time.timeOfDay, 11990) // mineflayer's own full-packet write
-    // One 5x wall-second: 20 physicsTicks at the stale rate=1, five empties.
-    for (let i = 0; i < 20; i++) bot.emit('physicsTick')
-    for (let k = 0; k < 5; k++) client.emit('update_time', mempty())
+    // One 5x wall-second at prod cadence: five empties, four physicsTicks each.
+    for (let k = 0; k < 5; k++) {
+      client.emit('update_time', mempty())
+      for (let i = 0; i < 4; i++) bot.emit('physicsTick')
+    }
     // Mineflayer alone would sit at 12010 (20/s wall); the rig holds server truth 12090.
     assert.equal(bot.time.timeOfDay, 12090)
     assert.equal(r.daytime(), 12090)
@@ -436,9 +453,11 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     r.onPacket(bot, full(11990), 0)
     r.onPacket(bot, empty(), 200) // 12010: dusk
     r.apply(bot)
+    r.onTick(bot)
     assert.equal(events.length, 1)
     r.onPacket(bot, full(12015), 400) // gamerule-flip shape: delta 5, same word
     r.apply(bot)
+    r.onTick(bot)
     assert.equal(events.length, 1)
     assert.equal(r.daytime(), 12015)
     r.onPacket(bot, empty(), 600)
@@ -450,6 +469,7 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(src.includes("b._client.on('update_time'"), 'missing follower time tap')
     assert.ok(src.includes("b.on('time'"), 'missing follower time-apply tap')
+    assert.ok(src.includes("b.on('physicsTick'"), 'missing follower tick-flush tap')
     assert.ok(src.includes('CASTLE-RIG time: '), 'missing dusk/dawn report line')
     assert.ok(src.includes('timeEvents: seen.timeEvents'), 'missing timeEvents record field')
     assert.ok(src.includes('CASTLE-RIG time-drift:'), 'missing drift breach line')
