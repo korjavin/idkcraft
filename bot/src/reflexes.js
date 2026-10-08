@@ -495,6 +495,7 @@ const ABORT_SHORE_MEMORY_MS = 600000 // failed shores stay skipped across episod
 const ABORT_DY_LO = -1 // waterline stances only: wadable or a +1 exit;
 const ABORT_DY_HI = 1 // deeper is caves, higher is h04-unexitable walls
 const ABORT_INLAND_D = 5 // inland-first detour cap: the abort swim stays short
+const ABORT_STANCE_D = 1.5 // at-stance radius: GoalNear range 1 plus margin (no drive/hold flap at the edge)
 const ABORT_WATER_MOBS = new Set(['drowned', 'guardian', 'elder_guardian'])
 const ABORT_WETFLORA = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
 function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
@@ -521,12 +522,15 @@ function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
   if (typeof ctx.abortCoolUntil === 'number' && nowMs < ctx.abortCoolUntil) return false
   if (abortFooting(bot)) return false
   if (!abortThreat(bot, ctx, state, nowMs, ABORT_RANGE)) return false
-  const skip = abortRememberedSkips(ctx, nowMs)
-  const target = pickAbortShore(bot, ctx, skip)
+  const remembered = abortRememberedSkips(ctx, nowMs)
+  const target = pickAbortShore(bot, ctx, remembered)
   if (!target) return false
   try { if (typeof bot.stopDigging === 'function') bot.stopDigging() } catch (_) { /* nothing in flight */ }
   dropAbortGoal(bot, ctx)
-  ctx.abort = { x: target.x, y: target.y, z: target.z, skip, scanAt: nowMs, best: undefined, progressAt: nowMs, touchedAt: nowMs }
+  // skip is this episode's own stalls (ABORT_MAX_SKIP counts them, and
+  // only the release remembers them); remembered stays a separate
+  // exclusion list so another ford's failures can't pre-give-up this one.
+  ctx.abort = { x: target.x, y: target.y, z: target.z, skip: [], remembered, scanAt: nowMs, best: undefined, progressAt: nowMs, touchedAt: nowMs }
   driveAbortGoal(bot, ctx)
   console.log(`reflex abort-shore threat=${abortThreatName(state)} target=${target.x},${target.y},${target.z}`)
   try { metrics.events.inc({ event: 'reflex_abort' }) } catch (_) { /* metrics best-effort */ }
@@ -547,7 +551,26 @@ function driveAbort(bot, ctx, state, nowMs, inWater) {
     releaseAbort(bot, ctx, nowMs)
     return false
   }
-  if (!inWater || abortFooting(bot)) return false // ashore hold: normal dispatch (fight/flee) owns the tick, latch kept
+  // Stance hold (revmux 02): footing on the river shelf is NOT the beach
+  // — yielding there flaps with fight/leg goals at the depth edge and the
+  // inland stance is never reached. Drive through wading; hold (body kept,
+  // goal untouched so a creeper-flee set earlier this tick still runs)
+  // once dry, or wading on the stance itself. Progress refreshes on the
+  // hold so a later re-entry never misfires the stall on this shore.
+  let atStance = false
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number') {
+      atStance = Math.hypot(bp.x - (a.x + 0.5), bp.z - (a.z + 0.5)) < ABORT_STANCE_D
+    }
+  } catch (_) { /* drive on unknown position */ }
+  let footing = false
+  try { footing = abortFooting(bot) } catch (_) { /* drive on unknown footing */ }
+  if (!inWater || (atStance && footing)) {
+    a.progressAt = nowMs
+    a.best = undefined
+    return true
+  }
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (bp && typeof bp.x === 'number') {
@@ -556,7 +579,7 @@ function driveAbort(bot, ctx, state, nowMs, inWater) {
         a.best = dist
         a.progressAt = nowMs
       } else if (nowMs - (a.progressAt || nowMs) > ABORT_STALL_MS) {
-        a.skip.push({ x: a.x, z: a.z })
+        a.skip.push({ x: a.x, z: a.z, footed: footing })
         a.x = null
         a.scanAt = 0
       }
@@ -565,7 +588,7 @@ function driveAbort(bot, ctx, state, nowMs, inWater) {
   if ((a.x === null || a.x === undefined) && a.skip.length < ABORT_MAX_SKIP && !(nowMs - (a.scanAt || 0) < ABORT_SCAN_MS)) {
     a.scanAt = nowMs
     let next = null
-    try { next = pickAbortShore(bot, ctx, a.skip) } catch (_) { next = null }
+    try { next = pickAbortShore(bot, ctx, (a.skip || []).concat(a.remembered || [])) } catch (_) { next = null }
     if (next) {
       a.x = next.x
       a.y = next.y
@@ -609,13 +632,16 @@ function driveAbortGoal(bot, ctx) {
 function releaseAbort(bot, ctx, nowMs = Date.now()) {
   // Failed shores stay skipped for a while (revmux 01 minor): the next
   // episode at this ford tries a different beach instead of repeating the
-  // same entry. The driven target is not remembered — it never failed.
+  // same entry. The driven target is not remembered — it never failed —
+  // and neither is a stall the bot waded through footing to reach (revmux
+  // 02: the stance wasn't tested, the path was).
   try {
     const skips = ctx.abort && Array.isArray(ctx.abort.skip) ? ctx.abort.skip : []
     if (skips.length > 0) {
       const mem = Array.isArray(ctx.abortShoreMemory) ? ctx.abortShoreMemory : []
       for (const s of skips) {
-        if (s && typeof s.x === 'number' && !mem.some((m) => m && m.x === s.x && m.z === s.z)) {
+        if (!s || typeof s.x !== 'number' || s.footed === true) continue
+        if (!mem.some((m) => m && m.x === s.x && m.z === s.z)) {
           mem.push({ x: s.x, z: s.z, until: nowMs + ABORT_SHORE_MEMORY_MS })
         }
       }

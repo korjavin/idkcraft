@@ -273,34 +273,81 @@ describe('abortReflex episode', () => {
 
   it('holds the latch ashore with the threat adjacent (no cooldown gap)', () => {
     // Revmux 01 major: releasing on footing with the drowned still adjacent
-    // armed a 15 s cooldown and sent the bot back in unprotected. The latch
-    // now holds through the ashore ticks (normal dispatch fights/flees on
-    // land) and re-drives the moment the body is wet again.
+    // armed a 15 s cooldown and sent the bot back in unprotected. Revmux 02
+    // major: yielding those ticks to dispatch flapped fight/leg goals with
+    // the abort at the depth edge. The latch now HOLDS the body (kept, no
+    // release, goal untouched) and re-drives the moment the body is wet.
     const { bot, ctx, state } = latched()
-    const wadeBlockAt = ((base) => (p) => {
+    bot.entity.isInWater = false // dry on the beach, threat still adjacent
+    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), true) // hold, keep latch
+    assert.ok(ctx.abort)
+    assert.equal(ctx.abortCoolUntil, undefined)
+    assert.ok(bot.pathfinder.goal) // abort goal untouched (a flee set earlier still runs)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 2000), true) // still holding
+    assert.ok(ctx.abort)
+    // Re-entering re-drives immediately (same key, no cooldown gap).
+    bot.entity.isInWater = true
+    bot.entity.position = pos(1.5, 62, 0.5)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 3000), true)
+    assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
+  })
+
+  it('drives through shelf footing to the stance (no yield at the edge)', () => {
+    // Revmux 02 major: footing on the river shelf is wading, not the beach.
+    // The abort keeps the body and the goal until the stance is stood on.
+    const { bot, ctx, state } = latched() // target (-3,62,0), bot mid-pool
+    bot.blockAt = ((base) => (p) => {
       if (Math.floor(p.x) === 0 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
         return { name: 'sand', boundingBox: 'block' }
       }
       return base(p)
     })(bot.blockAt)
-    bot.blockAt = wadeBlockAt
-    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), false) // ashore: yield, keep latch
-    assert.ok(ctx.abort)
-    assert.equal(ctx.abortCoolUntil, undefined)
-    assert.ok(bot.pathfinder.goal) // abort goal stays until dispatch overwrites it
-    assert.equal(abortReflex(bot, ctx, state, T0 + 2000), false) // still holding
-    assert.ok(ctx.abort)
-    // Re-entering re-drives immediately (same key, no cooldown gap).
-    bot.entity.isInWater = true
+    const goalsBefore = bot.calls.setGoal
+    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), true) // wading far: drive
+    assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
+    assert.ok(bot.calls.setGoal >= goalsBefore) // goal (re-)issued, never yielded
+    // Wading ON the stance holds: the fight happens from footing.
+    bot.entity.position = pos(-2.5, 62, 0.5)
     bot.blockAt = ((base) => (p) => {
-      if (Math.floor(p.x) === 1 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
-        return { name: 'water', boundingBox: 'empty' }
+      if (Math.floor(p.x) === -3 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
+        return { name: 'sand', boundingBox: 'block' }
       }
       return base(p)
     })(bot.blockAt)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 2000), true) // at stance: hold
+    assert.ok(ctx.abort)
+  })
+
+  it('re-entering past the stall window keeps the reached shore (no misfire)', () => {
+    // Revmux 02 major: the hold refreshes progress, so a re-entry 16 s
+    // after landfall neither skips the reached shore nor remembers it.
+    const { bot, ctx, state } = latched()
+    bot.entity.isInWater = false
+    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), true) // landfall hold
+    bot.entity.isInWater = true // dispatch walked back in 16 s later
     bot.entity.position = pos(1.5, 62, 0.5)
-    assert.equal(abortReflex(bot, ctx, state, T0 + 3000), true)
-    assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
+    assert.equal(abortReflex(bot, ctx, state, T0 + 17000), true)
+    assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: -3, z: 0 })
+    assert.deepEqual(ctx.abort.skip, [])
+    assert.equal(abortReflex(bot, ctx, null, T0 + 18000), false) // threat gone: release
+    assert.deepEqual(ctx.abortShoreMemory, [])
+  })
+
+  it('a waded-through stall is not remembered as a failed shore', () => {
+    // Revmux 02: the bot had footing while stalling toward this stance —
+    // the path failed, the stance wasn't tested.
+    const { bot, ctx, state } = latched()
+    bot.blockAt = ((base) => (p) => {
+      if (Math.floor(p.x) === 0 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
+        return { name: 'sand', boundingBox: 'block' }
+      }
+      return base(p)
+    })(bot.blockAt)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 5000), true) // baseline
+    assert.equal(abortReflex(bot, ctx, state, T0 + 21000), true) // stall with footing
+    assert.deepEqual(ctx.abort.skip, [{ x: -3, z: 0, footed: true }])
+    assert.equal(abortReflex(bot, ctx, null, T0 + 22000), false) // release
+    assert.deepEqual(ctx.abortShoreMemory, [])
   })
 
   it('releases ashore once the threat is gone (crossing resumes)', () => {
@@ -334,7 +381,7 @@ describe('abortReflex episode', () => {
     assert.equal(abortReflex(bot, ctx, state, T0 + 5000), true) // sets the progress baseline
     // Frozen 16 s past the baseline: skip the entry, re-scan the east shore.
     assert.equal(abortReflex(bot, ctx, state, T0 + 21000), true)
-    assert.deepEqual(ctx.abort.skip, [{ x: -3, z: 0 }])
+    assert.deepEqual(ctx.abort.skip, [{ x: -3, z: 0, footed: false }])
     assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: 3, z: 0 })
     assert.equal(ctx.lastGoalKey, 'abort-shore:3,0')
     // Frozen again: skip the east shore too; the re-scan finds nothing
@@ -400,11 +447,13 @@ describe('abortReflex episode', () => {
     assert.equal(abortReflex(bot, ctx, null, T0 + 22000), false) // threat gone: release, remember the skip
     assert.equal(ctx.abort, null)
     assert.equal(ctx.abortShoreMemory.length, 1)
-    // Next episode (past the cooldown) seeds the remembered skip: the entry
-    // stays excluded and the scan wins outright.
+    // Next episode (past the cooldown) seeds the remembered exclusion: the
+    // entry stays out and the scan wins outright, while the episode's own
+    // skip list starts empty (revmux 02: MAX_SKIP counts this ford only).
     assert.equal(abortReflex(bot, ctx, state, T0 + 38000), true)
     assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: 3, z: 0 })
-    assert.deepEqual(ctx.abort.skip, [{ x: -3, z: 0 }])
+    assert.deepEqual(ctx.abort.skip, [])
+    assert.deepEqual(ctx.abort.remembered, [{ x: -3, z: 0 }])
     assert.equal(abortReflex(bot, ctx, null, T0 + 39000), false) // release again
     // Past the memory TTL the entry is available and wins the tie again.
     assert.equal(abortReflex(bot, ctx, state, T0 + 39000 + 600000 + 16000), true)
