@@ -1201,6 +1201,20 @@ function tableWithin(bot, ctx, maxD) {
   }
 }
 
+// A double is armed only when placeChest can plausibly start it (revmux
+// 02-after-fix major 2): a chest item places anywhere, while the planks
+// craft needs a table — within 32 at the site (noFarTable fails past it),
+// merely standing at home (the walk is the home branch's own leg).
+function doubleArmed(bot, ctx, site) {
+  try {
+    if (!fundedForChest(bot)) return false
+    if (countItems(bot, (n) => n === 'chest') > 0) return true
+    return site ? tableWithin(bot, ctx, 32) : !!standingTable(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
+
 // Funded for a new chest: a chest item, or 8 same-wood planks to craft one
 // (the table check rides with placeChest — site passes noFarTable).
 function fundedForChest(bot) {
@@ -1247,7 +1261,7 @@ function stockpileSite(bot, ctx, bp) {
       return
     }
   }
-  const c = st.siteChest
+  let c = st.siteChest
   let at = null
   try { at = blockNameAt(bot, c.x, c.y, c.z) } catch (_) { at = null }
   if (at === null) {
@@ -1283,11 +1297,21 @@ function stockpileSite(bot, ctx, bp) {
   // Pending double first: resume the multi-tick place, never the deposit
   // goal over it (doublePending above).
   if (ctx.siteDouble && typeof ctx.siteDouble.x === 'number') {
-    if (doublePending(bot, ctx.siteDouble) === 'open') {
-      placeChest(bot, ctx, ctx.siteDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true })
+    const st8 = doublePending(bot, ctx.siteDouble)
+    if (st8 === 'open') {
+      placeChest(bot, ctx, ctx.siteDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true, pendingKey: 'siteDouble' })
       return
     }
-    ctx.siteDouble = null // landed or shut: the deposit below decides
+    if (st8 === 'landed') {
+      // The fresh half becomes the chest (revmux 02-after-fix major 4):
+      // merged or a lone single, it holds the new room — the facing the
+      // place landed with no longer matters. This fill's expansion is
+      // spent, so a still-full double parks instead of fielding chests.
+      siteAdopted(ctx, ctx.siteDouble)
+      ctx.siteExpanded = true
+      c = st.siteChest
+    }
+    ctx.siteDouble = null // shut: the deposit below decides
   }
   const key = `stockpile-site:${c.x},${c.y},${c.z}`
   if (key !== ctx.lastGoalKey) {
@@ -1351,7 +1375,7 @@ function stockpileSite(bot, ctx, bp) {
         // then the site parks. The next run retries after the owner
         // empties it; a doubled chest that still takes nothing is parked,
         // never expanded into a chest field.
-        if (!ctx.siteExpanded && fundedForChest(bot)) {
+        if (!ctx.siteExpanded && doubleArmed(bot, ctx, true)) {
           let dbl = null
           try { dbl = doubleSpot(bot, ctx, c) } catch (_) { dbl = null }
           if (dbl) {
@@ -1359,7 +1383,7 @@ function stockpileSite(bot, ctx, bp) {
             ctx.siteDouble = dbl // pending: the deposit path resumes it (below)
             ctx.lastGoalKey = null
             ctx.stepStatus = 'running'
-            placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true })
+            placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true, pendingKey: 'siteDouble' })
             return
           }
         }
@@ -1411,18 +1435,32 @@ function stockpile(bot, ctx, target, state) {
   if (ctx.stockpileInFlight) return // exactly one window op at a time (craft.js rule)
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return
+  // A new pick retries the site: the fallback latch below lives for one
+  // pick (the goal shortcut keeps the stamp across a trip's ticks).
+  try {
+    const pickAt = ctx.stepPick && ctx.stepPick.at
+    if (pickAt && ctx.stockpileHomeLatch && ctx.stockpileHomeLatch !== pickAt) ctx.stockpileHomeLatch = null
+  } catch (_) { /* keep */ }
   // Site banking (vmzq.39): an active far castle banks at the site, never
   // across the map. Falls back to home below when the site fails
   // synchronously and the home leg is the feasible-approved unblock.
   try {
-    if (siteMode(bot, ctx)) {
+    if (siteMode(bot, ctx) && !ctx.stockpileHomeLatch) {
       stockpileSite(bot, ctx, bp)
       if (!failedSync(ctx) || !homeFallbackViable(bot, ctx)) return
       // The site cannot take it: the home walk is the unblock feasible
       // approved (vmzq.19 R3 pierce), so clear the site failure and run
-      // the home branch below.
+      // the home branch below. Latched for the pick: without it the next
+      // tick re-runs the failing site first and the two goals swap every
+      // tick (revmux 02-after-fix major 1). The pierce latches too — the
+      // trip must survive a partial bank like a home-branch pick (R4).
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = null
+      try {
+        const pickAt = ctx.stepPick && ctx.stepPick.at
+        ctx.stockpileHomeLatch = pickAt || -1
+        ctx.stockpilePierced = true
+      } catch (_) { ctx.stockpileHomeLatch = -1 }
     }
   } catch (_) { /* undecidable: home below */ }
   const home = ctx.home
@@ -1476,7 +1514,7 @@ function stockpile(bot, ctx, target, state) {
     }
   }
 
-  const c = home.chest
+  let c = home.chest
   let at = null
   try {
     at = blockNameAt(bot, c.x, c.y, c.z)
@@ -1519,11 +1557,19 @@ function stockpile(bot, ctx, target, state) {
   // Pending double first: resume the multi-tick place, never the deposit
   // goal over it (doublePending above).
   if (ctx.homeDouble && typeof ctx.homeDouble.x === 'number') {
-    if (doublePending(bot, ctx.homeDouble) === 'open') {
-      placeChest(bot, ctx, ctx.homeDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest' })
+    const st8 = doublePending(bot, ctx.homeDouble)
+    if (st8 === 'open') {
+      placeChest(bot, ctx, ctx.homeDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest', pendingKey: 'homeDouble' })
       return
     }
-    ctx.homeDouble = null // landed or shut: the deposit below decides
+    if (st8 === 'landed') {
+      // The fresh half becomes the chest (revmux 02-after-fix major 4):
+      // merged or a lone single, it holds the new room.
+      adopted(ctx, ctx.homeDouble)
+      ctx.homeExpanded = true // this fill's expansion is spent
+      c = home.chest
+    }
+    ctx.homeDouble = null // shut: the deposit below decides
   }
 
   const key = `stockpile:${c.x},${c.y},${c.z}`
@@ -1634,7 +1680,7 @@ function stockpile(bot, ctx, target, state) {
         // Full: double once per fill (vmzq.39), then park. Done, not
         // failed — failing would hold and spam; the stamped flag parks the
         // step until the retry window expires or a bring fetch re-arms it.
-        if (!ctx.homeExpanded && fundedForChest(bot)) {
+        if (!ctx.homeExpanded && doubleArmed(bot, ctx, false)) {
           let dbl = null
           try { dbl = doubleSpot(bot, ctx, c) } catch (_) { dbl = null }
           if (dbl) {
@@ -1642,7 +1688,7 @@ function stockpile(bot, ctx, target, state) {
             ctx.homeDouble = dbl // pending: the deposit path resumes it (below)
             ctx.lastGoalKey = null
             ctx.stepStatus = 'running'
-            placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest' })
+            placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest', pendingKey: 'homeDouble' })
             return
           }
         }
@@ -1664,10 +1710,19 @@ function stockpile(bot, ctx, target, state) {
 // opts.adopt: 'home' (default) adopts ctx.home.chest, 'site' adopts
 // ctx.castle.siteChest, 'none' keeps the adoption (a double). opts.noFarTable
 // (site mode): a table past 32 fails instead of walking across the map.
+// opts.pendingKey (a double): the ctx key to clear when the place fails.
 function placeChest(bot, ctx, spot, bp, opts = {}) {
   const adoptMode = opts.adopt || 'home'
   const goalPrefix = opts.goalPrefix || 'stockpile-place'
   const sayPlaced = opts.sayPlaced || 'placed the home chest'
+  // A failed double clears its pending (revmux 02-after-fix major 2):
+  // without this every later pick retries the same hopeless place and
+  // the full chest never parks. opts.pendingKey names ctx.siteDouble or
+  // ctx.homeDouble; the initial place passes none.
+  const failHere = (reason) => {
+    try { if (opts.pendingKey) ctx[opts.pendingKey] = null } catch (_) { /* clear best-effort */ }
+    fail(ctx, reason)
+  }
   const have = countItems(bot, (n) => n === 'chest')
   if (have <= 0) {
     // Deferred require: stockpile loads during goal's load (goal requires
@@ -1689,13 +1744,13 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
     }
     if (!tableBlock) {
       if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
-      fail(ctx, 'no-chest')
+      failHere( 'no-chest')
       return
     }
     const found = craftMod ? craftMod.recipes(bot, 'chest', tableBlock) : []
     if (found.length === 0) { // no ingredients for the recipe
       if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
-      fail(ctx, 'no-chest')
+      failHere( 'no-chest')
       return
     }
     // The table craft opens a window: walk into reach first (craft.js door
@@ -1709,7 +1764,7 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
           const dz = bp.z - tablePos.z
           if (Math.hypot(dx, dz) > 32) {
             if (offerHaul(bot, ctx)) say(bot, 'no table nearby to craft a chest — bringing the surplus to you')
-            fail(ctx, 'no-chest')
+            failHere( 'no-chest')
             return
           }
         } catch (_) { /* distance unreadable: walk as before */ }
@@ -1726,7 +1781,7 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
       try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
       if (moving) return
       if (!farStalled(ctx, key)) return
-      fail(ctx, 'far') // issued, standing, still far: no path to the table
+      failHere( 'far') // issued, standing, still far: no path to the table
       return
     }
     ctx.stockpileInFlight = true
@@ -1738,7 +1793,7 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
         // A room failure still hands the surplus over when a player is
         // online (revmux 01 major): without the haul the pack never drains.
         if (offerHaul(bot, ctx)) say(bot, 'no room to craft a chest — bringing the surplus to you')
-        fail(ctx, 'craft') // loud: failHolds parks until the situation moves
+        failHere( 'craft') // loud: failHolds parks until the situation moves
         return
       }
       ctx.stockpileInFlight = false
@@ -1760,7 +1815,7 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
   if (moving) return
   if (!nearPos(bot, p, PLACE_REACH)) {
     if (!farStalled(ctx, gkey)) return
-    fail(ctx, 'far') // issued, standing, still far: no path to the spot
+    failHere( 'far') // issued, standing, still far: no path to the spot
     return
   }
 
@@ -1770,7 +1825,7 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
       const below = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))
       if (!below || !below.name || below.name === 'air') {
         ctx.stockpileInFlight = false
-        fail(ctx, 'no-ground')
+        failHere( 'no-ground')
         return
       }
       // The scan admits clearable flora: break it first, the server
@@ -1785,14 +1840,14 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
         }
       } catch (_) {
         ctx.stockpileInFlight = false
-        fail(ctx, 'dig')
+        failHere( 'dig')
         return
       }
       const items = bot.inventory.items()
       const item = Array.isArray(items) ? items.find((i) => i && i.name === 'chest') : null
       if (!item) {
         ctx.stockpileInFlight = false
-        fail(ctx, 'no-chest')
+        failHere( 'no-chest')
         return
       }
       if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
@@ -1806,11 +1861,11 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
         ctx.lastGoalKey = null
         say(bot, sayPlaced)
       } else {
-        fail(ctx, 'place')
+        failHere( 'place')
       }
     } catch (_) {
       ctx.stockpileInFlight = false
-      fail(ctx, 'place')
+      failHere( 'place')
     }
   })()
 }
@@ -1858,6 +1913,7 @@ module.exports.findSiteChest = findSiteChest
 module.exports.siteChestTodo = siteChestTodo
 module.exports.doubleSpot = doubleSpot
 module.exports.doublePending = doublePending
+module.exports.doubleArmed = doubleArmed
 module.exports.homeFallbackViable = homeFallbackViable
 module.exports.siteParked = siteParked
 module.exports.SITE_STORE_RADIUS = SITE_STORE_RADIUS

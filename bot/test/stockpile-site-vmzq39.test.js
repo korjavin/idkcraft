@@ -244,13 +244,29 @@ describe('vmzq.39 R2 pending-double resume', () => {
     assert.ok(!String(ctx.stepStatus || '').startsWith('failed:'))
   })
 
-  it('a landed pending double clears and deposits', () => {
+  it('a landed pending double is adopted as the chest and deposits', () => {
     const bot = resumeBot({ '96,64,205': 'chest' })
     const ctx = resumeCtx()
     stockpile(bot, ctx)
     assert.equal(ctx.siteDouble, null)
-    assert.equal(ctx.lastGoalKey, `stockpile-site:${chest.x},${chest.y},${chest.z}`)
+    assert.equal(ctx.castle.siteChest.x, dbl.x)
+    assert.equal(ctx.castle.siteChest.z, dbl.z)
+    assert.equal(ctx.siteExpanded, true) // this fill's expansion is spent
+    assert.equal(ctx.lastGoalKey, `stockpile-site:${dbl.x},${dbl.y},${dbl.z}`)
     assert.equal(bot.pathfinder.goals[0].constructor.name, 'GoalNear')
+  })
+
+  it('a failed pending double clears instead of retrying forever', () => {
+    // No chest item and no table: placeChest fails 'no-chest' at once.
+    const bot = mockBot({
+      at: atSite,
+      inv: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 }],
+      cells: { '95,64,205': 'chest' },
+    })
+    const ctx = resumeCtx()
+    stockpile(bot, ctx)
+    assert.equal(ctx.siteDouble, null)
+    assert.equal(ctx.stepStatus, 'failed:no-chest')
   })
 
   it('a shut pending double clears and deposits', () => {
@@ -302,5 +318,123 @@ describe('vmzq.39 R2 home fallback', () => {
     assert.equal(stockpile.homeFallbackViable(bot, ctx), false)
     stockpile(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:no-spot')
+  })
+
+  it('a pierce latch (a home-branch pick) allows the fallback', () => {
+    const bot = mockBot({
+      at: atSite,
+      inv: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'coal', count: 64 }],
+      cells: { '502,64,502': 'chest' },
+    })
+    const ctx = farHomeCtx()
+    ctx.stockpilePierced = true
+    assert.equal(stockpile.homeFallbackViable(bot, ctx), true)
+    stockpile(bot, ctx)
+    assert.equal(ctx.lastGoalKey, 'stockpile:502,64,502')
+  })
+
+  it('the fallback latches for the pick: no goal swap on tick two', () => {
+    const bot = mockBot({
+      at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
+    })
+    const ctx = farHomeCtx()
+    ctx.stepPick = { step: 'stockpile', at: 777 }
+    stockpile(bot, ctx) // tick 1: site fails, home goal issues
+    assert.equal(bot.pathfinder.goals.length, 1)
+    stockpile(bot, ctx) // tick 2: the site must not run first again
+    assert.equal(bot.pathfinder.goals.length, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.stockpilePierced, true)
+  })
+
+  it('a new pick retries the site', () => {
+    const bot = mockBot({
+      at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
+    })
+    const ctx = farHomeCtx()
+    ctx.stepPick = { step: 'stockpile', at: 777 }
+    stockpile(bot, ctx)
+    assert.ok(ctx.stockpileHomeLatch)
+    bot.inv.push({ name: 'chest', count: 1 })
+    ctx.stepPick = { step: 'stockpile', at: 778 }
+    stockpile(bot, ctx)
+    assert.ok(String(ctx.lastGoalKey).startsWith('stockpile-site-place:'))
+    assert.equal(bot.pathfinder.goals[bot.pathfinder.goals.length - 1].constructor.name, 'GoalPlaceBlock')
+  })
+})
+
+describe('vmzq.39 R3 doubleArmed', () => {
+  const atSite = pos(105, 64, 205)
+  it('a chest item arms anywhere, planks need a table', () => {
+    assert.equal(stockpile.doubleArmed(mockBot({ inv: [{ name: 'chest', count: 1 }] }), siteCtx(), true), true)
+    assert.equal(stockpile.doubleArmed(mockBot({ inv: [{ name: 'chest', count: 1 }] }), siteCtx(), false), true)
+    assert.equal(stockpile.doubleArmed(mockBot({ inv: [{ name: 'oak_planks', count: 7 }] }), siteCtx(), true), false)
+  })
+
+  it('site planks need the table within 32, home only needs it standing', () => {
+    const near = mockBot({
+      at: atSite, inv: [{ name: 'oak_planks', count: 8 }], cells: { '105,64,206': 'crafting_table' },
+    })
+    const nearCtx = siteCtx({ ctx: { claimedTable: { x: 105, y: 64, z: 206 } } })
+    assert.equal(stockpile.doubleArmed(near, nearCtx, true), true)
+    assert.equal(stockpile.doubleArmed(near, nearCtx, false), true)
+    const far = mockBot({
+      at: atSite, inv: [{ name: 'oak_planks', count: 8 }], cells: { '140,64,205': 'crafting_table' },
+    })
+    const farCtx = siteCtx({ ctx: { claimedTable: { x: 140, y: 64, z: 205 } } })
+    assert.equal(stockpile.doubleArmed(far, farCtx, true), false)
+    assert.equal(stockpile.doubleArmed(far, farCtx, false), true)
+    const none = mockBot({ at: atSite, inv: [{ name: 'oak_planks', count: 8 }] })
+    assert.equal(stockpile.doubleArmed(none, siteCtx(), true), false)
+    assert.equal(stockpile.doubleArmed(none, siteCtx(), false), false)
+  })
+})
+
+describe('vmzq.39 R3 home pending-double resume', () => {
+  it('an open home double re-issues the place goal; landed adopts the fresh half', () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 2, y: 64, z: 2 } }
+    const inv = () => [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'chest', count: 1 }]
+    const open = mockBot({ at: pos(2, 64, 3), inv: inv(), cells: { '2,64,2': 'chest' } })
+    const octx = { home: { ...home }, homeDouble: { x: 3, y: 64, z: 2 }, homeExpanded: true }
+    stockpile(open, octx)
+    assert.equal(octx.lastGoalKey, 'stockpile-double:3,64,2')
+    assert.equal(open.pathfinder.goals[0].constructor.name, 'GoalPlaceBlock')
+    const land = mockBot({ at: pos(2, 64, 3), inv: inv(), cells: { '2,64,2': 'chest', '3,64,2': 'chest' } })
+    const lctx = { home: { ...home }, homeDouble: { x: 3, y: 64, z: 2 }, homeExpanded: true }
+    stockpile(land, lctx)
+    assert.equal(lctx.homeDouble, null)
+    assert.equal(lctx.home.chest.x, 3)
+    assert.equal(lctx.homeExpanded, true)
+    assert.equal(lctx.lastGoalKey, 'stockpile:3,64,2')
+  })
+})
+
+describe('vmzq.39 R3 stockpileSiteBranch', () => {
+  const goal = require('../src/goal')
+  const atSite = pos(105, 64, 205)
+  const facts = { haul: 'none', player: 'none', surplus: 'yes' }
+  it('true with a standing chest to adopt, false with nothing fundable', () => {
+    const standing = mockBot({ at: atSite, chests: [{ x: 95, y: 64, z: 205 }] })
+    assert.equal(goal.stockpileSiteBranch(facts, standing, siteCtx()), true)
+    const bare = mockBot({ at: atSite })
+    assert.equal(goal.stockpileSiteBranch(facts, bare, siteCtx()), false)
+  })
+
+  it('adopted reads the surplus; a haul for its player never banks', () => {
+    const adopted = siteCtx({ castle: { siteChest: { x: 95, y: 64, z: 205 } } })
+    assert.equal(goal.stockpileSiteBranch(facts, mockBot({ at: atSite }), adopted), true)
+    assert.equal(goal.stockpileSiteBranch({ ...facts, surplus: 'no' }, mockBot({ at: atSite }), adopted), false)
+    const haul = { ...facts, haul: 'waiting', player: 'Kor' }
+    const standing = mockBot({ at: atSite, chests: [{ x: 95, y: 64, z: 205 }] })
+    assert.equal(goal.stockpileSiteBranch(haul, standing, siteCtx()), false)
+  })
+
+  it('feasible matches the helper when home cannot approve', () => {
+    // Home unbuilt: the home half is false, so feasible is the site half.
+    const f = { home: 'none', haul: 'none', player: 'none', surplus: 'yes' }
+    const standing = mockBot({ at: atSite, chests: [{ x: 95, y: 64, z: 205 }] })
+    const bare = mockBot({ at: atSite })
+    assert.equal(goal.MENU.stockpile.feasible(f, standing, siteCtx()), true)
+    assert.equal(goal.MENU.stockpile.feasible(f, bare, siteCtx()), false)
   })
 })

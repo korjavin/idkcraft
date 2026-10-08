@@ -362,16 +362,7 @@ const MENU = {
       // Site first; when the site cannot take it the home walk below is
       // still the unblock (vmzq.19 R3: a full pack pierces the leash).
       try {
-        if (stockpileMod.siteMode(bot, ctx)) {
-          let site = false
-          if (!(facts.haul === 'waiting' && facts.player !== 'none')) {
-            const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
-            if (!adopted) {
-              try { site = stockpileMod.siteChestTodo(bot, ctx) !== 'none' } catch (_) { site = false }
-            } else site = facts.surplus === 'yes'
-          }
-          if (site) return true
-        }
+        if (stockpileSiteBranch(facts, bot, ctx)) return true
       } catch (_) { /* undecidable: home below */ }
       return facts.home === 'built' && !facts.chestParked &&
         !(facts.haul === 'waiting' && facts.player !== 'none') &&
@@ -579,6 +570,23 @@ function homeLegVetoed(bot, ctx, step = null) {
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
     return Math.hypot(bp.x - h.x, bp.z - h.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+// Site half of the stockpile feasible (vmzq.39, extracted R3): an active
+// far castle banks at the site instead of home. Shared with the pierce
+// latch below — a site pick is not a pierce, so it must not arm the latch
+// (revmux 02-after-fix major 3).
+function stockpileSiteBranch(facts, bot, ctx) {
+  try {
+    if (!stockpileMod.siteMode(bot, ctx)) return false
+    if (facts.haul === 'waiting' && facts.player !== 'none') return false
+    const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
+    if (!adopted) {
+      try { return stockpileMod.siteChestTodo(bot, ctx) !== 'none' } catch (_) { return false }
+    }
+    return facts.surplus === 'yes'
   } catch (_) {
     return false
   }
@@ -2266,9 +2274,11 @@ async function decide(bot, ctx) {
     ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
     // A banking trip picked under the pierce latches for the trip (R4):
     // set on the fresh pick only, so the shortcut re-issue below never
-    // arms it and only stockpile's own finish releases it above.
+    // arms it and only stockpile's own finish releases it above. A site
+    // pick is not a pierce (the site is near by definition), so only a
+    // home-branch pick arms it (revmux 02-after-fix major 3).
     if (choice.step === 'stockpile') {
-      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { /* latch best-effort */ }
+      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') && !stockpileSiteBranch(facts, bot, ctx) } catch (_) { /* latch best-effort */ }
     }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
@@ -2304,4 +2314,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch }
