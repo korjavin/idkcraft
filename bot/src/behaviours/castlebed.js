@@ -311,6 +311,12 @@ function placeTick(bot, ctx, cb, st, n) {
     cb.anchor = null
   }
   if (!cb.at) { deadTonight(ctx, cb, n); return }
+  const dropSpot = () => {
+    try { if (cb.bad) cb.bad.add(`${cb.at.x},${cb.at.y},${cb.at.z}`) } catch (_) { /* bad best-effort */ }
+    cb.at = null
+    cb.blocks = (cb.blocks || 0) + 1
+    if (cb.blocks >= PLACE_REFUSALS) deadTonight(ctx, cb, n)
+  }
   const foot = new Vec3(cb.at.x, cb.at.y, cb.at.z)
   const head = new Vec3(cb.at.x + 1, cb.at.y, cb.at.z)
   const bp = botPos(bot)
@@ -330,16 +336,11 @@ function placeTick(bot, ctx, cb, st, n) {
       cb.stalls = 0
       cb.anchor = { x: bp.x, z: bp.z }
     } else if (++cb.stalls >= STALL_TICKS) {
+      dropSpot() // unreachable tonight and likely tomorrow: never re-walk it — revmux 02 core-1
       deadTonight(ctx, cb, n)
       return
     }
     return
-  }
-  const dropSpot = () => {
-    try { if (cb.bad) cb.bad.add(`${cb.at.x},${cb.at.y},${cb.at.z}`) } catch (_) { /* bad best-effort */ }
-    cb.at = null
-    cb.blocks = (cb.blocks || 0) + 1
-    if (cb.blocks >= PLACE_REFUSALS) deadTonight(ctx, cb, n)
   }
   // Already placed (the verify pass after the flight, or a bed there first):
   // claim it before the flora gate below can mistake it for a blocker.

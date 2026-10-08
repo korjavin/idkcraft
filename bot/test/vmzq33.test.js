@@ -313,6 +313,28 @@ describe('vmzq.33 night place and sleep', () => {
     assert.equal(ctx.stepStatus, undefined, 'retrying, not failed')
   })
 
+  it('a stalled walk drops the spot, the next night scans fresh', () => {
+    const set = new Map()
+    const bot = makeBot({ timeOfDay: 18000, items: [{ name: 'white_bed', count: 1 }], set })
+    const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
+    castlebed(bot, ctx) // picks the spot, starts the walk
+    const first = ctx.castlebed.at
+    assert.ok(first, 'a spot was picked')
+    for (let i = 0; i < 40; i++) { // the body never moves: 30-tick stall trips
+      ctx.stepStatus = undefined
+      castlebed(bot, ctx)
+    }
+    assert.equal(ctx.stepStatus, 'done', 'stalled tonight yields')
+    assert.equal(ctx.castlebed.at, null, 'the unreachable spot is dropped')
+    assert.ok(ctx.castlebed.bad.has(`${first.x},${first.y},${first.z}`), 'never re-walked')
+    bot.time.day = 6 // night 2: a fresh scan elsewhere
+    ctx.stepStatus = undefined
+    castlebed(bot, ctx)
+    const second = ctx.castlebed.at
+    assert.ok(second, 'night 2 scans again')
+    assert.ok(!ctx.castlebed.bad.has(`${second.x},${second.y},${second.z}`), 'a different spot')
+  })
+
   it('no bed at night yields to the shelter (done, no hold past dawn)', () => {
     const bot = makeBot({ timeOfDay: 18000 })
     const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
