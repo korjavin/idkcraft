@@ -313,11 +313,37 @@ describe('vmzq.33 night place and sleep', () => {
     assert.equal(ctx.stepStatus, undefined, 'retrying, not failed')
   })
 
-  it('no bed at night fails to the shelter', () => {
+  it('no bed at night yields to the shelter (done, no hold past dawn)', () => {
     const bot = makeBot({ timeOfDay: 18000 })
     const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
     castlebed(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:no-bed')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.castlebed.deadNight, 5, 'tonight only')
+    assert.equal(ctx.stepFail && ctx.stepFail.castlebed, undefined, 'no hold stands into the next night')
+  })
+
+  it('a yielded night re-decides to shelter, the next night retries the bed', async () => {
+    const set = new Map()
+    putBed(set, 90, 64, 190)
+    const bot = makeBot({ timeOfDay: 18000, at: pos(90.5, 64, 190.5), set })
+    bot.isSleeping = false
+    bot.sleep = async () => { throw new Error('occupied by another player') }
+    const ctx = { castle: castleState({ siteBed: { x: 90, y: 64, z: 190 } }), home: farHome(), castlebed: {}, work: true, step: 'castlebed', stepStatus: 'running' }
+    castlebed(bot, ctx) // night 1: the sleep refuses, tonight yields
+    await flush()
+    await flush()
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(goal.MENU.castlebed.feasible(goal.goalFacts(bot, ctx), bot, ctx), false, 'yielded tonight')
+    assert.equal((await goal.decide(bot, ctx)).action, 'shelter', 'the shelter holds the rest of the night')
+    bot.time.day = 6 // night 2: the flags re-arm, the sleep lands
+    bot.sleep = async () => {}
+    ctx.step = 'shelter'
+    ctx.stepStatus = 'done'
+    assert.equal(goal.MENU.castlebed.feasible(goal.goalFacts(bot, ctx), bot, ctx), true, 'the next night retries')
+    castlebed(bot, ctx)
+    await flush()
+    assert.equal(ctx.castle.sleptSite, true, 'night 2 sleeps')
   })
 })
 

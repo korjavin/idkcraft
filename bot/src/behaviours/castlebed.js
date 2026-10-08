@@ -296,9 +296,9 @@ function dayTick(bot, ctx, cb, st) {
 
 // Place the packed bed at a site spot (dusk/night). A refused spot is
 // dropped and the scan re-runs; three dead spots fail to the shelter.
-function placeTick(bot, ctx, cb, st) {
+function placeTick(bot, ctx, cb, st, n) {
   const item = bedsMod.findBedItem(bot, null)
-  if (!item) { ctx.stepStatus = 'failed:no-bed'; return } // pack lost the bed: tomorrow re-fetches
+  if (!item) { deadTonight(ctx, cb, n); return } // pack lost the bed: tomorrow re-fetches
   if (!cb.bad || !(cb.bad instanceof Set)) {
     try { cb.bad = new Set() } catch (_) { cb.bad = null }
   }
@@ -310,7 +310,7 @@ function placeTick(bot, ctx, cb, st) {
     cb.stalls = 0
     cb.anchor = null
   }
-  if (!cb.at) { ctx.stepStatus = 'failed:no-spot'; return }
+  if (!cb.at) { deadTonight(ctx, cb, n); return }
   const foot = new Vec3(cb.at.x, cb.at.y, cb.at.z)
   const head = new Vec3(cb.at.x + 1, cb.at.y, cb.at.z)
   const bp = botPos(bot)
@@ -330,7 +330,7 @@ function placeTick(bot, ctx, cb, st) {
       cb.stalls = 0
       cb.anchor = { x: bp.x, z: bp.z }
     } else if (++cb.stalls >= STALL_TICKS) {
-      ctx.stepStatus = 'failed:cant-reach-bed'
+      deadTonight(ctx, cb, n)
       return
     }
     return
@@ -339,7 +339,7 @@ function placeTick(bot, ctx, cb, st) {
     try { if (cb.bad) cb.bad.add(`${cb.at.x},${cb.at.y},${cb.at.z}`) } catch (_) { /* bad best-effort */ }
     cb.at = null
     cb.blocks = (cb.blocks || 0) + 1
-    if (cb.blocks >= PLACE_REFUSALS) ctx.stepStatus = 'failed:cant-place-bed'
+    if (cb.blocks >= PLACE_REFUSALS) deadTonight(ctx, cb, n)
   }
   // Already placed (the verify pass after the flight, or a bed there first):
   // claim it before the flora gate below can mistake it for a blocker.
@@ -477,17 +477,40 @@ function sleepTick(bot, ctx, cb, st) {
   }
 }
 
+// A night leg that cannot run tonight yields to the shelter with done, not
+// failed: a hold would stand into the next night (the facts text carries no
+// day number) and — with the shelter yielding to a feasible bed — leave
+// neither night step running. deadNight blocks the rest of this night only;
+// the nightly reset below re-arms the next one. Revmux 01 core-1/core-2.
+function deadTonight(ctx, cb, n) {
+  cb.deadNight = n
+  ctx.stepStatus = 'done'
+}
+
 function nightTick(bot, ctx, cb, st) {
   ctx.inShelter = false // awake paths fight; sleepTick arms once asleep
-  if (!nearSite(bot, ctx)) { ctx.stepStatus = 'failed:too-far'; return } // march belongs to day: shelter holds here
+  const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+  if (cb.night !== n) {
+    cb.night = n
+    cb.sleepGiveUp = false
+    cb.sleepCooldown = 0
+    cb.sleepSaid = false
+    cb.sleepErrSaid = false
+    cb.sleepStalls = 0
+    cb.sleepAnchor = null
+    cb.fails = 0
+    cb.blocks = 0
+  }
+  if (cb.deadNight === n) { ctx.stepStatus = 'done'; return } // yielded tonight: the shelter holds
+  if (!nearSite(bot, ctx)) { ctx.stepStatus = 'done'; return } // march belongs to day: shelter holds here
   if (siteBedStands(bot, ctx)) {
     if (sleepTick(bot, ctx, cb, st)) return
     // No bed (retracted above): re-place when packed, else the shelter.
     // Give-up (unreachable/refused tonight): the shelter, not an open hold.
-    if (st.siteBed) { ctx.stepStatus = 'failed:cant-sleep'; return }
+    if (st.siteBed) { deadTonight(ctx, cb, n); return }
   }
   const pack = bedMod.packCounts(bot)
-  if (bedMod.bedInPack(pack)) { placeTick(bot, ctx, cb, st); return }
+  if (bedMod.bedInPack(pack)) { placeTick(bot, ctx, cb, st, n); return }
   // Wool covered but uncrafted at dusk: craft now, place next tick.
   const color = bedMod.pickBedColor(pack)
   if (color && (pack[`${color}_wool`] || 0) >= bedMod.BED_WOOL) {
@@ -498,7 +521,7 @@ function nightTick(bot, ctx, cb, st) {
       if (res && res.done) { ctx.inShelter = false; return } // recount next tick: place
     }
   }
-  ctx.stepStatus = 'failed:no-bed'
+  deadTonight(ctx, cb, n)
 }
 
 function castlebed(bot, ctx, target, state) {

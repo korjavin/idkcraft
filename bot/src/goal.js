@@ -92,7 +92,11 @@ const MENU = {
     // Site bed first (vmzq.33): a ready site bed sleeps, the pillar is the fallback.
     feasible: (facts, bot, ctx) => {
       try {
-        if (MENU.castlebed && registered('castlebed') && MENU.castlebed.feasible(facts, bot, ctx)) return false
+        // Yield only while the site bed can actually run: a held castlebed
+        // (failed tonight, facts standing) must not take the shelter down
+        // with it — revmux 01 core-1.
+        if (MENU.castlebed && registered('castlebed') && MENU.castlebed.feasible(facts, bot, ctx) &&
+            !failHolds(ctx, 'castlebed', goalText(facts, ctx && ctx.home), bot)) return false
       } catch (_) { /* shelter decides */ }
       return (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx)
     },
@@ -306,6 +310,13 @@ const MENU = {
     // outranks the day steps because shelter yields above it.
     feasible: (facts, bot, ctx) => {
       if (!castleFirst(ctx)) return false // parked/complete castles need no site bed
+      // Yielded tonight (revmux 01 core-2): tonight's leg gave up, the
+      // shelter holds till dawn; the next night re-arms.
+      try {
+        const cb = ctx && ctx.castlebed
+        const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+        if (cb && cb.deadNight === n) return false
+      } catch (_) { /* no yield */ }
       let sb = 'none'
       try {
         sb = require('./behaviours/castlebed').sitebedFact(bot, ctx) || 'none' // deferred: the behaviour chain
@@ -1826,6 +1837,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       let cf = false
       try { cf = castleFirst(ctx) } catch (_) { cf = false }
       if (!cf) return 'castlebed: no castle ordered'
+      try {
+        const cb = ctx && ctx.castlebed
+        const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+        if (cb && cb.deadNight === n) return 'castlebed: yielded tonight'
+      } catch (_) { /* wording only */ }
       let sb = 'none'
       try { sb = require('./behaviours/castlebed').sitebedFact(bot, ctx) || 'none' } catch (_) { sb = 'none' }
       if (sb === 'placed') {
