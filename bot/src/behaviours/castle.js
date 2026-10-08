@@ -1163,8 +1163,9 @@ function relocate(bot, ctx, st, c, name, now) {
 }
 
 // Door path (vmzq.40, shared with the site bed): the entrance's way out to
-// the nearest site edge and 4 beyond, 2 to either side. Stow spots and the
-// site bed keep off it. Pure over the site geometry; unreadable reads off.
+// the nearest site edge and 4 beyond, 2 to either side. Stow spots, the
+// site bed, and storage (vmzq.39) keep off it. Pure over the site geometry;
+// unreadable reads off.
 function onDoorPath(st, x, z) {
   try {
     const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
@@ -1544,3 +1545,6 @@ module.exports.siteLoaded = siteLoaded
 module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets
+// Site storage (vmzq.39): stockpile reuses the stow ring and the door path.
+module.exports.stowSpot = stowSpot
+module.exports.onDoorPath = onDoorPath

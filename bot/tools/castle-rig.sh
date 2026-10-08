@@ -10,9 +10,11 @@
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
-#   CASTLE_KIT (empty|seeded|junk — seeded pre-fills cobble/planks/tools so a
-#   6-min window measures laying, not fetching; junk is vmzq.38's prod pack:
-#   36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no cobble),
+#   CASTLE_KIT (empty|seeded|junk|valuables — seeded pre-fills cobble/planks/
+#   tools so a 6-min window measures laying, not fetching; junk is vmzq.38's
+#   prod pack: 36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no
+#   cobble; valuables is vmzq.39's 36/36 never-dropped ores/tools/wood, no
+#   stone/dirt, with a pick, chests and a table),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
 #   order — protected oak logs + a foreign chest, vmzq.27's stall mix),
 #   CASTLE_BURY / CASTLE_BURY_AFTER (vmzq.37: N > 0 buries the bot pickless
@@ -87,7 +89,7 @@ MINS="${1:-${CASTLE_MINS:-6}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk) ;; *) echo "CASTLE_KIT: want empty|seeded|junk, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables, got '$KIT'"; exit 2 ;; esac
 BLOCKED="${CASTLE_BLOCKED:-0}"
 case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2 ;; esac
 { [ "$BLOCKED" -ge 0 ] && [ "$BLOCKED" -le 16 ]; } || { echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2; }
