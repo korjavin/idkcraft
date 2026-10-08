@@ -1527,6 +1527,7 @@ function createLifecycle(ticker) {
       try {
         const ctx = bot && bot._tickerCtx
         if (ctx && ctx.home) delete ctx.home.sleptA // obstructed/mined: the spawn is world spawn again
+        if (ctx && ctx.castle) delete ctx.castle.siteSpawnSet // same: the site click no longer holds
       } catch (_) { /* claim best-effort */ }
     },
   }

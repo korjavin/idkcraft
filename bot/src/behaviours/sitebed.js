@@ -117,6 +117,9 @@ function siteBedSpot(bot, st, bad) {
   const cellOk = (x, y, z) => {
     if (!AIR.has(at(x, y, z)) || !AIR.has(at(x, y + 1, z))) return false
     try {
+      if (flatMod.cellOccupiedSelf(bot, x, y, z) || flatMod.cellOccupiedSelf(bot, x, y + 1, z)) return false
+    } catch (_) { /* unreadable body: allow */ }
+    try {
       if (blueprint.inFootprint(st, { x, y, z })) return false
     } catch (_) { return false }
     try {
@@ -163,6 +166,12 @@ function sitebed(bot, ctx, target, state) {
   if (siteBedStands(bot, ctx)) { ctx.stepStatus = 'done'; return } // placed: nothing owed, ever
   const n = dayNum(bot)
   if (n >= 0 && cb.deadDay === n) { ctx.stepStatus = 'done'; return } // yielded today: tomorrow retries
+  if (n >= 0 && cb.day !== n) { // new day: fresh retry budget (spots, refusals, chest pull)
+    cb.day = n
+    cb.blocks = 0
+    cb.bad = new Set()
+    cb.pulled = false
+  }
   const giveUpToday = () => {
     if (n >= 0) cb.deadDay = n
     ctx.stepStatus = 'done'

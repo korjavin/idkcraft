@@ -15,7 +15,7 @@ const blueprint = require('../src/castle')
 const castleMod = require('../src/behaviours/castle')
 const sitebed = require('../src/behaviours/sitebed')
 const goal = require('../src/goal')
-const { respawnLine } = require('../src/index')
+const { respawnLine, createLifecycle } = require('../src/index')
 
 const SITE = { x: 100, y: 64, z: 200 }
 const flush = () => new Promise((r) => setImmediate(r))
@@ -79,6 +79,20 @@ describe('sitebed geometry', () => {
     }
   })
 
+  it('the picker steps aside from the bot own cells (revmux core-1)', () => {
+    const st = castleState()
+    const probe = sitebed.siteBedSpot(makeBot(), st, null)
+    assert.ok(probe, 'a spot exists')
+    const bot = makeBot({ at: pos(probe.x + 0.5, probe.y, probe.z + 0.5) })
+    const spot = sitebed.siteBedSpot(bot, st, null)
+    assert.ok(spot, 'another spot exists')
+    const feet = { x: Math.floor(probe.x + 0.5), y: probe.y, z: Math.floor(probe.z + 0.5) }
+    for (const dx of [0, 1]) {
+      const overlap = spot.x + dx === feet.x && spot.y === feet.y && spot.z === feet.z
+      assert.equal(overlap, false, `foot+${dx} never inside the player hitbox`)
+    }
+  })
+
   it('bad spots lose', () => {
     const bot = makeBot()
     const st = castleState()
@@ -124,6 +138,14 @@ describe('sitebed menu', () => {
     assert.equal(goal.MENU.sitebed.feasible(day, bot, placed), false, 'one bed is enough')
     const yielded = { castle: castleState(), sitebed: { deadDay: 5 } }
     assert.equal(goal.MENU.sitebed.feasible(day, bot, yielded), false, 'tomorrow retries')
+  })
+
+  it('castle-rule: fsm sitebed skips the model (revmux core-2)', async () => {
+    const boom = { source: 'laya-test', ask: async () => { throw new Error('model asked') } }
+    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0 }
+    assert.deepEqual(
+      await goal.chooseStep(boom, facts, ['sitebed', 'light', 'rest'], null),
+      { step: 'sitebed', source: 'castle-rule', fsm: 'sitebed', model: null })
   })
 
   it('with no bed the decide sequence equals master', async () => {
@@ -209,6 +231,25 @@ describe('sitebed place and spawn', () => {
     assert.equal(ctx.sitebed.deadDay, 5, 'the menu cannot re-pick today')
     const day = { time: 'day', home: 'built', inside: 'no', rearm: false, castle: 'stone-none', pickaxe: 1 }
     assert.equal(goal.MENU.sitebed.feasible(day, bot, ctx), false)
+  })
+
+  it('a new day resets the retry budget: spots, refusals, chest pull (revmux core-4)', () => {
+    const bot = makeBot({ items: [{ name: 'white_bed', count: 1 }], day: 6 })
+    const ctx = { castle: castleState(), home: farHome(), sitebed: { day: 5, blocks: 3, bad: new Set(['1,2,3']), pulled: true } }
+    sitebed(bot, ctx)
+    assert.equal(ctx.sitebed.blocks, 0, 'refusals reset')
+    assert.equal(ctx.sitebed.bad.size, 0, 'dead spots reopen')
+    assert.equal(ctx.sitebed.pulled, false, 'the chest gets one pull a day')
+    assert.ok(ctx.sitebed.at, 'placing resumes')
+  })
+
+  it('spawnReset clears the tentative site flag (revmux core-5)', () => {
+    const bot = makeBot()
+    bot._tickerCtx = { castle: castleState({ siteBed: { x: 90, y: 64, z: 191 }, siteSpawnSet: true }) }
+    assert.ok(respawnLine(bot).includes('(bed)'), 'clicked bed wins while set')
+    createLifecycle(null).onSpawnReset(bot)
+    assert.equal(bot._tickerCtx.castle.siteSpawnSet, undefined, 'obstructed/mined: world spawn again')
+    assert.ok(!respawnLine(bot).includes('(bed)'), 'the line falls back')
   })
 
   it('respawnLine reports the clicked site bed', () => {

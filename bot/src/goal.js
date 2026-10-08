@@ -1607,7 +1607,7 @@ async function chooseStep(brain, facts, feasible, home) {
   // beds over a feasible castle and walked 500 blocks home. The model is
   // consulted only when the castle cannot run now.
   // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
-  if (fsm === 'castle' || fsm === 'castlefetch' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
