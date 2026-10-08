@@ -76,6 +76,7 @@ function castleBot(at, opts = {}) {
     async equip(item) { bot.heldItem = item },
     async placeBlock(ref, face) {
       const d = ref.position.plus(face)
+      if (bot.failPlace) throw new Error(`Server refused to place ${bot.heldItem && bot.heldItem.name} at (${d.x}, ${d.y}, ${d.z})`)
       if (opts.refuseSite !== false && castleData.inFootprint(CASTLE, { x: d.x, y: d.y, z: d.z })) {
         throw new Error(`Server refused to place cobblestone at (${d.x}, ${d.y}, ${d.z}): the block is still air`)
       }
@@ -246,6 +247,61 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.ok(!ctx.shelter.offCastle, 'the walk-off stays protected-gated')
   })
 
+  it('a refused first break at the walk-off spot (no descent) holds exposed', async () => {
+    // Revmux 02 core-1/2: st.digs counts dispatched digs — a break the
+    // server refuses leaves the body on the surface, and the open hold
+    // must release fight.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => {
+        if (x === 5 && z === 5) return 'dirt'
+        return Math.hypot(x - 5, z - 5) <= 12 ? 'stone' : 'dirt'
+      },
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    const walk = ctx.shelter.dig.walk
+    assert.ok(walk, 'relocation launched')
+    bot.entity.position = pos(walk.x + 0.5, walk.y, walk.z + 0.5)
+    bot.dig = async () => { throw new Error('Server refused to break dirt') }
+    for (let t = 0; t < 10 && ctx.shelter.dig; t++) {
+      logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+      await flush()
+    }
+    assert.ok(!ctx.shelter.dig, 'dig gave up')
+    assert.ok(logs.includes('shelter dig-in failed:dig-error'), JSON.stringify(logs))
+    assert.equal(Math.floor(bot.entity.position.y), walk.y, 'body never descended')
+    assert.equal(ctx.inShelter, false, 'no descent: fight preempts')
+  })
+
+  it('a descended pit whose cap is refused keeps the armed hold', async () => {
+    // Revmux 02 core-2: measured descent still commits — abandoning a
+    // 3-deep pit to chase is worse than holding it.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => {
+        if (x === 5 && z === 5) return 'dirt'
+        return Math.hypot(x - 5, z - 5) <= 12 ? 'stone' : 'dirt'
+      },
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    const walk = ctx.shelter.dig.walk
+    assert.ok(walk, 'relocation launched')
+    bot.entity.position = pos(walk.x + 0.5, walk.y, walk.z + 0.5)
+    for (let t = 0; t < 20 && ctx.shelter.dig; t++) {
+      if (Math.floor(bot.entity.position.y) <= walk.y - 3) bot.failPlace = true // pit dug, cap refused
+      logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+      await flush()
+    }
+    assert.ok(!ctx.shelter.dig, 'dig gave up')
+    assert.ok(logs.includes('shelter dig-in failed:cap-error'), JSON.stringify(logs))
+    assert.equal(Math.floor(bot.entity.position.y), walk.y - 3, 'three deep')
+    assert.equal(ctx.inShelter, true, 'descended: the armed hold keeps the pit')
+  })
+
   it('normal pad: a working pillar at the castle perches armed, no relocation', async () => {
     // By-construction pin: the relocation path only runs after a
     // protected dig failure — a site that pillars (or digs) keeps the
@@ -325,8 +381,16 @@ describe('vmzq.48 exposed hold releases fight (tick level)', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'fight', `fight released: ${JSON.stringify(r.decision)}`)
       assert.equal(fightRan, 1, 'fight behaviour dispatched')
-      assert.ok(bot.attackCalls >= 1, 'the arm swings at the adjacent zombie')
       assert.ok(!logs.some((m) => m.includes('action=shelter')), `never shelter-idles: ${JSON.stringify(logs)}`)
+      // Control (revmux 02 core-3): the same tick with the hold armed
+      // suppresses fight — the dispatch, not the every-tick melee
+      // reflex, tells the exposed hold apart. (attackCalls is not
+      // asserted: the reflex swings regardless of inShelter.)
+      ctx.inShelter = true
+      fightRan = 0
+      const held = await ticker.tick()
+      assert.equal(held.decision.action, 'idle', 'armed hold still suppresses')
+      assert.equal(fightRan, 0, 'fight not dispatched under the armed hold')
     } finally {
       console.log = origLog
       BEHAVIOURS.fight = origFight
