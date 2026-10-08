@@ -47,7 +47,6 @@ const NATURAL_SOLID = new Set([
   'mud', 'muddy_mangrove_roots',
   'sand', 'red_sand', 'gravel', 'clay', 'soul_sand', 'soul_soil',
   'stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite',
-  'smooth_basalt', // vmzq.46: natural (deltas, geodes) — the quarry must dig what STONE_ITEMS counts
   'dripstone_block', 'sandstone', 'red_sandstone', 'infested_stone',
   'snow', 'snow_block', 'ice', 'packed_ice', 'ancient_debris',
   'netherrack', 'basalt', 'blackstone', 'soul_sand', 'soul_soil',

@@ -394,13 +394,55 @@ describe('quarry-down pit abandon rules (vmzq.46)', () => {
 })
 
 describe('quarry-down stone set (vmzq.46)', () => {
-  it('smooth_basalt digs like terrain and counts as castle stone', () => {
+  it('smooth_basalt counts as castle stone but steps around like master (r2: NATURAL_SOLID reverted)', () => {
     const set = new Map()
     const bot = makeBot({ items: [], set, at: pos(97, 64, 202) })
     const block = { name: 'smooth_basalt', position: pos(96, 63, 202) }
-    assert.equal(canBreak(bot, block, { castle: castleState() }), true, 'natural basalt digs')
+    // Parity by construction: basalt in the ground steps around exactly as
+    // on master (the quarry scan skips the type and digs past); only
+    // held/placed basalt counts toward stone.
+    assert.equal(canBreak(bot, block, { castle: castleState() }), false, 'natural basalt steps around')
     assert.ok(blueprint.isStone('smooth_basalt'), 'counts')
     const pack = { inventory: { items: () => [{ name: 'smooth_basalt', count: 11 }, { name: 'calcite', count: 12 }] } }
     assert.equal(castleMod.held(pack, 'stone'), 23, 'the run7 pack now funds the batch')
+  })
+})
+
+describe('non-starved parity (vmzq.46 r2)', () => {
+  it('live pad decides exactly like master: trench cells in order, pit never engaged', () => {
+    // Flat dirt world: no exposed stone, every trench side live. Runs the
+    // fetch pick chain in digTick order; with verbatim pickQuarry the pit
+    // handover must never fire and the picks must be master's exact cells.
+    const set = new Map()
+    const st = castleState()
+    const ctx = { castle: st }
+    const bot = makeBot({ items: TOOLS(), set })
+    const f = { kind: 'stone', skip: new Set(), target: null }
+    const o = fetch.quarrySide(st, 0, 0)
+    const pick = () => {
+      let t = null
+      quiet(() => {
+        t = fetch.pickStone(bot, ctx, { skip: new Set() }, bot.entity.position)
+        if (!t) {
+          t = fetch.pickQuarry(bot, ctx, f)
+          if (!t) t = fetch.pickPit(bot, ctx, f)
+        }
+      })
+      return t
+    }
+    const y = st.site.y - 1
+    let t = pick()
+    assert.ok(t && t.quarry === true && !t.pit, 'first pick is a trench cell')
+    assert.deepEqual([t.x, t.y, t.z], [o.x, y, o.z], 'side 0 col 0 lane 0 ground cell')
+    assert.deepEqual([t.stance.x, t.stance.y, t.stance.z], [o.x + 1, st.site.y, o.z], 'column -1 stance')
+    set.set(t.k, 'air')
+    t = pick()
+    assert.deepEqual([t.x, t.y, t.z], [o.x, y, o.z + 1], 'side 0 col 0 lane 1')
+    set.set(t.k, 'air')
+    t = pick()
+    assert.deepEqual([t.x, t.y, t.z], [o.x - 1, y, o.z], 'side 0 col 1 lane 0')
+    assert.equal(f.pit, undefined, 'the pit handover never runs on a live pad')
+    assert.equal(st.quarryPits, undefined, 'no pit latched')
+    assert.equal(st.quarryBase[0], st.site.y, 'side 0 latches the ground frame')
   })
 })
