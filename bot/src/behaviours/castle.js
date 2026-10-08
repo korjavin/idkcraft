@@ -43,7 +43,7 @@ const SIDESTEPS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
 const AIR = new Set(['air', 'cave_air', 'void_air'])
 
 const ITEM = {
-  stone: (n) => n === 'cobblestone' || n === 'stone',
+  stone: blueprint.isStone, // vmzq.38: the one castle-stone set (variants too)
   planks: (n) => n.endsWith('_planks'),
   door: (n) => n.endsWith('_door') && n !== 'iron_door', // iron needs redstone
   torch: (n) => n === 'torch',

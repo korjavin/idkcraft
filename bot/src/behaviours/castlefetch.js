@@ -102,7 +102,7 @@ const isFence = (n) => n.endsWith('_fence') && n !== 'nether_brick_fence'
 // What the chest yields for a kind, finished items first; planks also
 // take logs (converted by the craft source next tick).
 function chestNames(bot, kind) {
-  if (kind === 'stone') return [['cobblestone', 'stone']]
+  if (kind === 'stone') return [[...blueprint.STONE_ITEMS]]
   if (kind === 'planks') return [itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'door') return [itemNames(bot, isDoor)]
   if (kind === 'fence') return [itemNames(bot, isFence)]
@@ -164,7 +164,7 @@ function hasPickaxe(bot) {
 }
 
 function cobble(bot) {
-  return countItems(bot, (n) => n === 'cobblestone')
+  return countItems(bot, blueprint.isStone) // vmzq.38: a granite dig is a gain
 }
 
 // Per-leg time split (idkcraft-vmzq.20 nudge2): every digTick lands in
@@ -182,7 +182,7 @@ function spend(f, bucket) {
 // it against the leg-start count, so dig-ticks-per-block is measurable.
 function blocksOnHand(bot) {
   try {
-    return countItems(bot, (n) => n === 'cobblestone' || n === 'dirt')
+    return countItems(bot, (n) => blueprint.isStone(n) || n === 'dirt')
   } catch (_) { return null }
 }
 
@@ -593,7 +593,7 @@ function roomForDrop(bot, ctx) {
     if (!Array.isArray(items)) return true
     if (items.length < 36) return true
     for (const s of items) {
-      if (!s || (s.name !== 'cobblestone' && s.name !== 'dirt')) continue
+      if (!s || (!blueprint.isStone(s.name) && s.name !== 'dirt')) continue
       const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
       if ((typeof s.count === 'number' ? s.count : 1) < cap) return true
     }

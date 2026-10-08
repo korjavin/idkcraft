@@ -4,6 +4,7 @@ const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
+const { isStone } = require('../castle')
 const fightMod = require('./fight')
 const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
 
@@ -41,7 +42,7 @@ const DIG_NOGAIN_STRIKES = 5
 const DIG_TIMEOUT_MS = 10000
 
 function scaffoldCount(bot) {
-  return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  return countItems(bot, (n) => n === 'dirt' || isStone(n)) // vmzq.38: castle stone scaffolds too
 }
 
 function hasSword(bot) {

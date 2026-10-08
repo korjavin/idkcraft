@@ -113,6 +113,7 @@ function castleWalk(ctx) {
 // the same movements object, so an open gate also holds parkour off — a
 // maxD=4 plan would strand the next sprint-off tick.
 const danger = require('./danger')
+const { STONE_ITEMS, isStone } = require('./castle') // pure blueprint data
 
 const SPRINT_DIST = 8
 const SPRINT_LOOKAHEAD = 6
@@ -166,8 +167,9 @@ function movementTargets(bot, ctx) {
   return out
 }
 
-// Castle stone (g0z.18): the pathfinder scaffolds with any cobblestone
-// (scafoldingBlocks = dirt + cobblestone), so the castle walk to its site
+// Castle stone (g0z.18): the pathfinder scaffolds with any castle stone
+// (scafoldingBlocks = dirt + castle.STONE_ITEMS — vmzq.38: the quarry's
+// granite/diorite/andesite too; "cobble" below means that set), so the castle walk to its site
 // pillared/bridged the quarried batch away. The castle climbs its own
 // stairs (reach invariant).
 // Walk-proof store (idkcraft-vmzq.31): g0z.18 put cobble back into the
@@ -199,18 +201,22 @@ function castleStone(bot, ctx) {
 function otherScaffold(bot, mov) {
   try {
     const byName = bot.registry.itemsByName
-    return (bot.inventory.items() || []).some((it) => it && it.name !== 'cobblestone' && (it.count | 0) > 0 &&
+    return (bot.inventory.items() || []).some((it) => it && !isStone(it.name) && (it.count | 0) > 0 &&
       byName[it.name] && mov.scafoldingBlocks.includes(byName[it.name].id))
   } catch (_) { return false }
 }
 
 function scaffoldCobble(bot, mov, on) {
   const list = mov.scafoldingBlocks
-  const it = bot && bot.registry && bot.registry.itemsByName && bot.registry.itemsByName.cobblestone
-  if (!Array.isArray(list) || !it) return
-  const i = list.indexOf(it.id)
-  if (on && i < 0) list.push(it.id)
-  if (!on && i >= 0) list.splice(i, 1)
+  const byName = bot && bot.registry && bot.registry.itemsByName
+  if (!Array.isArray(list) || !byName) return
+  for (const name of STONE_ITEMS) {
+    const it = byName[name]
+    if (!it) continue
+    const i = list.indexOf(it.id)
+    if (on && i < 0) list.push(it.id)
+    if (!on && i >= 0) list.splice(i, 1)
+  }
 }
 
 function movementsFor(owner, bot, ctx, extra) {

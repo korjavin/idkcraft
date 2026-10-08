@@ -333,6 +333,18 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword)')
   }
+  // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
+  // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
+  if (KIT === 'junk') {
+    for (const [item, count] of [['granite', 90], ['diorite', 113], ['andesite', 115], ['smooth_basalt', 12],
+      ['sand', 30], ['leaf_litter', 40], ['rotten_flesh', 20], ['bow', 4], ['raw_iron', 63], ['oak_planks', 128],
+      ['acacia_door', 3], ['white_bed', 1], ['arrow', 88], ['wooden_sword', 1], ['bone', 64], ['string', 64],
+      ['gunpowder', 64], ['spider_eye', 64], ['feather', 64], ['flint', 64], ['wheat_seeds', 64], ['oak_sapling', 64],
+      ['kelp', 64], ['cactus', 64], ['egg', 16], ['ink_sac', 64], ['slime_ball', 64], ['clay_ball', 64]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=junk (36/36 stone variants + junk, no pickaxe)')
+  }
   await sleep(3000) // chunks in, both landed
   if (tickCtx()) tickCtx().paused = false
 

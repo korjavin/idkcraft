@@ -1151,7 +1151,7 @@ function goalFacts(bot, ctx) {
   const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
   const charcoal = countItems(bot, (n) => n === 'charcoal') // 33vm: coal above holds both; light spends charcoal past the reserve
   const torches = countItems(bot, (n) => n === 'torch')
-  const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  const scaffold = countItems(bot, (n) => n === 'dirt' || require('./castle').isStone(n)) // vmzq.38: one stone set
   const ironOre = countItems(bot, (n) => n === 'raw_iron')
   const ingots = countItems(bot, (n) => n === 'iron_ingot')
   const diamonds = countItems(bot, (n) => n === 'diamond')

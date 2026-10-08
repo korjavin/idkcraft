@@ -377,6 +377,7 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
 CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
+CASTLE_KIT=junk sh bot/tools/castle-rig.sh 5     # vmzq.38: the 36/36 prod junk pack, no pickaxe — must recover and lay
 ```
 
 One call = reset the disposable world copy, boot Paper, scan nine
