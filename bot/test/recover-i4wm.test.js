@@ -10,8 +10,10 @@
 // B4 only exempts gave-ups, not the done-loop). Fix: count consecutive
 // same-anchor same-floor dones of shuffle kinds (sidestep/hop_step) while
 // boxed in, ban the kind at 3 — climbing/tunneling dones neither count nor
-// seed. Open ground never counts (a wedge that walks 2 blocks sideways is
-// genuinely free), so open-ground sidesteps stay byte-identical.
+// seed, and a boxed climb-done keeps the runs (only leaving the box breaks
+// them — revmux 01 major). Open ground never counts (a wedge that walks 2
+// blocks sideways is genuinely free), so open-ground sidesteps stay
+// byte-identical.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -143,7 +145,7 @@ describe('i4wm shuffle-done guard', () => {
     assert.equal(dm.action, 'dig_step', 'the post-ban menu offers the model the staircase')
   })
 
-  it('hop_step dones count the same; climbing/tunneling dones never count and reset', () => {
+  it('hop_step dones count the same; climbing/tunneling dones never count', () => {
     const bp = pos(0.5, 61, 0.5)
     const ctx = {}
     recover.noteRecoverDone(ctx, bp, 'hop_step', true)
@@ -151,7 +153,7 @@ describe('i4wm shuffle-done guard', () => {
     assert.equal(recover.recoverBanned(ctx, 'hop_step'), false, '2 dones: not yet')
     recover.noteRecoverDone(ctx, bp, 'hop_step', true)
     assert.equal(recover.recoverBanned(ctx, 'hop_step'), true, '3rd boxed done bans hop too')
-    // Climbing/tunneling dones neither count nor seed — and break the run.
+    // Climbing/tunneling dones never count and never seed a kind ban.
     const ctx2 = {}
     recover.noteRecoverDone(ctx2, bp, 'sidestep', true)
     recover.noteRecoverDone(ctx2, bp, 'sidestep', true)
@@ -159,9 +161,40 @@ describe('i4wm shuffle-done guard', () => {
       recover.noteRecoverDone(ctx2, bp, kind, true)
       assert.equal(recover.recoverBanned(ctx2, kind), false, `${kind} done never bans`)
     }
-    assert.equal((ctx2.recoverStreaks.dones.sidestep || {}).n || 0, 0, 'a climbing done resets the shuffle run')
-    recover.noteRecoverDone(ctx2, bp, 'sidestep', true)
-    assert.equal(recover.recoverBanned(ctx2, 'sidestep'), false, 'post-climb run restarts at 1')
+  })
+
+  it('a boxed climb-done keeps the run (revmux 01 major); an unboxed one clears it', () => {
+    // The staircase that stops below the rim releases done while still
+    // boxed: clearing there would re-offer the shuffle between climb
+    // episodes (rise one, shuffle, fall back, re-ban, forever). Only a
+    // climb that leaves the box breaks the run.
+    const bp = pos(0.5, 61, 0.5)
+    const ctx = {}
+    recover.noteRecoverDone(ctx, bp, 'sidestep', true)
+    recover.noteRecoverDone(ctx, bp, 'sidestep', true)
+    recover.noteRecoverDone(ctx, bp, 'dig_step', true)
+    assert.equal(ctx.recoverStreaks.dones.sidestep.n, 2, 'boxed dig done keeps the run')
+    recover.noteRecoverDone(ctx, bp, 'sidestep', true)
+    assert.equal(recover.recoverBanned(ctx, 'sidestep'), true, 'the kept run still bans at 3')
+    assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true)
+    recover.noteRecoverDone(ctx, bp, 'dig_step', true)
+    assert.equal(recover.recoverBanned(ctx, 'sidestep'), true, 'a boxed climb keeps the ban itself')
+    recover.noteRecoverDone(ctx, bp, 'dig_step', false)
+    assert.equal(recover.recoverBanned(ctx, 'sidestep'), false, 'leaving the box clears it')
+    assert.deepEqual(ctx.recoverStreaks.dones, {}, 'unboxed climb clears every run')
+  })
+
+  it('a kept run refreshes its clock; a stalled one lapses', () => {
+    const bp = pos(0.5, 61, 0.5)
+    const ctx = {}
+    for (let i = 0; i < 3; i++) recover.noteRecoverDone(ctx, bp, 'sidestep', true)
+    const run = ctx.recoverStreaks.dones.sidestep
+    run.at -= recover.RECOVER_BAN_MS - 1000 // nearly stale
+    recover.noteRecoverDone(ctx, bp, 'dig_step', true) // the climb continues
+    assert.ok(Date.now() - ctx.recoverStreaks.dones.sidestep.at < 1000, 'boxed climb re-stamps the run')
+    assert.equal(recover.recoverBanned(ctx, 'sidestep'), true, 'still banned past the old deadline')
+    ctx.recoverStreaks.dones.sidestep.at -= recover.RECOVER_BAN_MS + 1 // then it stalls
+    assert.equal(recover.recoverBanned(ctx, 'sidestep'), false, 'no refresh without a climb done')
   })
 
   it('a floor change restarts the run; moving out clears; bans expire', () => {
@@ -359,6 +392,33 @@ describe('i4wm post-shuffle staircase arm', () => {
     assert.ok(m.names.includes('dig_step'), 'hand staircase feasible')
     const d = await recover.decide(bot, ctx, null, null)
     assert.equal(d.action, 'dig_through', 'unboxed done-ban tunnels as before, never the staircase')
+  })
+
+  it('near goal: ban, dig, still digs (the staircase continues below the rim)', async () => {
+    // The finding's trace: a near level goal stops the dig chain after one
+    // block; the boxed dig-done must keep the ban so the next episode digs
+    // on instead of shuffling back down (rise one, shuffle, fall back,
+    // re-ban, forever).
+    const bot = cornerBot()
+    const ctx = { stuck: null, brain: null }
+    const goal = { x: 10, y: 61, z: 0 }
+    for (let ep = 1; ep <= 3; ep++) {
+      ctx.stuck = { by: 'gather', goal, key: `near-${ep}` }
+      const d = await recover.decide(bot, ctx, null, null)
+      assert.equal(d.action, 'sidestep', `episode ${ep} shuffles`)
+      ctx.recovery.status = 'done'
+      await recover.decide(bot, ctx, null, null)
+    }
+    assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, 'banned at 3')
+    ctx.stuck = { by: 'gather', goal, key: 'near-4' }
+    assert.equal((await recover.decide(bot, ctx, null, null)).action, 'dig_step', 'ep4 staircases')
+    ctx.recovery.status = 'done' // one block up, chain stops (near goal), still boxed
+    await recover.decide(bot, ctx, null, null)
+    assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, 'the boxed climb keeps the ban')
+    ctx.stuck = { by: 'gather', goal, key: 'near-5' }
+    const m = menuOf(bot, ctx)
+    assert.ok(!m.names.includes('sidestep'), `no shuffle between climbs, got ${m.names}`)
+    assert.equal((await recover.decide(bot, ctx, null, null)).action, 'dig_step', 'ep5 digs on')
   })
 
   it('a just-failed hop escalates to the staircase (4jr order pin)', () => {

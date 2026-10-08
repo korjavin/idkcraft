@@ -2097,9 +2097,14 @@ function noteRecoverDone(ctx, bp, action, boxed) {
   if (bp) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
   if (action && st.fails) delete st.fails[action]
   // Shuffle-done run (i4wm): a boxed same-floor shuffle done extends the
-  // kind's run, anything else restarts or clears it. Climbing/tunneling
-  // dones never count — progress breaks consecutiveness — and open-ground
-  // shuffles never count either (the fja wedge genuinely walks free).
+  // kind's run, anything else restarts or clears it. Open-ground shuffles
+  // never count (the fja wedge genuinely walks free). A climbing/tunneling
+  // done breaks the runs only once OUT of the box (revmux 01 major): a
+  // staircase that stops below the rim (near goal, or REPEATS in a deep
+  // pit) releases done while still boxed, and clearing there would put the
+  // shuffle back on the menu between climb episodes — rise one, shuffle,
+  // fall back, re-ban, forever. Kept runs refresh their clocks (an active
+  // climb is the same situation, not a transient); a stalled one lapses.
   if (!st.dones || typeof st.dones !== 'object') st.dones = {}
   if (RECOVER_SHUFFLE.has(action) && bp) {
     if (boxed) {
@@ -2114,8 +2119,12 @@ function noteRecoverDone(ctx, bp, action, boxed) {
     } else {
       delete st.dones[action]
     }
-  } else {
+  } else if (!boxed) {
     st.dones = {}
+  } else {
+    for (const k of Object.keys(st.dones)) {
+      if (st.dones[k] && typeof st.dones[k] === 'object') st.dones[k].at = Date.now()
+    }
   }
 }
 function recoverBanned(ctx, action) {
