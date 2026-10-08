@@ -211,19 +211,46 @@ describe('abortReflex episode', () => {
     assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
   })
 
-  it('releases on footing regained (waded out)', () => {
+  it('holds the latch ashore with the threat adjacent (no cooldown gap)', () => {
+    // Revmux 01 major: releasing on footing with the drowned still adjacent
+    // armed a 15 s cooldown and sent the bot back in unprotected. The latch
+    // now holds through the ashore ticks (normal dispatch fights/flees on
+    // land) and re-drives the moment the body is wet again.
     const { bot, ctx, state } = latched()
-    bot.blockAt = ((base) => (p) => {
+    const wadeBlockAt = ((base) => (p) => {
       if (Math.floor(p.x) === 0 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
         return { name: 'sand', boundingBox: 'block' }
       }
       return base(p)
     })(bot.blockAt)
-    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), false)
+    bot.blockAt = wadeBlockAt
+    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), false) // ashore: yield, keep latch
+    assert.ok(ctx.abort)
+    assert.equal(ctx.abortCoolUntil, undefined)
+    assert.ok(bot.pathfinder.goal) // abort goal stays until dispatch overwrites it
+    assert.equal(abortReflex(bot, ctx, state, T0 + 2000), false) // still holding
+    assert.ok(ctx.abort)
+    // Re-entering re-drives immediately (same key, no cooldown gap).
+    bot.entity.isInWater = true
+    bot.blockAt = ((base) => (p) => {
+      if (Math.floor(p.x) === 1 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0) {
+        return { name: 'water', boundingBox: 'empty' }
+      }
+      return base(p)
+    })(bot.blockAt)
+    bot.entity.position = pos(1.5, 62, 0.5)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 3000), true)
+    assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
+  })
+
+  it('releases ashore once the threat is gone (crossing resumes)', () => {
+    const { bot, ctx } = latched()
+    bot.entity.isInWater = false
+    bot.entity.onGround = true
+    assert.equal(abortReflex(bot, ctx, null, T0 + 1000), false)
     assert.equal(ctx.abort, null)
     assert.equal(ctx.abortCoolUntil, T0 + 1000 + ABORT_COOLDOWN_MS)
     assert.equal(bot.pathfinder.goal, null)
-    assert.equal(ctx.lastGoalKey, '')
   })
 
   it('releases when the threat is gone mid-swim (crossing resumes)', () => {
@@ -295,6 +322,33 @@ describe('abortReflex episode', () => {
     assert.equal(abortReflex(bot, ctx, state, T0 + 2000 + ABORT_COOLDOWN_MS + 1), true) // calm over
     assert.ok(ctx.abort)
     assert.equal(bot.calls.setGoal, 3)
+  })
+
+  it('a stale latch GCs without a cooldown and re-triggers fresh', () => {
+    const { bot, ctx, state } = latched()
+    assert.equal(abortReflex(bot, ctx, state, T0 + 61000), true) // 61 s, no drive tick: GC + fresh trigger
+    assert.ok(ctx.abort)
+    assert.equal(ctx.abortCoolUntil, undefined)
+    assert.equal(ctx.abort.touchedAt, T0 + 61000)
+  })
+
+  it('failed shores stay skipped across episodes until the memory expires', () => {
+    const { bot, ctx, state } = latched()
+    assert.equal(abortReflex(bot, ctx, state, T0 + 5000), true) // baseline
+    assert.equal(abortReflex(bot, ctx, state, T0 + 21000), true) // stall: skip entry -> east
+    assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: 3, z: 0 })
+    assert.equal(abortReflex(bot, ctx, null, T0 + 22000), false) // threat gone: release, remember the skip
+    assert.equal(ctx.abort, null)
+    assert.equal(ctx.abortShoreMemory.length, 1)
+    // Next episode (past the cooldown) seeds the remembered skip: the entry
+    // stays excluded and the scan wins outright.
+    assert.equal(abortReflex(bot, ctx, state, T0 + 38000), true)
+    assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: 3, z: 0 })
+    assert.deepEqual(ctx.abort.skip, [{ x: -3, z: 0 }])
+    assert.equal(abortReflex(bot, ctx, null, T0 + 39000), false) // release again
+    // Past the memory TTL the entry is available and wins the tie again.
+    assert.equal(abortReflex(bot, ctx, state, T0 + 39000 + 600000 + 16000), true)
+    assert.deepEqual({ x: ctx.abort.x, z: ctx.abort.z }, { x: -3, z: 0 })
   })
 
   it('airborne dry ticks do not move the entry shore', () => {

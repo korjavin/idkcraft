@@ -472,19 +472,26 @@ function headInAir(bot) {
 // the bot beaches at the nearest landable shore — the entry shore when it
 // is closer — then the leg resumes. Wading (footing below) fights
 // normally, and dry-land threats never trigger: a zombie ashore while the
-// bot swims past is not its fight. Episode latch like breath (trigger,
-// drive, release, cooldown): release on footing regained, threat gone, or
-// the stuck menu appearing (it owns the body then); a short cooldown
-// paces waterline re-probes. Rides the tick's baseline owner like
+// bot swims past is not its fight. Episode latch like breath, but the
+// latch is the water-entry guard: it holds until the threat is gone even
+// ashore (releasing on landfall with the drowned still adjacent would send
+// the bot back in unprotected under a fresh cooldown — the revmux 01
+// major). Ashore ticks yield to normal dispatch (fight or flee on land
+// work there) without releasing; re-entering while the threat persists
+// re-drives immediately, never after a gap. Release on threat gone, the
+// stuck menu appearing (it owns the body then), or give-up; a short
+// cooldown paces the next episode. Rides the tick's baseline owner like
 // fleeReflex (a keyed pathfinder goal needs no lease edge); breath still
 // preempts (oxygen kills faster) and hands off here on full lungs.
 const ABORT_RANGE = 6
 const ABORT_CLEAR_DIST = 8 // release band: threat must leave past this (no mid-water flap)
 const ABORT_HURT_MS = 5000 // fresh-damage window (mirrors index.js HURT_FRESH_MS; this module cannot import index)
-const ABORT_COOLDOWN_MS = 15000 // post-release calm: paces waterline re-probes, not a latch
+const ABORT_COOLDOWN_MS = 15000 // post-release calm: paces episodes, not ticks inside one
 const ABORT_SCAN_MS = 5000 // shore re-scan throttle (mirrors shelter-dry)
 const ABORT_STALL_MS = 15000 // no-approach -> skip the shore (mirrors shelter-dry)
 const ABORT_MAX_SKIP = 3 // skipped shores -> give up, release to the leg
+const ABORT_STALE_MS = 60000 // latch without a main-path drive tick this long is a mode-switch leftover: GC it
+const ABORT_SHORE_MEMORY_MS = 600000 // failed shores stay skipped across episodes for this long (revmux 01 minor)
 const ABORT_DY_LO = -1 // waterline stances only: wadable or a +1 exit;
 const ABORT_DY_HI = 1 // deeper is caves, higher is h04-unexitable walls
 const ABORT_WATER_MOBS = new Set(['drowned', 'guardian', 'elder_guardian'])
@@ -495,32 +502,38 @@ function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
   if (!inWater) {
     try { trackAbortDry(bot, ctx) } catch (_) { /* entry shore best-effort */ }
   }
-  if (ctx.abort) return driveAbort(bot, ctx, state, nowMs)
+  if (ctx.abort) {
+    // Stale latch (no main-path drive tick for a minute — the mode moved
+    // on while latched): GC without a cooldown so a live threat now
+    // re-triggers fresh below.
+    if (typeof ctx.abort.touchedAt === 'number' && nowMs - ctx.abort.touchedAt > ABORT_STALE_MS) {
+      ctx.abort = null
+      dropAbortGoal(bot, ctx)
+    } else {
+      ctx.abort.touchedAt = nowMs
+      return driveAbort(bot, ctx, state, nowMs, inWater)
+    }
+  }
   if (!inWater) return false
   if (ctx.breath) return false
   if (ctx.stuck || ctx.recovery) return false
   if (typeof ctx.abortCoolUntil === 'number' && nowMs < ctx.abortCoolUntil) return false
   if (abortFooting(bot)) return false
   if (!abortThreat(bot, ctx, state, nowMs, ABORT_RANGE)) return false
-  const target = pickAbortShore(bot, ctx, [])
+  const skip = abortRememberedSkips(ctx, nowMs)
+  const target = pickAbortShore(bot, ctx, skip)
   if (!target) return false
   try { if (typeof bot.stopDigging === 'function') bot.stopDigging() } catch (_) { /* nothing in flight */ }
   dropAbortGoal(bot, ctx)
-  ctx.abort = { x: target.x, y: target.y, z: target.z, skip: [], scanAt: nowMs, best: undefined, progressAt: nowMs }
+  ctx.abort = { x: target.x, y: target.y, z: target.z, skip, scanAt: nowMs, best: undefined, progressAt: nowMs, touchedAt: nowMs }
   driveAbortGoal(bot, ctx)
   console.log(`reflex abort-shore threat=${abortThreatName(state)} target=${target.x},${target.y},${target.z}`)
   try { metrics.events.inc({ event: 'reflex_abort' }) } catch (_) { /* metrics best-effort */ }
   return true
 }
 
-function driveAbort(bot, ctx, state, nowMs) {
+function driveAbort(bot, ctx, state, nowMs, inWater) {
   const a = ctx.abort
-  let inWater = false
-  try { inWater = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { inWater = false }
-  if (!inWater || abortFooting(bot)) {
-    releaseAbort(bot, ctx, nowMs)
-    return false
-  }
   if (!abortThreat(bot, ctx, state, nowMs, ABORT_CLEAR_DIST)) {
     releaseAbort(bot, ctx, nowMs)
     return false
@@ -533,6 +546,7 @@ function driveAbort(bot, ctx, state, nowMs) {
     releaseAbort(bot, ctx, nowMs)
     return false
   }
+  if (!inWater || abortFooting(bot)) return false // ashore hold: normal dispatch (fight/flee) owns the tick, latch kept
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (bp && typeof bp.x === 'number') {
@@ -592,9 +606,33 @@ function driveAbortGoal(bot, ctx) {
 }
 
 function releaseAbort(bot, ctx, nowMs = Date.now()) {
+  // Failed shores stay skipped for a while (revmux 01 minor): the next
+  // episode at this ford tries a different beach instead of repeating the
+  // same entry. The driven target is not remembered — it never failed.
+  try {
+    const skips = ctx.abort && Array.isArray(ctx.abort.skip) ? ctx.abort.skip : []
+    if (skips.length > 0) {
+      const mem = Array.isArray(ctx.abortShoreMemory) ? ctx.abortShoreMemory : []
+      for (const s of skips) {
+        if (s && typeof s.x === 'number' && !mem.some((m) => m && m.x === s.x && m.z === s.z)) {
+          mem.push({ x: s.x, z: s.z, until: nowMs + ABORT_SHORE_MEMORY_MS })
+        }
+      }
+      ctx.abortShoreMemory = mem.slice(-20)
+    }
+  } catch (_) { /* memory best-effort */ }
   ctx.abort = null
   ctx.abortCoolUntil = nowMs + ABORT_COOLDOWN_MS
   dropAbortGoal(bot, ctx)
+}
+
+function abortRememberedSkips(ctx, nowMs) {
+  try {
+    const mem = Array.isArray(ctx.abortShoreMemory) ? ctx.abortShoreMemory : []
+    const live = mem.filter((m) => m && typeof m.x === 'number' && typeof m.until === 'number' && nowMs < m.until)
+    ctx.abortShoreMemory = live.slice(-20)
+    return live.map((m) => ({ x: m.x, z: m.z }))
+  } catch (_) { return [] }
 }
 
 function dropAbortGoal(bot, ctx) {
