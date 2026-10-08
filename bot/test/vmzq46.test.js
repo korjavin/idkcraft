@@ -96,6 +96,26 @@ describe('quarry-down pit spots (vmzq.46)', () => {
     assert.deepEqual(gaps, [4, 6, 8, 10, 12].flatMap((g) => Array(8).fill(g)), 'outward gaps ascend')
   })
 
+  it('every spot band stays off the 8 trench lanes (v1+v2, all rotations; revmux 01 major)', () => {
+    for (const v of [1, 2]) {
+      for (let rot = 0; rot < 4; rot++) {
+        const st = castleState({ blueprintVersion: v, rot })
+        for (const o of fetch.pitSpots(st)) {
+          for (let i = 0; i < fetch.PIT_LEN; i++) {
+            for (let l = 0; l < 2; l++) {
+              const c = { x: o.x + o.dx * i + o.lx * l, z: o.z + o.dz * i + o.lz * l }
+              assert.equal(fetch.inTrench(st, { ...c, y: st.site.y }), false, `v${v} rot${rot} pit cell ${c.x},${c.z} off trench lanes`)
+              assert.equal(fetch.inTrench(st, { ...c, y: st.site.y - fetch.PIT_DEPTH }), false, `v${v} rot${rot} deep pit cell ${c.x},${c.z} off trench lanes`)
+            }
+          }
+        }
+        // Sanity: a trench origin reads as trenched.
+        const t = fetch.quarrySide(st, 0, 0)
+        assert.ok(fetch.inTrench(st, { x: t.x, y: st.site.y, z: t.z }), `v${v} rot${rot} trench origin is trenched`)
+      }
+    }
+  })
+
   it('every spot band stays outside the footprint and door path (v1+v2, all rotations)', () => {
     for (const v of [1, 2]) {
       for (let rot = 0; rot < 4; rot++) {
@@ -273,9 +293,8 @@ describe('quarry-down pit abandon rules (vmzq.46)', () => {
       let t = null
       const lines = quiet(() => { t = fetch.pickPit(bot, ctx, { skip: new Set() }) })
       assert.equal(st.quarryPits[0].dead, true, 'the house ground persists abandoned')
-      assert.equal(st.quarryPits[1].dead, true, 'the house apron covers spot 2 too')
-      const o3 = fetch.pitSpots(st)[2]
-      assert.deepEqual([t.x, t.y, t.z], [o3.x, 63, o3.z], 'spot 3 takes over')
+      const o2 = fetch.pitSpots(st)[1]
+      assert.deepEqual([t.x, t.y, t.z], [o2.x, 63, o2.z], 'the next spot takes over')
       assert.ok(lines.some((m) => m.includes('abandoned (protected place at')), `abandon line, got: ${lines.join(' | ')}`)
       assert.equal(bot.calls.dig.length, 0, 'nothing dug')
     }
@@ -296,6 +315,41 @@ describe('quarry-down pit abandon rules (vmzq.46)', () => {
       assert.ok(f.skip.has(`${o.x},63,${o.z}`), 'the log stays skipped, never dug')
       assert.equal(st.quarryPits[0].dead, false, 'the pit stands')
     }
+  })
+
+  it('no fresh spot probes dug ground: a shadowed wider gap is skipped, never latched (revmux 01 major)', () => {
+    // Drown every gap-4 spot but the first, dig the first out, then the
+    // same-lateral gap-6 spot (inside the dug band) must be skipped while a
+    // clear lateral goes live.
+    const set = new Map()
+    const st = castleState()
+    const ctx = { castle: st }
+    const spots = fetch.pitSpots(st)
+    for (const o of spots.slice(1, 8)) {
+      for (let y = SITE.y - 8; y <= SITE.y + 3; y++) set.set(`${o.x},${y},${o.z}`, 'water')
+    }
+    const bot = makeBot({ items: TOOLS(), set })
+    const oA = spots[0]
+    quiet(() => {
+      const f = { skip: new Set() }
+      for (let n = 0; n < 3000; n++) {
+        const c = fetch.pickPit(bot, ctx, f)
+        if (!c) break
+        const { i, l } = band(oA, c)
+        if (i < 0 || i >= fetch.PIT_LEN || l < 0 || l >= 2) break // spot A dug out
+        set.set(c.k, 'air')
+      }
+    })
+    assert.equal(st.quarryPits.length, 2, 'spot A dug out, one live frame latched past it')
+    const oShadow = spots[8] // same lateral, gap 6: origin inside spot A's band
+    assert.deepEqual([oShadow.x, oShadow.z], [oA.x - 2, oA.z], 'gap 6 sits on the gap-4 lane')
+    let t = null
+    const lines = quiet(() => { t = fetch.pickPit(bot, ctx, { skip: new Set() }) })
+    const inA = band(oA, t)
+    assert.ok(inA.i < 0 || inA.i >= fetch.PIT_LEN, 'the takeover is outside spot A')
+    assert.ok(!st.quarryPits.some((e) => e.x === oShadow.x && e.z === oShadow.z), 'the shadowed spot never latches')
+    assert.ok(lines.some((m) => m.includes(`pit spot ${oShadow.x} ${oShadow.z} skipped (dug ground)`)),
+      `dug-ground skip line, got: ${lines.join(' | ')}`)
   })
 
   it('a far leg with no stone at the candidate ends no-stone and never pits', () => {

@@ -80,8 +80,9 @@ const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble
 // sides dead (holes/water along the 40-column lines) and no exposed stone.
 // The fallback digs a stepped pit at a dry spot near the site instead of a
 // long line: a staircase PIT_DEPTH down (walkable out by construction — 1
-// per column under the trench stance rule), then a PIT_ROOM room at the
-// bottom, cut top-down through the dirt cap into stone. Spots ring the
+// per column under the trench stance rule — on undug ground, which the
+// spot layout and the dug-ground skip guarantee), then a PIT_ROOM room at
+// the bottom, cut top-down through the dirt cap into stone. Spots ring the
 // footprint at PIT_GAPS, nearest first, each probed dry before the first
 // dig; liquid or a hole mid-pit abandons the spot and the next takes over.
 const PIT_GAPS = [4, 6, 8, 10, 12]
@@ -465,8 +466,8 @@ function inTrench(st, p) {
     if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
   }
   }
-  // Latched pit frames (vmzq.46) are ours too — dead ones included, their
-  // dug cells stay ours.
+  // Latched pit frames (vmzq.46) are ours too — scan-dead ones included,
+  // their dug cells stay ours (probe-dead spots latch nothing).
   try {
     const pits = Array.isArray(st.quarryPits) ? st.quarryPits : []
     for (const e of pits) {
@@ -554,24 +555,29 @@ function scanStairCells(bot, ctx, f, o, len, depth, base) {
   return { dead: false, why: '' } // dug out
 }
 
-// Pit spots (vmzq.46): each side from both lateral ends (the ring-1 trick:
-// fresh ground) at every PIT_GAPS distance outside the footprint, nearest
-// first. The room runs outward like a trench; the stairs bottom out PIT_DEPTH
+// Pit spots (vmzq.46): mid-side laterals (between the ring-0/ring-1 trench
+// lanes) plus diagonal-corner origins, at every PIT_GAPS distance outside
+// the footprint, nearest first. Every spot band stays OFF the 8 trench
+// lanes (revmux 01 major: the first layout sat all 40 spots on the dead
+// lanes' columns and re-dug them deeper instead of finding dry ground).
+// The room runs outward like a trench; the stairs bottom out PIT_DEPTH
 // down within PIT_DEPTH of the origin, so the pit digs down in place.
 function pitSpots(st) {
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, z: sz } = st.site
+  const midX = sx + Math.floor((w - QUARRY_W) / 2) // N/S sides run along z
+  const midZ = sz + Math.floor((d - QUARRY_W) / 2) // W/E sides run along x
   const spots = []
   for (const g of PIT_GAPS) {
     spots.push(
-      { x: sx - g, z: sz + 2, dx: -1, dz: 0, lx: 0, lz: 1 },
-      { x: sx - g, z: sz + d - 2 - QUARRY_W, dx: -1, dz: 0, lx: 0, lz: 1 },
-      { x: sx + w - 1 + g, z: sz + 2, dx: 1, dz: 0, lx: 0, lz: 1 },
-      { x: sx + w - 1 + g, z: sz + d - 2 - QUARRY_W, dx: 1, dz: 0, lx: 0, lz: 1 },
-      { x: sx + 2, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 },
-      { x: sx + w - 2 - QUARRY_W, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 },
-      { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 },
-      { x: sx + w - 2 - QUARRY_W, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 },
+      { x: sx - g, z: midZ, dx: -1, dz: 0, lx: 0, lz: 1 }, // west mid-side
+      { x: sx + w - 1 + g, z: midZ, dx: 1, dz: 0, lx: 0, lz: 1 }, // east mid-side
+      { x: midX, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 }, // north mid-side
+      { x: midX, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }, // south mid-side
+      { x: sx - g, z: sz - g, dx: -1, dz: 0, lx: 0, lz: 1 }, // NW corner, run west
+      { x: sx + w - 1 + g, z: sz - g, dx: 1, dz: 0, lx: 0, lz: 1 }, // NE corner, run east
+      { x: sx - g, z: sz + d - 1 + g, dx: -1, dz: 0, lx: 0, lz: 1 }, // SW corner, run west
+      { x: sx + w - 1 + g, z: sz + d - 1 + g, dx: 1, dz: 0, lx: 0, lz: 1 }, // SE corner, run east
     )
   }
   return spots
@@ -583,13 +589,16 @@ function pitKey(o) {
 
 // The next pit cell to dig (vmzq.46): the first live frame in spot order —
 // a latched frame resumes, a fresh spot is probed (the trench probe: real
-// ground, solid under, dry head) and latched. A spot whose probe or scan
-// finds liquid, a hole or a protected place is abandoned for the leg, and
-// persisted dead on the castle (its ground truth does not change —
-// re-probing a half-dug pit would latch its dug floors as ground and walk
-// the frame down); only a probe void (unloaded, transient) re-probes next
-// leg. Dug-out pits re-scan cheap and are never persisted dead: a leg that
-// could not walk to its cells reads dug out without being empty.
+// ground, solid under, dry head) and latched. A spot whose scan finds
+// liquid, a hole or a protected place is abandoned for the leg and
+// persisted dead on the castle (its ground truth does not change);
+// probe-dead spots stay unlatched and re-probe next leg (trench semantics —
+// their ground was never dug, so no frame can walk). Dug-out pits re-scan
+// cheap and are never persisted dead: a leg that could not walk to its
+// cells reads dug out without being empty. Fresh spots never probe our own
+// dug ground (revmux 01 major: a probe on a dug trench/pit floor latches
+// low and the seam step out is 2 high) — the spot layout already avoids
+// the trench lanes; the inTrench skip covers earlier pits' bands.
 function pickPit(bot, ctx, f) {
   const st = ctx.castle
   const p = f.pit || (f.pit = { dead: [] })
@@ -607,15 +616,21 @@ function pickPit(bot, ctx, f) {
   for (const o of pitSpots(st)) {
     const key = pitKey(o)
     if (p.dead.includes(key)) continue
-    let entry = byKey.get(key)
+    const entry = byKey.get(key)
     if (entry && entry.dead) continue // a drowned/holed pit stays abandoned
     // Outside the footprint and the door path (both lie inside it).
     if (blueprint.inFootprint(st, { x: o.x, y: st.site.y, z: o.z })) continue
     if (blueprint.inFootprint(st, { x: o.x + o.dx * (PIT_LEN - 1), y: st.site.y, z: o.z + o.dz * (PIT_LEN - 1) })) continue
-    let base = entry && Number.isInteger(entry.base) ? entry.base : null
-    let why = null
-    let whyAt = null
-    if (base == null) {
+    let frame = entry && Number.isInteger(entry.base) ? entry : null
+    if (!frame) {
+      if (inTrench(st, { x: o.x, y: st.site.y, z: o.z }) ||
+          inTrench(st, { x: o.x + o.dx * (PIT_LEN - 1), y: st.site.y, z: o.z + o.dz * (PIT_LEN - 1) })) {
+        p.dead.push(key)
+        try { console.log(`castlefetch pit spot ${o.x} ${o.z} skipped (dug ground)`) } catch (_) { /* log best-eff */ }
+        continue
+      }
+      let why = null
+      let whyAt = null
       let liquid = false
       let g = null
       for (let y = st.site.y + QUARRY_TOP; y >= st.site.y - QUARRY_ADAPT; y--) {
@@ -630,40 +645,29 @@ function pickPit(bot, ctx, f) {
         const head = at(o.x, g + 1, o.z)
         if (!under || open(under)) { why = 'hole'; whyAt = [o.x, g - 1, o.z] }
         else if (wet(under) || wet(head)) { why = 'wet'; whyAt = [o.x, g, o.z] }
-        else base = g + 1
       }
-      if (!why) {
-        entry = { x: o.x, z: o.z, dx: o.dx, dz: o.dz, lx: o.lx, lz: o.lz, base, dead: false }
-        if (stored.length < PIT_MAX) {
-          try { stored.push(entry) } catch (_) { /* latch best-effort */ }
-          byKey.set(key, entry)
-        }
-        try { console.log(`castlefetch pit live at ${o.x} ${base} ${o.z}`) } catch (_) { /* log best-eff */ }
+      if (why) {
+        p.dead.push(key)
+        try { console.log(`castlefetch pit spot ${o.x} ${o.z} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
+        continue
       }
+      frame = { x: o.x, z: o.z, dx: o.dx, dz: o.dz, lx: o.lx, lz: o.lz, base: g + 1, dead: false }
+      if (stored.length < PIT_MAX) {
+        try { stored.push(frame) } catch (_) { /* latch best-effort */ }
+        byKey.set(key, frame)
+      }
+      try { console.log(`castlefetch pit live at ${o.x} ${frame.base} ${o.z}`) } catch (_) { /* log best-eff */ }
     }
-    if (why) {
-      p.dead.push(key)
-      if (why !== 'void') {
-        const tomb = entry || { x: o.x, z: o.z, dx: o.dx, dz: o.dz, lx: o.lx, lz: o.lz, base: st.site.y + 1, dead: true }
-        tomb.dead = true
-        if (!entry && stored.length < PIT_MAX) {
-          try { stored.push(tomb) } catch (_) { /* latch best-effort */ }
-          byKey.set(key, tomb)
-        }
-      }
-      try { console.log(`castlefetch pit spot ${o.x} ${o.z} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
-      continue
-    }
-    const r = scanStairCells(bot, ctx, f, o, PIT_LEN, PIT_DEPTH, base)
+    const r = scanStairCells(bot, ctx, f, o, PIT_LEN, PIT_DEPTH, frame.base)
     if (r.cell) {
       r.cell.pit = true
       return r.cell
     }
     p.dead.push(key)
-    if (r.dead && entry) {
-      try { entry.dead = true } catch (_) { /* latch best-effort */ }
+    if (r.dead) {
+      try { frame.dead = true } catch (_) { /* latch best-effort */ }
     }
-    try { console.log(`castlefetch pit at ${o.x} ${base} ${o.z} ${r.dead ? `abandoned (${r.why})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    try { console.log(`castlefetch pit at ${o.x} ${frame.base} ${o.z} ${r.dead ? `abandoned (${r.why})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }

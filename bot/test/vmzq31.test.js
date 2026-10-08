@@ -175,7 +175,7 @@ describe('quarry second ring (vmzq.31)', () => {
     quiet(() => fetch(bot, ctx))
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
     assert.equal(ctx.castle.quarryBase, undefined, 'dead sides stay unlatched')
-    assert.ok((ctx.castle.quarryPits || []).every((e) => e.dead), 'drowned spots persist abandoned')
+    assert.deepEqual(ctx.castle.quarryPits || [], [], 'probe-dead spots latch nothing (revmux 01)')
   })
 })
 
