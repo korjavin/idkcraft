@@ -77,4 +77,19 @@ describe('vmzq.51: the low-hp castle gate releases after a bounded stall', () =>
       assert.equal(c.lowHpGateSince, null, 'food clears the clock')
     })
   })
+
+  it('a silence past the gap restarts the window instead of opening (fight/follow)', async () => {
+    await quietAsync(async () => {
+      const gated = goalBot({ items: [...TOOLS], health: 5, food: 10 })
+      const c = { castle: castleState(), home: { site: { x: 0, y: 64, z: 0 }, built: true } }
+      await goal.decide(gated, c)
+      // Fight owned the body for 10 min (no decide ticks): the stamp is old
+      // but the gating was not continuous — the window restarts, no opening.
+      c.lowHpGateSince = Date.now() - goal.LOW_HP_GATE_MS - 1
+      c.lowHpGateLast = Date.now() - 10 * 60 * 1000
+      await goal.decide(gated, c)
+      assert.ok(Date.now() - c.lowHpGateSince < 5000, 'stale stamp re-arms')
+      assert.equal(goal.MENU.castle.feasible({ time: 'day', castle: 'stone-batch', health: 5, food: 10 }, gated, c), false)
+    })
+  })
 })

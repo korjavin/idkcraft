@@ -529,6 +529,10 @@ function lowHpNoFood(bot, facts) {
 // own live combat. The clock arms in decide() on the raw pack check; an
 // unarmed ctx reads gated (fail closed, the .49 shape).
 const LOW_HP_GATE_MS = 5 * 60 * 1000
+// Continuity gap (67z3 revmux 01 minor): decide runs on work ticks only
+// (~1 s), so a longer silence means fight, follow or pause owned the body
+// and the 'continuous' in continuous gating is unverified.
+const LOW_HP_GAP_MS = 60 * 1000
 function lowHpGated(bot, facts, ctx) {
   if (!lowHpNoFood(bot, facts)) return false
   try {
@@ -1621,7 +1625,14 @@ function buildHeld(ctx) {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
     if (!sf || typeof sf.at !== 'number') return false
     if (Date.now() - sf.at > BUILD_RETRY_MS) return false
-    if (sf.status === 'failed:no-planks' || sf.status === 'failed:no-site') return (sf.n || 1) >= 2
+    if (sf.status === 'failed:no-site') {
+      // A site now set voids the verdict (67z3 revmux 01): the none->site
+      // text flip released it on master, and the text-blind hold must
+      // match — otherwise a 'build here' rescue waits out the window.
+      if (ctx && ctx.home && ctx.home.site) return false
+      return (sf.n || 1) >= 2
+    }
+    if (sf.status === 'failed:no-planks') return (sf.n || 1) >= 2
     return true
   } catch (_) {
     return false
@@ -2151,13 +2162,22 @@ async function decide(bot, ctx) {
   const text = goalText(facts, ctx && ctx.home)
   // Low-hp gate clock (idkcraft-vmzq.51): arms on the raw pack check while
   // gated, clears on food or healing — the gates above read it, probes
-  // never arm it (the write lives on the decide path only).
+  // never arm it (the write lives on the decide path only). A silence past
+  // LOW_HP_GAP_MS restarts the window (revmux 01 minor): decide runs on
+  // work ticks only, so after a fight/follow/pause stretch the gating was
+  // not continuous — opening on the stale stamp would skip the stand-down
+  // on the first tick back (the run8 shape .49 gated against).
   try {
     if (ctx) {
       if (lowHpNoFood(bot, facts)) {
-        if (typeof ctx.lowHpGateSince !== 'number') ctx.lowHpGateSince = Date.now()
+        const last = ctx.lowHpGateLast
+        if (typeof ctx.lowHpGateSince !== 'number' || typeof last !== 'number' || Date.now() - last > LOW_HP_GAP_MS) {
+          ctx.lowHpGateSince = Date.now()
+        }
+        ctx.lowHpGateLast = Date.now()
       } else {
         ctx.lowHpGateSince = null
+        ctx.lowHpGateLast = null
       }
     }
   } catch (_) { /* clock best-effort */ }
@@ -2329,20 +2349,29 @@ async function decide(bot, ctx) {
     }
   } catch (_) { /* retry best-effort */ }
   // No-site retry (idkcraft-vmzq.16): the fetchRetry mirror for a homeless
-  // build — a failed:no-site hold that no longer binds (chunks loaded and
-  // a site validates, or relocation past REFAIL_DIST) retires and forces
-  // one fresh pick. With the text standing, the replay paths would keep
-  // the step that took over and the valid site never gets seen. Gated on
-  // the failure text still standing (revmux 01 majors): a changed text
-  // releases through the normal hold path — retiring here would preempt a
-  // forage leg past the 4dse flicker hold and delete the record the
-  // pending-house stall clock reads, resetting it on every bucket flip.
+  // build — a failed:no-site hold retires and forces one fresh pick when a
+  // site validates NOW (chunks streamed in). With the text standing, the
+  // replay paths would keep the step that took over and the valid site
+  // never gets seen. Gated on the failure text still standing (revmux 01
+  // majors): a changed text releases through the normal hold path —
+  // retiring here would preempt a forage leg past the 4dse flicker hold
+  // and delete the record the pending-house stall clock reads, resetting
+  // it on every bucket flip. Probe-only (67z3 revmux 01 major): retiring
+  // on relocation alone re-picks build once per 32-block wander with no
+  // new information — that IS the post-park loop — and deletes the repeat
+  // counter with the record. A relocation that loads the spawn chunks
+  // retires through the probe, the only arm that ever had news (the probe
+  // is spawn-anchored, never the bot).
   let siteRetry = false
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
-    if (sf && sf.status === 'failed:no-site' && sf.text === text && !failHolds(ctx, 'build', text, bot)) {
-      delete ctx.stepFail.build
-      siteRetry = true
+    if (sf && sf.status === 'failed:no-site' && sf.text === text && !(ctx && ctx.home && ctx.home.site)) {
+      let site = null
+      try { site = bot && bot.spawnPoint ? siteFor(bot, bot.spawnPoint) : null } catch (_) { site = null }
+      if (site) {
+        delete ctx.stepFail.build
+        siteRetry = true
+      }
     }
   } catch (_) { /* retry best-effort */ }
   // Known-flicker hold (4dse): a running forage/explore leg is never

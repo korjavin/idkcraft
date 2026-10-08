@@ -151,6 +151,18 @@ describe('67z3: a failed build holds past facts drift, then retries', () => {
     assert.equal(goal.stepWhy('build', facts(), bot(), twice, 'new text'), 'build holds after failure')
   })
 
+  it('a site now set voids a no-site hold (the build-here rescue)', () => {
+    const rescued = {
+      home: { site: { x: 0, y: 64, z: 0 } },
+      stepFail: { build: { status: 'failed:no-site', text: 't', pos: null, at: Date.now(), sig: 'site=none', n: 2 } },
+    }
+    // Home with the table already placed: next is planks, batch on hand.
+    const factsHome = { time: 'day', planks: 16, table: 0, door: 0 }
+    const world = makeWorld()
+    world.set(0 + 4, 64, 0 + 1, 'crafting_table') // v1 table cell done
+    assert.equal(F()(factsHome, mockBot(world), rescued), true)
+  })
+
   it('a same-text done still holds text-keyed only, never time-keyed (h9z stands)', () => {
     const F2 = F()
     const doneHold = { stepFail: { build: { status: 'done', text: 'same', pos: null } } }
@@ -220,6 +232,30 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
       ctx.stepStatus = 'failed:no-planks'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1, 'new resources reset the count')
+    })
+  })
+
+  it('parked castle + table=no: no-site repeats count and pace (67z3 loop)', async () => {
+    await quietAsync(async () => {
+      const world = makeWorld()
+      const bot = decideBot(world, [{ name: 'oak_planks', count: 16 }])
+      // Dark spawn: siteFor never wins, so the probe never retires.
+      bot.blockAt = () => ({ name: 'air', boundingBox: 'empty', position: { x: 0, y: 64, z: 0 } })
+      const ctx = {
+        step: 'build',
+        stepStatus: 'failed:no-site',
+        castle: { site: { x: 300, y: 64, z: 300 }, rot: 0, blueprintVersion: 1, phase: 'body', parked: true },
+      }
+      await goal.decide(bot, ctx)
+      assert.equal(ctx.stepFail.build.sig, 'site=none')
+      assert.equal(nOf(ctx), 1)
+      ctx.step = 'build'
+      ctx.stepStatus = 'failed:no-site'
+      await goal.decide(bot, ctx)
+      assert.equal(nOf(ctx), 2)
+      const f = goal.goalFacts(bot, ctx)
+      assert.equal(f.table, 0, 'shape: table=no')
+      assert.equal(goal.MENU.build.feasible(f, bot, ctx), false, 'repeat holds')
     })
   })
 })

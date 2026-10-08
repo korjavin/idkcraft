@@ -151,14 +151,20 @@ describe('vmzq.16 decide wakes when no-site releases', () => {
     assert.equal(ctx.stepFail.build, undefined, 'record retired')
   })
 
-  it('relocation past the failure point forces one re-pick', async () => {
+  // Relocation alone retires nothing (67z3 revmux 01 major — contract
+  // change from vmzq.16): the no-site probe is spawn-anchored, so a
+  // 32-block wander carries no new information; retiring on it re-picked
+  // build once per wander (the post-park loop) and deleted the 67z3 repeat
+  // counter with the record. A relocation that loads the spawn chunks
+  // retires through the probe ('loaded spawn' above).
+  it('relocation alone keeps resting: dark spawn, record kept, no churn', async () => {
     const bot = goalBot(darkWorld())
     const ctx = restingNoSite(bot)
     assert.equal((await goal.decide(bot, ctx)).action, 'rest')
     bot.entity.position = pos(100, 65, 100) // walked off, same buckets
     const r = await goal.decide(bot, ctx)
-    assert.equal(r.action, 'build', 'steady text still re-picks')
-    assert.equal(ctx.stepFail.build, undefined, 'record retired')
+    assert.equal(r.action, 'rest', 'no probe win, no re-pick')
+    assert.equal(ctx.stepFail.build.status, 'failed:no-site', 'record kept')
   })
 })
 
