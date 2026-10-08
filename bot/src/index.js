@@ -819,6 +819,22 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log('shelter-run: holding fight preemption, walking home')
         ctx.shelterRunLogged = true
       }
+      // Post-respawn night grace (idkcraft-lph3): the shelter-run mirror
+      // for a night (re)spawn — fight would win every tick while hostiles
+      // stay adjacent and the shelter never builds (the bed-loop). While
+      // the respawn stamp is fresh the work step below runs first and digs
+      // now (melee reflex defends); a stale stamp resumes fight. Alone
+      // only (!target: player protection still fights), no order override
+      // (comehome/gocastle doorway legs own their ticks, like dayDivert).
+      let graceFresh = false
+      try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
+      if (!graceFresh) { ctx.nightGraceLogged = false; ctx.nightGraceFallbackLogged = false }
+      const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter &&
+        decision.action === 'fight' && !target && graceFresh
+      if (nightGraceHold && !ctx.nightGraceLogged) {
+        console.log('night-grace: holding fight preemption, sheltering')
+        ctx.nightGraceLogged = true
+      }
       // 33vm: a hostile already INSIDE the interior box is fought (prod: six
       // deaths standing idle in stay with a zombie at 0.7). Scanned, not
       // state.hostile: the nearest may stand outside the wall. The pin and
@@ -894,6 +910,31 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             return { decision: { ...decision, action: 'comehome' }, calledBrain }
           }
         }
+        // Committed dig-in (vmzq.30, revmux 01 body-1): the descent
+        // suppresses fight, so without this the half-dug pit freezes on
+        // fight ticks — the work block below never runs, digInRun never
+        // advances, and a camping skeleton wins by arrows. Drive the
+        // shelter handler so the dig finishes under melee cover (no
+        // pursuit is dispatched here, same as the hold). Mirrors the
+        // comehome-exit exception above. A phantom descent in progress
+        // (lph3: descended) drives from digs 0 — the walk to the pit
+        // is committed too, or walkers at the perch starve it.
+        if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig &&
+          ((ctx.shelter.dig.digs | 0) > 0 || ctx.shelter.descended)) {
+          try {
+            const handler = BEHAVIOURS.shelter
+            if (typeof handler === 'function') handler(bot, ctx, target, state)
+          } catch (_) { /* drive best-effort: hold below */ }
+          // Descent walk owns the goal (lph3 revmux 03): stopOnce below
+          // would clear the dig-in-walk goal in the same tick, so a
+          // cobble-pillar (or stone-stance) descent with walkers at the
+          // perch never walks. The walk needs its goal live; the hold
+          // still returns idle (no pursuit).
+          if (ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk) {
+            console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+        }
         // Sheltered for the night: no pursuit through our own wall (the
         // pathfinder would dig it with canDig). The melee reflex above
         // still swings at anything that gets inside.
@@ -913,7 +954,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || underFire || dayDivert)) {
+      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
         if (!ctx.home && !ctx.adoptDone) {
           // Spawn adoption races chunk loading (one shot at join sees an
           // empty world): hold work until the spawn block is visible, then
@@ -982,12 +1023,48 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             return { decision: rd, calledBrain }
           }
         }
+        const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
+        // Pre-check (lph3 revmux 02 minor): with no feasible night step,
+        // fall back WITHOUT awaiting goal.decide — the await may brain.ask
+        // (up to the timeout, possibly paid) for a pick we then discard,
+        // and it chats/steps a day job that never runs. Fail open: an
+        // unreadable menu proceeds to the post-check below.
+        if (nightGraceHold) {
+          let nightFeasible = true
+          try {
+            const facts = goal.goalFacts(bot, ctx)
+            nightFeasible = !!(goal.MENU.stay.feasible(facts, bot, ctx) ||
+              goal.MENU.gohome.feasible(facts, bot, ctx) || goal.MENU.shelter.feasible(facts, bot, ctx))
+          } catch (_) { nightFeasible = true }
+          if (!nightFeasible) {
+            if (!ctx.nightGraceFallbackLogged) {
+              console.log('night-grace: no night step feasible, fighting instead')
+              ctx.nightGraceFallbackLogged = true
+            }
+            applyDecision(brainFight, target, state)
+            if (!ctx.paused) ctx.retreat = null
+            return { decision: brainFight, calledBrain }
+          }
+        }
         decision = await goal.decide(bot, ctx)
         if (ctx.paused || !ctx.work) {
           // 'stop' (or a mode change) landed during the goal await: same
           // stale-decision guard as after the brain await above.
           stopOnce()
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        }
+        // Night grace holds only for night steps (lph3 revmux 01): with no
+        // home (and no castle) the work block picks a day step — working
+        // the dark with fight suppressed for 60 s. Fall back to the
+        // brain's fight instead; a night step runs the hold as usual.
+        if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter') {
+          if (!ctx.nightGraceFallbackLogged) {
+            console.log(`night-grace: work picked ${decision.action}, fighting instead`)
+            ctx.nightGraceFallbackLogged = true
+          }
+          applyDecision(brainFight, target, state)
+          if (!ctx.paused) ctx.retreat = null
+          return { decision: brainFight, calledBrain }
         }
         // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
         try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
@@ -1422,6 +1499,13 @@ function handleDeath(bot, ticker) {
 function handleRespawn(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+  // Post-respawn night grace (idkcraft-lph3): stamp the reappearance so
+  // dispatch holds fight preemption while the night step digs in. Each
+  // death re-stamps; the stamp goes stale on its own after the window.
+  try {
+    const ctx = bot && bot._tickerCtx
+    if (ctx) ctx.lastRespawnAt = Date.now()
+  } catch (_) { /* stamp best-effort */ }
 }
 
 function handlePlayerLeft(bot, ticker, player) {

@@ -15,6 +15,7 @@ const IDS = {
   stone_pickaxe: 274, stick: 280, leaf_litter: 1001, gravel: 1002, dirt: 3,
   cobblestone: 4, oak_sapling: 1003, wheat_seeds: 1004, bow: 1005, arrow: 1006,
   oak_planks: 1007, oak_log: 1008, chest: 1009, crafting_table: 1010,
+  granite: 1011, sand: 1012, rotten_flesh: 1013, raw_iron: 1014,
 }
 const STACK = { stone_pickaxe: 1, bow: 1 }
 
@@ -221,20 +222,15 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.deepEqual(bot.calls.toss, [])
   })
 
-  it('full pack with junk and no chest: fails inventory-full, tosses nothing (g0z.26)', async () => {
-    // Owner 2026-10-06: the bot never throws anything away — the old rwuu
-    // 'no chest → toss junk' fallback is gone. The hold parks the step while
-    // the stockpile step (or deliver to the owner) drains the pack.
+  it('full pack with junk and no chest: drops one leaf-litter stack (junk policy), crafts (vmzq.38)', async () => {
+    // Owner 2026-10-07 (vmzq.38): low-value junk may be dropped to free a
+    // slot; the 2026-10-06 never-drop rule stands for everything else.
     const bot = roomBot({ stacks: fullPack() })
     bot.tossStack = tossStackFake(bot)
-    await assert.rejects(
-      craft.safeCraft(bot, PICK(), 1, null, { item: 'stone_pickaxe' }),
-      /inventory-full/,
-    )
-    assert.equal(bot.calls.craft.length, 0)
+    await craft.safeCraft(bot, PICK(), 1, null, { item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
     assert.deepEqual(bot.calls.toss, [])
-    assert.deepEqual(bot.calls.tossStack, [])
-    assert.equal(bot._items.length, 36, 'the junk stays packed')
+    assert.deepEqual(bot.calls.tossStack.map((t) => t.name), ['leaf_litter'])
   })
 
   it('full pack without junk: fails inventory-full, crafts nothing', async () => {
@@ -256,7 +252,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
 
   it('spare bow with no chest: fails inventory-full, both bows stay (g0z.26)', async () => {
     const stacks = [stack('bow', 1), stack('bow', 1)]
-    for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+    for (let i = 0; i < 34; i++) stacks.push(stack('raw_iron', 64)) // never-drop filler (vmzq.38)
     const bot = roomBot({ stacks })
     bot.tossStack = tossStackFake(bot)
     await assert.rejects(
@@ -285,7 +281,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
 
   it('enchanted bow with no chest: fails inventory-full, nothing tossed (g0z.26)', async () => {
     const stacks = [stack('bow', 1, { nbt: { Enchantments: [1] } }), stack('bow', 1)]
-    for (let i = 0; i < 34; i++) stacks.push(stack('dirt', 64))
+    for (let i = 0; i < 34; i++) stacks.push(stack('raw_iron', 64)) // never-drop filler (vmzq.38)
     const bot = roomBot({ stacks })
     bot.tossStack = tossStackFake(bot)
     await assert.rejects(
@@ -310,7 +306,7 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.ok(bot.calls.deposit.every((d) => d.type === IDS.leaf_litter || d.type === IDS.gravel))
   })
 
-  it('chest far from home: never opened, fails inventory-full (g0z.26)', async () => {
+  it('chest far from home: never opened, the junk policy drops instead (g0z.26, vmzq.38)', async () => {
     const bot = roomBot({
       stacks: fullPack(),
       blockAtImpl: () => ({ name: 'chest' }),
@@ -318,33 +314,27 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     })
     bot.tossStack = tossStackFake(bot)
     const ctx = { home: { chest: { x: 200, y: 64, z: 200 } } }
-    await assert.rejects(
-      craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' }),
-      /inventory-full/,
-    )
-    assert.equal(bot.calls.craft.length, 0)
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
     assert.equal(bot.calls.openChest, 0)
     assert.deepEqual(bot.calls.toss, [])
-    assert.deepEqual(bot.calls.tossStack, [])
+    assert.deepEqual(bot.calls.tossStack.map((t) => t.name), ['leaf_litter'])
   })
 
-  it('chest full strands the pickup on the cursor: returned, then inventory-full (g0z.26)', async () => {
+  it('chest full strands the pickup on the cursor: returned, then the junk drop (g0z.26, vmzq.38)', async () => {
     const bot = roomBot({ stacks: fullPack(), blockAtImpl: () => ({ name: 'chest' }) })
     bot.putSelectedItemRange = putBackFake(bot)
     bot.tossStack = tossStackFake(bot)
     const { win } = chestBot(bot, { full: true })
     const ctx = { home: { chest: { x: 1, y: 64, z: 0 } } }
     const leafBefore = bot._items.filter((i) => i.name === 'leaf_litter').reduce((a, i) => a + i.count, 0)
-    await assert.rejects(
-      craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' }),
-      /inventory-full/,
-    )
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
     assert.equal(win.selectedItem, null)
-    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot.calls.craft.length, 1)
     assert.deepEqual(bot.calls.toss, [])
-    assert.deepEqual(bot.calls.tossStack, [])
+    assert.deepEqual(bot.calls.tossStack.map((t) => t.name), ['leaf_litter'])
     const leafAfter = bot._items.filter((i) => i.name === 'leaf_litter').reduce((a, i) => a + i.count, 0)
-    assert.equal(leafAfter, leafBefore) // nothing banked, nothing tossed, none lost to the cursor
+    assert.equal(leafAfter, leafBefore - 64) // nothing banked, one policy stack dropped, none lost to the cursor
     assert.ok(bot._items.some((i) => i.name === 'gravel'), 'unbanked junk stays packed')
   })
 
@@ -440,9 +430,9 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
 
   it('reserved slot: a tool craft refuses the last slot when chestless and alone (R2)', async () => {
     // Revmux 01 major: the last slot belongs to the bootstrap chest craft —
-    // a 36/36 chestless pack has no drain that is not tossing.
+    // with nothing the junk policy may drop or shed, the craft refuses.
     const stacks = [stack('cobblestone', 41), stack('stick', 5)]
-    for (let i = 0; i < 33; i++) stacks.push(stack('dirt', 64))
+    for (let i = 0; i < 33; i++) stacks.push(stack('raw_iron', 64)) // never-drop filler (vmzq.38)
     assert.equal(stacks.length, 35)
     const bot = roomBot({ stacks })
     bot.tossStack = tossStackFake(bot)
@@ -656,5 +646,117 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.equal(bot.calls.openChest, 2)
     assert.deepEqual(bot.calls.toss, [])
     assert.ok(bot.calls.deposit.length > 0, 'junk banked to the second chest')
+  })
+})
+
+// vmzq.38 (prod 2026-10-06): a 36/36 granite/sand/junk pack refused the
+// table craft for 1h+ — no table, no pickaxe, castle flat. The shed is the
+// one full-pack guard every craft routes through: no home, nobody, no chest.
+describe('craft shed at the shared root (vmzq.38)', () => {
+  function shedBot(stacks, over = {}) {
+    const cells = {}
+    const bot = roomBot({
+      stacks,
+      blockAtImpl: (p) => {
+        const key = `${p.x},${p.y},${p.z}`
+        return { name: cells[key] || (p.y < 64 ? 'dirt' : 'air'), position: { x: p.x, y: p.y, z: p.z } }
+      },
+      ...over,
+    })
+    bot.equip = async (item) => { bot._held = item }
+    bot.placeBlock = async (ref, face) => {
+      const p = ref.position
+      cells[`${p.x + face.x},${p.y + face.y},${p.z + face.z}`] = bot._held.name
+      bot._held.count--
+      if (bot._held.count <= 0) bot._items = bot._items.filter((i) => i !== bot._held)
+    }
+    bot.calls.placed = cells
+    return bot
+  }
+
+  it('36/36 prod junk, no chest, no home: the table craft sheds sand (not castle stone) and crafts', async () => {
+    const stacks = [stack('oak_planks', 64), stack('granite', 26), stack('sand', 30)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ing = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    await craft.safeCraft(bot, prodRecipe('crafting_table', 1, ing), 1, null, { ctx: {}, item: 'crafting_table' })
+    assert.equal(bot.calls.craft.length, 1, 'the table is crafted')
+    assert.ok(!bot._items.some((i) => i.name === 'sand'), 'sand placed beside the bot')
+    assert.ok(bot._items.some((i) => i.name === 'granite' && i.count === 26), 'castle stone kept')
+    assert.equal(Object.values(bot.calls.placed).filter((n) => n === 'sand').length, 30)
+    assert.deepEqual(bot.calls.toss, [])
+  })
+
+  it('36/36 with only castle stone shedable: granite sheds before nothing crafts', async () => {
+    const stacks = [stack('cobblestone', 41), stack('stick', 5), stack('granite', 12)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx: {}, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.ok(!bot._items.some((i) => i.name === 'granite'), 'the smallest stone stack sheds')
+    assert.ok(bot._items.some((i) => i.name === 'cobblestone' && i.count === 41), 'the pickaxe cobble stays')
+  })
+
+  it('reserved last slot (chestless, alone): the pickaxe craft sheds instead of refusing', async () => {
+    const stacks = [stack('cobblestone', 41), stack('stick', 5), stack('sand', 7)]
+    while (stacks.length < 35) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true, chest: null } }
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.ok(!bot._items.some((i) => i.name === 'sand'))
+  })
+
+  it('36/36 with cobble 5 and granite 26: the pickaxe keeps its own cobble, granite sheds (revmux 01)', async () => {
+    const stacks = [stack('cobblestone', 5), stack('stick', 4), stack('granite', 26)]
+    while (stacks.length < 36) stacks.push(stack('raw_iron', 64))
+    const bot = shedBot(stacks)
+    await craft.safeCraft(bot, PICK(), 1, null, { ctx: {}, item: 'stone_pickaxe' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.ok(bot._items.some((i) => i.name === 'cobblestone' && i.count === 5), 'the ingredient cobble stays')
+    assert.ok(!bot._items.some((i) => i.name === 'granite'), 'granite pillared instead')
+  })
+
+  it('junk policy: a full pack drops sand first; castle stone, ores, tools never drop', async () => {
+    const stacks = [stack('oak_planks', 64), stack('granite', 3), stack('sand', 30), stack('stone_pickaxe', 1)]
+    while (stacks.length < 36) stacks.push(stack('raw_iron', 64))
+    const bot = shedBot(stacks)
+    bot.tossStack = tossStackFake(bot)
+    const ing = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    await craft.safeCraft(bot, prodRecipe('crafting_table', 1, ing), 1, null, { ctx: {}, item: 'crafting_table' })
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.tossStack.map((t) => t.name), ['sand'])
+    assert.deepEqual(bot.calls.placed, {}, 'the drop freed the slot: nothing pillared')
+  })
+
+  it('junk policy is one allow-list: valuables and castle stone are never droppable', () => {
+    for (const n of ['diamond_pickaxe', 'iron_sword', 'iron_chestplate', 'bread', 'cooked_beef', 'raw_iron', 'iron_ingot',
+      'iron_ore', 'coal', 'oak_log', 'oak_planks', 'white_wool', 'white_bed', 'cobblestone', 'stone', 'granite',
+      'diorite', 'andesite', 'bow', 'arrow', 'torch', 'crafting_table', 'chest']) {
+      assert.equal(craft.dropRank(n), -1, n)
+    }
+    for (const n of ['oak_leaves', 'leaf_litter', 'sand', 'gravel', 'poppy', 'red_tulip', 'oak_sapling', 'wheat_seeds',
+      'rotten_flesh', 'stick', 'dirt']) {
+      assert.ok(craft.dropRank(n) >= 0, n)
+    }
+    const valuables = [stack('diamond_pickaxe', 1), stack('bread', 5), stack('granite', 1), stack('oak_log', 2)]
+    assert.equal(craft.dropVictim(valuables), null, 'nothing valuable is ever a victim')
+    // Dirt drops only above the one-stack scaffold reserve (dirt + castle stone).
+    assert.equal(craft.dropVictim([stack('dirt', 64)]), null, 'the last scaffold stack stays')
+    assert.equal(craft.dropVictim([stack('dirt', 30), stack('cobblestone', 64)]).name, 'dirt')
+    assert.equal(craft.dropVictim([stack('stick', 5), stack('sand', 2)], new Set(['sand'])).name, 'stick', 'ingredients skip')
+  })
+
+  it('nothing placeable and no chest: honest inventory-full, nothing placed or tossed', async () => {
+    const stacks = [stack('oak_planks', 64)]
+    while (stacks.length < 36) stacks.push(stack('rotten_flesh', 64))
+    const bot = shedBot(stacks)
+    const ing = Array.from({ length: 4 }, () => ({ id: IDS.oak_planks }))
+    await assert.rejects(
+      craft.safeCraft(bot, prodRecipe('crafting_table', 1, ing), 1, null, { ctx: {}, item: 'crafting_table' }),
+      /inventory-full/,
+    )
+    assert.deepEqual(bot.calls.placed, {})
+    assert.deepEqual(bot.calls.toss, [])
   })
 })

@@ -566,9 +566,10 @@ describe('reserve corner exits (g0z.26 R3, revmux 02 majors)', () => {
 
   it('M2: shedVictim sheds the smallest junk, never wood, stations or light', () => {
     assert.deepEqual(
-      craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'cobblestone', count: 3 }]),
-      { name: 'cobblestone', count: 3 }, 'smallest first (fewest placements)',
+      craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'sand', count: 3 }]),
+      { name: 'sand', count: 3 }, 'smallest first (fewest placements)',
     )
+    assert.equal(craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'granite', count: 3 }]).name, 'dirt', 'castle stone after dirt (vmzq.38)')
     assert.equal(craft.shedVictim([{ name: 'iron_ore', count: 1 }, { name: 'dirt', count: 64 }]).name, 'dirt', 'dirt before ore')
     assert.equal(craft.shedVictim([{ name: 'iron_ore', count: 5 }]).name, 'iron_ore', 'ore sheds last-resort')
     assert.equal(craft.shedVictim([{ name: 'oak_planks', count: 9 }, { name: 'oak_log', count: 14 }]), null, 'wood never sheds')

@@ -384,9 +384,19 @@ function isPlaceTarget(kind) {
 // and the protection guard share it. 'air' accepts the door's upper half
 // (the server places it into the doorway hole with the lower half).
 const AIR_NAMES = new Set(['air', 'cave_air', 'void_air'])
+// The one castle-stone set (vmzq.38): item and placed-block names alike.
+// The quarry yields granite/diorite/andesite as often as cobble; the castle
+// (wall cells, fetch counts) and the pathfinder scaffold all read this set,
+// so quarry yield is laid instead of hoarded into a 36/36 pack.
+const STONE_ITEMS = Object.freeze(['cobblestone', 'stone', 'granite', 'diorite', 'andesite',
+  'polished_granite', 'polished_diorite', 'polished_andesite', 'cobbled_deepslate'])
+const STONE_SET = new Set(STONE_ITEMS)
+function isStone(name) {
+  return STONE_SET.has(name)
+}
 function matches(kind, name) {
   if (typeof name !== 'string') return false
-  if (kind === 'stone') return name === 'cobblestone' || name === 'stone'
+  if (kind === 'stone') return isStone(name)
   if (kind === 'planks') return name.endsWith('_planks')
   if (kind === 'frame') return name.endsWith('_log')
   if (kind === 'door') return name.endsWith('_door')
@@ -442,6 +452,20 @@ function groundCell(state, pos) {
   } catch (_) { return false }
 }
 
+// Castle footprint (idkcraft-vmzq.40): the site box at and above site.y
+// (the entrance apron and door path lie inside it), plus any plan cell
+// (moat digs below). What the castle step may clear there: util.protectedReason.
+function inFootprint(state, pos) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos) return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    if (x < site.x || x >= site.x + w || z < site.z || z >= site.z + d) return false
+    return y >= site.y || absPlan(site, state.rot, state.blueprintVersion).at.has(`${x},${y},${z}`)
+  } catch (_) { return false }
+}
+
 function billOfMaterials(plan) {
   const bom = {}
   for (const c of plan) bom[c.kind] = (bom[c.kind] || 0) + 1
@@ -467,7 +491,10 @@ module.exports = {
   isPlaceTarget,
   billOfMaterials,
   matches,
+  STONE_ITEMS,
+  isStone,
   absPlan,
   protects,
   groundCell,
+  inFootprint,
 }

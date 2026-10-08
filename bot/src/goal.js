@@ -807,15 +807,23 @@ function shelterOwns(bot, ctx) {
 // anywhere away from home, so a bot caught mid-map pillars in place
 // instead of marching. Near home — or with the castle next to the house
 // (R2 major 1: a 60-block dusk walk to a standing house beats a pillar) —
-// the old steps win (walk in, stay). A sited home is required: the
-// shelter behaviour fails no-home without one, so a truly homeless bot
-// keeps the old night instead of a doomed pick.
+// the old steps win (walk in, stay). Homeless (idkcraft-vmzq.32: fresh
+// memory, and build — the only siter — is castle-vetoed; the rig spawn is
+// quarried, no flat 7x6 site) the night is the shelter's anywhere: there
+// is no house to walk to (rig: 113 deaths working every night).
+// Unbuilt home (vmzq.30): near a SITED-but-unbuilt home the old steps
+// cannot run either (gohome/stay need built), and working the dark
+// there dies (run6, rig: zombie spawn-loops) — so the night belongs to
+// shelter in place at any distance, even next to the house or the site.
 function castleSiteNight(bot, ctx) {
   try {
-    if (!castleFirst(ctx) || !castleFarFromHome(ctx)) return false
+    if (!castleFirst(ctx)) return false
+    if (!(ctx.home && ctx.home.site)) return true
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    if (ctx.home.built !== true) return true
+    if (!castleFarFromHome(ctx)) return false
     return Math.hypot(bp.x - h.x, bp.z - h.z) > CASTLE_NIGHT_DIST
   } catch (_) {
     return false
@@ -1145,7 +1153,7 @@ function goalFacts(bot, ctx) {
   const coal = countItems(bot, (n) => n === 'coal' || n === 'charcoal')
   const charcoal = countItems(bot, (n) => n === 'charcoal') // 33vm: coal above holds both; light spends charcoal past the reserve
   const torches = countItems(bot, (n) => n === 'torch')
-  const scaffold = countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
+  const scaffold = countItems(bot, (n) => n === 'dirt' || require('./castle').isStone(n)) // vmzq.38: one stone set
   const ironOre = countItems(bot, (n) => n === 'raw_iron')
   const ingots = countItems(bot, (n) => n === 'iron_ingot')
   const diamonds = countItems(bot, (n) => n === 'diamond')

@@ -198,6 +198,19 @@ const HAND_DIG = new Set([
   'mud', 'muddy_mangrove_roots', 'sand', 'red_sand', 'suspicious_sand',
   'gravel', 'suspicious_gravel', 'clay', 'snow', 'snow_block', 'moss_block',
 ])
+// Gravity blocks (idkcraft-lph3): sand/gravel/concrete-powder fall when the
+// dig updates them — a gravity floor over a cave drops the pit into it
+// (rig: y54-57 samples), gravity walls slump the 1x1 into a 2-wide that
+// admits spiders. The dig-in vetoes them (dig, floor and walls alike);
+// the walk then seeks a dirt column instead. Leaves stay diggable (they
+// never fall) but never count as walls or floor (see the veto).
+const GRAVITY_DIG = new Set([
+  'sand', 'red_sand', 'suspicious_sand', 'gravel', 'suspicious_gravel',
+  'dragon_egg',
+])
+function isGravityName(n) {
+  return typeof n === 'string' && (GRAVITY_DIG.has(n) || n.endsWith('_concrete_powder'))
+}
 function handDiggable(bot, b) {
   // Round-1 finding 1: mineflayer canDigBlock checks only diggable+reach,
   // never the tool — trusting it alone calls stone hand-diggable in prod.
@@ -923,23 +936,43 @@ function digInHazard(bot, ox, dy, oz) {
 // A fresh column must take the whole descent (rig: a grass skin over stone
 // dug 1 deep and capped nothing): all DIG_IN_DEPTH cells hand-dig. Deeper
 // steps re-check the next cell only. The reach check (canDigBlock) is for
-// the cell right under the body; scan cells are judged by name.
-function digInVeto(bot, ctx, ox, oy, oz, fresh) {
-  const n = fresh ? DIG_IN_DEPTH : 1
+// the cell right under the body; scan cells are judged by name. extra: the
+// phantom descent starts a pillar-cell above normal, so its fresh column
+// takes one more cell — the cap then lands at ground level against dirt
+// walls instead of in the open pillar cell (no-cap-ref). Walk targets are
+// ground columns and always veto at the normal depth.
+function digInVeto(bot, ctx, ox, oy, oz, fresh, extra = 0) {
+  const n = fresh ? DIG_IN_DEPTH + (extra | 0) : 1
   for (let k = 1; k <= n; k++) {
     const c = cellAt(bot, ox, oy - k, oz)
     const here = ox === 0 && oz === 0 && k === 1
     const nameOk = !!c && typeof c.name === 'string' && (HAND_DIG.has(c.name) || c.name.endsWith('_leaves'))
     if (!(here ? handDiggable(bot, c) : nameOk)) return 'undiggable:' + ((c && c.name) || 'none')
+    if (c && isGravityName(c.name)) return 'gravity-dig' // sand/gravel slumps the 1x1 into a 2-wide (lph3)
     if (protectedReason(bot, c, ctx)) return 'protected'
     if (digInHazard(bot, ox, oy - k, oz)) return 'fluid'
   }
-  if (!solid(cellAt(bot, ox, oy - n - 1, oz))) return 'no-floor' // cave/water under: never drop into it
+  const floor = cellAt(bot, ox, oy - n - 1, oz)
+  if (!solid(floor)) return 'no-floor' // cave/water under: never drop into it
+  if (floor && isGravityName(floor.name)) return 'gravity-floor' // gravel over a cave drops the pit (lph3: y54-57)
+  if (!solid(cellAt(bot, ox, oy - n - 2, oz))) return 'cave-below' // thin floor over a void (lph3 probe)
   if (fresh) {
     // The finished pit's walls (feet + head at the bottom) must stand:
     // a hillside column opens sideways (rig: dug and capped, east side air).
-    for (const [dx, dz] of SIDES) {
-      if (!solid(cellAt(bot, ox + dx, oy - n, oz + dz)) || !solid(cellAt(bot, ox + dx, oy - n + 1, oz + dz))) return 'open-side'
+    // The full 3x3 ring (sides + diagonals) must stand too (lph3): a pit
+    // one block from a quarry, cave mouth or last night's pit shares a
+    // 1-thin wall that slumps or admits spiders — a 2-wide is not a pit.
+    // Gravity walls (sand/gravel) and leaf walls never count: the first
+    // slumps when the dig updates it, the second is a canopy, not ground.
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue
+        for (const dy of [oy - n, oy - n + 1]) {
+          const w = cellAt(bot, ox + dx, dy, oz + dz)
+          if (!solid(w)) return 'open-side'
+          if (w && (isGravityName(w.name) || (typeof w.name === 'string' && w.name.endsWith('_leaves')))) return 'open-side'
+        }
+      }
     }
   }
   if (digInHazard(bot, ox, oy - n - 1, oz) ||
@@ -1020,7 +1053,7 @@ function digInRun(bot, ctx, st) {
     return 'running'
   }
   const below = cellAt(bot, 0, -1, 0)
-  if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH) {
+  if (!st.capping && st.floor0 - Math.floor(bp.y) < DIG_IN_DEPTH + (st.extra | 0)) {
     if (!solid(below)) {
       // Dug out but the body still stands on a neighbour's edge (or is mid
       // fall): walk to the cell centre, the walls stop the overshoot.
@@ -1055,11 +1088,11 @@ function digInRun(bot, ctx, st) {
     }
     setForward(bot, false)
     st.steer = 0
-    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs)
+    const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs, st.extra | 0)
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
       // A server that reverts the break (protection) would re-dig forever.
-      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + 2) return 'failed:dig-refused'
+      if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + (st.extra | 0) + 2) return 'failed:dig-refused'
       st.digInFlight = true
       void (async () => {
         try { await bot.dig(below) } catch (_) { st.digError = true } finally { st.digInFlight = false }
@@ -1071,6 +1104,7 @@ function digInRun(bot, ctx, st) {
       const spot = !st.digs && !st.walked ? digInSpot(bot, ctx) : null
       if (!spot || typeof goals.GoalBlock !== 'function') return 'failed:' + veto
       st.walked = true
+      st.extra = 0 // the perch geometry goes with the walk: arrival digs a ground column
       st.walkTicks = 0
       st.walk = { x: Math.floor(bp.x) + spot[0], y: Math.floor(bp.y) + spot[1], z: Math.floor(bp.z) + spot[2] }
       try { digInWalk(bot, ctx, st.walk) } catch (_) { return 'failed:' + veto }
