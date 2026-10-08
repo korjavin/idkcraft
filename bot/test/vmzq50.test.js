@@ -317,8 +317,10 @@ describe('vmzq.50 return-to-site: dusk dig-up', () => {
     const bot = goalBot({ at: pos(MID.x + 0.5, MID.y, MID.z + 0.5), cells })
     const facts = { time: 'dusk', home: 'built', inside: 'no', health: 20, food: 20 }
     // Failed climb, same text and ground: the hold lifts the carve-out.
+    // Record shape mirrors decide(): { status, text, pos, at } (R2: the
+    // bare x/y/z shape held everywhere and proved nothing about radius).
     const held = duskCtx()
-    held.stepFail = { gocastle: { text: goal.goalText(facts, held.home), x: MID.x, y: MID.y, z: MID.z } }
+    held.stepFail = { gocastle: { status: 'failed:cannot-reach-castle', text: goal.goalText(facts, held.home), pos: { x: MID.x, y: MID.y, z: MID.z }, at: Date.now() } }
     assert.equal(goal.MENU.shelter.feasible(facts, bot, held), true)
     // Low + foodless + hostile near: the climb will not run either.
     const zombie = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(MID.x + 3, MID.y, MID.z), isValid: true } }
@@ -424,6 +426,76 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
     const dctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64 } })
     gocastleMod(door, dctx)
     assert.ok(dctx.lastGoalKey === 'gocastle-far' || dctx.lastGoalKey === 'gocastle-walk', dctx.lastGoalKey)
+  })
+
+  it('ordinary downhill never trips the floor; an 8-fall does (R2 decay)', () => {
+    const cells = new Map()
+    for (let y = 40; y <= 80; y++) cells.set(`0,${y},0`, 'air')
+    // Walk down 2/tick: the watermark follows, the XZ leg holds throughout.
+    const ctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 70 } })
+    for (const y of [70, 68, 66, 64, 62]) {
+      gocastleMod(stepBot({ at: pos(0.5, y, 0.5), cells }), ctx)
+      assert.equal(ctx.stepStatus, 'running', `y=${y}`)
+      assert.ok(ctx.lastGoalKey === 'gocastle-far' || ctx.lastGoalKey === 'gocastle-walk', `y=${y}: ${ctx.lastGoalKey}`)
+      assert.equal(ctx.gosite.climbing || false, false, `y=${y}`)
+    }
+    assert.equal(ctx.gosite.highY, 62)
+    // A completed 8-fall (pre-decay check) still triggers.
+    const fell = stepBot({ at: pos(0.5, 61, 0.5), cells })
+    const fctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 70 } })
+    gocastleMod(fell, fctx)
+    assert.ok(String(fctx.lastGoalKey).startsWith('gocastle-up:'), fctx.lastGoalKey)
+  })
+
+  it('blind starts seed the watermark at site level; open starts at feet (R2)', () => {
+    const cells = new Map()
+    for (let y = 42; y <= 49; y++) cells.set(`0,${y},0`, 'stone')
+    const deep = stepBot({ at: pos(0.5, 41, 0.5), cells })
+    const dctx = stepCtx()
+    gocastleMod(deep, dctx)
+    assert.equal(dctx.gosite.highY, 64, 'covered start assumes the site surface')
+    const open = stepBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })
+    const octx = stepCtx()
+    gocastleMod(open, octx)
+    assert.equal(octx.gosite.highY, SPAWN.y, 'open start seeds from feet')
+  })
+
+  it('a climb past a low local surface exits after 12 gained (R2 cap)', () => {
+    const cells = new Map()
+    for (let y = 40; y <= 80; y++) cells.set(`0,${y},0`, 'air')
+    const mk = (y) => stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: true, climbFromY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    // Floor 56: at 52 neither the band (58) nor the cap (53) releases.
+    const low = stepBot({ at: pos(0.5, 52, 0.5), cells })
+    const lctx = mk(52)
+    gocastleMod(low, lctx)
+    assert.ok(String(lctx.lastGoalKey).startsWith('gocastle-up:'), lctx.lastGoalKey)
+    // At 53 the cap releases even below the band.
+    const out = stepBot({ at: pos(0.5, 53, 0.5), cells })
+    const octx = mk(53)
+    gocastleMod(out, octx)
+    assert.ok(octx.lastGoalKey === 'gocastle-far' || octx.lastGoalKey === 'gocastle-walk', octx.lastGoalKey)
+    assert.equal(octx.gosite.climbing, false)
+  })
+
+  it('depth entries never flap; a dig that steps up refunds fails (R2)', () => {
+    const cells = new Map()
+    for (let y = 40; y <= 72; y++) cells.set(`0,${y},0`, 'air')
+    // Open sky below the floor at the flap spot: enters, counts nothing.
+    const bot = stepBot({ at: pos(0.5, 55, 0.5), cells })
+    const ctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: false, climbAt: { x: 0, z: 0 }, flaps: 2 } })
+    gocastleMod(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(String(ctx.lastGoalKey).startsWith('gocastle-up:'), ctx.lastGoalKey)
+    assert.equal(ctx.gosite.flaps, 2)
+    // A move between stall windows refunds the fail budget (slow hand dig).
+    const stones = new Map()
+    for (let y = 42; y <= 50; y++) stones.set(`0,${y},0`, 'stone')
+    const dug = stepBot({ at: pos(0.5, 42, 0.5), cells: stones })
+    const dctx = stepCtx({ gosite: { phase: 'walk', stalls: 9, fails: 2, lastPos: { x: 0, y: 41, z: 0 }, highY: 64, climbing: true, climbFromY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    gocastleMod(dug, dctx)
+    assert.equal(dctx.stepStatus, 'running')
+    assert.equal(dctx.gosite.fails, 0)
+    assert.equal(dctx.gosite.stalls, 0)
   })
 
   it('same-spot climb re-entry fails the leg; far-apart episodes reset (R1 flap cap)', () => {

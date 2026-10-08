@@ -133,28 +133,50 @@ function gocastle(bot, ctx, target, state) {
   let stepClimb = false
   if (stepMode) {
     const feetY = Math.floor(bp.y)
-    // Depth floor (R1): the leg-high watermark minus headroom — any
+    // Depth floor (R1+R2): the leg-high watermark minus headroom — an
     // 8-descent from where the walk has been goals up instead of
     // following A* down (the bead's y>=surface-8, self-calibrating:
-    // no site assumptions, hills never contour). Near the entrance
-    // the floor lifts (the arrival leg digs/walks the site as needed).
-    if (typeof od.highY !== 'number' || feetY > od.highY) od.highY = feetY
+    // no site assumptions). R2: the watermark DECAYS 2/tick while
+    // walking open, so ordinary downhill (walk/jump pace) follows the
+    // floor down and never trips — only falling-or-faster outruns it
+    // into a dive trigger. The check runs pre-decay (a completed
+    // 8-fall still triggers); climbs track up only (stable exit).
+    // Near the entrance the floor lifts (arrival digs/walks as needed).
+    let seeded = false
+    if (typeof od.highY !== 'number') {
+      // Blind starts assume site level: a deep start climbs toward the
+      // surface, not toward start-8 (R2 reverse gap). Open starts seed
+      // from feet (a mountain site never contours).
+      const siteY = st && st.site && typeof st.site.y === 'number' ? st.site.y : feetY
+      od.highY = climbNeeded(bot, bp) ? Math.max(feetY, siteY) : feetY
+      od.climbFromY = null
+      seeded = true
+    }
     const floorY = od.highY - CLIMB_HEADROOM
     const cover = climbNeeded(bot, bp)
     const below = feetY < floorY && Math.hypot(bp.x - ent.x, bp.z - ent.z) > 32
+    if (!od.climbing && !seeded) {
+      od.highY = Math.max(feetY, od.highY - 2)
+    } else if (od.climbing && feetY > od.highY) {
+      od.highY = feetY
+    }
     if (!od.climbing && (cover || below)) {
-      // Entering the climb: a same-spot re-entry flaps (a cave mouth
-      // the XZ leg keeps re-planning) — three strikes ends the leg
-      // instead of oscillating forever; far-apart episodes reset.
-      const at = od.climbAt
-      if (at && Math.hypot(bp.x - at.x, bp.z - at.z) < 16) od.flaps = (od.flaps || 0) + 1
-      else {
-        od.flaps = 0
-        od.climbAt = { x: bp.x, z: bp.z }
+      // Entering the climb: a same-spot COVER re-entry flaps (a cave
+      // mouth the XZ leg keeps re-planning) — three strikes ends the
+      // leg; far-apart episodes reset. Depth entries never flap (the
+      // +2 exit band cannot re-enter at the same spot).
+      if (cover) {
+        const at = od.climbAt
+        if (at && Math.hypot(bp.x - at.x, bp.z - at.z) < 16) od.flaps = (od.flaps || 0) + 1
+        else {
+          od.flaps = 0
+          od.climbAt = { x: bp.x, z: bp.z }
+        }
       }
       od.climbing = true
-    } else if (od.climbing && !cover && feetY >= floorY + 2) {
-      od.climbing = false // recovered: open sky and above the floor + margin
+      od.climbFromY = feetY
+    } else if (od.climbing && !cover && (feetY >= floorY + 2 || (od.climbFromY != null && feetY >= od.climbFromY + 12))) {
+      od.climbing = false // recovered: open sky past the floor, or 12 up past a low local surface
     }
     stepClimb = !!od.climbing
   }
@@ -202,10 +224,13 @@ function gocastle(bot, ctx, target, state) {
     setGoal(bot, ctx, `gocastle-up:${tx},${ty},${tz}`, new goals.GoalNear(bp.x, ty, bp.z, 2))
     ctx.stepStatus = 'running'
     // 3D progress resets: a dig-up climbs without closing XZ in, and
-    // must not burn the give-up budget the order legs share.
+    // must not burn the give-up budget the order legs share. R2: any
+    // move refunds fails too — hand-digging is slow (a pickless block
+    // outlasts a stall window), and only consecutive still windows fail.
     const last = od.lastPos
     if (!last || Math.abs(bp.x - last.x) + Math.abs(bp.y - last.y) + Math.abs(bp.z - last.z) > MOVE_TOLERANCE) {
       od.stalls = 0
+      od.fails = 0
       od.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
     }
