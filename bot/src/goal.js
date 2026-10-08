@@ -356,16 +356,25 @@ const MENU = {
     // The chest=no branch runs only when actionable (a standing chest to
     // adopt, or the pack to place one): an unready bot must not preempt a
     // forage leg just to fail at once (revmux 02-review).
-    feasible: (facts, bot, ctx) => facts.home === 'built' && !facts.chestParked &&
-      !(facts.haul === 'waiting' && facts.player !== 'none') &&
-      // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run —
-      // unless the pack is full (R3, round-2 major A): stockpile is the
-      // only drain, and castlefetch/equip/gather yield pack-full counting
-      // on it, so a leashed full pack stalls to the L2 park. The pierce
-      // latches for the trip (R4, round-3 major): one placed block must
-      // not turn the walk around, and dusk must not strand it.
-      (!homeLegVetoed(bot, ctx, 'stockpile') || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
-      (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')),
+    // Site banking (vmzq.39): an active far castle banks at the site
+    // instead — same surplus, the site chest, no home needed.
+    feasible: (facts, bot, ctx) => {
+      // Site first; when the site cannot take it the home walk below is
+      // still the unblock (vmzq.19 R3: a full pack pierces the leash).
+      try {
+        if (stockpileSiteBranch(facts, bot, ctx)) return true
+      } catch (_) { /* undecidable: home below */ }
+      return facts.home === 'built' && !facts.chestParked &&
+        !(facts.haul === 'waiting' && facts.player !== 'none') &&
+        // Home-leg leash (vmzq.19 R2, major 2): no cross-map banking run —
+        // unless the pack is full (R3, round-2 major A): stockpile is the
+        // only drain, and castlefetch/equip/gather yield pack-full counting
+        // on it, so a leashed full pack stalls to the L2 park. The pierce
+        // latches for the trip (R4, round-3 major): one placed block must
+        // not turn the walk around, and dusk must not strand it.
+        (!homeLegVetoed(bot, ctx, 'stockpile') || packFull(bot, ctx) || !!(ctx && ctx.stockpilePierced)) &&
+        (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting'))
+    },
     chat: () => 'on my own: stockpiling at the home chest',
     verb: 'stockpiling',
   },
@@ -561,6 +570,23 @@ function homeLegVetoed(bot, ctx, step = null) {
     const bp = bot && bot.entity && bot.entity.position
     if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
     return Math.hypot(bp.x - h.x, bp.z - h.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+// Site half of the stockpile feasible (vmzq.39, extracted R3): an active
+// far castle banks at the site instead of home. Shared with the pierce
+// latch below — a site pick is not a pierce, so it must not arm the latch
+// (revmux 02-after-fix major 3).
+function stockpileSiteBranch(facts, bot, ctx) {
+  try {
+    if (!stockpileMod.siteMode(bot, ctx)) return false
+    if (facts.haul === 'waiting' && facts.player !== 'none') return false
+    const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
+    if (!adopted) {
+      try { return stockpileMod.siteChestTodo(bot, ctx) !== 'none' } catch (_) { return false }
+    }
+    return facts.surplus === 'yes'
   } catch (_) {
     return false
   }
@@ -1516,7 +1542,7 @@ const STEP_CRITERIA = {
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
   deliver: 'haul is waiting: carry it to the player',
-  stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest and bank the surplus',
+  stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest (or a site chest) and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
   explore: 'known is none: walk the visited boundary',
@@ -1759,7 +1785,21 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'deliver':
       if (facts.haul !== 'waiting') return 'deliver: nothing waiting'
       return 'deliver: nobody to deliver to'
-    case 'stockpile':
+    case 'stockpile': {
+      // Site reasons only when home is out of the picture (unbuilt): a
+      // built home keeps its leash wording (vmzq.19), the site fallback
+      // having already lost in feasible.
+      try {
+        if (facts.home !== 'built' && stockpileMod.siteMode(bot, ctx)) {
+          if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
+          try {
+            if (stockpileMod.siteParked(bot, ctx)) return 'stockpile: site chest full'
+          } catch (_) { /* wording best-effort */ }
+          const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
+          if (!adopted) return 'stockpile: no site chest to adopt, nothing to place it with'
+          return 'stockpile: nothing to bank'
+        }
+      } catch (_) { /* wording best-effort: home below */ }
       if (facts.home !== 'built') return 'stockpile: house not built yet'
       if (homeLegVetoed(bot, ctx, 'stockpile')) return 'stockpile: castle comes first'
       if (facts.haul === 'waiting' && facts.player !== 'none') return 'stockpile: haul waits for its player'
@@ -1772,6 +1812,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       }
       if (facts.chest === 'no') return 'stockpile: no chest to adopt, nothing to place it with'
       return 'stockpile: nothing to bank'
+    }
     case 'gear': {
       if (facts.home !== 'built') return 'gear: house not built yet'
       if (homeLegVetoed(bot, ctx, 'gear')) return 'gear: castle comes first'
@@ -2233,9 +2274,11 @@ async function decide(bot, ctx) {
     ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
     // A banking trip picked under the pierce latches for the trip (R4):
     // set on the fresh pick only, so the shortcut re-issue below never
-    // arms it and only stockpile's own finish releases it above.
+    // arms it and only stockpile's own finish releases it above. A site
+    // pick is not a pierce (the site is near by definition), so only a
+    // home-branch pick arms it (revmux 02-after-fix major 3).
     if (choice.step === 'stockpile') {
-      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { /* latch best-effort */ }
+      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') && !stockpileSiteBranch(facts, bot, ctx) } catch (_) { /* latch best-effort */ }
     }
     ctx.goalText = text
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
@@ -2271,4 +2314,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch }
