@@ -20,6 +20,7 @@ function pos(x, y, z) {
 function mockBot({ inv = [], cells = {}, at = null, chests = [] } = {}) {
   const w = { ...cells }
   const nameAt = (x, y, z) => w[`${x},${y},${z}`] || (y < 64 ? 'dirt' : 'air')
+  const pathfinder = { goals: [], moving: false, setGoal(g) { this.goals.push(g) }, isMoving: () => pathfinder.moving }
   return {
     inv,
     entity: { position: at || pos(0, 64, 0) },
@@ -31,6 +32,8 @@ function mockBot({ inv = [], cells = {}, at = null, chests = [] } = {}) {
       position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)),
     }),
     findBlocks: () => chests,
+    pathfinder,
+    world: { getBlock: () => null }, // GoalPlaceBlock reads one block at construct
   }
 }
 
@@ -165,5 +168,139 @@ describe('vmzq.39 siteParked', () => {
     const stale = siteCtx({ castle: { siteChest: c }, ctx: { siteChestFullAt: Date.now() - 11 * 60 * 1000 } })
     assert.equal(stockpile.siteParked(mockBot({ at: pos(95, 64, 205) }), stale), false)
     assert.equal(stockpile.siteParked(mockBot({ at: pos(0, 64, 0) }), stale), true)
+  })
+})
+
+describe('vmzq.39 R2 siteChestTodo table gate', () => {
+  const atSite = pos(105, 64, 205)
+  it('none on 8 planks with no standing table', () => {
+    const bot = mockBot({ at: atSite, inv: [{ name: 'oak_planks', count: 8 }] })
+    assert.equal(stockpile.siteChestTodo(bot, siteCtx()), 'none')
+  })
+
+  it('place on 8 planks with a standing table within 32', () => {
+    const bot = mockBot({
+      at: atSite,
+      inv: [{ name: 'oak_planks', count: 8 }],
+      cells: { '105,64,206': 'crafting_table' },
+    })
+    const ctx = siteCtx({ ctx: { claimedTable: { x: 105, y: 64, z: 206 } } })
+    assert.equal(stockpile.siteChestTodo(bot, ctx), 'place')
+  })
+
+  it('none on 8 planks with a standing table past 32', () => {
+    const bot = mockBot({
+      at: atSite,
+      inv: [{ name: 'oak_planks', count: 8 }],
+      cells: { '140,64,205': 'crafting_table' },
+    })
+    const ctx = siteCtx({ ctx: { claimedTable: { x: 140, y: 64, z: 205 } } })
+    assert.equal(stockpile.siteChestTodo(bot, ctx), 'none')
+  })
+
+  it('a chest item still places with no table at all', () => {
+    const bot = mockBot({ at: atSite, inv: [{ name: 'chest', count: 1 }] })
+    assert.equal(stockpile.siteChestTodo(bot, siteCtx()), 'place')
+  })
+})
+
+describe('vmzq.39 R2 doublePending', () => {
+  it('landed on chest, open on air and flora, shut on solids', () => {
+    const bot = mockBot({
+      cells: { '96,64,205': 'chest', '96,64,206': 'short_grass', '96,64,207': 'stone' },
+    })
+    assert.equal(stockpile.doublePending(bot, { x: 96, y: 64, z: 205 }), 'landed')
+    assert.equal(stockpile.doublePending(bot, { x: 97, y: 64, z: 205 }), 'open')
+    assert.equal(stockpile.doublePending(bot, { x: 96, y: 64, z: 206 }), 'open')
+    assert.equal(stockpile.doublePending(bot, { x: 96, y: 64, z: 207 }), 'shut')
+  })
+})
+
+describe('vmzq.39 R2 pending-double resume', () => {
+  const atSite = pos(105, 64, 205)
+  const chest = { x: 95, y: 64, z: 205 }
+  const dbl = { x: 96, y: 64, z: 205 }
+  function resumeBot(cells) {
+    return mockBot({
+      at: atSite,
+      inv: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'chest', count: 1 }],
+      cells: { '95,64,205': 'chest', ...cells },
+    })
+  }
+  function resumeCtx() {
+    const ctx = siteCtx({ castle: { siteChest: { ...chest } } })
+    ctx.siteDouble = { ...dbl }
+    ctx.siteExpanded = true
+    return ctx
+  }
+  it('an open pending double re-issues the place goal, never the deposit goal', () => {
+    const bot = resumeBot({})
+    const ctx = resumeCtx()
+    stockpile(bot, ctx)
+    assert.equal(ctx.lastGoalKey, `stockpile-site-double:${dbl.x},${dbl.y},${dbl.z}`)
+    assert.equal(bot.pathfinder.goals.length, 1)
+    assert.equal(bot.pathfinder.goals[0].constructor.name, 'GoalPlaceBlock')
+    assert.deepEqual(ctx.siteDouble, dbl) // still pending until it lands
+    assert.ok(!String(ctx.stepStatus || '').startsWith('failed:'))
+  })
+
+  it('a landed pending double clears and deposits', () => {
+    const bot = resumeBot({ '96,64,205': 'chest' })
+    const ctx = resumeCtx()
+    stockpile(bot, ctx)
+    assert.equal(ctx.siteDouble, null)
+    assert.equal(ctx.lastGoalKey, `stockpile-site:${chest.x},${chest.y},${chest.z}`)
+    assert.equal(bot.pathfinder.goals[0].constructor.name, 'GoalNear')
+  })
+
+  it('a shut pending double clears and deposits', () => {
+    const bot = resumeBot({ '96,64,205': 'stone' })
+    const ctx = resumeCtx()
+    stockpile(bot, ctx)
+    assert.equal(ctx.siteDouble, null)
+    assert.equal(ctx.lastGoalKey, `stockpile-site:${chest.x},${chest.y},${chest.z}`)
+  })
+})
+
+describe('vmzq.39 R2 home fallback', () => {
+  const atSite = pos(105, 64, 205)
+  // 36/36, no stone/dirt room: castlefetch's own roomForDrop says full.
+  function fullPack() {
+    const inv = []
+    for (let i = 0; i < 34; i++) inv.push({ name: 'coal', count: 64 })
+    inv.push({ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 })
+    return inv
+  }
+  function farHomeCtx() {
+    return siteCtx({
+      home: { site: { x: 500, y: 64, z: 500 }, built: true, chest: { x: 502, y: 64, z: 502 } },
+    })
+  }
+  it('a failed site falls back to the home chest on a full pack', () => {
+    const bot = mockBot({
+      at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
+    })
+    const ctx = farHomeCtx()
+    assert.equal(stockpile.siteMode(bot, ctx), true)
+    stockpile(bot, ctx)
+    assert.ok(!String(ctx.stepStatus || '').startsWith('failed:'), `step failed: ${ctx.stepStatus}`)
+    assert.equal(ctx.lastGoalKey, 'stockpile:502,64,502')
+    assert.equal(bot.pathfinder.goals.length, 1)
+    assert.equal(bot.pathfinder.goals[0].constructor.name, 'GoalNear')
+  })
+
+  it('no home keeps the site failure', () => {
+    const bot = mockBot({ at: atSite, inv: fullPack() })
+    const ctx = siteCtx({ home: { built: false } })
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-spot')
+  })
+
+  it('a vetoed leash without a full pack keeps the site failure', () => {
+    const bot = mockBot({ at: atSite, inv: [{ name: 'coal', count: 64 }] })
+    const ctx = farHomeCtx()
+    assert.equal(stockpile.homeFallbackViable(bot, ctx), false)
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-spot')
   })
 })

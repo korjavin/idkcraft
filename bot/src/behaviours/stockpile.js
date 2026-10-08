@@ -777,6 +777,7 @@ function adopted(ctx, spot) {
   ctx.chestErrorAt = null
   ctx.chestNoSpotAt = null
   ctx.homeExpanded = false
+  ctx.homeDouble = null
 }
 
 // Site adoption (vmzq.39): the home adopted() mirror for ctx.castle.siteChest.
@@ -784,6 +785,7 @@ function siteAdopted(ctx, spot) {
   ctx.castle.siteChest = new Vec3(spot.x, spot.y, spot.z)
   ctx.siteChestFullAt = null
   ctx.siteExpanded = false
+  ctx.siteDouble = null
 }
 
 // Open the adopted chest (or the explicit chest at `at` — g0z.4 castle
@@ -1052,6 +1054,12 @@ function siteChestTodo(bot, ctx) {
         for (const n of Object.values(perWood)) if (n > max) max = n
       } catch (_) { max = 0 }
       if (max < 8) return 'none'
+      // The site craft needs a table within reach: placeChest's noFarTable
+      // fails past 32, so planks alone must not read 'place' — the menu
+      // would preempt a castle leg to fail at once (revmux 01-review-b).
+      try {
+        if (!tableWithin(bot, ctx, 32)) return 'none'
+      } catch (_) { return 'none' }
     }
     try {
       if (!require('./castle').stowSpot(bot, st, null)) return 'none'
@@ -1137,6 +1145,22 @@ function siteParked(bot, ctx) {
   }
 }
 
+// Pending-double state (revmux 01-review-b major 1): the full branch
+// issued a multi-tick place, so the next tick must resume it instead of
+// re-issuing the deposit goal over it. 'landed' (a chest now) and 'shut'
+// (no longer air/flora — something else took the cell) drop the pending
+// and the deposit proceeds; a double that still takes nothing parks via
+// the expanded flag, never loops. Unknown (dark chunk) reads open:
+// placeChest walks in, or fails bounded like any far leg.
+function doublePending(bot, pending) {
+  let at = null
+  try { at = blockNameAt(bot, pending.x, pending.y, pending.z) } catch (_) { at = null }
+  if (at === 'chest') return 'landed'
+  if (at === null || at === 'air' || at === 'cave_air') return 'open'
+  try { if (CLEAR_FLORA.has(at)) return 'open' } catch (_) { /* not flora */ }
+  return 'shut'
+}
+
 // A banked pack re-arms a pack-full fetch leg (vmzq.39): the hold exists
 // because the dig had no room, and room is what banking just made —
 // retrying now resumes in seconds, not after the 5-min bound. Only the
@@ -1146,6 +1170,35 @@ function clearPackFullHold(ctx) {
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (sf && sf.status === 'failed:castlefetch-pack-full') delete ctx.stepFail.castlefetch
   } catch (_) { /* hold best-effort */ }
+}
+
+// First verified-standing table (h9z): a ghost home claim must not shadow
+// the standing roadside table (craft.js pattern). Shared by placeChest and
+// siteChestTodo — one scan, so the menu never promises a craft the step
+// cannot start (revmux 01-review-b major 3).
+function standingTable(bot, ctx) {
+  const cands = [ctx && ctx.home && ctx.home.table, ctx && ctx.claimedTable]
+  for (const cand of cands) {
+    if (!cand || typeof cand.x !== 'number') continue
+    try {
+      const b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z))
+      if (b && b.name === 'crafting_table') return cand
+    } catch (_) { /* unreadable: try the next claim */ }
+  }
+  return null
+}
+
+// A verified-standing table within maxD (XZ) of the body.
+function tableWithin(bot, ctx, maxD) {
+  try {
+    const t = standingTable(bot, ctx)
+    if (!t) return false
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - t.x, bp.z - t.z) <= maxD
+  } catch (_) {
+    return false
+  }
 }
 
 // Funded for a new chest: a chest item, or 8 same-wood planks to craft one
@@ -1216,14 +1269,25 @@ function stockpileSite(bot, ctx, bp) {
   }
   if (at !== 'chest') {
     st.siteChest = null
+    ctx.siteDouble = null // the double's neighbour is gone too
     ctx.stepStatus = 'running'
     stockpileSite(bot, ctx, bp)
     return
   }
   const plan = depositPlan(bot, ctx)
   if (plan.length === 0) {
+    ctx.siteDouble = null
     ctx.stepStatus = 'done'
     return
+  }
+  // Pending double first: resume the multi-tick place, never the deposit
+  // goal over it (doublePending above).
+  if (ctx.siteDouble && typeof ctx.siteDouble.x === 'number') {
+    if (doublePending(bot, ctx.siteDouble) === 'open') {
+      placeChest(bot, ctx, ctx.siteDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true })
+      return
+    }
+    ctx.siteDouble = null // landed or shut: the deposit below decides
   }
   const key = `stockpile-site:${c.x},${c.y},${c.z}`
   if (key !== ctx.lastGoalKey) {
@@ -1261,6 +1325,7 @@ function stockpileSite(bot, ctx, bp) {
       ctx.stockpileInFlight = false
       if (!res || res.status === 'gone') {
         st.siteChest = null
+        ctx.siteDouble = null
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = null
         return
@@ -1291,6 +1356,7 @@ function stockpileSite(bot, ctx, bp) {
           try { dbl = doubleSpot(bot, ctx, c) } catch (_) { dbl = null }
           if (dbl) {
             ctx.siteExpanded = true
+            ctx.siteDouble = dbl // pending: the deposit path resumes it (below)
             ctx.lastGoalKey = null
             ctx.stepStatus = 'running'
             placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true })
@@ -1309,17 +1375,54 @@ function stockpileSite(bot, ctx, bp) {
   })()
 }
 
+// A synchronous site failure (no-spot, no-chest, far): async paths leave
+// 'running' and must never fall through to home mid-window.
+function failedSync(ctx) {
+  try {
+    return typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')
+  } catch (_) {
+    return false
+  }
+}
+
+// Home fallback (revmux 01-review-b major 2): the home branch the
+// stockpile feasible approved — a standing or fundable home chest plus the
+// vmzq.19 shape (pack-full pierce, pierce latch, or no leash veto).
+// Without the leash shape the fallback would march across a vetoed leash
+// feasible never allowed.
+function homeFallbackViable(bot, ctx) {
+  try {
+    const home = ctx && ctx.home
+    if (!home || !home.site || typeof home.site.x !== 'number') return false
+    if (!home.chest && !fundedForChest(bot)) {
+      try { if (!questShedDue(bot, ctx)) return false } catch (_) { return false }
+    }
+    const goal = require('../goal') // deferred: goal requires this module at load
+    try { if (goal.packFull(bot, ctx)) return true } catch (_) { /* leash below */ }
+    if (ctx && ctx.stockpilePierced) return true
+    try { return !goal.homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { return false }
+  } catch (_) {
+    return false
+  }
+}
+
 function stockpile(bot, ctx, target, state) {
   if (!ctx) return
   if (ctx.stockpileInFlight) return // exactly one window op at a time (craft.js rule)
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return
   // Site banking (vmzq.39): an active far castle banks at the site, never
-  // across the map. Falls back to home below when the site cannot take it.
+  // across the map. Falls back to home below when the site fails
+  // synchronously and the home leg is the feasible-approved unblock.
   try {
     if (siteMode(bot, ctx)) {
       stockpileSite(bot, ctx, bp)
-      return
+      if (!failedSync(ctx) || !homeFallbackViable(bot, ctx)) return
+      // The site cannot take it: the home walk is the unblock feasible
+      // approved (vmzq.19 R3 pierce), so clear the site failure and run
+      // the home branch below.
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = null
     }
   } catch (_) { /* undecidable: home below */ }
   const home = ctx.home
@@ -1401,6 +1504,7 @@ function stockpile(bot, ctx, target, state) {
   }
   if (at !== 'chest') {
     home.chest = null // mined or never there: re-place, same step
+    ctx.homeDouble = null // the double's neighbour is gone too
     ctx.stepStatus = 'running'
     stockpile(bot, ctx, target, state)
     return
@@ -1408,8 +1512,18 @@ function stockpile(bot, ctx, target, state) {
 
   const plan = depositPlan(bot, ctx)
   if (plan.length === 0) {
+    ctx.homeDouble = null
     ctx.stepStatus = 'done'
     return
+  }
+  // Pending double first: resume the multi-tick place, never the deposit
+  // goal over it (doublePending above).
+  if (ctx.homeDouble && typeof ctx.homeDouble.x === 'number') {
+    if (doublePending(bot, ctx.homeDouble) === 'open') {
+      placeChest(bot, ctx, ctx.homeDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest' })
+      return
+    }
+    ctx.homeDouble = null // landed or shut: the deposit below decides
   }
 
   const key = `stockpile:${c.x},${c.y},${c.z}`
@@ -1456,6 +1570,7 @@ function stockpile(bot, ctx, target, state) {
       ctx.stockpileInFlight = false
       if (!res || res.status === 'gone') {
         home.chest = null // vanished mid-step: re-place, same step
+        ctx.homeDouble = null
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = null
         return
@@ -1524,6 +1639,7 @@ function stockpile(bot, ctx, target, state) {
           try { dbl = doubleSpot(bot, ctx, c) } catch (_) { dbl = null }
           if (dbl) {
             ctx.homeExpanded = true
+            ctx.homeDouble = dbl // pending: the deposit path resumes it (below)
             ctx.lastGoalKey = null
             ctx.stepStatus = 'running'
             placeChest(bot, ctx, dbl, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest' })
@@ -1562,15 +1678,14 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
     let tableBlock = null
     let tablePos = null
     if (craftMod) {
-      // First verified-standing (h9z): a ghost home claim must not shadow
-      // the standing roadside table (craft.js pattern).
-      for (const cand of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
-        if (!cand || typeof cand.x !== 'number') continue
+      tablePos = standingTable(bot, ctx)
+      if (tablePos) {
         try {
-          const b = bot.blockAt && bot.blockAt(new Vec3(cand.x, cand.y, cand.z))
-          if (b && b.name === 'crafting_table') { tableBlock = b; tablePos = cand; break }
-        } catch (_) { /* unreadable: try the next claim */ }
+          tableBlock = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
+          if (!tableBlock || tableBlock.name !== 'crafting_table') tableBlock = null
+        } catch (_) { tableBlock = null }
       }
+      if (!tableBlock) tablePos = null
     }
     if (!tableBlock) {
       if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
@@ -1742,6 +1857,8 @@ module.exports.siteMode = siteMode
 module.exports.findSiteChest = findSiteChest
 module.exports.siteChestTodo = siteChestTodo
 module.exports.doubleSpot = doubleSpot
+module.exports.doublePending = doublePending
+module.exports.homeFallbackViable = homeFallbackViable
 module.exports.siteParked = siteParked
 module.exports.SITE_STORE_RADIUS = SITE_STORE_RADIUS
 module.exports.SITE_CHEST_RADIUS = SITE_CHEST_RADIUS
