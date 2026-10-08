@@ -109,6 +109,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `MC_DATA_PATH`: Host bind-mount path (default `./data`)
   - `WHITELIST`: Comma-separated list (Bedrock players prefixed with `.`)
   - `OPS`: Comma-separated operators
+  - `LEVEL`: World directory name (default `world`)
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
