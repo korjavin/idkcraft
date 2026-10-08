@@ -8,7 +8,8 @@
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b c"),
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
-#   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
+#   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_PADSPOT ("x,z", pins the pad probe
+#   pick — controlled pairs set it on both legs), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
 #   CASTLE_KIT (empty|seeded|junk|valuables — seeded pre-fills cobble/planks/
 #   tools so a 6-min window measures laying, not fetching; junk is vmzq.38's
