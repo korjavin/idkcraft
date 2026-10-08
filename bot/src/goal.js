@@ -12,7 +12,7 @@
 // Model choice (bead .6) asks at the same decision points with the FSM as
 // fallback and disagreement reference, exactly like hybridBrain.
 
-const { countItems, wornItems } = require('./perception')
+const { countItems, wornItems, HOSTILE_NAMES } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
 const { CLEAR_FLORA } = require('./behaviours/util')
@@ -526,11 +526,38 @@ function needsClimb(bot) {
     return false
   }
 }
+// Threatened (vmzq.49 R1): a hostile within the retreat release band.
+// The gocastle threat gate keys off it: a low, foodless walk through
+// mobs is the run8 death, while quiet travel stays legal.
+function threatNear(bot) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    const entities = (bot && bot.entities && typeof bot.entities === 'object') ? Object.values(bot.entities) : null
+    if (!Array.isArray(entities)) return false
+    for (const e of entities) {
+      if (!e || e.type === 'player' || !e.position) continue
+      if (!HOSTILE_NAMES.has(e.name || '')) continue
+      if (e.isValid === false) continue
+      let d = null
+      try { d = bp.distanceTo(e.position) } catch (_) { continue }
+      if (typeof d === 'number' && d <= 10) return true
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
 // Dusk dig-up (vmzq.50): underground and displaced at dusk, the climb
-// runs before shelter. Night keeps shelter (vmzq.48 owns it).
+// runs before shelter. Night keeps shelter (vmzq.48 owns it). R1: the
+// carve-out means "the climb leg WILL run" — a held (failed) or
+// threat-gated climb falls back to shelter instead of wandering.
 function duskClimbOut(facts, bot, ctx) {
   try {
-    return !!facts && facts.time === 'dusk' && displacedFromCastle(bot, ctx) && needsClimb(bot)
+    if (!facts || facts.time !== 'dusk') return false
+    if (!displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false
+    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
+    return !failHolds(ctx, 'gocastle', goalText(facts, ctx && ctx.home), bot)
   } catch (_) {
     return false
   }
@@ -539,9 +566,14 @@ function gocastleGo(facts, bot, ctx) {
   try {
     if (!displacedFromCastle(bot, ctx)) return false
     if (!registered('gocastle')) return false
+    // Threat gate (vmzq.49 R1): low and foodless INTO mobs does not
+    // travel — flee/recover first. Quiet travel stays legal (a fresh
+    // respawn is full-hp anyway; the gate only bites a walk that has
+    // already gone bad).
+    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
     const t = facts && facts.time
     if (t === 'day') return true
-    return t === 'dusk' && needsClimb(bot) // == duskClimbOut (displaced already true)
+    return t === 'dusk' && needsClimb(bot)
   } catch (_) {
     return false
   }
@@ -1776,6 +1808,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || ctx.castle.phase === 'complete') return 'gocastle: no active castle'
       if (facts.time !== 'day' && facts.time !== 'dusk') return 'gocastle: daytime job'
       if (!displacedFromCastle(bot, ctx)) return 'gocastle: already at the site'
+      if (lowHpNoFood(bot, facts) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
       return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
@@ -2127,17 +2160,6 @@ async function decide(bot, ctx) {
   // force the askedKey shortcut below would re-issue shelter all night.
   const nightNearShelter = !finished && prev === 'shelter' &&
     facts.time !== 'day' && !shelterFits(facts, bot, ctx)
-  // Return-to-site force (idkcraft-vmzq.50): a displacement moves no
-  // bucket (the castle word reads the last word off-site), so without
-  // the force the shortcut re-issues the castle leg every tick and the
-  // walk back runs the cave-diving far leg (run8). Like nightFarWalk it
-  // forces a real re-decide past the askedKey shortcut — one tick, the
-  // menu then holds gocastle to arrival.
-  let siteFarWalk = false
-  try {
-    siteFarWalk = !finished && (prev === 'castle' || prev === 'castlefetch') &&
-      !!MENU.gocastle.feasible(facts, bot, ctx)
-  } catch (_) { siteFarWalk = false }
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
@@ -2262,6 +2284,26 @@ async function decide(bot, ctx) {
       commitForce = false
     }
   }
+  // Return-to-site force (idkcraft-vmzq.50): a displacement moves no
+  // bucket (the castle word reads the last word off-site), so without
+  // the force the shortcut re-issues the castle leg every tick and the
+  // walk back runs the cave-diving far leg (run8). Like nightFarWalk it
+  // forces a real re-decide past the askedKey shortcut — one tick, the
+  // menu then holds gocastle to arrival. R1: a running far-fetch leg is
+  // exempt (its candidate lies past 64 by design — pre-empting it on
+  // commit expiry would loop out-and-back), and a pin on the current
+  // step is exempt (the force would re-decide every tick of the window
+  // just to re-pick the same step). Lives here (not with the other
+  // forces) for the commitStep read.
+  let siteFarWalk = false
+  try {
+    const f = ctx && ctx.castleFetch
+    const farLeg = prev === 'castlefetch' && status === 'running' &&
+      !!f && !!f.farCandidate && typeof f.farCandidate.x === 'number'
+    siteFarWalk = !finished && (prev === 'castle' || prev === 'castlefetch') &&
+      !farLeg && commitStep !== prev &&
+      !!MENU.gocastle.feasible(facts, bot, ctx)
+  } catch (_) { siteFarWalk = false }
   // A finished window step ends the window early (before any re-pick, so
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.

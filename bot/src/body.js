@@ -107,7 +107,17 @@ function castleWalk(ctx) {
   // Return-to-site (idkcraft-vmzq.50): the work step walks the same
   // no-dig surface route as the order — a digging 400-block walk
   // tunnels hills and descends into caves (run8: drowned at y11).
-  return !!(ctx && ctx.work && ctx.step === 'gocastle' && ctx.stepStatus === 'running')
+  // R1: the climb leg digs (a sealed up-goal has no walkable path) —
+  // the no-dig borrow lifts while its mode flag stands. The flag (not
+  // the goal key): the behaviour sets it before the claim, so the
+  // first climb plan already computes with digging movements.
+  if (ctx && ctx.work && ctx.step === 'gocastle' && ctx.stepStatus === 'running') {
+    try {
+      if (ctx.gosite && ctx.gosite.climbing) return false
+    } catch (_) { /* borrow stands */ }
+    return true
+  }
+  return false
 }
 
 // Flat-gate inputs, verbatim from follow.js (5vv) and home.js (rw4.10):

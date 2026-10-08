@@ -10,13 +10,25 @@ const body = require('../body')
 const MOVE_TOLERANCE = 0.5
 const STALL_TICKS = 10
 const MAX_REISSUES = 3
-// Climb-first depth (idkcraft-vmzq.50): solid above within this many
+// Climb-first depth (idkcraft-vmzq.50): terrain above within this many
 // blocks means deep cover — an XZ leg from there dives caves (run8: the
 // walk back descended to y11 water and drowned). The leg goals up
 // instead (see the walk phase); the surface walk only plans from open
-// sky. Water and air pass (swimming out is walking, breath owns it);
-// unloaded reads surfaced — fail open to the old walk.
+// sky. Unloaded reads surfaced — fail open to the old walk.
+// R1: only TERRAIN counts. Canopy (leaves/logs), flora and built
+// surfaces pass — the walk leaves from under a tree, it does not
+// climb it (leaves used to read as deep cover and the leg towered at
+// every tree). Anything passable (empty box) passes with them.
 const CLIMB_HEADROOM = 8
+const CLIMB_AIR = new Set(['air', 'cave_air', 'water', 'bubble_column'])
+const CLIMB_WALKOUT = /(_leaves$|_log$|_stem$|_sapling$|_flower$|_grass$|fern$|_bush$|roots$|vines?$|sugar_cane|cactus|mushroom$|planks$|_door$|_bed$|fence|glass|torch|ladder|_slab$|stairs$|rail$|carpet$|^snow$|web$)/
+function openAbove(b) {
+  if (!b) return true
+  const n = b.name
+  if (CLIMB_AIR.has(n)) return true
+  if (b.boundingBox === 'empty') return true
+  return typeof n === 'string' && CLIMB_WALKOUT.test(n)
+}
 function climbNeeded(bot, bp) {
   try {
     if (!bot || typeof bot.blockAt !== 'function') return false
@@ -31,10 +43,7 @@ function climbNeeded(bot, bp) {
       } catch (_) {
         return false
       }
-      if (!b) return false
-      const n = b.name
-      if (n === 'air' || n === 'cave_air' || n === 'water' || n === 'bubble_column') continue
-      return true
+      if (!openAbove(b)) return true
     }
     return false
   } catch (_) {
@@ -117,8 +126,39 @@ function gocastle(bot, ctx, target, state) {
     return
   }
 
-  // Walk phase
-  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { walk: true }) } catch (_) { /* lease best-effort */ }
+  // Walk phase. Step mode picks climb-vs-walk BEFORE the claim (R1):
+  // the climb leg digs (sealed rock has no walkable up) while the XZ
+  // leg stays no-dig (the cave-diving fix) — the claim carries the
+  // mode so the first plan already computes with the right movements.
+  let stepClimb = false
+  if (stepMode) {
+    const feetY = Math.floor(bp.y)
+    // Depth floor (R1): the leg-high watermark minus headroom — any
+    // 8-descent from where the walk has been goals up instead of
+    // following A* down (the bead's y>=surface-8, self-calibrating:
+    // no site assumptions, hills never contour). Near the entrance
+    // the floor lifts (the arrival leg digs/walks the site as needed).
+    if (typeof od.highY !== 'number' || feetY > od.highY) od.highY = feetY
+    const floorY = od.highY - CLIMB_HEADROOM
+    const cover = climbNeeded(bot, bp)
+    const below = feetY < floorY && Math.hypot(bp.x - ent.x, bp.z - ent.z) > 32
+    if (!od.climbing && (cover || below)) {
+      // Entering the climb: a same-spot re-entry flaps (a cave mouth
+      // the XZ leg keeps re-planning) — three strikes ends the leg
+      // instead of oscillating forever; far-apart episodes reset.
+      const at = od.climbAt
+      if (at && Math.hypot(bp.x - at.x, bp.z - at.z) < 16) od.flaps = (od.flaps || 0) + 1
+      else {
+        od.flaps = 0
+        od.climbAt = { x: bp.x, z: bp.z }
+      }
+      od.climbing = true
+    } else if (od.climbing && !cover && feetY >= floorY + 2) {
+      od.climbing = false // recovered: open sky and above the floor + margin
+    }
+    stepClimb = !!od.climbing
+  }
+  try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', stepClimb ? {} : { walk: true }) } catch (_) { /* lease best-effort */ }
   try { ctx.shelterLeg = ent } catch (_) { /* lease stash best-effort */ }
 
   if (atEntrance(bp, ent)) {
@@ -140,10 +180,22 @@ function gocastle(bot, ctx, target, state) {
     return
   }
 
-  // Climb-first (vmzq.50, step mode only): from deep cover goal up, never
-  // an XZ leg — a walkable exit climbs, a sealed pocket noPaths and
-  // stuck→recover digs up. The order walk keeps its shape.
-  if (stepMode && climbNeeded(bot, bp)) {
+  // Climb-first (vmzq.50, step mode only): from deep cover — or below
+  // the leg's depth floor — goal up, never an XZ leg. A walkable exit
+  // climbs and sealed rock digs (the claim above digs for this leg);
+  // what neither opens noPaths and stuck→recover digs up. The order
+  // walk keeps its shape.
+  if (stepClimb) {
+    if ((od.flaps || 0) >= 3) {
+      // Cave-mouth flap cap (R1): the XZ leg keeps re-planning the
+      // tunnel this climb exits. Fail it — the menu falls back instead
+      // of oscillating (the castle far leg, then the watchdog).
+      od.phase = 'failed'
+      ctx.stepStatus = 'failed:cannot-reach-castle'
+      ctx.gosite = null
+      holdStill(bot, ctx)
+      return
+    }
     const tx = Math.floor(bp.x)
     const ty = Math.floor(bp.y) + CLIMB_HEADROOM
     const tz = Math.floor(bp.z)

@@ -51,7 +51,7 @@ function flatWorld(cells) {
   }
 }
 
-function goalBot({ items = [], at = pos(CASTLE.x + 2, 64, CASTLE.z + 2), timeOfDay = 6000, cells = null, health = 20, food = 20 } = {}) {
+function goalBot({ items = [], at = pos(CASTLE.x + 2, 64, CASTLE.z + 2), timeOfDay = 6000, cells = null, health = 20, food = 20, entities = {} } = {}) {
   const world = flatWorld(cells)
   return {
     chats: [],
@@ -60,7 +60,7 @@ function goalBot({ items = [], at = pos(CASTLE.x + 2, 64, CASTLE.z + 2), timeOfD
     time: { timeOfDay, day: 1 },
     spawnPoint: pos(0, 64, 0),
     players: {},
-    entities: {},
+    entities,
     health,
     food,
     blockAt: (p) => world.blockAt(p),
@@ -166,6 +166,25 @@ describe('vmzq.50 return-to-site: menu', () => {
     assert.equal(goal.stepWhy('gocastle', { time: 'day' }, near, ctx, ''), 'gocastle: already at the site')
     assert.equal(goal.stepWhy('gocastle', { time: 'dusk' }, far, ctx, ''), 'gocastle: dusk shelters')
   })
+
+  it('threat gate (R1): low + foodless into mobs does not travel, quiet does', () => {
+    const zombieNear = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(SPAWN.x + 5, SPAWN.y, SPAWN.z), isValid: true } }
+    const zombieFar = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(SPAWN.x + 11, SPAWN.y, SPAWN.z), isValid: true } }
+    const ctx = { castle: castleState() }
+    const facts = { time: 'day', health: 5, food: 10 }
+    const threatened = goalBot({ items: [], at: pos(SPAWN.x, SPAWN.y, SPAWN.z), entities: zombieNear })
+    assert.equal(goal.MENU.gocastle.feasible(facts, threatened, ctx), false)
+    assert.equal(
+      goal.stepWhy('gocastle', facts, threatened, ctx, ''),
+      'gocastle: too hurt to travel (low health, no food, hostile near)'
+    )
+    const quiet = goalBot({ items: [], at: pos(SPAWN.x, SPAWN.y, SPAWN.z), entities: zombieFar })
+    assert.equal(goal.MENU.gocastle.feasible(facts, quiet, ctx), true, 'past the band the walk runs')
+    const fed = goalBot({ items: [{ name: 'bread', count: 1 }], at: pos(SPAWN.x, SPAWN.y, SPAWN.z), entities: zombieNear })
+    assert.equal(goal.MENU.gocastle.feasible(facts, fed, ctx), true, 'food re-opens')
+    const healthy = goalBot({ items: [], at: pos(SPAWN.x, SPAWN.y, SPAWN.z), entities: zombieNear })
+    assert.equal(goal.MENU.gocastle.feasible({ ...facts, health: 20 }, healthy, ctx), true, 'hp re-opens')
+  })
 })
 
 describe('vmzq.50 return-to-site: decide force', () => {
@@ -199,6 +218,44 @@ describe('vmzq.50 return-to-site: decide force', () => {
       ctx.askedKey = `${text}\nrunning`
       const d = await goal.decide(bot, ctx)
       assert.equal(d.action, 'gocastle')
+    })
+  })
+
+  it('a running far-fetch leg is exempt (R1): it finishes past 64, no turn-back', async () => {
+    await quietAsync(async () => {
+      const bot = goalBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })
+      const ctx = {
+        castle: castleState(), work: true,
+        castleFetch: { farCandidate: { x: SPAWN.x - 100, y: 60, z: SPAWN.z, kind: 'stone', left: 10 } },
+      }
+      const facts = goal.goalFacts(bot, ctx)
+      const text = goal.goalText(facts, null)
+      ctx.step = 'castlefetch'
+      ctx.stepStatus = 'running'
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      const d = await goal.decide(bot, ctx)
+      assert.equal(d.action, 'castlefetch')
+      assert.equal(ctx.stepPick, undefined, 'no re-decide: the shortcut re-issues')
+    })
+  })
+
+  it('a pin on the current step is exempt (R1): no per-tick re-decide churn', async () => {
+    await quietAsync(async () => {
+      const bot = goalBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })
+      const ctx = {
+        castle: castleState(), work: true,
+        goal: { id: 'g1', generation: 1, commit: { goalId: 'g1', generation: 1, step: 'castlefetch', until: Date.now() + 60000 } },
+      }
+      const facts = goal.goalFacts(bot, ctx)
+      const text = goal.goalText(facts, null)
+      ctx.step = 'castlefetch'
+      ctx.stepStatus = 'running'
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      const d = await goal.decide(bot, ctx)
+      assert.equal(d.action, 'castlefetch')
+      assert.equal(ctx.stepPick, undefined, 'no re-decide: the pin holds silently')
     })
   })
 })
@@ -253,6 +310,23 @@ describe('vmzq.50 return-to-site: dusk dig-up', () => {
     assert.equal(goal.MENU.shelter.feasible(facts, bot, ctx), true)
     assert.equal(goal.MENU.gocastle.feasible(facts, bot, ctx), false)
   })
+
+  it('a held climb falls back to shelter (R1), as does a threat-gated one', () => {
+    const cells = new Map()
+    for (let y = 63; y <= 70; y++) cells.set(`${MID.x},${y},${MID.z}`, 'stone')
+    const bot = goalBot({ at: pos(MID.x + 0.5, MID.y, MID.z + 0.5), cells })
+    const facts = { time: 'dusk', home: 'built', inside: 'no', health: 20, food: 20 }
+    // Failed climb, same text and ground: the hold lifts the carve-out.
+    const held = duskCtx()
+    held.stepFail = { gocastle: { text: goal.goalText(facts, held.home), x: MID.x, y: MID.y, z: MID.z } }
+    assert.equal(goal.MENU.shelter.feasible(facts, bot, held), true)
+    // Low + foodless + hostile near: the climb will not run either.
+    const zombie = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(MID.x + 3, MID.y, MID.z), isValid: true } }
+    const hurt = goalBot({ items: [], at: pos(MID.x + 0.5, MID.y, MID.z + 0.5), cells, entities: zombie })
+    const lowFacts = { ...facts, health: 5, food: 10 }
+    assert.equal(goal.MENU.gocastle.feasible(lowFacts, hurt, duskCtx()), false)
+    assert.equal(goal.MENU.shelter.feasible(lowFacts, hurt, duskCtx()), true)
+  })
 })
 
 describe('vmzq.50 return-to-site: step behaviour', () => {
@@ -301,7 +375,7 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
     assert.equal(bot._goals.length, 1)
   })
 
-  it('from deep cover it goals up, never an XZ leg (path avoids y < surface-8)', () => {
+  it('from deep cover it goals up, never an XZ leg (the trigger; the rig pins the route)', () => {
     const cells = new Map()
     for (let y = 42; y <= 49; y++) cells.set(`0,${y},0`, 'stone')
     const bot = stepBot({ at: pos(0.5, 41, 0.5), cells })
@@ -311,6 +385,63 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
     assert.ok(String(ctx.lastGoalKey).startsWith('gocastle-up:'), ctx.lastGoalKey)
     assert.equal(bot._goals.length, 1)
     assert.ok(bot._goals[0].y > 41, `up goal y=${bot._goals[0] && bot._goals[0].y}`)
+  })
+
+  it('below the leg depth floor it goals up under open sky (R1 y-floor)', () => {
+    // Air shaft: open sky down low (no cover) — the floor alone triggers.
+    const cells = new Map()
+    for (let y = 40; y <= 72; y++) cells.set(`0,${y},0`, 'air')
+    const bot = stepBot({ at: pos(0.5, 55, 0.5), cells })
+    const ctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64 } })
+    gocastleMod(bot, ctx)
+    assert.ok(String(ctx.lastGoalKey).startsWith('gocastle-up:'), ctx.lastGoalKey)
+    assert.equal(ctx.gosite.climbing, true)
+    // At the floor it walks.
+    const level = stepBot({ at: pos(0.5, 56, 0.5), cells })
+    const lctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64 } })
+    gocastleMod(level, lctx)
+    assert.ok(lctx.lastGoalKey === 'gocastle-far' || lctx.lastGoalKey === 'gocastle-walk', lctx.lastGoalKey)
+  })
+
+  it('the climb latches till floor+2, and lifts near the entrance (R1)', () => {
+    const cells = new Map()
+    for (let y = 40; y <= 72; y++) cells.set(`0,${y},0`, 'air')
+    // Still climbing at floor+1 (margin), exits at floor+2.
+    const low = stepBot({ at: pos(0.5, 57, 0.5), cells })
+    const lctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: true, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    gocastleMod(low, lctx)
+    assert.ok(String(lctx.lastGoalKey).startsWith('gocastle-up:'), lctx.lastGoalKey)
+    const out = stepBot({ at: pos(0.5, 58, 0.5), cells })
+    const octx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: true, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    gocastleMod(out, octx)
+    assert.ok(octx.lastGoalKey === 'gocastle-far' || octx.lastGoalKey === 'gocastle-walk', octx.lastGoalKey)
+    assert.equal(octx.gosite.climbing, false)
+    // At the doorstep the floor lifts (arrival digs/walks as needed).
+    const ent = castleMod.entrance(castleState())
+    const doorCells = new Map()
+    for (let y = 30; y <= 72; y++) doorCells.set(`${ent.x + 10},${y},${ent.z}`, 'air')
+    const door = stepBot({ at: pos(ent.x + 10.5, 40, ent.z + 0.5), cells: doorCells })
+    const dctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64 } })
+    gocastleMod(door, dctx)
+    assert.ok(dctx.lastGoalKey === 'gocastle-far' || dctx.lastGoalKey === 'gocastle-walk', dctx.lastGoalKey)
+  })
+
+  it('same-spot climb re-entry fails the leg; far-apart episodes reset (R1 flap cap)', () => {
+    const cells = new Map()
+    for (let y = 42; y <= 49; y++) cells.set(`0,${y},0`, 'stone')
+    // Third same-spot re-entry: fail.
+    const bot = stepBot({ at: pos(0.5, 41, 0.5), cells })
+    const ctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: false, climbAt: { x: 0, z: 0 }, flaps: 2 } })
+    gocastleMod(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-castle')
+    assert.equal(ctx.gosite, null)
+    // A far-apart climb resets the count and goals up.
+    const far = stepBot({ at: pos(0.5, 41, 0.5), cells })
+    const fctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: false, climbAt: { x: 500, z: 500 }, flaps: 2 } })
+    gocastleMod(far, fctx)
+    assert.equal(fctx.stepStatus, 'running')
+    assert.ok(String(fctx.lastGoalKey).startsWith('gocastle-up:'), fctx.lastGoalKey)
+    assert.equal(fctx.gosite.flaps, 0)
   })
 
   it('arrival ends the leg done; a missing site fails it', () => {
@@ -336,11 +467,19 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
     assert.ok(ctx.lastGoalKey === 'gocastle-far' || ctx.lastGoalKey === 'gocastle-walk', ctx.lastGoalKey)
   })
 
-  it('climbNeeded: solid above within 8, water and sky pass, unloaded opens', () => {
+  it('climbNeeded: terrain above within 8, canopy/flora/built pass, unloaded opens', () => {
     const surf = stepBot({ at: pos(0.5, 64, 0.5) })
     assert.equal(gocastleMod.climbNeeded(surf), false)
-    const cells = new Map([[`0,70,0`, 'stone']])
-    assert.equal(gocastleMod.climbNeeded(stepBot({ at: pos(0.5, 64, 0.5), cells })), true)
+    for (const name of ['stone', 'dirt', 'grass_block', 'gravel', 'iron_ore', 'deepslate', 'bedrock']) {
+      const cells = new Map([[`0,70,0`, name]])
+      assert.equal(gocastleMod.climbNeeded(stepBot({ at: pos(0.5, 64, 0.5), cells })), true, name)
+    }
+    for (const name of ['oak_leaves', 'oak_log', 'tall_grass', 'oak_planks', 'torch', 'oak_fence', 'glass', 'sugar_cane', 'snow', 'cobweb']) {
+      const cells = new Map([[`0,65,0`, name], [`0,66,0`, name]])
+      const bot = stepBot({ at: pos(0.5, 64, 0.5), cells })
+      // Solid-box lookalikes still pass by name (boundingBox empty skips first).
+      assert.equal(gocastleMod.climbNeeded(bot), false, name)
+    }
     const water = new Map([[`0,65,0`, 'water']])
     assert.equal(gocastleMod.climbNeeded(stepBot({ at: pos(0.5, 64, 0.5), cells: water })), false)
     const unloaded = new Map([[`0,65,0`, null]])
@@ -356,5 +495,33 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
       assert.equal(d.action, 'gocastle')
       assert.equal(ctx.gosite, null)
     })
+  })
+})
+
+describe('vmzq.50 return-to-site: movements (R1)', () => {
+  const body = require('../src/body')
+
+  function movCtx(over = {}) {
+    return {
+      movements: { canDig: true, allowSprinting: false, allowParkour: true },
+      lastGoalKey: '',
+      lastPathNodes: null,
+      work: true,
+      step: 'gocastle',
+      stepStatus: 'running',
+      ...over,
+    }
+  }
+  const movBot = { entity: { position: pos(0, 64, 0) } }
+
+  it('the XZ leg borrows no-dig; the climb leg digs', () => {
+    const walk = movCtx({ gosite: { phase: 'walk', climbing: false } })
+    walk.movements.canDig = true
+    body.movementsFor('work', movBot, walk)
+    assert.equal(walk.movements.canDig, false)
+    const climb = movCtx({ gosite: { phase: 'walk', climbing: true } })
+    climb.movements.canDig = false
+    body.movementsFor('work', movBot, climb)
+    assert.equal(climb.movements.canDig, true)
   })
 })
