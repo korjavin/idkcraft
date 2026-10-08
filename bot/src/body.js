@@ -251,7 +251,7 @@ function movementsFor(owner, bot, ctx, extra) {
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
       danger.addPathCost(mov, ctx, bot) // zj2p: once per Movements, reads ctx live
-      swim.addNightWaterCost(mov, bot) // vmzq.44: once per Movements, reads the bot clock live
+      swim.addNightWaterPrune(mov, bot) // vmzq.44: once per Movements, reads the bot clock live
     } catch (_) { /* apply best-effort */ }
   }
 }

@@ -60,15 +60,6 @@ const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 const SWIM_EXIT_COST = 2
 const SWIM_RISE_COST = 6 // rise swims ~0.4 blocks/s live vs ~2 cruise: price it last-resort so the
 // planner prefers surface entries and only rises out of genuinely deep starts
-// Night deep-water entry cost (idkcraft-vmzq.44): at night every move
-// landing in deep water (2+ deep, below) pays this. Drowned spawn in deep
-// water at night, so legs detour on land or hold ashore (partial paths stop
-// at the rim, the zj2p shape) instead of swimming in; day crossings keep
-// current costs (the gate below no-ops off-night, so day plans are byte-identical
-// to master). A cost, never a ban: a forced crossing still plans, and exits
-// (dry targets) stay cheap so a body caught out swims to the nearest shore.
-// The value is danger's PATH_COST: proven steep enough to stop partials.
-const NIGHT_WATER_COST = 10
 
 // The executor's water: prismarine-physics waterLike behind isInWater
 // counts these flora (plus bubble columns) as water, so jump is held
@@ -173,8 +164,40 @@ function unswimmable(movements, node, m) {
   return false
 }
 
+// Night deep-water entry ban (idkcraft-vmzq.44): Noel's-arc "cross only by
+// day" half for the n9ta quarry-run drownings. At night, moves ENTERING deep
+// water (landing 2+ deep from a dry or shallow source) are not offered, so
+// legs detour on land or hold ashore (noPath/timeout, retried till day)
+// instead of swimming into fresh drowned spawns; day crossings keep current
+// costs (the gate below no-ops off-night, so day plans are byte-identical to
+// master). A ban, not a cost, on measured evidence: a steep cost (+10/move,
+// danger's PATH_COST) still swam a forced 60-wide night crossing on the rig
+// (132/150 deep samples — a cost never holds without a land alternative),
+// and the n9ta probe priced ford-cost first and found neither death site has
+// a shallow ford to steer to (cost cannot change fatal lines). Shallow
+// (1-deep, wading with footing) stays plannable at night — fords still work —
+// and bodies already in deep at nightfall (day crossings in progress) keep
+// cruises and exits, so they swim OUT instead of treading: only the
+// non-deep -> deep transition prunes.
+function addNightWaterPrune(movements, bot) {
+  // Same wrap shape as addSwimPrune: real Movements only, installed once
+  // (body.js movementsFor is the single production call site, like
+  // danger.addPathCost — the gate reads the bot clock live, so a
+  // dusk-to-night transition steers the next plan with no reinstall).
+  if (!movements || typeof movements.getNeighbors !== 'function' || movements._nightWaterPruneInstalled) return
+  movements._nightWaterPruneInstalled = true
+  const orig = movements.getNeighbors.bind(movements)
+  movements.getNeighbors = (node) => {
+    const ns = orig(node)
+    if (!isNight(bot)) return ns
+    const committed = isDeepCell(movements, node, 0, 0, 0)
+    if (committed) return ns
+    return ns.filter((m) => !entersDeep(movements, node, m))
+  }
+}
+
 // Night gate: the MC clock word, goal.js timeWord's night boundary
-// (>13000; dusk 12000-13000 stays day-cheap — the spawn risk is night).
+// (>13000; dusk 12000-13000 stays day-open — the spawn risk is night).
 // Unknown clocks (no bot.time, NaN) read as day, the goalFacts precedent:
 // the day path is identical with or without the wrapper.
 function isNight(bot) {
@@ -184,40 +207,26 @@ function isNight(bot) {
   } catch (_) { return false }
 }
 
-// Deep at the landing: the target cell is swimmable water (the executor's
-// isWet, flora and waterlogged included — drowned spawn there too) and the
-// cell below it is wet as well, so the surface sits 2+ deep. Shallow
-// (1-deep, solid below) stays cheap: wading and shore work never pay.
-// Unknown cells (chunk edge: null reads dry) fail open to shallow.
-function isDeepWater(movements, node, m) {
-  const dx = m.x - node.x
-  const dy = m.y - node.y
-  const dz = m.z - node.z
-  let target = null
-  try { target = movements.getBlock(node, dx, dy, dz) } catch (_) { return false }
-  if (!target || !isWet(target) || !target.safe) return false
+// Deep at the cell: swimmable water (the executor's isWet, flora and
+// waterlogged included — drowned spawn there too) with a wet cell below, so
+// the surface sits 2+ deep. Shallow (1-deep, solid below) reads false:
+// wading and shore work never prune. Unknown cells (chunk edge: null reads
+// dry) fail open to shallow.
+function isDeepCell(movements, node, dx, dy, dz) {
+  let cell = null
+  try { cell = movements.getBlock(node, dx, dy, dz) } catch (_) { return false }
+  if (!cell || !isWet(cell) || !cell.safe) return false
   let below = null
   try { below = movements.getBlock(node, dx, dy - 1, dz) } catch (_) { return false }
   return !!below && isWet(below)
 }
 
-function addNightWaterCost(movements, bot) {
-  // Same wrap shape as addSwimPrune/addPathCost: real Movements only,
-  // installed once (body.js movementsFor is the single production call
-  // site, like danger.addPathCost — the cost reads the bot clock live, so
-  // a dusk-to-night transition steers the next plan with no reinstall).
-  if (!movements || typeof movements.getNeighbors !== 'function' || movements._nightWaterCostInstalled) return
-  movements._nightWaterCostInstalled = true
-  const orig = movements.getNeighbors.bind(movements)
-  movements.getNeighbors = (node) => {
-    const ns = orig(node)
-    if (!isNight(bot)) return ns
-    for (const m of ns) {
-      if (!m || typeof m.cost !== 'number') continue
-      if (isDeepWater(movements, node, m)) m.cost += NIGHT_WATER_COST
-    }
-    return ns
-  }
+// Entering deep: the landing is deep (dry/shallow landings never prune, so
+// exits and wading stay). Called only for non-deep sources (committed deep
+// bodies return early above).
+function entersDeep(movements, node, m) {
+  if (!m || typeof m.x !== 'number' || typeof m.y !== 'number' || typeof m.z !== 'number') return false
+  return isDeepCell(movements, node, m.x - node.x, m.y - node.y, m.z - node.z)
 }
 
-module.exports = { addSwimExits, addSwimPrune, addNightWaterCost, SWIM_EXIT_COST, SWIM_RISE_COST, NIGHT_WATER_COST }
+module.exports = { addSwimExits, addSwimPrune, addNightWaterPrune, SWIM_EXIT_COST, SWIM_RISE_COST }
