@@ -1128,7 +1128,10 @@ const FALLBACK_FLAT_PENALTY = 10000
 // Chain steps per work kind: the STEP_EFFECT +metric/+chain set, plus the
 // night safety steps (a dusk stall must march/shelter, never blind-walk).
 const FALLBACK_CHAIN = {
-  castle: new Set(['castlefetch', 'castle', 'craft', 'equip', 'gather', 'stay', 'gohome', 'shelter']),
+  // gocastle (idkcraft-vmzq.50): the displaced return walk — STEP_ORDER
+  // ranks it first of the chain, so a far stall falls back to walking
+  // back, never to fetching at spawn.
+  castle: new Set(['gocastle', 'castlefetch', 'castle', 'craft', 'equip', 'gather', 'stay', 'gohome', 'shelter']),
   house: new Set(['build', 'beds', 'craft', 'equip', 'light', 'gather', 'stay', 'gohome', 'shelter']),
 }
 function fallbackRank(kind, offered, history = null, currentStep = null, held = null) {

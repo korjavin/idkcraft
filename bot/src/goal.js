@@ -12,7 +12,7 @@
 // Model choice (bead .6) asks at the same decision points with the FSM as
 // fallback and disagreement reference, exactly like hybridBrain.
 
-const { countItems, wornItems } = require('./perception')
+const { countItems, wornItems, HOSTILE_NAMES } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
 const { CLEAR_FLORA } = require('./behaviours/util')
@@ -89,9 +89,24 @@ const MENU = {
     // Castle site (vmzq.19): with an active castle and the bot away from
     // home it shelters from dusk anywhere — mid-map it pillars in place —
     // and the built-home gate lifts (an unbuilt far house still shelters).
-    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx),
+    // Dusk dig-up (vmzq.50): underground and displaced at dusk the climb
+    // runs first — sheltering in a cave pillars head-blocked and digs
+    // undiggable (run8 16:13). Night keeps shelter (vmzq.48 owns it).
+    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx) && !duskClimbOut(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
+  },
+  gocastle: {
+    // Return-to-site (idkcraft-vmzq.50): displaced past GOSITE_DIST from
+    // an active castle, walk back on the surface instead of working from
+    // afar — run8 respawned 400 off and the castle/castlefetch far legs
+    // walked the raw digging route through caves (drowned y11, creeper)
+    // and ended stuck sheltering 450 off. Day only (the night steps own
+    // the dark); at dusk only the climb-out leg runs. No kit gate: a
+    // fresh respawn walks with an empty pack.
+    feasible: (facts, bot, ctx) => gocastleGo(facts, bot, ctx),
+    chat: () => 'on my own: returning to the castle site',
+    verb: 'returning to the castle',
   },
   craft: {
     // Batch gate: a full NEED_LOGS load crafts at once. Starting on the first
@@ -307,7 +322,7 @@ const MENU = {
     // stay/gohome/equip outrank it, so the bot still sleeps and rearms.
     // A running fetch owns the body to its stack target (revmux 01): the
     // model menu must not cut it at the batch line either.
-    feasible: (facts, bot, ctx) => castleGo(facts, ctx) &&
+    feasible: (facts, bot, ctx) => castleGo(facts, ctx, bot) &&
       !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running' && castleFetchGo(facts, bot, ctx)),
     chat: () => 'on my own: building the castle',
     verb: 'building the castle',
@@ -365,7 +380,7 @@ const MENU = {
     // before the next forage leg. Nobody online (dxl) -> infeasible.
     // The owner wants the castle (g0z.3): a workable castle leg goes first,
     // for the model's menu too (the FSM already ranks castle above).
-    feasible: (facts, bot, ctx) => facts.haul === 'waiting' && facts.player !== 'none' && !castleGo(facts, ctx),
+    feasible: (facts, bot, ctx) => facts.haul === 'waiting' && facts.player !== 'none' && !castleGo(facts, ctx, bot),
     chat: () => 'on my own: delivering the haul',
     verb: 'delivering',
   },
@@ -437,7 +452,7 @@ const MENU = {
     // parked task keeps the hunt but only near finds (vmzq.3 side work):
     // the pickers in forage.js skip far cells while parked, so known
     // reads none when only far finds remain — no gate needed here.
-    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx) && !forageHeld(ctx) && !castleBlocked(facts),
+    feasible: (facts, bot, ctx) => facts.known === 'near' && !nightHurt(facts) && !castleGo(facts, ctx, bot) && !forageHeld(ctx) && !castleBlocked(facts),
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
@@ -480,12 +495,110 @@ const MENU = {
 // next cell is a keep-clear dig or has its material batch on hand; a
 // running castle leg finishes a partial batch. Shared by MENU.castle and
 // the deliver/forage yield.
-function castleGo(facts, ctx) {
+function castleGo(facts, ctx, bot = null) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
   if (!registered('castle')) return false
+  if (lowHpNoFood(bot, facts)) return false // vmzq.49: eat first, then climb
   if (w === 'clear' || w === 'finish' || w.endsWith('-batch')) return true
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
+}
+
+// Health gate (idkcraft-vmzq.49): at low health with nothing edible on
+// hand the castle legs stand down — run8 worked the y72 frame at low hp
+// (fell 13:29) and walked back into a day zombie (died 15:52), kit
+// food=0 both times, because no gate exists. eatReflex cannot help
+// (nothing to eat), so forage (a hunt) or rest runs until food or regen
+// lands. With food on hand the reflex eats and work continues. An
+// unreadable pack reads fed (fail open: the old behaviour).
+function lowHpNoFood(bot, facts) {
+  try {
+    if (!(facts && facts.health < 6)) return false
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
+    if (!Array.isArray(items)) return false
+    return !require('./reflexes').pickEdible(items)
+  } catch (_) {
+    return false
+  }
+}
+
+// Return-to-site radius (idkcraft-vmzq.50): past 64 XZ from the castle
+// centre the day belongs to the walk back, not to far legs. 64 is the
+// epic's own bound (PARK_FORAGE_RADIUS) and the task radius.
+const GOSITE_DIST = 64
+function displacedFromCastle(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || !st.site || typeof st.site.x !== 'number') return false
+    if (!castleFirst(ctx)) return false // active castle only (unfinished, unparked)
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    const c = castleSiteCentre(st)
+    return Math.hypot(bp.x - c.x, bp.z - c.z) > GOSITE_DIST
+  } catch (_) {
+    return false
+  }
+}
+// Climb-first test (vmzq.50): the behaviour's own headroom probe — one
+// source, so the menu and the leg can never disagree on what is deep.
+function needsClimb(bot) {
+  try {
+    return !!require('./behaviours/gocastle').climbNeeded(bot)
+  } catch (_) {
+    return false
+  }
+}
+// Threatened (vmzq.49 R1): a hostile within the retreat release band.
+// The gocastle threat gate keys off it: a low, foodless walk through
+// mobs is the run8 death, while quiet travel stays legal.
+function threatNear(bot) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    const entities = (bot && bot.entities && typeof bot.entities === 'object') ? Object.values(bot.entities) : null
+    if (!Array.isArray(entities)) return false
+    for (const e of entities) {
+      if (!e || e.type === 'player' || !e.position) continue
+      if (!HOSTILE_NAMES.has(e.name || '')) continue
+      if (e.isValid === false) continue
+      let d = null
+      try { d = bp.distanceTo(e.position) } catch (_) { continue }
+      if (typeof d === 'number' && d <= 10) return true
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
+// Dusk dig-up (vmzq.50): underground and displaced at dusk, the climb
+// runs before shelter. Night keeps shelter (vmzq.48 owns it). R1: the
+// carve-out means "the climb leg WILL run" — a held (failed) or
+// threat-gated climb falls back to shelter instead of wandering.
+function duskClimbOut(facts, bot, ctx) {
+  try {
+    if (!facts || facts.time !== 'dusk') return false
+    if (!displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false
+    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
+    return !failHolds(ctx, 'gocastle', goalText(facts, ctx && ctx.home), bot)
+  } catch (_) {
+    return false
+  }
+}
+function gocastleGo(facts, bot, ctx) {
+  try {
+    if (!displacedFromCastle(bot, ctx)) return false
+    if (!registered('gocastle')) return false
+    // Threat gate (vmzq.49 R1): low and foodless INTO mobs does not
+    // travel — flee/recover first. Quiet travel stays legal (a fresh
+    // respawn is full-hp anyway; the gate only bites a walk that has
+    // already gone bad).
+    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
+    const t = facts && facts.time
+    if (t === 'day') return true
+    return t === 'dusk' && needsClimb(bot)
+  } catch (_) {
+    return false
+  }
 }
 
 // Castle fetch can progress now (g0z.4): day, a material word (or blocked
@@ -499,6 +612,7 @@ function castleGo(facts, ctx) {
 function castleFetchGo(facts, bot, ctx) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
+  if (lowHpNoFood(bot, facts)) return false // vmzq.49: eat first, then climb
   // Blocked (g0z.23): the gated kind (menuFact keeps it on castleWord)
   // still wants its batch while the build stands.
   let kind = null
@@ -511,7 +625,7 @@ function castleFetchGo(facts, bot, ctx) {
   }
   if (!registered('castlefetch') || !registered('castle')) return false
   if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return false
-  if (castleGo(facts, ctx) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
+  if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
   try {
     const d = require('./behaviours/castlefetch').demand(bot, ctx)
     return !!d && d.short > 0
@@ -892,9 +1006,10 @@ function shelterFits(facts, bot, ctx) {
 // the house chain, which run3 proved by losing every day to beds/build at
 // the far house while the castle never laid a cell), then craft, rearm
 // (equip), build, gather, then unload (deliver), dig (forage), search
-// (explore), rest last.
+// (explore), rest last. The return-to-site walk (vmzq.50) heads the
+// chain: displaced, walking back beats fetching at spawn.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1564,6 +1679,7 @@ const STEP_CRITERIA = {
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
+  gocastle: 'time is day and the castle site is far: walk back to the castle site on the surface so laying can resume',
   deliver: 'haul is waiting: carry it to the player',
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest (or a site chest) and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
@@ -1607,7 +1723,9 @@ async function chooseStep(brain, facts, feasible, home) {
   // beds over a feasible castle and walked 500 blocks home. The model is
   // consulted only when the castle cannot run now.
   // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
-  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  // vmzq.50: the return-to-site walk rides it too — displaced, the model
+  // must not wander to forage/explore instead of walking back.
+  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -1704,10 +1822,17 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'gohome: too far to walk at night'
     case 'shelter':
       if (facts.time === 'day') return 'shelter: daytime'
+      if (duskClimbOut(facts, bot, ctx)) return 'shelter: climbing out before sheltering'
       if (facts.time === 'dusk') return 'shelter: dusk marches home'
       if (facts.home !== 'built') return 'shelter: home not built'
       if (facts.inside !== 'no') return 'shelter: already inside'
       return 'shelter: home is close'
+    case 'gocastle':
+      if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || ctx.castle.phase === 'complete') return 'gocastle: no active castle'
+      if (facts.time !== 'day' && facts.time !== 'dusk') return 'gocastle: daytime job'
+      if (!displacedFromCastle(bot, ctx)) return 'gocastle: already at the site'
+      if (lowHpNoFood(bot, facts) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
+      return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
       if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
@@ -1779,6 +1904,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (w === 'parked') return 'castle: parked'
       if (w === 'done') return 'castle: complete'
       if (facts.time !== 'day') return 'castle: daytime job'
+      if (lowHpNoFood(bot, facts)) return 'castle: eating first (low health, no food)'
       if (w === 'blocked') return 'castle: next cell blocked, retrying later'
       const kind = w.slice(0, w.lastIndexOf('-'))
       if (w.endsWith('-none')) return `castle: need ${kind}`
@@ -1787,6 +1913,7 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'castlefetch': {
       const w = facts.castle || 'none'
       if (facts.time !== 'day') return 'castlefetch: daytime job'
+      if (lowHpNoFood(bot, facts)) return 'castlefetch: eating first (low health, no food)'
       // Blocked (g0z.23): the gated kind, like the gate above.
       let kind = null
       if (w === 'blocked') {
@@ -2067,6 +2194,23 @@ async function decide(bot, ctx) {
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
     if (ph && ph !== 'done' && ph !== 'failed') return { action: prev, sprint: false, source: 'goal-fsm' }
   }
+  // Retreat hysteresis (idkcraft-vmzq.49): a latched chain leg holds
+  // across veto flicker — run8 15:52 re-picked castle into a 1-block
+  // zombie the tick the veto dropped and died there. While the latch
+  // stands the leg re-issues instead of re-deciding; a failed leg or a
+  // truly clear tick (bands) clears the latch and falls through.
+  if (prev === 'retreat' || prev === 'pillar') {
+    try {
+      const failed = typeof status === 'string' && status.startsWith('failed:')
+      const rm = require('./behaviours/retreat')
+      if (failed || rm.retreatClear(bot, { bot_health: facts.health })) {
+        if (ctx) ctx.retreatLatch = null
+      } else if (rm.latchedAction(ctx) === prev) {
+        ctx.stepStatus = 'running'
+        return { action: prev, sprint: false, source: 'goal-fsm' }
+      }
+    } catch (_) { /* hold best-effort: the menu below decides */ }
+  }
   // A chain-owned step never rides the goal shortcuts: re-issuing it here
   // would bypass feasibility and the model ask (the stale hold in another
   // coat). Force a real re-decide instead; the menu never contains
@@ -2163,11 +2307,31 @@ async function decide(bot, ctx) {
       commitForce = false
     }
   }
+  // Return-to-site force (idkcraft-vmzq.50): a displacement moves no
+  // bucket (the castle word reads the last word off-site), so without
+  // the force the shortcut re-issues the castle leg every tick and the
+  // walk back runs the cave-diving far leg (run8). Like nightFarWalk it
+  // forces a real re-decide past the askedKey shortcut — one tick, the
+  // menu then holds gocastle to arrival. R1: a running far-fetch leg is
+  // exempt (its candidate lies past 64 by design — pre-empting it on
+  // commit expiry would loop out-and-back), and a pin on the current
+  // step is exempt (the force would re-decide every tick of the window
+  // just to re-pick the same step). Lives here (not with the other
+  // forces) for the commitStep read.
+  let siteFarWalk = false
+  try {
+    const f = ctx && ctx.castleFetch
+    const farLeg = prev === 'castlefetch' && status === 'running' &&
+      !!f && !!f.farCandidate && typeof f.farCandidate.x === 'number'
+    siteFarWalk = !finished && (prev === 'castle' || prev === 'castlefetch') &&
+      !farLeg && commitStep !== prev &&
+      !!MENU.gocastle.feasible(facts, bot, ctx)
+  } catch (_) { siteFarWalk = false }
   // A finished window step ends the window early (before any re-pick, so
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.
   const commitEnded = commitActive && finished && prev && prev === commitStep
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || fetchRetry || siteRetry || planStep || commitForce) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./task').commitFinished(bot, ctx, status)
@@ -2199,7 +2363,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !fetchRetry && !siteRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {
@@ -2260,7 +2424,7 @@ async function decide(bot, ctx) {
         }
       }
     }
-    const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : 'facts-changed'
+    const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : siteFarWalk ? 'site-far' : 'facts-changed'
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     if (planApplied || commitApplied) choice.source = 'task-plan'
@@ -2273,6 +2437,9 @@ async function decide(bot, ctx) {
     if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
     if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
     if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
+    // A fresh return leg restarts its walk (vmzq.50): stall patience spent
+    // by an interrupted leg must not fail the new one on arrival day.
+    if (choice.step === 'gocastle' && choice.step !== prev) ctx.gosite = null
     // A fresh forage pick restarts the hunt (4dse): a resumed stale
     // find/walk chases the old target id while explore heads elsewhere.
     // The interrupted run's partial haul banks first (sqg2), so the reset
@@ -2337,4 +2504,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }

@@ -1000,7 +1000,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // of fire; a miss falls through to goal.decide, i.e. the old
         // behaviour. The engage log fires only on a dispatched pick, so an
         // empty menu or a declined chain never claims a retreat.
-        if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire) {
+        // Retreat hysteresis (idkcraft-vmzq.49): a latched leg holds across
+        // veto flicker — sheltered ticks excepted, like the veto leg,
+        // and a truly clear tick (bands) releases at once.
+        let retreatHeld = false
+        try { retreatHeld = !ctx.inShelter && retreatMod.retreatLatched(ctx) && !retreatMod.retreatClear(bot, state) } catch (_) { retreatHeld = false }
+        if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire || retreatHeld) {
           const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
           if (retreat) {
             if (ctx.paused || !ctx.work) {
@@ -1486,6 +1491,7 @@ function handleDeath(bot, ticker) {
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
+      ctx.gosite = null // R3: the return-walk watermark belongs to the dead body — a stale highY floors the respawn into a climb
       ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
       ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
       if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
