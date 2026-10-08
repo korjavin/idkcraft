@@ -255,3 +255,16 @@ describe('castle slice reach invariant (range 4, ref face, LOS, way back)', () =
     assert.equal(r.ok, false, 'out-of-range pillar top must fail the invariant')
   })
 })
+
+describe('castle stone variants (vmzq.38)', () => {
+  it('granite/diorite/andesite are castle stone: done test, held count, material', () => {
+    for (const n of ['cobblestone', 'stone', 'granite', 'diorite', 'andesite', 'polished_andesite']) {
+      assert.ok(castle.matches('stone', n), n)
+      assert.ok(castleMod.isMaterial(n), n)
+    }
+    assert.ok(!castle.matches('stone', 'sand'))
+    assert.ok(!castle.matches('stone', 'smooth_basalt'))
+    const bot = { inventory: { items: () => [{ name: 'granite', count: 64 }, { name: 'diorite', count: 10 }, { name: 'sand', count: 30 }] } }
+    assert.equal(castleMod.held(bot, 'stone'), 74)
+  })
+})

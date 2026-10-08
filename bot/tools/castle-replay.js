@@ -82,7 +82,7 @@ const SAMPLE_EDIBLES = new Set([
 // fetch needs, blocked cells, progress, deaths, verdict). Ticker chatter
 // (decision/scout/kit/eat) would bury the verdict on a 30+ min run.
 const logStream = fs.createWriteStream(LOGFILE, { flags: 'w' })
-const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /,
+const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^castle relocate /,
   /^castle \d+\/\d+$/, /death/, /^castle-sample /, /^castle \d+\/\d+ in /,
   /^CASTLE-RIG /, /^task castle /, /no progress for/,
   /^goal watchdog /, /^goal outcome /]
@@ -184,7 +184,10 @@ function fail(kind, detail) {
 // first: all three land in the work order's first-16 prefix, so the old
 // layer gate stalls on them within minutes and the skip fix must build
 // past. Pure (unit-tested): the rcon writes + readback live in main().
-const SEED_MATS = ['oak_log', 'chest']
+// vmzq.40: planks join the mix and the chest is seeded filled (SEED_NBT) —
+// the footprint rule clears both and relocates the chest, contents intact.
+const SEED_MATS = ['oak_log', 'chest', 'oak_planks']
+const SEED_NBT = { chest: '{Items:[{Slot:0b,id:"minecraft:diamond",count:3},{Slot:1b,id:"minecraft:oak_planks",count:20}]}' }
 function pickBlockedSeeds(site, rot, version, n) {
   const blueprint = require('../src/castle')
   const { cells } = blueprint.absPlan(site, rot, version)
@@ -330,6 +333,18 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword)')
   }
+  // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
+  // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
+  if (KIT === 'junk') {
+    for (const [item, count] of [['granite', 90], ['diorite', 113], ['andesite', 115], ['smooth_basalt', 12],
+      ['sand', 30], ['leaf_litter', 40], ['rotten_flesh', 20], ['bow', 4], ['raw_iron', 63], ['oak_planks', 128],
+      ['acacia_door', 3], ['white_bed', 1], ['arrow', 88], ['wooden_sword', 1], ['bone', 64], ['string', 64],
+      ['gunpowder', 64], ['spider_eye', 64], ['feather', 64], ['flint', 64], ['wheat_seeds', 64], ['oak_sapling', 64],
+      ['kelp', 64], ['cactus', 64], ['egg', 16], ['ink_sac', 64], ['slime_ball', 64], ['clay_ball', 64]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=junk (36/36 stone variants + junk, no pickaxe)')
+  }
   await sleep(3000) // chunks in, both landed
   if (tickCtx()) tickCtx().paused = false
 
@@ -373,7 +388,7 @@ async function main() {
     await rcon(`tp ${GUIDE} ${st.site.x + 15.5} ${st.site.y + 10} ${st.site.z + 13.5}`).catch((e) => fail('seed-blocked', e.message))
     await sleep(3000)
     for (const s of blockedSeeds) {
-      await rcon(`setblock ${s.x} ${s.y} ${s.z} minecraft:${s.block}`).catch((e) => fail('seed-blocked', `${s.x} ${s.y} ${s.z}: ${e.message}`))
+      await rcon(`setblock ${s.x} ${s.y} ${s.z} minecraft:${s.block}${SEED_NBT[s.block] || ''}`).catch((e) => fail('seed-blocked', `${s.x} ${s.y} ${s.z}: ${e.message}`))
     }
     await sleep(1000)
     for (const s of blockedSeeds) {
@@ -547,6 +562,13 @@ async function main() {
     }
   }
   drainSaid()
+  // Relocated boxes (vmzq.40): read the contents back where the bot says it put them.
+  for (const m of seen.said) {
+    const mv = /moved the (\S+) out of the castle to (-?\d+) (-?\d+) (-?\d+)/.exec(m)
+    if (!mv) continue
+    const got = await rcon(`data get block ${mv[2]} ${mv[3]} ${mv[4]} Items`).catch((e) => `error ${e.message}`)
+    origLog(`CASTLE-RIG relocated ${mv[1]} at ${mv[2]} ${mv[3]} ${mv[4]}: ${String(got).slice(0, 300)}`)
+  }
   const last = series[series.length - 1] || {}
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0

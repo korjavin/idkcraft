@@ -460,7 +460,7 @@ describe('ipn.12 shelter behaviour: pillar once, hold till dawn', () => {
     assert.equal(ctx.night.reported, true, 'tally snapped like stay')
   })
 
-  it('inside hands to stay; no home fails loud', () => {
+  it('inside hands to stay; homeless shelters anyway (vmzq.32)', () => {
     const bot = holdBot()
     bot.entity.position = pos(SITE.x + 2, SITE.y, SITE.z + 2) // inside the box
     const ctx = { home: v2home(SITE), step: 'shelter', stepStatus: 'running' }
@@ -468,7 +468,7 @@ describe('ipn.12 shelter behaviour: pillar once, hold till dawn', () => {
     assert.equal(ctx.stepStatus, 'done', 'stay owns the inside')
     const homeless = { step: 'shelter', stepStatus: 'running' }
     home.shelter(bot, homeless, null, null)
-    assert.equal(homeless.stepStatus, 'failed:no-home')
+    assert.notEqual(homeless.stepStatus, 'failed:no-home')
   })
 })
 

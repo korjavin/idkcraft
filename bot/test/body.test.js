@@ -141,6 +141,25 @@ describe('movementsFor', () => {
     assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE], 'other steps keep the default')
   })
 
+  it('vmzq.38: castle stone variants scaffold with cobble and count toward the castle reserve', () => {
+    const DIRT = 9
+    const COBBLE = 14
+    const GRANITE = 15
+    const b = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { itemsByName: { dirt: { id: DIRT }, cobblestone: { id: COBBLE }, granite: { id: GRANITE } } },
+      inventory: { items: () => [{ name: 'granite', count: 40 }, { name: 'dirt', count: 3 }] },
+    }
+    const ctx = ctxWithMov({ work: true, step: 'forage' })
+    ctx.movements.scafoldingBlocks = [DIRT, COBBLE]
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT, COBBLE, GRANITE], 'granite scaffolds off the castle step')
+    ctx.step = 'castle'
+    ctx.castle = { site: { x: 0, y: 64, z: 0 } }
+    body.movementsFor('work', b, ctx)
+    assert.deepEqual(ctx.movements.scafoldingBlocks, [DIRT], '40 granite on the castle step: kept for the walls')
+  })
+
   it('vmzq.31: castlefetch walks cobble walk-proof like the castle step', () => {
     const DIRT = 9
     const COBBLE = 14

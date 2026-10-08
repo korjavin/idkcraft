@@ -1210,7 +1210,7 @@ describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
     assert.ok(crafts.includes('chest'), 'the chest crafts after the shed')
     assert.deepEqual(
       Object.keys(placed).sort(),
-      ['3,64,1', '3,65,1', '3,66,1'],
+      ['5,64,2', '5,65,2', '5,66,2'], // diagonals first (vmzq.38)
       'the dirt-3 victim pillars beside the bot, skipping the (5,*,1) spot column',
     )
     await flush()
@@ -1330,7 +1330,7 @@ describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
     await flush()
     assert.equal(bot.inv.length, 34, 'one stack shed')
     assert.equal(ctx.stepStatus, 'done')
-    assert.deepEqual(Object.keys(placed).sort(), ['1,64,0', '1,65,0', '1,66,0'])
+    assert.deepEqual(Object.keys(placed).sort(), ['1,64,1', '1,65,1', '1,66,1']) // diagonals first (vmzq.38)
     assert.deepEqual(bot.calls.goals, [], 'no aside on fresh ground')
     assert.ok(ctx.shedAt, 'the shed site is remembered')
     assert.equal(stockpile.chestTodo(bot, ctx, 0), 'shed', '34 sheds again')
