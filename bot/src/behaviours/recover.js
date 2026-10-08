@@ -1929,9 +1929,16 @@ const RECOVER_MENU = {
     // The climb gate mirrors the other climbers plus the boxed arms; guards
     // mirror pillar_up (water) and dig_step (lava), protection refuses at
     // dig time like every other dig. A dig kind, never banned (vmzq.47).
+    // No placeError latch (r4 reverts the r3 one, revmux 02 major): a pillar
+    // refusal always lands post-dig, when the head is free and this is
+    // already infeasible — the latch would bind only later, at a fresh
+    // column with a diggable head, where it would bar the resume and force
+    // a gave-up plus a full re-entry per transient refusal. pillar_up has
+    // no head coupling, so its latch usefully suppresses immediate
+    // retries; here the head state already does that (rig c42c: 1
+    // transient refusal, 9 s sidestep detour, climb resumed same episode).
     feasible: (facts) => facts.boxed && (facts.goalDy >= 1 || boxClimb(facts)) &&
-      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water &&
-      !facts.placeError, // r3 (revmux 01 minor): like pillar_up, a refused episode does not re-pillar
+      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water,
     run: digPillarRun,
     repeatable: (facts) => (facts.goalDy >= 1 || boxChain(facts)) &&
       !facts.pickaxe && facts.scaffold > 0 && !facts.lavaNear && !facts.water && facts.ownHeadBlocked,

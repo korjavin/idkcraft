@@ -149,12 +149,18 @@ describe('dig_pillar menu (vmzq.43)', () => {
     )
   })
 
-  it('a refused episode does not re-pillar (r3)', () => {
+  it('a refusal does not bar the resume at a fresh head (r4)', () => {
+    // r4 reverts the r3 latch (revmux 02 major): the refusal lands post-dig
+    // with the head free, when this is already infeasible — the latch would
+    // bind only at a fresh column, barring the resume and forcing a gave-up
+    // plus re-entry per transient refusal (pillar_up has no head coupling,
+    // so its latch stands). Rig c42c: 1 transient refusal, resumed same
+    // episode after a 9 s sidestep detour.
     const bot = pocketBot()
     const { facts: f, names } = menuOf(bot, pocketCtx())
     assert.ok(names.includes('dig_pillar'))
     const refused = { ...f, placeError: true }
-    assert.equal(recover.RECOVER_MENU.dig_pillar.feasible(refused, pocketCtx()), false)
+    assert.equal(recover.RECOVER_MENU.dig_pillar.feasible(refused, pocketCtx()), true)
   })
 
   it('decide picks dig_pillar without asking the brain', async () => {
