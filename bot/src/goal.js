@@ -1610,19 +1610,18 @@ function forageHeld(ctx) {
 // Failed-build hold (idkcraft-67z3): a failed build re-picks at most once
 // per BUILD_RETRY_MS past facts drift — the text-keyed failHolds releases
 // every time the wandering rest moves the facts (post-park rig: 19
-// build<->rest cycles in ~10 min). failed:no-site keeps its own
-// chunk-probe retry (vmzq.16), same-text dones stay text-keyed (h9z).
-// no-planks is the routine batch handoff (xoj: fail -> craft -> retry),
-// so only a REPEAT with the same resources and no cell placed holds —
-// structural verdicts pace from the first failure.
+// build<->rest cycles in ~10 min, the no-site homeless loop). Same-text
+// dones stay text-keyed (h9z). no-planks is the routine batch handoff
+// (xoj: fail -> craft -> retry) and no-site the chunk-load retry (vmzq.16),
+// so only a REPEAT with the same cause holds — structural verdicts pace
+// from the first failure.
 const BUILD_RETRY_MS = 5 * 60 * 1000
 function buildHeld(ctx) {
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
     if (!sf || typeof sf.at !== 'number') return false
-    if (sf.status === 'failed:no-site') return false
     if (Date.now() - sf.at > BUILD_RETRY_MS) return false
-    if (sf.status === 'failed:no-planks') return (sf.n || 1) >= 2
+    if (sf.status === 'failed:no-planks' || sf.status === 'failed:no-site') return (sf.n || 1) >= 2
     return true
   } catch (_) {
     return false
@@ -1631,12 +1630,14 @@ function buildHeld(ctx) {
 // Cause signature (67z3): what a repeated build failure is ABOUT. A
 // no-planks retry with new resources — or fewer cells left — is the
 // healthy batch handoff; the same failure with the same resources and no
-// cell placed is the stuck shape. Structural verdicts key on the site
-// (a 'build here' move re-arms) plus the skip count for skipped-cells
-// (the 1h re-probe re-arms). Null when uncomputable: no counting then.
+// cell placed is the stuck shape. no-site is homeless by definition, so
+// any repeat counts. Structural verdicts key on the site (a 'build here'
+// move re-arms) plus the skip count for skipped-cells (the 1h re-probe
+// re-arms). Null when uncomputable: no counting then.
 function buildFailSig(status, facts, ctx, bot) {
   try {
     const home = ctx && ctx.home
+    if (status === 'failed:no-site') return 'site=none'
     if (status === 'failed:no-planks') {
       let remaining = null
       try {
@@ -2222,9 +2223,9 @@ async function decide(bot, ctx) {
       const bp = bot && bot.entity && bot.entity.position
       const rec = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
       // Consecutive-cause counter (67z3): the failed-build hold counts
-      // repeats with the same cause (new resources or a placed cell
-      // re-arm). no-site keeps its bare record (vmzq.16 reads it raw).
-      if (prev === 'build' && status !== 'failed:no-site') {
+      // repeats with the same cause (new resources, a placed cell, or a
+      // validated site re-arm).
+      if (prev === 'build') {
         const sig = buildFailSig(status, facts, ctx, bot)
         if (sig != null) {
           rec.sig = sig

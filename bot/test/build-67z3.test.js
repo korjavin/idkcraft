@@ -143,9 +143,12 @@ describe('67z3: a failed build holds past facts drift, then retries', () => {
     assert.equal(F()(facts(), bot(), ctx), true)
   })
 
-  it('failed:no-site keeps its own chunk-probe retry, not the time hold (vmzq.16 stands)', () => {
-    const ctx = { stepFail: { build: { status: 'failed:no-site', text: 'stale text', pos: null, at: Date.now() } } }
-    assert.equal(F()(facts(), bot(), ctx), true)
+  it('failed:no-site: first retry stays prompt (vmzq.16), the repeat holds (67z3)', () => {
+    const once = { stepFail: { build: { status: 'failed:no-site', text: 't', pos: null, at: Date.now(), sig: 'site=none', n: 1 } } }
+    assert.equal(F()(facts(), bot(), once), true, 'chunk-load retry stays prompt')
+    const twice = { stepFail: { build: { status: 'failed:no-site', text: 'stale text', pos: null, at: Date.now(), sig: 'site=none', n: 2 } } }
+    assert.equal(F()(facts(), bot(), twice), false, 'hopeless spawn paces')
+    assert.equal(goal.stepWhy('build', facts(), bot(), twice, 'new text'), 'build holds after failure')
   })
 
   it('a same-text done still holds text-keyed only, never time-keyed (h9z stands)', () => {
