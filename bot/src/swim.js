@@ -164,4 +164,77 @@ function unswimmable(movements, node, m) {
   return false
 }
 
-module.exports = { addSwimExits, addSwimPrune, SWIM_EXIT_COST, SWIM_RISE_COST }
+// Night deep-water entry cost (idkcraft-vmzq.44): at night, work-mode legs
+// pay this per move landing in deep water (2+ column), so they detour on
+// land (any detour up to ~10x the water moves wins) instead of swimming into
+// fresh drowned spawns; day crossings keep current costs (the gate below
+// no-ops off-night, so day plans are byte-identical to master). A FINITE,
+// BOUNDED cost on verifier scope: a water-only target (island, gohome across
+// a river) stays reachable — a forced crossing pays and completes (R1 rig:
+// swam a 60-wide night crossing; that swimming is accepted reachability, not
+// a hold). R2-R3 shipped an entry ban; the verifier scoped it back to cost:
+// a ban made water-only targets unreachable till dawn and changed follow/
+// fight/orders behaviour the bead never decided.
+// Work scope (live owner read, like danger reads ctx live): only owner
+// 'work' pays — follow runs ambient (idle owner, never claims), so player
+// follows cross water at night exactly as before (the verifier MUST);
+// orders (lead/bring/comehome/gocastle), recover, breath and idle are exempt
+// too. Fight inside work mode is steered (bounded: still engages, just not
+// straight into deep water after drowned).
+const NIGHT_WATER_COST = 10 // danger's PATH_COST: a 6-wide river pays +60,
+// so land detours under ~60 extra moves win; longer detours lose honestly.
+function addNightWaterCost(movements, bot, ctx) {
+  // Same wrap shape as addSwimPrune: real Movements only, installed once
+  // (body.js movementsFor is the single production call site — the gate
+  // reads the bot clock AND the live body owner, so dusk-to-night and
+  // follow<->work transitions steer the next plan with no reinstall).
+  if (!movements || typeof movements.getNeighbors !== 'function' || movements._nightWaterCostInstalled) return
+  movements._nightWaterCostInstalled = true
+  const orig = movements.getNeighbors.bind(movements)
+  movements.getNeighbors = (node) => {
+    const ns = orig(node)
+    if (!isNight(bot) || !isWorkOwner(ctx)) return ns
+    for (const m of ns) {
+      if (!m || typeof m.cost !== 'number') continue
+      if (typeof m.x !== 'number' || typeof m.y !== 'number' || typeof m.z !== 'number') continue
+      if (isDeepCell(movements, node, m.x - node.x, m.y - node.y, m.z - node.z)) m.cost += NIGHT_WATER_COST
+    }
+    return ns
+  }
+}
+
+function isWorkOwner(ctx) {
+  try { return !!ctx && !!ctx.body && ctx.body.owner === 'work' } catch (_) { return false }
+}
+
+// Night gate: the MC clock word, goal.js timeWord's night boundary
+// (>13000; dusk 12000-13000 stays day-open — the spawn risk is night).
+// Unknown clocks (no bot.time, NaN) read as day, the goalFacts precedent:
+// the day path is identical with or without the wrapper.
+function isNight(bot) {
+  try {
+    const t = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
+    return t > 13000
+  } catch (_) { return false }
+}
+
+// Deep at the cell: swimmable water (the executor's isWet, flora and
+// waterlogged included — drowned spawn there too) in a 2+ column: wet above
+// OR below. The bottom cell of 2-deep water (solid below, water above) reads
+// deep too — else bank dives land there at night and bottom bodies lose
+// their rises (revmux 01 core-1/body-1). Shallow (1-deep: solid below, air
+// above) reads false: wading and shore work never prune. Unknown cells
+// (chunk edge: null reads dry) fail open to shallow.
+function isDeepCell(movements, node, dx, dy, dz) {
+  let cell = null
+  try { cell = movements.getBlock(node, dx, dy, dz) } catch (_) { return false }
+  if (!cell || !isWet(cell) || !cell.safe) return false
+  let below = null
+  try { below = movements.getBlock(node, dx, dy - 1, dz) } catch (_) { below = null }
+  if (below && isWet(below)) return true
+  let above = null
+  try { above = movements.getBlock(node, dx, dy + 1, dz) } catch (_) { return false }
+  return !!above && isWet(above)
+}
+
+module.exports = { addSwimExits, addSwimPrune, addNightWaterCost, SWIM_EXIT_COST, SWIM_RISE_COST, NIGHT_WATER_COST }
