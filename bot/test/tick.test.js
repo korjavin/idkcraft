@@ -2962,6 +2962,22 @@ describe('nobody-online leave', () => {
       await Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error('runOnce never resolved')), 2000))])
       assert.equal(bot.quitCalls, 1)
       assert.equal(exits, 0)
+      // hidden sample (hide-online-players): online==1 with an empty or
+      // missing sample while connected is us — quit, not re-arm. Pins the
+      // confirmLeave selfConnected wiring (revmux 01 major-1, 02 minor-1):
+      // without it the streak re-arms and runOnce never resolves.
+      for (const res of [{ players: { online: 1, sample: [] } }, { players: { online: 1 } }]) {
+        const b = connBot()
+        const pHidden = runOnce({
+          host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+          brain: mockBrain(), leaveAfterMs: 10, followName: '',
+          createBot: () => b, pingFn: async () => res,
+        })
+        b.emit('spawn')
+        await Promise.race([pHidden, new Promise((_, reject) => setTimeout(() => reject(new Error('runOnce never resolved')), 2000))])
+        assert.equal(b.quitCalls, 1)
+        assert.equal(exits, 0)
+      }
       // unexpected end with no quit: fatal exit, no resolve
       const bot2 = connBot()
       let resolved = false
