@@ -2363,19 +2363,27 @@ async function decide(bot, ctx) {
     if (ctx) ctx.lowHpWasGated = gatedNow
     gateOpened = wasGated && !gatedNow
   } catch (_) { gateOpened = false }
-  // Expired build hold (67z3 verifier P2): the fetchRetry mirror — an
-  // expired hold retires and forces one fresh pick, or steady facts keep
-  // the running step past the window. Deleting re-arms the repeat counter
-  // (the next identical failure starts at n=1: one free probe per window).
-  // no-site records are excluded: their steady-text retry is siteRetry's
-  // per-tick probe (a forced blind retry adds no information), and the
-  // record is the pending-house task identity (task.js) — deleting it at
-  // 5 min would null the task and kill the 15-min L1.
+  // Expired build hold (67z3 verifier P2): an expired hold forces one
+  // fresh pick, or steady facts keep the running step past the window.
+  // The record stands with its counter (revmux 03 minor): deleting it
+  // would restart the repeat at n=1 and pick twice per window, while the
+  // kept counter holds the very next identical failure (n+1) — one pick
+  // per window. The fire voids the text/pos key instead: a matching text
+  // would let the text-keyed failHolds veto the forced pick in the menu
+  // AND block the shortcut re-issue on the next tick (deletion used to do
+  // both implicitly). retryFired makes the force one-shot; any later
+  // verdict overwrites the record and re-arms. no-site records are
+  // excluded: their steady-text retry is siteRetry's per-tick probe (a
+  // forced blind retry adds no information), and the record is the
+  // pending-house task identity (task.js) — deleting it at 5 min would
+  // null the task and kill the 15-min L1.
   let buildRetry = false
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
-    if (sf && sf.status !== 'failed:no-site' && typeof sf.at === 'number' && Date.now() - sf.at > BUILD_RETRY_MS) {
-      delete ctx.stepFail.build
+    if (sf && sf.status !== 'failed:no-site' && typeof sf.at === 'number' && Date.now() - sf.at > BUILD_RETRY_MS && !sf.retryFired) {
+      sf.retryFired = true
+      sf.text = null
+      sf.pos = null
       buildRetry = true
     }
   } catch (_) { /* retry best-effort */ }

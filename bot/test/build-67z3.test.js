@@ -235,7 +235,7 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
     })
   })
 
-  it('an expired build hold wakes a steady menu: rest re-picks to build', async () => {
+  it('an expired build hold wakes a steady menu: one pick per window', async () => {
     await quietAsync(async () => {
       // vmzq16's full kit: craft/equip/gather all infeasible, so build is
       // the only work step standing between rest and the site.
@@ -248,17 +248,32 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
         { name: 'cobblestone', count: 64 },
       ]
       const bot = decideBot(makeWorld(), items)
-      const ctx = { step: 'rest', stepStatus: 'running' }
+      const ctx = { step: 'build', stepStatus: 'failed:no-planks' }
+      await goal.decide(bot, ctx)
+      assert.equal(nOf(ctx), 1)
+      ctx.step = 'build'
+      ctx.stepStatus = 'failed:no-planks'
+      await goal.decide(bot, ctx)
+      assert.equal(nOf(ctx), 2)
+      // Held now: steady rest replays.
+      ctx.step = 'rest'
+      ctx.stepStatus = 'running'
       const text = goal.goalText(goal.goalFacts(bot, ctx), null)
       ctx.goalText = text
       ctx.askedKey = `${text}\nrunning`
-      ctx.stepFail = { build: { status: 'failed:no-planks', text: 'old', pos: null, at: Date.now(), sig: 's', n: 2 } }
       assert.equal((await goal.decide(bot, ctx)).action, 'rest', 'held: rest replays')
+      // Window passes, facts steady: the expiry forces exactly one pick,
+      // and the kept counter holds the very next identical failure (n=3).
       ctx.stepFail.build.at = Date.now() - goal.BUILD_RETRY_MS - 1
       const text2 = goal.goalText(goal.goalFacts(bot, ctx), null)
       assert.equal(text2, text, 'setup: facts steady')
       assert.equal((await goal.decide(bot, ctx)).action, 'build', 'expiry forces a fresh pick')
-      assert.equal(ctx.stepFail.build, undefined, 'expired record retired')
+      assert.equal(ctx.stepFail.build.retryFired, true, 'force is one-shot')
+      ctx.step = 'build'
+      ctx.stepStatus = 'failed:no-planks'
+      await goal.decide(bot, ctx)
+      assert.equal(nOf(ctx), 3, 'kept counter counts on')
+      assert.equal(goal.MENU.build.feasible(goal.goalFacts(bot, ctx), bot, ctx), false, 'no second free pick')
     })
   })
 
