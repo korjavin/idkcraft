@@ -27,6 +27,8 @@
 #   the rim with the prod 'still air' text; the verdict adds
 #   pit=escaped/resumed seconds;
 #   CASTLE_PIT_REFUSE=0 keeps placements working: the pillar control),
+#   CASTLE_PIT_GOAL=level forces pit stuck goals level (the i4wm repro),
+#   CASTLE_PIT_SHAPE=corner|hall picks the hollow (i4wm corner/hall repro),
 #   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
 #   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
 #   100 = 5x — for fast iteration),
