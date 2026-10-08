@@ -496,6 +496,7 @@ const ABORT_DY_LO = -1 // waterline stances only: wadable or a +1 exit;
 const ABORT_DY_HI = 1 // deeper is caves, higher is h04-unexitable walls
 const ABORT_INLAND_D = 5 // inland-first detour cap: the abort swim stays short
 const ABORT_STANCE_D = 1.5 // at-stance radius: GoalNear range 1 plus margin (no drive/hold flap at the edge)
+const ABORT_HOLD_MS = 60000 // stance-hold cap: a loitering drowned must not freeze the bot past this (revmux 03)
 const ABORT_WATER_MOBS = new Set(['drowned', 'guardian', 'elder_guardian'])
 const ABORT_WETFLORA = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
 function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
@@ -567,10 +568,17 @@ function driveAbort(bot, ctx, state, nowMs, inWater) {
   let footing = false
   try { footing = abortFooting(bot) } catch (_) { /* drive on unknown footing */ }
   if (!inWater || (atStance && footing)) {
+    if (a.landAt === undefined) a.landAt = nowMs
+    if (nowMs - a.landAt > ABORT_HOLD_MS) {
+      try { console.log('reflex abort-shore hold-timeout') } catch (_) { /* log best-effort */ }
+      releaseAbort(bot, ctx, nowMs) // cooldown paces the fresh re-trigger below
+      return false
+    }
     a.progressAt = nowMs
     a.best = undefined
     return true
   }
+  a.landAt = undefined // driving again: the next landfall gets a fresh hold
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (bp && typeof bp.x === 'number') {

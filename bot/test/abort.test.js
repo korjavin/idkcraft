@@ -292,6 +292,19 @@ describe('abortReflex episode', () => {
     assert.equal(ctx.lastGoalKey, 'abort-shore:-3,0')
   })
 
+  it('a loitering threat ends the hold after a minute (no statue)', () => {
+    // Revmux 03 major: the capped hold releases so the episode can
+    // re-trigger fresh (or stuck.js can see the bot) instead of freezing.
+    const { bot, ctx, state } = latched()
+    bot.entity.isInWater = false
+    assert.equal(abortReflex(bot, ctx, state, T0 + 1000), true) // landfall
+    assert.equal(abortReflex(bot, ctx, state, T0 + 59000), true) // still holding
+    assert.ok(ctx.abort)
+    assert.equal(abortReflex(bot, ctx, state, T0 + 62000), false) // hold-timeout: release
+    assert.equal(ctx.abort, null)
+    assert.equal(ctx.abortCoolUntil, T0 + 62000 + ABORT_COOLDOWN_MS)
+  })
+
   it('drives through shelf footing to the stance (no yield at the edge)', () => {
     // Revmux 02 major: footing on the river shelf is wading, not the beach.
     // The abort keeps the body and the goal until the stance is stood on.
