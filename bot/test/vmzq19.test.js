@@ -197,7 +197,9 @@ describe('vmzq.19 dusk shelters at the site, never marches home', () => {
   it('dusk mid-map with a built far house: shelter in place, not gohome (run3 03:37)', async () => {
     await quiet(async () => {
       const { home, cells } = standingHomeCells()
-      const bot = goalBot({ at: pos(MIDMAP.x, MIDMAP.y, MIDMAP.z), timeOfDay: 12500, cells })
+      // Feet on the mock surface (dirt at y<=63): the run3 y=62 reads
+      // buried here, and buried-at-dusk climbs out first (vmzq.50).
+      const bot = goalBot({ at: pos(MIDMAP.x, 64, MIDMAP.z), timeOfDay: 12500, cells })
       const ctx = { home, castle: castleState(), work: true, step: 'castle', stepStatus: 'done' }
       const facts = goal.goalFacts(bot, ctx)
       assert.equal(goal.MENU.gohome.feasible(facts, bot, ctx), false, 'no 500-block dusk march')

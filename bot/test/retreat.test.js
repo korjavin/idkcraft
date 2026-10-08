@@ -367,11 +367,11 @@ describe('veto path ownership (live 1tj)', () => {
 })
 
 describe('goal shortcut (live 1tj follow-up)', () => {
-  it('lapsed veto re-decides, never re-issues the chain step', async () => {
+  it('lapsed veto holds the latched leg, then re-decides past expiry', async () => {
     // No dirt: the chain can only pick retreat (no asks anywhere).
     const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) }, health: 3 })
     bot.players = {}
-    const decides = ['idle', 'follow', 'idle']
+    const decides = ['idle', 'follow', 'idle', 'idle']
     let n = 0
     const remote = {
       name: 'laya',
@@ -397,11 +397,17 @@ describe('goal shortcut (live 1tj follow-up)', () => {
     bot.health = 4
     const r1 = await ticker.tick()
     assert.equal(r1.decision.action, 'retreat')
-    // Tick 2: model idle again (veto lapsed), world unchanged: the arbiter
-    // must re-decide, not shortcut the chain-owned retreat back out.
+    // Tick 2: model idle again (veto lapsed), hp 5 with the zombie
+    // adjacent: hysteresis (vmzq.49) holds the latched leg instead of
+    // re-picking work into the same zombie (run8 15:52 died there).
     bot.health = 5
     const r2 = await ticker.tick()
-    assert.ok(r2.decision.action !== 'retreat', `lapsed veto re-issued retreat: ${r2.decision.action}`)
+    assert.equal(r2.decision.action, 'retreat')
+    // Tick 3: past latch expiry the arbiter re-decides (the 1tj release
+    // property), never re-issues the stale leg.
+    bot._tickerCtx.retreatLatch.until = Date.now() - 1
+    const r3 = await ticker.tick()
+    assert.ok(r3.decision.action !== 'retreat', `expired latch re-issued retreat: ${r3.decision.action}`)
   })
 })
 

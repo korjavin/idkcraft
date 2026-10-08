@@ -241,6 +241,7 @@ const STEP_EFFECT = {
   castle: {
     castle: ' (+castle laid, the goal metric)',
     castlefetch: ' (+castle material)',
+    gocastle: ' (+castle return: walk back to the site so laying can resume)',
     craft: ' (+castle chain: table unblocks pickaxe for stone)',
     equip: ' (+castle chain: pickaxe unblocks stone digging)',
     gather: ' (+castle chain when logs short)',
