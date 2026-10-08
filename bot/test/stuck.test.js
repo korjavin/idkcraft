@@ -448,6 +448,26 @@ describe('stuck update: fast entry', () => {
     assert.equal(ctx.stuckResets, 1)
     assert.equal(ctx.lastPathReset, 'stuck')
   })
+
+  it('sustained tower spam fast-fires past the moving/key/jump gates (vmzq.47)', () => {
+    // c410: 172 place_error resets, moving=false, path=success, work key —
+    // neither entry fired for 3 min (the fast check needs shouldCount, the
+    // slow needs moving-or-terminal). Past PLACE_SPAM_ENTRY the streak
+    // alone raises: a parked executor plans no resets, and a healthy tower
+    // climbs and zeroes the streak via progressed().
+    const bot = mockBot({ moving: false, goal: null })
+    const ctx = { lastGoalKey: 'castle:12,64,0', lastPos: { x: 0, y: 64, z: 0 }, jumpCooldown: 4 }
+    for (let i = 0; i < stuck.PLACE_SPAM_ENTRY - 1; i++) stuck.countPathReset(ctx, 'place_error')
+    const cap = capture()
+    try {
+      stuck.update(bot, ctx)
+      assert.equal(ctx.stuck || null, null, '9 consecutive refusals hold (mid-cycle traffic)')
+      stuck.countPathReset(ctx, 'place_error')
+      stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK', '10th consecutive refusal raises')
+    assert.equal(ctx.stuck.by, 'no-displacement')
+  })
 })
 
 describe('stuck update: idle probe (rra)', () => {
@@ -914,5 +934,43 @@ describe('stuck walkHomeTick (pure walk)', () => {
     assert.equal(stuck.homeReached(bot), true)
     bot.entity.position = pos(-205, 39, -35)
     assert.equal(stuck.homeReached(bot), false)
+  })
+})
+
+describe('stuck update re-arms recover situation state (vmzq.47r4)', () => {
+  it('a tick past the anchor clears bans and page stamps with no episode', () => {
+    // Revmux 03 core-1: a /tp rescue (or plain walk) with no episode in
+    // between must still re-arm — the reset rides every tick, not just
+    // episode boundaries.
+    const bot = mockBot({ at: [50, 64, 0] })
+    const ctx = {
+      lastGoalKey: 'x',
+      recoverStreaks: {
+        anchor: { x: 0, y: 64, z: 0 },
+        fails: { sidestep: { n: 2, at: Date.now() } },
+        pageKeys: { ticker: Date.now() },
+      },
+    }
+    stuck.update(bot, ctx)
+    assert.deepEqual(ctx.recoverStreaks.fails, {})
+    assert.deepEqual(ctx.recoverStreaks.pageKeys, {})
+    assert.deepEqual(ctx.recoverStreaks.anchor, { x: 50, y: 64, z: 0 })
+  })
+
+  it('ticks at the anchor keep streaks and stamps', () => {
+    const bot = mockBot({ at: [1, 64, 0] })
+    const at = Date.now()
+    const ctx = {
+      lastGoalKey: 'x',
+      lastPos: { x: 1, y: 64, z: 0 },
+      recoverStreaks: {
+        anchor: { x: 0, y: 64, z: 0 },
+        fails: { sidestep: { n: 2, at } },
+        pageKeys: { ticker: at },
+      },
+    }
+    stuck.update(bot, ctx)
+    assert.equal(ctx.recoverStreaks.fails.sidestep.n, 2)
+    assert.equal(ctx.recoverStreaks.pageKeys.ticker, at)
   })
 })

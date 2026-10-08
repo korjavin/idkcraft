@@ -1058,6 +1058,8 @@ function shelter(bot, ctx, target, state) {
       // so a later stuck flow never adopts this stale record.
       if (rec === 'done') {
         st.perched = true // atop the pillar: walkers cannot reach, phantoms can (descent below)
+        // Placement works again: clear the pillar streak (vmzq.47).
+        try { recover.noteRecoverDone(ctx, botPos(bot), 'pillar_up') } catch (_) { /* bans best-effort */ }
       } else {
         // Any terminal pillar failure digs in by hand (vmzq.30: run6
         // place-error with scaffold on hand held on open ground and a
@@ -1073,6 +1075,12 @@ function shelter(bot, ctx, target, state) {
           if (se) err = ` err=${se}`
         } catch (_) { /* token best-effort */ }
         try { console.log(`shelter pillar ${rec}${err}, digging in`) } catch (_) { /* log best-effort */ }
+        // A refused shelter pillar bans the recover pillar at this spot too
+        // (vmzq.47): the dig-in below inherits the same refusal, and the
+        // morning episodes must dig out instead of re-pillaring.
+        if (rec === 'failed:place-error') {
+          try { recover.noteRecoverFail(ctx, botPos(bot), 'pillar_up', rec) } catch (_) { /* bans best-effort */ }
+        }
         st.dig = {}
         try {
           bot.pathfinder.setGoal(null)

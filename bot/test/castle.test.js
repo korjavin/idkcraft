@@ -262,8 +262,15 @@ describe('castle stone variants (vmzq.38)', () => {
       assert.ok(castle.matches('stone', n), n)
       assert.ok(castleMod.isMaterial(n), n)
     }
+    // vmzq.46: calcite, smooth_basalt, tuff and the deepslate variants join
+    // the set (solid full blocks); sand stays out.
+    for (const n of ['calcite', 'smooth_basalt', 'tuff', 'deepslate', 'polished_deepslate',
+        'deepslate_bricks', 'deepslate_tiles', 'cracked_deepslate_bricks',
+        'cracked_deepslate_tiles', 'chiseled_deepslate']) {
+      assert.ok(castle.matches('stone', n), n)
+      assert.ok(castleMod.isMaterial(n), n)
+    }
     assert.ok(!castle.matches('stone', 'sand'))
-    assert.ok(!castle.matches('stone', 'smooth_basalt'))
     const bot = { inventory: { items: () => [{ name: 'granite', count: 64 }, { name: 'diorite', count: 10 }, { name: 'sand', count: 30 }] } }
     assert.equal(castleMod.held(bot, 'stone'), 74)
   })

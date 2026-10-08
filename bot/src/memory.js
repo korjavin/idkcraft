@@ -246,6 +246,20 @@ function castleOf(c) {
       out.quarryBase = [...c.quarryBase]
       while (out.quarryBase.length < 8) out.quarryBase.push(null)
     }
+    // Quarry-down pit frames (idkcraft-vmzq.46): {x,z,dx,dz,lx,lz,base,dead}
+    // per tried spot, latched like quarryBase (a restart resumes the frame
+    // instead of re-probing dug floors as ground); dead pits stay abandoned.
+    // The cap mirrors castlefetch PIT_MAX (a require would cycle).
+    if (Array.isArray(c.quarryPits) && c.quarryPits.length <= 64) {
+      const pits = []
+      for (const e of c.quarryPits) {
+        if (!e || typeof e !== 'object') continue
+        if (!Number.isInteger(e.x) || !Number.isInteger(e.z) || !Number.isInteger(e.base)) continue
+        if (![e.dx, e.dz, e.lx, e.lz].every((v) => v === 0 || v === 1 || v === -1)) continue
+        pits.push({ x: e.x, z: e.z, dx: e.dx, dz: e.dz, lx: e.lx, lz: e.lz, base: e.base, dead: e.dead === true })
+      }
+      out.quarryPits = pits
+    }
     if (c.blocked && typeof c.blocked === 'object') {
       for (const k of Object.keys(c.blocked).slice(0, CASTLE_BLOCKED_MAX)) {
         const e = c.blocked[k]

@@ -20,6 +20,12 @@
 #   CASTLE_BURY / CASTLE_BURY_AFTER (vmzq.37: N > 0 buries the bot pickless
 #   N below the pad after M min; the verdict adds surfaced/resumed seconds;
 #   CASTLE_BURY_NOWOOD=1 also clears the wood: the hand staircase only),
+#   CASTLE_PIT / CASTLE_PIT_AFTER (vmzq.47: N > 0 leads the bot past the
+#   site box after M min, builds an open N-deep stone pit around it (it
+#   falls in) with a pick + 19 dirt, refusing every placement near/below
+#   the rim with the prod 'still air' text; the verdict adds
+#   pit=escaped/resumed seconds;
+#   CASTLE_PIT_REFUSE=0 keeps placements working: the pillar control),
 #   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
 #   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
 #   100 = 5x — for fast iteration),

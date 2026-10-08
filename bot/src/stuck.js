@@ -14,6 +14,14 @@ const recover = require('./behaviours/recover')
 const MOVE_TOLERANCE = 0.5 // the single displacement tolerance, every stall budget
 const STUCK_RESETS_ENTRY = 2 // fast entry: 'stuck' resets with no displacement
 const PLACE_ERRORS_ENTRY = 3 // fast entry: consecutive place_error resets
+// Sustained tower spam (vmzq.47): consecutive place_error resets with no
+// progress are active failing, not parked idleness — a parked executor
+// plans no resets. Past this the fast entry fires through the jump quiet
+// (a healthy tower climbs and zeroes the streak via progressed(); only a
+// refused spin survives 10 resets), the moving gate (a refused tower never
+// displaces) and the follow/roam key gate (work legs tower too). Normal
+// mid-cycle resets (1-2 per jump) never reach it.
+const PLACE_SPAM_ENTRY = 10
 // Dig hold (uqhp): still ticks while the executor works a planned dig
 // (bot.targetDigBlock set) before the slow count resumes. Barehand granite
 // runs ~8 s a block and multi-block legs pass 30 stills with zero
@@ -343,6 +351,11 @@ function clearRestMark(ctx, bot) {
 function update(bot, ctx) {
   if (!ctx || ctx.paused) return
   const bp = bodyPos(bot)
+  // Bans and page stamps are situation state: observe every tick, not just
+  // at episode boundaries, so a /tp rescue (or plain walk) with no episode
+  // in between still re-arms (revmux 03 core-1). At episode boundaries
+  // decide() resets identically; only non-episode movement is newly seen.
+  try { recover.resetRecoverStreaksIfMoved(ctx, bp) } catch (_) { /* anchor best-effort */ }
   const moving = movingNow(bot)
   const anchor = () => { if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z } }
   // An episode (or a retreat pillar borrowing ctx.recovery) owns the body;
@@ -396,7 +409,8 @@ function update(bot, ctx) {
     // or an idle one against a live unsatisfied goal after a terminal
     // planner verdict (rra). Parked/at-goal/mid-plan stillness resets.
     const terminal = ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout'
-    const shouldCount = moving || (terminal && idleFarFromGoal(bot, bp))
+    const spam = (ctx.placeErrors || 0) >= PLACE_SPAM_ENTRY
+    const shouldCount = moving || (terminal && idleFarFromGoal(bot, bp)) || spam
     trackJump(bot, ctx, bp)
     if (!shouldCount) {
       ctx.stuckTicks = 0
@@ -411,8 +425,8 @@ function update(bot, ctx) {
       else ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
       ctx.stuckState = 'SUSPECT'
       if (!raiseExempt(ctx, bot)) {
-        const fast = moving && fastKey(ctx) && (ctx.jumpCooldown || 0) <= 0 &&
-          ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)
+        const fast = (moving && fastKey(ctx) && (ctx.jumpCooldown || 0) <= 0 &&
+          ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)) || spam
         if (fast || ctx.stuckTicks >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuckState = raise(bot, ctx, bp) ? 'STUCK' : 'SUSPECT'
         }
@@ -456,6 +470,7 @@ module.exports = {
   MOVE_TOLERANCE,
   STUCK_RESETS_ENTRY,
   PLACE_ERRORS_ENTRY,
+  PLACE_SPAM_ENTRY,
   DIG_STILLS_CAP,
   UNSEEN_HOME_TICKS,
   ownerOf,

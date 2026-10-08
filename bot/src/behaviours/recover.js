@@ -20,6 +20,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
+const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
 
@@ -37,6 +38,9 @@ const HOP_UNWEDGE_MS = 250 // unwedge back-hold: ~1 block per 1 Hz tick, re-held
 const HOP_RETRY_BACK_MS = 100 // short back-off to leap stance: gap 0.25-0.5 off the face (wqt assay)
 const HOP_PRESS_DIST = 1.0 // pressed: closer than this to the anchor a leap goes into the face (flush is 0.8)
 const REST_GAVE_UPS = 2 // consecutive rest gave-ups before the step fails
+const RECOVER_BAN_FAILS = 3 // same-spot consecutive fails before a kind leaves the menu (vmzq.47)
+const RECOVER_BAN_ANCHOR_DIST = 3 // 3D blocks from the ban anchor: past this the situation is new
+const RECOVER_BAN_MS = 5 * 60 * 1000 // a ban expires: a transient refusal costs one retry per window, not a wedge
 const STUCK_TICKS_ENTRY = 30 // slow stuck entry (stuck.js reads it; recoverText buckets use it)
 const PROGRESS_TOLERANCE = 0.5
 const PILLAR_ISSUE_DY = 0.6 // ascent issue height: fire place on the way up (2bh)
@@ -297,11 +301,93 @@ function pickSidestepDir(bot, sides) {
 // Nulls read as open (never claim a pit blind). Lava and water never
 // count (solid() reads them passable).
 function pitAt(bot) {
+  return pitWalls(bot) >= 2
+}
+
+// Two-high walled sides around the body (vmzq.47r2): pitAt's counter.
+function pitWalls(bot) {
   let high = 0
   for (const [dx, dz] of SIDES) {
     if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) high++
   }
-  return high >= 2
+  return high
+}
+
+// Mirrors stuck.js LATCH_CLEAR (unrequired: stuck requires recover, so the
+// value is pinned here with the consumer). An at-anchored latch goes stale
+// past this many horizontal blocks.
+const LATCH_REARM = 4
+
+// A cell the body can be in (vmzq.47r4): air-like, or a hand-openable
+// door the A* door reflex walks through (doors.js: non-iron *_door;
+// iron stays a wall, routed around like the pathfinder does). Nulls read
+// passable (solid() says so), so a blind read latches as before.
+function passable(b) {
+  if (!solid(b)) return true
+  try { return doors.isHandDoor(b.name) } catch (_) { return false }
+}
+
+// A floor the body can stand (or swim) on: solid ground, water — or
+// unknown (null reads standable, so a blind read walks level and latches
+// exactly as before; only verified air starts a drop scan).
+function standable(b) {
+  if (!b) return true
+  if (solid(b)) return true
+  try { return isWater(b) } catch (_) { return false }
+}
+
+// Boxed for the release latch (vmzq.47r3/r4): can the body reach horizontal
+// distance past LATCH_REARM? A latch that can never go stale wedges every
+// later episode with no page. 3D BFS over reachable stands: same-level
+// walk through passable feet+head (landing below when the floor drops —
+// a fall is displacement too), +1 step-ups onto feet-solid with headroom,
+// doors crossed like the pathfinder crosses them. Wall counts fail both
+// ways: a 3x3 pit centre reads 0 adjacent walls yet boxes (max 2.8),
+// while a corridor reads 2 walls yet walks free — reachability is the
+// actual re-arm condition (revmux 02 core-1). r4 adds the exits the body
+// really uses: doors (a hut interior is not a pit), step-ups (a 1-deep
+// hole is not a pit), drops with a landing (revmux 03 body-1). Nowhere to
+// stand at all (a pillar over void: every way out is an unverified drop)
+// is not boxed either — stepping off leaves, and the latch's own stale
+// check judges the landing (the rra pillar pins this).
+function boxedIn(bot) {
+  const cell = (x, y, z) => {
+    try { return cellAt(bot, x, y, z) } catch (_) { return null }
+  }
+  const seen = new Set(['0,0,0'])
+  const q = [[0, 0, 0]]
+  let landedBeyond = false
+  let voidDrop = false
+  const push = (x, y, z) => {
+    if (Math.abs(x) > 6 || Math.abs(z) > 6 || y < -6 || y > 4) return
+    const k = x + ',' + y + ',' + z
+    if (seen.has(k)) return
+    seen.add(k)
+    if (x !== 0 || z !== 0) landedBeyond = true
+    q.push([x, y, z])
+  }
+  while (q.length) {
+    const [x, y, z] = q.pop()
+    if (Math.hypot(x, z) > LATCH_REARM) return false
+    for (const [dx, dz] of SIDES) {
+      const nx = x + dx
+      const nz = z + dz
+      const feet = cell(nx, y, nz)
+      const head = cell(nx, y + 1, nz)
+      if (passable(feet) && passable(head)) {
+        // Walk, landing below when the floor gives (drop capped: deeper
+        // than 6 is unverified air, not a stand).
+        let ly = y
+        while (ly > y - 6 && !standable(cell(nx, ly - 1, nz))) ly--
+        if (standable(cell(nx, ly - 1, nz))) push(nx, ly, nz)
+        else voidDrop = true
+      } else if (!passable(feet) && passable(head) && passable(cell(nx, y + 2, nz))) {
+        // +1 step-up: mount feet-solid with room above to stand.
+        push(nx, y + 1, nz)
+      }
+    }
+  }
+  return landedBeyond || !voidDrop
 }
 
 // Climb OFFER for a hemmed body with no goal worth walking to (jsf.3,
@@ -1614,6 +1700,7 @@ function callPlayerRun(bot, ctx) {
   } catch (_) { return 'failed:chat' }
   rec.calledPlayer = true
   rec.endEpisode = true
+  try { stampOnlinePage(ctx) } catch (_) { /* page stamp best-effort */ }
   return 'done'
 }
 
@@ -1627,7 +1714,7 @@ const RECOVER_MENU = {
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
     // sidestep own the escape, not the scaffold.
-    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water,
+    feasible: (facts, ctx) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water && !recoverBanned(ctx, 'pillar_up'),
     run: pillarUpRun,
     repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
     verb: 'pillaring up',
@@ -1651,8 +1738,8 @@ const RECOVER_MENU = {
     // away (jsf.6: the FSM arm's pitClimb gate, one formula): a known NEAR
     // level goal never climbs (one-way door, see the FSM arm). The chain
     // re-scans the combo at each stand; the strip returns both buckets.
-    feasible: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
-      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)),
+    feasible: (facts, ctx) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
+      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && !recoverBanned(ctx, 'water_up'),
     run: waterUpRun,
     repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
       (facts.goalDy >= 2 || pitChain(facts, facts.wall2)),
@@ -1665,12 +1752,12 @@ const RECOVER_MENU = {
     verb: 'digging a step',
   },
   hop_step: {
-    feasible: (facts) => facts.hopStep != null && Math.abs(facts.goalDy) <= 1 && !facts.lavaNear,
+    feasible: (facts, ctx) => facts.hopStep != null && Math.abs(facts.goalDy) <= 1 && !facts.lavaNear && !recoverBanned(ctx, 'hop_step'),
     run: hopStepRun,
     verb: 'hopping the step',
   },
   sidestep: {
-    feasible: (facts) => facts.walls < 4,
+    feasible: (facts, ctx) => facts.walls < 4 && !recoverBanned(ctx, 'sidestep'),
     run: sidestepRun,
     verb: 'sidestepping',
   },
@@ -1686,10 +1773,110 @@ const RECOVER_MENU = {
     verb: 'waiting it out',
   },
   call_player: {
-    feasible: (facts, ctx) => facts.playerOnline && !(ctx && ctx.recovery && ctx.recovery.calledPlayer),
+    feasible: (facts, ctx) => facts.playerOnline && !(ctx && ctx.recovery && ctx.recovery.calledPlayer) && !keyPaged(ctx),
     run: callPlayerRun,
     verb: 'calling the player',
   },
+}
+
+// --- cross-episode failure memory (idkcraft-vmzq.47) ---
+//
+// The p4s placeError latch lives in the episode, so a persistent refusal
+// re-offers the failing kind as the FIRST pick of every new episode (prod
+// run7 stall962: pillar_up refused 'still air' for ~1.5h, 82 actions, the
+// bot holding a pickaxe and 19 scaffold). Streaks survive release(): a
+// refused pillar leaves the menu at this spot at once, any other non-dig
+// kind after RECOVER_BAN_FAILS consecutive same-spot failures — the menu
+// then offers the dig-out (dig_up/dig_step/dig_through) instead of the
+// loop. Dig kinds are never banned (they ARE the switch); wait and
+// call_player are the episode fallback and the page, not escape attempts.
+// Anchor: moving RECOVER_BAN_ANCHOR_DIST (3D — a climb-out keeps XZ) is a
+// new situation and clears; a done episode re-anchors and clears the kind
+// that worked; bans expire after RECOVER_BAN_MS so a one-off race retries
+// instead of wedging a pillar-only pocket forever.
+const RECOVER_BANNABLE = new Set(['pillar_up', 'water_up', 'hop_step', 'sidestep'])
+function recoverStreakState(ctx) {
+  if (!ctx) return null
+  if (!ctx.recoverStreaks || typeof ctx.recoverStreaks !== 'object') ctx.recoverStreaks = { anchor: null, fails: {} }
+  if (!ctx.recoverStreaks.fails || typeof ctx.recoverStreaks.fails !== 'object') ctx.recoverStreaks.fails = {}
+  return ctx.recoverStreaks
+}
+function recoverStreaksMoved(st, bp) {
+  const a = st && st.anchor
+  if (!a || typeof a.x !== 'number' || !bp) return false
+  return Math.hypot(bp.x - a.x, bp.y - a.y, bp.z - a.z) > RECOVER_BAN_ANCHOR_DIST
+}
+function resetRecoverStreaksIfMoved(ctx, bp) {
+  const st = recoverStreakState(ctx)
+  if (!st) return
+  if (recoverStreaksMoved(st, bp)) {
+    st.anchor = null
+    st.fails = {}
+    st.pageKeys = {} // a new situation re-arms every detector's page
+  }
+  if (bp && !st.anchor) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
+}
+
+// Online page throttle (vmzq.47r3): one page per situation per stuck key.
+// Without the boxed-in latch, same-key episodes re-fire by design and each
+// one ends in call_player — an unthrottled page would chat every 30-60s
+// for the whole trap (revmux 01 core-1). Keyed on the detector key, not
+// the spot alone: a new detector at the trap (cross-step) gets its word —
+// the rw4.9.1 suite pins that repeat — while same-key re-fires stay
+// silent. Moving past the anchor clears — observed every tick, so a
+// departure with no episode in between still re-arms (a re-trap after a
+// rescue pages again: revmux 02 Failure A, revmux 03 core-1); the stamp
+// is online-only, so a
+// nobody-online page never eats the owner's (Failure B); and the menu
+// excludes instead of silent-done, so no phantom done hits the metrics
+// (the silent-'done' shape is gone). Outside boxed pits the latch holds
+// re-fires anyway, so this only ever binds where the latch doesn't.
+function keyPaged(ctx) {
+  try {
+    const st = ctx && ctx.recoverStreaks
+    const key = ctx && ctx.stuck && ctx.stuck.key
+    if (!st || !key || !st.pageKeys || typeof st.pageKeys !== 'object') return false
+    const at = st.pageKeys[key]
+    if (typeof at !== 'number') return false
+    return Date.now() - at <= danger.TTL_MS
+  } catch (_) { return false }
+}
+function stampOnlinePage(ctx) {
+  const st = recoverStreakState(ctx)
+  const key = ctx && ctx.stuck && ctx.stuck.key
+  if (!st || !key) return
+  if (!st.pageKeys || typeof st.pageKeys !== 'object') st.pageKeys = {}
+  st.pageKeys[key] = Date.now()
+}
+function noteRecoverFail(ctx, bp, action, outcome) {
+  const st = recoverStreakState(ctx)
+  if (!st || !RECOVER_BANNABLE.has(action)) return
+  resetRecoverStreaksIfMoved(ctx, bp)
+  const prev = (st.fails[action] && st.fails[action].n) || 0
+  // A refused placement fast-forwards to the ban: the pillar is known
+  // broken at this spot, the next pick digs instead of re-jumping.
+  const n = (action === 'pillar_up' && outcome === 'failed:place-error') ? RECOVER_BAN_FAILS : prev + 1
+  st.fails[action] = { n, at: Date.now() }
+  if (prev < RECOVER_BAN_FAILS && n >= RECOVER_BAN_FAILS) {
+    try { console.log(`recover ban action=${action} fails=${n} outcome=${outcome} pos=${fmtPos(bp)}`) } catch (_) { /* log best-effort */ }
+  }
+}
+function noteRecoverDone(ctx, bp, action) {
+  const st = recoverStreakState(ctx)
+  if (!st) return
+  resetRecoverStreaksIfMoved(ctx, bp)
+  if (bp) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
+  if (action && st.fails) delete st.fails[action]
+}
+function recoverBanned(ctx, action) {
+  try {
+    const st = ctx && ctx.recoverStreaks
+    if (!st || !RECOVER_BANNABLE.has(action)) return false
+    const f = st.fails && st.fails[action]
+    if (!f || (f.n || 0) < RECOVER_BAN_FAILS) return false
+    if (typeof f.at !== 'number' || Date.now() - f.at > RECOVER_BAN_MS) return false
+    return true
+  } catch (_) { return false }
 }
 
 // --- episode ---
@@ -1840,6 +2027,11 @@ function repeatPaged(ctx, bp) {
 // an escape worked; gave-up = budget spent, target stays dropped.
 function release(bot, ctx, how) {
   const rec = ctx.recovery || {}
+  // A done episode re-anchors the cross-episode memory and clears the kind
+  // that worked; gave-ups keep their streaks for the next episode (vmzq.47).
+  if (how === 'done') {
+    try { noteRecoverDone(ctx, botPos(bot), rec.action) } catch (_) { /* bans best-effort */ }
+  }
   // drop-goal (kl19) ends like a gave-up for the owner, minus the pit mark/page
   const gaveUp = how === 'gave-up' || how === 'drop-goal'
   const by = (ctx.stuck && ctx.stuck.by) || 'unknown'
@@ -1902,8 +2094,17 @@ function release(bot, ctx, how) {
   // anchors on gave-up only (rra round 2): a 'done' may be a partial climb
   // still in the pit, and latching it would end all escapes with no page.
   // Lead latches too (6x7.2), or a mining stall re-fires every slow
-  // threshold and the order never gives up.
-  if (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp)) {
+  // threshold and the order never gives up. Never while boxed in
+  // (vmzq.47): the latch re-arms past LATCH_REARM horizontal blocks, which
+  // a boxed body cannot reach — latching it would end all escapes with no
+  // page. Anything the body can walk out of (corridor, doorway, house
+  // corner — the open side reaches past the re-arm) keeps the latch. The
+  // cross-episode bans bound the re-fire loop instead (menus shrink; the
+  // online page fires once per situation per detector, the nobody-online
+  // page stays throttled by repeatPaged).
+  let boxed = false
+  try { boxed = boxedIn(bot) } catch (_) { boxed = false }
+  if (!boxed && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
@@ -1989,6 +2190,9 @@ async function decide(bot, ctx, state, target) {
   }
   if (!rec) {
     rec = ctx.recovery = { action: null, source: null, model: null, status: 'starting', st: null, attempts: 0, fails: 0, repeats: 0, last: null, calledPlayer: false, endEpisode: false, lastDy: null, lastY: null, flats: 0, placeError: (ctx.placeErrors || 0) > 0 }
+    // A new episode elsewhere is a new situation: anchored streaks from a
+    // far pit must not shape this menu (vmzq.47).
+    try { resetRecoverStreaksIfMoved(ctx, botPos(bot)) } catch (_) { /* bans best-effort */ }
     metrics.routes.inc({ route: 'hard', reason: 'stuck' })
     // Drop the stale goal first: a live GoalFollow/GoalNear keeps driving
     // the executor (jump/forward overrides at 20 Hz) and fights every
@@ -2018,6 +2222,11 @@ async function decide(bot, ctx, state, target) {
     // Failed primitives leave a log line, not just a metric (ak4): done
     // already logs through release(), failures never did.
     if (outcome !== 'done') logRecover(bot, ctx, prev, source, outcome)
+    // Cross-episode memory (vmzq.47): the streak survives release(), so a
+    // kind that keeps failing at this spot leaves future menus.
+    if (outcome !== 'done') {
+      try { noteRecoverFail(ctx, botPos(bot), prev, outcome) } catch (_) { /* bans best-effort */ }
+    }
     // A finished goal-owner (sidestep) leaves its GoalNear live, and the
     // next primitive's direct drive would fight the lib at 20 Hz (7gt:
     // revmux-01 found hop's instance) — decide() is the one choke point
@@ -2158,6 +2367,13 @@ module.exports = {
   MAX_FAILS,
   REPEATS,
   REST_GAVE_UPS,
+  RECOVER_BAN_FAILS,
+  RECOVER_BAN_ANCHOR_DIST,
+  RECOVER_BAN_MS,
+  noteRecoverFail,
+  noteRecoverDone,
+  recoverBanned,
+  resetRecoverStreaksIfMoved,
   WAIT_TICKS,
   DISPLACE_TIMEOUT_TICKS,
   STUCK_TICKS_ENTRY,
