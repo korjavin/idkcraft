@@ -2,6 +2,7 @@
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
+const castleData = require('../castle')
 const { HOSTILE_NAMES } = require('../perception')
 const { goalFacts, timeWord } = require('../goal')
 const detour = require('../detour')
@@ -913,6 +914,61 @@ function nearestDry(bot, skip = []) {
   }
   return best
 }
+// Castle ground (idkcraft-vmzq.48): the feet stand in the site box at/above
+// site.y, or the dig column below is castle-protected ground — the cell the
+// dig-in veto refused as 'protected' in run8.
+function castleGroundHere(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || !st.site || typeof st.site.x !== 'number') return false
+    const bp = botPos(bot)
+    if (!bp) return false
+    const feet = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+    if (castleData.inFootprint(st, feet)) return true
+    return castleData.groundCell(st, { x: feet.x, y: feet.y - 1, z: feet.z })
+  } catch (_) { return false }
+}
+// Off-footprint dig column (vmzq.48): the nearest standable feet cell 6+
+// blocks from the castle box whose fresh dig the shared veto takes — the
+// dig-in's own ±8 walk cannot leave an 11-wide site ringed by trenches
+// (run8: every night failed:protected), so the shelter walks farther
+// instead of holding open ground. One shot per episode (st.offCastle);
+// the walk reuses digInRun's walk below, the veto is recover's.
+const SHELTER_CASTLE_GAP = 6
+const SHELTER_CASTLE_R = 24
+function offCastleSpot(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    const bp = botPos(bot)
+    if (!st || !st.site || typeof st.site.x !== 'number' || !bp || typeof bot.blockAt !== 'function') return null
+    const { w, d } = castleData.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const x0 = Math.floor(bp.x); const y0 = Math.floor(bp.y); const z0 = Math.floor(bp.z)
+    const gap2 = SHELTER_CASTLE_GAP * SHELTER_CASTLE_GAP
+    const free = (b) => !!b && b.boundingBox === 'empty'
+    let best = null
+    let bd = Infinity
+    for (let dx = -SHELTER_CASTLE_R; dx <= SHELTER_CASTLE_R; dx++) {
+      for (let dz = -SHELTER_CASTLE_R; dz <= SHELTER_CASTLE_R; dz++) {
+        const ax = x0 + dx; const az = z0 + dz
+        const ox = ax < st.site.x ? st.site.x - ax : ax >= st.site.x + w ? ax - (st.site.x + w - 1) : 0
+        const oz = az < st.site.z ? st.site.z - az : az >= st.site.z + d ? az - (st.site.z + d - 1) : 0
+        if (ox * ox + oz * oz < gap2) continue
+        for (let dy = 1; dy >= -4; dy--) { // nearestDry's climbable band
+          const dist = Math.hypot(dx, dy, dz)
+          if (dist >= bd) continue
+          const floor = bot.blockAt(new Vec3(ax, y0 + dy - 1, az))
+          if (!floor || floor.boundingBox !== 'block') continue
+          if (!free(bot.blockAt(new Vec3(ax, y0 + dy, az)))) continue
+          if (!free(bot.blockAt(new Vec3(ax, y0 + dy + 1, az)))) continue
+          if (recover.digInVeto(bot, ctx, dx, dy, dz, true)) continue
+          best = { x: ax, y: y0 + dy, z: az }
+          bd = dist
+        }
+      }
+    }
+    return best
+  } catch (_) { return null }
+}
 function shelter(bot, ctx, target, state) {
   // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
   // homeless castle): home only answers "already inside" and the swim aim.
@@ -967,6 +1023,8 @@ function shelter(bot, ctx, target, state) {
       st.dugIn = false
       st.descendTried = false
       st.descended = false
+      st.exposed = false // vmzq.48: a fresh episode re-arms the verdict below
+      st.offCastle = false // ... and re-earns its one off-footprint walk
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1100,6 +1158,17 @@ function shelter(bot, ctx, target, state) {
         try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
         return
       }
+      // Committed pits keep the armed hold below: measured descent once
+      // the dig column is reached and a dig was sent. st.digs counts
+      // dispatched digs, and a refused first break leaves the body on
+      // the surface (revmux 02 core-1); floor0 seeds when the walk
+      // starts, so a walk that descends and times out is not a dug pit
+      // either (revmux 03 core-1: a failed walk keeps st.walk set, so
+      // !walk reads arrival — or no walk at all). Unknown reads as
+      // surface (exposed).
+      const bp0 = botPos(bot)
+      const dugDown = (!st.dig.walk && (st.dig.digs | 0) > 0 && st.dig.floor0 != null && bp0)
+        ? Math.max(0, st.dig.floor0 - Math.floor(bp0.y)) : 0
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
       if (r === 'done') {
@@ -1118,6 +1187,38 @@ function shelter(bot, ctx, target, state) {
         // would idle fight ticks instead of re-pillaring.
         try { ctx.inShelter = false } catch (_) { /* unarm best-effort */ }
         return
+      }
+      // A terminal dig failure (done falls to the shared log below, the
+      // descended failure re-pillars above): castle ground walks once off
+      // the footprint instead of holding open ground (vmzq.48: the dig-in
+      // veto refused the footprint and its own ±8 walk found nothing).
+      // The walk reuses digInRun's walk (arrival digs, the anchor
+      // follows); walked is set so arrival refuses into the hold instead
+      // of walking again.
+      if (r !== 'done') {
+        if (r === 'failed:protected' && !st.offCastle && castleGroundHere(bot, ctx)) {
+          let spot = null
+          try { spot = offCastleSpot(bot, ctx) } catch (_) { spot = null }
+          if (spot) {
+            st.offCastle = true
+            st.dig = { walk: spot, walkTicks: 0, walked: true, extra: 0 }
+            try { console.log(`shelter leaving the castle footprint, digging in at ${spot.x} ${spot.y} ${spot.z}`) } catch (_) { /* log best-effort */ }
+            return
+          }
+        }
+        // No ground past the footprint (or the walk-off dig died with
+        // the body still on the surface): the hold is exposed — fight
+        // preempts instead of idling next to a hostile (run8: the armed
+        // hold died to a zombie). Any terminal no-descent failure
+        // exposes on castle ground — a deck of laid blocks
+        // (undiggable), a failed walk (no-walk), or a refused first
+        // break (dig-error) strands the body in the open exactly like
+        // the protected veto (revmux 01 core-2) — while a descended
+        // pit keeps the armed hold (ed88's committed descent:
+        // abandoning it to chase is worse than holding it). Off the
+        // castle every failure keeps the old armed hold.
+        const onCastle = st.offCastle || castleGroundHere(bot, ctx)
+        if (onCastle && dugDown === 0) st.exposed = true
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
@@ -1163,7 +1264,9 @@ function shelter(bot, ctx, target, state) {
     try { console.log('shelter phantom overhead, digging in') } catch (_) { /* log best-effort */ }
     return
   }
-  ctx.inShelter = true
+  // vmzq.48: a shelter that never enclosed on castle ground holds exposed
+  // (st.exposed above) so fight preempts; every other hold arms as before.
+  ctx.inShelter = !st.exposed
   holdStill(bot, ctx)
 }
 
