@@ -145,7 +145,7 @@ describe('quarry second ring (vmzq.31)', () => {
     assert.ok(!lines.some((m) => m.includes('ring 1 live')), 'latched ring-1 reuse logs nothing')
   })
 
-  it('all eight sides dead ends the leg with no-stone', () => {
+  it('all eight sides dead hands over to the pit, not no-stone (vmzq.46)', () => {
     const st = castleState()
     const set = new Map()
     for (let ring = 0; ring < 2; ring++) {
@@ -156,9 +156,26 @@ describe('quarry second ring (vmzq.31)', () => {
     }
     const bot = makeBot({ items: TOOLS(), set })
     const ctx = { castle: st }
+    const lines = quiet(() => fetch(bot, ctx))
+    const t = ctx.castleFetch.target
+    assert.ok(t && t.quarry && t.pit, 'the pit takes over the starved leg')
+    assert.equal(ctx.stepStatus, undefined, 'no no-stone stall')
+    assert.equal(ctx.castle.quarryBase, undefined, 'dead sides stay unlatched')
+    const live = (ctx.castle.quarryPits || []).filter((e) => !e.dead)
+    assert.equal(live.length, 1, 'one live pit frame latches')
+    assert.equal(live[0].base, 64)
+    assert.deepEqual([t.x, t.y, t.z], [live[0].x, 63, live[0].z], 'first cell is the pit ground')
+    assert.ok(lines.some((m) => m.includes('pit live at')), `pit live line, got: ${lines.join(' | ')}`)
+  })
+
+  it('a drowned world still ends the leg with no-stone (vmzq.46)', () => {
+    const st = castleState()
+    const bot = makeBot({ items: TOOLS(), under: (y) => (y <= 63 ? 'water' : 'air') })
+    const ctx = { castle: st }
     quiet(() => fetch(bot, ctx))
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
     assert.equal(ctx.castle.quarryBase, undefined, 'dead sides stay unlatched')
+    assert.ok((ctx.castle.quarryPits || []).every((e) => e.dead), 'drowned spots persist abandoned')
   })
 })
 

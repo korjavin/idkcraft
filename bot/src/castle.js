@@ -388,8 +388,15 @@ const AIR_NAMES = new Set(['air', 'cave_air', 'void_air'])
 // The quarry yields granite/diorite/andesite as often as cobble; the castle
 // (wall cells, fetch counts) and the pathfinder scaffold all read this set,
 // so quarry yield is laid instead of hoarded into a 36/36 pack.
+// vmzq.46: calcite, smooth_basalt, tuff and the deepslate variants join —
+// all solid full blocks (box=block, minecraft-data 1.21.1), so quarry and
+// chest yield in them lays instead of starving the fetch (prod run7 died
+// holding calcite 12 + smooth_basalt 11 uncounted).
 const STONE_ITEMS = Object.freeze(['cobblestone', 'stone', 'granite', 'diorite', 'andesite',
-  'polished_granite', 'polished_diorite', 'polished_andesite', 'cobbled_deepslate'])
+  'polished_granite', 'polished_diorite', 'polished_andesite', 'cobbled_deepslate',
+  'calcite', 'smooth_basalt', 'tuff', 'deepslate', 'polished_deepslate',
+  'deepslate_bricks', 'deepslate_tiles', 'cracked_deepslate_bricks',
+  'cracked_deepslate_tiles', 'chiseled_deepslate'])
 const STONE_SET = new Set(STONE_ITEMS)
 function isStone(name) {
   return STONE_SET.has(name)

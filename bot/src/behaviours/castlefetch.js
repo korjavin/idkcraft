@@ -76,6 +76,19 @@ const QUARRY_TOP = 3 // a hill is cut up to site.y + this
 const QUARRY_ADAPT = 8 // a trench starts at real ground up to this far below site level (dips, pad edges)
 const QUARRY_TRIES = 3 // digs on one quarry cell before it is skipped
 const QUARRY_NOGAIN = 4 * QUARRY_W * 3 // stone digs (~4 columns) with no cobble picked up
+// Quarry-down pit (idkcraft-vmzq.46): prod run7 starved with all 8 trench
+// sides dead (holes/water along the 40-column lines) and no exposed stone.
+// The fallback digs a stepped pit at a dry spot near the site instead of a
+// long line: a staircase PIT_DEPTH down (walkable out by construction — 1
+// per column under the trench stance rule), then a PIT_ROOM room at the
+// bottom, cut top-down through the dirt cap into stone. Spots ring the
+// footprint at PIT_GAPS, nearest first, each probed dry before the first
+// dig; liquid or a hole mid-pit abandons the spot and the next takes over.
+const PIT_GAPS = [4, 6, 8, 10, 12]
+const PIT_DEPTH = 8
+const PIT_ROOM = 8
+const PIT_LEN = PIT_DEPTH + PIT_ROOM
+const PIT_MAX = 64 // persisted pit frames cap (memory.js sanitizes the same)
 const LIQUID = new Set(['water', 'lava', 'bubble_column'])
 // Pickaxe blocks a trench meets; anything else is dug bare-handed.
 const ROCK = /stone|_ore$|granite|diorite|andesite|deepslate|tuff|calcite|basalt/
@@ -427,8 +440,16 @@ function quarrySide(st, s, ring = 0) {
   return { x: r1 ? sx + w - 2 - QUARRY_W : sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }
 }
 
+function stairFloor(base, i, depth) {
+  return base - 1 - Math.min(i, depth - 1)
+}
+
 function trenchFloor(st, i, base) {
-  return (base == null ? st.site.y : base) - 1 - Math.min(i, QUARRY_DEPTH - 1)
+  return stairFloor(base == null ? st.site.y : base, i, QUARRY_DEPTH)
+}
+
+function pitFloor(base, i) {
+  return stairFloor(base, i, PIT_DEPTH)
 }
 
 // A trench cell or the block a trench stance stands on (revmux 01): the
@@ -444,6 +465,21 @@ function inTrench(st, p) {
     if (i >= 0 && i < QUARRY_LEN && l >= 0 && l < QUARRY_W && p.y >= trenchFloor(st, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
   }
   }
+  // Latched pit frames (vmzq.46) are ours too — dead ones included, their
+  // dug cells stay ours.
+  try {
+    const pits = Array.isArray(st.quarryPits) ? st.quarryPits : []
+    for (const e of pits) {
+      if (!e || !Number.isInteger(e.base) || typeof e.x !== 'number' || typeof e.z !== 'number') continue
+      const dx = e.dx | 0
+      const dz = e.dz | 0
+      const lx = Number.isInteger(e.lx) ? e.lx : (dx === 0 ? 1 : 0)
+      const lz = Number.isInteger(e.lz) ? e.lz : (dz === 0 ? 1 : 0)
+      const i = (p.x - e.x) * dx + (p.z - e.z) * dz
+      const l = (p.x - e.x) * lx + (p.z - e.z) * lz
+      if (i >= 0 && i < PIT_LEN && l >= 0 && l < QUARRY_W && p.y >= pitFloor(e.base, i) - 1 - QUARRY_ADAPT && p.y <= st.site.y + QUARRY_TOP) return true
+    }
+  } catch (_) { /* pits best-effort */ }
   return false
 }
 
@@ -454,6 +490,184 @@ function inTrench(st, p) {
 // around. Stance rules are checked at dig time (they depend on where we
 // stand). Recomputed from the world every pick and per leg (revmux 01: no
 // session latch) — a restart or a retry resumes the same trench.
+// The staircase cell scan shared by the ring trenches and the quarry-down
+// pits (vmzq.46): columns run outward from o over len, the floor stepping
+// down 1 per column to depth below base, cut top-down (dirt included).
+// Returns { cell } for the next cell to dig (the trench {quarry, stance}
+// shape — stance is the previous column's floor, same lane, so the bot
+// walks down the staircase and every dug cell sits within pickup reach of
+// a stance), { dead, why } when liquid, a hole or a protected place kills
+// the line mid-way, or { dead: false } when it is dug out. A protected
+// block type (a path, a ruin block) is stepped around, never dug.
+function scanStairCells(bot, ctx, f, o, len, depth, base) {
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  const wet = (b) => !!b && LIQUID.has(b.name)
+  const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
+  for (let i = 0; i < len; i++) {
+    const floor = stairFloor(base, i, depth)
+    for (let l = 0; l < QUARRY_W; l++) {
+      const cx = o.x + o.dx * i + o.lx * l
+      const cz = o.z + o.dz * i + o.lz * l
+      const below = at(cx, floor - 1, cz)
+      if (!below || open(below) || wet(below)) {
+        return { dead: true, why: `${below ? (wet(below) ? 'water' : 'hole') : 'void'} under column ${i} floor at ${cx} ${floor - 1} ${cz}` }
+      }
+    }
+    for (let y = base + QUARRY_TOP; y >= floor; y--) {
+      for (let l = 0; l < QUARRY_W; l++) {
+        const x = o.x + o.dx * i + o.lx * l
+        const z = o.z + o.dz * i + o.lz * l
+        const k = `${x},${y},${z}`
+        const b = at(x, y, z)
+        if (!b || wet(b)) return { dead: true, why: `${b ? 'wet' : 'void'} at ${k}` }
+        if (open(b) || f.skip.has(k)) continue
+        if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) {
+          return { dead: true, why: `liquid by ${k}` }
+        }
+        if (protectedReason(bot, b, ctx)) {
+          // Where (house apron, castle) kills the line; what (a path,
+          // a ruin block) is stepped around.
+          if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) {
+            return { dead: true, why: `protected place at ${k}` }
+          }
+          f.skip.add(k)
+          continue
+        }
+        // Stance (idkcraft-vmzq.25): the previous column's floor, same
+        // lane, reached by walking down the staircase. A walk to the cell
+        // itself (ground level, the bot deep in the trench) pillared up
+        // out of the trench and the quarry re-dug the pillar (rig: 161
+        // digs for 115 cells). Column i's drops rest on its floor, the
+        // stance the next column is dug from. A cell out of eye reach
+        // from its stance (a hill top or a leaf over a deep column) stays
+        // standing: walking up to it pillared the same way (rig). A stance
+        // that is not open body room (a stepped-around path, a skipped
+        // cell, column 0's outside cell) is never walked into (revmux 01:
+        // range 0 would dig it): that cell walks to itself as before.
+        let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : stairFloor(base, i - 1, depth), z: o.z + o.dz * (i - 1) + o.lz * l }
+        if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
+        else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+        return { cell: { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance } }
+      }
+    }
+  }
+  return { dead: false, why: '' } // dug out
+}
+
+// Pit spots (vmzq.46): each side from both lateral ends (the ring-1 trick:
+// fresh ground) at every PIT_GAPS distance outside the footprint, nearest
+// first. The room runs outward like a trench; the stairs bottom out PIT_DEPTH
+// down within PIT_DEPTH of the origin, so the pit digs down in place.
+function pitSpots(st) {
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const { x: sx, z: sz } = st.site
+  const spots = []
+  for (const g of PIT_GAPS) {
+    spots.push(
+      { x: sx - g, z: sz + 2, dx: -1, dz: 0, lx: 0, lz: 1 },
+      { x: sx - g, z: sz + d - 2 - QUARRY_W, dx: -1, dz: 0, lx: 0, lz: 1 },
+      { x: sx + w - 1 + g, z: sz + 2, dx: 1, dz: 0, lx: 0, lz: 1 },
+      { x: sx + w - 1 + g, z: sz + d - 2 - QUARRY_W, dx: 1, dz: 0, lx: 0, lz: 1 },
+      { x: sx + 2, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 },
+      { x: sx + w - 2 - QUARRY_W, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 },
+      { x: sx + 2, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 },
+      { x: sx + w - 2 - QUARRY_W, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 },
+    )
+  }
+  return spots
+}
+
+function pitKey(o) {
+  return `${o.x},${o.z},${o.dx},${o.dz}`
+}
+
+// The next pit cell to dig (vmzq.46): the first live frame in spot order —
+// a latched frame resumes, a fresh spot is probed (the trench probe: real
+// ground, solid under, dry head) and latched. A spot whose probe or scan
+// finds liquid, a hole or a protected place is abandoned for the leg, and
+// persisted dead on the castle (its ground truth does not change —
+// re-probing a half-dug pit would latch its dug floors as ground and walk
+// the frame down); only a probe void (unloaded, transient) re-probes next
+// leg. Dug-out pits re-scan cheap and are never persisted dead: a leg that
+// could not walk to its cells reads dug out without being empty.
+function pickPit(bot, ctx, f) {
+  const st = ctx.castle
+  const p = f.pit || (f.pit = { dead: [] })
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  const wet = (b) => !!b && LIQUID.has(b.name)
+  const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
+  let stored = null
+  try {
+    stored = Array.isArray(st.quarryPits) ? st.quarryPits : (st.quarryPits = [])
+  } catch (_) { stored = [] }
+  const byKey = new Map()
+  for (const e of stored) {
+    if (e && typeof e.x === 'number' && typeof e.z === 'number') byKey.set(`${e.x},${e.z},${e.dx},${e.dz}`, e)
+  }
+  for (const o of pitSpots(st)) {
+    const key = pitKey(o)
+    if (p.dead.includes(key)) continue
+    let entry = byKey.get(key)
+    if (entry && entry.dead) continue // a drowned/holed pit stays abandoned
+    // Outside the footprint and the door path (both lie inside it).
+    if (blueprint.inFootprint(st, { x: o.x, y: st.site.y, z: o.z })) continue
+    if (blueprint.inFootprint(st, { x: o.x + o.dx * (PIT_LEN - 1), y: st.site.y, z: o.z + o.dz * (PIT_LEN - 1) })) continue
+    let base = entry && Number.isInteger(entry.base) ? entry.base : null
+    let why = null
+    let whyAt = null
+    if (base == null) {
+      let liquid = false
+      let g = null
+      for (let y = st.site.y + QUARRY_TOP; y >= st.site.y - QUARRY_ADAPT; y--) {
+        const b = at(o.x, y, o.z)
+        if (!b) { why = 'void'; whyAt = [o.x, y, o.z]; break }
+        if (wet(b)) { liquid = true; continue }
+        if (!open(b)) { g = y; break }
+      }
+      if (!why && g == null) { why = liquid ? 'wet' : 'hole'; whyAt = [o.x, st.site.y, o.z] }
+      if (!why) {
+        const under = at(o.x, g - 1, o.z)
+        const head = at(o.x, g + 1, o.z)
+        if (!under || open(under)) { why = 'hole'; whyAt = [o.x, g - 1, o.z] }
+        else if (wet(under) || wet(head)) { why = 'wet'; whyAt = [o.x, g, o.z] }
+        else base = g + 1
+      }
+      if (!why) {
+        entry = { x: o.x, z: o.z, dx: o.dx, dz: o.dz, lx: o.lx, lz: o.lz, base, dead: false }
+        if (stored.length < PIT_MAX) {
+          try { stored.push(entry) } catch (_) { /* latch best-effort */ }
+          byKey.set(key, entry)
+        }
+        try { console.log(`castlefetch pit live at ${o.x} ${base} ${o.z}`) } catch (_) { /* log best-eff */ }
+      }
+    }
+    if (why) {
+      p.dead.push(key)
+      if (why !== 'void') {
+        const tomb = entry || { x: o.x, z: o.z, dx: o.dx, dz: o.dz, lx: o.lx, lz: o.lz, base: st.site.y + 1, dead: true }
+        tomb.dead = true
+        if (!entry && stored.length < PIT_MAX) {
+          try { stored.push(tomb) } catch (_) { /* latch best-effort */ }
+          byKey.set(key, tomb)
+        }
+      }
+      try { console.log(`castlefetch pit spot ${o.x} ${o.z} unusable (${why} at ${whyAt[0]} ${whyAt[1]} ${whyAt[2]})`) } catch (_) { /* log best-eff */ }
+      continue
+    }
+    const r = scanStairCells(bot, ctx, f, o, PIT_LEN, PIT_DEPTH, base)
+    if (r.cell) {
+      r.cell.pit = true
+      return r.cell
+    }
+    p.dead.push(key)
+    if (r.dead && entry) {
+      try { entry.dead = true } catch (_) { /* latch best-effort */ }
+    }
+    try { console.log(`castlefetch pit at ${o.x} ${base} ${o.z} ${r.dead ? `abandoned (${r.why})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
+  }
+  return null
+}
+
 // Flat sides 0..7 across QUARRY_RINGS (vmzq.31): ring 1 (4..7) is only
 // reached when every ring-0 side is dead or dug, nearest stone first.
 function pickQuarry(bot, ctx, f) {
@@ -526,50 +740,10 @@ function pickQuarry(bot, ctx, f) {
       q.said.push(rs)
       try { console.log(`castlefetch quarry ${tag} live (level ${base})`) } catch (_) { /* log best-eff */ }
     }
-    let dead = false
-    let deadWhy = ''
-    for (let i = 0; i < QUARRY_LEN && !dead; i++) {
-      const floor = trenchFloor(st, i, base)
-      for (let l = 0; l < QUARRY_W && !dead; l++) {
-        const below = at(o.x + o.dx * i + o.lx * l, floor - 1, o.z + o.dz * i + o.lz * l)
-        if (!below || open(below) || wet(below)) { dead = true; deadWhy = `${below ? (wet(below) ? 'water' : 'hole') : 'void'} under column ${i} floor at ${o.x + o.dx * i + o.lx * l} ${floor - 1} ${o.z + o.dz * i + o.lz * l}` }
-      }
-      for (let y = base + QUARRY_TOP; y >= floor && !dead; y--) {
-        for (let l = 0; l < QUARRY_W && !dead; l++) {
-          const x = o.x + o.dx * i + o.lx * l
-          const z = o.z + o.dz * i + o.lz * l
-          const k = `${x},${y},${z}`
-          const b = at(x, y, z)
-          if (!b || wet(b)) { dead = true; deadWhy = `${b ? 'wet' : 'void'} at ${k}`; break }
-          if (open(b) || f.skip.has(k)) continue
-          if (EXPOSE.concat([[0, -1, 0]]).some(([ex, ey, ez]) => wet(at(x + ex, y + ey, z + ez)))) { dead = true; deadWhy = `liquid by ${k}`; break }
-          if (protectedReason(bot, b, ctx)) {
-            // Where (house apron, castle) kills the side; what (a path,
-            // a ruin block) is stepped around.
-            if (protectedReason(bot, { name: 'dirt', position: b.position }, ctx)) { dead = true; deadWhy = `protected place at ${k}`; break }
-            f.skip.add(k)
-            continue
-          }
-          // Stance (idkcraft-vmzq.25): the previous column's floor, same
-          // lane, reached by walking down the staircase. A walk to the cell
-          // itself (ground level, the bot deep in the trench) pillared up
-          // out of the trench and the quarry re-dug the pillar (rig: 161
-          // digs for 115 cells). Column i's drops rest on its floor, the
-          // stance the next column is dug from. A cell out of eye reach
-          // from its stance (a hill top or a leaf over a deep column) stays
-          // standing: walking up to it pillared the same way (rig). A stance
-          // that is not open body room (a stepped-around path, a skipped
-          // cell, column 0's outside cell) is never walked into (revmux 01:
-          // range 0 would dig it): that cell walks to itself as before.
-          let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
-          if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
-          else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
-          return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
-        }
-      }
-    }
+    const r = scanStairCells(bot, ctx, f, o, QUARRY_LEN, QUARRY_DEPTH, base)
+    if (r.cell) return r.cell
     q.dead.push(rs) // dug out or unusable mid-trench
-    try { console.log(`castlefetch quarry ${tag} ${dead ? `unusable (mid-trench: ${deadWhy})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
+    try { console.log(`castlefetch quarry ${tag} ${r.dead ? `unusable (mid-trench: ${r.why})` : 'dug out'}`) } catch (_) { /* log best-eff */ }
   }
   return null
 }
@@ -672,8 +846,9 @@ function digTick(bot, ctx, f) {
     }
     const far = Math.hypot(bp.x - (c.x + 0.5), bp.z - (c.z + 0.5))
     // A leg already quarrying stays out: the trench runs past DIG_RADIUS
-    // (revmux 02), and its own target walks have their own patience.
-    if (far > DIG_RADIUS && !f.quarry) {
+    // (revmux 02), and its own target walks have their own patience. Pit
+    // rooms run out the same way (vmzq.46).
+    if (far > DIG_RADIUS && !f.quarry && !f.pit) {
       // The castle chest is looked up again on arrival, once per leg
       // (revmux 01: a far leg's body-centred lookup found none).
       if (f.chestRelook == null) f.chestRelook = true
@@ -707,6 +882,7 @@ function digTick(bot, ctx, f) {
         try { bot.chat(`no stone near the castle at ${st.site.x} ${st.site.z}: quarrying it; drop cobblestone into a chest on the castle site to speed it up`) } catch (_) { /* chat best-effort */ }
       }
       t = pickQuarry(bot, ctx, f)
+      if (!t) t = pickPit(bot, ctx, f) // vmzq.46: every side dead/dug -> quarry down
     }
     if (!t) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
     f.target = t
@@ -849,6 +1025,13 @@ module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
 module.exports.QUARRY_RINGS = QUARRY_RINGS
+module.exports.pickQuarry = pickQuarry
+module.exports.pickPit = pickPit
+module.exports.pitSpots = pitSpots
+module.exports.inTrench = inTrench
+module.exports.PIT_LEN = PIT_LEN
+module.exports.PIT_DEPTH = PIT_DEPTH
+module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.roomForDrop = roomForDrop

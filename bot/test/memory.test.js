@@ -537,4 +537,22 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     memory.restore(botAt(SPAWN_A), ctx2, file, now)
     assert.deepEqual(ctx2.castle.quarryBase, [61, null, 64, 59, 62, 62, null, 60])
   })
+
+  it('round-trips pit frames, drops malformed entries and oversize lists (vmzq.46)', () => {
+    const now = Date.now()
+    const frame = { x: 96, z: 202, dx: -1, dz: 0, lx: 0, lz: 1, base: 64, dead: false }
+    const tomb = { x: 96, z: 207, dx: -1, dz: 0, lx: 0, lz: 1, base: 65, dead: true }
+    const ctx1 = castleCtx({})
+    ctx1.castle.quarryPits = [frame, tomb, { x: 1 }, 'nope', null]
+    assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, now), true)
+    const ctx2 = {}
+    memory.restore(botAt(SPAWN_A), ctx2, file, now)
+    assert.deepEqual(ctx2.castle.quarryPits, [frame, tomb])
+    const ctx3 = castleCtx({})
+    ctx3.castle.quarryPits = Array.from({ length: 65 }, (_, i) => ({ ...frame, x: i }))
+    assert.equal(memory.save(botAt(SPAWN_A), ctx3, file, now + 1), true)
+    const ctx4 = {}
+    memory.restore(botAt(SPAWN_A), ctx4, file, now + 1)
+    assert.equal(ctx4.castle.quarryPits, undefined)
+  })
 })
