@@ -20,6 +20,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
+const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
 
@@ -317,31 +318,76 @@ function pitWalls(bot) {
 // past this many horizontal blocks.
 const LATCH_REARM = 4
 
-// Boxed for the release latch (vmzq.47r3): can the body reach horizontal
+// A cell the body can be in (vmzq.47r4): air-like, or a hand-openable
+// door the A* door reflex walks through (doors.js: non-iron *_door;
+// iron stays a wall, routed around like the pathfinder does). Nulls read
+// passable (solid() says so), so a blind read latches as before.
+function passable(b) {
+  if (!solid(b)) return true
+  try { return doors.isHandDoor(b.name) } catch (_) { return false }
+}
+
+// A floor the body can stand (or swim) on: solid ground, water — or
+// unknown (null reads standable, so a blind read walks level and latches
+// exactly as before; only verified air starts a drop scan).
+function standable(b) {
+  if (!b) return true
+  if (solid(b)) return true
+  try { return isWater(b) } catch (_) { return false }
+}
+
+// Boxed for the release latch (vmzq.47r3/r4): can the body reach horizontal
 // distance past LATCH_REARM? A latch that can never go stale wedges every
-// later episode with no page. BFS over feet+head-passable cells (the pitAt
-// per-side test per cell). Wall counts fail both ways: a 3x3 pit centre
-// reads 0 adjacent walls yet boxes (max 2.8), while a corridor reads 2
-// walls yet walks free — reachability is the actual re-arm condition
-// (revmux 02 core-1). Nulls read passable (solid() says so), so a blind
-// read latches exactly as before.
+// later episode with no page. 3D BFS over reachable stands: same-level
+// walk through passable feet+head (landing below when the floor drops —
+// a fall is displacement too), +1 step-ups onto feet-solid with headroom,
+// doors crossed like the pathfinder crosses them. Wall counts fail both
+// ways: a 3x3 pit centre reads 0 adjacent walls yet boxes (max 2.8),
+// while a corridor reads 2 walls yet walks free — reachability is the
+// actual re-arm condition (revmux 02 core-1). r4 adds the exits the body
+// really uses: doors (a hut interior is not a pit), step-ups (a 1-deep
+// hole is not a pit), drops with a landing (revmux 03 body-1). Nowhere to
+// stand at all (a pillar over void: every way out is an unverified drop)
+// is not boxed either — stepping off leaves, and the latch's own stale
+// check judges the landing (the rra pillar pins this).
 function boxedIn(bot) {
-  const seen = new Set(['0,0'])
-  const q = [[0, 0]]
+  const cell = (x, y, z) => {
+    try { return cellAt(bot, x, y, z) } catch (_) { return null }
+  }
+  const seen = new Set(['0,0,0'])
+  const q = [[0, 0, 0]]
+  let landedBeyond = false
+  let voidDrop = false
+  const push = (x, y, z) => {
+    if (Math.abs(x) > 6 || Math.abs(z) > 6 || y < -6 || y > 4) return
+    const k = x + ',' + y + ',' + z
+    if (seen.has(k)) return
+    seen.add(k)
+    if (x !== 0 || z !== 0) landedBeyond = true
+    q.push([x, y, z])
+  }
   while (q.length) {
-    const [x, z] = q.pop()
+    const [x, y, z] = q.pop()
     if (Math.hypot(x, z) > LATCH_REARM) return false
     for (const [dx, dz] of SIDES) {
       const nx = x + dx
       const nz = z + dz
-      if (Math.abs(nx) > 6 || Math.abs(nz) > 6) continue
-      const k = nx + ',' + nz
-      if (seen.has(k)) continue
-      seen.add(k)
-      if (!solid(cellAt(bot, nx, 0, nz)) && !solid(cellAt(bot, nx, 1, nz))) q.push([nx, nz])
+      const feet = cell(nx, y, nz)
+      const head = cell(nx, y + 1, nz)
+      if (passable(feet) && passable(head)) {
+        // Walk, landing below when the floor gives (drop capped: deeper
+        // than 6 is unverified air, not a stand).
+        let ly = y
+        while (ly > y - 6 && !standable(cell(nx, ly - 1, nz))) ly--
+        if (standable(cell(nx, ly - 1, nz))) push(nx, ly, nz)
+        else voidDrop = true
+      } else if (!passable(feet) && passable(head) && passable(cell(nx, y + 2, nz))) {
+        // +1 step-up: mount feet-solid with room above to stand.
+        push(nx, y + 1, nz)
+      }
     }
   }
-  return true
+  return landedBeyond || !voidDrop
 }
 
 // Climb OFFER for a hemmed body with no goal worth walking to (jsf.3,
@@ -1777,8 +1823,10 @@ function resetRecoverStreaksIfMoved(ctx, bp) {
 // for the whole trap (revmux 01 core-1). Keyed on the detector key, not
 // the spot alone: a new detector at the trap (cross-step) gets its word —
 // the rw4.9.1 suite pins that repeat — while same-key re-fires stay
-// silent. Moving past the anchor clears (a re-trap after a rescue pages
-// again: revmux 02 Failure A); the stamp is online-only, so a
+// silent. Moving past the anchor clears — observed every tick, so a
+// departure with no episode in between still re-arms (a re-trap after a
+// rescue pages again: revmux 02 Failure A, revmux 03 core-1); the stamp
+// is online-only, so a
 // nobody-online page never eats the owner's (Failure B); and the menu
 // excludes instead of silent-done, so no phantom done hits the metrics
 // (the silent-'done' shape is gone). Outside boxed pits the latch holds

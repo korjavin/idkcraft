@@ -19,10 +19,12 @@ function pos(x, y, z) {
 }
 
 // Open 4-wall stone pit readings: floor + 4 sides 2-high solid, head free,
-// walls continue up (no hop), far high goal (pillar/dig arms live).
+// walls continue up (no hop), far high goal (pillar/dig arms live). The
+// floor is the shaft footprint only (r4: the reachability gate walks
+// floors, so a universal dirt plane would pave escapes that aren't there).
 function pitBot() {
   const solidAt = (x, y, z) => {
-    if (y === 60) return 'dirt' // floor
+    if (y === 60 && Math.abs(x) <= 1 && Math.abs(z) <= 1) return 'dirt' // floor
     if (y >= 61 && y <= 66 && (Math.abs(x) === 1) !== (Math.abs(z) === 1)) {
       // The 4 side columns around the origin column read solid.
       if ((Math.abs(x) === 1 && z === 0) || (Math.abs(z) === 1 && x === 0)) return 'stone'
@@ -169,7 +171,13 @@ describe('vmzq.47 cross-episode bans', () => {
     assert.equal(pitCtx.stuck, null)
     assert.equal(pitCtx.recoverLatch || null, null, 'no latch in the pit')
     const open = pitBot()
-    open.blockAt = (p) => ({ name: 'air', position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), boundingBox: 'empty' })
+    // Physical open ground (r4: the reachability gate reads floors, so a
+    // floorless all-air mock would — correctly — read as a void drop).
+    open.blockAt = (p) => {
+      const y = Math.floor(p.y)
+      const n = y <= 60 ? 'dirt' : 'air'
+      return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)), boundingBox: n === 'air' ? 'empty' : 'block' }
+    }
     const openCtx = {
       stuck: { by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key: 'ticker' },
       recovery: { action: 'sidestep', source: 'fsm', status: 'gave-up', fails: 3 },
@@ -239,23 +247,56 @@ describe('vmzq.47 cross-episode bans', () => {
 })
 
 describe('vmzq.47r2 revmux 01 findings', () => {
-  // Latch-skip shapes (body-1, r3 boxed-in): the skip tests whether the
-  // body can reach past the latch re-arm, not a wall count. A corridor
-  // and an alcove walk out (latch); a 1x1 shaft and a 3x3 hollow centre
-  // (0 adjacent walls, max reach 2.8 — the CASTLE_PIT rig shape) box in.
-  function shapeBot(solidSide) {
+  // Latch-skip shapes (body-1, r3/r4 boxed-in): the skip tests whether the
+  // body can reach past the latch re-arm, not a wall count. Walk-out
+  // shapes latch; only truly boxed shapes skip.
+  function shapeBot(cell) {
     const bot = pitBot()
     bot.blockAt = (p) => {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
-      const n = (y === 60) ? 'dirt'
-        : (y >= 61 && y <= 66 && solidSide(x, z)) ? 'stone' : 'air'
+      const n = cell(x, y, z) || 'air'
       return { name: n, position: new Vec3(x, y, z), boundingBox: n === 'air' ? 'empty' : 'block' }
     }
     return bot
   }
-  const corridor = (x) => Math.abs(x) === 1
-  const alcove = (x, z) => Math.abs(x) === 1 || z === 1
-  const hollow3 = (x, z) => Math.abs(x) === 2 || Math.abs(z) === 2
+  // Floors are structure footprints (r4: a universal plane would pave
+  // escapes past the ring being tested).
+  const floor60 = (x, y, z, wall, bound) => {
+    if (y === 60 && Math.abs(x) <= bound && Math.abs(z) <= bound) return 'dirt'
+    if (y >= 61 && y <= 66 && wall(x, z)) return 'stone'
+    return null
+  }
+  const corridor = (x, y, z) => floor60(x, y, z, (x) => Math.abs(x) === 1, 6)
+  const alcove = (x, y, z) => floor60(x, y, z, (x, z) => Math.abs(x) === 1 || z === 1, 6)
+  const hollow3 = (x, y, z) => floor60(x, y, z, (x, z) => Math.abs(x) === 2 || Math.abs(z) === 2, 6)
+  // Hut ring with a door column at (2,0): boundingBox 'block' like the
+  // real registry — the pass must come from the door name, not the box.
+  const hut = (door) => (x, y, z) => {
+    if (y === 60 && Math.abs(x) <= 6 && Math.abs(z) <= 6) return 'dirt'
+    if ((y === 61 || y === 62) && x === 2 && z === 0) return door
+    if (y >= 61 && y <= 66 && (Math.abs(x) === 2 || Math.abs(z) === 2)) return 'stone'
+    return null
+  }
+  // 1-deep 1x1 hole: ground to y62, dug cell at (0,63,0); the bot stands
+  // at 63 and steps back up (r3 body-1).
+  const hole1 = (x, y, z) => {
+    if (y <= 62) return 'dirt'
+    if (y === 63 && !(x === 0 && z === 0)) return 'grass_block'
+    return null
+  }
+  // Notched 1x1 shaft (revmux 02 core-1's worry): one side cleared at head
+  // height and above mid-dig — a step, not an exit (tall walls stand past
+  // the notch, no floor beyond the shaft).
+  const notched1 = (x, y, z) => {
+    if (y === 60 && Math.abs(x) <= 1 && Math.abs(z) <= 1) return 'dirt'
+    if (y >= 61 && y <= 66) {
+      if ((Math.abs(x) === 1 && z === 0) || (Math.abs(z) === 1 && x === 0)) {
+        if (x === 1 && z === 0 && (y === 62 || y === 63)) return null // the notch
+        return 'stone'
+      }
+    }
+    return null
+  }
 
   function gaveUpCtx() {
     return {
@@ -265,13 +306,15 @@ describe('vmzq.47r2 revmux 01 findings', () => {
   }
 
   it('body-1: walk-out shapes latch; boxed shapes (1x1, 3x3 hollow) skip', () => {
-    for (const [name, shape] of [['corridor', corridor], ['alcove', alcove]]) {
+    const hole = shapeBot(hole1)
+    hole.entity.position = pos(0.5, 63, 0.5)
+    for (const [name, bot] of [['corridor', shapeBot(corridor)], ['alcove', shapeBot(alcove)], ['oak-door hut', shapeBot(hut('oak_door'))], ['1-deep hole', hole]]) {
       const ctx = gaveUpCtx()
-      recover.release(shapeBot(shape), ctx, 'gave-up')
+      recover.release(bot, ctx, 'gave-up')
       assert.ok(ctx.recoverLatch, `${name} gave-up latches as before`)
       assert.equal(ctx.recoverLatch.by, 'no-displacement')
     }
-    for (const [name, bot] of [['1x1 shaft', pitBot()], ['3x3 hollow centre', shapeBot(hollow3)]]) {
+    for (const [name, bot] of [['1x1 shaft', pitBot()], ['3x3 hollow centre', shapeBot(hollow3)], ['notched 1x1 shaft', shapeBot(notched1)], ['iron-door hut', shapeBot(hut('iron_door'))]]) {
       const ctx = gaveUpCtx()
       recover.release(bot, ctx, 'gave-up')
       assert.equal(ctx.recoverLatch || null, null, `${name} skips the latch`)
@@ -306,11 +349,15 @@ describe('vmzq.47r2 revmux 01 findings', () => {
     assert.equal(menu.feasible(facts, ctx), true)
     assert.equal(menu.run(bot, ctx), 'done')
     assert.equal(chats.length, 2, 'a new detector gets its word')
-    // Failure A: rescued out and re-trapped — the anchor reset re-arms.
-    recover.resetRecoverStreaksIfMoved(ctx, pos(50.5, 61, 0.5))
+    // Failure A (r3 real sequence): page at P, /tp out with no episode in
+    // between — stuck.update ticks the reset on the way out — then re-trap
+    // at P with the same key: the observed departure re-armed, the ask
+    // fires (the r2 test skipped the return leg and proved nothing).
+    recover.resetRecoverStreaksIfMoved(ctx, pos(50.5, 61, 0.5)) // ticks while away
+    recover.resetRecoverStreaksIfMoved(ctx, here) // back at P, episode entry
     ctx.stuck = stuck('k1')
     episode()
-    assert.equal(menu.feasible(facts, ctx), true, 'a new situation re-arms')
+    assert.equal(menu.feasible(facts, ctx), true, 'a departure re-arms the same-spot re-trap')
     // Failure B: a nobody-online stamp never eats the online page.
     ctx.repeatGaveUpPage = { x: here.x, y: here.y, z: here.z, at: Date.now() }
     assert.equal(menu.feasible(facts, ctx), true, 'offline stamp does not exclude')

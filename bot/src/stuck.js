@@ -351,6 +351,11 @@ function clearRestMark(ctx, bot) {
 function update(bot, ctx) {
   if (!ctx || ctx.paused) return
   const bp = bodyPos(bot)
+  // Bans and page stamps are situation state: observe every tick, not just
+  // at episode boundaries, so a /tp rescue (or plain walk) with no episode
+  // in between still re-arms (revmux 03 core-1). At episode boundaries
+  // decide() resets identically; only non-episode movement is newly seen.
+  try { recover.resetRecoverStreaksIfMoved(ctx, bp) } catch (_) { /* anchor best-effort */ }
   const moving = movingNow(bot)
   const anchor = () => { if (bp) ctx.lastPos = { x: bp.x, y: bp.y, z: bp.z } }
   // An episode (or a retreat pillar borrowing ctx.recovery) owns the body;

@@ -936,3 +936,41 @@ describe('stuck walkHomeTick (pure walk)', () => {
     assert.equal(stuck.homeReached(bot), false)
   })
 })
+
+describe('stuck update re-arms recover situation state (vmzq.47r4)', () => {
+  it('a tick past the anchor clears bans and page stamps with no episode', () => {
+    // Revmux 03 core-1: a /tp rescue (or plain walk) with no episode in
+    // between must still re-arm — the reset rides every tick, not just
+    // episode boundaries.
+    const bot = mockBot({ at: [50, 64, 0] })
+    const ctx = {
+      lastGoalKey: 'x',
+      recoverStreaks: {
+        anchor: { x: 0, y: 64, z: 0 },
+        fails: { sidestep: { n: 2, at: Date.now() } },
+        pageKeys: { ticker: Date.now() },
+      },
+    }
+    stuck.update(bot, ctx)
+    assert.deepEqual(ctx.recoverStreaks.fails, {})
+    assert.deepEqual(ctx.recoverStreaks.pageKeys, {})
+    assert.deepEqual(ctx.recoverStreaks.anchor, { x: 50, y: 64, z: 0 })
+  })
+
+  it('ticks at the anchor keep streaks and stamps', () => {
+    const bot = mockBot({ at: [1, 64, 0] })
+    const at = Date.now()
+    const ctx = {
+      lastGoalKey: 'x',
+      lastPos: { x: 1, y: 64, z: 0 },
+      recoverStreaks: {
+        anchor: { x: 0, y: 64, z: 0 },
+        fails: { sidestep: { n: 2, at } },
+        pageKeys: { ticker: at },
+      },
+    }
+    stuck.update(bot, ctx)
+    assert.equal(ctx.recoverStreaks.fails.sidestep.n, 2)
+    assert.equal(ctx.recoverStreaks.pageKeys.ticker, at)
+  })
+})
