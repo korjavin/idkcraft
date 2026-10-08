@@ -165,9 +165,11 @@ describe('vmzq.33 menu', () => {
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(goal.MENU.equip.feasible(facts, bot, ctx), true, 'the kit still wants arming')
     assert.equal(goal.MENU.castlebed.feasible(facts, bot, ctx), false, 'pick first, sheep later')
-    const bot2 = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'stone_pickaxe', count: 1 }] })
-    const facts2 = goal.goalFacts(bot2, { castle: castleState(), home: farHome() })
-    assert.equal(goal.MENU.castlebed.feasible(facts2, bot2, { castle: castleState() }), true, 'sword/scaffold top-ups wait')
+    const bot2 = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'stone_pickaxe', count: 1 }, { name: 'crafting_table', count: 1 }] })
+    const ctx2 = { castle: castleState(), home: farHome() }
+    const facts2 = goal.goalFacts(bot2, ctx2)
+    assert.equal(goal.MENU.equip.feasible(facts2, bot2, ctx2), true, 'the sword still wants arming')
+    assert.equal(goal.MENU.castlebed.feasible(facts2, bot2, ctx2), true, 'sword/scaffold top-ups wait')
   })
 
   it('night sleeps in a placed bed at the site', () => {
