@@ -337,11 +337,12 @@ const MENU = {
         try {
           if (require('./behaviours/beds').sheepLatched(ctx, bot)) return false // the shared sheepless latch
         } catch (_) { /* unreadable latch: hunt */ }
-        // Kit first (vmzq.17 chain): an unarmed bot equips before it hunts
-        // sheep — the pickless rearm rides this gate too.
-        try {
-          if (MENU.equip && MENU.equip.feasible(facts, bot, ctx)) return false
-        } catch (_) { /* unreadable kit: hunt */ }
+        // Pick first (vmzq.17 chain): a pickless bot equips before it hunts
+        // sheep — the pickless rearm rides this gate too. Sword/scaffold
+        // top-ups do not block: a hunt with a pick (or fists) still kills
+        // sheep, and gating on the whole kit stalled the fetch for days
+        // (rig: sword never armed, bed never fetched).
+        if ((facts.pickaxe || 0) <= 0) return false
         let maxP = 0
         try {
           const bedsMod = require('./behaviours/beds')
@@ -1860,9 +1861,7 @@ function stepWhy(name, facts, bot, ctx, text) {
         try {
           if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'castlebed: sheep hunt latched'
         } catch (_) { /* wording only */ }
-        try {
-          if (MENU.equip && MENU.equip.feasible(facts, bot, ctx)) return 'castlebed: kit first'
-        } catch (_) { /* wording only */ }
+        if ((facts.pickaxe || 0) <= 0) return 'castlebed: no pickaxe yet'
         return 'castlebed: need 3 planks of one wood'
       }
       if (!castleSiteNight(bot, ctx)) return 'castlebed: near home, the house steps win'

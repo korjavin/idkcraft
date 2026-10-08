@@ -128,7 +128,7 @@ describe('vmzq.33 sitebed fact', () => {
 })
 
 describe('vmzq.33 menu', () => {
-  const day = { time: 'day', home: 'built', inside: 'no', rearm: false, castle: 'stone-none' }
+  const day = { time: 'day', home: 'built', inside: 'no', rearm: false, castle: 'stone-none', pickaxe: 1 }
   const night = { time: 'night', home: 'built', inside: 'no', rearm: false, castle: 'stone-none' }
 
   it('day fetches with planks, no bed, unlatched sheep', () => {
@@ -143,7 +143,7 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot(), ctx), false, 'no planks, no hunt')
     const latched = { castle: castleState(), beds: { noWool: { fails: 2, at: Date.now() } } }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), latched), false, 'sheepless latch')
-    assert.equal(goal.MENU.castlebed.feasible({ ...day, rearm: true }, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), ctx), false, 'rearm first')
+    assert.equal(goal.MENU.castlebed.feasible({ ...day, rearm: true, pickaxe: 0 }, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), ctx), false, 'rearm first')
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), {}), false, 'no castle')
   })
 
@@ -159,12 +159,15 @@ describe('vmzq.33 menu', () => {
     assert.equal((await goal.decide(bot, ctx)).action, 'castlebed', 'the once fetch goes first')
   })
 
-  it('day yields to an unarmed kit (the vmzq.17 chain equips first)', () => {
+  it('day yields to a pickless kit, but a missing sword does not block', () => {
     const bot = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 }] })
     const ctx = { castle: castleState(), home: farHome() }
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(goal.MENU.equip.feasible(facts, bot, ctx), true, 'the kit still wants arming')
-    assert.equal(goal.MENU.castlebed.feasible(facts, bot, ctx), false, 'kit first, sheep later')
+    assert.equal(goal.MENU.castlebed.feasible(facts, bot, ctx), false, 'pick first, sheep later')
+    const bot2 = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'stone_pickaxe', count: 1 }] })
+    const facts2 = goal.goalFacts(bot2, { castle: castleState(), home: farHome() })
+    assert.equal(goal.MENU.castlebed.feasible(facts2, bot2, { castle: castleState() }), true, 'sword/scaffold top-ups wait')
   })
 
   it('night sleeps in a placed bed at the site', () => {
