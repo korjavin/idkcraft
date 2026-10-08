@@ -164,36 +164,47 @@ function unswimmable(movements, node, m) {
   return false
 }
 
-// Night deep-water entry ban (idkcraft-vmzq.44): Noel's-arc "cross only by
-// day" half for the n9ta quarry-run drownings. At night, moves ENTERING deep
-// water (landing 2+ deep from a dry or shallow source) are not offered, so
-// legs detour on land or hold ashore (noPath/timeout, retried till day)
-// instead of swimming into fresh drowned spawns; day crossings keep current
-// costs (the gate below no-ops off-night, so day plans are byte-identical to
-// master). A ban, not a cost, on measured evidence: a steep cost (+10/move,
-// danger's PATH_COST) still swam a forced 60-wide night crossing on the rig
-// (132/150 deep samples — a cost never holds without a land alternative),
-// and the n9ta probe priced ford-cost first and found neither death site has
-// a shallow ford to steer to (cost cannot change fatal lines). Shallow
-// (1-deep, wading with footing) stays plannable at night — fords still work —
-// and bodies already in deep at nightfall (day crossings in progress) keep
-// cruises and exits, so they swim OUT instead of treading: only the
-// non-deep -> deep transition prunes.
-function addNightWaterPrune(movements, bot) {
+// Night deep-water entry cost (idkcraft-vmzq.44): at night, work-mode legs
+// pay this per move landing in deep water (2+ column), so they detour on
+// land (any detour up to ~10x the water moves wins) instead of swimming into
+// fresh drowned spawns; day crossings keep current costs (the gate below
+// no-ops off-night, so day plans are byte-identical to master). A FINITE,
+// BOUNDED cost on verifier scope: a water-only target (island, gohome across
+// a river) stays reachable — a forced crossing pays and completes (R1 rig:
+// swam a 60-wide night crossing; that swimming is accepted reachability, not
+// a hold). R2-R3 shipped an entry ban; the verifier scoped it back to cost:
+// a ban made water-only targets unreachable till dawn and changed follow/
+// fight/orders behaviour the bead never decided.
+// Work scope (live owner read, like danger reads ctx live): only owner
+// 'work' pays — follow runs ambient (idle owner, never claims), so player
+// follows cross water at night exactly as before (the verifier MUST);
+// orders (lead/bring/comehome/gocastle), recover, breath and idle are exempt
+// too. Fight inside work mode is steered (bounded: still engages, just not
+// straight into deep water after drowned).
+const NIGHT_WATER_COST = 10 // danger's PATH_COST: a 6-wide river pays +60,
+// so land detours under ~60 extra moves win; longer detours lose honestly.
+function addNightWaterCost(movements, bot, ctx) {
   // Same wrap shape as addSwimPrune: real Movements only, installed once
-  // (body.js movementsFor is the single production call site, like
-  // danger.addPathCost — the gate reads the bot clock live, so a
-  // dusk-to-night transition steers the next plan with no reinstall).
-  if (!movements || typeof movements.getNeighbors !== 'function' || movements._nightWaterPruneInstalled) return
-  movements._nightWaterPruneInstalled = true
+  // (body.js movementsFor is the single production call site — the gate
+  // reads the bot clock AND the live body owner, so dusk-to-night and
+  // follow<->work transitions steer the next plan with no reinstall).
+  if (!movements || typeof movements.getNeighbors !== 'function' || movements._nightWaterCostInstalled) return
+  movements._nightWaterCostInstalled = true
   const orig = movements.getNeighbors.bind(movements)
   movements.getNeighbors = (node) => {
     const ns = orig(node)
-    if (!isNight(bot)) return ns
-    const committed = isDeepCell(movements, node, 0, 0, 0)
-    if (committed) return ns
-    return ns.filter((m) => !entersDeep(movements, node, m))
+    if (!isNight(bot) || !isWorkOwner(ctx)) return ns
+    for (const m of ns) {
+      if (!m || typeof m.cost !== 'number') continue
+      if (typeof m.x !== 'number' || typeof m.y !== 'number' || typeof m.z !== 'number') continue
+      if (isDeepCell(movements, node, m.x - node.x, m.y - node.y, m.z - node.z)) m.cost += NIGHT_WATER_COST
+    }
+    return ns
   }
+}
+
+function isWorkOwner(ctx) {
+  try { return !!ctx && !!ctx.body && ctx.body.owner === 'work' } catch (_) { return false }
 }
 
 // Night gate: the MC clock word, goal.js timeWord's night boundary
@@ -226,12 +237,4 @@ function isDeepCell(movements, node, dx, dy, dz) {
   return !!above && isWet(above)
 }
 
-// Entering deep: the landing is deep (dry/shallow landings never prune, so
-// exits and wading stay). Called only for non-deep sources (committed deep
-// bodies return early above).
-function entersDeep(movements, node, m) {
-  if (!m || typeof m.x !== 'number' || typeof m.y !== 'number' || typeof m.z !== 'number') return false
-  return isDeepCell(movements, node, m.x - node.x, m.y - node.y, m.z - node.z)
-}
-
-module.exports = { addSwimExits, addSwimPrune, addNightWaterPrune, SWIM_EXIT_COST, SWIM_RISE_COST }
+module.exports = { addSwimExits, addSwimPrune, addNightWaterCost, SWIM_EXIT_COST, SWIM_RISE_COST, NIGHT_WATER_COST }
