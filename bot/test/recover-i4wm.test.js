@@ -460,7 +460,9 @@ describe('i4wm post-shuffle staircase arm', () => {
     await step(pos(0.5, 62, 0.5), 'step 1 chains')
     await step(pos(1.5, 63, 0.5), 'step 2 chains')
     await step(pos(1.5, 64, 0.5), 'step 3 chains past 3 blocks moved')
-    assert.deepEqual(ctx.recoverStreaks.pageKeys, {}, 'page stamps still re-arm (legacy paging)')
+    assert.deepEqual(
+      ctx.recoverStreaks.pageKeys, { 'gather:far-chain': 1 },
+      'short hops keep page stamps (revmux 03 minor: no over-wipe)')
     // Fourth done ends the chain (REPEATS) and releases boxed: kept.
     bot.entity.position = pos(0.5, 65, 0.5)
     stuck.update(bot, ctx)
@@ -468,6 +470,17 @@ describe('i4wm post-shuffle staircase arm', () => {
     await recover.decide(bot, ctx, null, null)
     assert.equal(ctx.recovery, null, 'chain released')
     assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, 'ban survives the release')
+    // But a real >3 move across one continue still re-arms the stamps.
+    ctx.stuck = { by: 'gather', goal: levelGoal(), key: 'far-chain-2' }
+    ctx.recovery = {
+      action: 'dig_step', source: 'fsm', status: 'done', st: null,
+      attempts: 1, fails: 0, repeats: 0, last: null, lastY: null, flats: 0,
+    }
+    ctx.recoverStreaks.anchor = { x: -5, y: 61, z: 0.5 }
+    bot.entity.position = pos(0.5, 62, 0.5)
+    await recover.decide(bot, ctx, null, null)
+    assert.deepEqual(ctx.recoverStreaks.pageKeys, {}, 'a >3 hop across a continue re-arms')
+    assert.deepEqual(ctx.recoverStreaks.anchor, { x: 0.5, y: 62, z: 0.5 }, 'anchor follows')
   })
 
   it('a just-failed hop escalates to the staircase (4jr order pin)', () => {
