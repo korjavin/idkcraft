@@ -322,7 +322,7 @@ function placeTick(bot, ctx, cb, st, n) {
   const bp = botPos(bot)
   if (!bp) return
   if (Math.hypot(bp.x - foot.x, bp.y - foot.y, bp.z - foot.z) > PLACE_REACH) {
-    const key = 'castlebed-place'
+    const key = `castlebed-place:${foot.x},${foot.y},${foot.z}` // per spot: a same-night rescan re-goals — revmux 03 minor
     if (ctx.lastGoalKey !== key) {
       try { bot.pathfinder.setGoal(new goals.GoalNear(foot.x, foot.y, foot.z, 1), false) } catch (_) { /* retry next tick */ }
       ctx.lastGoalKey = key

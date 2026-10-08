@@ -36,7 +36,7 @@ function farHome() {
 
 // Flat world with an override set: dirt at y<=63, air above, bed/ground
 // overrides by key. blockAt takes Vec3 or plain points.
-function makeBot({ items = [], timeOfDay = 6000, at = pos(SITE.x + 15.5, 64, SITE.z + 13.5), set = new Map() } = {}) {
+function makeBot({ items = [], timeOfDay = 6000, at = pos(SITE.x + 15.5, 64, SITE.z + 13.5), set = new Map(), goals = null } = {}) {
   const bot = {
     username: 'IdkBot',
     chats: [],
@@ -52,7 +52,7 @@ function makeBot({ items = [], timeOfDay = 6000, at = pos(SITE.x + 15.5, 64, SIT
       if (name === null) return null // dark chunk
       return { name, position: p, boundingBox: name === 'air' || name === 'cave_air' || name === 'void_air' ? 'empty' : 'block' }
     },
-    pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null, movements: null, setMovements() {} },
+    pathfinder: { isMoving: () => false, setGoal(g) { if (goals) goals.push(g) }, stop() {}, goal: null, movements: null, setMovements() {} },
     clearControlStates() {},
     on() {},
     once() {},
@@ -315,7 +315,8 @@ describe('vmzq.33 night place and sleep', () => {
 
   it('a stalled walk drops the spot, the next night scans fresh', () => {
     const set = new Map()
-    const bot = makeBot({ timeOfDay: 18000, items: [{ name: 'white_bed', count: 1 }], set })
+    const goals = []
+    const bot = makeBot({ timeOfDay: 18000, items: [{ name: 'white_bed', count: 1 }], set, goals })
     const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
     castlebed(bot, ctx) // picks the spot, starts the walk
     const first = ctx.castlebed.at
@@ -333,6 +334,9 @@ describe('vmzq.33 night place and sleep', () => {
     const second = ctx.castlebed.at
     assert.ok(second, 'night 2 scans again')
     assert.ok(!ctx.castlebed.bad.has(`${second.x},${second.y},${second.z}`), 'a different spot')
+    const lastGoal = goals[goals.length - 1]
+    assert.ok(lastGoal && Math.abs(lastGoal.x - second.x) <= 1 && Math.abs(lastGoal.z - second.z) <= 1,
+      `night 2 goals the new spot, got: ${lastGoal ? `${lastGoal.x},${lastGoal.z}` : 'no goal'}`)
   })
 
   it('no bed at night yields to the shelter (done, no hold past dawn)', () => {
