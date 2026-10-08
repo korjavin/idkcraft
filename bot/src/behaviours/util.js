@@ -8,6 +8,7 @@
 // requires of its own) — still no repo import cycles.
 const { Vec3 } = require('vec3')
 const castle = require('../castle')
+const metrics = require('../metrics')
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
@@ -498,9 +499,59 @@ function installPlaceTiming(bot) {
   bot._placeTimingInstalled = true
   const orig = bot.placeBlock.bind(bot)
   bot.placeBlock = async (ref, face, opts) => {
+    // The hand at issue time (vmzq.47): eat/fight equip on the 1 Hz ticks
+    // and race the feet-clear wait below — _genericPlace sends CURRENT
+    // heldItem, so a swapped hand sends the wrong item and the server
+    // refuses 'still air'. Snapshot now, re-assert after the wait.
+    const want = bot.heldItem || null
     await feetClear(bot, ref, face)
+    assertRefSolid(bot, ref)
+    await reassertHand(bot, want)
     return orig(ref, face, opts)
   }
+}
+
+// The reference may have gone while the feet cleared (a dig resolving
+// under us, a client/server ghost): placing against air is a doomed
+// packet, so fail fast with the reason instead. Only air-like refuses —
+// an unreadable chunk reads as placed-against, never as gone.
+function assertRefSolid(bot, ref) {
+  const rp = ref && ref.position
+  if (!rp || !bot || typeof bot.blockAt !== 'function') return
+  let cur = null
+  try { cur = bot.blockAt(rp) } catch (_) { return }
+  if (cur && typeof cur.name === 'string' && cur.name !== '' && cur.name.endsWith('air')) {
+    throw new Error(`place reference is gone at ${rp.x},${rp.y},${rp.z} (ghost?)`)
+  }
+}
+
+// Restore the issued hand after the feet-clear wait (vmzq.47, see the
+// wrapper). Same kind reads as same hand — a twin stack places as well —
+// and a snapshot whose slot no longer holds that kind is stale (a twin
+// place consumed it): never equip whatever slid into the slot, fail with
+// the names instead. Every restore is a won race the old code sent as a
+// doomed packet, so it gets a log line plus the event metric.
+async function reassertHand(bot, want) {
+  if (!want || typeof want.name !== 'string') return
+  let heldName = null
+  try { heldName = bot.heldItem && bot.heldItem.name } catch (_) { return }
+  if (heldName === want.name) return
+  let slotName = null
+  try {
+    const slots = bot.inventory && bot.inventory.slots
+    const s = slots && typeof want.slot === 'number' ? slots[want.slot] : null
+    slotName = s && s.name
+  } catch (_) { slotName = null }
+  const interloper = heldName || 'nothing'
+  const swapped = () => new Error(`place hand swapped during issue (want ${want.name}, held ${interloper})`)
+  if (slotName !== want.name || typeof bot.equip !== 'function') throw swapped()
+  try {
+    await bot.equip(want, 'hand')
+  } catch (_) { throw swapped() }
+  try { heldName = bot.heldItem && bot.heldItem.name } catch (_) { heldName = null }
+  if (heldName !== want.name) throw swapped()
+  try { console.log(`place hand race won: restored ${want.name} over ${interloper}`) } catch (_) { /* log best-effort */ }
+  try { metrics.events.inc({ event: 'place_hand_race' }) } catch (_) { /* metrics best-effort */ }
 }
 
 // Record every successful placement in ctx.placedByBot ("x,y,z", capped).

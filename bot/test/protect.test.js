@@ -203,6 +203,76 @@ describe('canBreak guard (idkcraft-drq)', () => {
     assert.notEqual(early.placeBlock, raw, 'wrapped on spawn')
   })
 
+  it('restores a hand swapped mid-wait instead of sending the wrong item (vmzq.47)', async () => {
+    // Eat/fight equip on the 1 Hz ticks and race the feet-clear wait:
+    // _genericPlace sends CURRENT heldItem, so a swapped hand used to go
+    // out as a doomed packet ('still air'). The wrapper re-asserts the
+    // issued hand after the wait; the raw place sees dirt, not bread.
+    const dirt = { name: 'dirt', slot: 36, count: 19 }
+    const bread = { name: 'bread', slot: 37, count: 3 }
+    let sentHeld = null
+    const bot = {
+      heldItem: dirt,
+      inventory: { slots: { 36: dirt, 37: bread } },
+      entity: { position: new Vec3(0.5, 63.5, 0.5), velocity: new Vec3(0, 0.3, 0) },
+      waitForTicks: async () => { bot.heldItem = bread; bot.entity.position.y = 64.2 },
+      equip: async (item) => { bot.heldItem = item },
+      blockAt: () => ({ name: 'dirt' }),
+      placeBlock: async () => { sentHeld = bot.heldItem },
+    }
+    installPlaceTiming(bot)
+    await bot.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0))
+    assert.equal(sentHeld, dirt, 'the issued hand is restored before the send')
+  })
+
+  it('a stale snapshot slot throws instead of equipping a stranger (vmzq.47)', async () => {
+    // The twin place consumed the last dirt and cobble slid into the
+    // slot: re-equipping the snapshot would send the wrong item.
+    const dirt = { name: 'dirt', slot: 36, count: 0 }
+    const bot = {
+      heldItem: dirt,
+      inventory: { slots: { 36: { name: 'cobblestone', slot: 36 }, 37: { name: 'bread', slot: 37 } } },
+      entity: { position: new Vec3(0.5, 63.5, 0.5), velocity: new Vec3(0, 0.3, 0) },
+      waitForTicks: async () => { bot.heldItem = bot.inventory.slots[37]; bot.entity.position.y = 64.2 },
+      equip: async (item) => { bot.heldItem = item },
+      blockAt: () => ({ name: 'dirt' }),
+      placeBlock: async () => { throw new Error('doomed packet sent') },
+    }
+    installPlaceTiming(bot)
+    await assert.rejects(
+      bot.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0)),
+      /place hand swapped during issue \(want dirt, held bread\)/,
+    )
+  })
+
+  it('a vanished reference fails fast as ref-gone; unreadable chunks pass through (vmzq.47)', async () => {
+    const still = {
+      entity: { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) },
+      waitForTicks: async () => { throw new Error('waited') },
+      heldItem: { name: 'dirt', slot: 36 },
+      inventory: { slots: { 36: { name: 'dirt', slot: 36 } } },
+      equip: async () => {},
+      blockAt: () => ({ name: 'cave_air' }),
+      placeBlock: async () => { throw new Error('doomed packet sent') },
+    }
+    installPlaceTiming(still)
+    await assert.rejects(
+      still.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0)),
+      /place reference is gone/,
+    )
+    let sent = 0
+    const blind = {
+      entity: { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) },
+      waitForTicks: async () => { throw new Error('waited') },
+      heldItem: { name: 'dirt', slot: 36 },
+      blockAt: () => { throw new Error('unloaded') },
+      placeBlock: async () => { sent++ },
+    }
+    installPlaceTiming(blind)
+    await blind.placeBlock({ position: new Vec3(0, 63, 0) }, new Vec3(0, 1, 0))
+    assert.equal(sent, 1, 'unreadable reads as placed-against')
+  })
+
   it('logDeny prints the protected line without throwing', () => {
     assert.doesNotThrow(() => logDeny(blk('oak_planks', 1, 2, 3), 'protected'))
     assert.doesNotThrow(() => logDeny(null, 'protected'))

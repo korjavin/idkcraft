@@ -448,6 +448,26 @@ describe('stuck update: fast entry', () => {
     assert.equal(ctx.stuckResets, 1)
     assert.equal(ctx.lastPathReset, 'stuck')
   })
+
+  it('sustained tower spam fast-fires past the moving/key/jump gates (vmzq.47)', () => {
+    // c410: 172 place_error resets, moving=false, path=success, work key —
+    // neither entry fired for 3 min (the fast check needs shouldCount, the
+    // slow needs moving-or-terminal). Past PLACE_SPAM_ENTRY the streak
+    // alone raises: a parked executor plans no resets, and a healthy tower
+    // climbs and zeroes the streak via progressed().
+    const bot = mockBot({ moving: false, goal: null })
+    const ctx = { lastGoalKey: 'castle:12,64,0', lastPos: { x: 0, y: 64, z: 0 }, jumpCooldown: 4 }
+    for (let i = 0; i < stuck.PLACE_SPAM_ENTRY - 1; i++) stuck.countPathReset(ctx, 'place_error')
+    const cap = capture()
+    try {
+      stuck.update(bot, ctx)
+      assert.equal(ctx.stuck || null, null, '9 consecutive refusals hold (mid-cycle traffic)')
+      stuck.countPathReset(ctx, 'place_error')
+      stuck.update(bot, ctx)
+    } finally { cap.release() }
+    assert.equal(ctx.stuckState, 'STUCK', '10th consecutive refusal raises')
+    assert.equal(ctx.stuck.by, 'no-displacement')
+  })
 })
 
 describe('stuck update: idle probe (rra)', () => {

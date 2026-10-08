@@ -66,6 +66,17 @@ const BURY_AFTER = Math.max(1, parseInt(process.env.CASTLE_BURY_AFTER || '4', 10
 // CASTLE_BURY_NOWOOD=1 also clears planks/logs/sticks/tables: no pick can
 // be crafted, so only the bare-hand staircase (recover dig_step) gets out.
 const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
+// Pit-trapped with tools (vmzq.47, prod run7 stall962): after
+// CASTLE_PIT_AFTER min a pit-guide leads the follower east past the site
+// box and a CASTLE_PIT-deep open stone pit is built around it; it falls
+// in with a stone pickaxe + 19 dirt (the prod kit), and every placement
+// near/below the rim is refused with the prod text — recover must
+// dig-staircase out instead of looping pillar_up. The verdict gets
+// pit=escaped@Ns,resumed@Ms. 0 = off.
+// CASTLE_PIT_REFUSE=0 keeps placements working (control: pillar escape).
+const PIT = Math.max(0, parseInt(process.env.CASTLE_PIT || '0', 10) || 0)
+const PIT_AFTER = Math.max(1, parseInt(process.env.CASTLE_PIT_AFTER || '2', 10) || 2)
+const PIT_REFUSE = process.env.CASTLE_PIT_REFUSE !== '0'
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -502,6 +513,14 @@ async function main() {
   let buryPre = null
   let surfacedS = null
   let resumedS = null
+  let pitAt = 0
+  let pitPre = null
+  let pitRim = null
+  let pitCX = null
+  let pitCZ = null
+  let escapedS = null
+  let pitResumedS = null
+  let pitEsc = null
   while (Date.now() < endAt) {
     await sleep(15000)
     if (FAR > 0 && !farAt && Date.now() - t0 >= FAR_AFTER * 60000) {
@@ -546,11 +565,207 @@ async function main() {
       const k = sample()
       origLog(`CASTLE-RIG bury: at ${(buryAt - t0) / 1000 | 0}s ${buryPre}/${(st.progress && st.progress.total) ?? '?'} -> pocket ${px} ${py} ${pz} (${BURY} below ${gy}), picks cleared${BURY_NOWOOD ? ' + wood' : ''}, pack cobble=${k.cobble} planks=${k.planks} logs=${k.logs} pick=${k.pick}`)
     }
+    if (PIT > 0 && !pitAt && Date.now() - t0 >= PIT_AFTER * 60000) {
+      const pst = follower._tickerCtx && follower._tickerCtx.castle
+      if (!pst || !pst.site) fail('pit', 'no castle site')
+      // Lead-out past the site box (max width 31: inside it the pit stone
+      // reads as castle groundCell and every recover dig refuses
+      // 'protected' (c31)). The follower itself never tps — burst tp
+      // confirms lie (c698/c921 dropped nowhere with 'Teleported'
+      // printed). Instead an expendable pit-guide tps near the site
+      // (retried to client-verify), chats 'follow me', and walks east;
+      // the follower trails it by gameplay. Then the pit is built around
+      // the follower and it falls in — physics, client-verified.
+      const GUIDE2 = `PitGuide${TAG}`.slice(0, 16)
+      let guide2 = null
+      try {
+        guide2 = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE2, auth: 'offline' })
+        await waitFor(guide2, 'spawn', 60000, 'pit guide2 spawn')
+      } catch (e) { fail('pit', `guide2 join: ${e.message}`) }
+      await sleep(6000) // past Paper's same-IP connection throttle (guide precedent)
+      let pfMod = null
+      try {
+        pfMod = require('mineflayer-pathfinder')
+        guide2.loadPlugin(pfMod.pathfinder)
+      } catch (e) { fail('pit', `guide2 pathfinder: ${e.message}`) }
+      try { guide2.chat('follow me') } catch (e) { fail('pit', `guide2 chat: ${e.message}`) }
+      await sleep(2000) // the follower adopts on the next tick or two
+      const fpos = () => {
+        try {
+          const p = follower.entity && follower.entity.position
+          return p && typeof p.x === 'number' ? p : null
+        } catch (_) { return null }
+      }
+      const gpos = () => {
+        try {
+          const p = guide2.entity && guide2.entity.position
+          return p && typeof p.x === 'number' ? p : null
+        } catch (_) { return null }
+      }
+      try {
+        const moves = new pfMod.Movements(guide2)
+        moves.canDig = false // surface walk only: no tunnels the follower cannot trail
+        moves.allowParkour = true
+        moves.allowSprinting = true
+        guide2.pathfinder.setMovements(moves)
+      } catch (e) { fail('pit', `guide2 moves: ${e.message}`) }
+      // Guide2 goes by tp (the follower never does): it is expendable and
+      // retries are cheap, and its client position is truth (no rcon
+      // data-get, whose point readback false-passed once (c921)). Then a
+      // short lead on loaded chunks — a 400-block GoalXZ from world spawn
+      // never computes (c69, c900) and strands the lead.
+      const G2X = pst.site.x + 10
+      const G2Z = pst.site.z
+      let g2there = false
+      for (let i = 0; i < 5 && !g2there; i++) {
+        if (i > 0) await sleep(2000) // space burst rcon (silent-no-op class)
+        await rcon(`tp ${GUIDE2} ${G2X + 0.5} ${gy + 1} ${G2Z + 0.5}`).catch(() => {}) // confirm lies; client verifies
+        for (let k = 0; k < 10 && !g2there; k++) {
+          await sleep(1000)
+          const gp = gpos()
+          if (gp && Math.hypot(gp.x - (G2X + 0.5), gp.z - (G2Z + 0.5)) < 6 && Math.abs(gp.y - (gy + 1)) < 3) g2there = true
+        }
+      }
+      if (!g2there) fail('pit', 'guide2 tp never applied (client readback)')
+      // Pull-to-window on the flat on-pad east strip (pad x1 274, site box
+      // ends at site.x+31): off-pad slopes slide the parked bot downhill
+      // and false-positive the fall-in (c216), and inside the box the pit
+      // stone is castle-protected (c31). Guide2 steps east until the
+      // follower reads inside [site.x+32, site.x+36].
+      const WIN_LO = pst.site.x + 32
+      const WIN_HI = pst.site.x + 36
+      let ledOut = false
+      for (let step = 0; step < 12 && !ledOut; step++) {
+        try { guide2.pathfinder.setGoal(new pfMod.goals.GoalXZ(pst.site.x + 38 + step * 5, pst.site.z)) } catch (e) { fail('pit', `guide2 goal: ${e.message}`) }
+        for (let i = 0; i < 10 && !ledOut; i++) {
+          await sleep(2000)
+          const fp = fpos()
+          if (fp && fp.x >= WIN_LO && fp.x <= WIN_HI) ledOut = true
+        }
+      }
+      try { guide2.chat('stop') } catch (_) { /* parking best-effort */ }
+      await sleep(2000)
+      if (!ledOut) fail('pit', 'follower never entered the on-pad window [site.x+32, site.x+36] (lead-out)')
+      // Parked for the build: a working bot walks out from under the fills
+      // (c982). Resume ('go work') only after the fall verifies — 'stop'
+      // alone would park it idle with no goal to get stuck against (c429).
+      // The hollow takes its footing and it falls 4 to the pit floor.
+      // Hollow east-shifted so it lands in the west column, wall-adjacent
+      // (a centre landing has no dig_step: no solid side at feet — the
+      // dead zone, not the dig).
+      let bx = null
+      let by = null
+      let bz = null
+      for (let i = 0; i < 20; i++) {
+        await sleep(500)
+        try {
+          if (follower.entity && follower.entity.onGround !== false) {
+            const p = follower.entity.position
+            if (p && typeof p.x === 'number') { bx = Math.floor(p.x); by = Math.floor(p.y); bz = Math.floor(p.z); break }
+          }
+        } catch (_) { /* settling */ }
+      }
+      if (bx == null) fail('pit', 'follower never settled')
+      if (bx < WIN_LO || bx > WIN_HI) fail('pit', 'settle x left the on-pad window')
+      // Mass rim (bx-3..bx+3) stays on the flattened pad: WIN_HI+3 <= 274.
+      await rcon(`fill ${bx - 3} ${by - 5} ${bz - 2} ${bx + 3} ${by - 1} ${bz + 2} minecraft:stone`).catch((e) => fail('pit', e.message))
+      await sleep(1000) // space burst rcon (same silent-no-op class as the tps)
+      await rcon(`fill ${bx} ${by - 4} ${bz - 1} ${bx + 2} ${by + 6} ${bz + 1} minecraft:air`).catch((e) => fail('pit', e.message))
+      // Fill-verify (client scan): burst rcon silently no-ops (c698). The
+      // mass cell proves the mass applied; the hollow cell is air only if
+      // the hollow applied on top of it (the mass would stone it).
+      await sleep(1000)
+      let massOk = false
+      let hollowOk = false
+      try {
+        const m = follower.blockAt(new Vec3(bx - 3, by - 2, bz))
+        massOk = !!(m && m.name !== 'air' && m.name !== 'cave_air' && m.name !== 'void_air')
+        const h = follower.blockAt(new Vec3(bx + 1, by - 2, bz))
+        hollowOk = !!(h && (h.name === 'air' || h.name === 'cave_air' || h.name === 'void_air'))
+      } catch (_) { /* scan failed: verify loud below */ }
+      if (!massOk || !hollowOk) fail('pit', `fills never landed (mass=${massOk} hollow=${hollowOk})`)
+      // Persistent fall-in: one low read is a downhill slide off-pad, a
+      // jump transient, or lag — three consecutive lows is the pit floor.
+      let lowRun = 0
+      let fellIn = false
+      for (let i = 0; i < 30 && !fellIn; i++) {
+        await sleep(500)
+        const p = fpos()
+        if (p && Math.floor(p.y) <= by - 3) { lowRun++; if (lowRun >= 3) fellIn = true } else lowRun = 0
+      }
+      if (!fellIn) fail('pit', 'follower never fell in')
+      // Open top (client scan, no rcon): a hill lip overhead head-blocks
+      // every dig mount and the pit is unescapable-by-shape.
+      let capped = false
+      try {
+        for (let y = by; y <= by + 6; y++) {
+          const b = follower.blockAt(new Vec3(bx + 1, y, bz))
+          if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') { capped = true; break }
+        }
+      } catch (_) { capped = false }
+      if (capped) fail('pit', 'capped by terrain (re-run; the walk varies)')
+      const qy = by - PIT // pit-floor feet level; rim feet level is by
+      await sleep(1000)
+      await rcon(`give ${FOLLOWER} minecraft:stone_pickaxe 1`).catch((e) => fail('pit', e.message))
+      await sleep(1000)
+      await rcon(`give ${FOLLOWER} minecraft:dirt 19`).catch((e) => fail('pit', e.message))
+      await sleep(1000)
+      await rcon(`clear ${FOLLOWER} minecraft:water_bucket`).catch(() => { /* none held */ })
+      await sleep(2000) // the pack read lags the gives
+      pitRim = by
+      pitCX = bx + 1
+      pitCZ = bz
+      if (PIT_REFUSE && !follower._pitRefuseInstalled) {
+        // Installed BEFORE the resume: a post-resume install gives the bot
+        // an unrefused head start and it pillar-towers out (c913: 67->69
+        // in the 4s gap). Below the rim, near the pit, every placement
+        // throws the run7 text. Above the rim or back at the site the real
+        // place runs, so resumed-seconds still measure.
+        follower._pitRefuseInstalled = true
+        const rawPlace = follower.placeBlock.bind(follower)
+        follower.placeBlock = async (ref, face, opts) => {
+          let p = null
+          try { p = follower.entity && follower.entity.position } catch (_) { p = null }
+          if (p && typeof p.y === 'number' && p.y < pitRim &&
+            Math.hypot(p.x - (pitCX + 0.5), p.z - (pitCZ + 0.5)) <= 6) {
+            const held = (follower.heldItem && follower.heldItem.name) || 'block'
+            const rp = ref && ref.position
+            const d = rp && face ? `(${rp.x + face.x}, ${rp.y + face.y}, ${rp.z + face.z})` : '(?, ?, ?)'
+            throw new Error(`Server refused to place ${held} at ${d}: the block is still air`)
+          }
+          return rawPlace(ref, face, opts)
+        }
+      }
+      try { guide2.chat('go work') } catch (_) { /* resume best-effort */ }
+      await sleep(2000) // adopts on the next tick or two
+      try { guide2.quit() } catch (_) { /* quit best-effort */ }
+      // Post-kit still-low: the parked bot must still read pit-low after
+      // the kit round-trips, else the fall-in verified a slope, not the
+      // pit (c216: fall verified, then site+laying with zero recover).
+      {
+        const pk = fpos()
+        if (!pk || Math.floor(pk.y) > by - 3) fail('pit', `follower not pit-low after kit (y=${pk ? pk.y : '?'}, need block<=${by - 3})`)
+      }
+      pitAt = Date.now()
+      pitPre = pst.progress && typeof pst.progress.done === 'number' ? pst.progress.done : 0
+      const k = sample()
+      origLog(`CASTLE-RIG pit: at ${(pitAt - t0) / 1000 | 0}s ${pitPre}/${(pst.progress && pst.progress.total) ?? '?'} -> open ${PIT}-deep stone pit ${bx} ${qy} ${bz} (rim ${by}), pick+scaffold kit, refuse=${PIT_REFUSE ? 'on' : 'off'}, pack cobble=${k.cobble} dirt=${k.dirt} pick=${k.pick}`)
+    }
     const s = sample()
     if (buryAt) {
       const since = Math.round((Date.now() - buryAt) / 1000)
       if (surfacedS == null && typeof s.y === 'number' && s.y >= gy - 2) surfacedS = since
       if (surfacedS != null && resumedS == null && typeof s.done === 'number' && s.done > buryPre) resumedS = since // laid after surfacing
+    }
+    if (pitAt) {
+      const since = Math.round((Date.now() - pitAt) / 1000)
+      // Resume baselines at the escape sample, not the pit sample: the
+      // initial done=0 is set without scanning, so the first rescan can
+      // jump on terrain stone (c378: 0->5 from the pit floor) and a
+      // pit-baselined resume would fire at the escape sample.
+      if (escapedS == null && typeof s.y === 'number' && s.y >= pitRim) { escapedS = since; pitEsc = typeof s.done === 'number' ? s.done : null }
+      const resumeBase = pitEsc != null ? pitEsc : pitPre
+      if (escapedS != null && pitResumedS == null && typeof s.done === 'number' && s.done > resumeBase) pitResumedS = since // laid after escaping
     }
     drainSaid()
     checkpoint()
@@ -579,7 +794,8 @@ async function main() {
   const farMin = farAt ? Math.min(...series.filter((x) => x.t * 1000 >= farAt - t0 && typeof x.done === 'number').map((x) => x.done)) : null
   const farTag = farAt ? `, far=${farPre}/${farMin}/${done}${farMin < farPre ? ' DROPPED' : ''}` : ''
   const buryTag = buryAt ? `, bury=surfaced@${surfacedS ?? 'never'}s,resumed@${resumedS ?? 'never'}s` : ''
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}`
+  const pitTag = pitAt ? `, pit=escaped@${escapedS ?? 'never'}s,resumed@${pitResumedS ?? 'never'}s` : ''
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
