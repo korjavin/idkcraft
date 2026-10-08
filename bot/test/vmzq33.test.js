@@ -338,6 +338,27 @@ describe('vmzq.33 night place and sleep', () => {
     assert.deepEqual(ctx.castle.siteBed, at, 'claimed once whole')
   })
 
+  it('an unclaimed bed keeps the menu on castlebed (revmux 07 core-1)', async () => {
+    const set = new Map()
+    putBed(set, 90, 64, 190) // the flight consumed the item; the claim has not landed
+    const bot = makeBot({ timeOfDay: 18000, items: [], at: pos(90.5, 64, 190.5), set })
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { at: { x: 90, y: 64, z: 190 } }, work: true }
+    assert.equal(goal.goalFacts(bot, ctx).sitebed, 'placed', 'an unclaimed bed reads placed')
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlebed', 'the menu holds the step, not shelter')
+    castlebed(bot, ctx)
+    assert.deepEqual(ctx.castle.siteBed, { x: 90, y: 64, z: 190 }, 'the next tick claims')
+  })
+
+  it('a stale spot with no bed in it never routes to place (07 minor)', () => {
+    const bot = makeBot({ timeOfDay: 12500, items: [] })
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { at: { x: 90, y: 64, z: 190 } } }
+    assert.equal(castlebed.sitebedFact(bot, ctx), 'none', 'stale air reads none: the dusk craft runs, not place')
+    const set = new Map()
+    set.set('90,64,190', 'white_bed') // a syncing half still routes to place
+    const bot2 = makeBot({ timeOfDay: 12500, items: [], set })
+    assert.equal(castlebed.sitebedFact(bot2, ctx), 'placed', 'a half reads placed: the sync wait runs')
+  })
+
   it('adopts a bed orphaned on a dropped spot instead of re-fetching', () => {
     const set = new Map()
     putBed(set, 90, 64, 190)

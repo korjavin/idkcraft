@@ -94,12 +94,43 @@ function siteBedStands(bot, ctx) {
   }
 }
 
+// A placed-but-unclaimed bed: the flight consumed the item before the claim
+// landed (a verifying half or an orphan on a dropped spot). Pure (never
+// writes); the menu and nightTick route through it.
+function unclaimedBed(bot, ctx) {
+  try {
+    const cb = ctx && ctx.castlebed
+    if (!cb) return false
+    const holdsBed = (x, y, z) => {
+      try {
+        if (bedsMod.bedAt(bot, new Vec3(x, y, z))) return true
+        const fn = blockNameAt(bot, new Vec3(x, y, z))
+        const hn = blockNameAt(bot, new Vec3(x + 1, y, z))
+        return !!((fn && fn.endsWith('_bed')) || (hn && hn.endsWith('_bed')))
+      } catch (_) { return false }
+    }
+    if (cb.at && typeof cb.at.x === 'number' && holdsBed(cb.at.x, cb.at.y, cb.at.z)) return true
+    if (cb.bad) {
+      for (const key of cb.bad) {
+        const m = typeof key === 'string' && key.match(/^(-?\d+),(-?\d+),(-?\d+)$/)
+        if (m && holdsBed(+m[1], +m[2], +m[3])) return true
+      }
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
+
 // Pure placed truth for goalFacts (never writes): placed, packed (a bed item
-// awaits dusk), or none.
+// awaits dusk), or none. An unclaimed bed reads placed: the menu must keep
+// picking the step while the verify runs, or the arbiter drops to shelter
+// the tick the flight consumes the item (revmux 07 core-1).
 function sitebedFact(bot, ctx) {
   try {
     if (siteBedStands(bot, ctx)) return 'placed'
     if (bedMod.bedInPack(bedMod.packCounts(bot))) return 'packed'
+    if (unclaimedBed(bot, ctx)) return 'placed'
     return 'none'
   } catch (_) {
     return 'none'
@@ -456,6 +487,18 @@ function placeTick(bot, ctx, cb, st, n) {
       } else {
         await bot.placeBlock(ref, new Vec3(0, 1, 0))
       }
+      // The item is consumed: claim as soon as the whole bed syncs, inside
+      // the flight — the next tick's menu runs before any verify pass, and
+      // without a claim it reads packed→none and drops to shelter (07 core-1).
+      for (let i = 0; i < 10 && !placedNow(); i++) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (placedNow()) {
+        try { st.siteBed = { x: foot.x, y: foot.y, z: foot.z } } catch (_) { /* claim best-effort */ }
+        try { delete st.sleptSite } catch (_) { /* a fresh bed needs a fresh sleep */ }
+        cb.fails = 0
+        try { bot.chat('site bed is in') } catch (_) { /* chat best-effort */ }
+      }
     } catch (err) {
       cb.fails = fails() + 1
       if (fails() === 1) {
@@ -574,9 +617,10 @@ function nightTick(bot, ctx, cb, st) {
     if (st.siteBed) { deadTonight(ctx, cb, n); return }
   }
   const pack = bedMod.packCounts(bot)
-  // A pending spot or a dropped one may hold a verifying/orphaned bed even
-  // with an empty pack (the flight consumes the item first).
-  if (bedMod.bedInPack(pack) || cb.at || (cb.bad && cb.bad.size > 0)) { placeTick(bot, ctx, cb, st, n); return }
+  // A verifying/orphaned bed routes to place even with an empty pack (the
+  // flight consumes the item first) — but a stale spot with no bed in it
+  // falls through to the dusk craft instead of yielding the night (07 minor).
+  if (bedMod.bedInPack(pack) || unclaimedBed(bot, ctx)) { placeTick(bot, ctx, cb, st, n); return }
   // Wool covered but uncrafted at dusk: craft now, place next tick.
   const color = bedMod.pickBedColor(pack)
   if (color && (pack[`${color}_wool`] || 0) >= bedMod.BED_WOOL) {
@@ -609,6 +653,7 @@ function castlebed(bot, ctx, target, state) {
 
 module.exports = castlebed
 module.exports.siteBedStands = siteBedStands
+module.exports.unclaimedBed = unclaimedBed
 module.exports.sitebedFact = sitebedFact
 module.exports.bedCraftable = bedCraftable
 module.exports.nearSite = nearSite
