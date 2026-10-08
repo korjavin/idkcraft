@@ -229,6 +229,13 @@ function castleOf(c) {
       if (pb) out.planb = pb
     } catch (_) { /* park best-effort */ }
     if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
+    // Site bed (vmzq.33): the placed foot claim + slept flag, like home
+    // bedA/sleptA. Additive: restarts keep sleeping in the same bed.
+    try {
+      const sb = pt(c.siteBed)
+      if (sb && [sb.x, sb.y, sb.z].every(Number.isInteger)) out.siteBed = sb
+      if (c.sleptSite === true) out.sleptSite = true
+    } catch (_) { /* claims best-effort */ }
     // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side
     // (null = unprobed). A restart resumes the same frame instead of
     // re-probing dug floors as ground and walking the trench down.

@@ -55,6 +55,7 @@ const BEHAVIOURS = {
   build: require('./behaviours/build'),
   castle: castleMod,
   castlefetch: require('./behaviours/castlefetch'),
+  castlebed: require('./behaviours/castlebed'),
   beds: require('./behaviours/beds'),
   light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
@@ -243,6 +244,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.gohome = null
     ctx.stay = null
     ctx.shelter = null
+    ctx.castlebed = null // a stale site-bed leg must not survive an order/stop/fresh work
     ctx.inShelter = false
     wakeBody(bot) // jr2.2: an order takes the body even at night
     // canDig is the body's (body.js): clearing ctx.gohome above ends the
@@ -1049,7 +1051,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // home (and no castle) the work block picks a day step — working
         // the dark with fight suppressed for 60 s. Fall back to the
         // brain's fight instead; a night step runs the hold as usual.
-        if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter') {
+        if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter' && decision.action !== 'castlebed') {
           if (!ctx.nightGraceFallbackLogged) {
             console.log(`night-grace: work picked ${decision.action}, fighting instead`)
             ctx.nightGraceFallbackLogged = true
@@ -1449,7 +1451,10 @@ function respawnLine(bot) {
     const ctx = bot && bot._tickerCtx
     // The claim alone never set the spawn: only a slept bed wins (revmux
     // 01-review — a day-1 /kill before first sleep lands on world spawn).
-    bed = ctx && ctx.home && ctx.home.sleptA && (ctx.home.bedA || null)
+    // The sleeps are exclusive (each sleep clears the other flag), so the
+    // surviving flag is the last spawn.
+    bed = (ctx && ctx.castle && ctx.castle.sleptSite && (ctx.castle.siteBed || null)) ||
+      (ctx && ctx.home && ctx.home.sleptA && (ctx.home.bedA || null))
   } catch (_) { bed = null }
   const dest = (bed && typeof bed.x === 'number' && { x: bed.x, y: bed.y, z: bed.z }) ||
     (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
@@ -1481,6 +1486,7 @@ function handleDeath(bot, ticker) {
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
+      ctx.castlebed = null // the site-bed leg belongs to the dead body's position too
       ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
       ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
       if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null
@@ -1522,6 +1528,7 @@ function createLifecycle(ticker) {
       try {
         const ctx = bot && bot._tickerCtx
         if (ctx && ctx.home) delete ctx.home.sleptA // obstructed/mined: the spawn is world spawn again
+        if (ctx && ctx.castle) delete ctx.castle.sleptSite // same for the site bed (either bed may have gone)
       } catch (_) { /* claim best-effort */ }
     },
   }

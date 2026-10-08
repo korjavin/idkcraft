@@ -1162,22 +1162,31 @@ function relocate(bot, ctx, st, c, name, now) {
   })
 }
 
+// Door path (vmzq.40, shared with the site bed): the entrance's way out to
+// the nearest site edge and 4 beyond, 2 to either side. Stow spots and the
+// site bed keep off it. Pure over the site geometry; unreadable reads off.
+function onDoorPath(st, x, z) {
+  try {
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const { x: sx, z: sz } = st.site
+    const ent = entrance(st)
+    const [reach, ox, oz] = [[ent.x - sx + 1, -1, 0], [sx + w - ent.x, 1, 0], [ent.z - sz + 1, 0, -1], [sz + d - ent.z, 0, 1]]
+      .sort((a, b) => a[0] - b[0])[0]
+    const along = (x - ent.x) * ox + (z - ent.z) * oz
+    const lat = ox ? Math.abs(z - ent.z) : Math.abs(x - ent.x)
+    return along >= 0 && along <= reach + 4 && lat <= 2
+  } catch (_) {
+    return false
+  }
+}
 // Stow spot (vmzq.40): the nearest standable air cell 2..5 out of the site
-// box, off the door path (the entrance's way out to the nearest site edge
-// and 4 beyond, 2 to either side). Air above too: a chest lid needs it.
+// box, off the door path (see onDoorPath). Air above too: a chest lid needs it.
 function stowSpot(bot, st, bad) {
   const bp = bodyPos(bot)
   if (!bp) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, y: sy, z: sz } = st.site
-  const ent = entrance(st)
-  const [reach, ox, oz] = [[ent.x - sx + 1, -1, 0], [sx + w - ent.x, 1, 0], [ent.z - sz + 1, 0, -1], [sz + d - ent.z, 0, 1]]
-    .sort((a, b) => a[0] - b[0])[0]
-  const onPath = (x, z) => {
-    const along = (x - ent.x) * ox + (z - ent.z) * oz
-    const lat = ox ? Math.abs(z - ent.z) : Math.abs(x - ent.x)
-    return along >= 0 && along <= reach + 4 && lat <= 2
-  }
+  const onPath = (x, z) => onDoorPath(st, x, z)
   const y0 = Math.max(Math.floor(bp.y), sy)
   let best = null
   for (let r = 2; r <= 5; r++) {
@@ -1529,6 +1538,7 @@ module.exports.BATCH = BATCH
 module.exports.BATCH_OF = BATCH_OF
 module.exports.batchOf = batchOf
 module.exports.entrance = entrance
+module.exports.onDoorPath = onDoorPath
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 module.exports.siteLoaded = siteLoaded
 module.exports.siteDist = siteDist

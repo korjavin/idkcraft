@@ -15,6 +15,7 @@ const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const home = require('../src/behaviours/home')
 const recover = require('../src/behaviours/recover')
+const goal = require('../src/goal')
 const { createTicker, BEHAVIOURS, handleRespawn } = require('../src/index')
 
 function pos(x, y, z) {
@@ -415,6 +416,35 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
       assert.equal(fightRan, 1)
       assert.ok(lines.some((l) => l.includes('night-grace:') && l.includes('fighting instead')), `fallback logged, got: ${lines.join(' | ')}`)
       assert.equal(ctx.step, null, 'pre-check never ran goal.decide (no step, no chat)')
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('fresh grace but work picks a day step (night steps held): fights instead (post-check)', async () => {
+    const bot = graceBot()
+    const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = v2home({ x: 200, y: 64, z: 200 }) // far: shelter feasible, the pre-check passes
+    ctx.adoptDone = true // past the spawn-chunk adopt grace: goal decides now
+    ctx.lastRespawnAt = Date.now()
+    // Hold the shelter (failed, same facts text, same pos): decide falls
+    // through the night steps to a day step, and the post-check must catch it.
+    const text = goal.goalText(goal.goalFacts(bot, ctx))
+    const p = bot.entity.position
+    ctx.stepFail = { shelter: { status: 'failed:no-scaffold', text, pos: { x: p.x, y: p.y, z: p.z } } }
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', 'post-check falls back to fight')
+      assert.equal(fightRan, 1)
+      assert.ok(lines.some((l) => l.includes('night-grace:') && l.includes('work picked')), `post-check logged, got: ${lines.join(' | ')}`)
+      assert.ok(ctx.step && ctx.step !== 'stay' && ctx.step !== 'gohome' && ctx.step !== 'shelter',
+        `decide ran and picked a day step, got: ${ctx.step}`)
     } finally {
       BEHAVIOURS.fight = origFight
       ticker.destroy()

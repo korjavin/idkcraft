@@ -729,6 +729,7 @@ function sleepTick(bot, ctx, home, st) {
       try {
         await bot.sleep(bed)
         try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
+        try { if (ctx && ctx.castle) delete ctx.castle.sleptSite } catch (_) { /* the home spawn wins */ }
         if (ctx.stay !== st) {
           // An order took the body mid-flight (revmux 02-review): the spawn
           // is set, but the body must not sleep under the order — wake at

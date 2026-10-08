@@ -89,7 +89,13 @@ const MENU = {
     // Castle site (vmzq.19): with an active castle and the bot away from
     // home it shelters from dusk anywhere — mid-map it pillars in place —
     // and the built-home gate lifts (an unbuilt far house still shelters).
-    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx),
+    // Site bed first (vmzq.33): a ready site bed sleeps, the pillar is the fallback.
+    feasible: (facts, bot, ctx) => {
+      try {
+        if (MENU.castlebed && registered('castlebed') && MENU.castlebed.feasible(facts, bot, ctx)) return false
+      } catch (_) { /* shelter decides */ }
+      return (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx)
+    },
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -289,6 +295,58 @@ const MENU = {
       !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running' && castleFetchGo(facts, bot, ctx)),
     chat: () => 'on my own: building the castle',
     verb: 'building the castle',
+  },
+  castlebed: {
+    // The castle site bed (vmzq.33): by day fetch one bed once (wool hunt +
+    // craft), at dusk/night place it outside the site and sleep in it.
+    // Sleeping skips the night, resets phantoms, and sets the spawn at the
+    // site; when no bed can be had the step is infeasible and the shelter
+    // (which yields to a ready bed) runs as before. Day ranks below the
+    // castle chain (fetch in its gaps, never starve it); the night branch
+    // outranks the day steps because shelter yields above it.
+    feasible: (facts, bot, ctx) => {
+      if (!castleFirst(ctx)) return false // parked/complete castles need no site bed
+      let sb = 'none'
+      try {
+        sb = require('./behaviours/castlebed').sitebedFact(bot, ctx) || 'none' // deferred: the behaviour chain
+      } catch (_) { /* no bed: fetch or shelter below */ }
+      if (sb === 'placed') {
+        if (facts.time === 'day') return false // placed: nights sleep, days build
+        if (!castleSiteNight(bot, ctx)) return false // near home the house steps win
+        try {
+          if (!require('./behaviours/castlebed').nearSite(bot, ctx)) return false
+        } catch (_) { return false }
+        return facts.inside === 'no'
+      }
+      if (facts.time === 'day') {
+        if (sb === 'packed') return false // a packed bed awaits dusk
+        try {
+          if (require('./behaviours/beds').sheepLatched(ctx, bot)) return false // the shared sheepless latch
+        } catch (_) { /* unreadable latch: hunt */ }
+        // Kit first (vmzq.17 chain): an unarmed bot equips before it hunts
+        // sheep — the pickless rearm rides this gate too.
+        try {
+          if (MENU.equip && MENU.equip.feasible(facts, bot, ctx)) return false
+        } catch (_) { /* unreadable kit: hunt */ }
+        let maxP = 0
+        try {
+          const bedsMod = require('./behaviours/beds')
+          maxP = bedsMod.maxWoodPlanks(require('./behaviours/bed').packCounts(bot))
+        } catch (_) { maxP = 0 }
+        return maxP >= 3 // same-wood planks for the craft; wool comes from the hunt
+      }
+      if (!castleSiteNight(bot, ctx)) return false
+      try {
+        if (!require('./behaviours/castlebed').nearSite(bot, ctx)) return false
+      } catch (_) { return false }
+      if (facts.inside !== 'no') return false
+      if (sb === 'packed') return true
+      try {
+        return !!require('./behaviours/castlebed').bedCraftable(bot, ctx) // wool covered at dusk: craft, place, sleep
+      } catch (_) { return false }
+    },
+    chat: () => 'on my own: sleeping at the site',
+    verb: 'sleeping at the site',
   },
   gather: {
     // Only while material is still missing: plank-equivalent on hand vs the
@@ -846,7 +904,7 @@ function shelterFits(facts, bot, ctx) {
 // (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'castlebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1298,6 +1356,12 @@ function goalFacts(bot, ctx) {
   try {
     beds = require('./behaviours/beds').bedsFact(bot, ctx && ctx.home) || 'both'
   } catch (_) { /* unreadable beds */ }
+  // Site bed (vmzq.33): placed/packed/none while a castle runs. Unreadable
+  // reads none: castlebed yields, the shelter runs.
+  let sitebed = 'none'
+  try {
+    if (ctx && ctx.castle) sitebed = require('./behaviours/castlebed').sitebedFact(bot, ctx) || 'none'
+  } catch (_) { /* unreadable site bed */ }
   // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
   // Unreadable reads done (light precedent): gear yields, nothing churns.
   let gear = 'done'
@@ -1324,7 +1388,7 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* unknown food reads full */ }
   let rearm = false
   try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
-  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, sitebed, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -1382,7 +1446,9 @@ function goalText(facts, home) {
     `chest=${facts.chest} surplus=${facts.surplus} handover=${facts.gearHandover} gear=${facts.gear} beds=${beds}` +
     // Castle word only while a castle exists (g0z.3): castle-less text
     // stays byte-identical for the model and every pinned state string.
-    (facts.castle && facts.castle !== 'none' ? ` castle=${facts.castle}` : '') +
+    // The sitebed word rides with it (vmzq.33, ahead of the castle word so
+    // the castle word stays last): placed/packed/none.
+    (facts.castle && facts.castle !== 'none' ? ` sitebed=${facts.sitebed || 'none'} castle=${facts.castle}` : '') +
     (noSword ? ' sword=no' : '') +
     (noPick ? ' pickaxe=no' : woodPick ? ' pickaxe=wood' : '') +
     (blocksLow ? ' blocks=low' : '')
@@ -1512,6 +1578,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
+  castlebed: 'castle is not none and sitebed is none and time is day: hunt sheep for wool and craft the castle site bed; sitebed is packed or placed and time is dusk or night: place the bed outside the castle and sleep in it',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
@@ -1559,6 +1626,10 @@ async function chooseStep(brain, facts, feasible, home) {
   // consulted only when the castle cannot run now.
   // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
   if (fsm === 'castle' || fsm === 'castlefetch' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  // Site-bed rule (vmzq.33, the castle-rule precedent): a runnable site bed
+  // is a rule, not a preference — the night branch is safety (sleep beats a
+  // pillar), the day fetch is once and must not lose its gap to a day step.
+  if (fsm === 'castlebed') return { step: fsm, source: 'castlebed-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -1750,6 +1821,37 @@ function stepWhy(name, facts, bot, ctx, text) {
       }
       if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return 'castlefetch: no pickaxe'
       return 'castlefetch: batch on hand'
+    }
+    case 'castlebed': {
+      let cf = false
+      try { cf = castleFirst(ctx) } catch (_) { cf = false }
+      if (!cf) return 'castlebed: no castle ordered'
+      let sb = 'none'
+      try { sb = require('./behaviours/castlebed').sitebedFact(bot, ctx) || 'none' } catch (_) { sb = 'none' }
+      if (sb === 'placed') {
+        if (facts.time === 'day') return 'castlebed: site bed waits for dusk'
+        if (!castleSiteNight(bot, ctx)) return 'castlebed: near home, the house steps win'
+        try {
+          if (!require('./behaviours/castlebed').nearSite(bot, ctx)) return 'castlebed: too far from the site'
+        } catch (_) { return 'castlebed: too far from the site' }
+        return facts.inside === 'no' ? 'castlebed: not feasible' : 'castlebed: already inside'
+      }
+      if (facts.time === 'day') {
+        if (sb === 'packed') return 'castlebed: bed packed, waits for dusk'
+        try {
+          if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'castlebed: sheep hunt latched'
+        } catch (_) { /* wording only */ }
+        try {
+          if (MENU.equip && MENU.equip.feasible(facts, bot, ctx)) return 'castlebed: kit first'
+        } catch (_) { /* wording only */ }
+        return 'castlebed: need 3 planks of one wood'
+      }
+      if (!castleSiteNight(bot, ctx)) return 'castlebed: near home, the house steps win'
+      try {
+        if (!require('./behaviours/castlebed').nearSite(bot, ctx)) return 'castlebed: too far from the site'
+      } catch (_) { return 'castlebed: too far from the site' }
+      if (facts.inside !== 'no') return 'castlebed: already inside'
+      return 'castlebed: no bed to place'
     }
     case 'gather':
       if (ctx && ctx.home && ctx.home.parked) return 'gather: house parked'
@@ -2093,7 +2195,7 @@ async function decide(bot, ctx) {
           }
         })
         const safety = goalFsm(facts, earlyNames)
-        commitForce = safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter'
+        commitForce = safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter' && safety !== 'castlebed'
       }
     } catch (_) {
       commitForce = false
@@ -2183,7 +2285,7 @@ async function decide(bot, ctx) {
       } catch (_) {
         safety = null
       }
-      if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter') {
+      if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter' && safety !== 'castlebed') {
         let ok = false
         try {
           ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
