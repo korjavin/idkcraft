@@ -421,6 +421,55 @@ describe('i4wm post-shuffle staircase arm', () => {
     assert.equal((await recover.decide(bot, ctx, null, null)).action, 'dig_step', 'ep5 digs on')
   })
 
+  it('a boxed chain keeps the ban past 3 blocks moved (revmux 02 major)', async () => {
+    // Deep-pit staircase: the far level goal chains dig_step (pitChain),
+    // ~1 up +1 sideways per step, stuck.update ticks between steps (the
+    // per-tick move-reset that wiped the runs mid-chain before r3).
+    // Displacement passes 3 mid-chain; the ban must survive to the release.
+    // Tall 2x1 shaft: every stance boxed, pit, dig-feasible (the corner
+    // mock loses pit off-column, which stops the chain by design).
+    const stuck = require('../src/stuck')
+    const bot = cornerBot()
+    bot.entity.position = pos(0.5, 61, 0.5)
+    bot.blockAt = (p) => {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      let n = 'air'
+      if (y === 60 && x >= -2 && x <= 3 && Math.abs(z) <= 2) n = 'dirt'
+      else if (y >= 61 && y <= 70) {
+        if (x === -1 || x === 2 || Math.abs(z) === 1) n = 'stone'
+      }
+      return { name: n, position: new Vec3(x, y, z), boundingBox: n === 'air' ? 'empty' : 'block' }
+    }
+    const ctx = { stuck: { by: 'gather', goal: levelGoal(), key: 'far-chain' }, brain: null }
+    const bp0 = pos(0.5, 61, 0.5)
+    for (let i = 0; i < 3; i++) recover.noteRecoverDone(ctx, bp0, 'sidestep', true)
+    assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, 'banned going in')
+    ctx.recoverStreaks.pageKeys = { 'gather:far-chain': 1 }
+    ctx.recovery = {
+      action: 'dig_step', source: 'fsm', status: 'done', st: null,
+      attempts: 1, fails: 0, repeats: 0, last: null, lastY: null, flats: 0,
+    }
+    const step = async (p, want) => {
+      bot.entity.position = { ...p }
+      stuck.update(bot, ctx) // the mid-episode tick that used to wipe
+      ctx.recovery.status = 'done'
+      const d = await recover.decide(bot, ctx, null, null)
+      assert.equal(d.action, 'dig_step', want)
+      assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, `${want} (ban survives)`)
+    }
+    await step(pos(0.5, 62, 0.5), 'step 1 chains')
+    await step(pos(1.5, 63, 0.5), 'step 2 chains')
+    await step(pos(1.5, 64, 0.5), 'step 3 chains past 3 blocks moved')
+    assert.deepEqual(ctx.recoverStreaks.pageKeys, {}, 'page stamps still re-arm (legacy paging)')
+    // Fourth done ends the chain (REPEATS) and releases boxed: kept.
+    bot.entity.position = pos(0.5, 65, 0.5)
+    stuck.update(bot, ctx)
+    ctx.recovery.status = 'done'
+    await recover.decide(bot, ctx, null, null)
+    assert.equal(ctx.recovery, null, 'chain released')
+    assert.equal(recover.recoverShuffleBanned(ctx, 'sidestep'), true, 'ban survives the release')
+  })
+
   it('a just-failed hop escalates to the staircase (4jr order pin)', () => {
     // Done-banned sidestep, hop offered but just failed: the hop line
     // yields (4jr exclusion) and the arm takes it instead of re-hopping.

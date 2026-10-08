@@ -2568,6 +2568,24 @@ async function decide(bot, ctx, state, target) {
       }
       const chainCap = (RECOVER_MENU[prev] && RECOVER_MENU[prev].chainCap) || REPEATS
       if (closer && rec.repeats < chainCap && RECOVER_MENU[prev].repeatable(fresh)) {
+        // A boxed chain is one situation (i4wm r3): follow the streak anchor
+        // along it, or the per-tick move-reset (stuck.js, which also runs
+        // mid-episode) reads a 4-block staircase as leaving and wipes the
+        // done-runs mid-chain — the release-time keep then has nothing to
+        // keep and the shuffle returns between climb episodes (revmux 02
+        // major). Page stamps still re-arm on the move (legacy paging);
+        // unboxed chains keep legacy wipes (an escaping climb is a fresh
+        // start outside).
+        if (fresh && fresh.boxed) {
+          try {
+            const st = recoverStreakState(ctx)
+            const bp = botPos(bot)
+            if (st && bp) {
+              st.anchor = { x: bp.x, y: bp.y, z: bp.z }
+              st.pageKeys = {}
+            }
+          } catch (_) { /* bans best-effort */ }
+        }
         rec.lastDy = fresh.goalDy
         rec.status = 'running'
         rec.st = null
