@@ -567,13 +567,22 @@ function pitSpots(st) {
   const { x: sx, z: sz } = st.site
   const midX = sx + Math.floor((w - QUARRY_W) / 2) // N/S sides run along z
   const midZ = sz + Math.floor((d - QUARRY_W) / 2) // W/E sides run along x
+  // The gate side never pits (revmux 02 major): a mid-side pit straight out
+  // from the door digs up the approach. Entrance faces -z/+x/+z/-x for rot
+  // 0/1/2/3 (the rotatePlan convention); corners stay (off the axis).
+  const gate = [[0, -1], [1, 0], [0, 1], [-1, 0]][((st.rot | 0) % 4 + 4) % 4]
   const spots = []
   for (const g of PIT_GAPS) {
-    spots.push(
+    for (const m of [
       { x: sx - g, z: midZ, dx: -1, dz: 0, lx: 0, lz: 1 }, // west mid-side
       { x: sx + w - 1 + g, z: midZ, dx: 1, dz: 0, lx: 0, lz: 1 }, // east mid-side
       { x: midX, z: sz - g, dx: 0, dz: -1, lx: 1, lz: 0 }, // north mid-side
       { x: midX, z: sz + d - 1 + g, dx: 0, dz: 1, lx: 1, lz: 0 }, // south mid-side
+    ]) {
+      if (m.dx === gate[0] && m.dz === gate[1]) continue
+      spots.push(m)
+    }
+    spots.push(
       { x: sx - g, z: sz - g, dx: -1, dz: 0, lx: 0, lz: 1 }, // NW corner, run west
       { x: sx + w - 1 + g, z: sz - g, dx: 1, dz: 0, lx: 0, lz: 1 }, // NE corner, run east
       { x: sx - g, z: sz + d - 1 + g, dx: -1, dz: 0, lx: 0, lz: 1 }, // SW corner, run west

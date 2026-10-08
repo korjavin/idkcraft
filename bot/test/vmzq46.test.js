@@ -84,16 +84,36 @@ function band(o, c) {
 }
 
 describe('quarry-down pit spots (vmzq.46)', () => {
-  it('40 spots ring the footprint, nearest gap first', () => {
-    const spots = fetch.pitSpots(castleState())
-    assert.equal(spots.length, 40)
-    const gaps = spots.map((o) => (
-      o.dx === -1 ? SITE.x - o.x
-      : o.dx === 1 ? o.x - (SITE.x + 10)
-      : o.dz === -1 ? SITE.z - o.z
-      : o.z - (SITE.z + 10)
-    ))
-    assert.deepEqual(gaps, [4, 6, 8, 10, 12].flatMap((g) => Array(8).fill(g)), 'outward gaps ascend')
+  it('35 spots ring the footprint, nearest gap first, never the gate side', () => {
+    for (const v of [1, 2]) {
+      for (let rot = 0; rot < 4; rot++) {
+        const st = castleState({ blueprintVersion: v, rot })
+        const { w, d } = blueprint.siteDimensions(rot, v)
+        const spots = fetch.pitSpots(st)
+        assert.equal(spots.length, 35, `v${v} rot${rot}: 7 per gap`)
+        const gaps = spots.map((o) => (
+          o.dx === -1 ? SITE.x - o.x
+          : o.dx === 1 ? o.x - (SITE.x + w - 1)
+          : o.dz === -1 ? SITE.z - o.z
+          : o.z - (SITE.z + d - 1)
+        ))
+        assert.deepEqual(gaps, [4, 6, 8, 10, 12].flatMap((g) => Array(7).fill(g)), `v${v} rot${rot}: outward gaps ascend`)
+        // The gate side (apron minus door, rotated) has corners only, no mid.
+        const bp = blueprint.blueprintOf(v)
+        const at = (c) => blueprint.rotatePlan([{ ...c }], rot, v)[0]
+        const door = at({ ...bp.DOOR })
+        const apron = at({ ...bp.ENTRANCE })
+        const gate = [Math.sign(apron.dx - door.dx), Math.sign(apron.dz - door.dz)]
+        const isMid = (o) => o.dx !== 0
+          ? (o.z >= SITE.z && o.z < SITE.z + d)
+          : (o.x >= SITE.x && o.x < SITE.x + w)
+        const mids = spots.filter(isMid)
+        assert.equal(mids.length, 15, `v${v} rot${rot}: 3 mids per gap`)
+        for (const m of mids) {
+          assert.ok(!(m.dx === gate[0] && m.dz === gate[1]), `v${v} rot${rot}: no mid on the gate side`)
+        }
+      }
+    }
   })
 
   it('every spot band stays off the 8 trench lanes (v1+v2, all rotations; revmux 01 major)', () => {
@@ -325,7 +345,7 @@ describe('quarry-down pit abandon rules (vmzq.46)', () => {
     const st = castleState()
     const ctx = { castle: st }
     const spots = fetch.pitSpots(st)
-    for (const o of spots.slice(1, 8)) {
+    for (const o of spots.slice(1, 7)) {
       for (let y = SITE.y - 8; y <= SITE.y + 3; y++) set.set(`${o.x},${y},${o.z}`, 'water')
     }
     const bot = makeBot({ items: TOOLS(), set })
@@ -341,7 +361,7 @@ describe('quarry-down pit abandon rules (vmzq.46)', () => {
       }
     })
     assert.equal(st.quarryPits.length, 2, 'spot A dug out, one live frame latched past it')
-    const oShadow = spots[8] // same lateral, gap 6: origin inside spot A's band
+    const oShadow = spots[7] // same lateral, gap 6: origin inside spot A's band
     assert.deepEqual([oShadow.x, oShadow.z], [oA.x - 2, oA.z], 'gap 6 sits on the gap-4 lane')
     let t = null
     const lines = quiet(() => { t = fetch.pickPit(bot, ctx, { skip: new Set() }) })
