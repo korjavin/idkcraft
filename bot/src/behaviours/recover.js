@@ -2600,4 +2600,5 @@ module.exports = {
   run,
   pillarUpRun,
   digInRun,
+  digInVeto,
 }
