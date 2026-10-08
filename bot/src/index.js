@@ -68,6 +68,7 @@ const BEHAVIOURS = {
   pillar_up: (bot, ctx) => recover.run(bot, ctx),
   dig_up: (bot, ctx) => recover.run(bot, ctx),
   water_up: (bot, ctx) => recover.run(bot, ctx),
+  dig_pillar: (bot, ctx) => recover.run(bot, ctx),
   dig_step: (bot, ctx) => recover.run(bot, ctx),
   hop_step: (bot, ctx) => recover.run(bot, ctx),
   sidestep: (bot, ctx) => recover.run(bot, ctx),

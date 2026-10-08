@@ -192,7 +192,7 @@ describe('vmzq.47 cross-episode bans', () => {
     // recorded trigger every kind reads unbanned and decide() opens with
     // the legacy first pick. One pair of noisy laid/h runs cannot prove
     // that; this battery does (orchestrator rule, #353).
-    assert.deepEqual(recover.RECOVER_ORDER, ['pillar_up', 'dig_up', 'water_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player'])
+    assert.deepEqual(recover.RECOVER_ORDER, ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player'])
     const bot = pitBot()
     const ctx = pitCtx()
     for (const kind of recover.RECOVER_ORDER) {

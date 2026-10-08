@@ -32,6 +32,15 @@ const PLACE_SPAM_ENTRY = 10
 // covers any working leg while a pathological dig (unbreakable target,
 // endless flail) still wedges one minute late, not never.
 const DIG_STILLS_CAP = 60
+// Buried fast entry (idkcraft-vmzq.42): consecutive flail stills while
+// buried with no working path (recover.buriedFlail) before the detector
+// raises. Pocket digs feed the hold and shuffles reset it, so without
+// this the buried body flails for minutes; working legs read a success
+// path and never accrue here.
+const BURIED_STILLS_ENTRY = 15
+// Horizontal progress bar while buriedFlail: pocket shuffles stay inside
+// it (no reset), a real walk leaves it (resets like before).
+const BURIED_PROGRESS_DIST = 3
 const LATCH_CLEAR = 4 // release-latch radius: relocation past it re-arms
 // Still ticks after a 3D jump during which the fast entry holds fire: tower
 // attempts apex every jump, so a reset streak alone must not wedge
@@ -83,7 +92,15 @@ function groundedNow(bot) {
 function progressed(bot, ctx, bp) {
   const last = ctx && ctx.lastPos
   if (!bp || !last) return false
-  if (horiz(bp, last) > MOVE_TOLERANCE) return true
+  if (horiz(bp, last) > MOVE_TOLERANCE) {
+    // Buried with no working path (vmzq.42): pocket shuffles are flail,
+    // not progress — only leaving the pocket past the buried bar counts,
+    // and a climb/descent still counts via the floor check below. The scan
+    // runs only on would-be-progress ticks, so healthy ticks cost nothing
+    // further; working legs read a success path and keep the old bar.
+    if (!recover.buriedFlail(bot, ctx)) return true
+    if (horiz(bp, last) > BURIED_PROGRESS_DIST) return true
+  }
   return !!(groundedNow(bot) && typeof bp.y === 'number' && typeof last.y === 'number' &&
     Math.floor(bp.y) !== Math.floor(last.y))
 }
@@ -326,6 +343,7 @@ function zeroCounters(ctx) {
   ctx.placeErrors = 0
   ctx.jumpCooldown = 0
   ctx.digStills = 0
+  ctx.buriedStills = 0
 }
 
 // Read-only verdict: the ONLY stuck state behaviours may consult.
@@ -384,6 +402,7 @@ function update(bot, ctx) {
     if (latchStale(ctx, bot, bp)) ctx.recoverLatch = null
     else {
       ctx.stuckState = 'COOLDOWN'
+      ctx.buriedStills = 0 // latched situations never raise: no stale streak survives them
       if (progressed(bot, ctx, bp)) {
         zeroCounters(ctx)
         anchor()
@@ -423,10 +442,16 @@ function update(bot, ctx) {
       // wedge even mid-dig, and past the cap the slow count resumes.
       if (diggingNow(bot) && (ctx.digStills || 0) < DIG_STILLS_CAP) ctx.digStills = (ctx.digStills || 0) + 1
       else ctx.stuckTicks = (ctx.stuckTicks || 0) + 1
+      // Buried fast streak (vmzq.42): a flail tick accrues here too, so the
+      // raise below beats the dig hold instead of waiting it out. Progress
+      // zeroes via zeroCounters; any non-flail tick restarts the streak.
+      if (recover.buriedFlail(bot, ctx)) ctx.buriedStills = (ctx.buriedStills || 0) + 1
+      else ctx.buriedStills = 0
       ctx.stuckState = 'SUSPECT'
       if (!raiseExempt(ctx, bot)) {
         const fast = (moving && fastKey(ctx) && (ctx.jumpCooldown || 0) <= 0 &&
-          ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)) || spam
+          ((ctx.stuckResets || 0) >= STUCK_RESETS_ENTRY || (ctx.placeErrors || 0) >= PLACE_ERRORS_ENTRY)) || spam ||
+          (ctx.buriedStills || 0) >= BURIED_STILLS_ENTRY
         if (fast || ctx.stuckTicks >= recover.STUCK_TICKS_ENTRY) {
           ctx.stuckState = raise(bot, ctx, bp) ? 'STUCK' : 'SUSPECT'
         }
@@ -472,6 +497,8 @@ module.exports = {
   PLACE_ERRORS_ENTRY,
   PLACE_SPAM_ENTRY,
   DIG_STILLS_CAP,
+  BURIED_STILLS_ENTRY,
+  BURIED_PROGRESS_DIST,
   UNSEEN_HOME_TICKS,
   ownerOf,
   verdict,

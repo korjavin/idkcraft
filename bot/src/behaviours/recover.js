@@ -59,7 +59,7 @@ const NEAR_PLAYER = 8
 // probe dist=12; tune inside [16,32] without asking.
 const PIT_GOAL_INSIDE = 24
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 
 // Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
 // the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
@@ -78,6 +78,13 @@ function shapeRecoverMenu(names, facts) {
   if (names.length > 1 && names.includes('dig_step')) {
     if (names.includes('hop_step')) return names.filter((n) => n !== 'dig_step')
     if (names.includes('sidestep') && facts && facts.goalDy < 2) return names.filter((n) => n !== 'dig_step')
+  }
+  // vmzq.43: where the head-dig climb works, the slower dig_step staircase
+  // and the aimless sidestep/wait never get asked — the climb gains a block
+  // every cycle. A failed dig_pillar is already out via the 4jr exclusion,
+  // so shaping never hides the escalation it falls back to.
+  if (names.length > 1 && names.includes('dig_pillar')) {
+    return names.filter((n) => n !== 'dig_step' && n !== 'sidestep' && n !== 'wait')
   }
   return names
 }
@@ -244,6 +251,20 @@ const PICK_DIG = new Set([
 // jsf.4 rule — no pick, no stone ladder; sidestep/call_player own it.
 function capped(bot) {
   return solid(cellAt(bot, 0, 2, 0)) || solid(cellAt(bot, 0, 3, 0)) || solid(cellAt(bot, 0, 4, 0))
+}
+
+// Buried flail (idkcraft-vmzq.42): rock over the head column while the
+// planner has no working path (anything but a success). A buried pocket's
+// shuffles and wall-chews are flail, not work: the stuck detector
+// fast-enters on them instead of letting the dig hold and pacing resets
+// starve the slow count. Working legs read success (forage/deep digs,
+// walks with a plan) and never match, so the uqhp hold and displacement
+// resets stand for them.
+function buriedFlail(bot, ctx) {
+  try {
+    if (ctx && ctx.lastPathStatus === 'success') return false
+    return capped(bot)
+  } catch (_) { return false }
 }
 function diggable(bot, b) {
   if (handDiggable(bot, b)) return true
@@ -426,6 +447,24 @@ function pitChain(facts, hemmed) {
   return !!hemmed && (facts.goalDist === null || facts.goalDist > PIT_GOAL_INSIDE)
 }
 
+// Boxed climb OFFER (idkcraft-vmzq.43): pitClimb with reachability instead
+// of walls. A 3-wide pocket centre reads walls=0/pit=no, yet sidesteps
+// lead nowhere — boxed is the actual "up is the only way out" condition,
+// so there is no walls gate (unlike pitClimb's jsf.6 corner rule). The
+// goal guards mirror pitClimb: a known NEAR goal stays unclimbable (4jr
+// one-way door) and up must be toward-or-neutral to it.
+function boxClimb(facts) {
+  if (!facts || !facts.boxed) return false
+  if (facts.goalDist === null) return true
+  return facts.goalDist > PIT_GOAL_INSIDE && facts.goalDy >= -1
+}
+// Boxed climb CONTINUATION: like pitChain, without the direction arm —
+// once the climb started, finishing the exit is progress.
+function boxChain(facts) {
+  if (!facts || !facts.boxed) return false
+  return facts.goalDist === null || facts.goalDist > PIT_GOAL_INSIDE
+}
+
 // Lava in or around the mount head: digging the cap would open a flow
 // onto the mount, and standing under lava is death either way. Mirrors the
 // executor's dontCreateFlow refusal (liquid above or beside the break).
@@ -481,6 +520,21 @@ function findDigStepDir(bot) {
     return [dx, dz]
   }
   return cobbleSide
+}
+
+// The own-head cell a pickless buried body digs before pillaring through
+// it (idkcraft-vmzq.43): the lowest solid of the two cells the 1.8 body
+// rises through, or null when there is nothing to dig (pillar_up owns
+// free headroom) or the head does not dig. Same gate as findDigStepDir's
+// jump head: it must dig bare-handed (HAND_DIG, or PICK_DIG stone while
+// capped, via diggable) with no lava sitting on it.
+function findDigPillarHead(bot) {
+  const head1 = cellAt(bot, 0, 1, 0)
+  const head2 = cellAt(bot, 0, 2, 0)
+  const cell = solid(head1) ? head1 : (solid(head2) ? head2 : null)
+  if (!cell) return null
+  if (!diggable(bot, cell) || headLavaAt(bot)) return null
+  return cell
 }
 
 // A plain +1 mount (cjq): the side cell at feet level is solid, the cell
@@ -673,8 +727,10 @@ function recoverFacts(bot, ctx, state, target) {
     throughBlocked: throughBlockedAt(bot, stuck.goal),
     digStep: findDigStepDir(bot),
     hopStep: findHopStepDir(bot, gp),
+    digPillar: findDigPillarHead(bot) != null,
     walls: sides.walls,
     pit: pitAt(bot),
+    boxed: boxedIn(bot),
     // water_up (jsf.2): a climbable pour combo (high shaft pour with a clear
     // swim lane + a dry ledge pour above its spread) and a 2-high wall beside
     // the body (the bead's one-side pit gate — jsf.3's 2-side pit reads false
@@ -721,7 +777,7 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|water_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
@@ -733,6 +789,11 @@ function recoverFsm(facts, names) {
   // the climb is a one-way door (4jr: the goal sits inside the pit, height
   // gained is never given back), and hop/sidestep own the level case.
   if ((facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && pick('water_up')) return 'water_up'
+  // vmzq.43: the pickless boxed climb — one head dig plus a pillar per
+  // block beats the staircase's three digs plus a mount below, so it goes
+  // first. The boxed goal-less arm answers the buried castle raise
+  // (goal=level, dist=none: castle goals carry no coords).
+  if ((facts.goalDy >= 1 || boxClimb(facts)) && pick('dig_pillar')) return 'dig_pillar'
   // vmzq.37: the hemmed far-goal pit climbs by staircase too (the pitClimb
   // arm of the climbers above) — a pickless buried body has nothing else.
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('dig_step')) return 'dig_step'
@@ -764,6 +825,7 @@ const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high, or in a pit with the goal far away, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high, or in a pit with the goal far away, pickaxe on hand — dig above your head and climb',
   water_up: 'climb: goal is high, or in a pit with the goal far away, water bucket on hand — pour water on the wall, swim up the fall, scoop it back',
+  dig_pillar: 'climb: buried with no pickaxe, scaffold on hand — dig the block above your head and pillar up through it',
   dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
   sidestep: 'bypass: a side is open — step sideways around the obstacle',
@@ -786,7 +848,7 @@ async function chooseRecovery(brain, facts, feasible) {
   // Kept when it is the only option; the FSM fallback below still sees it.
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
-  const failedM = /^(pillar_up|dig_up|water_up|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
   // already out, so shaping never hides the dig it escalates to. Before
@@ -1260,6 +1322,46 @@ function digUpRun(bot, ctx) {
     } catch (_) { st.digError = true } finally { st.digInFlight = false }
   })()
   return 'running'
+}
+
+// Dig the head, then pillar through it (idkcraft-vmzq.43): the pickless
+// boxed climb — one bare-hand dig per block instead of the staircase's
+// three digs plus a mount. Phase 'dig' clears the own head through the
+// shared digStepCell (same deny/lava/timeout shape as every other dig);
+// phase 'pillar' runs the shared pillarUpRun IN PLACE on this same rec.st
+// (its jump-start timer keys on st identity, so no sub-state swap —
+// digStepCell borrows st.waited, and the transition resets the whole
+// pillar field set before the first pillar tick). Done on the pillar
+// verify, chainable to the mouth.
+function digPillarRun(bot, ctx) {
+  const rec = ctx.recovery
+  const st = rec.st || (rec.st = { dphase: 'dig', startFloor: null, digInFlight: false, digError: false })
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.dphase === 'dig') {
+    const head1 = cellAt(bot, 0, 1, 0)
+    const head2 = cellAt(bot, 0, 2, 0)
+    const cell = solid(head1) ? head1 : (solid(head2) ? head2 : null)
+    if (cell) {
+      if (!diggable(bot, cell) || headLavaAt(bot)) { setJump(bot, false); return 'failed:no-head-dig' }
+      return digStepCell(bot, ctx, st, cell)
+    }
+    // Headroom clear: reset the pillar field set on the shared st and fall
+    // into the pillar cycle below, same tick — the jump starts now.
+    st.dphase = 'pillar'
+    st.phase = 'jump'
+    st.waited = 0
+    st.timerArmed = false
+    st.jumpAt = null
+    st.armedAt = null
+    st.placeInFlight = false
+    st.placed = false
+    st.placeError = false
+    st.syncFail = null
+    st.startFloor = null
+    st.belowFloor = 0
+  }
+  return pillarUpRun(bot, ctx)
 }
 
 // One dig of the staircase (vmzq.37 jump head; the above/cap digs below
@@ -1744,6 +1846,22 @@ const RECOVER_MENU = {
     repeatable: (facts) => (facts.bucket || 0) >= 2 && facts.combo && !facts.water && !facts.lavaNear && !facts.headBlocked &&
       (facts.goalDy >= 2 || pitChain(facts, facts.wall2)),
     verb: 'pouring water to swim up',
+  },
+  dig_pillar: {
+    // vmzq.43: the pickless boxed climb — one head dig plus a pillar per
+    // block instead of the staircase's three digs plus a mount. Boxed-only:
+    // a 3-wide pocket centre reads walls=0/pit=no, so neither gates it, and
+    // on open ground this never offers (the menu stays master-identical).
+    // The climb gate mirrors the other climbers plus the boxed arms; guards
+    // mirror pillar_up (water) and dig_step (lava), protection refuses at
+    // dig time like every other dig. A dig kind, never banned (vmzq.47).
+    feasible: (facts) => facts.boxed && (facts.goalDy >= 1 || boxClimb(facts)) &&
+      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water,
+    run: digPillarRun,
+    repeatable: (facts) => (facts.goalDy >= 1 || boxChain(facts)) &&
+      !facts.pickaxe && facts.scaffold > 0 && !facts.lavaNear && !facts.water && facts.ownHeadBlocked,
+    chainCap: 32, // verified metres, not episodes: every chained done rose a block, fuel bounds the rest
+    verb: 'digging overhead and pillaring up',
   },
   dig_step: {
     feasible: (facts) => facts.digStep != null && !facts.lavaNear,
@@ -2283,7 +2401,8 @@ async function decide(bot, ctx, state, target) {
         rec.repeats = (rec.repeats || 0) + 1
         closer = rec.lastDy === null || fresh.goalDy < rec.lastDy
       }
-      if (closer && rec.repeats < REPEATS && RECOVER_MENU[prev].repeatable(fresh)) {
+      const chainCap = (RECOVER_MENU[prev] && RECOVER_MENU[prev].chainCap) || REPEATS
+      if (closer && rec.repeats < chainCap && RECOVER_MENU[prev].repeatable(fresh)) {
         rec.lastDy = fresh.goalDy
         rec.status = 'running'
         rec.st = null
@@ -2378,6 +2497,7 @@ module.exports = {
   DISPLACE_TIMEOUT_TICKS,
   STUCK_TICKS_ENTRY,
   goalClose,
+  buriedFlail,
   recoverFacts,
   recoverText,
   recoverFsm,
