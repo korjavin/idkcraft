@@ -45,14 +45,28 @@ function blockNameAt(bot, p) {
   }
 }
 
-// Shared sheepless latch lives in ctx.beds (beds.js owns the shape, memory
-// persists it): ensure the object before noting a site-bed failure into it.
-function ensureBeds(ctx) {
+// Site sheepless latch (own object, not the beds.js one: the castle site is
+// 500 blocks from home, and a failed site hunt must not latch the home
+// bedrooms). Same {fails, at} shape, same 2-fail arming — but only an
+// EXHAUSTED hunt (full budget, nothing found) notes. A partial hunt gained
+// wool (progress, not sheeplessness) and a dusk-cancelled hunt never ran
+// long enough to judge; both reopen without noting. Not persisted: a
+// restart re-hunts, bounded by the reopen cap and the menu holds.
+function siteSheepLatched(ctx, bot) {
   try {
-    if (!ctx.beds || typeof ctx.beds !== 'object') ctx.beds = {}
-    return ctx.beds
+    const cb = ctx && ctx.castlebed
+    const lat = cb && cb.noWool
+    if (!lat || typeof lat !== 'object') return false
+    if ((lat.fails || 0) < (bedsMod.NOWOOL_LATCH || 2)) return false
+    if (Date.now() - (lat.at || 0) >= (bedsMod.LATCH_MS || 7200000)) return false
+    // String exemption (beds.js mirror): 4 string crafts wool with no sheep.
+    if (cb.stringDry) return true
+    let string = 0
+    try { string = bedMod.packCounts(bot).string || 0 } catch (_) { string = 0 }
+    if (string >= 4) return false
+    return true
   } catch (_) {
-    return {}
+    return false
   }
 }
 
@@ -207,16 +221,20 @@ function woolTick(bot, ctx, cb, pack) {
     try { timedOut = !!(last.searchLegs && last.searchLegs.timedOut) } catch (_) { /* reopen */ }
     try { capped = !!(last.searchLegs && last.searchLegs.capped) } catch (_) { /* reopen */ }
     const budget = (bringMod.SEARCH_BUDGET && bringMod.SEARCH_BUDGET.legs) || 24
-    if (legs >= budget || timedOut || capped || (cb.reopens || 0) >= HUNT_REOPENS) {
+    // Only an exhausted hunt notes the latch (true sheeplessness). A short
+    // hunt (dusk-cancelled, or partial wool gained) reopens without noting —
+    // noting progress latched day 2 in the rig and the bed never got made.
+    if (legs >= budget || timedOut || capped) {
       cb.reopens = 0
-      try { bedsMod.noteNoWool(ensureBeds(ctx)) } catch (_) { /* latch best-effort */ }
+      try { bedsMod.noteNoWool(cb) } catch (_) { /* latch best-effort */ }
       ctx.stepStatus = 'failed:no-wool'
       return false
     }
-    try {
-      const atOpen = typeof cb.huntWool === 'number' ? cb.huntWool : null
-      if (atOpen !== null && bedsMod.totalWool(pack) > atOpen) bedsMod.noteNoWool(ensureBeds(ctx))
-    } catch (_) { /* latch best-effort */ }
+    if ((cb.reopens || 0) >= HUNT_REOPENS) {
+      cb.reopens = 0
+      ctx.stepStatus = 'failed:no-wool' // hold, no latch: short hunts never judged the range
+      return false
+    }
     cb.reopens = (cb.reopens || 0) + 1
   }
   const fromString = Math.floor((pack.string || 0) / 4)
@@ -226,10 +244,10 @@ function woolTick(bot, ctx, cb, pack) {
     if (!(res && res.done)) cb.stringDry = true
     return false // recount next tick
   }
-  // The latch armed (or was restored): the menu only re-reads feasible on a
-  // re-decide, so the running step must not reopen a hunt itself.
+  // The latch armed: the menu only re-reads feasible on a re-decide, so
+  // the running step must not reopen a hunt itself.
   try {
-    if (bedsMod.sheepLatched(ctx, bot)) {
+    if (siteSheepLatched(ctx, bot)) {
       cb.reopens = 0
       ctx.stepStatus = 'failed:no-wool'
       return false
@@ -243,7 +261,6 @@ function woolTick(bot, ctx, cb, pack) {
   if (!o) { ctx.stepStatus = 'failed:no-wool'; return false }
   o.self = 'castlebed'
   cb.hunt = o
-  try { cb.huntWool = bedsMod.totalWool(pack) } catch (_) { /* latch best-effort */ }
   ctx.bring = o
   return false
 }
@@ -548,3 +565,4 @@ module.exports.sitebedFact = sitebedFact
 module.exports.bedCraftable = bedCraftable
 module.exports.nearSite = nearSite
 module.exports.siteBedSpot = siteBedSpot
+module.exports.siteSheepLatched = siteSheepLatched

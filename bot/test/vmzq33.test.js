@@ -141,8 +141,10 @@ describe('vmzq.33 menu', () => {
     const ctx = { castle: castleState() }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'white_bed', count: 1 }] }), ctx), false, 'packed awaits dusk')
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot(), ctx), false, 'no planks, no hunt')
-    const latched = { castle: castleState(), beds: { noWool: { fails: 2, at: Date.now() } } }
+    const latched = { castle: castleState(), castlebed: { noWool: { fails: 2, at: Date.now() } } }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), latched), false, 'sheepless latch')
+    const homeLatched = { castle: castleState(), beds: { noWool: { fails: 2, at: Date.now() } } }
+    assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), homeLatched), true, 'the home latch does not bind the site')
     assert.equal(goal.MENU.castlebed.feasible({ ...day, rearm: true, pickaxe: 0 }, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), ctx), false, 'rearm first')
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), {}), false, 'no castle')
   })
@@ -262,10 +264,12 @@ describe('vmzq.33 day fetch', () => {
     castlebed(bot, ctx)
     assert.ok(ctx.bring, 'short hunt reopens in the morning')
     assert.equal(ctx.castlebed.reopens, 1)
-    const ctx2 = { castle: castleState(), beds: {}, castlebed: { hunt: { searchLegs: { legs: 24 } }, reopens: 0 } }
+    assert.equal(ctx.castlebed.noWool, undefined, 'a short hunt never judges the range')
+    const ctx2 = { castle: castleState(), castlebed: { hunt: { searchLegs: { legs: 24 } }, reopens: 0 } }
     castlebed(makeBot({ items: pack }), ctx2)
     assert.equal(ctx2.stepStatus, 'failed:no-wool')
-    assert.ok(ctx2.beds.noWool && ctx2.beds.noWool.fails >= 1, 'the shared latch notes the failure')
+    assert.ok(ctx2.castlebed.noWool && ctx2.castlebed.noWool.fails >= 1, 'the own latch notes exhaustion')
+    assert.equal(ctx2.beds, undefined, 'the home latch stays untouched')
   })
 })
 

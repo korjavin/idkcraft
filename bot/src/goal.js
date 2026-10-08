@@ -335,7 +335,7 @@ const MENU = {
       if (facts.time === 'day') {
         if (sb === 'packed') return false // a packed bed awaits dusk
         try {
-          if (require('./behaviours/beds').sheepLatched(ctx, bot)) return false // the shared sheepless latch
+          if (require('./behaviours/castlebed').siteSheepLatched(ctx, bot)) return false // own latch, not the home one
         } catch (_) { /* unreadable latch: hunt */ }
         // Pick first (vmzq.17 chain): a pickless bot equips before it hunts
         // sheep — the pickless rearm rides this gate too. Sword/scaffold
@@ -1859,7 +1859,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time === 'day') {
         if (sb === 'packed') return 'castlebed: bed packed, waits for dusk'
         try {
-          if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'castlebed: sheep hunt latched'
+          if (require('./behaviours/castlebed').siteSheepLatched(ctx, bot)) return 'castlebed: sheep hunt latched'
         } catch (_) { /* wording only */ }
         if ((facts.pickaxe || 0) <= 0) return 'castlebed: no pickaxe yet'
         return 'castlebed: need 3 planks of one wood'
