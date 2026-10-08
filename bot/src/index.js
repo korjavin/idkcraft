@@ -55,6 +55,7 @@ const BEHAVIOURS = {
   build: require('./behaviours/build'),
   castle: castleMod,
   castlefetch: require('./behaviours/castlefetch'),
+  sitebed: require('./behaviours/sitebed'),
   beds: require('./behaviours/beds'),
   light: require('./behaviours/light'),
   explore: require('./behaviours/explore'),
@@ -1458,6 +1459,7 @@ function respawnLine(bot) {
     // The claim alone never set the spawn: only a slept bed wins (revmux
     // 01-review — a day-1 /kill before first sleep lands on world spawn).
     bed = ctx && ctx.home && ctx.home.sleptA && (ctx.home.bedA || null)
+    if (!bed) bed = ctx && ctx.castle && ctx.castle.siteBed && ctx.castle.siteSpawnSet && ctx.castle.siteBed
   } catch (_) { bed = null }
   const dest = (bed && typeof bed.x === 'number' && { x: bed.x, y: bed.y, z: bed.z }) ||
     (bot.spawnPoint && { x: bot.spawnPoint.x, y: bot.spawnPoint.y, z: bot.spawnPoint.z }) ||
@@ -1531,6 +1533,7 @@ function createLifecycle(ticker) {
       try {
         const ctx = bot && bot._tickerCtx
         if (ctx && ctx.home) delete ctx.home.sleptA // obstructed/mined: the spawn is world spawn again
+        if (ctx && ctx.castle) delete ctx.castle.siteSpawnSet // same: the site click no longer holds
       } catch (_) { /* claim best-effort */ }
     },
   }

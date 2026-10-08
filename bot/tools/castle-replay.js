@@ -21,7 +21,8 @@
 //
 // Env: CASTLE_HOST (localhost), CASTLE_PORT (25581),
 //   CASTLE_CONTAINER (idk-castle), CASTLE_TAG (c + pid digits),
-//   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_OUT (json path),
+//   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_PADSPOT ("x,z", pins the
+//   pad probe pick — controlled pairs set it on both legs), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
 //   RIG_PLANNER (jev|stub, default jev), TYPESAFE_API_KEY (jev bearer).
 // Exit: 0 = measured (even at 0 laid — the line says so),
@@ -317,6 +318,31 @@ function pickBlockedSeeds(site, rot, version, n) {
     .map((c, i) => ({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: SEED_MATS[i % SEED_MATS.length] }))
 }
 
+// Pad-spot pick (pair 2, vmzq.33): the flattest readable 48x48 among the 9
+// candidates around the pad. Readability is chunk-load timing after a fixed
+// sleep, so two runs on the same pad can pick different spots — pair 2 ran
+// the castle at 235,347 (master) vs 235,297 (branch), different quarries,
+// and the branch-only dig stalls. CASTLE_PADSPOT="x,z" pins the spot and
+// skips the scan: controlled pairs set it on both legs. Pure over scan
+// (a null scan reads unreadable); exported for tests.
+function pickPadSpot(scan, px, pz) {
+  const pin = String(process.env.CASTLE_PADSPOT || '').trim()
+  if (pin) {
+    const m = pin.match(/^(-?\d+)\s*,\s*(-?\d+)$/)
+    if (!m) throw new Error(`CASTLE_PADSPOT: want "x,z", got ${JSON.stringify(process.env.CASTLE_PADSPOT)}`)
+    return { bx: +m[1], bz: +m[2], brel: null, best: null, pinned: true }
+  }
+  const cands = [[px, pz], [px - 50, pz], [px + 50, pz], [px, pz - 50], [px, pz + 50],
+    [px - 50, pz - 50], [px + 50, pz - 50], [px - 50, pz + 50], [px + 50, pz + 50]]
+  let best = null
+  for (const [qx, qz] of cands) {
+    const r = scan(qx, qz)
+    if (r && (!best || r.score < best.score)) best = { ...r, x: qx, z: qz }
+  }
+  if (best) return { bx: best.x, bz: best.z, brel: best, best, pinned: false }
+  return { bx: px, bz: pz, brel: null, best: null, pinned: false }
+}
+
 function waitFor(em, ev, ms, what) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => { em.removeListener(ev, on); reject(new Error(`${what} timeout`)) }, ms)
@@ -435,15 +461,10 @@ async function main() {
   }
   let bx = px; let bz = pz; let brel = null
   {
-    const cands = [[px, pz], [px - 50, pz], [px + 50, pz], [px, pz - 50], [px, pz + 50],
-      [px - 50, pz - 50], [px + 50, pz - 50], [px - 50, pz + 50], [px + 50, pz + 50]]
-    let best = null
-    for (const [qx, qz] of cands) {
-      const r = scanRelief(qx, qz)
-      if (r && (!best || r.score < best.score)) best = { ...r, x: qx, z: qz }
-    }
-    if (best) { bx = best.x; bz = best.z; brel = best }
-    origLog(`CASTLE-RIG padspot ${bx},${bz} span=${brel ? brel.span : '?'} liquid=${brel ? brel.liquid : '?'}${best ? '' : ' (preferred, unreadable)'}`)
+    const pick = pickPadSpot(scanRelief, px, pz)
+    bx = pick.bx; bz = pick.bz; brel = pick.brel
+    const tag = pick.best ? '' : (pick.pinned ? ' (pinned)' : ' (preferred, unreadable)')
+    origLog(`CASTLE-RIG padspot ${bx},${bz} span=${brel ? brel.span : '?'} liquid=${brel ? brel.liquid : '?'}${tag}`)
   }
   await rcon(`tp ${GUIDE} ${bx} 150 ${bz}`).catch((e) => fail('pad-probe', e.message))
   await sleep(4000)
@@ -979,4 +1000,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createTimeResync, timeDrift }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds, pickPadSpot, createTimeResync, timeDrift }

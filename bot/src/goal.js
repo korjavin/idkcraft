@@ -249,6 +249,28 @@ const MENU = {
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
   },
+  sitebed: {
+    // The castle spawn bed (vmzq.33 minimal): when the bot HAS a bed (pack,
+    // or the adopted home chest already within reach — no walks, hunts, or
+    // crafts), place it outside the footprint and off the door path and
+    // click it to set the spawn (prod run 8: 83 min lost to world-spawn
+    // walkbacks). Ranks below the castle chain: laying never waits for it.
+    // Without a bed it is infeasible by construction (master-identical).
+    feasible: (facts, bot, ctx) => {
+      if (!castleFirst(ctx)) return false
+      if (facts.time !== 'day' && facts.time !== 'dusk') return false
+      try {
+        const m = require('./behaviours/sitebed')
+        if (m.siteBedStands(bot, ctx)) return false
+        const cb = ctx && ctx.sitebed
+        const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+        if (cb && cb.deadDay === n) return false
+        return m.bedReady(bot, ctx)
+      } catch (_) { return false }
+    },
+    chat: () => 'on my own: placing the site bed',
+    verb: 'placing the site bed',
+  },
   light: {
     // Day shift only: walking the yard at night is the danger being fixed.
     // Fuel floor mirrors the behaviour's reserve (deferred require: the
@@ -987,7 +1009,7 @@ function shelterFits(facts, bot, ctx) {
 // (explore), rest last. The return-to-site walk (vmzq.50) heads the
 // chain: displaced, walking back beats fetching at spawn.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1653,6 +1675,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
+  sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
@@ -1702,7 +1725,7 @@ async function chooseStep(brain, facts, feasible, home) {
   // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
   // vmzq.50: the return-to-site walk rides it too — displaced, the model
   // must not wander to forage/explore instead of walking back.
-  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
