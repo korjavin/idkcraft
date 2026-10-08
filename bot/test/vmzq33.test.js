@@ -359,6 +359,24 @@ describe('vmzq.33 night place and sleep', () => {
     assert.equal(castlebed.sitebedFact(bot2, ctx), 'placed', 'a half reads placed: the sync wait runs')
   })
 
+  it('a half bed on a dropped spot reads none: the day leg re-fetches (08 core-1)', () => {
+    const set = new Map()
+    set.set('90,64,190', 'white_bed') // foot only: placeTick can never adopt it
+    const bot = makeBot({ timeOfDay: 6000, items: [{ name: 'oak_planks', count: 8 }], set })
+    const ctx = { castle: castleState(), castlebed: { at: null, bad: new Set(['90,64,190']) } }
+    assert.equal(castlebed.sitebedFact(bot, ctx), 'none', 'a bad-set half reads none')
+    const day = { time: 'day', home: 'built', inside: 'no', rearm: false, castle: 'stone-none', pickaxe: 1 }
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), true, 'the day fetch runs again')
+  })
+
+  it('a whole orphan on a dropped spot still reads placed for adoption', () => {
+    const set = new Map()
+    putBed(set, 90, 64, 190)
+    const bot = makeBot({ timeOfDay: 18000, items: [], set })
+    const ctx = { castle: castleState(), castlebed: { at: null, bad: new Set(['90,64,190']) } }
+    assert.equal(castlebed.sitebedFact(bot, ctx), 'placed', 'a bad-set whole bed routes to place, not a re-fetch')
+  })
+
   it('adopts a bed orphaned on a dropped spot instead of re-fetching', () => {
     const set = new Map()
     putBed(set, 90, 64, 190)

@@ -95,25 +95,33 @@ function siteBedStands(bot, ctx) {
 }
 
 // A placed-but-unclaimed bed: the flight consumed the item before the claim
-// landed (a verifying half or an orphan on a dropped spot). Pure (never
-// writes); the menu and nightTick route through it.
+// landed (a syncing half on the live spot, or a whole orphan on a dropped
+// spot). Pure (never writes); the menu and nightTick route through it. The
+// bad set uses the same strict whole-bed test as adoption: a half or a
+// wrong-facing bed there reads none, so the day leg fetches a new bed
+// instead of parking on a bed placeTick can never adopt (revmux 08 core-1).
 function unclaimedBed(bot, ctx) {
   try {
     const cb = ctx && ctx.castlebed
     if (!cb) return false
-    const holdsBed = (x, y, z) => {
+    const holdsWhole = (x, y, z) => {
       try {
-        if (bedsMod.bedAt(bot, new Vec3(x, y, z))) return true
+        return !!bedsMod.bedAt(bot, new Vec3(x, y, z))
+      } catch (_) { return false }
+    }
+    const holdsHalf = (x, y, z) => {
+      try {
+        if (holdsWhole(x, y, z)) return true
         const fn = blockNameAt(bot, new Vec3(x, y, z))
         const hn = blockNameAt(bot, new Vec3(x + 1, y, z))
         return !!((fn && fn.endsWith('_bed')) || (hn && hn.endsWith('_bed')))
       } catch (_) { return false }
     }
-    if (cb.at && typeof cb.at.x === 'number' && holdsBed(cb.at.x, cb.at.y, cb.at.z)) return true
+    if (cb.at && typeof cb.at.x === 'number' && holdsHalf(cb.at.x, cb.at.y, cb.at.z)) return true
     if (cb.bad) {
       for (const key of cb.bad) {
         const m = typeof key === 'string' && key.match(/^(-?\d+),(-?\d+),(-?\d+)$/)
-        if (m && holdsBed(+m[1], +m[2], +m[3])) return true
+        if (m && holdsWhole(+m[1], +m[2], +m[3])) return true
       }
     }
     return false
