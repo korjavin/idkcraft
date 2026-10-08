@@ -239,12 +239,12 @@ describe('vmzq.47 cross-episode bans', () => {
 })
 
 describe('vmzq.47r2 revmux 01 findings', () => {
-  // Corridor / alcove variants of the pit: 2 and 3 two-high sides. The
-  // latch skip needs all four (body-1) — fewer walls keep the master
-  // latch, the open side walks the re-arm.
-  function wallsBot(sides) {
+  // Latch-skip shapes (body-1, r3 boxed-in): the skip tests whether the
+  // body can reach past the latch re-arm, not a wall count. A corridor
+  // and an alcove walk out (latch); a 1x1 shaft and a 3x3 hollow centre
+  // (0 adjacent walls, max reach 2.8 — the CASTLE_PIT rig shape) box in.
+  function shapeBot(solidSide) {
     const bot = pitBot()
-    const solidSide = (x, z) => sides.some(([dx, dz]) => x === dx && z === 0 + dz)
     bot.blockAt = (p) => {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
       const n = (y === 60) ? 'dirt'
@@ -253,6 +253,9 @@ describe('vmzq.47r2 revmux 01 findings', () => {
     }
     return bot
   }
+  const corridor = (x) => Math.abs(x) === 1
+  const alcove = (x, z) => Math.abs(x) === 1 || z === 1
+  const hollow3 = (x, z) => Math.abs(x) === 2 || Math.abs(z) === 2
 
   function gaveUpCtx() {
     return {
@@ -261,42 +264,56 @@ describe('vmzq.47r2 revmux 01 findings', () => {
     }
   }
 
-  it('body-1: a corridor or alcove gave-up still latches; only 4 walls skip', () => {
-    for (const [name, sides] of [['corridor', [[1, 0], [-1, 0]]], ['alcove', [[1, 0], [-1, 0], [0, 1]]]]) {
+  it('body-1: walk-out shapes latch; boxed shapes (1x1, 3x3 hollow) skip', () => {
+    for (const [name, shape] of [['corridor', corridor], ['alcove', alcove]]) {
       const ctx = gaveUpCtx()
-      recover.release(wallsBot(sides), ctx, 'gave-up')
+      recover.release(shapeBot(shape), ctx, 'gave-up')
       assert.ok(ctx.recoverLatch, `${name} gave-up latches as before`)
       assert.equal(ctx.recoverLatch.by, 'no-displacement')
     }
-    const pit = gaveUpCtx()
-    recover.release(pitBot(), pit, 'gave-up')
-    assert.equal(pit.recoverLatch || null, null, '4-wall pit still skips the latch')
+    for (const [name, bot] of [['1x1 shaft', pitBot()], ['3x3 hollow centre', shapeBot(hollow3)]]) {
+      const ctx = gaveUpCtx()
+      recover.release(bot, ctx, 'gave-up')
+      assert.equal(ctx.recoverLatch || null, null, `${name} skips the latch`)
+    }
   })
 
-  it('core-1: the online page fires once per mark across episodes', () => {
+  it('core-1: the online page fires once per situation per detector key', () => {
     const bot = pitBot()
     bot.players = { Owner: { username: 'Owner', entity: { position: pos(5.5, 61, 0.5) } } }
     const chats = []
     bot.chat = (m) => chats.push(m)
-    const run = recover.RECOVER_MENU.call_player.run
-    const episode = () => ({
-      stuck: { by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key: 'ticker' },
-    })
-    let ctx = episode()
-    ctx.recovery = { action: 'call_player', calledPlayer: false }
-    assert.equal(run(bot, ctx), 'done')
+    const menu = recover.RECOVER_MENU.call_player
+    const here = pos(0.5, 61, 0.5)
+    const stuck = (key) => ({ by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key })
+    const facts = recover.recoverFacts(bot, { stuck: stuck('k1') }, null, null)
+    assert.equal(facts.playerOnline, true, 'owner online')
+    const ctx = { stuck: stuck('k1') }
+    const episode = () => { ctx.recovery = { action: 'call_player', calledPlayer: false } }
+    // Episode 1: feasible, pages, stamps the key.
+    recover.resetRecoverStreaksIfMoved(ctx, here) // decide() anchors per episode
+    episode()
+    assert.equal(menu.feasible(facts, ctx), true)
+    assert.equal(menu.run(bot, ctx), 'done')
     assert.equal(chats.length, 1, 'first episode pages')
-    assert.ok(ctx.repeatGaveUpPage, 'the online page stamps the mark')
-    // Next episode, same spot: silent done, same episode end.
-    ctx.recovery = { action: 'call_player', calledPlayer: false }
-    assert.equal(run(bot, ctx), 'done')
-    assert.equal(chats.length, 1, 're-fire stays silent')
-    assert.equal(ctx.recovery.endEpisode, true)
-    // Past the mark radius: a new trap pages again.
-    bot.entity.position = pos(50.5, 61, 0.5)
-    ctx.recovery = { action: 'call_player', calledPlayer: false }
-    assert.equal(run(bot, ctx), 'done')
-    assert.equal(chats.length, 2, 'a new mark pages again')
+    // Same-key re-fire: excluded from the menu (no silent-done lie).
+    episode()
+    assert.equal(menu.feasible(facts, ctx), false, 'same-key re-fire stays silent')
+    // New detector key at the trap (cross-step, the rw4.9.1 pinned
+    // repeat): feasible, pages.
+    ctx.stuck = stuck('k2')
+    episode()
+    assert.equal(menu.feasible(facts, ctx), true)
+    assert.equal(menu.run(bot, ctx), 'done')
+    assert.equal(chats.length, 2, 'a new detector gets its word')
+    // Failure A: rescued out and re-trapped — the anchor reset re-arms.
+    recover.resetRecoverStreaksIfMoved(ctx, pos(50.5, 61, 0.5))
+    ctx.stuck = stuck('k1')
+    episode()
+    assert.equal(menu.feasible(facts, ctx), true, 'a new situation re-arms')
+    // Failure B: a nobody-online stamp never eats the online page.
+    ctx.repeatGaveUpPage = { x: here.x, y: here.y, z: here.z, at: Date.now() }
+    assert.equal(menu.feasible(facts, ctx), true, 'offline stamp does not exclude')
   })
 
   it('core-2: a refused retreat pillar bans; a working one clears', () => {

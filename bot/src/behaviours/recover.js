@@ -303,16 +303,45 @@ function pitAt(bot) {
   return pitWalls(bot) >= 2
 }
 
-// Two-high walled sides around the body (vmzq.47r2): the release-latch
-// skip needs all four — pitAt's two also match corridors, doorways and
-// house corners, where the bot CAN walk the 4-block latch re-arm, so
-// those must keep latching exactly as before (revmux 01 body-1).
+// Two-high walled sides around the body (vmzq.47r2): pitAt's counter.
 function pitWalls(bot) {
   let high = 0
   for (const [dx, dz] of SIDES) {
     if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) high++
   }
   return high
+}
+
+// Mirrors stuck.js LATCH_CLEAR (unrequired: stuck requires recover, so the
+// value is pinned here with the consumer). An at-anchored latch goes stale
+// past this many horizontal blocks.
+const LATCH_REARM = 4
+
+// Boxed for the release latch (vmzq.47r3): can the body reach horizontal
+// distance past LATCH_REARM? A latch that can never go stale wedges every
+// later episode with no page. BFS over feet+head-passable cells (the pitAt
+// per-side test per cell). Wall counts fail both ways: a 3x3 pit centre
+// reads 0 adjacent walls yet boxes (max 2.8), while a corridor reads 2
+// walls yet walks free — reachability is the actual re-arm condition
+// (revmux 02 core-1). Nulls read passable (solid() says so), so a blind
+// read latches exactly as before.
+function boxedIn(bot) {
+  const seen = new Set(['0,0'])
+  const q = [[0, 0]]
+  while (q.length) {
+    const [x, z] = q.pop()
+    if (Math.hypot(x, z) > LATCH_REARM) return false
+    for (const [dx, dz] of SIDES) {
+      const nx = x + dx
+      const nz = z + dz
+      if (Math.abs(nx) > 6 || Math.abs(nz) > 6) continue
+      const k = nx + ',' + nz
+      if (seen.has(k)) continue
+      seen.add(k)
+      if (!solid(cellAt(bot, nx, 0, nz)) && !solid(cellAt(bot, nx, 1, nz))) q.push([nx, nz])
+    }
+  }
+  return true
 }
 
 // Climb OFFER for a hemmed body with no goal worth walking to (jsf.3,
@@ -1617,11 +1646,6 @@ function callPlayerRun(bot, ctx) {
   const rec = ctx.recovery
   if (rec.calledPlayer) return 'done'
   const bp = botPos(bot)
-  // Once per mark (vmzq.47r2): without the pit latch, episodes re-fire by
-  // design and each one ends here — an unthrottled page would chat every
-  // 30-60s for the whole trap (revmux 01 core-1). The stamp is the same
-  // one the nobody-online path uses, so either page counts.
-  if (bp && repeatPaged(ctx, bp)) { rec.calledPlayer = true; rec.endEpisode = true; return 'done' }
   const facts = recoverFacts(bot, ctx, null, null)
   const name = facts.playerName
   if (!name) return 'failed:no-player'
@@ -1630,7 +1654,7 @@ function callPlayerRun(bot, ctx) {
   } catch (_) { return 'failed:chat' }
   rec.calledPlayer = true
   rec.endEpisode = true
-  try { if (bp) ctx.repeatGaveUpPage = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() } } catch (_) { /* page stamp best-effort */ }
+  try { stampOnlinePage(ctx) } catch (_) { /* page stamp best-effort */ }
   return 'done'
 }
 
@@ -1703,7 +1727,7 @@ const RECOVER_MENU = {
     verb: 'waiting it out',
   },
   call_player: {
-    feasible: (facts, ctx) => facts.playerOnline && !(ctx && ctx.recovery && ctx.recovery.calledPlayer),
+    feasible: (facts, ctx) => facts.playerOnline && !(ctx && ctx.recovery && ctx.recovery.calledPlayer) && !keyPaged(ctx),
     run: callPlayerRun,
     verb: 'calling the player',
   },
@@ -1742,8 +1766,39 @@ function resetRecoverStreaksIfMoved(ctx, bp) {
   if (recoverStreaksMoved(st, bp)) {
     st.anchor = null
     st.fails = {}
+    st.pageKeys = {} // a new situation re-arms every detector's page
   }
   if (bp && !st.anchor) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
+}
+
+// Online page throttle (vmzq.47r3): one page per situation per stuck key.
+// Without the boxed-in latch, same-key episodes re-fire by design and each
+// one ends in call_player — an unthrottled page would chat every 30-60s
+// for the whole trap (revmux 01 core-1). Keyed on the detector key, not
+// the spot alone: a new detector at the trap (cross-step) gets its word —
+// the rw4.9.1 suite pins that repeat — while same-key re-fires stay
+// silent. Moving past the anchor clears (a re-trap after a rescue pages
+// again: revmux 02 Failure A); the stamp is online-only, so a
+// nobody-online page never eats the owner's (Failure B); and the menu
+// excludes instead of silent-done, so no phantom done hits the metrics
+// (the silent-'done' shape is gone). Outside boxed pits the latch holds
+// re-fires anyway, so this only ever binds where the latch doesn't.
+function keyPaged(ctx) {
+  try {
+    const st = ctx && ctx.recoverStreaks
+    const key = ctx && ctx.stuck && ctx.stuck.key
+    if (!st || !key || !st.pageKeys || typeof st.pageKeys !== 'object') return false
+    const at = st.pageKeys[key]
+    if (typeof at !== 'number') return false
+    return Date.now() - at <= danger.TTL_MS
+  } catch (_) { return false }
+}
+function stampOnlinePage(ctx) {
+  const st = recoverStreakState(ctx)
+  const key = ctx && ctx.stuck && ctx.stuck.key
+  if (!st || !key) return
+  if (!st.pageKeys || typeof st.pageKeys !== 'object') st.pageKeys = {}
+  st.pageKeys[key] = Date.now()
 }
 function noteRecoverFail(ctx, bp, action, outcome) {
   const st = recoverStreakState(ctx)
@@ -1991,17 +2046,17 @@ function release(bot, ctx, how) {
   // anchors on gave-up only (rra round 2): a 'done' may be a partial climb
   // still in the pit, and latching it would end all escapes with no page.
   // Lead latches too (6x7.2), or a mining stall re-fires every slow
-  // threshold and the order never gives up. Never in a true 4-wall pit
-  // (vmzq.47): the latch re-arms past 4 horizontal blocks, which a boxed
-  // body cannot produce — latching a mid-pit gave-up would end all
-  // escapes with no page. Anything less than four 2-high walls (corridor,
-  // doorway, house corner) keeps the latch: the open side walks the
-  // re-arm. The cross-episode bans bound the re-fire loop instead (menus
-  // shrink; the online page fires once per mark, the nobody-online page
-  // stays throttled by repeatPaged).
-  let truePit = false
-  try { truePit = pitWalls(bot) >= 4 } catch (_) { truePit = false }
-  if (!truePit && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
+  // threshold and the order never gives up. Never while boxed in
+  // (vmzq.47): the latch re-arms past LATCH_REARM horizontal blocks, which
+  // a boxed body cannot reach — latching it would end all escapes with no
+  // page. Anything the body can walk out of (corridor, doorway, house
+  // corner — the open side reaches past the re-arm) keeps the latch. The
+  // cross-episode bans bound the re-fire loop instead (menus shrink; the
+  // online page fires once per situation per detector, the nobody-online
+  // page stays throttled by repeatPaged).
+  let boxed = false
+  try { boxed = boxedIn(bot) } catch (_) { boxed = false }
+  if (!boxed && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
