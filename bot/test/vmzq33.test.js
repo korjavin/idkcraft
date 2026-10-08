@@ -466,6 +466,21 @@ describe('vmzq.33 night place and sleep', () => {
     assert.equal(castlebed.sitebedFact(bot, ctx), 'placed', 'a bad-set whole bed routes to place, not a re-fetch')
   })
 
+  it('claiming the site bed clicks it: the spawn sets at place time (prod run 8)', async () => {
+    const set = new Map()
+    putBed(set, 90, 64, 190)
+    const bot = makeBot({ timeOfDay: 18000, items: [], at: pos(90.5, 64, 190.5), set })
+    const activated = []
+    bot.activateBlock = async (b) => { activated.push(b.name) }
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { at: { x: 90, y: 64, z: 190 } }, work: true }
+    castlebed(bot, ctx) // verify pass claims on the empty pack
+    await flush()
+    await flush()
+    assert.deepEqual(ctx.castle.siteBed, { x: 90, y: 64, z: 190 }, 'claimed')
+    assert.deepEqual(activated, ['white_bed'], 'the claim clicks the bed: spawn sets even by day')
+    assert.ok(bot.chats.join(' ').includes('site spawn set'), `logged, got: ${bot.chats.join(' | ')}`)
+  })
+
   it('adopts a bed orphaned on a dropped spot instead of re-fetching', () => {
     const set = new Map()
     putBed(set, 90, 64, 190)

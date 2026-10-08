@@ -410,6 +410,24 @@ function placeTick(bot, ctx, cb, st, n) {
     cb.fails = 0
     cb.syncWaits = 0
     try { bot.chat('site bed is in') } catch (_) { /* chat best-effort */ }
+    // Spawn first (prod run 8: 7 deaths × ~400-block walkbacks from world
+    // spawn): click the bed at claim time — a daytime right-click sets the
+    // respawn point on vanilla/Paper even though sleep waits for night.
+    // Once per claim; out of reach (adopt) or refused leaves it to the
+    // first sleep, which sets it too.
+    try {
+      const key = `${foot.x},${foot.y},${foot.z}`
+      if (cb.spawnSetFor !== key && typeof bot.activateBlock === 'function') {
+        cb.spawnSetFor = key
+        const bed = bot.blockAt && bot.blockAt(new Vec3(foot.x, foot.y, foot.z))
+        if (bed) {
+          void Promise.resolve(bot.activateBlock(bed)).then(
+            () => { try { bot.chat('site spawn set') } catch (_) { /* chat best-effort */ } },
+            () => { /* refused: the first sleep sets it */ },
+          )
+        }
+      }
+    } catch (_) { /* spawn best-effort: the first sleep sets it */ }
   }
   // A standing bed claims before anything else needs the pack: the flight
   // consumes the item, so the verify pass after it runs on an empty pack.
