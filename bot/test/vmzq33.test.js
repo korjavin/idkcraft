@@ -318,6 +318,36 @@ describe('vmzq.33 night place and sleep', () => {
     assert.ok(bot.chats.some((c) => c.includes('site bed is in')), `place chatted, got: ${bot.chats.join(' | ')}`)
   })
 
+  it('a foot without its head yet waits, never drops (rig: packed→none)', () => {
+    const set = new Map()
+    const bot = makeBot({ timeOfDay: 18000, items: [], set }) // the flight consumed the item
+    const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
+    castlebed(bot, ctx) // picks the spot (pack empty, nothing to adopt: yields)
+    assert.equal(ctx.stepStatus, 'done')
+    const at = { x: 90, y: 64, z: 190 }
+    set.set('90,64,190', 'white_bed') // foot synced, head still in flight
+    ctx.stepStatus = undefined
+    ctx.castlebed = { at: { ...at }, bad: new Set() }
+    bot.entity.position = pos(90.5, 64, 190.5)
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined, 'waiting, not dropping')
+    assert.deepEqual(ctx.castlebed.at, at, 'the spot survives the sync')
+    assert.equal(ctx.castlebed.bad.size, 0, 'never blacklisted')
+    set.set('91,64,190', 'white_bed') // the head lands
+    castlebed(bot, ctx)
+    assert.deepEqual(ctx.castle.siteBed, at, 'claimed once whole')
+  })
+
+  it('adopts a bed orphaned on a dropped spot instead of re-fetching', () => {
+    const set = new Map()
+    putBed(set, 90, 64, 190)
+    const bot = makeBot({ timeOfDay: 18000, items: [], set })
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { at: null, bad: new Set(['90,64,190']) } }
+    castlebed(bot, ctx)
+    assert.deepEqual(ctx.castle.siteBed, { x: 90, y: 64, z: 190 }, 'adopted from the bad set')
+    assert.equal(ctx.stepStatus, undefined, 'sleep runs next, no yield')
+  })
+
   it('sleeps in the placed bed and sets the site spawn', async () => {
     const set = new Map()
     putBed(set, 90, 64, 190)

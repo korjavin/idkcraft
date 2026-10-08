@@ -31,6 +31,7 @@ const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
+const SYNC_TICKS = 10 // head-sync patience after the flight consumes the item
 const YAW_EAST = -Math.PI / 2 // head lands +x, the beds.js forced yaw
 const SLEEP_REACH = 2 // from the head: inside mineflayer's click box on every facing
 const SLEEP_STALL_TICKS = 30
@@ -314,12 +315,63 @@ function dayTick(bot, ctx, cb, st) {
 }
 
 // Place the packed bed at a site spot (dusk/night). A refused spot is
-// dropped and the scan re-runs; three dead spots fail to the shelter.
+// dropped and the scan re-runs; three dead spots yield to the shelter.
 function placeTick(bot, ctx, cb, st, n) {
-  const item = bedsMod.findBedItem(bot, null)
-  if (!item) { deadTonight(ctx, cb, n); return } // pack lost the bed: tomorrow re-fetches
   if (!cb.bad || !(cb.bad instanceof Set)) {
     try { cb.bad = new Set() } catch (_) { cb.bad = null }
+  }
+  const claimAt = (foot) => {
+    try { st.siteBed = { x: foot.x, y: foot.y, z: foot.z } } catch (_) { /* claim best-effort */ }
+    try { delete st.sleptSite } catch (_) { /* a fresh bed needs a fresh sleep */ }
+    cb.fails = 0
+    cb.syncWaits = 0
+    try { bot.chat('site bed is in') } catch (_) { /* chat best-effort */ }
+  }
+  // A standing bed claims before anything else needs the pack: the flight
+  // consumes the item, so the verify pass after it runs on an empty pack.
+  // A foot without its head yet is a sync in progress (patience), never a
+  // blocker — dropping there orphaned the bed every dusk (rig: packed→none,
+  // no claim, shelter).
+  if (cb.at) {
+    try {
+      const atFoot = new Vec3(cb.at.x, cb.at.y, cb.at.z)
+      if (bedsMod.bedAt(bot, atFoot)) { claimAt(cb.at); return }
+      const fn = blockNameAt(bot, atFoot)
+      const hn = blockNameAt(bot, new Vec3(cb.at.x + 1, cb.at.y, cb.at.z))
+      if ((fn && fn.endsWith('_bed')) || (hn && hn.endsWith('_bed'))) {
+        cb.syncWaits = (cb.syncWaits || 0) + 1
+        if (cb.syncWaits > SYNC_TICKS) {
+          try { if (cb.bad) cb.bad.add(`${cb.at.x},${cb.at.y},${cb.at.z}`) } catch (_) { /* bad best-effort */ }
+          cb.at = null
+          cb.syncWaits = 0
+          cb.blocks = (cb.blocks || 0) + 1
+          if (cb.blocks >= PLACE_REFUSALS) deadTonight(ctx, cb, n)
+        }
+        return
+      }
+      cb.syncWaits = 0
+    } catch (_) { /* unverifiable: adopt or place below */ }
+  }
+  const item = bedsMod.findBedItem(bot, null)
+  if (!item) {
+    // Pack empty, nothing claimed: adopt a bed orphaned on a dropped spot
+    // (a verify that ran before the head synced) instead of re-fetching.
+    try {
+      if (cb.bad) {
+        for (const key of cb.bad) {
+          const m = typeof key === 'string' && key.match(/^(-?\d+),(-?\d+),(-?\d+)$/)
+          if (!m) continue
+          const foot = { x: +m[1], y: +m[2], z: +m[3] }
+          if (bedsMod.bedAt(bot, new Vec3(foot.x, foot.y, foot.z))) {
+            cb.at = foot
+            claimAt(foot)
+            return
+          }
+        }
+      }
+    } catch (_) { /* unadoptable: yield below */ }
+    deadTonight(ctx, cb, n)
+    return // pack lost the bed: tomorrow re-fetches
   }
   if (!cb.at) {
     try {
@@ -328,6 +380,7 @@ function placeTick(bot, ctx, cb, st, n) {
     cb.fails = 0
     cb.stalls = 0
     cb.anchor = null
+    cb.syncWaits = 0
   }
   if (!cb.at) { deadTonight(ctx, cb, n); return }
   const dropSpot = () => {
@@ -361,23 +414,14 @@ function placeTick(bot, ctx, cb, st, n) {
     }
     return
   }
-  // Already placed (the verify pass after the flight, or a bed there first):
-  // claim it before the flora gate below can mistake it for a blocker.
-  try {
-    if (bedsMod.bedAt(bot, foot)) {
-      try { st.siteBed = { x: foot.x, y: foot.y, z: foot.z } } catch (_) { /* claim best-effort */ }
-      try { delete st.sleptSite } catch (_) { /* a fresh bed needs a fresh sleep */ }
-      cb.fails = 0
-      try { bot.chat('site bed is in') } catch (_) { /* chat best-effort */ }
-      return
-    }
-  } catch (_) { /* unverifiable: the flight below re-checks */ }
-  // The scan promised air over solid ground; the world may have moved.
+  // Flora gate (the top of this tick already verified and sync-waited; a
+  // bed here means that check fell through, so wait, never drop).
   for (const cell of [foot, head]) {
     let cur = null
     try { cur = bot.blockAt && bot.blockAt(cell) } catch (_) { cur = null }
     const nm = cur && cur.name
     if (!nm || nm === 'air' || nm === 'cave_air' || nm === 'void_air') continue
+    if (nm.endsWith('_bed')) return // our flight landing: the top verifies next tick
     let clearable = false
     try { clearable = !!require('./build').isReplaceable(nm) } catch (_) { clearable = false }
     if (!clearable || typeof bot.dig !== 'function' || !cur) { dropSpot(); return }
@@ -530,7 +574,9 @@ function nightTick(bot, ctx, cb, st) {
     if (st.siteBed) { deadTonight(ctx, cb, n); return }
   }
   const pack = bedMod.packCounts(bot)
-  if (bedMod.bedInPack(pack)) { placeTick(bot, ctx, cb, st, n); return }
+  // A pending spot or a dropped one may hold a verifying/orphaned bed even
+  // with an empty pack (the flight consumes the item first).
+  if (bedMod.bedInPack(pack) || cb.at || (cb.bad && cb.bad.size > 0)) { placeTick(bot, ctx, cb, st, n); return }
   // Wool covered but uncrafted at dusk: craft now, place next tick.
   const color = bedMod.pickBedColor(pack)
   if (color && (pack[`${color}_wool`] || 0) >= bedMod.BED_WOOL) {
