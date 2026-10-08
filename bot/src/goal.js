@@ -234,6 +234,28 @@ const MENU = {
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
   },
+  sitebed: {
+    // The castle spawn bed (vmzq.33 minimal): when the bot HAS a bed (pack,
+    // or the adopted home chest already within reach — no walks, hunts, or
+    // crafts), place it outside the footprint and off the door path and
+    // click it to set the spawn (prod run 8: 83 min lost to world-spawn
+    // walkbacks). Ranks below the castle chain: laying never waits for it.
+    // Without a bed it is infeasible by construction (master-identical).
+    feasible: (facts, bot, ctx) => {
+      if (!castleFirst(ctx)) return false
+      if (facts.time !== 'day' && facts.time !== 'dusk') return false
+      try {
+        const m = require('./behaviours/sitebed')
+        if (m.siteBedStands(bot, ctx)) return false
+        const cb = ctx && ctx.sitebed
+        const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+        if (cb && cb.deadDay === n) return false
+        return m.bedReady(bot, ctx)
+      } catch (_) { return false }
+    },
+    chat: () => 'on my own: placing the site bed',
+    verb: 'placing the site bed',
+  },
   light: {
     // Day shift only: walking the yard at night is the danger being fixed.
     // Fuel floor mirrors the behaviour's reserve (deferred require: the
@@ -872,7 +894,7 @@ function shelterFits(facts, bot, ctx) {
 // (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -1538,6 +1560,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
+  sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
   shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',

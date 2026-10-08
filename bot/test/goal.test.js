@@ -50,12 +50,12 @@ describe('goal constants and menu shape', () => {
   })
 
   it('menu has all seventeen steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['beds', 'build', 'castle', 'castlefetch', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gear', 'gohome', 'light', 'rest', 'shelter', 'stay', 'stockpile'])
+    assert.deepEqual(Object.keys(MENU).sort(), ['beds', 'build', 'castle', 'castlefetch', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gear', 'gohome', 'light', 'rest', 'shelter', 'sitebed', 'stay', 'stockpile'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest'])
   })
 })
 

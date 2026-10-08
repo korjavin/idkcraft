@@ -775,3 +775,5 @@ module.exports.SIGHT_MIN_MS = SIGHT_MIN_MS
 module.exports.fillNeed = fillNeed
 module.exports.needsFillGround = needsFillGround
 module.exports.WANT_WOOL = WANT_WOOL
+module.exports.chestTick = chestTick
+module.exports.findBedItem = findBedItem
