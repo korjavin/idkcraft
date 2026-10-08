@@ -103,7 +103,11 @@ function meetDig(ctx) {
 
 function castleWalk(ctx) {
   const o = ctx && ctx.gocastle
-  return !!(o && o.phase === 'walk')
+  if (o && o.phase === 'walk') return true
+  // Return-to-site (idkcraft-vmzq.50): the work step walks the same
+  // no-dig surface route as the order — a digging 400-block walk
+  // tunnels hills and descends into caves (run8: drowned at y11).
+  return !!(ctx && ctx.work && ctx.step === 'gocastle' && ctx.stepStatus === 'running')
 }
 
 // Flat-gate inputs, verbatim from follow.js (5vv) and home.js (rw4.10):
@@ -179,7 +183,8 @@ function movementTargets(bot, ctx) {
 // away (prod run6: scaffold 16 -> 0, then the night shelter pillar failed
 // with an empty kit). On the castle and castlefetch steps cobble is now
 // walk-proof while any dirt is held: dirt walks (fetch-leg spoil refills
-// it, below-16 equip too), cobble stays for laying and the night pillar.
+// it, below-16 equip too), cobble stays for laying and the night pillar
+// (and the gocastle return walk, vmzq.50 — same walk-proof family).
 // Past the shield (zero dirt) the walks spend the 24-stone buffer first
 // (castle.js reserveOf). Cobble
 // scaffolds only with no dirt held (the vmzq.29 rule — the set never reads
@@ -190,7 +195,7 @@ function movementTargets(bot, ctx) {
 // so the strip never fires without dirt in hand.
 function castleStone(bot, ctx) {
   try {
-    if (!ctx || !ctx.work || (ctx.step !== 'castle' && ctx.step !== 'castlefetch')) return false
+    if (!ctx || !ctx.work || (ctx.step !== 'castle' && ctx.step !== 'castlefetch' && ctx.step !== 'gocastle')) return false
     return true
   } catch (_) { return false }
 }

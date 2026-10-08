@@ -50,7 +50,9 @@ function bot(at, timeOfDay) {
       if (x === SITE.x + 5 && y === SITE.y && z === SITE.z + 1) return { name: 'crafting_table', boundingBox: 'block' }
       if (x === SITE.x + 3 && y === SITE.y && z === SITE.z) return { name: 'oak_door', boundingBox: 'block' }
       if (y < SITE.y) return { name: 'dirt', boundingBox: 'block' }
-      return { name: 'oak_planks', boundingBox: 'block' }
+      // Open sky above ground (vmzq.50: solid sky reads underground and
+      // the dusk climb-out would stand shelter down).
+      return { name: 'air', boundingBox: 'empty' }
     },
     findBlocks: () => [],
     pathfinder: { goal: null, setGoal: () => {}, isMoving: () => false },

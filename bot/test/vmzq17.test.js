@@ -80,8 +80,11 @@ describe('vmzq.17 far castle walks instead of failing no-material', () => {
     assert.ok(gx >= SITE.x - 8 && gx <= SITE.x + w + 8 && gz >= SITE.z - 8 && gz <= SITE.z + d + 8, `goal ${gx},${gz} at the site`)
   })
 
-  it('decide picks the far castle on a stale clear word; a cleared goal re-issues (revmux 01)', async () => {
+  it('decide picks the return walk for a far castle on a stale clear word; a cleared goal re-issues (revmux 01)', async () => {
     // Far, unloaded site + stale on-site word + empty kit: the prod path.
+    // vmzq.50: past 64 the arbiter walks back via gocastle (not the
+    // castle far leg); the behaviour-level walk + re-issue below still
+    // pin the castle leg itself for the near band.
     const { w, d } = blueprint.siteDimensions(0, 1)
     const cells = new Map()
     const key = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
@@ -108,7 +111,8 @@ describe('vmzq.17 far castle walks instead of failing no-material', () => {
     bot.world = { getBlock: () => null }
     const ctx = { home, castle: castleState(), castleWord: { word: 'clear' }, work: true }
     assert.equal(goal.goalFacts(bot, ctx).castle, 'clear', 'far reads the stale on-site word')
-    assert.equal((await goal.decide(bot, ctx)).action, 'castle', 'the far castle is picked, not explore')
+    assert.equal((await goal.decide(bot, ctx)).action, 'gocastle', 'the far return is picked, not explore')
+    ctx.step = 'castle' // the behaviour pins below run the leg directly
     castle(bot, ctx)
     assert.equal(setGoals.length, 1, 'the walk goal issues')
     assert.equal(ctx.castle.status, 'walking to the site')

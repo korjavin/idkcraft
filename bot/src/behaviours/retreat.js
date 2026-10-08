@@ -19,7 +19,7 @@
 // implied by the veto, and the under-fire leg gates it explicitly.
 
 const { goals } = require('mineflayer-pathfinder')
-const { isFightTarget } = require('../perception')
+const { isFightTarget, HOSTILE_NAMES } = require('../perception')
 const { botPos } = require('./util')
 const recover = require('./recover')
 
@@ -45,6 +45,59 @@ const RETREAT_VERBS = {
 const FLEE_RANGE = 6
 const FLEE_DIST = 6
 const FLEE_DONE_DIST = 8
+// Hysteresis (idkcraft-vmzq.49): the veto flickers — a hostile at the
+// 8-block edge, hp at 6 — and every off tick re-picked castle into the
+// same zombie (run8 15:52, died with one 1.1 blocks away). Each retreat
+// dispatch latches the leg past the last hostile sighting; while the
+// latch stands the leg re-issues without re-asking, in chooseRetreat
+// and in goal.decide alike. 5 ticks at the 1 s reflex rate. A failed
+// leg clears it (re-ask pillar/gohome, never hold a dead leg).
+const RETREAT_HOLD_MS = 5000
+function latchRetreat(ctx, action, now = Date.now()) {
+  try {
+    if (ctx && typeof action === 'string') ctx.retreatLatch = { action, until: now + RETREAT_HOLD_MS }
+  } catch (_) { /* latch best-effort */ }
+}
+function latchedAction(ctx, now = Date.now()) {
+  try {
+    const l = ctx && ctx.retreatLatch
+    if (l && typeof l.action === 'string' && typeof l.until === 'number' && now < l.until) return l.action
+  } catch (_) { /* unlatchable */ }
+  return null
+}
+function retreatLatched(ctx, now = Date.now()) {
+  return latchedAction(ctx, now) !== null
+}
+// Release bands (vmzq.49): the Schmitt twin of the veto — engage is
+// hp<6 with a hostile fact (fight target within 8), release needs hp>=8
+// AND no hostile within 10. The margins cover regen flicker at 6 and
+// radius flicker at 8 (the run8 15:52 flip); a truly clear tick (hp
+// full, nothing near) releases at once instead of draining the latch,
+// so the 1tj release property stands. Fail closed (hold): a blind tick
+// keeps fleeing, and the latch TTL bounds it.
+const RETREAT_RELEASE_HP = 8
+const RETREAT_RELEASE_DIST = 10
+function retreatClear(bot, state) {
+  try {
+    const hp = state && typeof state.bot_health === 'number' ? state.bot_health : NaN
+    if (!(hp >= RETREAT_RELEASE_HP)) return false
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    const entities = (bot && bot.entities && typeof bot.entities === 'object') ? Object.values(bot.entities) : null
+    if (!Array.isArray(entities)) return false
+    for (const e of entities) {
+      if (!e || e.type === 'player' || !e.position) continue
+      if (!HOSTILE_NAMES.has(e.name || '')) continue
+      if (e.isValid === false) continue
+      let d = null
+      try { d = bp.distanceTo(e.position) } catch (_) { continue }
+      if (typeof d === 'number' && d <= RETREAT_RELEASE_DIST) return false
+    }
+    return true
+  } catch (_) {
+    return false
+  }
+}
 // "Close enough to walk to": beyond this a low-health walk through mobs is
 // a death march, and pillar/flee (when feasible) dominate anyway.
 const HOME_WALK_RANGE = 96
@@ -114,6 +167,13 @@ function beginPillar(ctx, source, model) {
 function pick(bot, ctx, action, source, model) {
   ctx.retreat = { action, source, model }
   ctx.retreatFailed = null
+  // Hysteresis latches low-hp picks only (vmzq.49): the healthy
+  // under-fire leg (0ay) keys off fresh hurt, never a hold — latching
+  // it would flee stale fire for the whole TTL.
+  try {
+    const hp = bot && typeof bot.health === 'number' ? bot.health : NaN
+    if (Number.isNaN(hp) || hp < 6) latchRetreat(ctx, action)
+  } catch (_) { /* unlatchable */ }
   ctx.stepStatus = 'running'
   if (action === 'pillar') beginPillar(ctx, source, model)
   try { bot.chat(`retreating: ${RETREAT_VERBS[action]} (${source})`) } catch (_) { /* chat best-effort */ }
@@ -125,7 +185,7 @@ function pick(bot, ctx, action, source, model) {
 // Asks at most once per situation: an all-declined chain stamps
 // retreatAskedKey, and an ongoing pick (step still running) holds without
 // re-asking — model calls cost, and every answer already stands.
-async function chooseRetreat(brain, bot, ctx, state) {
+async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
   // A just-ended pick that failed excludes itself from the next menu: the
   // verdict is already on stepStatus (set by the behaviour), so stamp it
   // before the hold check (which needs 'running', never reached here).
@@ -133,8 +193,12 @@ async function chooseRetreat(brain, bot, ctx, state) {
   if (prev && prev.action && ctx && typeof ctx.stepStatus === 'string' && ctx.stepStatus.indexOf('failed') === 0) {
     ctx.retreatFailed = prev.action
     ctx.retreat = null
+    ctx.retreatLatch = null // vmzq.49: a failed leg re-asks, never holds
   }
   if (ctx && ctx.retreat && ctx.retreat.action && ctx.stepStatus === 'running') {
+    // Low-hp only (vmzq.49, the pick gate above): a healed leg drains.
+    const runHp = state && typeof state.bot_health === 'number' ? state.bot_health : NaN
+    if (Number.isNaN(runHp) || runHp < 6) latchRetreat(ctx, ctx.retreat.action, now) // danger persists: hold past this sighting
     return { action: ctx.retreat.action, source: ctx.retreat.source || 'retreat', model: ctx.retreat.model || null }
   }
   // Alone-only: with a player online the normal flow (and laya's follow)
@@ -142,7 +206,22 @@ async function chooseRetreat(brain, bot, ctx, state) {
   // suspenders for direct callers.
   if (state && typeof state.distance_to_player === 'number') {
     if (ctx) ctx.retreat = null
+    if (ctx) ctx.retreatLatch = null
     return null
+  }
+  // Hysteresis (vmzq.49): a latched leg re-issues without re-asking, past
+  // veto flicker. A live hostile fact refreshes the latch (keep fleeing
+  // until it is gone); without one the latch drains. The hold is the
+  // answer, so the decline stamp clears — expiry re-asks fresh instead
+  // of inheriting a stale decline into the castle flip.
+  const held = latchedAction(ctx, now)
+  if (held) {
+    // Low-hp only (vmzq.49, the pick gate above): a healed sighting
+    // drains instead of refreshing the hold.
+    const holdHp = state && typeof state.bot_health === 'number' ? state.bot_health : NaN
+    if (hostileDist(state) !== null && (Number.isNaN(holdHp) || holdHp < 6)) latchRetreat(ctx, held, now)
+    try { if (ctx) ctx.retreatAskedKey = null } catch (_) { /* stamp best-effort */ }
+    return { action: held, source: 'retreat-hold', model: null }
   }
   const names = feasibleRetreat(bot, ctx, state)
   if (names.length === 0) {
@@ -270,4 +349,4 @@ function pillar(bot, ctx) {
   if (ctx && ctx.retreat) ctx.recovery = null
 }
 
-module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar }
+module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear }
