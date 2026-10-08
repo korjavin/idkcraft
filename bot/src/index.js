@@ -1177,20 +1177,41 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// Names in a status-ping player sample (hide-online-players servers send
+// none at all). One definition for the ghost check and the ambiguity check.
+function pingSampleNames(res) {
+  const p = res && res.players
+  return Array.isArray(p && p.sample) ? p.sample.map((e) => e && e.name).filter(Boolean) : []
+}
+
+// online==1 with an empty sample is ambiguous: our just-quit ghost or one
+// real player. Only a hidden-sample server (hide-online-players) produces
+// it; a visible sample always names the one online.
+function isAmbiguousPing(res) {
+  const p = res && res.players
+  return !!p && p.online === 1 && pingSampleNames(res).length === 0
+}
+
 // Off-server wait: ping the server until a real player is online. A refused
 // or silent ping counts as nobody online. At most one line per minute, the
-// same throttle style as local-idle.
-function playersOccupied(res, username) {
+// same throttle style as local-idle. selfConnected (the confirmLeave ping,
+// sent while we are on the server) decides the empty-sample case: the one
+// online is us.
+function playersOccupied(res, username, selfConnected = false) {
   const p = res && res.players
   if (!p || typeof p.online !== 'number' || p.online <= 0) return false
   if (p.online > 1) return true
-  // online==1 right after our own quit() is usually ourselves: the server
-  // has not processed our disconnect yet while our local 'end' already
-  // fired. Only our name in the sample means still empty; anyone else (or
-  // no sample at all) means occupied — joining is the safe default there.
-  const sample = Array.isArray(p.sample) ? p.sample.map((e) => e && e.name).filter(Boolean) : []
-  if (sample.length === 0) return true
-  return sample.some((name) => name !== username)
+  // online==1 with a visible sample: only our name means still empty — our
+  // just-quit ghost off-server (the server has not processed our disconnect
+  // yet while our local 'end' already fired), or ourselves on the
+  // confirmLeave ping. Anyone else means occupied.
+  const sample = pingSampleNames(res)
+  if (sample.length > 0) return sample.some((name) => name !== username)
+  // online==1 with no sample at all: a hidden-sample server
+  // (hide-online-players empties it). While connected the one online is
+  // us; off-server it is our ghost or one real player — joining is the
+  // safe default there.
+  return !selfConnected
 }
 
 async function waitForPlayers({ host, port, pingFn, pollMs = JOIN_POLL_MS, username = '' }) {
@@ -1198,7 +1219,15 @@ async function waitForPlayers({ host, port, pingFn, pollMs = JOIN_POLL_MS, usern
   for (;;) {
     let occupied = false
     try {
-      occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username)
+      let res = await pingFn({ host, port, closeTimeout: 10000 })
+      if (isAmbiguousPing(res)) {
+        // Our just-quit ghost still counted, or one real player: one
+        // settle + re-ping tells them apart. The ghost clears to 0; a
+        // real player stays ambiguous, which reads occupied below.
+        await sleep(pollMs)
+        res = await pingFn({ host, port, closeTimeout: 10000 })
+      }
+      occupied = playersOccupied(res, username)
     } catch (_) { occupied = false }
     if (occupied) return
     const now = Date.now()
@@ -1267,7 +1296,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // flap join/leave every grace period. Standing down re-arms the streak.
     async function confirmLeave() {
       let occupied = false
-      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username) } catch (_) { occupied = false }
+      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username, true) } catch (_) { occupied = false }
       if (occupied) { ticker.rearm(); return }
       console.log('leaving: nobody online')
       wantQuit = true

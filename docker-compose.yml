@@ -35,6 +35,9 @@ services:
       MAX_MEMORY: ${MC_MAX_MEMORY:-2G}
       ONLINE_MODE: "false"
       ENFORCE_WHITELIST: "TRUE"
+      # Owner 2026-10-08: hide the online-player sample in server-list pings —
+      # the sample leaks whitelisted names to scanners (FishNet grief).
+      HIDE_ONLINE_PLAYERS: "true"
       # Owner 2026-09-28: off — the bot is not op, and protection around world
       # spawn silently refused every dig/place there (stuck loops near spawn).
       SPAWN_PROTECTION: "0"
@@ -46,6 +49,9 @@ services:
       OPS: ${OPS:-}
       DIFFICULTY: ${MC_DIFFICULTY:-easy}
       MOTD: idkcraft
+      # World directory name (level-name). Default keeps the original world;
+      # the stack env overrides it (LEVEL=world2 in Portainer since 2026-10-08).
+      LEVEL: ${LEVEL:-world}
       PATCH_DEFINITIONS: /patches
       # Geyser/Floodgate/ViaVersion track "latest" — drift risk accepted for
       # iteration 1. ViaVersion is needed because Geyser emulates a 26.2 Java
