@@ -3111,6 +3111,34 @@ describe('nobody-online leave', () => {
     await waitForPlayers({ host: 'x', port: 1, pingFn: async () => seq[calls++], pollMs: 10, username: 'IdkBot' })
     assert.equal(calls, 3)
   })
+
+  it('playersOccupied with selfConnected treats online==1 as us (hidden sample)', async () => {
+    const { playersOccupied } = require('../src/index')
+    // confirmLeave pings while connected: the one online is the bot itself,
+    // with or without a visible sample (hide-online-players empties it).
+    assert.equal(playersOccupied({ players: { online: 1 } }, 'IdkBot', true), false)
+    assert.equal(playersOccupied({ players: { online: 1, sample: [] } }, 'IdkBot', true), false)
+    assert.equal(playersOccupied({ players: { online: 1, sample: [{ name: 'IdkBot' }] } }, 'IdkBot', true), false)
+    assert.equal(playersOccupied({ players: { online: 2 } }, 'IdkBot', true), true)
+    assert.equal(playersOccupied({ players: { online: 0 } }, 'IdkBot', true), false)
+    // without selfConnected the old default stands: empty sample = occupied.
+    assert.equal(playersOccupied({ players: { online: 1 } }, 'IdkBot'), true)
+    assert.equal(playersOccupied({ players: { online: 1, sample: [] } }, 'IdkBot'), true)
+  })
+
+  it('waitForPlayers settles an ambiguous hidden-sample ghost, joins a real lone player', async () => {
+    const { waitForPlayers } = require('../src/index')
+    // ghost (online==1, empty sample) that clears on the settle re-ping:
+    // keep waiting, then join Steve.
+    const seq = [{ players: { online: 1, sample: [] } }, { players: { online: 0 } }, { players: { online: 1, sample: [{ name: 'Steve' }] } }]
+    let calls = 0
+    await waitForPlayers({ host: 'x', port: 1, pingFn: async () => seq[calls++], pollMs: 10, username: 'IdkBot' })
+    assert.equal(calls, 3)
+    // still ambiguous after the settle: a real lone player — join.
+    let loneCalls = 0
+    await waitForPlayers({ host: 'x', port: 1, pingFn: async () => { loneCalls++; return { players: { online: 1 } } }, pollMs: 10, username: 'IdkBot' })
+    assert.equal(loneCalls, 2)
+  })
 })
 
 describe('lead override', () => {
