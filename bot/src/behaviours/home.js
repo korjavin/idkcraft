@@ -887,6 +887,18 @@ function dryStanceAt(bot, x, y, z) {
   return freeCell(bot.blockAt(new Vec3(x, y, z))) && freeCell(bot.blockAt(new Vec3(x, y + 1, z)))
 }
 function nearestDry(bot, skip = [], dyLo = -4, dyHi = 1) {
+  return nearestDryIn(bot, skip, dyLo, dyHi, false, Infinity)
+}
+// Inland-first variant for the n9ta water abort: a waterline stance leaves
+// the bot inside drowned reach (3 blocks), so the beached bot fights from
+// the shallows and dies there. An inland stance (feet cell with no wet
+// 4-neighbour) forces the pack to flop over land, arriving staggered and
+// out of melee until it does. Bounded by maxD (squared XZ) so the abort
+// swim stays short; null when no inland stance stands in range.
+function nearestInlandDry(bot, skip = [], dyLo = -4, dyHi = 1, maxD = 5) {
+  return nearestDryIn(bot, skip, dyLo, dyHi, true, maxD * maxD)
+}
+function nearestDryIn(bot, skip, dyLo, dyHi, inland, maxD2) {
   const bp = botPos(bot)
   if (!bp || typeof bot.blockAt !== 'function') return null
   const x0 = Math.floor(bp.x), y0 = Math.floor(bp.y), z0 = Math.floor(bp.z)
@@ -895,9 +907,10 @@ function nearestDry(bot, skip = [], dyLo = -4, dyHi = 1) {
   for (let dx = -SHELTER_DRY_R; dx <= SHELTER_DRY_R; dx++) {
     for (let dz = -SHELTER_DRY_R; dz <= SHELTER_DRY_R; dz++) {
       const d = dx * dx + dz * dz
-      if (d >= bd) continue
+      if (d >= bd || d > maxD2) continue
       for (let dy = dyHi; dy >= dyLo; dy--) { // at most a step above the surface: climbable
         if (!dryStanceAt(bot, x0 + dx, y0 + dy, z0 + dz)) continue
+        if (inland && !inlandCell(bot, x0 + dx, y0 + dy, z0 + dz)) continue
         if (skip.some((s) => s.x === x0 + dx && s.z === z0 + dz)) continue
         best = { x: x0 + dx, y: y0 + dy, z: z0 + dz }
         bd = d
@@ -906,6 +919,14 @@ function nearestDry(bot, skip = [], dyLo = -4, dyHi = 1) {
     }
   }
   return best
+}
+// Feet cell with no wet orthogonal neighbour: out of drowned melee from
+// the water, reachable only by flopping ashore.
+function inlandCell(bot, x, y, z) {
+  return !wetCell(bot.blockAt(new Vec3(x + 1, y, z))) &&
+    !wetCell(bot.blockAt(new Vec3(x - 1, y, z))) &&
+    !wetCell(bot.blockAt(new Vec3(x, y, z + 1))) &&
+    !wetCell(bot.blockAt(new Vec3(x, y, z - 1)))
 }
 function shelter(bot, ctx, target, state) {
   const home = ctx && ctx.home
@@ -1482,4 +1503,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, nearestDry, dryStanceAt }
+module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, nearestDry, nearestInlandDry, dryStanceAt }

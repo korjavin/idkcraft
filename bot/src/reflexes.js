@@ -494,6 +494,7 @@ const ABORT_STALE_MS = 60000 // latch without a main-path drive tick this long i
 const ABORT_SHORE_MEMORY_MS = 600000 // failed shores stay skipped across episodes for this long (revmux 01 minor)
 const ABORT_DY_LO = -1 // waterline stances only: wadable or a +1 exit;
 const ABORT_DY_HI = 1 // deeper is caves, higher is h04-unexitable walls
+const ABORT_INLAND_D = 5 // inland-first detour cap: the abort swim stays short
 const ABORT_WATER_MOBS = new Set(['drowned', 'guardian', 'elder_guardian'])
 const ABORT_WETFLORA = new Set(['kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column'])
 function abortReflex(bot, ctx, state = null, nowMs = Date.now()) {
@@ -694,15 +695,23 @@ function abortThreatName(state) {
   return 'hurt'
 }
 
-// Closer of the entry shore (when still a waterline stance) and the
-// nearestDry scan, skips excluded; entry wins ties. Null when neither
-// stands (open water past scan range and no entry): the crossing swims on
-// with melee, i.e. current behavior.
+// Inland stance within ABORT_INLAND_D first (out of drowned melee from
+// the water; rig v9 beached at the waterline and fought from the
+// shallows). Then closer of the entry shore (when still a waterline
+// stance) and the nearestDry scan, skips excluded; entry wins ties. Null
+// when nothing stands (open water past scan range and no entry): the
+// crossing swims on with melee, i.e. current behavior.
 function pickAbortShore(bot, ctx, skip) {
   let home = null
   try { home = require('./behaviours/home') } catch (_) { return null } // lazy: home<->goal cycle (fleeReflex precedent)
   if (!home || typeof home.nearestDry !== 'function' || typeof home.dryStanceAt !== 'function') return null
   const skipped = (c) => Array.isArray(skip) && skip.some((s) => s && s.x === c.x && s.z === c.z)
+  if (typeof home.nearestInlandDry === 'function') {
+    try {
+      const inland = home.nearestInlandDry(bot, Array.isArray(skip) ? skip : [], ABORT_DY_LO, ABORT_DY_HI, ABORT_INLAND_D)
+      if (inland && !skipped(inland)) return inland
+    } catch (_) { /* fall through to entry/scan */ }
+  }
   let entry = null
   try {
     const ld = ctx.waterLastDry

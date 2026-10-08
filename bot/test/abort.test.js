@@ -44,6 +44,35 @@ function swimCells() {
   return cells
 }
 
+// East shore two deep: (3,62,0) waterline, (4,62,0) inland (no wet
+// 4-neighbour). Unset cells read null (wet), so the inland neighbours
+// are set air explicitly; their floors stay unset (not stances).
+function inlandCells() {
+  const cells = swimCells()
+  cells['4,61,0'] = 'dirt'
+  cells['4,62,0'] = 'air'
+  cells['4,63,0'] = 'air'
+  cells['5,62,0'] = 'air'
+  cells['4,62,1'] = 'air'
+  cells['4,62,-1'] = 'air'
+  return cells
+}
+
+// Inland stance at x=6: past the ABORT_INLAND_D cap, so the waterline
+// still wins. x=4 stays water-adjacent ((5,62,0) is x=6's dry neighbour
+// with no floor, not a stance).
+function farInlandCells() {
+  const cells = swimCells()
+  cells['6,61,0'] = 'dirt'
+  cells['6,62,0'] = 'air'
+  cells['6,63,0'] = 'air'
+  cells['5,62,0'] = 'air'
+  cells['7,62,0'] = 'air'
+  cells['6,62,1'] = 'air'
+  cells['6,62,-1'] = 'air'
+  return cells
+}
+
 function swimBot({ cells = swimCells(), bodyPos = pos(0.5, 62, 0.5), inWater = true, onGround = false, moving = false } = {}) {
   const calls = { stopDigging: 0, setGoal: 0, goals: [] }
   const bot = {
@@ -181,6 +210,37 @@ describe('abortReflex shore pick', () => {
     const state = hostileAt('drowned', 2, 61, 0, 2.5)
     assert.equal(abortReflex(bot, ctx, state, T0), true)
     assert.deepEqual({ x: ctx.abort.x, y: ctx.abort.y, z: ctx.abort.z }, { x: 3, y: 62, z: 0 })
+  })
+
+  it('an inland stance beats the nearer waterline scan', () => {
+    const bot = swimBot({ cells: inlandCells() })
+    const ctx = {}
+    const state = hostileAt('drowned', 2, 61, 0, 2.5)
+    assert.equal(abortReflex(bot, ctx, state, T0), true)
+    assert.deepEqual({ x: ctx.abort.x, y: ctx.abort.y, z: ctx.abort.z }, { x: 4, y: 62, z: 0 })
+  })
+
+  it('an inland stance beats the entry shore', () => {
+    const bot = swimBot({ cells: inlandCells() })
+    const ctx = { waterLastDry: { x: -3, y: 62, z: 0 } }
+    const state = hostileAt('drowned', 2, 61, 0, 2.5)
+    assert.equal(abortReflex(bot, ctx, state, T0), true)
+    assert.deepEqual({ x: ctx.abort.x, y: ctx.abort.y, z: ctx.abort.z }, { x: 4, y: 62, z: 0 })
+  })
+
+  it('with no inland in range the waterline still stands', () => {
+    const bot = swimBot({ cells: farInlandCells() }) // inland at x=6: past the detour cap
+    const ctx = {}
+    const state = hostileAt('drowned', 2, 61, 0, 2.5)
+    assert.equal(abortReflex(bot, ctx, state, T0), true)
+    // A waterline stance (scan tie order lands on -x); x=6 is ignored.
+    assert.deepEqual({ x: ctx.abort.x, y: ctx.abort.y, z: ctx.abort.z }, { x: -3, y: 62, z: 0 })
+  })
+
+  it('nearestInlandDry is null when every stance borders water', () => {
+    const bot = swimBot()
+    assert.equal(home.nearestInlandDry(bot, [], -1, 1, 5), null)
+    assert.deepEqual(home.nearestInlandDry(swimBot({ cells: inlandCells() }), [], -1, 1, 5), { x: 4, y: 62, z: 0 })
   })
 
   it('an unlandable entry (+2 bank, h04) falls back to the scan', () => {
