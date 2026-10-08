@@ -704,6 +704,7 @@ function questShed(bot, ctx, bp) {
         ctx.shedAsideDest = null // shed here: the next run asides past these pillars
       } catch (_) { /* last-site best-effort */ }
       ctx.lastGoalKey = null
+      ctx.stockpileHomeLatch = null // trip over
       ctx.stepStatus = 'done'
     } else {
       fail(ctx, 'shed')
@@ -753,6 +754,7 @@ function offerHaul(bot, ctx) {
 
 function fail(ctx, reason) {
   ctx.stepStatus = `failed:${reason}`
+  try { ctx.stockpileHomeLatch = null } catch (_) { /* trip over */ }
 }
 
 // Far patience: consecutive far+standing ticks on one goal key before the
@@ -1291,6 +1293,7 @@ function stockpileSite(bot, ctx, bp) {
   const plan = depositPlan(bot, ctx)
   if (plan.length === 0) {
     ctx.siteDouble = null
+    ctx.stockpileHomeLatch = null // trip over
     ctx.stepStatus = 'done'
     return
   }
@@ -1391,6 +1394,7 @@ function stockpileSite(bot, ctx, bp) {
         say(bot, 'the site chest is full')
         if (offerHaul(bot, ctx)) say(bot, 'bringing the surplus to you instead')
       }
+      ctx.stockpileHomeLatch = null // trip over
       ctx.stepStatus = 'done'
     } catch (_) {
       ctx.stockpileInFlight = false
@@ -1435,11 +1439,18 @@ function stockpile(bot, ctx, target, state) {
   if (ctx.stockpileInFlight) return // exactly one window op at a time (craft.js rule)
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return
-  // A new pick retries the site: the fallback latch below lives for one
-  // pick (the goal shortcut keeps the stamp across a trip's ticks).
+  // Latched fallback (trip latch): while the site situation reads the
+  // same, later ticks — including facts-changed re-picks, which re-stamp
+  // stepPick every 1-3 s near the site — skip the failing site instead of
+  // swapping goals every flip (revmux 03-after-fix major 1). A changed
+  // site retries below; terminal outcomes clear the latch at their own
+  // exits (fail + dones), ending the trip.
   try {
-    const pickAt = ctx.stepPick && ctx.stepPick.at
-    if (pickAt && ctx.stockpileHomeLatch && ctx.stockpileHomeLatch !== pickAt) ctx.stockpileHomeLatch = null
+    if (ctx.stockpileHomeLatch) {
+      let todo = null
+      try { todo = siteChestTodo(bot, ctx) } catch (_) { todo = null }
+      if (todo !== null && todo !== ctx.stockpileHomeLatch) ctx.stockpileHomeLatch = null
+    }
   } catch (_) { /* keep */ }
   // Site banking (vmzq.39): an active far castle banks at the site, never
   // across the map. Falls back to home below when the site fails
@@ -1450,17 +1461,17 @@ function stockpile(bot, ctx, target, state) {
       if (!failedSync(ctx) || !homeFallbackViable(bot, ctx)) return
       // The site cannot take it: the home walk is the unblock feasible
       // approved (vmzq.19 R3 pierce), so clear the site failure and run
-      // the home branch below. Latched for the pick: without it the next
-      // tick re-runs the failing site first and the two goals swap every
-      // tick (revmux 02-after-fix major 1). The pierce latches too — the
-      // trip must survive a partial bank like a home-branch pick (R4).
+      // the home branch below. Latched for the trip on the failing site
+      // todo: without it the next tick re-runs the failing site first and
+      // the two goals swap every tick (revmux 02-after-fix major 1). The
+      // pierce latches too — the trip must survive a partial bank like a
+      // home-branch pick (R4).
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = null
       try {
-        const pickAt = ctx.stepPick && ctx.stepPick.at
-        ctx.stockpileHomeLatch = pickAt || -1
+        ctx.stockpileHomeLatch = siteChestTodo(bot, ctx)
         ctx.stockpilePierced = true
-      } catch (_) { ctx.stockpileHomeLatch = -1 }
+      } catch (_) { ctx.stockpileHomeLatch = 'none' }
     }
   } catch (_) { /* undecidable: home below */ }
   const home = ctx.home
@@ -1514,7 +1525,7 @@ function stockpile(bot, ctx, target, state) {
     }
   }
 
-  let c = home.chest
+  const c = home.chest
   let at = null
   try {
     at = blockNameAt(bot, c.x, c.y, c.z)
@@ -1551,25 +1562,24 @@ function stockpile(bot, ctx, target, state) {
   const plan = depositPlan(bot, ctx)
   if (plan.length === 0) {
     ctx.homeDouble = null
+    ctx.stockpileHomeLatch = null // trip over
     ctx.stepStatus = 'done'
     return
   }
   // Pending double first: resume the multi-tick place, never the deposit
   // goal over it (doublePending above).
   if (ctx.homeDouble && typeof ctx.homeDouble.x === 'number') {
-    const st8 = doublePending(bot, ctx.homeDouble)
-    if (st8 === 'open') {
+    if (doublePending(bot, ctx.homeDouble) === 'open') {
       placeChest(bot, ctx, ctx.homeDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest', pendingKey: 'homeDouble' })
       return
     }
-    if (st8 === 'landed') {
-      // The fresh half becomes the chest (revmux 02-after-fix major 4):
-      // merged or a lone single, it holds the new room.
-      adopted(ctx, ctx.homeDouble)
-      ctx.homeExpanded = true // this fill's expansion is spent
-      c = home.chest
-    }
-    ctx.homeDouble = null // shut: the deposit below decides
+    // Landed or shut: the old chest stays adopted. Every withdraw path
+    // opens only ctx.home.chest, so adopting the fresh half would orphan
+    // the stored valuables when the halves do not merge (revmux
+    // 03-after-fix major 2); an unmerged home double parks like a full
+    // chest, its contents kept. (The site adopts the fresh half — nothing
+    // withdraws from a site chest.)
+    ctx.homeDouble = null
   }
 
   const key = `stockpile:${c.x},${c.y},${c.z}`
@@ -1697,6 +1707,7 @@ function stockpile(bot, ctx, target, state) {
         say(bot, 'the home chest is full')
         if (offerHaul(bot, ctx)) say(bot, 'bringing the surplus to you instead')
       }
+      ctx.stockpileHomeLatch = null // trip over
       ctx.stepStatus = 'done'
     } catch (_) {
       ctx.stockpileInFlight = false

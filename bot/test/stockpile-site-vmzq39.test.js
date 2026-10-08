@@ -333,7 +333,7 @@ describe('vmzq.39 R2 home fallback', () => {
     assert.equal(ctx.lastGoalKey, 'stockpile:502,64,502')
   })
 
-  it('the fallback latches for the pick: no goal swap on tick two', () => {
+  it('the fallback latches for the trip: a re-pick re-sends nothing', () => {
     const bot = mockBot({
       at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
     })
@@ -341,13 +341,14 @@ describe('vmzq.39 R2 home fallback', () => {
     ctx.stepPick = { step: 'stockpile', at: 777 }
     stockpile(bot, ctx) // tick 1: site fails, home goal issues
     assert.equal(bot.pathfinder.goals.length, 1)
+    ctx.stepPick = { step: 'stockpile', at: 778 } // facts-changed re-pick, same site
     stockpile(bot, ctx) // tick 2: the site must not run first again
     assert.equal(bot.pathfinder.goals.length, 1)
     assert.equal(ctx.stepStatus, 'running')
     assert.equal(ctx.stockpilePierced, true)
   })
 
-  it('a new pick retries the site', () => {
+  it('a changed site retries the site', () => {
     const bot = mockBot({
       at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
     })
@@ -360,6 +361,19 @@ describe('vmzq.39 R2 home fallback', () => {
     stockpile(bot, ctx)
     assert.ok(String(ctx.lastGoalKey).startsWith('stockpile-site-place:'))
     assert.equal(bot.pathfinder.goals[bot.pathfinder.goals.length - 1].constructor.name, 'GoalPlaceBlock')
+  })
+
+  it('a terminal outcome ends the trip and releases the latch', () => {
+    const bot = mockBot({
+      at: atSite, inv: fullPack(), cells: { '502,64,502': 'chest' },
+    })
+    const ctx = farHomeCtx()
+    stockpile(bot, ctx)
+    assert.ok(ctx.stockpileHomeLatch)
+    bot.inv.length = 0 // banked elsewhere: nothing left to do
+    stockpile(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.stockpileHomeLatch, null)
   })
 })
 
@@ -391,7 +405,7 @@ describe('vmzq.39 R3 doubleArmed', () => {
 })
 
 describe('vmzq.39 R3 home pending-double resume', () => {
-  it('an open home double re-issues the place goal; landed adopts the fresh half', () => {
+  it('an open home double re-issues the place goal; landed keeps the old chest', () => {
     const home = { site: { x: 0, y: 64, z: 0 }, built: true, chest: { x: 2, y: 64, z: 2 } }
     const inv = () => [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'chest', count: 1 }]
     const open = mockBot({ at: pos(2, 64, 3), inv: inv(), cells: { '2,64,2': 'chest' } })
@@ -399,13 +413,14 @@ describe('vmzq.39 R3 home pending-double resume', () => {
     stockpile(open, octx)
     assert.equal(octx.lastGoalKey, 'stockpile-double:3,64,2')
     assert.equal(open.pathfinder.goals[0].constructor.name, 'GoalPlaceBlock')
+    // Landed: the old chest stays adopted (every withdraw path opens only
+    // it); an unmerged double parks like a full chest, contents kept.
     const land = mockBot({ at: pos(2, 64, 3), inv: inv(), cells: { '2,64,2': 'chest', '3,64,2': 'chest' } })
     const lctx = { home: { ...home }, homeDouble: { x: 3, y: 64, z: 2 }, homeExpanded: true }
     stockpile(land, lctx)
     assert.equal(lctx.homeDouble, null)
-    assert.equal(lctx.home.chest.x, 3)
-    assert.equal(lctx.homeExpanded, true)
-    assert.equal(lctx.lastGoalKey, 'stockpile:3,64,2')
+    assert.equal(lctx.home.chest.x, 2)
+    assert.equal(lctx.lastGoalKey, 'stockpile:2,64,2')
   })
 })
 
@@ -436,5 +451,75 @@ describe('vmzq.39 R3 stockpileSiteBranch', () => {
     const bare = mockBot({ at: atSite })
     assert.equal(goal.MENU.stockpile.feasible(f, standing, siteCtx()), true)
     assert.equal(goal.MENU.stockpile.feasible(f, bare, siteCtx()), false)
+  })
+})
+
+describe('vmzq.39 R4 decide-level pierce latch', () => {
+  const goal = require('../src/goal')
+  require('../src/index') // BEHAVIOURS registration (goal.registered)
+  const CASTLE = { x: 276, y: 64, z: 180 }
+  const HOME = { x: -40, y: 64, z: -215 }
+  function flatWorld(cells) {
+    return {
+      blockAt: (p) => {
+        const fx = Math.floor(p.x)
+        const fy = Math.floor(p.y)
+        const fz = Math.floor(p.z)
+        const hit = cells && cells.get(`${fx},${fy},${fz}`)
+        const name = hit || (fy <= 63 ? 'dirt' : 'air')
+        return { name, position: pos(fx, fy, fz), boundingBox: name === 'air' ? 'empty' : 'block' }
+      },
+    }
+  }
+  function goalBot({ items = [], at = pos(CASTLE.x + 2, 64, CASTLE.z + 2), timeOfDay = 6000, cells = null } = {}) {
+    const world = flatWorld(cells)
+    return {
+      chats: [],
+      entity: { position: at, onGround: true },
+      inventory: { items: () => items },
+      time: { timeOfDay, day: 1 },
+      spawnPoint: pos(0, 64, 0),
+      players: {},
+      entities: {},
+      health: 20,
+      food: 20,
+      blockAt: (p) => world.blockAt(p),
+      findBlocks: () => [],
+      registry: { blocksByName: {}, itemsByName: {} },
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false, movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] } },
+      world: { getBlock: () => null },
+      chat(m) { this.chats.push(String(m)) },
+    }
+  }
+  it('a site pick banks without arming the pierce latch', async () => {
+    const orig = console.log
+    console.log = () => {}
+    try {
+      // The vmzq.19 R4 fill, slimmed below 36: surplus without a full pack,
+      // same tools and no craft mats so the menu field matches the R4 test.
+      const items = Array.from({ length: 30 }, (_, i) => ({ name: `granite_${i}`, count: 64 }))
+      items.push({ name: 'dirt', count: 64 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 })
+      const at = pos(CASTLE.x + 2, 64, CASTLE.z + 2)
+      const cells = new Map() // both beds in: no gather top-up (the R4 shape)
+      for (const dx of [1, 2, 4, 5]) cells.set(`${HOME.x + dx},64,${HOME.z + 4}`, 'white_bed')
+      const bot = goalBot({ items, at, cells })
+      const ctx = {
+        home: { site: { ...HOME }, built: true, v: 2 },
+        castle: {
+          site: { ...CASTLE }, rot: 0, blueprintVersion: 1, phase: 'body',
+          blocked: {}, parked: false, siteChest: { x: CASTLE.x - 3, y: 64, z: CASTLE.z + 1 },
+        },
+        work: true, step: 'explore', stepStatus: 'done',
+        gather: { final: 'failed:unreachable', atLogs: 0, failPos: { x: at.x, y: at.y, z: at.z } },
+      }
+      // Castlefetch held, like the vmzq.19 R4 test: the bank walk is the pick.
+      const t = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+      ctx.stepFail = { castlefetch: { status: 'failed:castlefetch-pack-full', text: t, pos: { x: at.x, y: at.y, z: at.z }, at: Date.now() } }
+      assert.equal(goal.goalFacts(bot, ctx).surplus, 'yes', 'the bread is surplus')
+      assert.equal((await goal.decide(bot, ctx)).action, 'stockpile', 'the site banks')
+      assert.equal(ctx.stockpilePierced, false, 'a site pick is not a pierce')
+    } finally {
+      console.log = orig
+    }
   })
 })
