@@ -345,6 +345,22 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=junk (36/36 stone variants + junk, no pickaxe)')
   }
+  // Valuables kit (vmzq.39): 36/36 never-dropped valuables — ores, wool,
+  // tools, coal, wood — no stone or dirt (the dig has no room until the
+  // site chest takes them), a pick to dig with once it does, chests and a
+  // table to build the storage. Nothing droppable, nothing shedable.
+  if (KIT === 'valuables') {
+    for (const [item, count] of [['raw_iron', 64], ['iron_ingot', 64], ['raw_gold', 64], ['diamond', 32],
+      ['coal', 64], ['oak_log', 64], ['oak_planks', 64], ['white_wool', 32],
+      ['stone_pickaxe', 2], ['iron_sword', 1], ['bow', 2], ['chest', 2], ['crafting_table', 1],
+      ['bread', 32], ['arrow', 96], ['white_bed', 1], ['oak_door', 1], ['oak_fence', 16], ['torch', 32],
+      ['charcoal', 64], ['raw_copper', 64], ['lapis_lazuli', 64], ['redstone', 64], ['emerald', 32],
+      ['iron_helmet', 1], ['iron_chestplate', 1], ['shield', 1], ['string', 64], ['bone', 64],
+      ['gunpowder', 64], ['feather', 64], ['flint', 64], ['leather', 64]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=valuables (36/36 ores + tools + wood, no stone/dirt)')
+  }
   await sleep(3000) // chunks in, both landed
   if (tickCtx()) tickCtx().paused = false
 
