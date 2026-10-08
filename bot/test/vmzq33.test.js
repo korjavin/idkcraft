@@ -141,8 +141,12 @@ describe('vmzq.33 menu', () => {
     const ctx = { castle: castleState() }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'white_bed', count: 1 }] }), ctx), false, 'packed awaits dusk')
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot(), ctx), false, 'no planks, no hunt')
-    const latched = { castle: castleState(), castlebed: { noWool: { fails: 2, at: Date.now() } } }
+    const latched = { castle: castleState({ noWool: { fails: 2, at: Date.now() } }) }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), latched), false, 'sheepless latch')
+    const stringOut = { castle: castleState({ noWool: { fails: 2, at: Date.now() } }) }
+    assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }, { name: 'string', count: 4 }] }), stringOut), true, '4 string crafts wool with no sheep')
+    const expired = { castle: castleState({ noWool: { fails: 2, at: Date.now() - 3 * 3600000 } }) }
+    assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), expired), true, 'the latch expires')
     const homeLatched = { castle: castleState(), beds: { noWool: { fails: 2, at: Date.now() } } }
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), homeLatched), true, 'the home latch does not bind the site')
     assert.equal(goal.MENU.castlebed.feasible({ ...day, rearm: true, pickaxe: 0 }, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), ctx), false, 'rearm first')
@@ -268,8 +272,19 @@ describe('vmzq.33 day fetch', () => {
     const ctx2 = { castle: castleState(), castlebed: { hunt: { searchLegs: { legs: 24 } }, reopens: 0 } }
     castlebed(makeBot({ items: pack }), ctx2)
     assert.equal(ctx2.stepStatus, 'failed:no-wool')
-    assert.ok(ctx2.castlebed.noWool && ctx2.castlebed.noWool.fails >= 1, 'the own latch notes exhaustion')
+    assert.ok(ctx2.castle.noWool && ctx2.castle.noWool.fails >= 1, 'the own latch notes exhaustion')
     assert.equal(ctx2.beds, undefined, 'the home latch stays untouched')
+    assert.equal(ctx2.bring, undefined, 'no reopen after exhaustion')
+  })
+
+  it('three short reopens fail to a hold, with no latch', () => {
+    const pack = [{ name: 'oak_planks', count: 8 }]
+    const ctx = { castle: castleState(), castlebed: { hunt: { searchLegs: { legs: 0 } }, reopens: 3 } }
+    castlebed(makeBot({ items: pack }), ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-wool')
+    assert.equal(ctx.bring, undefined, 'the reopen cap stops the loop')
+    assert.equal(ctx.castle.noWool, undefined, 'short hunts never judged the range')
+    assert.equal(ctx.castlebed.reopens, 0)
   })
 })
 

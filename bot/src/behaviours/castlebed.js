@@ -45,22 +45,24 @@ function blockNameAt(bot, p) {
   }
 }
 
-// Site sheepless latch (own object, not the beds.js one: the castle site is
-// 500 blocks from home, and a failed site hunt must not latch the home
-// bedrooms). Same {fails, at} shape, same 2-fail arming — but only an
-// EXHAUSTED hunt (full budget, nothing found) notes. A partial hunt gained
-// wool (progress, not sheeplessness) and a dusk-cancelled hunt never ran
-// long enough to judge; both reopen without noting. Not persisted: a
-// restart re-hunts, bounded by the reopen cap and the menu holds.
+// Site sheepless latch (own object on the castle state, not the beds.js one:
+// the site is 500 blocks from home, and a failed site hunt must not latch
+// the home bedrooms). Same {fails, at} shape, same 2-fail arming — but only
+// an EXHAUSTED hunt (full budget, nothing found) notes. A partial hunt
+// gained wool (progress, not sheeplessness) and a dusk-cancelled hunt never
+// ran long enough to judge; both reopen without noting. It lives on
+// ctx.castle (not the per-leg ctx.castlebed, which death and orders clear),
+// and memory drops it on save: a restart re-hunts, bounded by the reopen
+// cap and the menu holds.
 function siteSheepLatched(ctx, bot) {
   try {
     const cb = ctx && ctx.castlebed
-    const lat = cb && cb.noWool
+    const lat = ctx && ctx.castle && ctx.castle.noWool
     if (!lat || typeof lat !== 'object') return false
     if ((lat.fails || 0) < (bedsMod.NOWOOL_LATCH || 2)) return false
     if (Date.now() - (lat.at || 0) >= (bedsMod.LATCH_MS || 7200000)) return false
     // String exemption (beds.js mirror): 4 string crafts wool with no sheep.
-    if (cb.stringDry) return true
+    if (cb && cb.stringDry) return true
     let string = 0
     try { string = bedMod.packCounts(bot).string || 0 } catch (_) { string = 0 }
     if (string >= 4) return false
@@ -226,7 +228,7 @@ function woolTick(bot, ctx, cb, pack) {
     // noting progress latched day 2 in the rig and the bed never got made.
     if (legs >= budget || timedOut || capped) {
       cb.reopens = 0
-      try { bedsMod.noteNoWool(cb) } catch (_) { /* latch best-effort */ }
+      try { if (ctx.castle) bedsMod.noteNoWool(ctx.castle) } catch (_) { /* latch best-effort */ }
       ctx.stepStatus = 'failed:no-wool'
       return false
     }
