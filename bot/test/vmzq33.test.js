@@ -230,6 +230,48 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), true, 'tomorrow retries')
   })
 
+  it('hunt backoff: 3 consumed hunts without wool yield the day (pair 4)', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 8 }] })
+    bot.entities = {}
+    const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
+    for (let i = 0; i < 3; i++) {
+      delete ctx.stepStatus
+      ctx.bring = null
+      ctx.castlebed.hunt = { searchLegs: { legs: 1 } } // a bring that died fast, nothing gained
+      castlebed(bot, ctx)
+    }
+    assert.equal(ctx.stepStatus, 'failed:no-wool', 'the loud fail stands for the hold')
+    assert.equal(ctx.castlebed.huntDeadDay, 5, 'the reopen cap cannot reset itself across legs')
+    delete ctx.stepStatus
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done', 'no 4th chase: the chain runs')
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), false, 'the menu agrees')
+    assert.equal(goal.stepWhy('castlebed', day, bot, ctx), 'castlebed: sheep hunt failed 3x today, chain runs')
+  })
+
+  it('hunt backoff: wool progress resets the fail count', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 8 }, { name: 'white_wool', count: 1 }] })
+    bot.entities = {}
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { huntFails: 2, huntFailDay: 5, huntWool: 0, hunt: { searchLegs: { legs: 1 } } } }
+    castlebed(bot, ctx) // consumes a hunt that gained a wool: progress, not failure
+    assert.equal(ctx.castlebed.huntFails, 0, 'a working hunt never trips the cap')
+    assert.equal(ctx.castlebed.huntDeadDay, undefined, 'no yield on progress')
+  })
+
+  it('hunt backoff: a 300-tick chase cancels and yields the day (pair 4)', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 8 }] })
+    bot.entities = {}
+    const ctx = { castle: castleState(), home: farHome(), castlebed: { huntTickDay: 5, huntTicks: 300 }, bring: { self: 'castlebed', kind: 'wool' } }
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-wool')
+    assert.equal(ctx.castlebed.huntDeadDay, 5, 'the 5-min day budget yields')
+    assert.equal(ctx.bring, null, 'the stale order cannot own the body under the next step')
+    assert.equal(ctx.castlebed.hunt, null)
+    delete ctx.stepStatus
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done', 'menu and tick agree: done, not failed')
+  })
+
   it('craft backoff: the day tick drives to the cap, then yields without churning', () => {
     const bot = makeBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 6 }, { name: 'stone_pickaxe', count: 1 }] })
     const ctx = { castle: castleState(), home: farHome(), castlebed: {} }

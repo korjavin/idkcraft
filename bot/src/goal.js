@@ -358,11 +358,13 @@ const MENU = {
           } catch (_) { return false }
         }
         // Craft backoff (pair 3): capped no-progress craft fails yield the
-        // rest of the day to the chain; tomorrow retries.
+        // rest of the day to the chain; tomorrow retries. Hunt backoff
+        // (pair 4): capped fail-loop hunts and over-budget chases yield
+        // the same way.
         try {
           const cb = ctx && ctx.castlebed
           const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
-          if (cb && cb.craftDeadDay === n) return false
+          if (cb && (cb.craftDeadDay === n || cb.huntDeadDay === n)) return false
         } catch (_) { /* no clock: hunt */ }
         let maxP = 0
         try {
@@ -1913,6 +1915,7 @@ function stepWhy(name, facts, bot, ctx, text) {
           const cb = ctx && ctx.castlebed
           const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
           if (cb && cb.craftDeadDay === n) return 'castlebed: craft failed 3x today, chain runs'
+          if (cb && cb.huntDeadDay === n) return 'castlebed: sheep hunt failed 3x today, chain runs'
         } catch (_) { /* wording only */ }
         return 'castlebed: need 3 planks of one wood'
       }

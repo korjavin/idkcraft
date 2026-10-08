@@ -29,6 +29,8 @@ const WOOL16 = bedMod.BED_COLORS.map((c) => `${c}_wool`)
 const AIR = new Set(['air', 'cave_air', 'void_air'])
 const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:no-wool (beds mirror)
 const CRAFT_FAIL_CAP = 3 // consecutive no-progress craft fails before the day yields (pair 3: the no-table craft ping-ponged the menu ~20 legs for 606 ticks)
+const HUNT_FAIL_CAP = 3 // consumed hunts without wool progress before the day yields (pair 4: the reopen cap reset itself every 4 legs, ping-ponging forever)
+const HUNT_DAY_TICKS = 300 // running-hunt budget per day, ~5 min: a far chase must not eat the build (pair 4: one 12-min hunt)
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -45,6 +47,38 @@ function blockNameAt(bot, p) {
   } catch (_) {
     return null
   }
+}
+
+function dayNum(bot) {
+  try {
+    return bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+  } catch (_) {
+    return -1
+  }
+}
+
+function woolTotal(pack) {
+  try {
+    let wool = 0
+    for (const w of WOOL16) wool += pack[w] || 0
+    return wool
+  } catch (_) {
+    return 0
+  }
+}
+
+// Hunt-fail backoff (pair 4): every consumed hunt without wool progress
+// counts; the cap yields the day to the chain instead of re-picking every
+// hold-expiry. Day-scoped like the craft backoff: wool progress reopens at
+// once, tomorrow retries. Pure over cb; the menu and dayTick read huntDeadDay.
+function noteHuntFail(bot, cb) {
+  if (!cb || typeof cb !== 'object') return false
+  const n = dayNum(bot)
+  if (cb.huntFailDay !== n) { cb.huntFailDay = n; cb.huntFails = 1 }
+  else cb.huntFails = (cb.huntFails || 0) + 1
+  if (cb.huntFails < HUNT_FAIL_CAP) return false
+  if (n >= 0) cb.huntDeadDay = n
+  return true
 }
 
 // Site sheepless latch (own object on the castle state, not the beds.js one:
@@ -253,7 +287,24 @@ function woolTick(bot, ctx, cb, pack) {
     cb.hunt = null
     return true // wool covered: the caller crafts
   }
-  if (ctx.bring) return false // the ticker runs the hunt instead of this step
+  if (ctx.bring) { // the ticker runs the hunt instead of this step; the day budget bounds the chase
+    try {
+      const n = dayNum(bot)
+      if (n >= 0) {
+        if (cb.huntTickDay !== n) { cb.huntTickDay = n; cb.huntTicks = 0 }
+        cb.huntTicks = (cb.huntTicks || 0) + 1
+        if (cb.huntTicks > HUNT_DAY_TICKS) {
+          cb.huntDeadDay = n
+          cb.hunt = null
+          try { ctx.bring = null } catch (_) { /* cancel best-effort */ }
+          try { bringMod.clearSearchLeg(ctx) } catch (_) { /* cancel best-effort */ }
+          ctx.stepStatus = 'failed:no-wool'
+          return false
+        }
+      }
+    } catch (_) { /* uncounted: hunt */ }
+    return false
+  }
   const last = cb.hunt
   if (last) {
     cb.hunt = null
@@ -273,6 +324,18 @@ function woolTick(bot, ctx, cb, pack) {
       ctx.stepStatus = 'failed:no-wool'
       return false
     }
+    // Wool progress resets the fail count; every consumed hunt without it
+    // counts toward the day cap — the reopen cap alone resets itself every
+    // 4 legs and ping-pongs forever (pair 4).
+    try {
+      const w = woolTotal(pack)
+      if (w > (cb.huntWool || 0)) { cb.huntWool = w; cb.huntFails = 0 }
+      else if (noteHuntFail(bot, cb)) {
+        cb.reopens = 0
+        ctx.stepStatus = 'failed:no-wool'
+        return false
+      }
+    } catch (_) { /* uncounted: reopen below */ }
     if ((cb.reopens || 0) >= HUNT_REOPENS) {
       cb.reopens = 0
       ctx.stepStatus = 'failed:no-wool' // hold, no latch: short hunts never judged the range
@@ -301,7 +364,7 @@ function woolTick(bot, ctx, cb, pack) {
   try {
     o = bringMod.toWoolHunt(bot, base)
   } catch (_) { o = null }
-  if (!o) { ctx.stepStatus = 'failed:no-wool'; return false }
+  if (!o) { noteHuntFail(bot, cb); ctx.stepStatus = 'failed:no-wool'; return false }
   o.self = 'castlebed'
   cb.hunt = o
   ctx.bring = o
@@ -351,11 +414,12 @@ function craftSig(pack) {
 function noteCraftFail(bot, cb, pack) {
   const sig = craftSig(pack || {})
   if (!cb || typeof cb !== 'object') return false
-  if (cb.craftSig !== sig) { cb.craftSig = sig; cb.craftFails = 1 }
+  const n = dayNum(bot)
+  if (cb.craftFailDay !== n) { cb.craftFailDay = n; cb.craftSig = sig; cb.craftFails = 1 }
+  else if (cb.craftSig !== sig) { cb.craftSig = sig; cb.craftFails = 1 }
   else cb.craftFails = (cb.craftFails || 0) + 1
   if (cb.craftFails < CRAFT_FAIL_CAP) return false
   try {
-    const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
     if (n >= 0) cb.craftDeadDay = n
   } catch (_) { /* no clock: fail-held only */ }
   return true
@@ -392,7 +456,7 @@ function dayTick(bot, ctx, cb, st) {
   // tomorrow, or any pack progress, reopens.
   try {
     const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
-    if (n >= 0 && cb.craftDeadDay === n) { ctx.stepStatus = 'done'; return }
+    if (n >= 0 && (cb.craftDeadDay === n || cb.huntDeadDay === n)) { ctx.stepStatus = 'done'; return }
   } catch (_) { /* no clock: hunt */ }
   if (!woolTick(bot, ctx, cb, pack)) return // hunting/crafting string/failed
   craftTick(bot, ctx, cb, bedMod.packCounts(bot))
@@ -731,3 +795,4 @@ module.exports.nearSite = nearSite
 module.exports.siteBedSpot = siteBedSpot
 module.exports.siteSheepLatched = siteSheepLatched
 module.exports.noteCraftFail = noteCraftFail
+module.exports.noteHuntFail = noteHuntFail
