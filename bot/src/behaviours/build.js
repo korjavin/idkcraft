@@ -469,6 +469,17 @@ function guardExitWalls(bot, ctx, home) {
   } catch (_) { /* flag best-effort */ }
 }
 
+// Failure verdict (idkcraft-67z3): every failure carries its reason on one
+// log line — a silent stepStatus stranded the post-park rig in a
+// build<->rest oscillation with no line naming the cause. Once per episode
+// (the holes-line precedent): repeated ticks on a failed step stay silent.
+function failBuild(ctx, reason) {
+  const status = `failed:${reason}`
+  const fresh = ctx.stepStatus !== status
+  ctx.stepStatus = status
+  if (fresh) console.log(`build failed:${reason}`)
+}
+
 function skipCell(ctx, idx, p, why) {
   if (!Array.isArray(ctx.buildSkip)) ctx.buildSkip = []
   if (!ctx.buildSkip.includes(idx)) ctx.buildSkip.push(idx)
@@ -544,7 +555,7 @@ function walkToSite(bot, ctx, p) {
   } else if (++w.ticks >= CELL_TICK_BUDGET) {
     ctx.buildSiteWalk = null
     ctx.buildGoalIdx = -1
-    ctx.stepStatus = 'failed:cannot-reach-site'
+    failBuild(ctx, 'cannot-reach-site')
     return
   }
   let moving = false
@@ -573,7 +584,7 @@ function build(bot, ctx, target, state) {
     // stall clock sees the failure. The next attempt validates once
     // chunks load.
     if (!ctx.home) {
-      ctx.stepStatus = 'failed:no-site'
+      failBuild(ctx, 'no-site')
       return
     }
     ctx.buildSkip = []
@@ -620,7 +631,7 @@ function build(bot, ctx, target, state) {
       if (ctx.stepStatus !== 'failed:skipped-cells') {
         console.log(`build holes remain: ${n} skipped cells still missing`)
       }
-      ctx.stepStatus = 'failed:skipped-cells'
+      failBuild(ctx, 'skipped-cells')
       return
     }
     ctx.home.built = true
@@ -742,7 +753,7 @@ function build(bot, ctx, target, state) {
 
   const item = findItem(bot, wantItem(cell))
   if (!item) {
-    ctx.stepStatus = 'failed:no-planks'
+    failBuild(ctx, 'no-planks')
     return
   }
 

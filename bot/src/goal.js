@@ -173,6 +173,7 @@ const MENU = {
       // Parked house (vmzq.3): the L2 episode vetoes the house chain —
       // the bot does side work instead until resume.
       if (ctx && ctx.home && ctx.home.parked) return false
+      if (buildHeld(ctx)) return false // 67z3: pace failed builds past facts drift
       if (nightHurt(facts)) return false
       const home = ctx && ctx.home
       if (!home && !(bot && bot.spawnPoint)) return false
@@ -499,7 +500,7 @@ function castleGo(facts, ctx, bot = null) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
   if (!registered('castle')) return false
-  if (lowHpNoFood(bot, facts)) return false // vmzq.49: eat first, then climb
+  if (lowHpGated(bot, facts, ctx)) return false // vmzq.49: eat first, then climb (.51: bounded)
   if (w === 'clear' || w === 'finish' || w.endsWith('-batch')) return true
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
 }
@@ -519,6 +520,23 @@ function lowHpNoFood(bot, facts) {
     return !require('./reflexes').pickEdible(items)
   } catch (_) {
     return false
+  }
+}
+// Bounded stand-down (idkcraft-vmzq.51): the .49 gate above idles the
+// castle until the watchdog parks when hp stays low with no food, no
+// animals and no regen. Past LOW_HP_GATE_MS of continuous gating the work
+// resumes at low hp — an idle bot starves anyway, and retreat/pillar still
+// own live combat. The clock arms in decide() on the raw pack check; an
+// unarmed ctx reads gated (fail closed, the .49 shape).
+const LOW_HP_GATE_MS = 5 * 60 * 1000
+function lowHpGated(bot, facts, ctx) {
+  if (!lowHpNoFood(bot, facts)) return false
+  try {
+    const since = ctx && typeof ctx.lowHpGateSince === 'number' ? ctx.lowHpGateSince : null
+    if (since == null) return true
+    return Date.now() - since <= LOW_HP_GATE_MS
+  } catch (_) {
+    return true
   }
 }
 
@@ -578,7 +596,7 @@ function duskClimbOut(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'dusk') return false
     if (!displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false
-    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
+    if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
     return !failHolds(ctx, 'gocastle', goalText(facts, ctx && ctx.home), bot)
   } catch (_) {
     return false
@@ -592,7 +610,7 @@ function gocastleGo(facts, bot, ctx) {
     // travel — flee/recover first. Quiet travel stays legal (a fresh
     // respawn is full-hp anyway; the gate only bites a walk that has
     // already gone bad).
-    if (lowHpNoFood(bot, facts) && threatNear(bot)) return false
+    if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
     const t = facts && facts.time
     if (t === 'day') return true
     return t === 'dusk' && needsClimb(bot)
@@ -612,7 +630,7 @@ function gocastleGo(facts, bot, ctx) {
 function castleFetchGo(facts, bot, ctx) {
   const w = facts && facts.castle
   if (typeof w !== 'string' || facts.time !== 'day') return false
-  if (lowHpNoFood(bot, facts)) return false // vmzq.49: eat first, then climb
+  if (lowHpGated(bot, facts, ctx)) return false // vmzq.49: eat first, then climb (.51: bounded)
   // Blocked (g0z.23): the gated kind (menuFact keeps it on castleWord)
   // still wants its batch while the build stands.
   let kind = null
@@ -1589,6 +1607,63 @@ function forageHeld(ctx) {
     return false
   }
 }
+// Failed-build hold (idkcraft-67z3): a failed build re-picks at most once
+// per BUILD_RETRY_MS past facts drift — the text-keyed failHolds releases
+// every time the wandering rest moves the facts (post-park rig: 19
+// build<->rest cycles in ~10 min). failed:no-site keeps its own
+// chunk-probe retry (vmzq.16), same-text dones stay text-keyed (h9z).
+// no-planks is the routine batch handoff (xoj: fail -> craft -> retry),
+// so only a REPEAT with the same resources and no cell placed holds —
+// structural verdicts pace from the first failure.
+const BUILD_RETRY_MS = 5 * 60 * 1000
+function buildHeld(ctx) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.build
+    if (!sf || typeof sf.at !== 'number') return false
+    if (sf.status === 'failed:no-site') return false
+    if (Date.now() - sf.at > BUILD_RETRY_MS) return false
+    if (sf.status === 'failed:no-planks') return (sf.n || 1) >= 2
+    return true
+  } catch (_) {
+    return false
+  }
+}
+// Cause signature (67z3): what a repeated build failure is ABOUT. A
+// no-planks retry with new resources — or fewer cells left — is the
+// healthy batch handoff; the same failure with the same resources and no
+// cell placed is the stuck shape. Structural verdicts key on the site
+// (a 'build here' move re-arms) plus the skip count for skipped-cells
+// (the 1h re-probe re-arms). Null when uncomputable: no counting then.
+function buildFailSig(status, facts, ctx, bot) {
+  try {
+    const home = ctx && ctx.home
+    if (status === 'failed:no-planks') {
+      let remaining = null
+      try {
+        if (home && home.site && bot) {
+          const skip = new Set(Array.isArray(ctx.buildSkip) ? ctx.buildSkip : [])
+          const plan = buildMod.blueprintFor(home)
+          let n = 0
+          for (let i = 0; i < plan.length; i++) {
+            if (skip.has(i)) continue
+            if (!buildMod.cellDone(bot, home, plan[i])) n++
+          }
+          remaining = n
+        }
+      } catch (_) { remaining = null }
+      return `planks=${facts.planks},table=${facts.table},door=${facts.door},remaining=${remaining}`
+    }
+    const s = home && home.site
+    const site = s && typeof s.x === 'number' ? `${s.x},${s.y},${s.z}` : 'none'
+    if (status === 'failed:skipped-cells') {
+      const skips = Array.isArray(ctx.buildSkip) ? ctx.buildSkip.length : 0
+      return `site=${site},skips=${skips}`
+    }
+    return `site=${site}`
+  } catch (_) {
+    return null
+  }
+}
 // Done-holdable steps (h9z, revmux 01 major): ONLY steps whose every
 // productive path moves the facts text, so a same-text done proves no
 // effect. craft consumes its logs / flips table/door; gather crosses the
@@ -1831,7 +1906,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || ctx.castle.phase === 'complete') return 'gocastle: no active castle'
       if (facts.time !== 'day' && facts.time !== 'dusk') return 'gocastle: daytime job'
       if (!displacedFromCastle(bot, ctx)) return 'gocastle: already at the site'
-      if (lowHpNoFood(bot, facts) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
+      if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
       return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
@@ -1855,6 +1930,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'equip: no table'
     }
     case 'build': {
+      if (buildHeld(ctx)) return 'build holds after failure'
       if (castleFirst(ctx, 'build') || castleParkLeash(ctx)) return 'build: castle comes first'
       if (ctx && ctx.home && ctx.home.parked) return 'build: house parked'
       if (nightHurt(facts)) return 'build: hurt at night, waiting for dawn'
@@ -1904,7 +1980,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (w === 'parked') return 'castle: parked'
       if (w === 'done') return 'castle: complete'
       if (facts.time !== 'day') return 'castle: daytime job'
-      if (lowHpNoFood(bot, facts)) return 'castle: eating first (low health, no food)'
+      if (lowHpGated(bot, facts, ctx)) return 'castle: eating first (low health, no food)'
       if (w === 'blocked') return 'castle: next cell blocked, retrying later'
       const kind = w.slice(0, w.lastIndexOf('-'))
       if (w.endsWith('-none')) return `castle: need ${kind}`
@@ -1913,7 +1989,7 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'castlefetch': {
       const w = facts.castle || 'none'
       if (facts.time !== 'day') return 'castlefetch: daytime job'
-      if (lowHpNoFood(bot, facts)) return 'castlefetch: eating first (low health, no food)'
+      if (lowHpGated(bot, facts, ctx)) return 'castlefetch: eating first (low health, no food)'
       // Blocked (g0z.23): the gated kind, like the gate above.
       let kind = null
       if (w === 'blocked') {
@@ -2072,6 +2148,18 @@ async function decide(bot, ctx) {
     ctx.gohomeLatch = null // the latch lasts one night (xhqv)
   }
   const text = goalText(facts, ctx && ctx.home)
+  // Low-hp gate clock (idkcraft-vmzq.51): arms on the raw pack check while
+  // gated, clears on food or healing — the gates above read it, probes
+  // never arm it (the write lives on the decide path only).
+  try {
+    if (ctx) {
+      if (lowHpNoFood(bot, facts)) {
+        if (typeof ctx.lowHpGateSince !== 'number') ctx.lowHpGateSince = Date.now()
+      } else {
+        ctx.lowHpGateSince = null
+      }
+    }
+  } catch (_) { /* clock best-effort */ }
   const prev = (ctx && ctx.step) || null
   let status = (ctx && ctx.stepStatus) || null
   let finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
@@ -2130,8 +2218,20 @@ async function decide(bot, ctx) {
   if (finished && prev && typeof status === 'string' && status.startsWith('failed:')) {
     try {
       if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
+      const old = ctx.stepFail[prev]
       const bp = bot && bot.entity && bot.entity.position
-      ctx.stepFail[prev] = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
+      const rec = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
+      // Consecutive-cause counter (67z3): the failed-build hold counts
+      // repeats with the same cause (new resources or a placed cell
+      // re-arm). no-site keeps its bare record (vmzq.16 reads it raw).
+      if (prev === 'build' && status !== 'failed:no-site') {
+        const sig = buildFailSig(status, facts, ctx, bot)
+        if (sig != null) {
+          rec.sig = sig
+          rec.n = (old && old.status === status && old.sig === sig) ? (old.n || 1) + 1 : 1
+        }
+      }
+      ctx.stepFail[prev] = rec
       if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
     } catch (_) { /* guard best-effort */ }
   } else if (finished && prev && status === 'done') {
@@ -2504,4 +2604,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
+module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
