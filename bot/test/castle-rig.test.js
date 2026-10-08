@@ -214,7 +214,7 @@ describe('castle-replay.js verdict contract', () => {
   it('prints the one-line verdict shape and names its env seams', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(src.includes('castle ${done}/${total} in ${MINS} min, flips='), 'verdict line shape drifted')
-    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_OUT', 'CASTLE_BLOCKED']) {
+    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_PADSPOT', 'CASTLE_OUT', 'CASTLE_BLOCKED']) {
       assert.ok(src.includes(seam), `missing env seam ${seam}`)
     }
     // Usernames cap at 16 chars (stuck-replay precedent): the length guard
@@ -250,6 +250,52 @@ describe('castle-replay.js verdict contract', () => {
       if (/origLog|origErr|console\.(log|error)|b\.chat|\.chat\(/.test(line) && line.includes('${key}')) {
         assert.fail(`key value printed: ${line.trim()}`)
       }
+    }
+  })
+})
+
+describe('castle-replay.js pad-spot pick', () => {
+  const { pickPadSpot } = require('../tools/castle-replay')
+
+  it('a pin wins without scanning (controlled pairs, vmzq.33 pair 2)', () => {
+    const keep = process.env.CASTLE_PADSPOT
+    process.env.CASTLE_PADSPOT = '250,350'
+    try {
+      let scanned = 0
+      const pick = pickPadSpot(() => { scanned++; return { span: 1, liquid: 0, score: 1 } }, 300, 300)
+      assert.deepEqual([pick.bx, pick.bz], [250, 350])
+      assert.equal(pick.pinned, true)
+      assert.equal(scanned, 0, 'the scan never runs: no chunk-timing flake')
+    } finally {
+      if (keep === undefined) delete process.env.CASTLE_PADSPOT
+      else process.env.CASTLE_PADSPOT = keep
+    }
+  })
+
+  it('a bad pin shape fails the run, never a silent probe', () => {
+    const keep = process.env.CASTLE_PADSPOT
+    process.env.CASTLE_PADSPOT = '250x350'
+    try {
+      assert.throws(() => pickPadSpot(() => null, 300, 300), /CASTLE_PADSPOT/)
+    } finally {
+      if (keep === undefined) delete process.env.CASTLE_PADSPOT
+      else process.env.CASTLE_PADSPOT = keep
+    }
+  })
+
+  it('unpinned: min score wins, unreadables skipped, all-null falls back', () => {
+    const keep = process.env.CASTLE_PADSPOT
+    delete process.env.CASTLE_PADSPOT
+    try {
+      const byKey = { '250,350': { span: 18, liquid: 0, score: 18 }, '250,300': { span: 11, liquid: 77, score: 165 } }
+      const pick = pickPadSpot((x, z) => byKey[`${x},${z}`] || null, 300, 300)
+      assert.deepEqual([pick.bx, pick.bz], [250, 350], '18 beats 165; nulls skipped')
+      assert.equal(pick.pinned, false)
+      const fallback = pickPadSpot(() => null, 300, 300)
+      assert.deepEqual([fallback.bx, fallback.bz], [300, 300], 'preferred when nothing reads')
+    } finally {
+      if (keep === undefined) delete process.env.CASTLE_PADSPOT
+      else process.env.CASTLE_PADSPOT = keep
     }
   })
 })
