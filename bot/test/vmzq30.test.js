@@ -442,11 +442,13 @@ describe('vmzq.30 shelter near a sited-but-unbuilt home', () => {
     const ctx = ctxWith(unbuiltHome(), activeCastle({ x: SITE.x + 10, y: 64, z: SITE.z + 10 }))
     assert.equal(FSH(facts('night'), botAt(NEAR), ctx), true)
   })
-  it('no castle, built home, or no home at all: as before', () => {
+  it('no castle or built home: as before; no home at all shelters (vmzq.32)', () => {
     assert.equal(FSH(facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), null)), false, 'house flow untouched')
     assert.equal(FSH(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), false, 'near a built house: walk in')
     assert.equal(FGO(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), true)
-    assert.equal(FSH(facts('night', 'none'), botAt(NEAR), ctxWith(null, activeCastle(FAR_CASTLE))), false, 'truly homeless: .32 sites first')
+    // vmzq.32: no siter runs under a castle and the spawn may hold no flat
+    // site, so a homeless active castle shelters anywhere.
+    assert.equal(FSH(facts('night', 'none'), botAt(NEAR), ctxWith(null, activeCastle(FAR_CASTLE))), true, 'truly homeless: shelters (vmzq.32)')
     assert.equal(goal.stepWhy('gohome', facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), activeCastle(FAR_CASTLE)), ''), 'gohome: home not built')
   })
 })

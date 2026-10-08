@@ -81,10 +81,10 @@ function nightLine(bot, ctx, home) {
   } catch (_) { /* report best-effort */ }
   const dText = deaths === 0 ? 'no deaths' : `${deaths} death${deaths === 1 ? '' : 's'}`
   const bText = banked.length ? `banked ${banked.join(', ')}` : 'banked nothing'
-  let pText = 'at home'
+  const st = home && home.site
+  let pText = st ? 'at home' : 'no home yet'
   try {
     const bp = botPos(bot)
-    const st = home && home.site
     if (bp && st) {
       const d = Math.hypot(bp.x - st.x, bp.z - st.z)
       if (d > HOME_NEAR_BLOCKS) pText = `${Math.round(d)} blocks from home`
@@ -898,12 +898,10 @@ function nearestDry(bot, skip = []) {
   return best
 }
 function shelter(bot, ctx, target, state) {
-  const home = ctx && ctx.home
-  if (!home || !home.site) {
-    ctx.stepStatus = 'failed:no-home'
-    return
-  }
-  if (isInside(bot, home)) {
+  // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
+  // homeless castle): home only answers "already inside" and the swim aim.
+  const home = ctx && ctx.home && ctx.home.site ? ctx.home : null
+  if (home && isInside(bot, home)) {
     // Walked in by hand (or a lagged first tick): stay owns the inside.
     ctx.stepStatus = 'done'
     return
@@ -997,10 +995,12 @@ function shelter(bot, ctx, target, state) {
         ctx.lastGoalKey = null
       }
       const d = st.dry
-      // No land in reach: keep swimming toward the house, never pillar here.
+      // No land in reach: keep swimming toward the house (homeless: the
+      // castle), never pillar here.
+      const aim = (home && home.site) || (ctx.castle && ctx.castle.site) || bot.entity.position
       setGoal(bot, ctx, d ? `shelter-dry-${d.x},${d.z}` : 'shelter-dry', d
         ? new goals.GoalNear(d.x + 0.5, d.y, d.z + 0.5, 1)
-        : new goals.GoalNearXZ(home.site.x, home.site.z, 2))
+        : new goals.GoalNearXZ(aim.x, aim.z, 2))
       return
     }
     if (st.dry || ctx.lastGoalKey === 'shelter-dry') {
