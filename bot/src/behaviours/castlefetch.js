@@ -1039,6 +1039,7 @@ module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
 module.exports.QUARRY_RINGS = QUARRY_RINGS
 module.exports.pickQuarry = pickQuarry
+module.exports.pickStone = pickStone
 module.exports.pickPit = pickPit
 module.exports.pitSpots = pitSpots
 module.exports.inTrench = inTrench
