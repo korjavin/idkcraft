@@ -99,7 +99,7 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 } }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0 }
 function resetSeen() {
   seen.flips = 0
   seen.steps = {}
@@ -110,6 +110,8 @@ function resetSeen() {
   seen.wdChoices = {}
   seen.wdFirstAt = 0
   seen.outcomes = { progress: 0, flat: 0, preempted: 0 }
+  seen.timeEvents = []
+  seen.timeMaxDrift = 0
 }
 function hookConsole() {
   console.log = (...a) => {
@@ -168,6 +170,114 @@ function classify(line, now = Date.now()) {
     if (r === 'progress') seen.outcomes.progress++
     else if (r.startsWith('preempted:')) seen.outcomes.preempted++
     else seen.outcomes.flat++
+  }
+}
+
+// Server-clock resync (idkcraft-vmzq.45): on MC 26.1 + /tick rate > 1 the
+// server sends full clock state only on join/time-set/gamerule flips and
+// thereafter one EMPTY update_time per 20 game ticks (measured on Paper
+// 26.1.2: 1/s wall at rate 20, 5/s at rate 100, tick-aligned). Mineflayer
+// keeps interpolating the stale rate=1 clock at 20/s wall — it never learns
+// the new rate — so bot.time lags ~5x at rate 100 and the bot shelters
+// through server days. The rig re-anchors on every full packet and counts
+// +20 game ticks per empty while the anchor rate is > 0 (daylock fulls
+// carry rate=0 and empties keep arriving on the frozen clock — counting
+// those would invent time). Pre-26.1 packets (no clockUpdates), unknown
+// dimensions and dimension switches stay hands-off. TICKRATE=1 tracks only:
+// the gate path never writes bot.time.
+// Split tap: onPacket only mutates resync state (mineflayer injects its own
+// update_time listener deferred on inject_allowed, so it runs AFTER any
+// listener attached at createBot and would overwrite an onPacket write).
+// apply() runs on the bot 'time' event, which mineflayer's handler emits
+// synchronously at its end — the correction always lands last.
+const RESYNC_TICKS_PER_EMPTY = 20
+const RESYNC_JUMP_TICKS = 1000 // bigger anchor moves are time-sets: re-arm silently
+const RESYNC_DRIFT_TICKS = 100 // srv/bt breach: the correction stopped landing
+function resyncDimName(bot, id) {
+  try { return bot.registry.dimensionsById[id] && bot.registry.dimensionsById[id].name } catch (_) { return null }
+}
+function resyncWrite(bot, total) { // exact mirror of mineflayer time.js
+  const t = Math.floor(total)
+  bot.time.bigTime = BigInt(t)
+  bot.time.time = t
+  bot.time.timeOfDay = t % 24000
+  bot.time.day = Math.floor(t / 24000)
+  bot.time.isDay = bot.time.timeOfDay >= 0 && bot.time.timeOfDay < 13000
+  bot.time.moonPhase = bot.time.day % 8
+}
+function resyncWord(daytime) { // goal.js timeWord cutoffs
+  return daytime < 12000 ? 'day' : daytime <= 13000 ? 'dusk' : 'night'
+}
+// Circular |srv - bt| in daytime ticks, null when either clock is unreadable
+// (the midnight straddle reads 10 ticks, not 23990).
+function timeDrift(srv, bt) {
+  if (typeof srv !== 'number' || typeof bt !== 'number' || !Number.isFinite(srv) || !Number.isFinite(bt)) return null
+  const d = Math.abs(srv - bt) % 24000
+  return Math.min(d, 24000 - d)
+}
+// onEvent({ event, server, bot, at }) — event is dusk|nightfall|dawn,
+// server/bot are daytimes, at is a wall epoch. now is injectable for tests
+// (classify precedent).
+function createTimeResync({ write = true, onEvent = null } = {}) {
+  const st = { anchor: null, rate: 0, empties: 0, dim: null, word: null, pending: null }
+  const total = () => st.anchor == null ? null : st.anchor + st.empties * RESYNC_TICKS_PER_EMPTY
+  const daytime = () => {
+    const t = total()
+    return t == null ? null : Math.floor(t) % 24000
+  }
+  function crossed(bot, now) {
+    const d = daytime()
+    if (d == null) return
+    const w = resyncWord(d)
+    const prev = st.word
+    st.word = w
+    if (!onEvent || prev == null || prev === w) return
+    const fwd = (prev === 'day' && w === 'dusk') || (prev === 'dusk' && w === 'night') || (prev === 'night' && w === 'day')
+    if (!fwd) return // non-forward word changes re-arm silently
+    const ev = { event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, at: now }
+    // In write mode the event waits for the next physicsTick and reports
+    // the live clock as the brain would read it — never the counted value
+    // (revmux 02 minor: a read-back on the line after the write agrees by
+    // construction, a live-tick read can fail).
+    if (write) { st.pending = ev; return }
+    onEvent({ ...ev, bot: bot && bot.time ? bot.time.timeOfDay : null })
+  }
+  return {
+    state: st,
+    daytime,
+    onPacket(bot, packet, now = Date.now()) {
+      const cu = packet && packet.clockUpdates
+      if (!Array.isArray(cu)) return // pre-26.1 absolute-time shape
+      if (cu.length > 0) {
+        const cur = bot && bot.game && bot.game.dimension
+        const hit = cu.find((c) => resyncDimName(bot, c.id) === cur)
+        const tot = hit ? Number(hit.totalTicks) : NaN
+        if (!hit || !Number.isFinite(tot)) { st.anchor = null; st.word = null; st.pending = null; return }
+        const prev = total()
+        st.anchor = tot; st.rate = Number(hit.rate) || 0; st.empties = 0; st.dim = cur
+        st.pending = null // a new anchor invalidates any queued crossing
+        if (prev != null && Math.abs(tot - prev) > RESYNC_JUMP_TICKS) {
+          st.word = resyncWord(daytime()) // time-set jump (a night->day set is not a dawn)
+          return
+        }
+        crossed(bot, now) // full packet: mineflayer already wrote server truth
+        return
+      }
+      if (st.anchor == null || !(st.rate > 0)) return // frozen (daylock) or unanchored
+      if (!bot || !bot.game || bot.game.dimension !== st.dim) return // switched dimension: hands off
+      st.empties++
+      crossed(bot, now)
+    },
+    apply(bot) { // bot 'time' tap: lands after mineflayer's own write
+      if (!write || st.anchor == null || !(st.rate > 0)) return
+      if (!bot || !bot.game || bot.game.dimension !== st.dim) return
+      resyncWrite(bot, st.anchor + st.empties * RESYNC_TICKS_PER_EMPTY)
+    },
+    onTick(bot) { // physicsTick tap: flushes queued crossings with the live clock
+      if (!write || !st.pending || !onEvent) return
+      onEvent({ ...st.pending, bot: bot && bot.time ? bot.time.timeOfDay : null })
+      st.pending = null
+    },
   }
 }
 
@@ -238,6 +348,22 @@ async function main() {
   }
   origLog(`CASTLE-RIG planner=${PLANNER}`)
 
+  // Clock resync (vmzq.45): track server dusk/dawn every run, correct
+  // bot.time only above wall-clock rate (the TICKRATE=1 gate path writes
+  // nothing). Attached in mk(), before login completes — the spawn full
+  // packets are the first anchor, and a post-spawn attach would miss them.
+  const RESYNC_WRITE = (parseInt(TICKRATE, 10) || 1) > 1
+  const timeT0 = Date.now()
+  const timeResync = createTimeResync({
+    write: RESYNC_WRITE,
+    onEvent: (ev) => {
+      const plusS = Math.round((ev.at - timeT0) / 1000)
+      seen.timeEvents.push({ event: ev.event, server: ev.server, bot: ev.bot, plusS })
+      origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s`)
+    },
+  })
+  origLog(`CASTLE-RIG time-resync: tickrate=${TICKRATE} mode=${RESYNC_WRITE ? 'correct' : 'track'}`)
+
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn').catch((e) => fail('guide-spawn', e.message))
   await sleep(6000) // past Paper's same-IP connection throttle (stuck-replay precedent)
@@ -247,6 +373,9 @@ async function main() {
   const mk = (opts) => {
     const b = mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
+    b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
+    b.on('time', () => timeResync.apply(b))
+    b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
       const origChat = b.chat.bind(b)
       b.chat = (msg) => { chats.push(String(msg)); return origChat(msg) }
@@ -452,6 +581,19 @@ async function main() {
       s.hunger = (follower && typeof follower.food === 'number') ? follower.food : null
     } catch (_) { /* hunger best-effort */ }
     try {
+      // vmzq.45: server daytime (re-anchored + counted) vs the bot's own
+      // clock as the brain reads it. srv=null means the resync never
+      // anchored (pre-26.1 shape or unknown dimension). A breach is loud:
+      // the correction stopped landing (revmux 01 major).
+      s.srv = timeResync.daytime()
+      s.bt = (follower && follower.time && typeof follower.time.timeOfDay === 'number') ? follower.time.timeOfDay : null
+      const drift = timeDrift(s.srv, s.bt)
+      if (drift != null) {
+        if (drift > seen.timeMaxDrift) seen.timeMaxDrift = drift
+        if (drift > RESYNC_DRIFT_TICKS) origErr(`CASTLE-RIG time-drift: srv=${s.srv} bt=${s.bt} (+${s.t}s)`)
+      }
+    } catch (_) { /* time best-effort */ }
+    try {
       let cobble = 0; let dirt = 0; let logs = 0; let planks = 0; let sticks = 0
       let edibles = 0
       let pick = 'none'
@@ -505,6 +647,7 @@ async function main() {
         tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
         kit: KIT, tickrate: TICKRATE, planner: PLANNER, said: seen.said,
         wdCalls: seen.wdCalls, wdChoices: seen.wdChoices, outcomes: seen.outcomes, series,
+        timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
@@ -819,7 +962,7 @@ async function main() {
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
     kit: KIT, tickrate: TICKRATE, planner: PLANNER, blocked: blockedSeeds, said: seen.said,
     wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
-    series,
+    series, timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -836,4 +979,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createTimeResync, timeDrift }
