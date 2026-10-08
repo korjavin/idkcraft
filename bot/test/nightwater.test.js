@@ -24,8 +24,9 @@ const { addNightWaterPrune } = require('../src/swim')
 // banks flush with the surface (feet y=63). opts.bridgeAt builds a dry land
 // bridge (grass across the river at bank level) at that z; opts.shelf makes
 // x=4 a 1-deep wading shelf (water 62 over dirt 61) in front of deep x=5..9;
-// opts.shallow makes the whole river 1-deep so wading never prunes.
-function makeNameAt({ bridgeAt = null, shelf = false, shallow = false } = {}) {
+// opts.shallow makes the whole river 1-deep so wading never prunes;
+// opts.twoDeep makes it exactly 2-deep (water 61..62 over stone 60).
+function makeNameAt({ bridgeAt = null, shelf = false, shallow = false, twoDeep = false } = {}) {
   return function nameAt(x, y, z) {
     if (bridgeAt !== null && z === bridgeAt && x >= 4 && x <= 9) {
       if (y < 62) return 'dirt'
@@ -39,6 +40,11 @@ function makeNameAt({ bridgeAt = null, shelf = false, shallow = false } = {}) {
         if (y < 61) return 'stone'
         if (y === 61) return 'dirt'
         if (y === 62) return 'water'
+        return 'air'
+      }
+      if (twoDeep) {
+        if (y < 61) return 'stone'
+        if (y <= 62) return 'water'
         return 'air'
       }
       if (y < 60) return 'stone'
@@ -198,6 +204,28 @@ describe('night deep-water entry ban (idkcraft-vmzq.44)', () => {
     const rd = plan(day, 0, 63, 0, 14, 63, 0)
     assert.equal(rd.status, 'success')
     assert.ok(rd.path.some((p) => p.y < 63), 'day crosses')
+  })
+
+  it('exactly-2-deep water bans entries but keeps bottom rises (revmux 01)', () => {
+    // core-1: the bottom cell of 2-deep (solid below, water above) must read
+    // deep — else bank dives land there at night. body-1: the same bottom
+    // body must read committed — else its rises prune and it sits till dawn.
+    const nameFn = makeNameAt({ twoDeep: true })
+    const night = wiredMovements(nameFn, 18000).movements
+    const day = wiredMovements(nameFn, 6000).movements
+    const dive = (mov) => mov.getNeighbors(new Move(3, 63, 0, 0, 0)).find((m) => m.x === 4 && m.y === 61 && m.z === 0)
+    assert.ok(dive(day), 'day offers the 2-deep bank dive')
+    assert.ok(!dive(night), 'night prunes the 2-deep bank dive')
+    const bottom = new Move(5, 61, 0, 0, 0)
+    const rises = (mov) => mov.getNeighbors(bottom).filter((m) => m.y === 62 && Math.abs(m.x - 5) + Math.abs(m.z) === 1)
+    assert.ok(rises(day).length > 0, 'day rises from the 2-deep bottom')
+    assert.deepEqual(
+      rises(night).map((m) => m.hash).sort(),
+      rises(day).map((m) => m.hash).sort(),
+      'a bottom body keeps every rise at night (committed)'
+    )
+    const cruise = (mov) => mov.getNeighbors(bottom).filter((m) => m.x === 6 && m.y === 61)
+    assert.ok(cruise(day).length > 0 && cruise(night).length > 0, 'bottom cruises stay at night')
   })
 
   it('install is idempotent and plain-object safe', () => {

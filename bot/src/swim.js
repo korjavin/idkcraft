@@ -208,17 +208,22 @@ function isNight(bot) {
 }
 
 // Deep at the cell: swimmable water (the executor's isWet, flora and
-// waterlogged included — drowned spawn there too) with a wet cell below, so
-// the surface sits 2+ deep. Shallow (1-deep, solid below) reads false:
-// wading and shore work never prune. Unknown cells (chunk edge: null reads
-// dry) fail open to shallow.
+// waterlogged included — drowned spawn there too) in a 2+ column: wet above
+// OR below. The bottom cell of 2-deep water (solid below, water above) reads
+// deep too — else bank dives land there at night and bottom bodies lose
+// their rises (revmux 01 core-1/body-1). Shallow (1-deep: solid below, air
+// above) reads false: wading and shore work never prune. Unknown cells
+// (chunk edge: null reads dry) fail open to shallow.
 function isDeepCell(movements, node, dx, dy, dz) {
   let cell = null
   try { cell = movements.getBlock(node, dx, dy, dz) } catch (_) { return false }
   if (!cell || !isWet(cell) || !cell.safe) return false
   let below = null
-  try { below = movements.getBlock(node, dx, dy - 1, dz) } catch (_) { return false }
-  return !!below && isWet(below)
+  try { below = movements.getBlock(node, dx, dy - 1, dz) } catch (_) { below = null }
+  if (below && isWet(below)) return true
+  let above = null
+  try { above = movements.getBlock(node, dx, dy + 1, dz) } catch (_) { return false }
+  return !!above && isWet(above)
 }
 
 // Entering deep: the landing is deep (dry/shallow landings never prune, so
