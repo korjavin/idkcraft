@@ -28,6 +28,7 @@ const { botPos, canBreak, isInteractRef } = require('./util')
 const WOOL16 = bedMod.BED_COLORS.map((c) => `${c}_wool`)
 const AIR = new Set(['air', 'cave_air', 'void_air'])
 const HUNT_REOPENS = 3 // short cancelled hunts reopen this often before failed:no-wool (beds mirror)
+const CRAFT_FAIL_CAP = 3 // consecutive no-progress craft fails before the day yields (pair 3: the no-table craft ping-ponged the menu ~20 legs for 606 ticks)
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
@@ -309,23 +310,55 @@ function woolTick(bot, ctx, cb, pack) {
 
 // One bed craft from the pack's best wool color. Wool-short returns to the
 // hunt; anything else fails loud so the castle chain (which fetches the
-// planks and the table) runs instead of this step churning.
+// planks and the table) runs instead of this step churning. Every loud
+// fail notes the craft backoff below.
 function craftTick(bot, ctx, cb, pack) {
   const color = bedMod.pickBedColor(pack)
   if (!color || (pack[`${color}_wool`] || 0) < bedMod.BED_WOOL) return true // recount: woolTick hunts
   const target = bedMod.bedTarget(color)
-  if (!target) { ctx.stepStatus = 'failed:cant-craft-bed'; return false }
+  if (!target) { noteCraftFail(bot, cb, pack); ctx.stepStatus = 'failed:cant-craft-bed'; return false }
   const res = craftItem(bot, ctx, target, 1)
   if (res === 'running') return false
   if (res && res.done) return false // recount next tick: the pack holds the bed
   const short = bedMod.bedShortfall(pack, color, 1)
   if (short.wool > 0) return true // wool wandered off: re-hunt
   if (bedsMod.maxWoodPlanks(pack) < bedMod.BED_PLANKS) {
+    noteCraftFail(bot, cb, pack)
     ctx.stepStatus = 'failed:no-planks'
     return false
   }
+  noteCraftFail(bot, cb, pack)
   ctx.stepStatus = 'failed:cant-craft-bed'
   return false
+}
+
+// Craft-fail backoff (pair 3): a craft that fails with no pack progress —
+// the planner promises, the executor cannot (a table 100 blocks off, no
+// room to make one) — must not re-pick every hold-expiry: the no-table
+// craft ping-ponged the menu ~20 legs for 606 ticks and 21 laid. Same
+// shape as the hunt reopen cap, but day-scoped: any pack progress
+// (wool/planks/table counts move) reopens at once, and tomorrow retries.
+// Pure over cb + the pack; the menu and dayTick read craftDeadDay.
+function craftSig(pack) {
+  try {
+    let wool = 0
+    for (const w of WOOL16) wool += pack[w] || 0
+    return `${wool}:${bedsMod.maxWoodPlanks(pack)}:${pack.crafting_table || 0}`
+  } catch (_) {
+    return 'unreadable'
+  }
+}
+function noteCraftFail(bot, cb, pack) {
+  const sig = craftSig(pack || {})
+  if (!cb || typeof cb !== 'object') return false
+  if (cb.craftSig !== sig) { cb.craftSig = sig; cb.craftFails = 1 }
+  else cb.craftFails = (cb.craftFails || 0) + 1
+  if (cb.craftFails < CRAFT_FAIL_CAP) return false
+  try {
+    const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+    if (n >= 0) cb.craftDeadDay = n
+  } catch (_) { /* no clock: fail-held only */ }
+  return true
 }
 
 function dayTick(bot, ctx, cb, st) {
@@ -355,6 +388,12 @@ function dayTick(bot, ctx, cb, st) {
   let laid = 0
   try { laid = (st && st.progress && st.progress.done) | 0 } catch (_) { laid = 0 }
   if (!laid && !bedCraftable(bot, ctx)) { ctx.stepStatus = 'done'; return }
+  // Craft backoff (pair 3): capped fails today yield the day to the chain;
+  // tomorrow, or any pack progress, reopens.
+  try {
+    const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+    if (n >= 0 && cb.craftDeadDay === n) { ctx.stepStatus = 'done'; return }
+  } catch (_) { /* no clock: hunt */ }
   if (!woolTick(bot, ctx, cb, pack)) return // hunting/crafting string/failed
   craftTick(bot, ctx, cb, bedMod.packCounts(bot))
 }
@@ -673,3 +712,4 @@ module.exports.bedCraftable = bedCraftable
 module.exports.nearSite = nearSite
 module.exports.siteBedSpot = siteBedSpot
 module.exports.siteSheepLatched = siteSheepLatched
+module.exports.noteCraftFail = noteCraftFail

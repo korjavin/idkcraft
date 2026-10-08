@@ -357,6 +357,13 @@ const MENU = {
             if (!require('./behaviours/castlebed').bedCraftable(bot, ctx)) return false
           } catch (_) { return false }
         }
+        // Craft backoff (pair 3): capped no-progress craft fails yield the
+        // rest of the day to the chain; tomorrow retries.
+        try {
+          const cb = ctx && ctx.castlebed
+          const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+          if (cb && cb.craftDeadDay === n) return false
+        } catch (_) { /* no clock: hunt */ }
         let maxP = 0
         try {
           const bedsMod = require('./behaviours/beds')
@@ -1902,6 +1909,11 @@ function stepWhy(name, facts, bot, ctx, text) {
           if (require('./behaviours/castlebed').siteSheepLatched(ctx, bot)) return 'castlebed: sheep hunt latched'
         } catch (_) { /* wording only */ }
         if ((facts.pickaxe || 0) <= 0) return 'castlebed: no pickaxe yet'
+        try {
+          const cb = ctx && ctx.castlebed
+          const n = bot && bot.time && typeof bot.time.day === 'number' ? bot.time.day : -1
+          if (cb && cb.craftDeadDay === n) return 'castlebed: craft failed 3x today, chain runs'
+        } catch (_) { /* wording only */ }
         return 'castlebed: need 3 planks of one wood'
       }
       if (!castleSiteNight(bot, ctx)) return 'castlebed: near home, the house steps win'

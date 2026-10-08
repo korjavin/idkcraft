@@ -209,6 +209,39 @@ describe('vmzq.33 menu', () => {
     }
   })
 
+  it('craft backoff: 3 same-pack fails yield the day, pack progress reopens (pair 3)', () => {
+    const bot = makeBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 6 }] })
+    const cb = {}
+    const pack = { white_wool: 3, oak_planks: 6 }
+    assert.equal(castlebed.noteCraftFail(bot, cb, pack), false, 'fail 1: held, still feasible')
+    assert.equal(castlebed.noteCraftFail(bot, cb, { ...pack }), false, 'fail 2: held')
+    assert.equal(castlebed.noteCraftFail(bot, cb, { ...pack }), true, 'fail 3: the day yields')
+    assert.equal(cb.craftDeadDay, 5, 'day-scoped, not latched')
+    assert.equal(castlebed.noteCraftFail(bot, cb, { ...pack, oak_planks: 10 }), false, 'fresh planks reopen at once')
+    assert.equal(cb.craftFails, 1, 'the count restarts on progress')
+  })
+
+  it('craft backoff: the menu yields today and retries tomorrow', () => {
+    const bot = makeBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 6 }, { name: 'stone_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState(), castlebed: { craftDeadDay: 5 } }
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), false, 'capped fails yield the day')
+    assert.equal(goal.stepWhy('castlebed', day, bot, ctx), 'castlebed: craft failed 3x today, chain runs')
+    bot.time.day = 6
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), true, 'tomorrow retries')
+  })
+
+  it('craft backoff: the day tick drives to the cap, then yields without churning', () => {
+    const bot = makeBot({ items: [{ name: 'white_wool', count: 3 }, { name: 'oak_planks', count: 6 }, { name: 'stone_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState(), home: farHome(), castlebed: {} }
+    for (let i = 0; i < 3; i++) { delete ctx.stepStatus; castlebed(bot, ctx) }
+    assert.equal(ctx.stepStatus, 'failed:cant-craft-bed', 'the loud fail stands for the hold')
+    assert.equal(ctx.castlebed.craftDeadDay, 5, 'the cap yields the day')
+    delete ctx.stepStatus
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done', 'no 4th attempt: the chain runs')
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), false, 'the menu agrees')
+  })
+
   it('bed-first: a runnable castle yields the day to the fetch', async () => {
     const bot = makeBot({ items: [
       { name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 },
