@@ -177,6 +177,56 @@ describe('vmzq.47 cross-episode bans', () => {
     assert.equal(openCtx.recoverLatch.by, 'no-displacement')
   })
 
+  it('parity by construction: no trigger, no ban, the legacy first pick', async () => {
+    // The ban gate is the only choice-affecting delta vs master: with no
+    // recorded trigger every kind reads unbanned and decide() opens with
+    // the legacy first pick. One pair of noisy laid/h runs cannot prove
+    // that; this battery does (orchestrator rule, #353).
+    assert.deepEqual(recover.RECOVER_ORDER, ['pillar_up', 'dig_up', 'water_up', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player'])
+    const bot = pitBot()
+    const ctx = pitCtx()
+    for (const kind of recover.RECOVER_ORDER) {
+      assert.equal(recover.recoverBanned(ctx, kind), false, `${kind} unbanned on a fresh ctx`)
+    }
+    const d = await recover.decide(bot, ctx, null, null)
+    assert.equal(d.action, 'pillar_up', 'fresh ctx opens with the legacy first pick')
+  })
+
+  it('parity by construction: sub-trigger failures never change the next pick', async () => {
+    // A single fail, a cross-spot fail, and any number of non-bannable
+    // fails leave the next episode menu identical to master's.
+    const bot = pitBot()
+    const here = pos(0.5, 61, 0.5)
+    const away = pos(30.5, 61, 0.5)
+    async function nextPick(setup) {
+      const ctx = pitCtx()
+      setup(ctx)
+      for (const kind of recover.RECOVER_ORDER) {
+        assert.equal(recover.recoverBanned(ctx, kind), false, `${kind} unbanned (${setup.name})`)
+      }
+      ctx.stuck = { by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key: `next-${setup.name}` }
+      const m = menuOf(bot, ctx)
+      assert.ok(m.names.includes('pillar_up'), `pillar still offered (${setup.name})`)
+      const d = await recover.decide(bot, ctx, null, null)
+      assert.equal(d.action, 'pillar_up', `next episode still opens pillar (${setup.name})`)
+    }
+    function oneSidestep(ctx) { recover.noteRecoverFail(ctx, here, 'sidestep', 'failed:no-progress') }
+    function onePillarNoPlace(ctx) { recover.noteRecoverFail(ctx, here, 'pillar_up', 'failed:no-apex') }
+    function crossSpot(ctx) {
+      recover.noteRecoverFail(ctx, here, 'sidestep', 'failed:no-progress')
+      recover.noteRecoverFail(ctx, here, 'sidestep', 'failed:no-progress')
+      recover.resetRecoverStreaksIfMoved(ctx, away) // the ticker resets on move
+      recover.noteRecoverFail(ctx, away, 'sidestep', 'failed:no-progress')
+    }
+    function digFails(ctx) {
+      for (let i = 0; i < 5; i++) recover.noteRecoverFail(ctx, here, 'dig_step', 'failed:no-progress')
+    }
+    await nextPick(oneSidestep)
+    await nextPick(onePillarNoPlace)
+    await nextPick(crossSpot)
+    await nextPick(digFails)
+  })
+
   it('a refusal notes on a bare ctx (the shelter/retreat call shape)', () => {
     // home.js and retreat.js call noteRecoverFail with no episode state.
     const ctx = {}
