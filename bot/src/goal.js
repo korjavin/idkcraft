@@ -343,6 +343,20 @@ const MENU = {
         // sheep, and gating on the whole kit stalled the fetch for days
         // (rig: sword never armed, bed never fetched).
         if ((facts.pickaxe || 0) <= 0) return false
+        // Lay first (pair 1: master 196 vs branch 95): the day-one hunt
+        // cost ~4 min of fetch and dragged the bot off-site, so dusk
+        // sheltered in place and the bed never got placed. The hunt only
+        // runs once a block is laid; a bed craftable from the pack stays
+        // free — crafting costs seconds and displaces nothing. With no
+        // bed material and nothing laid the step is infeasible, so day
+        // one decides exactly as master does.
+        let laid = 0
+        try { laid = (ctx && ctx.castle && ctx.castle.progress && ctx.castle.progress.done) | 0 } catch (_) { laid = 0 }
+        if (!laid) {
+          try {
+            if (!require('./behaviours/castlebed').bedCraftable(bot, ctx)) return false
+          } catch (_) { return false }
+        }
         let maxP = 0
         try {
           const bedsMod = require('./behaviours/beds')

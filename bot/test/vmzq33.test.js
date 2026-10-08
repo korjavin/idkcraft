@@ -27,7 +27,9 @@ function pos(x, y, z) {
 }
 
 function castleState(extra) {
-  return { site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false, ...extra }
+  // Mid-build default: one block laid, so the day hunt is past the
+  // lay-first bound; pass progress explicitly for day-one states.
+  return { site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false, progress: { done: 1, total: 1722 }, ...extra }
 }
 
 function farHome() {
@@ -153,13 +155,67 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), {}), false, 'no castle')
   })
 
+  it('lay first: nothing laid and no craftable bed, no day-one hunt (pair 1)', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 52 }, { name: 'crafting_table', count: 1 }, { name: 'wooden_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState({ progress: { done: 0, total: 1722 } }) }
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), false, 'day one with no wool hunts nothing')
+    const fresh = { castle: castleState({ progress: undefined }) }
+    assert.equal(goal.MENU.castlebed.feasible(day, bot, fresh), false, 'no progress scan yet reads zero')
+  })
+
+  it('lay first: a bed craftable from the pack stays free before the first lay', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 52 }, { name: 'crafting_table', count: 1 }, { name: 'wooden_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState({ progress: { done: 0, total: 1722 } }) }
+    const mod = require('../src/behaviours/castlebed')
+    const keep = mod.bedCraftable
+    mod.bedCraftable = () => true
+    try {
+      assert.equal(goal.MENU.castlebed.feasible(day, bot, ctx), true, 'crafting costs seconds and displaces nothing')
+    } finally {
+      mod.bedCraftable = keep
+    }
+  })
+
+  it('lay first: the day tick yields with nothing laid and no craftable bed', () => {
+    const bot = makeBot({ items: [{ name: 'oak_planks', count: 52 }, { name: 'crafting_table', count: 1 }, { name: 'wooden_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState({ progress: { done: 0, total: 1722 } }), home: farHome(), castlebed: {} }
+    castlebed(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done', 'the day goes back to the chain, no hold')
+    assert.ok(!bot.chats.join(' ').includes('wool'), `no hunt starts, got: ${bot.chats.join(' | ')}`)
+  })
+
+  it('with no bed material the day-one sequence equals master', async () => {
+    const index = require('../src/index')
+    const kits = [
+      [],
+      [{ name: 'oak_planks', count: 52 }, { name: 'crafting_table', count: 1 }, { name: 'wooden_pickaxe', count: 1 }],
+      [{ name: 'oak_planks', count: 52 }, { name: 'crafting_table', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 64 }],
+    ]
+    const keepMenu = goal.MENU.castlebed
+    const keepBeh = index.BEHAVIOURS.castlebed
+    for (const [i, items] of kits.entries()) {
+      const withStep = await goal.decide(makeBot({ items: items.map((x) => ({ ...x })) }), { castle: castleState({ progress: { done: 0, total: 1722 } }), home: farHome(), work: true })
+      assert.notEqual(withStep.action, 'castlebed', `kit ${i}: the bed never decides day one`)
+      delete goal.MENU.castlebed
+      delete index.BEHAVIOURS.castlebed
+      let masterAction
+      try {
+        masterAction = (await goal.decide(makeBot({ items: items.map((x) => ({ ...x })) }), { castle: castleState({ progress: { done: 0, total: 1722 } }), home: farHome(), work: true })).action
+      } finally {
+        goal.MENU.castlebed = keepMenu
+        index.BEHAVIOURS.castlebed = keepBeh
+      }
+      assert.equal(withStep.action, masterAction, `kit ${i}: branch decides ${withStep.action}, master ${masterAction}`)
+    }
+  })
+
   it('bed-first: a runnable castle yields the day to the fetch', async () => {
     const bot = makeBot({ items: [
       { name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 },
       { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
       { name: 'dirt', count: 32 }, { name: 'cobblestone', count: 80 },
     ] })
-    const ctx = { castle: castleState(), home: farHome(), work: true }
+    const ctx = { castle: castleState(), home: farHome(), work: true, castleMenuProgressAt: Date.now() }
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(goal.MENU.castle.feasible(facts, bot, ctx), true, 'the batch could lay')
     assert.equal((await goal.decide(bot, ctx)).action, 'castlebed', 'the once fetch goes first')
@@ -172,7 +228,7 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.equip.feasible(facts, bot, ctx), true, 'the kit still wants arming')
     assert.equal(goal.MENU.castlebed.feasible(facts, bot, ctx), false, 'pick first, sheep later')
     const bot2 = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'stone_pickaxe', count: 1 }, { name: 'crafting_table', count: 1 }] })
-    const ctx2 = { castle: castleState(), home: farHome() }
+    const ctx2 = { castle: castleState(), home: farHome(), castleMenuProgressAt: Date.now() }
     const facts2 = goal.goalFacts(bot2, ctx2)
     assert.equal(goal.MENU.equip.feasible(facts2, bot2, ctx2), true, 'the sword still wants arming')
     assert.equal(goal.MENU.castlebed.feasible(facts2, bot2, ctx2), true, 'sword/scaffold top-ups wait')

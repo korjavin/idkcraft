@@ -349,6 +349,12 @@ function dayTick(bot, ctx, cb, st) {
   if (siteBedStands(bot, ctx)) { ctx.stepStatus = 'done'; return } // placed: nights sleep, days build
   const pack = bedMod.packCounts(bot)
   if (bedMod.bedInPack(pack)) { ctx.stepStatus = 'done'; return } // packed: dusk places
+  // Lay-first bound (pair 1): the menu gates the hunt on progress, and so
+  // does the tick — a direct call with nothing laid and no craftable bed
+  // yields the day back instead of hunting.
+  let laid = 0
+  try { laid = (st && st.progress && st.progress.done) | 0 } catch (_) { laid = 0 }
+  if (!laid && !bedCraftable(bot, ctx)) { ctx.stepStatus = 'done'; return }
   if (!woolTick(bot, ctx, cb, pack)) return // hunting/crafting string/failed
   craftTick(bot, ctx, cb, bedMod.packCounts(bot))
 }
