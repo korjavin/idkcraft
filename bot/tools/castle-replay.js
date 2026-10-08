@@ -736,16 +736,17 @@ async function main() {
           return rawPlace(ref, face, opts)
         }
       }
-      try { guide2.chat('go work') } catch (_) { /* resume best-effort */ }
-      await sleep(2000) // adopts on the next tick or two
-      try { guide2.quit() } catch (_) { /* quit best-effort */ }
-      // Post-kit still-low: the parked bot must still read pit-low after
-      // the kit round-trips, else the fall-in verified a slope, not the
-      // pit (c216: fall verified, then site+laying with zero recover).
+      // Post-kit still-low, checked while still parked (before the resume):
+      // the parked bot cannot move, so a high read here is a slope the
+      // fall-in false-positived (c216), while a post-resume check would
+      // also catch the control's first legit pillar block (c998: 68).
       {
         const pk = fpos()
         if (!pk || Math.floor(pk.y) > by - 3) fail('pit', `follower not pit-low after kit (y=${pk ? pk.y : '?'}, need block<=${by - 3})`)
       }
+      try { guide2.chat('go work') } catch (_) { /* resume best-effort */ }
+      await sleep(2000) // adopts on the next tick or two
+      try { guide2.quit() } catch (_) { /* quit best-effort */ }
       pitAt = Date.now()
       pitPre = pst.progress && typeof pst.progress.done === 'number' ? pst.progress.done : 0
       const k = sample()
