@@ -208,7 +208,8 @@ describe('vmzq.17 empty kit reaches rising castle progress', () => {
     assert.equal((await goal.decide(bot, ctx)).action, 'craft')
     // Craft done: planks + table + sticks arm the kit.
     items.length = 0
-    items.push({ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 })
+    items.push({ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 },
+      { name: 'white_bed', count: 1 }) // steady state: the site bed is fetched (vmzq.33 bed-first)
     assert.equal((await goal.decide(bot, ctx)).action, 'equip')
     // Equip done: pick + sword + scaffold fetch stone.
     items.push({ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 })

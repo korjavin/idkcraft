@@ -106,7 +106,7 @@ describe('pickless buried castle rearms first (vmzq.37)', () => {
     const mk = (y) => ({
       username: 'IdkBot', chats: [], chat() {},
       entity: { position: p(SITE.x - 12, y, SITE.z) },
-      inventory: { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'oak_planks', count: 16 }, { name: 'stone_sword', count: 1 }] },
+      inventory: { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'oak_planks', count: 16 }, { name: 'stone_sword', count: 1 }, { name: 'white_bed', count: 1 }] },
       time: { timeOfDay: 6000, day: 1 }, spawnPoint: p(0, 64, 0), players: {},
       blockAt: (q) => ({ name: Math.floor(q.y) <= 63 ? 'stone' : 'air', position: q, boundingBox: Math.floor(q.y) <= 63 ? 'block' : 'empty' }),
       pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null, movements: null, setMovements() {} },

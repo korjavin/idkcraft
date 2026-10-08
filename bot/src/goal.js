@@ -305,9 +305,12 @@ const MENU = {
     // craft), at dusk/night place it outside the site and sleep in it.
     // Sleeping skips the night, resets phantoms, and sets the spawn at the
     // site; when no bed can be had the step is infeasible and the shelter
-    // (which yields to a ready bed) runs as before. Day ranks below the
-    // castle chain (fetch in its gaps, never starve it); the night branch
-    // outranks the day steps because shelter yields above it.
+    // (which yields to a ready bed) runs as before. Day ranks above the
+    // castle chain: the fetch is once, and a healthy chain has no gaps to
+    // fetch in (rig-proven: gap-ranked, the bed never got made). The kit
+    // gate below keeps the vmzq.17 chain (equip arms before sheep), the
+    // latch bounds sheepless days, and a placed/packed bed yields the day
+    // back to the chain at once.
     feasible: (facts, bot, ctx) => {
       if (!castleFirst(ctx)) return false // parked/complete castles need no site bed
       // Yielded tonight (revmux 01 core-2): tonight's leg gave up, the
@@ -915,7 +918,7 @@ function shelterFits(facts, bot, ctx) {
 // (equip), build, gather, then unload (deliver), dig (forage), search
 // (explore), rest last.
 // goalFsm is pure priority over the feasible names it is given.
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlefetch', 'castle', 'castlebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'castlebed', 'castlefetch', 'castle', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.

@@ -142,6 +142,7 @@ describe('vmzq.19 castle first: order and vetoes', () => {
         { name: 'oak_planks', count: 16 }, { name: 'crafting_table', count: 1 },
         { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
         { name: 'dirt', count: 32 }, { name: 'cobblestone', count: 80 },
+        { name: 'white_bed', count: 1 }, // steady state: the site bed is fetched (vmzq.33 bed-first)
       ]
       const bot = goalBot({ items, cells })
       const ctx = { home, castle: castleState(), work: true, step: 'explore', stepStatus: 'done' }
@@ -415,6 +416,7 @@ describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () =
         { name: 'oak_planks', count: 16 }, { name: 'crafting_table', count: 1 },
         { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
         { name: 'dirt', count: 32 }, { name: 'cobblestone', count: 80 },
+        { name: 'white_bed', count: 1 }, // steady state: the site bed is fetched (vmzq.33 bed-first)
       ]
       const bot = goalBot({ items, cells })
       const lying = { source: 'laya-test', ask: async () => 'equip' }
@@ -597,7 +599,8 @@ describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rise
       items.push({ name: 'oak_log', count: 14 })
       assert.equal(await pick(), 'craft')
       items.length = 0
-      items.push({ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 })
+      items.push({ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 },
+        { name: 'white_bed', count: 1 }) // steady state: the site bed is fetched (vmzq.33 bed-first)
       assert.equal(await pick(), 'equip', 'arms the kit instead of founding the house')
       items.push({ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 })
       assert.equal(await pick(), 'castlefetch')

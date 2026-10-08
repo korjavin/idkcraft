@@ -147,6 +147,18 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.castlebed.feasible(day, makeBot({ items: [{ name: 'oak_planks', count: 8 }] }), {}), false, 'no castle')
   })
 
+  it('bed-first: a runnable castle yields the day to the fetch', async () => {
+    const bot = makeBot({ items: [
+      { name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 },
+      { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 },
+      { name: 'dirt', count: 32 }, { name: 'cobblestone', count: 80 },
+    ] })
+    const ctx = { castle: castleState(), home: farHome(), work: true }
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(goal.MENU.castle.feasible(facts, bot, ctx), true, 'the batch could lay')
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlebed', 'the once fetch goes first')
+  })
+
   it('day yields to an unarmed kit (the vmzq.17 chain equips first)', () => {
     const bot = makeBot({ items: [{ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 }] })
     const ctx = { castle: castleState(), home: farHome() }
@@ -193,9 +205,10 @@ describe('vmzq.33 menu', () => {
     assert.equal(goal.MENU.shelter.feasible(night, bot2, bare), true, 'shelter runs')
   })
 
-  it('goalFsm ranks castlebed below castle, above the day steps', () => {
+  it('goalFsm ranks the bed fetch above the castle chain (rig: gaps never come)', () => {
     const facts = { ...day }
-    assert.equal(goal.goalFsm(facts, ['castle', 'castlebed', 'craft']), 'castle')
+    assert.equal(goal.goalFsm(facts, ['castle', 'castlebed', 'craft']), 'castlebed')
+    assert.equal(goal.goalFsm(facts, ['castlefetch', 'castlebed', 'craft']), 'castlebed')
     assert.equal(goal.goalFsm(facts, ['castlebed', 'craft', 'rest']), 'castlebed')
     assert.equal(goal.goalFsm({ ...night }, ['shelter', 'castlebed', 'craft']), 'shelter', 'shelter still first when both feasible (yield decides)')
   })
