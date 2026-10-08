@@ -138,6 +138,25 @@ describe('dig_pillar menu (vmzq.43)', () => {
     )
   })
 
+  it('shaping wins over the staircase branch on a level goal (r3)', () => {
+    // Revmux 01 major: the y34 dig_step branch returns early for goalDy<2
+    // and used to run first, keeping sidestep/wait on the menu.
+    const { facts: f } = menuOf(pocketBot(), pocketCtx(null))
+    assert.equal(f.goalDy, 0)
+    assert.deepEqual(
+      recover.shapeRecoverMenu(['dig_pillar', 'dig_step', 'sidestep', 'wait'], f),
+      ['dig_pillar']
+    )
+  })
+
+  it('a refused episode does not re-pillar (r3)', () => {
+    const bot = pocketBot()
+    const { facts: f, names } = menuOf(bot, pocketCtx())
+    assert.ok(names.includes('dig_pillar'))
+    const refused = { ...f, placeError: true }
+    assert.equal(recover.RECOVER_MENU.dig_pillar.feasible(refused, pocketCtx()), false)
+  })
+
   it('decide picks dig_pillar without asking the brain', async () => {
     let asked = 0
     const bot = pocketBot()

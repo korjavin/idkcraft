@@ -78,16 +78,18 @@ const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_ste
 // the FSM climber and stays. No escape on the menu ([dig,wait] pit): no
 // shaping, digging out beats standing still.
 function shapeRecoverMenu(names, facts) {
+  // vmzq.43: where the head-dig climb works, the slower dig_step staircase
+  // and the aimless sidestep/wait never get asked — the climb gains a block
+  // every cycle. First (revmux 01 major): the dig_step branch below returns
+  // early and would otherwise keep sidestep/wait on the menu. A failed
+  // dig_pillar is already out via the 4jr exclusion, so shaping never hides
+  // the escalation it falls back to.
+  if (names.length > 1 && names.includes('dig_pillar')) {
+    return names.filter((n) => n !== 'dig_step' && n !== 'sidestep' && n !== 'wait')
+  }
   if (names.length > 1 && names.includes('dig_step')) {
     if (names.includes('hop_step')) return names.filter((n) => n !== 'dig_step')
     if (names.includes('sidestep') && facts && facts.goalDy < 2) return names.filter((n) => n !== 'dig_step')
-  }
-  // vmzq.43: where the head-dig climb works, the slower dig_step staircase
-  // and the aimless sidestep/wait never get asked — the climb gains a block
-  // every cycle. A failed dig_pillar is already out via the 4jr exclusion,
-  // so shaping never hides the escalation it falls back to.
-  if (names.length > 1 && names.includes('dig_pillar')) {
-    return names.filter((n) => n !== 'dig_step' && n !== 'sidestep' && n !== 'wait')
   }
   return names
 }
@@ -1928,7 +1930,8 @@ const RECOVER_MENU = {
     // mirror pillar_up (water) and dig_step (lava), protection refuses at
     // dig time like every other dig. A dig kind, never banned (vmzq.47).
     feasible: (facts) => facts.boxed && (facts.goalDy >= 1 || boxClimb(facts)) &&
-      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water,
+      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water &&
+      !facts.placeError, // r3 (revmux 01 minor): like pillar_up, a refused episode does not re-pillar
     run: digPillarRun,
     repeatable: (facts) => (facts.goalDy >= 1 || boxChain(facts)) &&
       !facts.pickaxe && facts.scaffold > 0 && !facts.lavaNear && !facts.water && facts.ownHeadBlocked,
