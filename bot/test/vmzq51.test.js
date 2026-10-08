@@ -78,6 +78,38 @@ describe('vmzq.51: the low-hp castle gate releases after a bounded stall', () =>
     })
   })
 
+  it('gate expiry wakes a steady menu: rest re-picks to castle through decide', async () => {
+    await quietAsync(async () => {
+      // Cobble on hand + flat world: the word reads stone-batch (probed).
+      const world = {
+        blockAt(p) {
+          const n = Math.floor(p.y) <= 63 ? 'dirt' : 'air'
+          return { name: n, boundingBox: n === 'air' ? 'empty' : 'block', position: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } }
+        },
+      }
+      const bot = goalBot({ items: [...TOOLS, { name: 'cobblestone', count: 64 }, { name: 'dirt', count: 32 }], health: 5, food: 10 })
+      bot.blockAt = (p) => world.blockAt(p)
+      const c = {
+        castle: castleState(), // near site: no displacement, gate is the only veto
+        home: { site: { x: 0, y: 64, z: 0 }, built: true },
+        gear: { saidNeed: 'want-logs' }, // latch the ladder out (vmzq49 precedent)
+        step: 'rest',
+        stepStatus: 'running',
+      }
+      const text = goal.goalText(goal.goalFacts(bot, c), c.home)
+      assert.match(text, /castle=stone-batch/, 'setup: a batch waits')
+      c.goalText = text
+      c.askedKey = `${text}\nrunning`
+      assert.equal((await goal.decide(bot, c)).action, 'rest', 'gated: rest replays')
+      // 5 min pass with steady facts (continuous: last stays fresh).
+      c.lowHpGateLast = Date.now()
+      c.lowHpGateSince = Date.now() - goal.LOW_HP_GATE_MS - 1
+      const text2 = goal.goalText(goal.goalFacts(bot, c), c.home)
+      assert.equal(text2, text, 'setup: facts steady')
+      assert.equal((await goal.decide(bot, c)).action, 'castle', 'expiry forces a fresh pick')
+    })
+  })
+
   it('a silence past the gap restarts the window instead of opening (fight/follow)', async () => {
     await quietAsync(async () => {
       const gated = goalBot({ items: [...TOOLS], health: 5, food: 10 })

@@ -2348,6 +2348,37 @@ async function decide(bot, ctx) {
       fetchRetry = true
     }
   } catch (_) { /* retry best-effort */ }
+  // Opened low-hp gate (vmzq.51 verifier P2): the stand-down lifts on a
+  // wall clock (timeout, food, healing) that the facts text may never
+  // carry — food in the pack is text-invisible — so with steady facts the
+  // replay paths would keep the running step and the bound would never
+  // fire in exactly the no-food scenario it bounds. A gated->open edge
+  // forces one fresh pick, like the retries. One-shot by construction
+  // (the edge flips); closing needs no force (the shortcut re-checks
+  // feasibility, and the closed gate fails it).
+  let gateOpened = false
+  try {
+    const gatedNow = lowHpGated(bot, facts, ctx)
+    const wasGated = ctx ? ctx.lowHpWasGated === true : false
+    if (ctx) ctx.lowHpWasGated = gatedNow
+    gateOpened = wasGated && !gatedNow
+  } catch (_) { gateOpened = false }
+  // Expired build hold (67z3 verifier P2): the fetchRetry mirror — an
+  // expired hold retires and forces one fresh pick, or steady facts keep
+  // the running step past the window. Deleting re-arms the repeat counter
+  // (the next identical failure starts at n=1: one free probe per window).
+  // no-site records are excluded: their steady-text retry is siteRetry's
+  // per-tick probe (a forced blind retry adds no information), and the
+  // record is the pending-house task identity (task.js) — deleting it at
+  // 5 min would null the task and kill the 15-min L1.
+  let buildRetry = false
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.build
+    if (sf && sf.status !== 'failed:no-site' && typeof sf.at === 'number' && Date.now() - sf.at > BUILD_RETRY_MS) {
+      delete ctx.stepFail.build
+      buildRetry = true
+    }
+  } catch (_) { /* retry best-effort */ }
   // No-site retry (idkcraft-vmzq.16): the fetchRetry mirror for a homeless
   // build — a failed:no-site hold retires and forces one fresh pick when a
   // site validates NOW (chunks streamed in). With the text standing, the
@@ -2383,7 +2414,7 @@ async function decide(bot, ctx) {
   // still cut through; the night forces are prev-specific and cannot
   // fire here.
   if (!finished && (prev === 'forage' || prev === 'explore') && ctx && ctx.goalText !== text &&
-    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry && !siteRetry) {
+    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry && !siteRetry && !gateOpened && !buildRetry) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
   // Stall-point plan (idkcraft-vmzq.5): a forced one-shot step from the
@@ -2461,7 +2492,7 @@ async function decide(bot, ctx) {
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.
   const commitEnded = commitActive && finished && prev && prev === commitStep
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || planStep || commitForce) {
+  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./task').commitFinished(bot, ctx, status)
@@ -2493,7 +2524,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !gateOpened && !buildRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {

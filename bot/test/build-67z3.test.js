@@ -235,6 +235,55 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
     })
   })
 
+  it('an expired build hold wakes a steady menu: rest re-picks to build', async () => {
+    await quietAsync(async () => {
+      // vmzq16's full kit: craft/equip/gather all infeasible, so build is
+      // the only work step standing between rest and the site.
+      const items = [
+        { name: 'oak_planks', count: 200 },
+        { name: 'crafting_table', count: 1 },
+        { name: 'oak_door', count: 1 },
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'cobblestone', count: 64 },
+      ]
+      const bot = decideBot(makeWorld(), items)
+      const ctx = { step: 'rest', stepStatus: 'running' }
+      const text = goal.goalText(goal.goalFacts(bot, ctx), null)
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      ctx.stepFail = { build: { status: 'failed:no-planks', text: 'old', pos: null, at: Date.now(), sig: 's', n: 2 } }
+      assert.equal((await goal.decide(bot, ctx)).action, 'rest', 'held: rest replays')
+      ctx.stepFail.build.at = Date.now() - goal.BUILD_RETRY_MS - 1
+      const text2 = goal.goalText(goal.goalFacts(bot, ctx), null)
+      assert.equal(text2, text, 'setup: facts steady')
+      assert.equal((await goal.decide(bot, ctx)).action, 'build', 'expiry forces a fresh pick')
+      assert.equal(ctx.stepFail.build, undefined, 'expired record retired')
+    })
+  })
+
+  it('an expired no-site record is never retired by the clock (siteRetry owns it, L1 reads it)', async () => {
+    await quietAsync(async () => {
+      const items = [
+        { name: 'oak_planks', count: 200 },
+        { name: 'crafting_table', count: 1 },
+        { name: 'oak_door', count: 1 },
+        { name: 'stone_sword', count: 1 },
+        { name: 'stone_pickaxe', count: 1 },
+        { name: 'cobblestone', count: 64 },
+      ]
+      const bot = decideBot(makeWorld(), items)
+      bot.blockAt = () => null // dark spawn: the probe never retires
+      const ctx = { step: 'rest', stepStatus: 'running' }
+      const text = goal.goalText(goal.goalFacts(bot, ctx), null)
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      ctx.stepFail = { build: { status: 'failed:no-site', text, pos: null, at: Date.now() - goal.BUILD_RETRY_MS - 1, sig: 'site=none', n: 2 } }
+      assert.equal((await goal.decide(bot, ctx)).action, 'rest', 'dark steady: rest replays')
+      assert.equal(ctx.stepFail.build.status, 'failed:no-site', 'record survives for the stall clock')
+    })
+  })
+
   it('parked castle + table=no: no-site repeats count and pace (67z3 loop)', async () => {
     await quietAsync(async () => {
       const world = makeWorld()
