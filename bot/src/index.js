@@ -1489,6 +1489,7 @@ function handleDeath(bot, ticker) {
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
+      ctx.gosite = null // R3: the return-walk watermark belongs to the dead body — a stale highY floors the respawn into a climb
       ctx.inShelter = false // the stay guard that cleared it no longer runs: fight must work on the walk back
       ctx.lastGoalKey = '' // a stale 'stay' would make the next holdStill skip clearing a dead walk goal
       if (ctx.recovery && ctx.recovery.action === 'pillar_up' && ctx.recovery.source === 'shelter') ctx.recovery = null

@@ -154,29 +154,43 @@ function gocastle(bot, ctx, target, state) {
     }
     const floorY = od.highY - CLIMB_HEADROOM
     const cover = climbNeeded(bot, bp)
-    const below = feetY < floorY && Math.hypot(bp.x - ent.x, bp.z - ent.z) > 32
+    // R3: swimming skips the depth trigger — a lake drop lands deep by
+    // design (infiniteLiquidDropdown), and an up-goal above water is
+    // untowerable from water (no path → fail). The XZ leg swims out
+    // (breath owns drowning); cover still climbs (cave water is not a lake).
+    let awash = false
+    try {
+      const feet = bot.blockAt(new Vec3(Math.floor(bp.x), feetY, Math.floor(bp.z)))
+      awash = !!feet && (feet.name === 'water' || feet.name === 'bubble_column')
+    } catch (_) { awash = false }
+    const below = feetY < floorY && Math.hypot(bp.x - ent.x, bp.z - ent.z) > 32 && !awash
     if (!od.climbing && !seeded) {
       od.highY = Math.max(feetY, od.highY - 2)
     } else if (od.climbing && feetY > od.highY) {
       od.highY = feetY
     }
     if (!od.climbing && (cover || below)) {
-      // Entering the climb: a same-spot COVER re-entry flaps (a cave
-      // mouth the XZ leg keeps re-planning) — three strikes ends the
-      // leg; far-apart episodes reset. Depth entries never flap (the
-      // +2 exit band cannot re-enter at the same spot).
-      if (cover) {
-        const at = od.climbAt
-        if (at && Math.hypot(bp.x - at.x, bp.z - at.z) < 16) od.flaps = (od.flaps || 0) + 1
-        else {
-          od.flaps = 0
-          od.climbAt = { x: bp.x, z: bp.z }
-        }
+      // Entering the climb: a same-spot re-entry flaps (a cave mouth
+      // — or a lake drop — the XZ leg keeps re-planning) — three
+      // strikes ends the leg; far-apart episodes reset. R3 counts
+      // depth entries too: a drop-climb-drop cycle re-enters at the
+      // same spot (the +2 band stops hovering, not cycling).
+      const at = od.climbAt
+      if (at && Math.hypot(bp.x - at.x, bp.z - at.z) < 16) od.flaps = (od.flaps || 0) + 1
+      else {
+        od.flaps = 0
+        od.climbAt = { x: bp.x, z: bp.z }
       }
       od.climbing = true
       od.climbFromY = feetY
+      od.climbHighY = feetY
     } else if (od.climbing && !cover && (feetY >= floorY + 2 || (od.climbFromY != null && feetY >= od.climbFromY + 12))) {
-      od.climbing = false // recovered: open sky past the floor, or 12 up past a low local surface
+      // Recovered: open sky past the floor, or 12 up past a low local
+      // surface. R3: re-anchor the watermark to the exit — without it
+      // a site-seeded floor re-trips on the next tick and the leg
+      // towers in open sky toward site-8 (the cap exit never sticks).
+      od.climbing = false
+      od.highY = feetY
     }
     stepClimb = !!od.climbing
   }
@@ -224,13 +238,19 @@ function gocastle(bot, ctx, target, state) {
     setGoal(bot, ctx, `gocastle-up:${tx},${ty},${tz}`, new goals.GoalNear(bp.x, ty, bp.z, 2))
     ctx.stepStatus = 'running'
     // 3D progress resets: a dig-up climbs without closing XZ in, and
-    // must not burn the give-up budget the order legs share. R2: any
-    // move refunds fails too — hand-digging is slow (a pickless block
-    // outlasts a stall window), and only consecutive still windows fail.
+    // must not burn the give-up budget the order legs share. R2: moves
+    // refund fails too — hand-digging is slow (a pickless block
+    // outlasts a stall window), and only consecutive still windows
+    // fail. R3: fails refund on NEW HEIGHT only (ratchet) — jumping,
+    // bobbing or sideways shuffling never gains, so it still fails.
     const last = od.lastPos
     if (!last || Math.abs(bp.x - last.x) + Math.abs(bp.y - last.y) + Math.abs(bp.z - last.z) > MOVE_TOLERANCE) {
       od.stalls = 0
-      od.fails = 0
+      if (typeof od.climbHighY !== 'number') od.climbHighY = od.climbFromY != null ? od.climbFromY : bp.y
+      if (bp.y > od.climbHighY) {
+        od.climbHighY = bp.y
+        od.fails = 0
+      }
       od.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
     }

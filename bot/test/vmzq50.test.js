@@ -460,42 +460,78 @@ describe('vmzq.50 return-to-site: step behaviour', () => {
     assert.equal(octx.gosite.highY, SPAWN.y, 'open start seeds from feet')
   })
 
-  it('a climb past a low local surface exits after 12 gained (R2 cap)', () => {
+  it('a climb past a low local surface exits after 12 gained, and the exit sticks (R2 cap, R3 re-anchor)', () => {
     const cells = new Map()
     for (let y = 40; y <= 80; y++) cells.set(`0,${y},0`, 'air')
-    const mk = (y) => stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: true, climbFromY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    const mk = () => stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: true, climbFromY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
     // Floor 56: at 52 neither the band (58) nor the cap (53) releases.
     const low = stepBot({ at: pos(0.5, 52, 0.5), cells })
-    const lctx = mk(52)
+    const lctx = mk()
     gocastleMod(low, lctx)
     assert.ok(String(lctx.lastGoalKey).startsWith('gocastle-up:'), lctx.lastGoalKey)
-    // At 53 the cap releases even below the band.
-    const out = stepBot({ at: pos(0.5, 53, 0.5), cells })
-    const octx = mk(53)
-    gocastleMod(out, octx)
+    // At 53 the cap releases even below the band — and re-anchors, so
+    // the NEXT tick walks instead of re-tripping (R3: the exit sticks).
+    const octx = mk()
+    gocastleMod(stepBot({ at: pos(0.5, 53, 0.5), cells }), octx)
     assert.ok(octx.lastGoalKey === 'gocastle-far' || octx.lastGoalKey === 'gocastle-walk', octx.lastGoalKey)
     assert.equal(octx.gosite.climbing, false)
+    assert.equal(octx.gosite.highY, 53)
+    gocastleMod(stepBot({ at: pos(0.5, 52, 0.5), cells }), octx)
+    assert.equal(octx.gosite.climbing || false, false, 'no re-trip after the exit')
+    assert.ok(octx.lastGoalKey === 'gocastle-far' || octx.lastGoalKey === 'gocastle-walk', octx.lastGoalKey)
   })
 
-  it('depth entries never flap; a dig that steps up refunds fails (R2)', () => {
+  it('depth entries flap too (R3); swimming skips the depth trigger', () => {
     const cells = new Map()
     for (let y = 40; y <= 72; y++) cells.set(`0,${y},0`, 'air')
-    // Open sky below the floor at the flap spot: enters, counts nothing.
+    // Open sky below the floor at the flap spot: third strike fails.
     const bot = stepBot({ at: pos(0.5, 55, 0.5), cells })
     const ctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64, climbing: false, climbAt: { x: 0, z: 0 }, flaps: 2 } })
     gocastleMod(bot, ctx)
-    assert.equal(ctx.stepStatus, 'running')
-    assert.ok(String(ctx.lastGoalKey).startsWith('gocastle-up:'), ctx.lastGoalKey)
-    assert.equal(ctx.gosite.flaps, 2)
-    // A move between stall windows refunds the fail budget (slow hand dig).
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-castle')
+    // Feet in water: a lake drop is a swim, not a climb (no tower from water).
+    const wetCells = new Map(cells)
+    wetCells.set(`0,55,0`, 'water')
+    const wet = stepBot({ at: pos(0.5, 55, 0.5), cells: wetCells })
+    const wctx = stepCtx({ gosite: { phase: 'walk', stalls: 0, fails: 0, lastPos: null, highY: 64 } })
+    gocastleMod(wet, wctx)
+    assert.equal(wctx.stepStatus, 'running')
+    assert.ok(wctx.lastGoalKey === 'gocastle-far' || wctx.lastGoalKey === 'gocastle-walk', wctx.lastGoalKey)
+    assert.equal(wctx.gosite.climbing || false, false)
+  })
+
+  it('fails refund on new height only; sideways shuffling still fails (R3 ratchet)', () => {
     const stones = new Map()
     for (let y = 42; y <= 50; y++) stones.set(`0,${y},0`, 'stone')
+    // A step up refunds (slow hand dig between stall windows).
     const dug = stepBot({ at: pos(0.5, 42, 0.5), cells: stones })
-    const dctx = stepCtx({ gosite: { phase: 'walk', stalls: 9, fails: 2, lastPos: { x: 0, y: 41, z: 0 }, highY: 64, climbing: true, climbFromY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    const dctx = stepCtx({ gosite: { phase: 'walk', stalls: 9, fails: 2, lastPos: { x: 0, y: 41, z: 0 }, highY: 64, climbing: true, climbFromY: 41, climbHighY: 41, climbAt: { x: 0, z: 0 }, flaps: 0 } })
     gocastleMod(dug, dctx)
     assert.equal(dctx.stepStatus, 'running')
     assert.equal(dctx.gosite.fails, 0)
     assert.equal(dctx.gosite.stalls, 0)
+    // A sideways shuffle resets stalls but keeps fails (jump/bob loop).
+    const shuffled = stepBot({ at: pos(1.5, 42, 0.5), cells: stones })
+    const sctx = stepCtx({ gosite: { phase: 'walk', stalls: 9, fails: 2, lastPos: { x: 0, y: 42, z: 0 }, highY: 64, climbing: true, climbFromY: 41, climbHighY: 42, climbAt: { x: 0, z: 0 }, flaps: 0 } })
+    gocastleMod(shuffled, sctx)
+    assert.equal(sctx.stepStatus, 'running')
+    assert.equal(sctx.gosite.stalls, 0)
+    assert.equal(sctx.gosite.fails, 2)
+  })
+
+  it('death drops the return-walk record (R3: no stale watermark on respawn)', () => {
+    const { handleDeath } = require('../src/index')
+    const ctx = { gosite: { phase: 'walk', highY: 85, climbing: true, climbFromY: 60, flaps: 1 }, gohome: { phase: 'walk' } }
+    const bot = { _tickerCtx: ctx, entity: { position: pos(0, 64, 0) }, health: 0 }
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      handleDeath(bot, null)
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(ctx.gosite, null)
+    assert.equal(ctx.gohome, null)
   })
 
   it('same-spot climb re-entry fails the leg; far-apart episodes reset (R1 flap cap)', () => {
