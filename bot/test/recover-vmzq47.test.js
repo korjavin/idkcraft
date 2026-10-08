@@ -11,6 +11,8 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const recover = require('../src/behaviours/recover')
+const home = require('../src/behaviours/home')
+const retreat = require('../src/behaviours/retreat')
 
 function pos(x, y, z) {
   return { x, y, z }
@@ -233,5 +235,165 @@ describe('vmzq.47 cross-episode bans', () => {
     recover.noteRecoverFail(ctx, pos(10.5, 64, -3.5), 'pillar_up', 'failed:place-error')
     assert.equal(recover.recoverBanned(ctx, 'pillar_up'), true)
     assert.ok(ctx.recoverStreaks.anchor, 'anchor set for the displacement reset')
+  })
+})
+
+describe('vmzq.47r2 revmux 01 findings', () => {
+  // Corridor / alcove variants of the pit: 2 and 3 two-high sides. The
+  // latch skip needs all four (body-1) — fewer walls keep the master
+  // latch, the open side walks the re-arm.
+  function wallsBot(sides) {
+    const bot = pitBot()
+    const solidSide = (x, z) => sides.some(([dx, dz]) => x === dx && z === 0 + dz)
+    bot.blockAt = (p) => {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      const n = (y === 60) ? 'dirt'
+        : (y >= 61 && y <= 66 && solidSide(x, z)) ? 'stone' : 'air'
+      return { name: n, position: new Vec3(x, y, z), boundingBox: n === 'air' ? 'empty' : 'block' }
+    }
+    return bot
+  }
+
+  function gaveUpCtx() {
+    return {
+      stuck: { by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key: 'ticker' },
+      recovery: { action: 'dig_step', source: 'fsm', status: 'gave-up', fails: 3 },
+    }
+  }
+
+  it('body-1: a corridor or alcove gave-up still latches; only 4 walls skip', () => {
+    for (const [name, sides] of [['corridor', [[1, 0], [-1, 0]]], ['alcove', [[1, 0], [-1, 0], [0, 1]]]]) {
+      const ctx = gaveUpCtx()
+      recover.release(wallsBot(sides), ctx, 'gave-up')
+      assert.ok(ctx.recoverLatch, `${name} gave-up latches as before`)
+      assert.equal(ctx.recoverLatch.by, 'no-displacement')
+    }
+    const pit = gaveUpCtx()
+    recover.release(pitBot(), pit, 'gave-up')
+    assert.equal(pit.recoverLatch || null, null, '4-wall pit still skips the latch')
+  })
+
+  it('core-1: the online page fires once per mark across episodes', () => {
+    const bot = pitBot()
+    bot.players = { Owner: { username: 'Owner', entity: { position: pos(5.5, 61, 0.5) } } }
+    const chats = []
+    bot.chat = (m) => chats.push(m)
+    const run = recover.RECOVER_MENU.call_player.run
+    const episode = () => ({
+      stuck: { by: 'no-displacement', goal: { x: 300, y: 71, z: 0 }, key: 'ticker' },
+    })
+    let ctx = episode()
+    ctx.recovery = { action: 'call_player', calledPlayer: false }
+    assert.equal(run(bot, ctx), 'done')
+    assert.equal(chats.length, 1, 'first episode pages')
+    assert.ok(ctx.repeatGaveUpPage, 'the online page stamps the mark')
+    // Next episode, same spot: silent done, same episode end.
+    ctx.recovery = { action: 'call_player', calledPlayer: false }
+    assert.equal(run(bot, ctx), 'done')
+    assert.equal(chats.length, 1, 're-fire stays silent')
+    assert.equal(ctx.recovery.endEpisode, true)
+    // Past the mark radius: a new trap pages again.
+    bot.entity.position = pos(50.5, 61, 0.5)
+    ctx.recovery = { action: 'call_player', calledPlayer: false }
+    assert.equal(run(bot, ctx), 'done')
+    assert.equal(chats.length, 2, 'a new mark pages again')
+  })
+
+  it('core-2: a refused retreat pillar bans; a working one clears', () => {
+    const bot = { entity: { position: pos(56.5, 59, -26.5) } }
+    const ctx = { recovery: { action: 'pillar_up', status: 'failed:place-error', st: {} }, retreat: {} }
+    retreat.pillar(bot, ctx)
+    assert.equal(recover.recoverBanned(ctx, 'pillar_up'), true, 'refused retreat pillar bans')
+    assert.equal(ctx.stepStatus, 'failed:pillar-place-error')
+    assert.equal(ctx.recovery, null, 'terminal verdict releases the episode')
+    // Same spot, pillar works again: the streak clears.
+    const ctx2 = { recovery: { action: 'pillar_up', status: 'done' }, retreat: {} }
+    recover.noteRecoverFail(ctx2, pos(56.5, 59, -26.5), 'pillar_up', 'failed:place-error')
+    assert.equal(recover.recoverBanned(ctx2, 'pillar_up'), true, 'pre-seeded ban')
+    retreat.pillar(bot, ctx2)
+    assert.equal(recover.recoverBanned(ctx2, 'pillar_up'), false, 'working pillar clears')
+    assert.equal(ctx2.stepStatus, 'done')
+  })
+
+  // Flat night world for the shelter drive (ed88 shape, trimmed): ground
+  // y<=63, dirt digs into the pack, dirt places.
+  function flatBot(at) {
+    const key = (x, y, z) => `${x},${y},${z}`
+    const dug = new Set()
+    const placed = new Set()
+    const items = []
+    const solidAt = (x, y, z) => placed.has(key(x, y, z)) || (y <= 63 && !dug.has(key(x, y, z)))
+    return {
+      username: 'IdkBot',
+      players: {},
+      entities: {},
+      health: 20,
+      food: 20,
+      time: { timeOfDay: 15000, day: 5 },
+      entity: { position: { ...at }, onGround: true },
+      inventory: { items: () => items.filter((i) => i.count > 0) },
+      heldItem: null,
+      controls: {},
+      pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
+      setControlState(c, v) { this.controls[c] = !!v },
+      clearControlStates() { this.controls = {} },
+      findBlocks: () => [],
+      chat: () => {},
+      blockAt(p) {
+        const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+        const s = solidAt(x, y, z)
+        return { name: s ? (y === 63 ? 'grass_block' : 'dirt') : 'air', position: new Vec3(x, y, z), boundingBox: s ? 'block' : 'empty' }
+      },
+      async dig(b) {
+        dug.add(key(b.position.x, b.position.y, b.position.z))
+        const d = items.find((i) => i.name === 'dirt')
+        if (d) d.count++
+        else items.push({ name: 'dirt', count: 1 })
+      },
+      async equip(item) { this.heldItem = item },
+      async placeBlock(ref, face) {
+        if (!this.heldItem || this.heldItem.count < 1) throw new Error('no block')
+        const d = ref.position.plus(face)
+        placed.add(key(d.x, d.y, d.z))
+        this.heldItem.count--
+      },
+    }
+  }
+
+  function v2home(site) {
+    return {
+      site: { ...site },
+      built: true,
+      v: 2,
+      interior: { min: { x: site.x + 1, y: site.y, z: site.z + 1 }, max: { x: site.x + 5, y: site.y + 1, z: site.z + 4 } },
+      door: { x: site.x + 3, y: site.y, z: site.z },
+    }
+  }
+
+  async function quiet(fn) {
+    const orig = console.log
+    console.log = () => {}
+    try { await fn() } finally { console.log = orig }
+  }
+
+  it('core-2: a refused shelter pillar bans and digs in; a working one clears', async () => {
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
+    const ctx = {
+      home: v2home({ x: 200, y: 64, z: 200 }), step: 'shelter', stepStatus: 'running', lastGoalKey: 'gohome',
+      recovery: { action: 'pillar_up', status: 'failed:place-error', st: {} },
+    }
+    await quiet(() => home.shelter(bot, ctx, null, null))
+    assert.equal(recover.recoverBanned(ctx, 'pillar_up'), true, 'refused shelter pillar bans')
+    assert.ok(ctx.shelter.dig, 'the hold digs in by hand')
+    // Same spot, pillar works again: the streak clears, the bot perches.
+    const ctx2 = {
+      home: v2home({ x: 200, y: 64, z: 200 }), step: 'shelter', stepStatus: 'running', lastGoalKey: 'gohome',
+      recovery: { action: 'pillar_up', status: 'done' },
+    }
+    recover.noteRecoverFail(ctx2, pos(0.5, 64, 0.5), 'pillar_up', 'failed:place-error')
+    assert.equal(recover.recoverBanned(ctx2, 'pillar_up'), true, 'pre-seeded ban')
+    await quiet(() => home.shelter(bot, ctx2, null, null))
+    assert.equal(recover.recoverBanned(ctx2, 'pillar_up'), false, 'working pillar clears')
+    assert.equal(ctx2.shelter.perched, true)
   })
 })

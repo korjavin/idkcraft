@@ -300,11 +300,19 @@ function pickSidestepDir(bot, sides) {
 // Nulls read as open (never claim a pit blind). Lava and water never
 // count (solid() reads them passable).
 function pitAt(bot) {
+  return pitWalls(bot) >= 2
+}
+
+// Two-high walled sides around the body (vmzq.47r2): the release-latch
+// skip needs all four — pitAt's two also match corridors, doorways and
+// house corners, where the bot CAN walk the 4-block latch re-arm, so
+// those must keep latching exactly as before (revmux 01 body-1).
+function pitWalls(bot) {
   let high = 0
   for (const [dx, dz] of SIDES) {
     if (solid(cellAt(bot, dx, 0, dz)) && solid(cellAt(bot, dx, 1, dz))) high++
   }
-  return high >= 2
+  return high
 }
 
 // Climb OFFER for a hemmed body with no goal worth walking to (jsf.3,
@@ -1609,6 +1617,11 @@ function callPlayerRun(bot, ctx) {
   const rec = ctx.recovery
   if (rec.calledPlayer) return 'done'
   const bp = botPos(bot)
+  // Once per mark (vmzq.47r2): without the pit latch, episodes re-fire by
+  // design and each one ends here — an unthrottled page would chat every
+  // 30-60s for the whole trap (revmux 01 core-1). The stamp is the same
+  // one the nobody-online path uses, so either page counts.
+  if (bp && repeatPaged(ctx, bp)) { rec.calledPlayer = true; rec.endEpisode = true; return 'done' }
   const facts = recoverFacts(bot, ctx, null, null)
   const name = facts.playerName
   if (!name) return 'failed:no-player'
@@ -1617,6 +1630,7 @@ function callPlayerRun(bot, ctx) {
   } catch (_) { return 'failed:chat' }
   rec.calledPlayer = true
   rec.endEpisode = true
+  try { if (bp) ctx.repeatGaveUpPage = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() } } catch (_) { /* page stamp best-effort */ }
   return 'done'
 }
 
@@ -1977,14 +1991,17 @@ function release(bot, ctx, how) {
   // anchors on gave-up only (rra round 2): a 'done' may be a partial climb
   // still in the pit, and latching it would end all escapes with no page.
   // Lead latches too (6x7.2), or a mining stall re-fires every slow
-  // threshold and the order never gives up. Never in a pit (vmzq.47): the
-  // latch re-arms past 4 horizontal blocks, which a pit cannot produce —
-  // latching a mid-pit gave-up would end all escapes with no page. The
-  // cross-episode bans bound the re-fire loop instead (menus shrink;
-  // pages stay throttled by repeatPaged).
-  let inPit = false
-  try { inPit = pitAt(bot) } catch (_) { inPit = false }
-  if (!inPit && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
+  // threshold and the order never gives up. Never in a true 4-wall pit
+  // (vmzq.47): the latch re-arms past 4 horizontal blocks, which a boxed
+  // body cannot produce — latching a mid-pit gave-up would end all
+  // escapes with no page. Anything less than four 2-high walls (corridor,
+  // doorway, house corner) keeps the latch: the open side walks the
+  // re-arm. The cross-episode bans bound the re-fire loop instead (menus
+  // shrink; the online page fires once per mark, the nobody-online page
+  // stays throttled by repeatPaged).
+  let truePit = false
+  try { truePit = pitWalls(bot) >= 4 } catch (_) { truePit = false }
+  if (!truePit && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
     ctx.recoverLatch = { by, key: sk, goal: sg ? { x: sg.x, y: sg.y, z: sg.z } : null }
