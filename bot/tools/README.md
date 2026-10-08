@@ -426,6 +426,18 @@ Gates always run at 1, since the bot ticks on wall-clock seconds and a
 faster game clock changes what a minute of play means (tested 20/60/100
 tps: identical laying, no speedup; the cycle win is 3-4 parallel rigs, 3
 proven overlapping with no degradation).
+Night runs stay correct above rate 1 (idkcraft-vmzq.45): on MC 26.1 the
+server sends full clock state only on join/time-set/gamerule flips and one
+empty `update_time` per 20 game ticks after that, which mineflayer
+interpolates at a stale 20/s wall — at rate 100 the bot's clock ran ~5x
+slow and it sheltered through server days. The replay re-anchors on every
+full packet, counts +20 ticks per empty (frozen clocks stay frozen), and
+rewrites `bot.time` on the `time` event, so dusk/dawn land within seconds
+of the server's at any rate. Every run logs `CASTLE-RIG time: <dusk|
+nightfall|dawn> server=<daytime> bot=<daytime> +<s>s` crossings plus a
+`time-resync: tickrate=<N> mode=<correct|track>` line (rate 1 tracks only
+and never writes the clock); the JSON record carries `timeEvents` and each
+15 s sample carries server (`srv`) vs bot (`bt`) daytime.
 
 Own containers/ports/locks, so a castle run and a stuck run share the box:
 container `idk-castle[-<id>]`, port 25581 + letter index, lock
