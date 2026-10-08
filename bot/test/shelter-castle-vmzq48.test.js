@@ -16,6 +16,7 @@ const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const home = require('../src/behaviours/home')
 const castleData = require('../src/castle')
+const { createTicker, BEHAVIOURS } = require('../src/index')
 
 const CASTLE = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: 2, phase: 'body' }
 const BOT_AT = { x: 5.5, y: 64, z: 5.5 } // site centre, on castle ground
@@ -182,6 +183,69 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.deepEqual(goals, [], 'still holding, still no march')
   })
 
+  it('a walk-off that never arrives (no-walk) holds exposed', async () => {
+    // Revmux 01 core-3a: the st.offCastle arm — a relocation walk that
+    // dies on the surface must release fight, not arm the open hold.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => {
+        if (x === 5 && z === 5) return 'dirt'
+        return Math.hypot(x - 5, z - 5) <= 12 ? 'stone' : 'dirt'
+      },
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, 'relocation launched')
+    for (let t = 0; t < 20 && ctx.shelter.dig; t++) {
+      logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+      await flush()
+    }
+    assert.ok(!ctx.shelter.dig, 'walk gave up')
+    assert.ok(logs.includes('shelter dig-in failed:no-walk'), JSON.stringify(logs))
+    assert.equal(ctx.shelter.pillared, true, 'never fails the step, never marches')
+    assert.equal(ctx.inShelter, false, 'exposed: fight preempts')
+  })
+
+  it('a protected failure off the castle (house ground) keeps the armed hold', async () => {
+    // Revmux 01 core-3b: the castleGroundHere gate — exposing every
+    // protected failure would break the house-porch hold.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => (x === 5 && z === 5 ? 'dirt' : 'stone'),
+    })
+    const ctx = {
+      step: 'shelter', stepStatus: 'running',
+      home: {
+        site: { x: 0, y: 64, z: 0 }, built: true, v: 2,
+        interior: { min: { x: 1, y: 64, z: 1 }, max: { x: 5, y: 65, z: 4 } },
+        door: { x: 3, y: 64, z: 0 },
+      },
+    }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    assert.ok(logs.includes('shelter dig-in failed:protected'), JSON.stringify(logs))
+    assert.equal(ctx.shelter.pillared, true)
+    assert.equal(ctx.inShelter, true, 'house ground: the old armed hold')
+    assert.ok(!ctx.shelter.offCastle, 'no castle, no walk-off')
+  })
+
+  it('an undiggable surface on castle ground (laid deck) holds exposed', async () => {
+    // Revmux 01 core-2: the bot stands on laid blocks, the veto never
+    // reaches the protected check, but the open hold is the same death.
+    const bot = castleBot(BOT_AT, {
+      items: [{ name: 'cobblestone', count: 16 }],
+      groundAt: (x, y, z) => (x === 5 && z === 5 ? 'cobblestone' : 'stone'),
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = []
+    await pillarTicks(bot, ctx, logs)
+    assert.ok(logs.includes('shelter dig-in failed:undiggable:cobblestone'), JSON.stringify(logs))
+    assert.equal(ctx.shelter.pillared, true, 'never fails the step, never marches')
+    assert.equal(ctx.inShelter, false, 'exposed: fight preempts')
+    assert.ok(!ctx.shelter.offCastle, 'the walk-off stays protected-gated')
+  })
+
   it('normal pad: a working pillar at the castle perches armed, no relocation', async () => {
     // By-construction pin: the relocation path only runs after a
     // protected dig failure — a site that pillars (or digs) keeps the
@@ -199,5 +263,74 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.equal(ctx.inShelter, true)
     assert.ok(!ctx.shelter.offCastle && !ctx.shelter.exposed, 'no relocation markers on the normal path')
     assert.ok(!logs.some((m) => m.includes('digging in')), `no dig fallback: ${JSON.stringify(logs)}`)
+  })
+})
+
+describe('vmzq.48 exposed hold releases fight (tick level)', () => {
+  function tickBot() {
+    const calls = { setGoal: 0, stop: 0 }
+    const bot = {
+      calls,
+      username: 'IdkBot',
+      players: {},
+      entities: {},
+      health: 20,
+      food: 20,
+      time: { timeOfDay: 15000, day: 5 },
+      entity: { position: pos(240.5, 70, 352.5) },
+      inventory: { items: () => [] },
+      attackCalls: 0,
+      attack() { this.attackCalls++ },
+      lookAt() {},
+      equip: async () => {},
+      pathfinder: {
+        goal: null,
+        setGoal(g) { calls.setGoal++; bot.pathfinder.goal = g },
+        stop() { calls.stop++ },
+        isMoving: () => false,
+        setMovements() {},
+      },
+      setControlState() {},
+      clearControlStates() {},
+      chat() {},
+    }
+    return bot
+  }
+
+  function zombie(id, x, z) {
+    const p = pos(x, 70, z)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
+  }
+
+  it('exposed hold + adjacent zombie: fight dispatched, the arm swings (not shelter-idle)', async () => {
+    // Revmux 01 core-3: the bead's 'fights back, not idle' through the
+    // real dispatch — the (h) mirror with the hold exposed.
+    const bot = tickBot()
+    bot.players = { Steve: { username: 'Steve', entity: { id: 7, position: pos(250, 70, 352) } } }
+    bot.entities = { 1: zombie(1, 241.5, 352.5) } // adjacent: melee range
+    const ticker = createTicker({ bot, brain: { calls: 0, async decide() { this.calls++; return { action: 'fight', sprint: false, source: 'stub' } } }, tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.step = 'shelter'
+    ctx.shelter = { pillared: true, pillarAt: { x: 240.5, z: 352.5 }, exposed: true }
+    ctx.inShelter = false
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', `fight released: ${JSON.stringify(r.decision)}`)
+      assert.equal(fightRan, 1, 'fight behaviour dispatched')
+      assert.ok(bot.attackCalls >= 1, 'the arm swings at the adjacent zombie')
+      assert.ok(!logs.some((m) => m.includes('action=shelter')), `never shelter-idles: ${JSON.stringify(logs)}`)
+    } finally {
+      console.log = origLog
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
   })
 })

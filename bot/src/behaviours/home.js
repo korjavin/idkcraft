@@ -1158,6 +1158,7 @@ function shelter(bot, ctx, target, state) {
         try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
         return
       }
+      const dugDown = (st.dig.digs | 0) // committed pits (dug>0) keep the armed hold below
       st.dig = null
       st.pillarAt = null // re-anchored below, at the pit
       if (r === 'done') {
@@ -1195,13 +1196,18 @@ function shelter(bot, ctx, target, state) {
             return
           }
         }
-        // No ground past the footprint (or the walk-off dig died): the
-        // hold is exposed — fight preempts instead of idling next to a
-        // hostile (run8: the armed hold died to a zombie). Only the
-        // castle-protected failure exposes; every other failure keeps
-        // the old armed hold.
-        const castleProtected = r === 'failed:protected' && (st.offCastle || castleGroundHere(bot, ctx))
-        if (castleProtected || st.offCastle) st.exposed = true
+        // No ground past the footprint (or the walk-off dig died on the
+        // surface): the hold is exposed — fight preempts instead of
+        // idling next to a hostile (run8: the armed hold died to a
+        // zombie). Any terminal surface failure exposes on castle
+        // ground — a deck of laid blocks (undiggable) or a failed walk
+        // (no-walk) strands the body in the open exactly like the
+        // protected veto (revmux 01 core-2) — while a half-dug pit
+        // keeps the armed hold (ed88's committed descent: abandoning
+        // it to chase is worse than holding it). Off the castle every
+        // failure keeps the old armed hold.
+        const onCastle = st.offCastle || castleGroundHere(bot, ctx)
+        if (onCastle && dugDown === 0) st.exposed = true
       }
       try { console.log(`shelter dig-in ${r}`) } catch (_) { /* log best-effort */ }
     }
