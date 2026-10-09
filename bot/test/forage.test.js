@@ -83,6 +83,29 @@ describe('planForage', () => {
     assert.equal(p.name, 'oak_log')
   })
 
+  it('g0z.34: a laid castle frame log is never a forage target (memory refuses it)', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(243, 73, 349)
+    const castle = { site: { x: 235, y: 70, z: 337 }, rot: 0, blueprintVersion: 2 }
+    const frame = { x: 242, y: 73, z: 349, name: 'spruce_log' } // rig-seeded frame cell
+    const tree = { x: 280, y: 70, z: 350, name: 'oak_log' }
+    // Noted with the castle known (scan, or a restore: castle restores first).
+    const ctx = { castle, lastGoalKey: '', stepStatus: 'running' }
+    resources.noteSpots(ctx, [frame, tree], 1000)
+    assert.equal(resources.count(ctx), 1)
+    assert.equal(forage.planForage(bot, ctx).name, 'oak_log')
+    // Noted before the castle existed: the next re-note drops the stale cell.
+    const late = memCtx([frame, tree])
+    assert.equal(resources.count(late), 2)
+    late.castle = castle
+    resources.noteSpots(late, [frame], 2000)
+    assert.equal(resources.count(late), 1)
+    assert.equal(forage.planForage(bot, late).name, 'oak_log')
+    // A plan cell holding a foreign block is no castle block: still a find.
+    resources.noteSpots(late, [{ x: 242, y: 73, z: 349, name: 'iron_ore' }], 3000)
+    assert.equal(resources.count(late), 2)
+  })
+
   it('diamond outranks iron at any distance', () => {
     const bot = mockBot()
     bot.inv.push({ name: 'iron_pickaxe', count: 1 })
