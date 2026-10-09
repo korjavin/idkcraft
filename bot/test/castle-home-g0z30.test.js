@@ -248,6 +248,17 @@ describe('g0z.30 live in the castle (4 rotations)', () => {
         if (castle.isPlaceTarget(c.kind)) laid++
       }
       assert.equal(laid, 1722, 'castle 1722/1722')
+      // The roadside table guard covers the castle's own plan: a bedroom
+      // doorway (keep-clear) and a wall yes, the storeroom table cell and a
+      // hall floor no.
+      const rel = (c) => { const r = castle.rotatePlan([{ ...c, kind: 'air' }], rot, 2)[0]; return [SITE.x + r.dx, SITE.y + r.dy, SITE.z + r.dz] }
+      assert.equal(build.isPlanCell(home, ...rel({ dx: 13, dy: 4, dz: 14 })), true, 'bedroom doorway')
+      assert.equal(build.isPlanCell(home, ...rel({ dx: 7, dy: 0, dz: 13 })), true, 'west wall')
+      assert.equal(build.isPlanCell(home, t.x, t.y, t.z), false, 'table cell')
+      assert.equal(build.isPlanCell(home, e.inside.x, e.inside.y, e.inside.z), false, 'hall floor')
+      // Mid-stair step edge: the feet floor over the open stairwell, still inside.
+      const edge = rel({ dx: 10, dy: 4, dz: 12 })
+      assert.equal(homeMod.isInside({ entity: { position: new Vec3(edge[0] + 0.5, edge[1], edge[2] + 0.5) } }, home), true)
       // No hut plan at castle coords.
       assert.deepEqual(build.blueprintFor(home), [])
       ctx.stepStatus = 'running'

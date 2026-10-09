@@ -209,7 +209,16 @@ const CASTLE = {
   lights: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'torch').map((c) => [c.dx, c.dy, c.dz])),
   chest: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'chest').map((c) => [c.dx, c.dy, c.dz])),
   table: (home) => world(home, [C_TABLE])[0],
-  interior: (home, pos) => !!pos && floorSet(home).has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`),
+  // The feet cell, or the one below it (g0z.30 02: a step-down edge on the
+  // stair floors the feet over the open stairwell for ~70 ms; a jump too).
+  interior: (home, pos) => {
+    if (!pos) return false
+    const x = Math.floor(pos.x)
+    const y = Math.floor(pos.y)
+    const z = Math.floor(pos.z)
+    const set = floorSet(home)
+    return set.has(`${x},${y},${z}`) || set.has(`${x},${y - 1},${z}`)
+  },
   box: (home) => {
     const cells = castle.absPlan(home.site, rot(home), CV).cells
     const min = { x: Infinity, y: Infinity, z: Infinity }
