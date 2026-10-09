@@ -326,6 +326,9 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.ok(logs.includes('shelter dig-in failed:cap-error'), JSON.stringify(logs))
     assert.equal(Math.floor(bot.entity.position.y), walk.y - 3, 'three deep')
     assert.equal(ctx.inShelter, true, 'descended: the armed hold keeps the pit')
+    // vmzq.58: the failed pit stays committed — no fight release climbs out.
+    assert.equal(ctx.shelter.pit, true)
+    assert.equal(home.shelterOpen(ctx), false)
   })
 
   it('normal pad: a working pillar at the castle perches armed, no relocation', async () => {
