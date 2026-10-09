@@ -93,6 +93,11 @@ const goalSteps = new client.Counter({
   help: 'Goal step choices by step and choice source (laya|jev|only-option|goal-fsm|fsm-fallback)',
   labelNames: ['step', 'source']
 })
+const stepStaleCompletions = new client.Counter({
+  name: 'idkcraft_bot_step_stale_completion_total',
+  help: 'Async step completions dropped because the step changed since the op started (oqul.7); step = the current step',
+  labelNames: ['step']
+})
 const goalStep = new client.Gauge({
   name: 'idkcraft_bot_goal_step',
   help: 'Current goal step timeline (1 on the running step, 0 elsewhere)',
@@ -174,4 +179,4 @@ const goalWatchdogTotal = new client.Counter({
   help: 'Goal watchdog rounds by kind, choice and source',
   labelNames: ['kind', 'choice', 'source']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }

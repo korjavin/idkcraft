@@ -511,8 +511,10 @@ describe('vmzq.30 no unloaded progress reads (.29A)', () => {
     }
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 2, phase: 'body', progress: { done: 328, total: 1722 } } }
     const logs = await quiet(() => castle(bot, ctx))
-    assert.equal(ctx.castle.progress.done, 0, 'all-air site recounts to 0')
-    assert.ok(ctx.castle.progress.total > 0)
-    assert.ok(logs.some((m) => /^castle 0\/\d+$/.test(m)), JSON.stringify(logs))
+    // vmzq.55: the 326 moat 'dig' cells join the gauge, and on an all-air
+    // site they already read dug — the place cells still recount to 0.
+    assert.equal(ctx.castle.progress.done, 326, 'all-air site recounts to the dug moat only')
+    assert.equal(ctx.castle.progress.total, 1722 + 326)
+    assert.ok(logs.some((m) => m === 'castle 326/2048'), JSON.stringify(logs))
   })
 })

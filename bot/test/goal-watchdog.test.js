@@ -13,6 +13,7 @@ const taskMod = require('../src/task')
 const goal = require('../src/goal')
 const metrics = require('../src/metrics')
 const { createTicker } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 
 assert.equal(taskMod.GOAL_WATCHDOG_MS_DEFAULT, 60000, 'owner 2026-10-07: 1 min flat window')
 assert.equal(taskMod.GOAL_COMMIT_MS_DEFAULT, 120000, 'bounded 120 s window')
@@ -213,9 +214,14 @@ describe('goal watchdog env (vmzq.21)', () => {
 })
 
 describe('run-4 fixture: flat cells, oscillating stone, alternating steps (acceptance 1)', () => {
-  it('fires one round within the window; the same-step answer pins across facts flips; round 2 carries the outcome', async () => {
+  it('fires one round within the window; the same-step answer pins across facts flips; round 2 carries the outcome', async (t_) => {
     const bot = makeBot()
+    const clock = fakeClock() // oqul.2: decide() reads Date.now; the window math runs on t
+    t_.after(() => clock.restore())
     const { ctx } = castleCtx(bot)
+    // Journal: step/stepPick writes (the test's flips included) — the window's
+    // own state (ctx.goal.commit, task.*.wd) mutates nested, outside the setter.
+    const journal = record(bot, ctx, { keys: ['stepPick'] })
     const { calls, brain } = answerBrain('castlefetch')
     ctx.brain = brain
     const inv = bot.inventory.items()
@@ -319,6 +325,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     t += 10000
     taskMod.taskTick(bot, ctx, t)
     assert.match(wdLogs()[1], /round=2 step=castlefetch .* choice=castlefetch/)
+    golden('goal-watchdog', 'vmzq watchdog round 1 pins, flat window, round 2 with history', journal.events)
   })
 })
 

@@ -20,8 +20,21 @@ jobs:
           cache-dependency-path: bot/package-lock.json
       - run: cd bot && npm ci && npm test
 
+  # idkcraft-oqul.2: the ~9 min task-run.sh oracle suite moved out of npm
+  # test (kept < 60 s); a parallel job keeps it gating the deploy.
+  test-slow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+      - run: cd bot && npm ci && npm run test:slow
+
   deploy:
-    needs: test
+    needs: [test, test-slow]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
