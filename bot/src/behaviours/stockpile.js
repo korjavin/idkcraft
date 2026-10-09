@@ -973,6 +973,49 @@ function siteCastleActive(ctx) {
     return false
   }
 }
+// Castle bank (g0z.27): a complete castle banks the leftover BOM into its
+// plan chest cell (prod: a 36/36 pack of planks/cobble after 'castle done'
+// failed every side step). Live on every tick, so a restart with a
+// complete castle banks too. The plan cell, not any footprint chest; a
+// standing chest only (unloaded or a hole reads null); full parks it for
+// the session (no second chest in v1). ponytail: the park lifts on restart
+// only — re-arm on an emptied chest when the owner asks for it.
+// Kept as a function of the chest cell so g0z.9b can point home at it.
+function castleBankAt(bot, ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (!st || !st.site || typeof st.site.x !== 'number' || st.parked || st.phase !== 'complete') return null
+    if (ctx.castleBankFull) return null
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number' || distXZ(bp, siteCentre(st)) > SITE_STORE_RADIUS) return null
+    const c = require('../castle').absPlan(st.site, st.rot, st.blueprintVersion).cells.find((o) => o.kind === 'chest')
+    if (!c || blockNameAt(bot, c.x, c.y, c.z) !== 'chest') return null
+    return new Vec3(c.x, c.y, c.z)
+  } catch (_) {
+    return null
+  }
+}
+// The bank keeps one bed (the spawn bed sitebed re-places) on top of the
+// depositPlan kit — the stockpile keep banks beds once none are owed.
+function bankPlan(bot, ctx) {
+  const plan = depositPlan(bot, ctx)
+  let beds = 0
+  for (const i of invItems(bot)) if (i && typeof i.name === 'string' && i.name.endsWith('_bed')) beds += typeof i.count === 'number' ? i.count : 1
+  let planned = 0
+  for (const p of plan) if (p.name.endsWith('_bed')) planned += p.count
+  if (beds === 0 || planned < beds) return plan
+  const out = []
+  let kept = false
+  for (const p of plan) {
+    if (!kept && p.name.endsWith('_bed')) {
+      kept = true
+      if (p.count > 1) out.push({ name: p.name, count: p.count - 1 })
+      continue
+    }
+    out.push(p)
+  }
+  return out
+}
 function siteCentre(st) {
   try {
     const dims = require('../castle').siteDimensions(st.rot | 0, st.blueprintVersion)
@@ -993,8 +1036,9 @@ function distXZ(a, b) {
 // veto). Near home the home chest wins (existing storage, tested).
 function siteMode(bot, ctx) {
   try {
-    if (!siteCastleActive(ctx)) return false
-    if (siteParked(bot, ctx)) return false
+    if (!siteCastleActive(ctx)) {
+      if (!castleBankAt(bot, ctx)) return false
+    } else if (siteParked(bot, ctx)) return false
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return false
     if (distXZ(bp, siteCentre(ctx.castle)) > SITE_STORE_RADIUS) return false
@@ -1046,6 +1090,7 @@ function siteChestTodo(bot, ctx) {
   try {
     const st = ctx && ctx.castle
     if (!st) return 'none'
+    if (castleBankAt(bot, ctx)) return 'store'
     if (st.siteChest && typeof st.siteChest.x === 'number') return 'store'
     if (findSiteChest(bot, ctx)) return 'adopt'
     if (countItems(bot, (n) => n === 'chest') <= 0) {
@@ -1247,7 +1292,10 @@ function stockpileSite(bot, ctx, bp) {
     fail(ctx, 'no-home')
     return
   }
-  if (!st.siteChest) {
+  // Castle bank (g0z.27): the plan chest is the target — no adopt, no
+  // place, no double; the deposit below is shared.
+  const bankAt = castleBankAt(bot, ctx)
+  if (!bankAt && !st.siteChest) {
     let found = null
     try { found = findSiteChest(bot, ctx) } catch (_) { found = null }
     if (found) {
@@ -1266,7 +1314,7 @@ function stockpileSite(bot, ctx, bp) {
       return
     }
   }
-  let c = st.siteChest
+  let c = bankAt || st.siteChest
   let at = null
   try { at = blockNameAt(bot, c.x, c.y, c.z) } catch (_) { at = null }
   if (at === null) {
@@ -1293,7 +1341,8 @@ function stockpileSite(bot, ctx, bp) {
     stockpileSite(bot, ctx, bp)
     return
   }
-  const plan = depositPlan(bot, ctx)
+  const planOf = bankAt ? bankPlan : depositPlan
+  const plan = planOf(bot, ctx)
   if (plan.length === 0) {
     ctx.siteDouble = null
     ctx.stockpileHomeLatch = null // trip over
@@ -1302,7 +1351,7 @@ function stockpileSite(bot, ctx, bp) {
   }
   // Pending double first: resume the multi-tick place, never the deposit
   // goal over it (doublePending above).
-  if (ctx.siteDouble && typeof ctx.siteDouble.x === 'number') {
+  if (!bankAt && ctx.siteDouble && typeof ctx.siteDouble.x === 'number') {
     const st8 = doublePending(bot, ctx.siteDouble)
     if (st8 === 'open') {
       placeChest(bot, ctx, ctx.siteDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-site-double', sayPlaced: 'doubled the site chest', noFarTable: true, pendingKey: 'siteDouble' })
@@ -1336,11 +1385,12 @@ function stockpileSite(bot, ctx, bp) {
   ctx.stockpileInFlight = true
   void (async () => {
     try {
-      const before = surplusCount(bot, ctx)
+      let before = 0
+      for (const p of planOf(bot, ctx)) before += p.count
       const names = []
       let banked = 0
       const res = await withChest(bot, ctx, async (window) => {
-        for (const p of depositPlan(bot, ctx)) {
+        for (const p of planOf(bot, ctx)) {
           const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[p.name]
           const type = entry && typeof entry.id === 'number' ? entry.id : null
           if (type == null) continue
@@ -1354,7 +1404,7 @@ function stockpileSite(bot, ctx, bp) {
       }, c)
       ctx.stockpileInFlight = false
       if (!res || res.status === 'gone') {
-        st.siteChest = null
+        if (!bankAt) st.siteChest = null // a gone castle chest: castleBankAt reads null next tick
         ctx.siteDouble = null
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = null
@@ -1366,7 +1416,8 @@ function stockpileSite(bot, ctx, bp) {
         return
       }
       if (res.status === 'error') {
-        ctx.siteChestFullAt = Date.now()
+        if (bankAt) ctx.castleBankFull = true // no loop on a lid that will not open
+        else ctx.siteChestFullAt = Date.now()
         fail(ctx, 'deposit')
         return
       }
@@ -1374,9 +1425,14 @@ function stockpileSite(bot, ctx, bp) {
         ctx.siteChestFullAt = null
         ctx.siteExpanded = false
         clearPackFullHold(ctx)
-        say(bot, `stockpiled ${names.join(', ')}`)
+        if (bankAt) say(bot, `castle done at ${st.site.x} ${st.site.y} ${st.site.z}, ${banked} items banked in the castle chest`)
+        else say(bot, `stockpiled ${names.join(', ')}`)
       }
-      if (before > 0 && banked === 0) {
+      if (bankAt && before > 0 && banked === 0) {
+        ctx.castleBankFull = true
+        say(bot, 'the castle chest is full')
+        if (offerHaul(bot, ctx)) say(bot, 'bringing the surplus to you instead')
+      } else if (before > 0 && banked === 0) {
         // Full: double once per fill (adjacent halves share one window),
         // then the site parks. The next run retries after the owner
         // empties it; a doubled chest that still takes nothing is parked,
@@ -1969,6 +2025,8 @@ module.exports.REPROBE_RADIUS = REPROBE_RADIUS
 module.exports.NO_SPOT_RETRY_MS = NO_SPOT_RETRY_MS
 module.exports.chestTodo = chestTodo
 module.exports.siteMode = siteMode
+module.exports.castleBankAt = castleBankAt
+module.exports.bankPlan = bankPlan
 module.exports.findSiteChest = findSiteChest
 module.exports.siteChestTodo = siteChestTodo
 module.exports.doubleSpot = doubleSpot
