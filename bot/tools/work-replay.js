@@ -17,7 +17,8 @@
 //   inside  — 'home for the night' chats (inside the shut house at night)
 //   dugin   — 'shelter dig-in done' (dug in instead of going home)
 //   deaths  — 'death health=' lines
-//   banked  — items in 'forage done: banked …' lines, per hour of window
+//   banked  — items in 'forage done: banked …' (+ the pack-full yield's
+//             'forage failed:pack-full (banked …)') lines, per hour of window
 //   brought — 'brought …' / 'stockpiled …' chats (handed over or banked)
 //   steps   — top goal steps by 'goal step=' count
 //   fail    — top failed steps (prev of why=step-failed; :<reason> when the
@@ -63,7 +64,7 @@ function verdict(lines, mins) {
     else if (/^say: (brought|stockpiled) /.test(line)) c.brought++
     else if (/^shelter dig-in done\b/.test(line)) c.dugin++
     else if (/^death health=/.test(line)) c.deaths++
-    else if ((m = /^forage done: banked (.*)$/.exec(line))) {
+    else if ((m = /^forage done: banked (.*)$/.exec(line) || /^forage failed:pack-full \(banked (.*)\)$/.exec(line))) {
       // '(reason)' tail stripped: its words must never read as items.
       for (const n of m[1].replace(/\s*\(.*\)\s*$/, '').matchAll(/(\d+) [a-z_]+/g)) c.banked += Number(n[1])
     } else if ((m = /^goal step=(\S+) prev=(\S+)/.exec(line))) {
@@ -81,7 +82,7 @@ function verdict(lines, mins) {
 }
 
 // Lines the verdict reads; the rest only reach the full log.
-const KEEP = /^(WORK-RIG time: |say: |shelter dig-in |death health=|forage done: |goal step=)/
+const KEEP = /^(WORK-RIG time: |say: |shelter dig-in |death health=|forage (done|failed):|goal step=)/
 // Stdout: the cycle-readable subset (the full log stays in WORK_LOG).
 const PRINT = /^(WORK-RIG |say: |shelter dig-in |death health=|forage done: |goal step=|goal watchdog |task )/
 

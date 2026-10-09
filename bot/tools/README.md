@@ -503,7 +503,8 @@ time resync, server truth; a bed at dusk skips the night before
 nightfall ever crosses), `slept` = `sleeping in my bed` chats,
 `inside` = `home for the night` chats, `dugin` = `shelter dig-in done`,
 `deaths` = `death health=` lines, `banked` = items in `forage done:
-banked …` per hour of window, `brought` = `brought …`/`stockpiled …`
+banked …` (and the pack-full yield's `forage failed:pack-full (banked
+…)`) per hour of window, `brought` = `brought …`/`stockpiled …`
 chats, `steps` = top `goal step=` counts, `fail` = top failed steps (the
 prev step of `why=step-failed`, `:<reason>` once the line carries
 `fail=`, ipn.15). `WORK_KIT=empty` (default) clears the pack, `chest`
