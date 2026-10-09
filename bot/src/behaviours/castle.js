@@ -1038,8 +1038,19 @@ function placeCell(bot, ctx, st, c, item, now) {
 // flora or our own placements only (flat allowlist + build REPLACEABLE +
 // ctx.placedByBot), never under anyone's feet, and
 // the shared denyReason gates (trap, gravity, submerged, protected).
+// Re-dig guard (vmzq.54): a plan dig cell that keeps coming back (our
+// scaffold, a player) blocks with the usual backoff instead of looping —
+// each dig succeeds and the body moves, so no strike or budget fires.
+// Session-only counts; blockCell's MAX_HOLE_TRIES retire bounds it.
+const REDIG_MAX = 3
 function digCell(bot, ctx, st, c, now) {
   const name = nameAt(bot, c)
+  const rk = c.kind === 'dig' ? bkey(st, c.idx) : null
+  if (rk && !AIR.has(name) && ctx.castleRedig && (ctx.castleRedig[rk] || 0) >= REDIG_MAX) {
+    delete ctx.castleRedig[rk]
+    blockCell(ctx, st, c, 'refilled', now)
+    return
+  }
   if (flat.isLiquidName(name)) { blockCell(ctx, st, c, 'liquid', now); return }
   // Our own placements count too: the executor's scaffolding (cobblestone
   // pillared into a landing cell on the rig) must clear like terrain.
@@ -1104,6 +1115,7 @@ function digCell(bot, ctx, st, c, now) {
       await bot.dig(b)
       if (live(ctx, token)) {
         ctx.castleFails = null
+        if (rk) { ctx.castleRedig = ctx.castleRedig || {}; ctx.castleRedig[rk] = (ctx.castleRedig[rk] || 0) + 1 }
         if (spoilWalk(st, c)) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
       }
     } catch (_) {
@@ -1392,7 +1404,14 @@ function guardCastle(bot, ctx) {
         const dx = q.x - st.site.x
         const dy = q.y - st.site.y
         const dz = q.z - st.site.z
-        return dx >= 0 && dx < w && dz >= 0 && dz < d && dy >= 0 && dy <= SITE_TOP ? 100 : 0
+        if (!(dx >= 0 && dx < w && dz >= 0 && dz < d)) return 0
+        if (dy >= 0 && dy <= SITE_TOP) return 100
+        // Moat pits (vmzq.54): dig cells sit below the site level, so the
+        // band above missed them and A* towered dirt back into the pit it
+        // climbed out of (prod livelock 1613/1722). 100 vetoes the tower
+        // (getMoveUp drops cost > 100); a step place is a cost only.
+        const c = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${q.x},${q.y},${q.z}`)
+        return c && c.kind === 'dig' ? 100 : 0
       } catch (_) { return 0 }
     }
     mov.exclusionAreasBreak.push(fn)

@@ -364,6 +364,54 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castleSelfOcc, undefined)
   })
 
+  // vmzq.54 (prod 12,64,-5; 34,64,-6): the bot climbs out of a freshly dug
+  // moat pit and A* towers dirt into it (getMoveUp drops a move whose cost
+  // is over 100). The mock towers whenever the guard lets it.
+  it('vmzq.54: the castle place guard vetoes a tower in a moat pit, so the dug cell stays dug', async () => {
+    const { m, world, bot, ctx } = moatStance()
+    const tower = (g) => {
+      bot.calls.goals.push(g)
+      const p = bot.entity.position
+      const feet = { position: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } }
+      const cost = 1 + bot.pathfinder.movements.exclusionAreasPlace.reduce((s, fn) => s + fn(feet), 0) + 1
+      if (cost <= 100) world.set(feet.position.x, feet.position.y, feet.position.z, 'dirt')
+    }
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g); bot.entity.position = { x: m.x + 0.5, y: m.y + 2, z: m.z - 1.5 } }
+    await run(bot, ctx, 4)
+    assert.equal(world.get(m.x, m.y, m.z), 'air')
+    // In the pit for the spoil, then the climb out.
+    bot.entity.position = { x: m.x + 0.5, y: m.y, z: m.z + 0.5 }
+    tower({})
+    assert.equal(world.get(m.x, m.y, m.z), 'air', 'no scaffold in the dug pit')
+    const place = bot.pathfinder.movements.exclusionAreasPlace[0]
+    const deep = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind === 'dig' && c.dy === -2)
+    assert.equal(place({ position: deep }), 100, 'bottom moat layer too')
+    const ground = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind !== 'dig' && c.dy === 0)
+    assert.equal(place({ position: { x: ground.x, y: SITE.y - 1, z: ground.z } }), 0, 'terrain under a non-dig cell stays free')
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(ctx.castleRedig[`2:${m.idx}`], 1, 'normal dig path counts one dig')
+    assert.deepEqual(ctx.castle.blocked, {})
+  })
+
+  it('vmzq.54: a moat cell refilled after REDIG_MAX digs is blocked (refilled), not dug forever', async () => {
+    const { m, world, bot, ctx } = moatStance()
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g); bot.entity.position = { x: m.x + 0.5, y: m.y + 2, z: m.z - 1.5 } }
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    try {
+      for (let i = 0; i < 30 && !ctx.castle?.blocked?.[`2:${m.idx}`]; i++) {
+        castle(bot, ctx)
+        await settle()
+        if (world.get(m.x, m.y, m.z) === 'air') world.set(m.x, m.y, m.z, 'dirt') // refilled behind the bot
+      }
+    } finally { console.log = log }
+    assert.equal(ctx.castle.blocked[`2:${m.idx}`].why, 'refilled')
+    assert.equal(bot.calls.digs.filter((p) => p.x === m.x && p.y === m.y && p.z === m.z).length, 3)
+    assert.equal(ctx.castleRedig[`2:${m.idx}`], undefined, 'the retry after the backoff counts afresh')
+    assert.ok(logs.some((l) => l.startsWith(`castle blocked ${m.x} ${m.y} ${m.z} dig (refilled) try 1`)), logs.join('\n'))
+  })
+
   it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {
     const world = makeWorld()
     const plan = cells()
