@@ -159,6 +159,10 @@ function done(bot, c) {
   return blueprint.matches(c.kind, nameAt(bot, c))
 }
 function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
+// Gauge cells (vmzq.55): place cells plus the moat 'dig' cells, so the
+// task clock sees digging. Keep-clear 'air' cells stay out (they start
+// done; counting them only inflates).
+function gauged(c) { return !clearing(c) || c.kind === 'dig' }
 function ver(st) { return blueprint.blueprintOf(st && st.blueprintVersion).version }
 function bkey(st, idx) { return `${ver(st)}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
@@ -750,7 +754,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (!st.progress) {
           const { cells } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
           let total = 0
-          for (const c of cells) if (!clearing(c)) total++
+          for (const c of cells) if (gauged(c)) total++
           st.progress = { done: 0, total }
         }
       } else if (now - (ctx.castleMenuProgressAt || 0) >= FULL_RESCAN_MS) {
@@ -829,13 +833,15 @@ function menuFact(bot, ctx, now = Date.now()) {
   }
 }
 
-// Owner-facing progress (chat 'castle'): laid/total per material kind,
+// Owner-facing progress (chat 'castle'): laid/total per material kind
+// (moat = dug/total of the 'dig' cells),
 // read live from the world (blocked never counts as done).
 function progressByKind(bot, st) {
   const out = {}
   for (const c of blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells) {
-    if (clearing(c)) continue
-    const e = out[c.kind] || (out[c.kind] = { done: 0, total: 0 })
+    if (!gauged(c)) continue
+    const k = c.kind === 'dig' ? 'moat' : c.kind
+    const e = out[k] || (out[k] = { done: 0, total: 0 })
     e.total++
     if (done(bot, c)) e.done++
   }
@@ -846,7 +852,7 @@ function progress(bot, st, cells, ctx) {
   let n = 0
   let total = 0
   for (const c of cells) {
-    if (clearing(c)) continue
+    if (!gauged(c)) continue
     total++
     if (done(bot, c)) n++
   }
