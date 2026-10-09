@@ -471,7 +471,7 @@ describe('order corpus (idkcraft-6x7.8)', () => {
     let seenRevoke = false
     for (const s of spots) {
       // Shelter spots chat 'go work' (idkcraft-ed88): revoking too.
-      const revokes = s.mode === 'shelter' || (s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order))
+      const revokes = s.mode === 'shelter' || s.mode === 'night' || (s.mode === 'order' && ['build here', 'come home', 'go work', 'free'].includes(s.order))
       if (revokes) seenRevoke = true
       else if (s.mode !== 'order') assert.ok(!seenRevoke, `follow spot ${s.name} after a follow-revoking order`)
     }
@@ -751,6 +751,69 @@ describe('shelter close budget (idkcraft-hoy7)', () => {
     assert.ok(Math.hypot(w.goal[0] - w.spawn[0], w.goal[2] - w.spawn[2]) > 128, 'guide out of entity range: the bot works alone')
     assert.deepEqual(baseline.spots['SHELTER-WATER'], { reached: true, maxStuck: 4, maxEps: 1, maxCalls: 0 },
       'stuck 1-2 (observed max 2: beaching trips stuck resets) + 2 slack, eps 0 + 1, calls strict')
+  })
+})
+
+describe('night spots (idkcraft-6x7.17)', () => {
+  const spots = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-spots.json'), 'utf8'))
+  const nights = spots.filter((s) => s.mode === 'night')
+
+  it('HOUSE-NIGHT and HOUSE-BUMP are night spots: home is the raised house, sleep is the expect', () => {
+    assert.deepEqual(nights.map((s) => s.name).sort(), ['HOUSE-BUMP', 'HOUSE-NIGHT'])
+    for (const s of nights) {
+      assert.deepEqual(s.home, s.house, `${s.name}: home == house (one site)`)
+      assert.ok(s.expect.length > 0 && s.expect.includes('sleeping in my bed'), `${s.name}: expect the sleep line`)
+      assert.ok(Math.hypot(s.goal[0] - s.spawn[0], s.goal[2] - s.spawn[2]) > 128, `${s.name}: guide out of entity range`)
+    }
+    const bump = nights.find((s) => s.name === 'HOUSE-BUMP')
+    assert.equal(bump.bead, 'idkcraft-rw4.19')
+    const [ox, oy, oz] = bump.house
+    assert.ok(bump.after.includes(`setblock ${ox + 3} ${oy} ${oz + 1} dirt`), 'bump behind the door (rw4.19 prod repro)')
+    assert.ok(bump.after.includes(`setblock ${ox + 1} ${oy} ${oz + 4} dirt`), 'bump on bed A foot (rw4.19 prod repro)')
+  })
+
+  it('the sleep line is expect, door/reach refusals are fail', () => {
+    const s = nights[0]
+    assert.equal(matchOrderLine('sleeping in my bed', s.expect, s.fail), 'expect')
+    assert.equal(matchOrderLine('cannot reach home: door blocked', s.expect, s.fail), 'fail')
+    assert.equal(matchOrderLine('home for the night', s.expect, s.fail), null) // arrival is not the sleep
+  })
+
+  it('windowReached judges night spots like orders', () => {
+    assert.equal(windowReached('night', true, 0, 0, null), null)
+    assert.equal(windowReached('night', true, 0, 0, 'expect'), true)
+    assert.equal(windowReached('night', false, 999, 999, 'fail'), false)
+  })
+
+  it('loadSpots validates the night contract and the after field', () => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'night-'))
+    const saved = process.argv[2]
+    const load = (list) => {
+      const f = path.join(dir, 'spots.json')
+      fs.writeFileSync(f, JSON.stringify(list))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    const base = { name: 'N', mode: 'night', spawn: [0, 64, -13], goal: [0, 90, 200], home: [0, 64, 0], house: [0, 64, 0], after: ['setblock 1 64 4 red_bed[facing=east,part=foot]'], expect: ['sleeping in my bed'], fail: ['cannot reach home'] }
+    try {
+      const n = load([base])[0]
+      assert.deepEqual(n.home, n.house)
+      assert.equal(n.order, null)
+      assert.deepEqual(n.after, base.after)
+      assert.throws(() => load([{ ...base, house: undefined, after: undefined }]), /house == home/)
+      assert.throws(() => load([{ ...base, house: [1, 64, 0] }]), /house == home/)
+      assert.throws(() => load([{ ...base, home: undefined }]), /integer home/)
+      assert.throws(() => load([{ ...base, expect: undefined }]), /non-empty expect/)
+      assert.throws(() => load([{ ...base, order: 'go work' }]), /no order/)
+      assert.throws(() => load([{ ...base, after: ['give @a red_bed 1'] }]), /after allows fill\/setblock only/)
+      assert.throws(() => load([{ ...base, after: 'setblock 1 64 4 dirt' }]), /bad after/)
+      assert.throws(() => load([{ name: 'F', spawn: [0, 64, 0], goal: [5, 64, 0], after: ['setblock 1 64 4 dirt'] }]), /after needs a house/)
+      assert.throws(() => load([{ name: 'F', spawn: [0, 64, 0], goal: [5, 64, 0], expect: ['x'], fail: ['y'] }]), /need mode=order\|night/)
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
