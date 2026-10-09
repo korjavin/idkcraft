@@ -706,6 +706,41 @@ describe('castle pane ladder (g0z.38)', () => {
     })
   }
 
+  it('g0z.39 cobble rung: smelt no-cobble -> wooden pickaxe -> digTick until 8 -> the smelt retries; twice fails', async () => {
+    const { bot, ctx, calls, items } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'oak_planks', count: 16 }] })
+    fetch.deps.driveFurnace = (b, c) => { calls.furnace.push(c.furnaceJob); return count(items, 'cobblestone') >= 8 ? null : 'failed:no-cobble' }
+    fetch.deps.craftItem = (b, c, names, n) => {
+      calls.crafts.push([names, n])
+      if (names[0] !== 'wooden_pickaxe') return { done: false }
+      items.push({ name: 'wooden_pickaxe', count: 1 })
+      return { done: true }
+    }
+    await run(bot, ctx, () => calls.crafts.some(([n]) => n[0] === 'wooden_pickaxe'))
+    assert.equal(ctx.castleFetch.cobble, true)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.equal(count(items, 'wooden_pickaxe'), 1)
+    // the stone source is digTick's own (its tests); here the pack fills.
+    items.push({ name: 'cobblestone', count: 8 })
+    const before = calls.furnace.length
+    await run(bot, ctx, () => calls.furnace.length > before)
+    assert.equal(calls.furnace.length, before + 1, 'the smelt retries at 8 cobble')
+    // a second no-cobble in the same leg fails honestly.
+    items.find((i) => i.name === 'cobblestone').count = 0
+    fetch.deps.driveFurnace = (b, c) => 'failed:no-cobble'
+    ctx.castleFetch.cobble = true
+    ctx.castleFetch.smelting = true
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-smelt-no-cobble')
+  })
+
+  it('g0z.39 cobble rung, no pickaxe and no wood: gather chops logs first', async () => {
+    const { bot, ctx, calls } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    fetch.deps.driveFurnace = (b, c) => { calls.furnace.push(c.furnaceJob); return 'failed:no-cobble' }
+    await run(bot, ctx, () => calls.gather)
+    assert.equal(calls.gather, 1)
+    assert.deepEqual(calls.crafts.at(-1), [['wooden_pickaxe'], 1])
+  })
+
   it('the real furnace settles async (revmux 01): the settled sand run is read back, then crafted', async () => {
     const { bot, ctx, calls, items } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
     // gear.driveFurnace shape: null while the window op is in flight; the

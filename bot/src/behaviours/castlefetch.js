@@ -32,7 +32,8 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // target could never be met from the world (castle BATCH_OF.frame matches).
 // pane (g0z.31, g0z.38): chest first — panes, else glass crafted 6 -> 16,
 // else chest sand; then the sand ladder (paneTick): a self sand order,
-// fuel, the castle furnace, the craft. Each rung fails honestly into the hold.
+// fuel, the castle furnace (its 8 cobble dug on a no-cobble, g0z.39), the craft.
+// Each rung fails honestly into the hold.
 // banner (g0z.32, g0z.35): chest first, then self-sourced (owner
 // 2026-10-09) — 6 wool + 1 stick per banner, the wool through a self bring
 // order (bannerTick), but only once the beds stand (beds first).
@@ -498,9 +499,31 @@ function paneTick(bot, ctx, f, d, target, state) {
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
   }
+  // Cobble rung (g0z.39): the castle furnace said no-cobble this leg.
+  if (f.cobble && countItems(bot, (nm) => nm === 'cobblestone') < 8) { cobbleTick(bot, ctx, f, target, state, dry); return }
   f.smelting = true
   if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
   smeltTick(bot, ctx, f, dry)
+}
+
+// Cobble rung (g0z.39, owner: the bot gets its own materials): an empty
+// kit has no 8 cobble for the castle furnace. A wooden pickaxe from the
+// pack (craftany chains planks/sticks/table), else logs through gather
+// (ends the leg; the next leg re-enters via the smelt's no-cobble); then
+// digTick's stone source (exposed stone, quarry, pit) until 8 cobble, and
+// the smelt retries. digTick's own failures end the leg into the hold.
+function cobbleTick(bot, ctx, f, target, state, dry) {
+  ctx.castle.status = `fetching pane (cobble ${countItems(bot, (nm) => nm === 'cobblestone')}/8)`
+  if (!hasPickaxe(bot)) {
+    let r = null
+    try { r = deps.craftItem(bot, ctx, ['wooden_pickaxe'], 1) } catch (_) { r = { done: false } }
+    if (r === 'running' || (r && r.done)) return
+    if (countItems(bot, (nm) => nm.endsWith('_log') || nm.endsWith('_planks')) > 0) { dry('no-pickaxe'); return } // wood on hand, craft failed (table, reach)
+    deps.gather(bot, ctx, target, state)
+    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
+    return
+  }
+  digTick(bot, ctx, f)
 }
 
 // One furnace tick per castlefetch tick (g0z.36 contract: the job is set
@@ -523,6 +546,11 @@ function smeltTick(bot, ctx, f, dry) {
   f.smelting = false
   ctx.furnaceJob = null
   if (out === 'done') { f.craftOut = false; return } // craftTick crafts the panes next tick
+  if (out === 'failed:no-cobble' && !f.cobble) { // g0z.39: dig the furnace's 8 cobble, then smelt again
+    f.cobble = true
+    try { console.log('castlefetch pane: no cobble for the furnace, digging 8') } catch (_) { /* log best-effort */ }
+    return
+  }
   dry(`smelt-${String(out).replace(/^failed:/, '')}`)
 }
 
