@@ -7,7 +7,7 @@ const craftMod = require('./craft')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen, stale } = require('../step')
 const fightMod = require('./fight')
-const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
+const { canBreak, issueGoal, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
 
 // equip: rebuild the starter kit after death (idkcraft-atl.6, owner
 // 2026-09-24: stone_pickaxe, stone_sword, ~32 scaffold blocks). Order is
@@ -357,8 +357,7 @@ function tableFor(bot, ctx) {
     }
     const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
     if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(new goals.GoalNear(homeTable.x, homeTable.y, homeTable.z, 3), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(homeTable.x, homeTable.y, homeTable.z, 3), key, false)
     }
     st.walkWaits = (st.walkWaits || 0) + 1
     // Walking that never arrives is a stall, not progress: fail so the
@@ -874,8 +873,7 @@ function digTick(bot, ctx, st, bp) {
   // hold instead of idled on forever. A dig attempt resets it.
   const approach = (key, range) => {
     if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-      bot.pathfinder.setGoal(new goals.GoalNear(block.x, block.y, block.z, range), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(block.x, block.y, block.z, range), key, false)
     }
     st.approachWaits = (st.approachWaits || 0) + 1
     if (st.approachWaits > 30) fail(bot, ctx, 'blocks', new Error('dig-unreachable'))

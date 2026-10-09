@@ -25,6 +25,17 @@ function clearGoal(bot, ctx) {
   ctx.lastGoalKey = ''
 }
 
+// idkcraft-oqul.8: exact pass-through for the one literal pattern
+// `bot.pathfinder.setGoal(goal, dynamic); ctx.lastGoalKey = key` — a throw
+// from setGoal still leaves the key unwritten, and dynamic is never
+// defaulted (follow/fight pass true). The other lastGoalKey paths (clear,
+// idle-stop, invalidate-to-reissue, try-wrapped issue) stay hand-written:
+// see the lastGoalKey note in test/ctx-fields.json.
+function issueGoal(bot, ctx, goal, key, dynamic) {
+  bot.pathfinder.setGoal(goal, dynamic)
+  ctx.lastGoalKey = key
+}
+
 function botPos(bot) {
   try {
     const p = bot && bot.entity && bot.entity.position
@@ -33,7 +44,7 @@ function botPos(bot) {
   return null
 }
 
-module.exports = { say, clearGoal, botPos }
+module.exports = { say, clearGoal, issueGoal, botPos }
 
 // Owner-build protection (idkcraft-drq): the single break guard every
 // direct dig site calls. Breakable = natural terrain or blocks the bot
@@ -652,4 +663,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }
+module.exports = { say, clearGoal, issueGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }

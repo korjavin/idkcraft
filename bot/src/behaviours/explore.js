@@ -17,7 +17,7 @@ const { Vec3 } = require('vec3')
 const stuck = require('../stuck')
 const resources = require('../resources')
 const danger = require('../danger')
-const { say, clearGoal } = require('./util')
+const { say, clearGoal, issueGoal } = require('./util')
 
 const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
 // Inner rings first: a hands-only walker without tools closes 16-32
@@ -265,8 +265,7 @@ function explore(bot, ctx, target, state) {
     const climbKey = `explore:climb:${floor}`
     const y = Math.floor(bp.y)
     if (climbKey !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalY(floor), false)
-      ctx.lastGoalKey = climbKey
+      issueGoal(bot, ctx, new goals.GoalY(floor), climbKey, false)
       e.climbY = y // progress counts from where the body is now (revmux 03)
       if (e.climbKey !== climbKey) { // a borrow taking the body back keeps the budget (68p)
         e.climbKey = climbKey

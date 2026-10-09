@@ -20,7 +20,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget, HOSTILE_NAMES } = require('../perception')
-const { botPos } = require('./util')
+const { botPos, issueGoal } = require('./util')
 const recover = require('./recover')
 
 // Question order = owner list (1tj notes). Feasibility, not priority:
@@ -309,8 +309,7 @@ function retreat(bot, ctx) {
   try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
   if (key !== ctx.lastGoalKey || !moving) {
     try {
-      bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(nx, bp.y, nz, 1), key, false)
     } catch (_) { /* goal best-effort */ }
   }
   ctx.stepStatus = 'running'

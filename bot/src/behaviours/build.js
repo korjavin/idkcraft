@@ -38,7 +38,7 @@
 // sends the bot back to gather/craft for the next batch.
 
 const Vec3 = require('vec3')
-const { denyReason, logDeny, isInteractRef, NATURAL_SOLID } = require('./util')
+const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 
@@ -310,14 +310,29 @@ function isComplete(bot, home) {
 // First plan entry (in lay order) that still needs placing, skipping cells
 // already given up on (ctx.buildSkip). Returns the blueprint index, or -1
 // when every remaining cell is in place.
-function nextCellIdx(bot, home, skipped) {
+// A clear cell holding our own block this session (ctx given: build's own
+// pick) waits until nothing else is owed (idkcraft-6x7.21): that is the
+// pathfinder's scaffold pillar for a wall/roof cell, and digging it first
+// livelocks — the approach re-pillars, the clear cell (visited first)
+// preempts again, the wall cell never lands (JR-BUILD rig: ring(1) cell 37
+// <-> clear 123/127 for the whole 300 s window). Natural ground still goes
+// first (rw4.19); the pillar is still dug out at the end.
+function nextCellIdx(bot, home, skipped, ctx) {
   const skip = new Set(Array.isArray(skipped) ? skipped : [])
   const plan = blueprintFor(home)
+  let own = -1
   for (const i of (home && home.v === 2 ? v2Order(plan) : plan.keys())) {
     if (skip.has(i)) continue
-    if (!cellDone(bot, home, plan[i])) return i
+    if (cellDone(bot, home, plan[i])) continue
+    let own0 = false
+    try { own0 = !!ctx && plan[i].kind === 'clear' && isOwnPlaced(ctx, bot.blockAt(cellAbs(home, plan[i]))) } catch (_) { own0 = false }
+    if (own0) {
+      if (own < 0) own = i
+      continue
+    }
+    return i
   }
-  return -1
+  return own
 }
 
 // v2 visit order (idkcraft-d7i): the partition is laid right before the
@@ -670,7 +685,7 @@ function build(bot, ctx, target, state) {
     Date.now() - ctx.buildFlightSince > FLIGHT_TIMEOUT_MS) {
     ctx.placeInFlight = false
     ctx.buildFlightSince = null
-    const hIdx = nextCellIdx(bot, ctx.home, ctx.buildSkip)
+    const hIdx = nextCellIdx(bot, ctx.home, ctx.buildSkip, ctx)
     if (hIdx >= 0) {
       if (ctx.buildFailIdx !== hIdx) {
         ctx.buildFailIdx = hIdx
@@ -690,7 +705,7 @@ function build(bot, ctx, target, state) {
     ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
   }
 
-  const idx = nextCellIdx(bot, ctx.home, ctx.buildSkip)
+  const idx = nextCellIdx(bot, ctx.home, ctx.buildSkip, ctx)
   if (idx === -1) {
     // Holes remain (vmzq.10): every remaining cell is placed but given-up
     // cells are still missing — fail the step, never announce done. The

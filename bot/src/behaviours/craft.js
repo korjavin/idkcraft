@@ -6,6 +6,7 @@ const { NEED_LOGS } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen } = require('../step')
+const { issueGoal } = require('./util')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -1237,8 +1238,7 @@ function craft(bot, ctx, target, state) {
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
         if (key !== ctx.lastGoalKey) {
-          bot.pathfinder.setGoal(new goals.GoalNear(tablePos.x, tablePos.y, tablePos.z, 3), false)
-          ctx.lastGoalKey = key
+          issueGoal(bot, ctx, new goals.GoalNear(tablePos.x, tablePos.y, tablePos.z, 3), key, false)
         }
         return // walk into reach, then craft on a later tick
       }

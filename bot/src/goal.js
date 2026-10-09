@@ -208,7 +208,7 @@ const MENU = {
       // on later cells deadlocks a fresh site (xoj). Skipped cells are
       // given up and do not gate.
       try {
-        const next = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
+        const next = buildMod.nextCellIdx(bot, home, ctx.buildSkip, ctx) // build's own pick (6x7.21)
         if (next < 0) return false
         const cell = buildMod.blueprintFor(home)[next]
         // 45j: an unloaded site (respawn far away) reads every cell as
@@ -1752,7 +1752,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       try {
         const home = ctx && ctx.home
         if (home && home.site) {
-          const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip)
+          const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip, ctx) // build's own pick (6x7.21)
           // Unloaded next cell (45j): only the plank batch gates, as in feasible.
           if (ni >= 0) kind = buildMod.cellLoaded(bot, home, buildMod.blueprintFor(home)[ni]) ? buildMod.blueprintFor(home)[ni].kind : 'unloaded'
         }

@@ -1048,17 +1048,11 @@
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
       "src/behaviours/castlefetch.js",
-      "src/behaviours/craft.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
-      "src/behaviours/deliver.js",
-      "src/behaviours/equip.js",
       "src/behaviours/explore.js",
-      "src/behaviours/fight.js",
       "src/behaviours/flat.js",
-      "src/behaviours/follow.js",
       "src/behaviours/forage.js",
-      "src/behaviours/furnace.js",
       "src/behaviours/gather.js",
       "src/behaviours/gear.js",
       "src/behaviours/gocastle.js",
@@ -1066,17 +1060,15 @@
       "src/behaviours/lead.js",
       "src/behaviours/light.js",
       "src/behaviours/recover.js",
-      "src/behaviours/retreat.js",
       "src/behaviours/roam.js",
-      "src/behaviours/sitebed.js",
       "src/behaviours/stockpile.js",
       "src/behaviours/util.js",
       "src/index.js",
       "src/orders.js",
-      "src/reflexes.js",
-      "src/stuck.js"
+      "src/reflexes.js"
     ],
-    "owner": "src/behaviours/home.js"
+    "owner": "src/behaviours/home.js",
+    "note": "setGoal dedup key, protocol field (oqul.8). Issue: util.issueGoal(bot, ctx, goal, key, dynamic) is the literal setGoal(goal, dynamic)+key pair (dynamic per caller, never defaulted). Allowed hand-written paths: clear (util.clearGoal and inline ctx.lastGoalKey = \"\" / null after setGoal(null), the next issue replans); idle-stop (index.js stopOnce and lead.js park: stop-vs-null rule, key = idle); park key (stay / home-door / dig-in-walk / deep-return-up / light:furnace: a sentinel, no fresh goal); invalidate-to-reissue (key = \"\" with the goal still live, forcing the next issue; flat/forage/home/gocastle); try-wrapped issue (key written even when setGoal throws, or with prevKey/side fields between: stockpile, beds, flat, deep, explore, gather, roam, castlefetch, craftany, gear); body.js claimBody drops the executor without touching the key; reflexes.js re-issues on key !== lastGoalKey || !moving. A single writer is a separate bead after the live oracle."
   },
   "lastHostileSnap": {
     "writers": [
