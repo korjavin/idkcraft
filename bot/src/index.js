@@ -827,7 +827,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       let graceFresh = false
       try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
       if (!graceFresh) { ctx.nightGraceLogged = false; ctx.nightGraceFallbackLogged = false }
-      const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter &&
+      // vmzq.58 (revmux 01): a shelter release latches while a hostile
+      // fact stands, so the grace hold cannot re-arm the open hold on the
+      // next tick and flip fight/shelter every other tick.
+      if (typeof state.hostile_distance !== 'number') ctx.shelterReleased = false
+      const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter && !ctx.shelterReleased &&
         decision.action === 'fight' && !target && graceFresh
       if (nightGraceHold && !ctx.nightGraceLogged) {
         console.log('night-grace: holding fight preemption, sheltering')
@@ -884,6 +888,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (open) {
           console.log(`shelter release: hostile at ${hd.toFixed(1)}, hold not enclosed, fighting`)
           ctx.inShelter = false
+          ctx.shelterReleased = true
         }
       }
       if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
@@ -1557,7 +1562,7 @@ function handleRespawn(bot, ticker) {
   // death re-stamps; the stamp goes stale on its own after the window.
   try {
     const ctx = bot && bot._tickerCtx
-    if (ctx) ctx.lastRespawnAt = Date.now()
+    if (ctx) { ctx.lastRespawnAt = Date.now(); ctx.shelterReleased = false } // vmzq.58: a death drops the release latch
   } catch (_) { /* stamp best-effort */ }
 }
 

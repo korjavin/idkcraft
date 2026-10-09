@@ -989,7 +989,7 @@ const SHELTER_PREPILLAR_MS = 8000
 function shelterOpen(ctx) {
   const st = ctx && ctx.shelter
   if (!st || ctx.step !== 'shelter') return false
-  if (st.dugIn || st.perched) return false
+  if (st.dugIn || st.perched || st.pit) return false
   if (st.dig && ((st.dig.digs | 0) > 0 || st.descended)) return false
   return true
 }
@@ -1051,6 +1051,7 @@ function shelter(bot, ctx, target, state) {
       st.offCastle = false // ... and re-earns its one off-footprint walk
       st.wetDeadline = false // vmzq.58: the new spot earns its own swim
       st.wetSince = null
+      st.pit = false
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1244,6 +1245,9 @@ function shelter(bot, ctx, target, state) {
       // The walk reuses digInRun's walk (arrival digs, the anchor
       // follows); walked is set so arrival refuses into the hold instead
       // of walking again.
+      // vmzq.58 (revmux 01): a failed dig that left the body down a pit is
+      // still a committed descent — the fight release never climbs out.
+      st.pit = dugDown > 0
       if (r !== 'done') {
         if (r === 'failed:protected' && !st.offCastle && castleGroundHere(bot, ctx)) {
           let spot = null

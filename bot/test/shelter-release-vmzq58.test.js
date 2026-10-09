@@ -146,7 +146,48 @@ describe('vmzq.58 shelter hold: fight release at melee range', () => {
     } finally { ticker.destroy() }
   })
 
+  it('post-respawn night grace: a released open hold fights 3 ticks in a row (no fight/shelter flip)', async () => {
+    const { ctx, ticker } = await heldTicker({ pillared: true })
+    ctx.lastRespawnAt = Date.now() + 30000 // fresh grace (future-dated: suite stalls cannot flake it)
+    try {
+      for (let t = 0; t < 3; t++) {
+        const r = await ticker.tick()
+        await flush()
+        assert.equal(r.decision.action, 'fight', `tick ${t} fights`)
+      }
+      assert.equal(fightRan, 3)
+      assert.equal(lines.filter((l) => l.startsWith('shelter release')).length, 1, 'released once, latched')
+    } finally { ticker.destroy() }
+  })
+
+  it('ground hold + zombie at 5.5 right after a hit: releases to fight', async () => {
+    const { bot, ctx, ticker } = await heldTicker({ pillared: true })
+    bot.entities[1] = zombie(1, 6.0)
+    ctx.lastHurtAt = Date.now() + 30000 // fresh hit
+    try {
+      const r = await ticker.tick()
+      await flush()
+      assert.equal(r.decision.action, 'fight')
+      assert.equal(fightRan, 1)
+    } finally { ticker.destroy() }
+  })
+
+  it('ground hold + hit + written-off (unreachable) zombie at 5.5: keeps the hold', async () => {
+    const { bot, ctx, ticker } = await heldTicker({ pillared: true })
+    bot.entities[1] = zombie(1, 6.0)
+    ctx.lastHurtAt = Date.now() + 30000
+    ctx.fightGivenUpId = 1
+    try {
+      const r = await ticker.tick()
+      await flush()
+      assert.equal(r.decision.action, 'idle')
+      assert.equal(fightRan, 0)
+      assert.equal(ctx.inShelter, true)
+    } finally { ticker.destroy() }
+  })
+
   it('shelterOpen: committed dig keeps the hold, walk and ground hold are open', () => {
+    assert.equal(home.shelterOpen({ step: 'shelter', shelter: { pillared: true, pit: true } }), false, 'failed dig left down a pit: committed')
     const c = (shelter) => ({ step: 'shelter', shelter })
     assert.equal(home.shelterOpen(c({ pillared: true })), true)
     assert.equal(home.shelterOpen(c({ dig: { digs: 0, walk: { x: 1, y: 64, z: 1 } } })), true)
