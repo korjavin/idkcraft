@@ -21,6 +21,7 @@ const flatMod = require('./behaviours/flat')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
 const taskMod = require('./task')
+const residence = require('./residence')
 
 // How long a recover outcome stays reportable in status (01 body-2): the
 // stamp never clears, so without a window every status would cite it.
@@ -34,7 +35,7 @@ function clipStatus(line) {
 
 function createOrders(box) {
   const { bot, ctx, greet, clearStuck, resetNightStep, startWork, stopOnce, doSetBrain } = box
-  return {
+  const orders = {
     setFollow: (name) => {
       clearPendingSearch(ctx)
       clearStuck()
@@ -668,8 +669,44 @@ function createOrders(box) {
       }
       if (wrong.length > 0) lines.push(wrong.join('; '))
       for (const l of lines) bot.chat(clipStatus(l))
-    }
+    },
+    // Residence switch (g0z.29): every tick (and once after the memory
+    // restore) — idempotent, so the restart migration of a castle completed
+    // by an earlier image, the completion tick and a forget all land here.
+    // Waits while a place/sleep/chest/window op is in flight; the next free
+    // tick switches. Returns true when it switched.
+    selectResidence: () => {
+      const want = residence.wanted(ctx)
+      if (want === undefined) return false
+      const busy = goal.opInFlight(ctx) || ctx.placeInFlight || ctx.sleepInFlight || ctx.bedsWithdrawInFlight ||
+        (ctx.bring && ctx.bring.chestInFlight) || bot.isSleeping
+      if (busy) return false
+      const label = (h) => (h && h.site ? `${h.kind || (h.v === 2 ? 'house' : 'hut')}@${h.site.x},${h.site.y},${h.site.z}` : 'none')
+      console.log(`residence ${label(ctx.home)} -> ${label(want)}`)
+      if (ctx.home && ctx.home.kind !== 'castle') ctx.hutHome = ctx.home
+      if (want && want.kind === 'castle' && ctx.castle) ctx.castle.residence = true // saved by setHome below
+      // Home-keyed caches: the night step (gohome/stay/shelter), beds,
+      // light and stockpile scratch, home-text fail holds; setHome does
+      // the build skips/fails, the meet, the task goal and the save.
+      resetNightStep()
+      const noWool = ctx.beds && ctx.beds.noWool
+      ctx.beds = noWool ? { noWool } : null
+      ctx.lightSkip = []; ctx.lightSkipKey = null; ctx.lightFails = 0; ctx.lightFailIdx = -1; ctx.lightGoalIdx = -1; ctx.lightLineDone = false; ctx.lightPlaced = 0
+      ctx.stockpileHomeLatch = null; ctx.stockpileFar = null; ctx.chestFull = false; ctx.chestFullAt = null; ctx.chestErrorAt = null; ctx.chestNoSpotAt = null
+      try {
+        if (ctx.stepFail && typeof ctx.stepFail === 'object') {
+          for (const k of HOME_STEPS) delete ctx.stepFail[k]
+        }
+      } catch (_) { /* holds best-effort */ }
+      orders.setHome(want, { fresh: true })
+      return true
+    },
   }
+  return orders
 }
+
+// Steps whose fail holds name the home (goal.js stepFail): a new residence
+// re-earns them.
+const HOME_STEPS = ['stay', 'gohome', 'shelter', 'build', 'beds', 'light', 'stockpile', 'craft']
 
 module.exports = { createOrders }
