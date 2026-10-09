@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
+const { stepDone, stepFailed, stepGen } = require('../step')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -57,8 +58,10 @@ function totals(bot) {
   return { logs: countItems(bot, (n) => n.endsWith('_log')), planks: countItems(bot, (n) => n.endsWith('_planks')) }
 }
 
-function fail(ctx, item, err) {
-  ctx.stepStatus = `failed:craft-${item}`
+// gen (oqul.7): the step identity captured at the op's start; a late
+// failure of a step that is gone drops instead of failing the new one.
+function fail(ctx, item, err, gen) {
+  if (!stepFailed(ctx, `craft-${item}`, gen)) return // stale: step.js logged the drop
   try {
     console.error(`craft failed item=${item} error=${err && err.message ? err.message : err}`)
   } catch (_) { /* logging best-effort */ }
@@ -1252,7 +1255,7 @@ function craft(bot, ctx, target, state) {
       fail(ctx, `${first}_planks`, new Error('no planks recipe for this wood'))
       return
     }
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     return
   }
   if (typeof bot.craft !== 'function') {
@@ -1260,6 +1263,7 @@ function craft(bot, ctx, target, state) {
     return
   }
   ctx.craftInFlight = true
+  const gen = stepGen(ctx)
   const run = async () => {
     for (const o of (ops.length > 0 ? ops : [op])) {
       // The planks batch sizes from the model at selection; a ghost grid entry
@@ -1280,7 +1284,7 @@ function craft(bot, ctx, target, state) {
         }
       } catch (err) {
         ctx.craftInFlight = false
-        fail(ctx, o.item, err)
+        fail(ctx, o.item, err, gen)
         return
       }
       const t = totals(bot)
