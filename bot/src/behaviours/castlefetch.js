@@ -32,7 +32,9 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // target could never be met from the world (castle BATCH_OF.frame matches).
 // pane (g0z.31): CHEST-ONLY — panes, else glass crafted 6 -> 16; no sand
 // hunt, no smelt: an empty chest fails the leg into the retry hold.
-// banner (g0z.32): CHEST-ONLY, never crafted (the wool belongs to the beds).
+// banner (g0z.32, g0z.35): chest first, then self-sourced (owner
+// 2026-10-09) — 6 wool + 1 stick per banner, the wool through a self bring
+// order (bannerTick), but only once the beds stand (beds first).
 const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
@@ -40,7 +42,8 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1 }
+const BANNER_WOOL = 6 // one colour per banner (table recipe)
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
 const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
@@ -115,6 +118,7 @@ function itemNames(bot, test) {
 
 const isDoor = (n) => n.endsWith('_door') && n !== 'iron_door'
 const isFence = (n) => n.endsWith('_fence') && n !== 'nether_brick_fence'
+const isBanner = (n) => n.endsWith('_banner') && !n.endsWith('_wall_banner')
 
 // What the chest yields for a kind, finished items first; planks also
 // take logs (converted by the craft source next tick).
@@ -127,7 +131,7 @@ function chestNames(bot, kind) {
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest']]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass']]
-  if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n))]
+  if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n)), itemNames(bot, (n) => n.endsWith('_wool'))]
   return []
 }
 
@@ -138,6 +142,7 @@ function craftNames(bot, kind) {
   if (kind === 'torch') return ['torch']
   if (kind === 'chest') return ['chest'] // 8 planks at a table (craftany crafts planks from logs)
   if (kind === 'pane') return ['glass_pane'] // 6 glass -> 16 at a table
+  if (kind === 'banner') return itemNames(bot, isBanner) // 6 wool of one colour + 1 stick at a table
   return []
 }
 
@@ -325,8 +330,11 @@ function chestTick(bot, ctx, f, d) {
       // glass: six glass are sixteen panes (one craft).
       const logs = d.kind === 'planks' && names.some((n) => n.endsWith('_log'))
       const glass = d.kind === 'pane' && names[0] === 'glass'
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : need, at)
-      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : 1)
+      // Banners' is wool (g0z.35): six per banner, only once the beds stand.
+      const wool = d.kind === 'banner' && names[0].endsWith('_wool')
+      if (wool && !bannerSelf(bot, ctx)) break
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : 1)
     }
   }, CHEST_TIMEOUT_MS)
   return true
@@ -336,6 +344,7 @@ function chestTick(bot, ctx, f, d) {
 function craftTick(bot, ctx, f, d) {
   const names = craftNames(bot, d.kind)
   if (names.length === 0 || f.craftOut) return false
+  if (d.kind === 'banner' && !bannerSelf(bot, ctx)) return false // beds first: the wool is theirs
   if (d.kind === 'torch' && countItems(bot, (n) => n === 'coal' || n === 'charcoal') <= require('./light').COAL_RESERVE) return false // smelting's coal floor
   let r = null
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
@@ -343,6 +352,75 @@ function craftTick(bot, ctx, f, d) {
   if (r && r.done) return true // re-check the target next tick
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false
+}
+
+// Beds first (g0z.35): the banner self-source (hunt, chest wool, craft)
+// runs only when the residence owes no bed — STEP_ORDER ranks castlefetch
+// above beds, so the gate lives here, not in the arbiter.
+function bannerSelf(bot, ctx) {
+  try { return require('./beds').bedsFact(bot, ctx && ctx.home) === 'both' } catch (_) { return false }
+}
+
+// Self-source seam (g0z.35, owner 2026-10-09: the castle chest is only the
+// first source). A leg opens a self bring order (the beds woolTick shape):
+// bring's ticker runs it over every goal step, caps the search to the
+// anchor, cancels at dusk and keeps the goods in the pack. The leg keeps
+// the order on f.hunt and returns while ctx.bring is set (castleFetchGo
+// stays true on the short demand, so the arbiter keeps the step); once
+// ctx.bring is null again selfOrderBack reads it back.
+function selfOrder(ctx, f, o) {
+  o.self = 'castle'
+  f.hunt = o
+  ctx.bring = o
+}
+
+// null when no order was opened; else { exhausted } (refuseExhausted's
+// searchLegs: the whole budget searched, timed out, or capped).
+function selfOrderBack(f) {
+  const o = f.hunt
+  if (!o) return null
+  f.hunt = null
+  let exhausted = false
+  try {
+    const s = o.searchLegs || {}
+    const budget = (require('./bring').SEARCH_BUDGET || {}).legs || 24
+    exhausted = (s.legs || 0) >= budget || !!s.timedOut || !!s.capped
+  } catch (_) { /* unreadable order: not exhausted */ }
+  return { exhausted }
+}
+
+// Banner world source (g0z.35): wool through a self hunt, then craftTick.
+// One sheep latch for every wool hunt in the bot (beds' noWool, 9qt0).
+// ponytail: no reopen counter — the 5-min failed-leg hold is the bounded retry.
+function bannerTick(bot, ctx, f, d) {
+  if (ctx.bring) return // the ticker runs the hunt (ours or foreign)
+  const bedsMod = require('./beds')
+  const dry = (why) => { ctx.castleFetchDry = 'banner'; finish(bot, ctx, `failed:castlefetch-${why}`) }
+  const top = require('./wool').topWoolColor(bot)
+  const held = top ? top.count : 0
+  const back = selfOrderBack(f)
+  if (back) {
+    if (back.exhausted) bedsMod.noteNoWool(ctx.beds && typeof ctx.beds === 'object' ? ctx.beds : (ctx.beds = {}))
+    if (held >= BANNER_WOOL) { f.craftOut = false; return } // craft next tick
+    dry('no-wool') // short, cancelled (dusk) or refused
+    return
+  }
+  if (held >= BANNER_WOOL) { dry('craft-banner'); return } // wool on hand, craft failed (table, reach): never a second hunt
+  const t = bot && bot.time && bot.time.timeOfDay
+  if (typeof t === 'number' && t >= 12000) { dry('no-wool'); return } // day-only: bring would cancel at once
+  if (bedsMod.sheepLatched(ctx, bot)) { dry('no-wool'); return }
+  const bringMod = require('./bring')
+  // Absolute pack target: bring's have already counts the held top colour,
+  // so the hunt tops it up (did.3) — never subtract it here (revmux 01).
+  const want = BANNER_WOOL * Math.max(1, Math.ceil(d.short))
+  const base = { kind: 'item', name: 'wool', names: bedsMod.WOOL16.slice(), want, by: null, drop: null, have: 0 }
+  let o = null
+  try {
+    o = countItems(bot, (n) => n.endsWith('_wool')) > 0 ? bringMod.toWoolHunt(bot, base) : { ...base, phase: bringMod.openPhase(ctx), announced: false }
+  } catch (_) { o = null }
+  if (!o) { dry('no-wool'); return }
+  try { console.log(`castlefetch banner: hunting ${want} wool`) } catch (_) { /* log best-effort */ }
+  selfOrder(ctx, f, o)
 }
 
 // Exposed stone only (revmux 01): air above, or air on a side — surface
@@ -1085,6 +1163,7 @@ function castlefetch(bot, ctx, target, state) {
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
   }
+  if (d.kind === 'banner' && bannerSelf(bot, ctx)) { bannerTick(bot, ctx, f, d); return }
   ctx.castleFetchDry = d.kind // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, pane/banner without chest stock
 }
@@ -1109,6 +1188,8 @@ module.exports.castleChest = castleChest
 module.exports.onSite = onSite
 module.exports.deps = deps
 module.exports.FETCH = FETCH
+module.exports.selfOrder = selfOrder
+module.exports.selfOrderBack = selfOrderBack
 module.exports.acceptStone = acceptStone
 module.exports.FIND_COUNT = FIND_COUNT
 module.exports.STONE_BELOW = STONE_BELOW

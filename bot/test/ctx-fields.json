@@ -33,6 +33,7 @@
   "beds": {
     "writers": [
       "src/behaviours/beds.js",
+      "src/behaviours/castlefetch.js",
       "src/memory.js",
       "src/orders.js"
     ],
@@ -138,6 +139,7 @@
     "writers": [
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
+      "src/behaviours/castlefetch.js",
       "src/chat.js",
       "src/index.js",
       "src/orders.js",
