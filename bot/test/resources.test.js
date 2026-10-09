@@ -75,6 +75,45 @@ describe('resource memory', () => {
     assert.equal(resources.count(ctx), 2)
     assert.equal(resources.nearest(ctx, pos(0, 64, 0), ['oak_log']).name, 'oak_log')
   })
+
+  it('scan notes coal_ore next to iron_ore, coal in its own capped scan (ipn.14)', () => {
+    const spots = [
+      { p: pos(10, 60, 0), id: 1 },
+      { p: pos(3, 64, 0), id: 3 },
+    ]
+    const names = { '10,60,0': 'iron_ore', '3,64,0': 'coal_ore' }
+    const calls = []
+    const bot = {
+      entity: { position: pos(0, 64, 0) },
+      registry: { blocksByName: { iron_ore: { id: 1 }, oak_log: { id: 2 }, coal_ore: { id: 3 } } },
+      findBlocks: (opts) => {
+        calls.push(opts)
+        return spots.filter((s) => opts.matching.includes(s.id)).map((s) => s.p)
+      },
+      blockAt: (p) => ({ name: names[`${p.x},${p.y},${p.z}`] }),
+    }
+    const ctx = {}
+    const r = resources.scan(bot, ctx, { radius: 48, now: 5000 })
+    assert.equal(r.added, 2)
+    assert.equal(resources.nearest(ctx, pos(0, 64, 0), ['coal_ore']).name, 'coal_ore')
+    assert.equal(resources.nearest(ctx, pos(0, 64, 0), ['iron_ore']).name, 'iron_ore')
+    // Normal path pinned: the ore+log scan is unchanged and never carries coal.
+    assert.deepEqual(calls[0].matching, [1, 2])
+    assert.equal(calls[0].count, 64)
+    assert.deepEqual(calls[1].matching, [3])
+    assert.equal(calls[1].count, 16)
+  })
+
+  it('a throwing coal scan keeps the ore results (ipn.14)', () => {
+    let n = 0
+    const bot = {
+      registry: { blocksByName: { iron_ore: { id: 1 }, coal_ore: { id: 3 } } },
+      findBlocks: () => { if (n++ > 0) throw new Error('busy'); return [pos(10, 60, 0)] },
+      blockAt: () => ({ name: 'iron_ore' }),
+    }
+    const ctx = {}
+    assert.equal(resources.scan(bot, ctx, { now: 5000 }).added, 1)
+  })
 })
 
 describe('resource memory edges (idkcraft-pun)', () => {

@@ -1521,3 +1521,64 @@ describe('gear latch preference (idkcraft-ipn.9)', () => {
     assert.equal(forage.gearWantCell(bot, ctx, bp, 'want-ore').name, 'iron_ore')
   })
 })
+
+describe('below-feet over solid digs (idkcraft-ipn.18, bring atl.20)', () => {
+  // Bot stands ON the ore at 40,60,0 (feet 40,61,0); the mock world reads
+  // stone everywhere unset, so the feet plane has 4 walls (below-feet trap).
+  function standingBot(below, name = 'iron_ore') {
+    const bot = mockBot()
+    bot.inv.push({ name: 'stone_pickaxe', count: 1 })
+    bot.entity = { position: pos(40.5, 61, 0.5), onGround: true }
+    bot.blocks['40,60,0'] = name
+    bot.blocks['30,60,0'] = 'coal_ore'
+    if (below) bot.blocks['40,59,0'] = below
+    bot.blockAt = (p) => {
+      const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z)
+      const n = bot.blocks[`${x},${y},${z}`] || 'stone'
+      return { name: n, position: { x, y, z }, boundingBox: n === 'air' || n === 'water' ? 'empty' : 'block' }
+    }
+    const ctx = memCtx([{ x: 40, y: 60, z: 0, name }, { x: 30, y: 60, z: 0, name: 'coal_ore' }])
+    ctx.forage = {
+      phase: 'dig', target: { kind: 'ore', name, pos: { x: 40, y: 60, z: 0 }, drop: 'raw_iron', want: 8 },
+      stalls: 0, streak: 0, lastBotPos: null, startInv: {}, drops: {}, announced: true,
+    }
+    return { bot, ctx }
+  }
+  function quiet(fn) {
+    const lines = []
+    const orig = console.log
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    try { fn() } finally { console.log = orig }
+    return lines
+  }
+
+  it('solid floor under the ore: digs, no strike, atl.20 log', async () => {
+    const { bot, ctx } = standingBot(null) // stone below
+    const lines = quiet(() => forage(bot, ctx, null, {}))
+    await tick()
+    await tick()
+    assert.equal(bot.calls.digs, 1)
+    assert.ok(!(ctx.forageSkip && ctx.forageSkip.size), 'no strike')
+    assert.equal(ctx.forage.streak, 0)
+    assert.ok(lines.some((l) => l.includes('onto solid — digging')), lines.join('\n'))
+  })
+
+  for (const below of ['air', 'water']) {
+    it(`${below} under the ore: strike as before`, () => {
+      const { bot, ctx } = standingBot(below)
+      const lines = quiet(() => forage(bot, ctx, null, {}))
+      assert.equal(bot.calls.digs, 0)
+      assert.ok(ctx.forageSkip && ctx.forageSkip.has('40,60,0'), 'struck')
+      assert.equal(resources.count(ctx), 2, 'memory kept')
+      assert.ok(lines.some((l) => l.includes('(below-feet)')), lines.join('\n'))
+    })
+  }
+
+  it('protected cell over solid: forget as before, no dig', () => {
+    const { bot, ctx } = standingBot(null, 'red_bed')
+    quiet(() => forage(bot, ctx, null, {}))
+    assert.equal(bot.calls.digs, 0)
+    assert.ok(!(ctx.forageSkip && ctx.forageSkip.has('40,60,0')), 'no strike')
+    assert.equal(resources.count(ctx), 1, 'forgotten')
+  })
+})
