@@ -144,18 +144,21 @@ function loadSpots() {
     // order instead of a follow walk. order/expect/fail are required there
     // and rejected on follow spots (dead data in a gate corpus confuses).
     const mode = s.mode == null ? 'follow' : String(s.mode)
-    if (mode !== 'follow' && mode !== 'order' && mode !== 'shelter') throw new Error(`spots[${i}]: bad mode (want follow|order|shelter)`)
+    if (!['follow', 'order', 'shelter', 'night'].includes(mode)) throw new Error(`spots[${i}]: bad mode (want follow|order|shelter|night)`)
     // Shelter spots (idkcraft-ed88): night, work mode, a built home `home`
     // far past the night walk range (injected as ctx.home, never raised —
     // its chunks stay unloaded), the guide parked out of sight on `goal`.
+    // Night spots (idkcraft-6x7.17): the shelter setup (home injected,
+    // night, 'go work') at a rig-raised house — home IS the house — judged
+    // by order markers (sleeping in my bed).
     let home = null
-    if (mode === 'shelter') {
+    if (mode === 'shelter' || mode === 'night') {
       if (!Array.isArray(s.home) || s.home.length !== 3 || !s.home.every(Number.isInteger)) {
         throw new Error(`spots[${i}]: shelter spots need an integer home [x, y, z] site`)
       }
       home = { x: s.home[0], y: s.home[1], z: s.home[2] }
     } else if (s.home != null) {
-      throw new Error(`spots[${i}]: home needs mode=shelter`)
+      throw new Error(`spots[${i}]: home needs mode=shelter|night`)
     }
     // Close budget (idkcraft-hoy7): a shelter spot that swims before it digs
     // (SHELTER-WATER) closes 18-24 s, past the 15 s stand-and-dig budget.
@@ -171,11 +174,13 @@ function loadSpots() {
     let order = null
     let expect = null
     let fail = null
-    if (mode === 'order') {
-      if (typeof s.order !== 'string' || !s.order.trim() || s.order.length > 256) {
+    if (mode === 'order' || mode === 'night') {
+      if (mode === 'night') {
+        if (s.order != null) throw new Error(`spots[${i}]: night spots chat 'go work', no order`)
+      } else if (typeof s.order !== 'string' || !s.order.trim() || s.order.length > 256) {
         throw new Error(`spots[${i}]: order spots need a chat order (<=256 chars)`)
       }
-      order = s.order
+      if (mode === 'order') order = s.order
       for (const [k, v] of [['expect', s.expect], ['fail', s.fail]]) {
         if (!Array.isArray(v) || v.length === 0 || v.length > 16) {
           throw new Error(`spots[${i}]: order spots need non-empty ${k} markers (<=16)`)
@@ -187,7 +192,7 @@ function loadSpots() {
       expect = s.expect.slice()
       fail = s.fail.slice()
     } else if (s.order != null || s.expect != null || s.fail != null) {
-      throw new Error(`spots[${i}]: order/expect/fail need mode=order`)
+      throw new Error(`spots[${i}]: order/expect/fail need mode=order|night`)
     }
     // Rig-built home (idkcraft-6x7.8): integer v2 site raised in the
     // disposable world at setup, so a come-home spot has a house to walk
@@ -198,6 +203,9 @@ function loadSpots() {
         throw new Error(`spots[${i}]: bad house (want integer [x, y, z] site)`)
       }
       house = { x: s.house[0], y: s.house[1], z: s.house[2] }
+    }
+    if (mode === 'night' && !(house && house.x === home.x && house.y === home.y && house.z === home.z)) {
+      throw new Error(`spots[${i}]: night spots need house == home (one site)`)
     }
     // Rig-built arena (idkcraft-jsf.7): rcon commands run after both tps
     // (chunks loaded) and before the kit, every trial, on the disposable
@@ -212,6 +220,20 @@ function loadSpots() {
         }
       }
       prep = s.prep.slice()
+    }
+    // After-house edits (idkcraft-6x7.17): prep runs BEFORE raiseHouse,
+    // whose air fill would erase a prep bed or bump — 'after' runs past it.
+    // Validated like prep; needs a house.
+    let after = []
+    if (s.after != null) {
+      if (!house) throw new Error(`spots[${i}]: after needs a house`)
+      if (!Array.isArray(s.after) || s.after.length > 32) throw new Error(`spots[${i}]: bad after (want <=32 commands)`)
+      for (const c of s.after) {
+        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock) /.test(c)) {
+          throw new Error(`spots[${i}]: after allows fill/setblock only`)
+        }
+      }
+      after = s.after.slice()
     }
     // Danger memory (idkcraft-zj2p): [x, y, z, r] marks seeded into the
     // follower's ctx.danger at the window cut (a water death the day
@@ -256,7 +278,7 @@ function loadSpots() {
       }
       verifyBuild = true
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, danger, home, closeSecs, kit, verifyBuild }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild }
   })
 }
 
@@ -289,7 +311,7 @@ function matchOrderLine(line, expect, fail) {
 // terminal verdict, null to keep the window open.
 function windowReached(mode, useGoal, d, gd, orderVerdict) {
   if (mode === 'shelter') return null // runs the full window: alive at the end is part of the verdict
-  if (mode === 'order') {
+  if (mode === 'order' || mode === 'night') {
     if (orderVerdict === 'expect') return true
     if (orderVerdict === 'fail') return false
     return null
@@ -607,7 +629,7 @@ async function main() {
     let gx; let gz; let gy
     // Shelter spots park it on the goal too: far out of entity range, so
     // the follower works alone (a visible player would be its target).
-    if (s.mode === 'order' || s.mode === 'shelter') {
+    if (s.mode === 'order' || s.mode === 'shelter' || s.mode === 'night') {
       gx = s.goal[0]; gz = s.goal[2]; gy = s.goal[1] + 1
     } else {
       let dx = s.goal[0] - s.spawn[0]; let dz = s.goal[2] - s.spawn[2]
@@ -657,6 +679,7 @@ async function main() {
       // raiseHouse clears the house volume: re-seat the follower after it
       // (a roof spawn would otherwise fall through its own air fill).
       await rcon(`tp ${FOLLOWER} ${s.spawn[0]} ${s.spawn[1]} ${s.spawn[2]}`)
+      for (const cmd of s.after) await rcon(cmd)
     }
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
@@ -731,7 +754,7 @@ async function main() {
     // range, then 'go work' through the real chat path (revokes the follow;
     // the corpus keeps this spot after every follow spot). Set before the
     // unpause so no tick walks toward the guide first.
-    if (s.mode === 'shelter') {
+    if (s.mode === 'shelter' || s.mode === 'night') {
       const h = s.home
       if (c) {
         c.home = {
@@ -776,7 +799,7 @@ async function main() {
     let scannedChats = 0
     let closedAt = null // shelter spots: seconds into the window the pit first read enclosed
     const scanOrderChat = () => {
-      if (s.mode !== 'order' || orderVerdict) return
+      if ((s.mode !== 'order' && s.mode !== 'night') || orderVerdict) return
       for (; scannedChats < chats.length; scannedChats++) {
         const v = matchOrderLine(chats[scannedChats], s.expect, s.fail)
         if (v) { orderVerdict = v; orderLine = String(chats[scannedChats]); break }
@@ -818,6 +841,7 @@ async function main() {
       reached = shelterReached(closedAt, died, s.closeSecs)
       await rcon('time set 1000') // later spots (if any) walk in daylight
     }
+    if (s.mode === 'night') await rcon('time set 1000') // day wakes a sleeper; the next spot walks in daylight
     // Honest build verdict (idkcraft-vmzq.1): on a verifyBuild spot the
     // done marker alone is not the verdict — the world-read counts.
     let buildNote = null
@@ -834,7 +858,7 @@ async function main() {
     // Order spots report the terminal line (truncated): TIMEOUT vs FAIL
     // tells a hung order from a refused one at a glance. Death keeps its
     // note (dying is behavior, judged like any unreached row).
-    const onote = s.mode === 'order'
+    const onote = (s.mode === 'order' || s.mode === 'night')
       ? (orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
       : s.mode === 'shelter'
         ? (closedAt === null ? `OPEN at ${(() => { try { return follower.entity.position.floored().toArray().join(' ') } catch (_) { return '?' } })()}` : `CLOSED ${closedAt.toFixed(0)}s`)
