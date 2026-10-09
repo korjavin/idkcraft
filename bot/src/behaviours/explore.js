@@ -13,6 +13,7 @@
 // A no-displacement stall fails the target; body wedges are stuck.js's.
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const stuck = require('../stuck')
 const resources = require('../resources')
 const danger = require('../danger')
@@ -38,6 +39,8 @@ const TASK_SEARCH_RADIUS = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const CHAT_MS = 30000 // departure chat at most this often
+const CLIMB_HOLD_MS = 5 * 60 * 1000 // failed climb: no re-raise at that spot (atl.23)
+const CLIMB_HOLD_DIST = 8 // feet from the failed climb's spot
 
 const DIRS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
 
@@ -142,7 +145,29 @@ function pickTarget(visited, anchor, maxRadius, banned) {
   return null
 }
 
-
+// Target height for the stuck escape (atl.23): the first standable cell
+// from the top of a 32-block window above the bot down, in the target's
+// column. A window that reads solid at its top (surface higher) or no
+// solid at all (unloaded) falls back to the bot's y. Pass-through blocks
+// (grass, flowers, snow layer) and tree crowns read as air: a level
+// forest leg must not ask for pillar_up (revmux 01).
+const COLUMN_WINDOW = 32
+function columnTop(bot, t, fallback) {
+  try {
+    const top = Math.floor(fallback) + COLUMN_WINDOW
+    let sawAir = false
+    for (let y = top; y >= top - 2 * COLUMN_WINDOW; y--) {
+      const b = bot.blockAt(new Vec3(t.x, y, t.z))
+      if (!b) return fallback
+      const n = String(b.name)
+      const air = (b.boundingBox === 'empty' && n !== 'water' && n !== 'lava') || n === 'air' || n === 'cave_air' || n === 'void_air' ||
+        n.endsWith('_leaves') || n.endsWith('_log')
+      if (air) sawAir = true
+      else return sawAir ? y + 1 : fallback
+    }
+  } catch (_) { /* unreadable: fallback */ }
+  return fallback
+}
 
 // Shared arrival: scan the new chunks into memory, consume the point,
 // report done with the one wedge line.
@@ -171,6 +196,51 @@ function explore(bot, ctx, target, state) {
     return
   }
   e.visited.add(chunkOf(bp.x, bp.z))
+
+  // Depth floor (atl.23): GoalXZ has no height, so the cheapest XZ path
+  // ran into caves (prod: 3 deaths at y -50 in 7 min). Under the floor the
+  // leg drops and the bot climbs; the spiral resumes at bp.y >= floor.
+  // ponytail: GoalY(floor) may stop in a cave at floor height; the
+  // underground abort is vmzq.59's.
+  // A climb that failed holds at its spot (revmux 02): within
+  // CLIMB_HOLD_DIST of it and CLIMB_HOLD_MS the spiral walks as on master
+  // (its legs fail and consume points) instead of re-raising one escape
+  // per lap at the same block.
+  // ponytail: a bot pinned at one spot still re-raises one climb escape
+  // per CLIMB_HOLD_MS; make the per-spot hold sticky if prod shows it.
+  const floor = resources.surfaceFloor(ctx, bp)
+  const cf = e.climbFail
+  const held = !!cf && Date.now() - cf.at < CLIMB_HOLD_MS &&
+    Math.hypot(bp.x - cf.x, bp.y - cf.y, bp.z - cf.z) <= CLIMB_HOLD_DIST
+  if (bp.y < floor && !held) {
+    dropDeadLeg(ctx)
+    const climbKey = `explore:climb:${floor}`
+    const y = Math.floor(bp.y)
+    if (climbKey !== ctx.lastGoalKey) {
+      bot.pathfinder.setGoal(new goals.GoalY(floor), false)
+      ctx.lastGoalKey = climbKey
+      e.climbY = y // progress counts from where the body is now (revmux 03)
+      if (e.climbKey !== climbKey) { // a borrow taking the body back keeps the budget (68p)
+        e.climbKey = climbKey
+        e.climbStalls = 0
+        console.log(`explore too deep y=${y} floor=${floor}`)
+      }
+    } else if (y > e.climbY) {
+      e.climbY = y
+      e.climbStalls = 0
+    } else if ((e.climbStalls = (e.climbStalls || 0) + 1) >= STALL_TICKS) {
+      // No height gained: fail the step with one escape whose goal is
+      // above (goalDy>0 offers the climb primitives) — never loop silently.
+      e.climbStalls = 0
+      e.climbKey = null
+      e.climbFail = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
+      clearGoal(bot, ctx)
+      ctx.stepStatus = 'failed:too-deep'
+      stuck.request(bot, ctx, 'explore', { x: Math.floor(bp.x), y: floor, z: Math.floor(bp.z) }, climbKey)
+    }
+    return
+  }
+  e.climbKey = null
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
@@ -247,7 +317,7 @@ function explore(bot, ctx, target, state) {
     // The target is the goal: without it dig_through has no direction and
     // goalDy/goalDist describe a bystander player (revmux round 1). One
     // escape per failed leg (core-1: else a pit cycles targets forever).
-    stuck.request(bot, ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
+    stuck.request(bot, ctx, 'explore', { x: t.x, y: columnTop(bot, t, bp.y), z: t.z }, key)
   }
 }
 

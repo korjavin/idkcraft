@@ -334,6 +334,18 @@
     "owner": "src/behaviours/castle.js",
     "tristate": "null = castle revoked, undefined = not restored from memory yet"
   },
+  "castleBankFull": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "castleBankSaid": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
   "castleBlockedSaid": {
     "writers": [
       "src/behaviours/castle.js"

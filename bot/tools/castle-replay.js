@@ -25,6 +25,8 @@
 //   pad probe pick — controlled pairs set it on both legs), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
 //   RIG_PLANNER (jev|stub, default jev), TYPESAFE_API_KEY (jev bearer).
+//   CASTLE_NIGHT (1 = night mode, set by castle-rig.sh --night: the
+//   wrapper skips the day lock, createNightDriver runs the nights).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
 //   jev without a key).
@@ -51,6 +53,7 @@ const KIT = process.env.CASTLE_KIT || 'empty'
 const TICKRATE = process.env.CASTLE_TICKRATE || '1'
 const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
+const NIGHT = process.env.CASTLE_NIGHT === '1'
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
 // window the follower lands CASTLE_FAR blocks off the half-built site in a
 // 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
@@ -118,7 +121,7 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0 }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null }
 function resetSeen() {
   seen.flips = 0
   seen.steps = {}
@@ -131,6 +134,8 @@ function resetSeen() {
   seen.outcomes = { progress: 0, flat: 0, preempted: 0 }
   seen.timeEvents = []
   seen.timeMaxDrift = 0
+  seen.step = null
+  seen.nightSteps = null
 }
 function hookConsole() {
   console.log = (...a) => {
@@ -152,6 +157,8 @@ function hookConsole() {
 function classify(line, now = Date.now()) {
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
+    seen.step = m[1]
+    if (seen.nightSteps) seen.nightSteps.add(m[1])
     const pair = [m[1], m[2]].sort().join('<>')
     if (pair === 'castle<>castlefetch') seen.flips++
     return
@@ -300,6 +307,55 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
   }
 }
 
+// Night mode (idkcraft-ek69, absorbs the orchestrator's night-driver.sh):
+// castle-rig.sh --night runs the natural cycle; open() at window start sets
+// time 0, each nightfall goes easy + summons phantoms over the follower,
+// each dawn goes peaceful and logs one night verdict (deaths during the
+// night, sheltered = a shelter/rest goal step held at any point of it).
+// Crossings before open() (setup) stay peaceful. cmd runs one rcon command,
+// deaths() reads the follower's death count; never fails the run.
+const NIGHT_SAFE_STEPS = new Set(['shelter', 'rest'])
+function createNightDriver({ cmd, who, deaths, log, phantoms = 2 }) {
+  const nights = []
+  let armed = false
+  let cur = null
+  const run = (c) => Promise.resolve().then(() => cmd(c)).then(
+    (o) => log(`CASTLE-RIG night-rcon [${c}]: ${String(o).trim().split('\n')[0]}`),
+    (e) => log(`CASTLE-RIG night-rcon FAILED [${c}]: ${e && e.message ? e.message : e}`))
+  const close = (partial) => {
+    if (!cur) return null
+    const steps = [...cur.steps]
+    const n = { night: nights.length + 1, deaths: deaths() - cur.d0, sheltered: steps.some((s) => NIGHT_SAFE_STEPS.has(s)), steps, partial }
+    nights.push(n)
+    cur = null
+    seen.nightSteps = null
+    log(`CASTLE-RIG night ${n.night}: deaths=${n.deaths}, sheltered=${n.sheltered ? 'yes' : 'no'}, steps=${steps.join(',') || 'none'}${partial ? ' (partial)' : ''}`)
+    return n
+  }
+  return {
+    nights,
+    async open() { armed = true; await run('time set 0') },
+    async onEvent(ev) {
+      if (!armed) return
+      if (ev.event === 'nightfall' && !cur) {
+        cur = { d0: deaths(), steps: new Set(seen.step ? [seen.step] : []) }
+        seen.nightSteps = cur.steps
+        await run('difficulty easy')
+        for (let i = 0; i < phantoms; i++) await run(`execute at ${who} run summon phantom ~ ~16 ~`)
+      } else if (ev.event === 'dawn' && cur) {
+        close(false)
+        await run('difficulty peaceful')
+      }
+    },
+    finish() { return close(true) },
+    // Verdict-line tail: nights seen, how many sheltered, deaths at night.
+    tag() {
+      if (!nights.length) return ', nights=0'
+      return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nights.reduce((a, n) => a + n.deaths, 0)}`
+    },
+  }
+}
+
 async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', CONTAINER, 'rcon-cli', cmd])
   const out = String(stdout)
@@ -398,12 +454,15 @@ async function main() {
   // packets are the first anchor, and a post-spawn attach would miss them.
   const RESYNC_WRITE = (parseInt(TICKRATE, 10) || 1) > 1
   const timeT0 = Date.now()
+  // deaths is declared below; the driver reads it only once armed (window open).
+  const night = NIGHT ? createNightDriver({ cmd: rcon, who: FOLLOWER, deaths: () => deaths, log: origLog }) : null
   const timeResync = createTimeResync({
     write: RESYNC_WRITE,
     onEvent: (ev) => {
       const plusS = Math.round((ev.at - timeT0) / 1000)
       seen.timeEvents.push({ event: ev.event, server: ev.server, bot: ev.bot, plusS })
       origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s`)
+      if (night) night.onEvent(ev)
     },
   })
   origLog(`CASTLE-RIG time-resync: tickrate=${TICKRATE} mode=${RESYNC_WRITE ? 'correct' : 'track'}`)
@@ -687,6 +746,7 @@ async function main() {
         kit: KIT, tickrate: TICKRATE, planner: PLANNER, said: seen.said,
         wdCalls: seen.wdCalls, wdChoices: seen.wdChoices, outcomes: seen.outcomes, series,
         timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
+        nights: night ? night.nights : undefined,
       }))
     } catch (_) { /* checkpoint best-effort */ }
   }
@@ -705,6 +765,7 @@ async function main() {
     }
   }
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
+  if (night) await night.open()
   let farAt = 0
   let farPre = null
   let buryAt = 0
@@ -1027,7 +1088,9 @@ async function main() {
   const farTag = farAt ? `, far=${farPre}/${farMin}/${done}${farMin < farPre ? ' DROPPED' : ''}` : ''
   const buryTag = buryAt ? `, bury=surfaced@${surfacedS ?? 'never'}s,resumed@${resumedS ?? 'never'}s` : ''
   const pitTag = pitAt ? `, pit=escaped@${escapedS ?? 'never'}s,resumed@${pitResumedS ?? 'never'}s` : ''
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}`
+  if (night) night.finish()
+  const nightTag = night ? night.tag() : ''
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
@@ -1035,6 +1098,7 @@ async function main() {
     kit: KIT, tickrate: TICKRATE, planner: PLANNER, blocked: blockedSeeds, said: seen.said,
     wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
     series, timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
+    nights: night ? night.nights : undefined,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -1051,4 +1115,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds, pickPadSpot, createTimeResync, timeDrift }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds, pickPadSpot, createTimeResync, timeDrift, createNightDriver }

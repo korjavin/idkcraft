@@ -734,7 +734,7 @@ function stockpileSiteBranch(facts, bot, ctx) {
   try {
     if (!stockpileMod.siteMode(bot, ctx)) return false
     if (facts.haul === 'waiting' && facts.player !== 'none') return false
-    const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
+    const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest) || !!stockpileMod.castleBankAt(bot, ctx) // g0z.27 castle bank
     if (!adopted) {
       try { return stockpileMod.siteChestTodo(bot, ctx) !== 'none' } catch (_) { return false }
     }
@@ -2008,7 +2008,7 @@ function stepWhy(name, facts, bot, ctx, text) {
           try {
             if (stockpileMod.siteParked(bot, ctx)) return 'stockpile: site chest full'
           } catch (_) { /* wording best-effort */ }
-          const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest)
+          const adopted = !!(ctx && ctx.castle && ctx.castle.siteChest) || !!stockpileMod.castleBankAt(bot, ctx) // g0z.27 castle bank
           if (!adopted) return 'stockpile: no site chest to adopt, nothing to place it with'
           return 'stockpile: nothing to bank'
         }
