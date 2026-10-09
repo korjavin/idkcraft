@@ -4,7 +4,8 @@
 // every ctx field written in src to its writer modules (ctx.X =, op=, ++,
 // --, delete ctx.X), an owner and, for the tri-state fields, a note
 // (null = revoked, undefined = not restored yet — memory.js). The test
-// fails when a field written by >= 2 modules is missing from the json:
+// fails when a field written by >= 2 modules is missing from the json or
+// has a writer the json does not list (a writer that left is not checked):
 // a review hook, not a ban — protocol fields (lastGoalKey, stepStatus,
 // in-flight flags) are multi-writer on purpose. Listing it is legal:
 //   node test/structure-ctx.test.js --write
@@ -77,9 +78,15 @@ if (require.main === module && process.argv.includes('--write')) {
       const missing = []
       for (const [field, by] of Object.entries(scan())) {
         const writers = Object.keys(by)
-        if (writers.length >= 2 && !listed[field]) missing.push(`${field}: ${writers.sort().join(', ')}`)
+        if (writers.length < 2) continue
+        if (!listed[field]) missing.push(`${field}: ${writers.sort().join(', ')}`)
+        else {
+          // revmux 01 minor: a listed field gaining a writer is the same hook.
+          const added = writers.filter((w) => !(listed[field].writers || []).includes(w))
+          if (added.length) missing.push(`${field}: new writer ${added.sort().join(', ')}`)
+        }
       }
-      assert.deepEqual(missing, [], `new ctx fields written by >= 2 modules — decide the owner, then list them (node test/structure-ctx.test.js --write):\n  ${missing.join('\n  ')}`)
+      assert.deepEqual(missing, [], `ctx fields with new writers (>= 2 modules) — decide the owner, then list them (node test/structure-ctx.test.js --write):\n  ${missing.join('\n  ')}`)
     })
 
     it('tri-state fields keep their note', () => {
