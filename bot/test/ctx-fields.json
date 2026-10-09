@@ -1,0 +1,1677 @@
+{
+  "_shedInFlight": {
+    "writers": [
+      "src/behaviours/craft.js"
+    ],
+    "owner": "src/behaviours/craft.js"
+  },
+  "adoptDone": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "adoptReadyMisses": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "adoptTries": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "askedKey": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "autonomous": {
+    "writers": [
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "beds": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/beds.js"
+  },
+  "bedsWithdrawInFlight": {
+    "writers": [
+      "src/behaviours/beds.js"
+    ],
+    "owner": "src/behaviours/beds.js"
+  },
+  "body": {
+    "writers": [
+      "src/body.js"
+    ],
+    "owner": "src/body.js"
+  },
+  "brain": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "brainRestore": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "breath": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathAir": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathBlind": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathCoolUntil": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathDead": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathLane": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathLastPos": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathPrev": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathPrev2": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathPrevLane": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathStill": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "breathUnstick": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "bring": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/behaviours/bring.js",
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js",
+      "src/task.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "buildAnchor": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildCellIdx": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildCellSite": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFailIdx": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFails": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFarDist": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFarFails": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFarIdx": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildFlightSince": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGoalIdx": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGuardBox": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGuardedMov": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGuardExit": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGuardFn": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildGuardKey": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildHardTicks": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildLastProgressLog": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildLatchSeen": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildMaxIdx": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildSiteWalk": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildSkip": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/behaviours/home.js",
+      "src/index.js",
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildSkipAt": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/behaviours/home.js",
+      "src/index.js",
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildStallTicks": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildSuspectAt": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildSuspectIdx": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buriedStills": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "castle": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/index.js",
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js",
+    "tristate": "null = castle revoked, undefined = not restored from memory yet"
+  },
+  "castleBlockedSaid": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleCarry": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleCell": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleCursor": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleFails": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleFar": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleFetch": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFetchFlight": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFetchGoal": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFetchInFlight": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFlight": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleGoal": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleGoalIdx": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleGuardFn": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleGuardMov": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleLitter": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleMenuProgressAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePickup": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePlaceFn": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePrep": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePrepSaid": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleProgressLog": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleRedig": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleScanAt": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleScanKey": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleSelfOcc": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleStoneAsked": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleWord": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "chestErrorAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "chestFull": {
+    "writers": [
+      "src/behaviours/bring.js",
+      "src/behaviours/bringitem.js",
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "chestFullAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "chestNoSpotAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "claimedTable": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "comehome": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/orders.js",
+      "src/task.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "craftany": {
+    "writers": [
+      "src/behaviours/bringitem.js",
+      "src/behaviours/craftany.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/craftany.js"
+  },
+  "craftanyLocal": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "craftInFlight": {
+    "writers": [
+      "src/behaviours/craft.js"
+    ],
+    "owner": "src/behaviours/craft.js"
+  },
+  "danger": {
+    "writers": [
+      "src/danger.js",
+      "src/memory.js"
+    ],
+    "owner": "src/danger.js"
+  },
+  "deaths": {
+    "writers": [
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "deep": {
+    "writers": [
+      "src/behaviours/deep.js"
+    ],
+    "owner": "src/behaviours/deep.js"
+  },
+  "deepRan": {
+    "writers": [
+      "src/behaviours/deep.js",
+      "src/body.js"
+    ],
+    "owner": "src/behaviours/deep.js"
+  },
+  "deliver": {
+    "writers": [
+      "src/behaviours/deliver.js"
+    ],
+    "owner": "src/behaviours/deliver.js"
+  },
+  "digInFlight": {
+    "writers": [
+      "src/behaviours/bring.js",
+      "src/behaviours/deep.js",
+      "src/behaviours/flat.js",
+      "src/behaviours/forage.js",
+      "src/behaviours/gather.js"
+    ],
+    "owner": "src/behaviours/flat.js"
+  },
+  "digStills": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "doorOpened": {
+    "writers": [
+      "src/doors.js"
+    ],
+    "owner": "src/doors.js"
+  },
+  "doorReprobeAt": {
+    "writers": [
+      "src/behaviours/home.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "doorShutFastAt": {
+    "writers": [
+      "src/doors.js"
+    ],
+    "owner": "src/doors.js"
+  },
+  "eatInFlight": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "equip": {
+    "writers": [
+      "src/behaviours/equip.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipDigInFlight": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipInFlight": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipLatch": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipTableDay": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipTableSkip": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "equipTableUnreachable": {
+    "writers": [
+      "src/behaviours/equip.js"
+    ],
+    "owner": "src/behaviours/equip.js"
+  },
+  "explore": {
+    "writers": [
+      "src/behaviours/explore.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/explore.js"
+  },
+  "exploreAloneRadius": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "fightGivenUpId": {
+    "writers": [
+      "src/behaviours/fight.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/fight.js"
+  },
+  "fightId": {
+    "writers": [
+      "src/behaviours/fight.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/fight.js"
+  },
+  "fightPursuit": {
+    "writers": [
+      "src/behaviours/fight.js"
+    ],
+    "owner": "src/behaviours/fight.js"
+  },
+  "fightUnreachableTicks": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "flat": {
+    "writers": [
+      "src/behaviours/flat.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "flatGuardFn": {
+    "writers": [
+      "src/behaviours/flat.js"
+    ],
+    "owner": "src/behaviours/flat.js"
+  },
+  "flatGuardKey": {
+    "writers": [
+      "src/behaviours/flat.js"
+    ],
+    "owner": "src/behaviours/flat.js"
+  },
+  "flatGuardMov": {
+    "writers": [
+      "src/behaviours/flat.js"
+    ],
+    "owner": "src/behaviours/flat.js"
+  },
+  "fleeTargetId": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "followIssuedAt": {
+    "writers": [
+      "src/behaviours/follow.js"
+    ],
+    "owner": "src/behaviours/follow.js"
+  },
+  "followName": {
+    "writers": [
+      "src/index.js",
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js",
+    "tristate": "null = follow revoked, undefined = not restored from memory yet"
+  },
+  "followRan": {
+    "writers": [
+      "src/behaviours/follow.js",
+      "src/body.js"
+    ],
+    "owner": "src/behaviours/follow.js"
+  },
+  "followSeenStuck": {
+    "writers": [
+      "src/behaviours/follow.js"
+    ],
+    "owner": "src/behaviours/follow.js"
+  },
+  "forage": {
+    "writers": [
+      "src/behaviours/forage.js",
+      "src/goal.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/forage.js"
+  },
+  "forageFinal": {
+    "writers": [
+      "src/behaviours/forage.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/forage.js"
+  },
+  "forageGated": {
+    "writers": [
+      "src/behaviours/forage.js"
+    ],
+    "owner": "src/behaviours/forage.js"
+  },
+  "forageSkip": {
+    "writers": [
+      "src/behaviours/forage.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/forage.js"
+  },
+  "furnace": {
+    "writers": [
+      "src/behaviours/furnace.js"
+    ],
+    "owner": "src/behaviours/furnace.js"
+  },
+  "furnaceInFlight": {
+    "writers": [
+      "src/behaviours/furnace.js"
+    ],
+    "owner": "src/behaviours/furnace.js"
+  },
+  "gather": {
+    "writers": [
+      "src/behaviours/gather.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/gather.js"
+  },
+  "gear": {
+    "writers": [
+      "src/behaviours/gear.js",
+      "src/goal.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/gear.js"
+  },
+  "gearFinished": {
+    "writers": [
+      "src/behaviours/gear.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/gear.js"
+  },
+  "gearGiven": {
+    "writers": [
+      "src/behaviours/gear.js",
+      "src/behaviours/stockpile.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/gear.js"
+  },
+  "gearInFlight": {
+    "writers": [
+      "src/behaviours/gear.js"
+    ],
+    "owner": "src/behaviours/gear.js"
+  },
+  "gearPantryBanked": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "gearRun": {
+    "writers": [
+      "src/behaviours/gear.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/gear.js"
+  },
+  "goal": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "goalSeq": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "goalText": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "gocastle": {
+    "writers": [
+      "src/behaviours/gocastle.js",
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js",
+      "src/task.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "gohome": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/chat.js",
+      "src/goal.js",
+      "src/index.js"
+    ],
+    "owner": "src/chat.js"
+  },
+  "gohomeLatch": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "gohomeSaidDay": {
+    "writers": [
+      "src/behaviours/home.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "gosite": {
+    "writers": [
+      "src/behaviours/gocastle.js",
+      "src/goal.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/gocastle.js"
+  },
+  "greeter": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "haul": {
+    "writers": [
+      "src/behaviours/deliver.js",
+      "src/behaviours/forage.js",
+      "src/behaviours/gear.js",
+      "src/behaviours/stockpile.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/deliver.js"
+  },
+  "home": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/behaviours/build.js",
+      "src/behaviours/furnace.js",
+      "src/index.js",
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "homeDouble": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "homeExpanded": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "inShelter": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/chat.js",
+      "src/goal.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "intruderFight": {
+    "writers": [
+      "src/body.js",
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "jumpCooldown": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "lastDecision": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lastGoalKey": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/behaviours/bring.js",
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/craft.js",
+      "src/behaviours/craftany.js",
+      "src/behaviours/deep.js",
+      "src/behaviours/deliver.js",
+      "src/behaviours/equip.js",
+      "src/behaviours/explore.js",
+      "src/behaviours/fight.js",
+      "src/behaviours/flat.js",
+      "src/behaviours/follow.js",
+      "src/behaviours/forage.js",
+      "src/behaviours/furnace.js",
+      "src/behaviours/gather.js",
+      "src/behaviours/gear.js",
+      "src/behaviours/gocastle.js",
+      "src/behaviours/home.js",
+      "src/behaviours/lead.js",
+      "src/behaviours/light.js",
+      "src/behaviours/recover.js",
+      "src/behaviours/retreat.js",
+      "src/behaviours/roam.js",
+      "src/behaviours/sitebed.js",
+      "src/behaviours/stockpile.js",
+      "src/behaviours/util.js",
+      "src/index.js",
+      "src/orders.js",
+      "src/reflexes.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "lastHostileSnap": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "lastHurtAt": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lastPathNext": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lastPathNodes": {
+    "writers": [
+      "src/behaviours/follow.js",
+      "src/behaviours/gocastle.js",
+      "src/behaviours/home.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/follow.js"
+  },
+  "lastPathReset": {
+    "writers": [
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lastPathStatus": {
+    "writers": [
+      "src/behaviours/forage.js",
+      "src/behaviours/gather.js",
+      "src/index.js"
+    ],
+    "owner": "src/behaviours/forage.js"
+  },
+  "lastPos": {
+    "writers": [
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "lastRecover": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "lastRespawnAt": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lastTickHp": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "lead": {
+    "writers": [
+      "src/behaviours/lead.js",
+      "src/behaviours/recover.js",
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js",
+      "src/task.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "leadTargetGone": {
+    "writers": [
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js",
+      "src/task.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "lightCraftInFlight": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightFailIdx": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightFails": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightFarTicks": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightGoalIdx": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightLineDone": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightPlaced": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightSkip": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightSkipKey": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightSmeltAt": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightSmeltTries": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightSmeltWalk": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightStillAnchor": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lightStillTicks": {
+    "writers": [
+      "src/behaviours/light.js"
+    ],
+    "owner": "src/behaviours/light.js"
+  },
+  "lowHpGateLast": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "lowHpGateSince": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "lowHpWasGated": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "manualBrain": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "movements": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "night": {
+    "writers": [
+      "src/behaviours/home.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "nightGraceFallbackLogged": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "nightGraceLogged": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "paused": {
+    "writers": [
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "pendingSearch": {
+    "writers": [
+      "src/chat.js",
+      "src/orders.js"
+    ],
+    "owner": "src/chat.js"
+  },
+  "placedByBot": {
+    "writers": [
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
+  },
+  "placedNames": {
+    "writers": [
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
+  },
+  "placedTotal": {
+    "writers": [
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
+  },
+  "placeErrors": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "placeInFlight": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/behaviours/build.js",
+      "src/behaviours/flat.js",
+      "src/behaviours/light.js",
+      "src/behaviours/sitebed.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "recoverLatch": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "recoverStreaks": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "recovery": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/behaviours/recover.js",
+      "src/behaviours/retreat.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "reflexSwung": {
+    "writers": [
+      "src/index.js",
+      "src/reflexes.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "reflexTargetId": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "repeatGaveUpPage": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "resources": {
+    "writers": [
+      "src/resources.js"
+    ],
+    "owner": "src/resources.js"
+  },
+  "restGaveUpAt": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "restGaveUpCalled": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "restGaveUps": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "restWhy": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "resumeWork": {
+    "writers": [
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "retreat": {
+    "writers": [
+      "src/behaviours/retreat.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/behaviours/retreat.js"
+  },
+  "retreatAskedKey": {
+    "writers": [
+      "src/behaviours/retreat.js"
+    ],
+    "owner": "src/behaviours/retreat.js"
+  },
+  "retreatFailed": {
+    "writers": [
+      "src/behaviours/retreat.js"
+    ],
+    "owner": "src/behaviours/retreat.js"
+  },
+  "retreatLatch": {
+    "writers": [
+      "src/behaviours/retreat.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/retreat.js"
+  },
+  "roamGoal": {
+    "writers": [
+      "src/behaviours/roam.js"
+    ],
+    "owner": "src/behaviours/roam.js"
+  },
+  "roamSeenResets": {
+    "writers": [
+      "src/behaviours/roam.js"
+    ],
+    "owner": "src/behaviours/roam.js"
+  },
+  "rosterWasOnline": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "scout": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "shedAsideDest": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "shedAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "shelter": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/chat.js",
+      "src/goal.js",
+      "src/index.js"
+    ],
+    "owner": "src/chat.js"
+  },
+  "shelterLeg": {
+    "writers": [
+      "src/behaviours/gocastle.js",
+      "src/behaviours/home.js",
+      "src/body.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "shelterRun": {
+    "writers": [
+      "src/behaviours/home.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "shelterRunLogged": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "sitebed": {
+    "writers": [
+      "src/behaviours/sitebed.js"
+    ],
+    "owner": "src/behaviours/sitebed.js"
+  },
+  "siteChestFullAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "siteDouble": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "siteExpanded": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "sleepInFlight": {
+    "writers": [
+      "src/behaviours/home.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "stay": {
+    "writers": [
+      "src/behaviours/home.js",
+      "src/chat.js",
+      "src/index.js"
+    ],
+    "owner": "src/chat.js"
+  },
+  "step": {
+    "writers": [
+      "src/chat.js",
+      "src/goal.js",
+      "src/index.js"
+    ],
+    "owner": "src/chat.js"
+  },
+  "stepChat": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "stepFail": {
+    "writers": [
+      "src/behaviours/stockpile.js",
+      "src/goal.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "stepPick": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "stepStatus": {
+    "writers": [
+      "src/behaviours/beds.js",
+      "src/behaviours/bring.js",
+      "src/behaviours/build.js",
+      "src/behaviours/castle.js",
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/craft.js",
+      "src/behaviours/craftany.js",
+      "src/behaviours/deep.js",
+      "src/behaviours/deliver.js",
+      "src/behaviours/equip.js",
+      "src/behaviours/explore.js",
+      "src/behaviours/forage.js",
+      "src/behaviours/furnace.js",
+      "src/behaviours/gather.js",
+      "src/behaviours/gear.js",
+      "src/behaviours/gocastle.js",
+      "src/behaviours/home.js",
+      "src/behaviours/light.js",
+      "src/behaviours/recover.js",
+      "src/behaviours/retreat.js",
+      "src/behaviours/sitebed.js",
+      "src/behaviours/stockpile.js",
+      "src/chat.js",
+      "src/goal.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/home.js"
+  },
+  "stockpileFar": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "stockpileHomeLatch": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "stockpileInFlight": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "stockpilePierced": {
+    "writers": [
+      "src/behaviours/stockpile.js",
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "stuck": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "stuckResets": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "stuckState": {
+    "writers": [
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "stuckTicks": {
+    "writers": [
+      "src/behaviours/recover.js",
+      "src/index.js",
+      "src/stuck.js"
+    ],
+    "owner": "src/stuck.js"
+  },
+  "task": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "taskPlanStep": {
+    "writers": [
+      "src/goal.js",
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "underFireLogged": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "unpin": {
+    "writers": [
+      "src/unpin.js"
+    ],
+    "owner": "src/unpin.js"
+  },
+  "unseenTicks": {
+    "writers": [
+      "src/chat.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  },
+  "work": {
+    "writers": [
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/orders.js"
+  }
+}

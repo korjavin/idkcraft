@@ -694,17 +694,6 @@ function stockWord(bot, kind, left) {
   return have >= Math.min(batchOf(kind), left) ? `${kind}-batch` : `${kind}-some`
 }
 
-// Loaded = all four footprint corners read (revmux 02): the v1 site
-// spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
-// chunks lie inside the corners' hull — the loaded area is convex.
-function siteLoaded(bot, st) {
-  try {
-    if (!st || !st.site || typeof st.site.x !== 'number') return false
-    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    return [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
-  } catch (_) { return false }
-}
-
 // 'finish' (revmux 01): every cell matches but the executor has not yet
 // run its completion branch (phase, chat, keep-clear release) — one more
 // castle tick does that, then the word reads 'done'.
