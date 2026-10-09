@@ -33,6 +33,7 @@ describe('residence hut/house: extracted values', () => {
     assert.deepEqual(d.lights(home)[0], { dx: 1, dz: -2 })
     assert.deepEqual(d.chest(home)[0], { dx: 5, dy: 0, dz: 1 })
     assert.deepEqual(xyz(d.table(home)), { x: 104, y: 64, z: -49 })
+    assert.deepEqual(d.furnace(home), [], 'hut furnace stays roadside')
     assert.equal(d.interior(home, { x: 102.9, y: 65.5, z: -47.1 }), true)
     assert.equal(d.interior(home, { x: 103, y: 64, z: -48 }), false)
   })
@@ -52,6 +53,7 @@ describe('residence hut/house: extracted values', () => {
     assert.deepEqual(d.lights(home)[0], { dx: 3, dz: -2 })
     assert.deepEqual(d.chest(home)[0], { dx: 5, dy: 0, dz: 2 })
     assert.deepEqual(xyz(d.table(home)), { x: 105, y: 64, z: -49 })
+    assert.deepEqual(d.furnace(home), [{ dx: 4, dy: 0, dz: 1 }, { dx: 1, dy: 0, dz: 2 }, { dx: 2, dy: 0, dz: 1 }, { dx: 1, dy: 0, dz: 1 }])
   })
 })
 
@@ -116,6 +118,17 @@ describe('residence castle: all 4 rotations', () => {
       assert.equal(plan.at.get(key(rel(d.chest(home)[0]))).kind, 'chest')
       assert.ok(d.lights(home).length > 0)
       for (const l of d.lights(home)) assert.equal(plan.at.get(key(rel(l))).kind, 'torch')
+      // g0z.36: the kitchen-corner furnace cells, (12,0,18) first; floor
+      // cells, off the plan, clear of beds, chest, table and doorways.
+      const fc = d.furnace(home).map(rel)
+      assert.deepEqual(fc[0], toWorld(home, { dx: 12, dy: 0, dz: 18 }))
+      assert.equal(fc.length, 3)
+      const taken = new Set([...all, key(rel(d.chest(home)[0])), key(e.door), key(e.inside), key(toWorld(home, { dx: 13, dy: 0, dz: 14 }))])
+      for (const c of fc) {
+        assert.ok(!plan.at.has(key(c)), `furnace cell ${key(c)} is a plan cell`)
+        assert.equal(d.interior(home, c), true, `furnace cell ${key(c)} on a floor`)
+        assert.ok(!taken.has(key(c)), `furnace cell ${key(c)} collides`)
+      }
       const box = d.box(home)
       for (const c of plan.cells) assert.ok(c.x >= box.min.x && c.x <= box.max.x && c.y >= box.min.y && c.y <= box.max.y && c.z >= box.min.z && c.z <= box.max.z)
     })

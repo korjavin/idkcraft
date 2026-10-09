@@ -9,6 +9,8 @@
 //                     sleep click stands, within 2 of the head)
 //   lights(home)   -> [{ dx, dy?, dz, ... }]  light plan, site-relative
 //   chest(home)    -> [{ dx, dy, dz }]        chest candidates, site-relative
+//   furnace(home)  -> [{ dx, dy, dz }]        furnace spots, site-relative
+//                     ([] = roadside: placed beside the body)
 //   table(home)    -> world cell of the workbench
 //   interior(home, pos) -> bool               pos on a residence floor
 //   box(home)      -> { min, max }            whole building, inclusive
@@ -62,6 +64,18 @@ const CHEST_SPOTS_V2 = [
   { dx: 4, dy: 0, dz: 1 },
 ]
 
+// Fixed furnace cells inside the v2 common room (jr2.1): (4,0,1) first,
+// then fallbacks clear of the door path and bedroom approaches. Placed from
+// outside through the wall (the light.js interior-torch shape, live-verified
+// on the rig); a standing furnace at any of them adopts on sight, so a
+// restart never duplicates the station (memory drops the claim).
+const FURNACE_SPOTS = [
+  { dx: 4, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 2 },
+  { dx: 2, dy: 0, dz: 1 },
+  { dx: 1, dy: 0, dz: 1 },
+]
+
 function at(home, dx, dy, dz) {
   const s = home.site
   return new Vec3(s.x + dx, s.y + dy, s.z + dz)
@@ -96,6 +110,7 @@ const HUT = {
   beds: () => [], // no bedrooms
   lights: () => LIGHT_SPOTS,
   chest: () => CHEST_SPOTS,
+  furnace: () => [], // roadside
   table: (home) => at(home, 4, 0, 1), // build BLUEPRINT[0], outside the east wall
   interior: boxInterior,
   box: (home) => ({ min: at(home, 0, 0, 0), max: at(home, 3, 2, 3) }),
@@ -114,6 +129,7 @@ const HOUSE = {
   beds: (home) => [houseBed(home, 1), houseBed(home, 4)],
   lights: () => LIGHT_SPOTS_V2,
   chest: () => CHEST_SPOTS_V2,
+  furnace: () => FURNACE_SPOTS,
   table: (home) => at(home, 5, 0, 1), // BLUEPRINT_V2[0], common room
   interior: boxInterior,
   box: (home) => ({ min: at(home, 0, -1, 0), max: at(home, 6, 2, 5) }), // dy -1: the bedroom floor fill
@@ -138,6 +154,9 @@ const C_BEDS = [
   { foot: [18, 4, 17], head: [18, 4, 18], stage: [17, 4, 16], sleep: [17, 4, 18] },
 ]
 const C_TABLE = [16, 0, 18] // ground storeroom, beside the plan chest (18,0,18)
+// Kitchen corner (g0z.36): (12,0,18) sits against the SW tower wall x=11
+// and the south wall z=19, off the kitchen doorway (13,0,14) and the hall.
+const C_FURNACE = [[12, 0, 18], [13, 0, 18], [12, 0, 17]]
 const C_INSIDE = [BP.DOOR.dx, 0, BP.DOOR.dz + 1] // first hall cell behind the gate
 
 // Residence floors, rot 0: every body-interior column (towers excluded —
@@ -208,6 +227,7 @@ const CASTLE = {
   }),
   lights: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'torch').map((c) => [c.dx, c.dy, c.dz])),
   chest: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'chest').map((c) => [c.dx, c.dy, c.dz])),
+  furnace: (home) => local(home, C_FURNACE),
   table: (home) => world(home, [C_TABLE])[0],
   // The feet cell, or the one below it (g0z.30 02: a step-down edge on the
   // stair floors the feet over the open stairwell for ~70 ms; a jump too).
@@ -293,4 +313,4 @@ function wanted(ctx) {
   return ctx.hutHome || null
 }
 
-module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2, RESIDENCE_CASTLE, castleHome, wanted }
+module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2, FURNACE_SPOTS, RESIDENCE_CASTLE, castleHome, wanted }
