@@ -161,11 +161,31 @@ function planbOf(v) {
   }
 }
 
+// Castle residence ref (g0z.29): { site, rot, blueprintVersion } of a
+// complete castle, validated like castleOf. Four things stay apart: home
+// kind ('castle'), house v (1|2), castle blueprintVersion, doc VERSION.
+function castleRefOf(c) {
+  try {
+    if (!c || typeof c !== 'object') return null
+    const site = pt(c.site)
+    if (!site || ![site.x, site.y, site.z].every(Number.isInteger)) return null
+    if (!Number.isInteger(c.rot) || c.rot < 0 || c.rot > 3 || !Number.isInteger(c.blueprintVersion)) return null
+    return { site, rot: c.rot, blueprintVersion: c.blueprintVersion }
+  } catch (_) {
+    return null
+  }
+}
+
 function homeOf(h) {
   if (!h || !h.site) return null
-  const site = v3(h.site)
+  // A castle home whose ref is broken is dropped, never read as a hut at
+  // the castle's corner.
+  const ref = h.kind === 'castle' ? castleRefOf(h.castle) : null
+  if (h.kind === 'castle' && !ref) return null
+  const site = ref ? new Vec3(ref.site.x, ref.site.y, ref.site.z) : v3(h.site)
   if (!site) return null
   const out = { site, interior: null, door: v3(h.door), table: v3(h.table), built: h.built === true, v: h && h.v === 2 ? 2 : 1 }
+  if (ref) { out.kind = 'castle'; out.rot = ref.rot; out.castle = ref }
   // Task park (vmzq.3): a restart mid-park keeps the house veto, the
   // episode timer and the day count instead of wandering or freezing.
   try {
@@ -558,6 +578,12 @@ function restore(bot, ctx, file, now) {
           ctx.buildSkipAt = skipAtOf(h.skipAt, ctx.buildSkip)
         } catch (_) { /* skip best-effort */ }
         out.homes = Math.min(doc.homes.length, HOMES_MAX)
+      }
+      // The hut to fall back to when a castle residence is forgotten
+      // (g0z.29): the newest non-castle home of the history.
+      for (let i = doc.homes.length - 1; i >= 0; i--) {
+        const hh = homeOf(doc.homes[i])
+        if (hh && hh.kind !== 'castle') { ctx.hutHome = hh; break }
       }
     }
     if (Array.isArray(doc.resources) && doc.resources.length) {

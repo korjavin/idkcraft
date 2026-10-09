@@ -39,7 +39,8 @@
   "beds": {
     "writers": [
       "src/behaviours/beds.js",
-      "src/memory.js"
+      "src/memory.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/beds.js"
   },
@@ -535,7 +536,8 @@
   },
   "chestErrorAt": {
     "writers": [
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
@@ -543,19 +545,22 @@
     "writers": [
       "src/behaviours/bring.js",
       "src/behaviours/bringitem.js",
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
   "chestFullAt": {
     "writers": [
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
   "chestNoSpotAt": {
     "writers": [
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
@@ -994,6 +999,13 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "hutHome": {
+    "writers": [
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/memory.js"
+  },
   "inShelter": {
     "writers": [
       "src/behaviours/home.js",
@@ -1153,13 +1165,15 @@
   },
   "lightFailIdx": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
   "lightFails": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
@@ -1171,31 +1185,36 @@
   },
   "lightGoalIdx": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
   "lightLineDone": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
   "lightPlaced": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
   "lightSkip": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
   "lightSkipKey": {
     "writers": [
-      "src/behaviours/light.js"
+      "src/behaviours/light.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/light.js"
   },
@@ -1611,13 +1630,15 @@
   },
   "stockpileFar": {
     "writers": [
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
   "stockpileHomeLatch": {
     "writers": [
-      "src/behaviours/stockpile.js"
+      "src/behaviours/stockpile.js",
+      "src/orders.js"
     ],
     "owner": "src/behaviours/stockpile.js"
   },
