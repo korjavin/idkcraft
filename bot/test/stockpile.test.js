@@ -576,16 +576,18 @@ describe('stockpile helper residuals (idkcraft-cq7)', () => {
   }
 
 
-  it('H-edibles a missing index set falls back to the built-in foods', () => {
-    const index = require('../src/index')
-    const keep = index.EDIBLE_FOODS
-    index.EDIBLE_FOODS = null
+  // oqul.3: edibles() reads reflexes.EDIBLE_FOODS (its owner), no longer the
+  // index re-export, so the stub moves to reflexes; same fallback contract.
+  it('H-edibles a missing reflexes set falls back to the built-in foods', () => {
+    const reflexes = require('../src/reflexes')
+    const keep = reflexes.EDIBLE_FOODS
+    reflexes.EDIBLE_FOODS = null
     try {
-      // baked_potato is index-only: without the set it banks, none kept.
+      // baked_potato is reflexes-only: without the set it banks, none kept.
       const plan = stockpile.depositPlan({ inventory: { items: () => [{ name: 'baked_potato', count: 12 }] } })
       assert.deepEqual(plan, [{ name: 'baked_potato', count: 12 }])
     } finally {
-      index.EDIBLE_FOODS = keep
+      reflexes.EDIBLE_FOODS = keep
     }
     const plan = stockpile.depositPlan({ inventory: { items: () => [{ name: 'baked_potato', count: 12 }] } })
     assert.deepEqual(plan, [{ name: 'baked_potato', count: 2 }])

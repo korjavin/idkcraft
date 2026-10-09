@@ -118,11 +118,11 @@ function questPlankWoods(bot, ctx) {
     return null
   }
 }
-// Log batch the quest chops to (goal.js NEED_LOGS, deferred: goal loads
-// forage at top). Falls back to 14 when goal is unreadable.
+// Log batch the quest chops to (budget.js NEED_LOGS). Falls back to 14
+// when unreadable.
 function questBatch() {
   try {
-    const g = require('../goal')
+    const g = require('../budget')
     if (g && typeof g.NEED_LOGS === 'number' && g.NEED_LOGS > 0) return g.NEED_LOGS
   } catch (_) { /* unreadable: 14 */ }
   return 14
@@ -483,7 +483,7 @@ function staleFinal(ctx) {
     if (!FF || typeof FF.status !== 'string' || !FF.status.startsWith('failed:')) return false
     const sf = ctx && ctx.stepFail && ctx.stepFail.forage
     if (!sf || typeof sf.at !== 'number') return false
-    return Date.now() - sf.at > (require('../goal').FORAGE_RETRY_MS || 0)
+    return Date.now() - sf.at > (require('../budget').FORAGE_RETRY_MS || 0)
   } catch (_) {
     return false
   }
