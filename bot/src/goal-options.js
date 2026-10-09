@@ -11,6 +11,7 @@
 
 const { OUTER_DISK } = require('./goal-unlock')
 const { failReason } = require('./step')
+const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION } = require('./plan-consts') // oqul.5: was a lazy task.js require
 
 function taskActive(ctx) {
   try {
@@ -489,12 +490,7 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
   }
 
   // park: always offered (the deterministic out).
-  try {
-    const { PLAN_PARK_CRITERION } = require('./task')
-    out.push({ id: 'park', step: null, unlock: null, criterion: PLAN_PARK_CRITERION })
-  } catch (_) {
-    out.push({ id: 'park', step: null, unlock: null, criterion: 'no step can move the goal now: stop the task and rest at home' })
-  }
+  out.push({ id: 'park', step: null, unlock: null, criterion: PLAN_PARK_CRITERION })
 
   // ask-owner: only when online (owner notes).
   if (!ownerOnline(bot)) {
@@ -542,7 +538,6 @@ function flatSummary(ctx, kind) {
 // Instructions per goal kind (castle/house keep the .21 words verbatim on
 // the first stall — the summary rides only once history names a flat).
 function planInstructions(kind, ctx, done, total) {
-  const { PLAN_INSTRUCTIONS } = require('./task')
   const summary = flatSummary(ctx, kind)
   if (kind === 'castle' || kind === 'house') {
     if (!summary) return PLAN_INSTRUCTIONS
