@@ -1,0 +1,13 @@
+{
+ "rw4.14 dusk hold -> deaths -> dawn report": [
+  {"tick":1,"kind":"owner","owner":"work"},
+  {"tick":1,"kind":"step","value":"stay"},
+  {"tick":1,"kind":"stepStatus","value":"running"},
+  {"tick":1,"kind":"chat","text":"next: staying inside (goal-fsm)"},
+  {"tick":1,"kind":"lastGoalKey","value":"stay"},
+  {"tick":2,"kind":"owner","owner":"shelter"},
+  {"tick":7,"kind":"lastGoalKey","value":"home-door"},
+  {"tick":10,"kind":"stepStatus","value":"done"},
+  {"tick":10,"kind":"chat","text":"night: survived, 2 deaths, banked 14 coal, at home; back to work"}
+ ]
+}

@@ -1,0 +1,14 @@
+{
+ "fja goal-less backstop -> call_player once": [
+  {"tick":1,"kind":"owner","owner":"recover"},
+  {"tick":1,"kind":"chat","text":"stuck, trying sidestepping (model)"},
+  {"tick":1,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":1,"x":-2,"y":61,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":10,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":10,"kind":"chat","text":"stuck, trying digging a step (stub-fallback)"},
+  {"tick":14,"kind":"chat","text":"stuck, trying sidestepping (model)"},
+  {"tick":14,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":1,"x":0,"y":61,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":23,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":23,"kind":"chat","text":"I'm stuck at -1 61 0, /tp IdkBot Steve"},
+  {"tick":24,"kind":"lastGoalKey","value":"idle"}
+ ]
+}

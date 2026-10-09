@@ -1,0 +1,33 @@
+{
+ "atl.4 unreachable final -> escape -> rest -> release": [
+  {"tick":1,"kind":"owner","owner":"work"},
+  {"tick":1,"kind":"step","value":"gather"},
+  {"tick":1,"kind":"stepStatus","value":"running"},
+  {"tick":1,"kind":"chat","text":"next: chopping wood (goal-fsm)"},
+  {"tick":1,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":2,"y":64,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":1,"kind":"lastGoalKey","value":"gather:2,64,0"},
+  {"tick":4,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":6,"y":65,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":4,"kind":"lastGoalKey","value":"gather:6,65,0"},
+  {"tick":7,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":9,"y":64,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":7,"kind":"lastGoalKey","value":"gather:9,64,0"},
+  {"tick":8,"kind":"stepStatus","value":"failed:unreachable"},
+  {"tick":8,"kind":"chat","text":"cannot reach the trees"},
+  {"tick":8,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":8,"kind":"lastGoalKey","value":""},
+  {"tick":9,"kind":"owner","owner":"recover"},
+  {"tick":9,"kind":"chat","text":"stuck, trying sidestepping (fsm)"},
+  {"tick":9,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":1,"x":0,"y":64,"z":7},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":12,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":12,"kind":"stop"},
+  {"tick":12,"kind":"lastGoalKey","value":"idle"},
+  {"tick":13,"kind":"owner","owner":"work"},
+  {"tick":13,"kind":"step","value":"rest"},
+  {"tick":13,"kind":"stepStatus","value":"running"},
+  {"tick":13,"kind":"chat","text":"resting: stay: daytime, gohome: daytime, shelter: daytime, gocastle: no active castle, sitebed: not feasible, craft: need 4 planks for the table, have 0, equip: no materials, build: need table/door item, beds: house not built yet, light: no home site, gather holds after failure, deliver: nothing waiting, stockpile: house not built yet, gear: house not built yet, forage: nothing known nearby, explore: house not built yet (only-option)"},
+  {"tick":24,"kind":"step","value":"gather"},
+  {"tick":24,"kind":"chat","text":"next: chopping wood (goal-fsm)"},
+  {"tick":24,"kind":"chat","text":"chopping oak_log 1/14"},
+  {"tick":24,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":2,"y":64,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":24,"kind":"lastGoalKey","value":"gather:2,64,0"}
+ ]
+}
