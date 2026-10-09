@@ -473,6 +473,63 @@ budget ~1 call/row, sequential. The confidence split it prints re-sets
 `TASK_PLAN_MIN_CONF` (`test/stand-steps.test.js` pins the variant shape
 and the fixture cache without network).
 
+## Work-cycle rig (`work-rig.sh`, idkcraft-6x7.16)
+
+```sh
+sh bot/tools/work-rig.sh [mins]                  # default 20, WORK_TICKRATE=60 (one mc day ~6.7 min)
+WORK_KIT=chest sh bot/tools/work-rig.sh 20       # + a home chest at the first v2 chest spot
+WORK_TICKRATE=1 sh bot/tools/work-rig.sh 60      # gate regime: wall-clock game
+```
+
+The offline twin of the work-cycle prod acceptances: a day of the bot's
+work with nobody online, measured in minutes instead of a multi-hour prod
+session. One call = reset the disposable world copy, boot Paper on
+NORMAL difficulty with the clock running (no daylock, no peaceful; fall
+damage and keepInventory untouched — deaths and drops are the
+measurement; weather stays clear so runs compare), level a 21x21 dirt pad
+at world spawn, raise a plan-driven v2 house on it (`raise-house.js`)
+with both bedroom beds set at the canonical cells (`beds.cellsOf`), join
+the follower (it must adopt the rig house from the world, else exit 2),
+chat `autonomous on` + `go work`, quit the guide (prod-alone parity),
+work `mins` minutes, print ONE verdict line:
+
+```
+work nights=<n> slept=<n> inside=<n> dugin=<n> deaths=<n> banked=<items>/h brought=<n> steps=<top-4> fail=<top-3>
+```
+
+Counters parse the bot's own lines only (`verdict(lines, mins)` in
+`work-replay.js`, pure): `nights` = server nightfalls (the castle-replay
+time resync, server truth), `slept` = `sleeping in my bed` chats,
+`inside` = `home for the night` chats, `dugin` = `shelter dig-in done`,
+`deaths` = `death health=` lines, `banked` = items in `forage done:
+banked …` per hour of window, `brought` = `brought …`/`stockpiled …`
+chats, `steps` = top `goal step=` counts, `fail` = top failed steps (the
+prev step of `why=step-failed`, `:<reason>` once the line carries
+`fail=`, ipn.15). `WORK_KIT=empty` (default) clears the pack, `chest`
+adds a home chest, `seeded` adds stone tools + 16 bread on top. Planner,
+key handling, `GOAL_WATCHDOG_MS`/`GOAL_COMMIT_MS`, heap and distance
+trims mirror the castle rig (`WORK_` prefix). JSON record in `WORK_OUT`
+(default `/tmp/work-rig-<id>.json`), full log in `WORK_LOG`.
+
+Own containers/ports/locks beside the castle and stuck rigs: container
+`idk-work[-<id>]`, port 25611 + letter index, lock
+`/tmp/idkcraft-work-rig.lock[-<id>]` (`WORK_LOCK_WAIT`, falling back to
+`RIG_LOCK_WAIT`), data under `$PRODWORLD/work-rigs/<id>/`;
+`WORK_RIG_ID=auto` picks a free slot of `WORK_SLOTS` (`0 a b c`). Exit
+0 = measured (even all zeros), 2 = environment/setup failure, 130 =
+interrupted. `test/work-rig.test.js` pins the wrapper and the verdict
+without docker.
+
+| prod acceptance | verdict counter |
+|---|---|
+| rw4.7 (home → night → morning) | `slept>=1` per night and `dugin=0` with a house (`slept`≈`nights` on the clean rig house) |
+| atl.3 (items/hour, deaths, stalls) | `banked=<n>/h`, `deaths`, `fail` |
+| ipn.5 / jsf.8 | counters exposed only (`brought`, `fail`); their epic owners write the criteria |
+
+Known limit: the world snapshot is old (spawn near −48 65 −208); prod
+relief (a hump inside the house, a cave at spawn) is synthetic here — the
+pad levels it — not the world itself.
+
 ## Puppet player (`puppet.js`, idkcraft-jlw7)
 
 Agents run real prod play sessions without the owner: the puppet joins as
