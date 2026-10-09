@@ -14,6 +14,7 @@ const taskMod = require('../src/task')
 const buildMod = require('../src/behaviours/build')
 const body = require('../src/body')
 const { createTicker, handleChat, BEHAVIOURS } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 const { lookupCommand, detailLine } = require('../src/commands')
 
 const SITE = { x: 10, y: 64, z: 20 }
@@ -872,7 +873,9 @@ describe('jr2.3 chat takes and refuses the order', () => {
 describe('jr2.3 ticks dispatch the meet like an explicit order', () => {
   it('walks without a visible player while the roster is online', async () => {
     const bot = tickBot({ at: { x: 30, y: 64, z: 30 }, players: { Steve: { username: 'Steve' } } })
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
     const ticker = tickerWith(bot)
+    const journal = record(bot, bot._tickerCtx, { ticker, clock })
     handleChat(bot, ticker, 'Steve', 'come home')
     const cap = capture()
     try {
@@ -881,7 +884,9 @@ describe('jr2.3 ticks dispatch the meet like an explicit order', () => {
       assert.equal(bot._goals.length, 1, 'walk goal issued with nobody visible')
       assert.deepEqual({ x: bot._goals[0].x, y: bot._goals[0].y, z: bot._goals[0].z }, OUT2)
       assert.ok(cap.lines.some((l) => l.includes('action=comehome')), cap.lines.join('\n'))
+      golden('comehome', "jr2.3 'come home' walk goal issues with digging off", journal.events)
     } finally {
+      clock.restore()
       cap.release()
     }
   })
@@ -1370,8 +1375,10 @@ describe('rw4.18 outLaneBlocked reads the approach cell, not the bot', () => {
 describe('jr2.3 move commands exit through the doorway, repeat and stop never hang', () => {
   it("'go work' from the hold exits, shuts, then works", async () => {
     const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } } })
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
     const ticker = tickerWith(bot)
     const ctx = bot._tickerCtx
+    const journal = record(bot, ctx, { ticker, clock })
     ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
     ctx.inShelter = true
     handleChat(bot, ticker, 'Steve', 'go work')
@@ -1394,7 +1401,11 @@ describe('jr2.3 move commands exit through the doorway, repeat and stop never ha
       assert.equal(ctx.comehome, null, 'released to work')
       assert.equal(ctx.inShelter, false)
       assert.deepEqual(bot._goals.filter((g) => g && typeof g.x === 'number'), [], 'no A* through the doorway')
+      // A tick past the release: the work arbiter takes the body.
+      await ticker.tick()
+      golden('comehome', "jr2.3 'go work' from the hold exits, shuts, then works", journal.events)
     } finally {
+      clock.restore()
       cap.release()
     }
   })

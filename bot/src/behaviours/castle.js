@@ -159,6 +159,10 @@ function done(bot, c) {
   return blueprint.matches(c.kind, nameAt(bot, c))
 }
 function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
+// Gauge cells (vmzq.55): place cells plus the moat 'dig' cells, so the
+// task clock sees digging. Keep-clear 'air' cells stay out (they start
+// done; counting them only inflates).
+function gauged(c) { return !clearing(c) || c.kind === 'dig' }
 function ver(st) { return blueprint.blueprintOf(st && st.blueprintVersion).version }
 function bkey(st, idx) { return `${ver(st)}:${idx}` }
 function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (tries - 1)) }
@@ -694,17 +698,6 @@ function stockWord(bot, kind, left) {
   return have >= Math.min(batchOf(kind), left) ? `${kind}-batch` : `${kind}-some`
 }
 
-// Loaded = all four footprint corners read (revmux 02): the v1 site
-// spans at most 2x2 chunks; the v2 site (31x27) up to 3x3, whose middle
-// chunks lie inside the corners' hull — the loaded area is convex.
-function siteLoaded(bot, st) {
-  try {
-    if (!st || !st.site || typeof st.site.x !== 'number') return false
-    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    return [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
-  } catch (_) { return false }
-}
-
 // 'finish' (revmux 01): every cell matches but the executor has not yet
 // run its completion branch (phase, chat, keep-clear release) — one more
 // castle tick does that, then the word reads 'done'.
@@ -750,7 +743,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (!st.progress) {
           const { cells } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
           let total = 0
-          for (const c of cells) if (!clearing(c)) total++
+          for (const c of cells) if (gauged(c)) total++
           st.progress = { done: 0, total }
         }
       } else if (now - (ctx.castleMenuProgressAt || 0) >= FULL_RESCAN_MS) {
@@ -829,13 +822,15 @@ function menuFact(bot, ctx, now = Date.now()) {
   }
 }
 
-// Owner-facing progress (chat 'castle'): laid/total per material kind,
+// Owner-facing progress (chat 'castle'): laid/total per material kind
+// (moat = dug/total of the 'dig' cells),
 // read live from the world (blocked never counts as done).
 function progressByKind(bot, st) {
   const out = {}
   for (const c of blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells) {
-    if (clearing(c)) continue
-    const e = out[c.kind] || (out[c.kind] = { done: 0, total: 0 })
+    if (!gauged(c)) continue
+    const k = c.kind === 'dig' ? 'moat' : c.kind
+    const e = out[k] || (out[k] = { done: 0, total: 0 })
     e.total++
     if (done(bot, c)) e.done++
   }
@@ -845,10 +840,18 @@ function progressByKind(bot, st) {
 function progress(bot, st, cells, ctx) {
   let n = 0
   let total = 0
+  // A dig cell counts once dug, refilled or not (revmux 01 minor): a
+  // bridge-refill -> re-dig loop must not read as growth to the clock.
+  // ponytail: per-session high-water, a restart re-reads the world.
+  const sig = `${st.site.x},${st.site.y},${st.site.z}:${st.rot | 0}:${ver(st)}`
+  if (!ctx.castleDug || ctx.castleDug.sig !== sig) ctx.castleDug = { sig, idx: new Set() }
   for (const c of cells) {
-    if (clearing(c)) continue
+    if (!gauged(c)) continue
     total++
-    if (done(bot, c)) n++
+    if (c.kind === 'dig') {
+      if (done(bot, c)) ctx.castleDug.idx.add(c.idx)
+      if (ctx.castleDug.idx.has(c.idx)) n++
+    } else if (done(bot, c)) n++
   }
   st.progress = { done: n, total }
   if (ctx.castleProgressLog !== n) {

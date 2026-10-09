@@ -78,10 +78,13 @@ function castleWoodOpen(ctx) {
 // at/above NEED_LOGS must still convert — conversion is what frees the log
 // slot, and the depositPlan/surplusWood banking below still caps logs at
 // LOG_KEEP. Fail-open: an unreadable inventory reads empty, the old
-// behaviour.
+// behaviour. Built home only, castle phase ignored (ipn.17): a complete
+// castle used to lift the ceiling and craft converted logs into a 13-stack
+// plank pile, tossing sticks for room. Pre-house the budget needs every
+// plank packed.
 function woodCapped(bot, ctx) {
   try {
-    if (!castleWoodOpen(ctx)) return false
+    if (!(ctx && ctx.home && ctx.home.built)) return false
     return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP
   } catch (_) {
     return false
@@ -1730,11 +1733,19 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
   // without this every later pick retries the same hopeless place and
   // the full chest never parks. opts.pendingKey names ctx.siteDouble or
   // ctx.homeDouble; the initial place passes none.
+  // The craftany chest run (ipn.16) is dropped the moment this step stops
+  // polling it (chest packed, table standing, failed): a lingering run reads
+  // as an open craft to beds' gate and a later pick would reuse stale state.
+  const dropRun = () => {
+    try { if (ctx.craftany && ctx.craftany.key === 'chestx1') ctx.craftany = null } catch (_) { /* best-effort */ }
+  }
   const failHere = (reason) => {
     try { if (opts.pendingKey) ctx[opts.pendingKey] = null } catch (_) { /* clear best-effort */ }
+    dropRun()
     fail(ctx, reason)
   }
   const have = countItems(bot, (n) => n === 'chest')
+  if (have > 0) dropRun()
   if (have <= 0) {
     // Deferred require: stockpile loads during goal's load (goal requires
     // this module), while craft destructures NEED_LOGS off goal at load —
@@ -1752,6 +1763,44 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
         } catch (_) { tableBlock = null }
       }
       if (!tableBlock) tablePos = null
+    }
+    // No standing table (ipn.16): craftany places one (pack item or 4
+    // planks/logs, TABLE_TRIES) and crafts the chest at it — the home chest
+    // never came because nothing else ever placed a table for it. Site mode
+    // (noFarTable) keeps the old fail: craftany may walk to a far home
+    // table. Deferred require (stockpile->craftany->gear->craft->goal).
+    // The table lands beside the body, so walk to the chest spot first: a
+    // table out in the field would leave home tableless again.
+    if (tableBlock) dropRun()
+    if (!tableBlock && !opts.noFarTable) {
+      let craftany = null
+      let plan = null
+      try {
+        craftany = require('./craftany')
+        plan = (ctx.craftany && ctx.craftany.key === 'chestx1') ? { ok: true } : craftany.planCraft(bot, ctx, 'chest', 1)
+      } catch (err) { plan = { ok: false, line: String(err && err.message) } }
+      // Unplannable: the honest fail at once, no walk first.
+      if (plan && plan.ok && !nearPos(bot, spot, INTERACT_REACH)) {
+        const key = `${goalPrefix}-table:${spot.x},${spot.y},${spot.z}`
+        if (key !== ctx.lastGoalKey) {
+          try { bot.pathfinder.setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 2), false) } catch (_) { /* retry next tick */ }
+          ctx.lastGoalKey = key
+          return
+        }
+        let moving = false
+        try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+        if (moving) return
+        if (!farStalled(ctx, key)) return
+        failHere('far')
+        return
+      }
+      let res = plan
+      if (plan && plan.ok) {
+        try { res = craftany(bot, ctx, 'chest', 1) } catch (err) { res = { done: false, line: String(err && err.message) } }
+      }
+      if (res === 'running' || (res && res.done)) return // next tick holds the chest and places it
+      // The tag names the branch (no standing table), the line craftany's reason.
+      console.log(`stockpile failed no-chest no-table: ${(res && res.line) || 'craftany refused'}`)
     }
     if (!tableBlock) {
       if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
