@@ -334,6 +334,12 @@
     "owner": "src/behaviours/castle.js",
     "tristate": "null = castle revoked, undefined = not restored from memory yet"
   },
+  "castleBankFull": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
   "castleBlockedSaid": {
     "writers": [
       "src/behaviours/castle.js"
@@ -565,6 +571,7 @@
     "writers": [
       "src/behaviours/bringitem.js",
       "src/behaviours/craftany.js",
+      "src/behaviours/stockpile.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/craftany.js"
