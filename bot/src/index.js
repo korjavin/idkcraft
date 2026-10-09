@@ -1087,7 +1087,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (ctx.home && ctx.home.site && !ctx.home.built) {
           let complete = false
           try {
-            complete = buildMod.isComplete(bot, ctx.home)
+            // A live clear cell (rw4.19) holds the flip: else the re-open
+            // below and this flip would alternate every tick.
+            complete = buildMod.isComplete(bot, ctx.home) && !buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)
           } catch (_) { complete = false }
           if (complete) {
             try {

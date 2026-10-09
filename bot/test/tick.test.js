@@ -1012,6 +1012,9 @@ describe('work mode (epic rw4)', () => {
         assert.equal(buildMod.isComplete(bot, ctx.home), true, 'the structure itself is whole')
         await ticker.tick()
         assert.equal(ctx.home.built, skipped, skipped ? 'a refused dig keeps the house' : 'bump re-opens the build')
+        await ticker.tick() // revmux 02: the stale-built flip must not undo the re-open
+        assert.equal(ctx.home.built, skipped, 'no flicker on the next tick')
+        assert.ok(!bot.chats.some((m) => m.startsWith('home done at')), 'no repeated announce')
       } finally {
         BEHAVIOURS.rest = origRest
         BEHAVIOURS.build = origBuild
