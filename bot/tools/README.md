@@ -378,7 +378,24 @@ sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
 CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
 CASTLE_KIT=junk sh bot/tools/castle-rig.sh 5     # vmzq.38: the 36/36 prod junk pack, no pickaxe — must recover and lay
+sh bot/tools/castle-rig.sh --night 30            # ek69: natural cycle, hostile nights, one verdict per night
 ```
+
+`--night` (first arg, or `CASTLE_NIGHT=1`; idkcraft-ek69 — replaces the
+hand-rolled night drivers) skips the day lock, sets `time 0` when the
+window opens, and per night: `difficulty easy` + 2 phantoms summoned over
+the bot at nightfall, `difficulty peaceful` at dawn, then one line
+`CASTLE-RIG night <n>: deaths=<d>, sheltered=<yes|no>, steps=<goal steps
+held>` (sheltered = a `shelter`/`rest` step at any point of the night; a
+night cut by the window end is `(partial)`). The verdict line gains
+`, nights=<n>, sheltered=<k>/<n>, night-deaths=<d>` and the record a
+`nights` array. Crossings are the replay's resynced clock, so it works at
+any `CASTLE_TICKRATE`.
+
+Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
+kills every descendant (server client, node, tee), `docker rm -f`s this
+slot's container and drops the lock, exit 130 — the next run on the slot
+needs no manual `pkill`/`docker rm`.
 
 One call = reset the disposable world copy, boot Paper, scan nine
 candidate 48x48 pads around `CASTLE_PAD` (default `300,300`, the preferred
