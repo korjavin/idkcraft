@@ -170,9 +170,18 @@ describe('gear planFor', () => {
     const p = gear.planFor(C({ sticks: 2, ironOre: 5, fuel: 8, furnaceClaim: true }), {}, { furnace: true })
     assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
   })
-  it('ore at/below the reserve wants coal', () => {
-    const p = gear.planFor(C({ sticks: 2, ironOre: 5, fuel: 4 }), {}, { furnace: true })
+  it('ore with no coal and under 2 planks wants coal (ipn.13)', () => {
+    const p = gear.planFor(C({ sticks: 2, ironOre: 5, fuel: 0, planks: 1 }), {}, { furnace: true })
     assert.equal(p.key, 'want-coal')
+    assert.match(p.line, /need coal or planks to smelt 5 ore/)
+  })
+  it('the prod inventory smelts: 32 ore + 3 coal (old reserve) is ready', () => {
+    const p = gear.planFor(C({ sticks: 2, ironOre: 32, fuel: 3, cobble: 64, furnaceClaim: true }), {}, { furnace: true })
+    assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
+  })
+  it('planks alone fuel the smelt (ipn.13)', () => {
+    const p = gear.planFor(C({ sticks: 2, ironOre: 5, fuel: 0, planks: 64, furnaceClaim: true }), {}, { furnace: true })
+    assert.deepEqual([p.state, p.action], ['ready', 'smelt'])
   })
   it('ore without the slice waits on the furnace', () => {
     const p = gear.planFor(C({ sticks: 2, ironOre: 5, fuel: 8 }), {}, {})
@@ -659,7 +668,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:no-fuel', brain: {}, furnace: { settled: true, result: 'failed:no-fuel' } }
     const r = await goal.decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.lines.some((l) => l.includes('coal above the reserve')))
+    assert.ok(bot.lines.some((l) => l.includes('need coal or planks')))
     assert.ok(!(ctx.stepFail && ctx.stepFail.gear), 'yield records no hold')
     assert.equal(r.action, 'explore', 'gear latched out, fetchers run')
   })
@@ -832,6 +841,33 @@ describe('gear round-2: handover state and op span', () => {
     const ctx = { home: home(), stepStatus: 'running', gear: { made: { iron_sword: true }, lastKey: 'iron:sword:give' }, gearFinished: { iron_sword: 1 }, gearGiven: {} }
     gear(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.lines, [])
+  })
+})
+
+describe('gear console observability (ipn.15)', () => {
+  const capture = (fn) => {
+    const logs = []
+    const orig = console.log
+    console.log = (l) => logs.push(String(l))
+    try { fn() } finally { console.log = orig }
+    return logs
+  }
+  it('a latched want logs gear yield once, like the chat', () => {
+    const bot = mockBot({ items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }] })
+    const ctx = { home: home({ furnace: { x: 1, y: 64, z: 0 } }), stepStatus: 'running', gearLegs: { furnace: () => {} } }
+    const first = capture(() => gear(bot, ctx))
+    assert.ok(first.some((l) => l.startsWith('gear yield key=want-coal line=')), JSON.stringify(first))
+    ctx.stepStatus = 'running'
+    const second = capture(() => gear(bot, ctx))
+    assert.ok(!second.some((l) => l.startsWith('gear yield')), 'latched: no second line')
+  })
+  it('a hand tick logs gear hand once per piece, chat stays silent', () => {
+    const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }, { name: 'iron_sword', count: 1 }] })
+    const ctx = { home: home(), stepStatus: 'running', gear: { made: { iron_sword: true }, lastKey: 'iron:sword:give' }, gearFinished: { iron_sword: 1 }, gearGiven: {} }
+    assert.deepEqual(capture(() => gear(bot, ctx)), ['gear hand iron_sword'])
+    ctx.stepStatus = 'running'
+    assert.deepEqual(capture(() => gear(bot, ctx)), [])
     assert.deepEqual(bot.lines, [])
   })
 })
@@ -1264,8 +1300,8 @@ describe('honest want lines (idkcraft-ipn.9)', () => {
     const bot = mockBot({ items: oreKit('stone_pickaxe') })
     const ctx = { home: home(), stepStatus: 'running' }
     resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
-    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-coal', 'need coal above the reserve, going to dig'), 'need coal above the reserve, going to dig')
-    assert.equal(gear.honestLine(bot, { home: home() }, bp(), 'want-coal', 'need coal above the reserve to smelt 2 ore, going to dig'), 'need coal above the reserve, none known')
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-coal', 'need coal or planks, going to dig'), 'need coal or planks, going to dig')
+    assert.equal(gear.honestLine(bot, { home: home() }, bp(), 'want-coal', 'need coal or planks to smelt 2 ore, going to dig'), 'need coal or planks, none known')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-cobble', 'need 8 cobble for the furnace, going to dig'), 'need 8 cobble for the furnace, going to dig')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-logs', 'need logs for sticks, going to chop'), 'need logs for sticks, going to chop')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-water', 'need water for the bucket'), 'need water for the bucket')

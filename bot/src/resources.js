@@ -111,6 +111,16 @@ function scan(bot, ctx, opts) {
   } catch (_) {
     return { added: 0, total: count(ctx) }
   }
+  // ipn.14: coal in its own small scan (see scout COAL_NAMES) so it can't
+  // crowd ores/logs out of maxCount; a throw here keeps the ore results.
+  try {
+    const coalIds = scout.resolveFindIds(bot, 'coal') || []
+    if (coalIds.length > 0) {
+      found = found.concat(bot.findBlocks({ matching: coalIds, maxDistance: radius, count: scout.COAL_COUNT }) || [])
+    }
+  } catch (_) {
+    // coal is best-effort
+  }
   const spots = []
   for (const p of found) {
     let name = null
