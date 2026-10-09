@@ -23,7 +23,7 @@ const k3 = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
 const settle = () => new Promise((r) => setImmediate(r))
 
 describe('castle decor plan (g0z.31)', () => {
-  const D = blueprint.DECOR[2]
+  const D = blueprint.DECOR[2].filter((c) => c.kind === 'pane') // g0z.32 appends 2 banners
   const air = new Map(V2.PLAN.filter((c) => c.kind === 'air').map((c) => [k3(c.dx, c.dy, c.dz), c]))
 
   it('covers exactly the v2 window openings', () => {
@@ -51,8 +51,9 @@ describe('castle decor plan (g0z.31)', () => {
     for (let rot = 0; rot < 4; rot++) {
       const plan = blueprint.absPlan(SITE, rot, 2)
       const dp = blueprint.decorPlan(SITE, rot, 2)
-      assert.equal(dp.cells.length, 44)
-      for (const c of dp.cells) {
+      const panes = dp.cells.filter((c) => c.kind === 'pane')
+      assert.equal(panes.length, 44)
+      for (const c of panes) {
         assert.ok(c.idx >= blueprint.DECOR_BASE)
         const p = plan.at.get(k3(c.x, c.y, c.z))
         assert.ok(p && p.kind === 'air', `rot ${rot}: ${k3(c.x, c.y, c.z)} over a window air cell`)
@@ -94,7 +95,7 @@ describe('castle decor plan (g0z.31)', () => {
       assert.ok(r.ok, `rot ${rot} cell ${r.idx}: ${r.reason}`)
       const g = r.grid
       let strict = 0
-      for (const t of blueprint.rotatePlan(blueprint.DECOR[2], rot, 2)) {
+      for (const t of blueprint.rotatePlan(D, rot, 2)) {
         if (reach.checkCell(g, ent, t).ok) strict++
         const ok = reach.flood(g, ent, (sx, sy, sz) => {
           if (sx === t.dx && sz === t.dz && (sy === t.dy || sy + 1 === t.dy)) return false
@@ -236,7 +237,7 @@ describe('castle decor behaviour (g0z.31)', () => {
   it('all windows glazed: done; an owner block in a window is left alone', () => {
     const bot = castleBot({ items: [{ name: 'glass_pane', count: 16 }] })
     const cells = blueprint.decorPlan(SITE, 0, 2).cells
-    cells.forEach((c, i) => bot.set.set(k3(c.x, c.y, c.z), i === 0 ? 'oak_leaves' : 'glass_pane'))
+    cells.forEach((c, i) => bot.set.set(k3(c.x, c.y, c.z), i === 0 ? 'oak_leaves' : c.kind === 'banner' ? 'white_wall_banner' : 'glass_pane'))
     const ctx = { castle: completeState() }
     assert.equal(castleMod.menuFact(bot, ctx), 'done')
     castleMod(bot, ctx)
@@ -299,5 +300,109 @@ describe('castle decor behaviour (g0z.31)', () => {
     const bot = castleBot({ items: [{ name: 'glass_pane', count: 5 }, { name: 'rotten_flesh', count: 3 }] })
     const plan = stockpile.depositPlan(bot, { castle: completeState(), home: null })
     assert.ok(!plan.some((p) => p.name === 'glass_pane'), JSON.stringify(plan))
+  })
+})
+
+// idkcraft-g0z.32: two wall banners flanking the gate — decor cells hung on
+// the gate wall's outward face from the apron, chest-only, never crafted.
+describe('castle gate banners (g0z.32)', () => {
+  const realCraft = fetch.deps.craftItem
+  const realGather = fetch.deps.gather
+  afterEach(() => {
+    fetch.deps.craftItem = realCraft
+    fetch.deps.gather = realGather
+  })
+  const banners = (rot) => blueprint.decorPlan(SITE, rot, 2).cells.filter((c) => c.kind === 'banner')
+  const paintPanes = (bot, rot) => {
+    for (const c of blueprint.decorPlan(SITE, rot, 2).cells) if (c.kind === 'pane') bot.set.set(k3(c.x, c.y, c.z), 'glass_pane')
+  }
+
+  it('decorPlan holds 2 banners at all 4 rots: outside the gate wall, door x +-2, wall ref behind', () => {
+    assert.deepEqual(blueprint.DECOR[2].filter((c) => c.kind === 'banner').map((c) => k3(c.dx, c.dy, c.dz)), ['13,2,6', '17,2,6'])
+    for (let rot = 0; rot < 4; rot++) {
+      const plan = blueprint.absPlan(SITE, rot, 2)
+      const door = plan.cells.find((c) => c.kind === 'door')
+      const e = blueprint.rotatePlan([{ ...V2.ENTRANCE, kind: 'air' }], rot, 2)[0]
+      const ent = { x: SITE.x + e.dx, z: SITE.z + e.dz }
+      const n = { x: Math.sign(ent.x - door.x), z: Math.sign(ent.z - door.z) } // outward normal
+      const bs = banners(rot)
+      assert.equal(bs.length, 2)
+      const side = []
+      for (const b of bs) {
+        assert.ok(b.idx >= blueprint.DECOR_BASE + 44)
+        assert.equal(b.y, door.y + 2)
+        assert.equal((b.x - door.x) * n.x + (b.z - door.z) * n.z, 1, `rot ${rot}: one out from the gate wall, entrance side`)
+        side.push((b.x - door.x) * n.z + (b.z - door.z) * n.x)
+        assert.deepEqual([b.x - b.wall.x, b.y - b.wall.y, b.z - b.wall.z], [n.x, 0, n.z], `rot ${rot}: face = outward normal`)
+        assert.equal(plan.at.get(k3(b.wall.x, b.wall.y, b.wall.z)).kind, 'stone')
+        assert.ok(!plan.at.has(k3(b.x, b.y, b.z)), 'off-plan cell')
+      }
+      assert.deepEqual(side.map(Math.abs), [2, 2])
+      assert.equal(side[0] + side[1], 0)
+    }
+  })
+
+  it('matches/protects a laid wall banner', () => {
+    assert.ok(blueprint.matches('banner', 'white_wall_banner'))
+    assert.ok(blueprint.matches('banner', 'red_banner'))
+    assert.ok(!blueprint.matches('banner', 'flower_banner_pattern'))
+    const st = { site: SITE, rot: 2, blueprintVersion: 2, phase: 'complete' }
+    const b = banners(2)[0]
+    assert.equal(blueprint.protects(st, b, 'white_wall_banner'), true)
+    assert.equal(util.protectedReason({}, { name: 'white_wall_banner', position: new Vec3(b.x, b.y, b.z) }, { castle: st, castleClear: true }), 'protected')
+  })
+
+  for (const rot of [0, 1, 2, 3]) {
+    it(`rot ${rot}: 2 white banners in the pack hang on the wall's outward face from the apron`, async () => {
+      const items = [{ name: 'white_banner', count: 2 }]
+      const bot = castleBot({ rot, items })
+      const refs = []
+      const place = bot.placeBlock
+      bot.placeBlock = (ref, face) => { refs.push([k3(ref.position.x, ref.position.y, ref.position.z), [face.x, face.y, face.z]]); return place(ref, face) }
+      // A scaffold block under each banner cell (findRef's first pick: a
+      // standing banner) and the windows glazed, but one pane still open
+      // and none held: the held banners word first.
+      for (const c of banners(rot)) bot.set.set(k3(c.x, c.y - 1, c.z), 'cobblestone')
+      paintPanes(bot, rot)
+      const open = blueprint.decorPlan(SITE, rot, 2).cells[0]
+      bot.set.delete(k3(open.x, open.y, open.z))
+      const ctx = { castle: completeState(rot) }
+      const cells = blueprint.absPlan(SITE, rot, 2).cells
+      castleMod.progress(bot, ctx.castle, cells, ctx)
+      const before = { ...ctx.castle.progress }
+      assert.equal(castleMod.menuFact(bot, ctx), 'banner-batch')
+      for (let i = 0; i < 60 && refs.length < 2; i++) { castleMod(bot, ctx); await settle(); await settle() }
+      const want = banners(rot).map((b) => [k3(b.wall.x, b.wall.y, b.wall.z), [b.x - b.wall.x, 0, b.z - b.wall.z]])
+      assert.deepEqual(refs.sort(), want.sort())
+      assert.equal(ctx.castle.phase, 'complete')
+      castleMod.progress(bot, ctx.castle, cells, ctx)
+      assert.deepEqual(ctx.castle.progress, before)
+      assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
+    })
+  }
+
+  it('no banner, empty chest: banner-none, the leg fails no-banner (no craft, no gather)', async () => {
+    const bot = castleBot({ items: [], chest: [] })
+    paintPanes(bot, 0)
+    const ctx = { castle: completeState() }
+    assert.equal(castleMod.menuFact(bot, ctx), 'banner-none')
+    let crafted = 0
+    fetch.deps.gather = () => { bot.calls.gather++ }
+    fetch.deps.craftItem = () => { crafted++; return { done: false } }
+    for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-banner'; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-banner')
+    assert.equal(bot.calls.gather + crafted, 0)
+  })
+
+  it('chest banners are withdrawn; the stockpile keeps them packed', async () => {
+    const bot = castleBot({ items: [], chest: [{ name: 'white_banner', count: 3 }] })
+    bot.registry.itemsByName.white_banner = {}
+    paintPanes(bot, 0)
+    const ctx = { castle: completeState() }
+    for (let i = 0; i < 40 && !bot.calls.withdraw.length; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.deepEqual(bot.calls.withdraw, [['white_banner', 2]])
+    assert.equal(castleMod.menuFact(bot, ctx), 'banner-batch')
+    const plan = require('../src/behaviours/stockpile').depositPlan(bot, { castle: completeState(), home: null })
+    assert.ok(!plan.some((p) => p.name === 'white_banner'), JSON.stringify(plan))
   })
 })
