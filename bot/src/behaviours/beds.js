@@ -394,6 +394,8 @@ function latchLive(ctx, bot, now) {
 // the 3rd strike latches until the home changes. Separate from the no-wool
 // latch (noWool) on purpose. ponytail: chest beds are not in the key (only
 // an async chest open reads them); add when a chest restock should re-arm.
+// ponytail: not persisted (unlike noWool) — a reconnect re-probes at most 3
+// times; persist via memory.js when per-connection churn shows in prod.
 const PLACE_HOLD_MS = 10 * 60 * 1000
 const PLACE_HOLD_MAX_MS = 60 * 60 * 1000
 const PLACE_STRIKES = 3

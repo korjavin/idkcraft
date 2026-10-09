@@ -126,6 +126,17 @@ describe('vmzq.61 beds reach/place hold', () => {
     assert.equal(goal.MENU.beds.feasible(FACTS, bot, ctx), true, 'home change releases')
   })
 
+  it('three place refusals at the bed (cant-place-bed) hold the same way', () => {
+    const { bot, ctx } = setup()
+    const foot = beds.cellsOf(ctx.home).a.foot
+    bot.entity.position = pos(foot.x, foot.y, foot.z + 1) // in reach; the cell reads stone: refused
+    assert.equal(runPick(bot, ctx), 'failed:cant-place-bed')
+    assert.equal(ctx.beds.placeHold.fails, 1)
+    assert.equal(goal.MENU.beds.feasible(FACTS, bot, ctx), false)
+    now += 10 * MIN
+    assert.equal(goal.MENU.beds.feasible(FACTS, bot, ctx), true)
+  })
+
   it('normal path: no failure, no hold; both beds in clears a record', () => {
     const { bot, ctx } = setup()
     assert.equal(beds.placeHeld(ctx, bot), null)
