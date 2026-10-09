@@ -1738,6 +1738,9 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
     fail(ctx, reason)
   }
   const have = countItems(bot, (n) => n === 'chest')
+  // A finished craftany chest run (ipn.16) is never polled again once the
+  // chest is packed: drop it so a later double replans from scratch.
+  try { if (have > 0 && ctx.craftany && ctx.craftany.key === 'chestx1') ctx.craftany = null } catch (_) { /* best-effort */ }
   if (have <= 0) {
     // Deferred require: stockpile loads during goal's load (goal requires
     // this module), while craft destructures NEED_LOGS off goal at load —
@@ -1755,6 +1758,17 @@ function placeChest(bot, ctx, spot, bp, opts = {}) {
         } catch (_) { tableBlock = null }
       }
       if (!tableBlock) tablePos = null
+    }
+    // No standing table (ipn.16): craftany places one (pack item or 4
+    // planks/logs, TABLE_TRIES) and crafts the chest at it — the home chest
+    // never came because nothing else ever placed a table for it. Site mode
+    // (noFarTable) keeps the old fail: craftany may walk to a far home
+    // table. Deferred require (stockpile->craftany->gear->craft->goal).
+    if (!tableBlock && !opts.noFarTable) {
+      let res = null
+      try { res = require('./craftany')(bot, ctx, 'chest', 1) } catch (err) { res = { done: false, line: String(err && err.message) } }
+      if (res === 'running' || (res && res.done)) return // next tick holds the chest and places it
+      console.log(`stockpile failed no-chest: ${(res && res.line) || 'no-table'} (no-table)`)
     }
     if (!tableBlock) {
       if (offerHaul(bot, ctx)) say(bot, 'no table to craft a chest — bringing the surplus to you')
