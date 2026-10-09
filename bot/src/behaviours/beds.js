@@ -37,7 +37,12 @@ const FAIL_BANK_MS = 3 * 60 * 1000 // a failing hunt's bank walk; past it the yi
 const PLACE_REACH = 4
 const PLACE_REFUSALS = 3
 const STALL_TICKS = 30
-const YAW_EAST = -Math.PI / 2 // head lands +x: A (1,4)->(2,4), B (4,4)->(5,4)
+// Place yaw by bed facing (g0z.30, residence facing 0 n, 1 e, 2 s, 3 w):
+// the head lands one cell along the look. House beds face east (-PI/2).
+function yawOf(facing) {
+  return -((facing | 0) % 4) * Math.PI / 2
+}
+const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]]
 const WOOL16 = bedMod.BED_COLORS.map((c) => `${c}_wool`)
 // Every plank wood incl. 26.x pale oak: the chest recovery pulls any wood.
 const PLANK_NAMES = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'bamboo', 'crimson', 'warped', 'pale_oak'].map((w) => `${w}_planks`)
@@ -103,13 +108,15 @@ function blockNameAt(bot, p) {
   }
 }
 
-// The foot block when a whole bed stands on foot+east, else null (half beds
-// and dark chunks read as no bed — sleep refuses halves, dark re-reads).
-function bedAt(bot, foot) {
+// The foot block when a whole bed stands on foot + facing (east for the
+// house), else null (half beds and dark chunks read as no bed — sleep
+// refuses halves, dark re-reads).
+function bedAt(bot, foot, facing = 1) {
   try {
     const f = bot.blockAt && bot.blockAt(foot)
     if (!f || typeof f.name !== 'string' || !f.name.endsWith('_bed')) return null
-    const h = blockNameAt(bot, new Vec3(foot.x + 1, foot.y, foot.z))
+    const [ox, oz] = DIRS[(facing | 0) % 4]
+    const h = blockNameAt(bot, new Vec3(foot.x + ox, foot.y, foot.z + oz))
     if (!h || !h.endsWith('_bed')) return null
     return f
   } catch (_) {
@@ -131,9 +138,9 @@ function bedStands(bot, home, cells, k, key) {
     } catch (_) { loaded = false }
     if (!loaded) return true
     if (f && typeof f.name === 'string' && f.name.endsWith('_bed') &&
-      bedAt(bot, new Vec3(claim.x, claim.y, claim.z))) return true
+      bedAt(bot, new Vec3(claim.x, claim.y, claim.z), cells[k].facing)) return true
   }
-  return !!bedAt(bot, cells[k].foot)
+  return !!bedAt(bot, cells[k].foot, cells[k].facing)
 }
 
 // Ground a bed can stand on: the v2 house lays no floor, so the bedroom row
@@ -194,7 +201,7 @@ function bedroomBed(bot, home, which) {
     if (!bedded(home)) return null
     const cells = cellsOf(home)[which]
     if (!cells) return null
-    return bedAt(bot, cells.foot)
+    return bedAt(bot, cells.foot, cells.facing)
   } catch (_) {
     return null
   }
@@ -221,10 +228,10 @@ function adoptBeds(bot, home) {
         } catch (_) { loaded = false }
         if (!loaded) { out[k] = true; continue }
         if (f && typeof f.name === 'string' && f.name.endsWith('_bed') &&
-          bedAt(bot, new Vec3(claim.x, claim.y, claim.z))) { out[k] = true; continue }
+          bedAt(bot, new Vec3(claim.x, claim.y, claim.z), cells[k].facing)) { out[k] = true; continue }
         try { delete home[key]; if (key === 'bedA') delete home.sleptA } catch (_) { /* retract best-effort */ }
       }
-      const blk = bedAt(bot, cells[k].foot)
+      const blk = bedAt(bot, cells[k].foot, cells[k].facing)
       if (blk) {
         try { home[key] = new Vec3(cells[k].foot.x, cells[k].foot.y, cells[k].foot.z) } catch (_) { /* claim best-effort */ }
         out[k] = true
@@ -403,7 +410,7 @@ const PLACE_STRIKES = 3
 
 function homeKey(home) {
   const s = home && home.site
-  return s && typeof s.x === 'number' ? `${s.x},${s.y},${s.z},v${home.v === 2 ? 2 : 1}` : 'none'
+  return s && typeof s.x === 'number' ? `${s.x},${s.y},${s.z},${home.kind === 'castle' ? 'castle' : `v${home.v === 2 ? 2 : 1}`}` : 'none'
 }
 
 function bedSig(bot, home) {
@@ -660,7 +667,8 @@ function chestTick(bot, ctx, st, key, op) {
   return true
 }
 
-// Bot's bed first, owner's second, staged south of the foot through the wall.
+// Bot's bed first, owner's second, from the residence stage cell (house:
+// south of the foot through the wall; castle: inside the bedroom).
 function placeTick(bot, ctx, st, placed) {
   const which = !placed.a ? 'a' : 'b'
   const item = findBedItem(bot, st.color)
@@ -758,7 +766,7 @@ function placeTick(bot, ctx, st, placed) {
       try { ref = bot.blockAt && bot.blockAt(new Vec3(foot.x, foot.y - 1, foot.z)) } catch (_) { ref = null }
       if (!ref || !ref.position || !ref.name || ref.name === 'air') throw new Error('no ground under the bed')
       if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
-      if (typeof bot.look === 'function') await bot.look(YAW_EAST, 0)
+      if (typeof bot.look === 'function') await bot.look(yawOf(cells[which].facing), 0)
       if (typeof bot._placeBlockWithOptions === 'function') {
         await bot._placeBlockWithOptions(ref, new Vec3(0, 1, 0), { forceLook: 'ignore' })
       } else {
@@ -819,6 +827,7 @@ module.exports.fillRef = fillRef
 module.exports.isBedroomCell = isBedroomCell
 module.exports.migrateClaims = migrateClaims
 module.exports.bedAt = bedAt
+module.exports.yawOf = yawOf
 module.exports.bedroomBed = bedroomBed
 module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact

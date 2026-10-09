@@ -4,7 +4,9 @@
 // of g0z.9). One descriptor per residence kind, pure (no bot/world reads):
 //
 //   entrance(home) -> { door, outside, inside, facing }   world cells
-//   beds(home)     -> [{ foot, head, stage, facing }]     world cells
+//   beds(home)     -> [{ foot, head, stage, facing, sleep }] world cells
+//                     (stage: where the place stands; sleep: where the
+//                     sleep click stands, within 2 of the head)
 //   lights(home)   -> [{ dx, dy?, dz, ... }]  light plan, site-relative
 //   chest(home)    -> [{ dx, dy, dz }]        chest candidates, site-relative
 //   table(home)    -> world cell of the workbench
@@ -16,7 +18,7 @@
 //
 // hut/house are EXTRACTED from the call sites (home.js stances, beds.js
 // cells, light/stockpile spot plans, the home.interior box): same values.
-// The castle descriptor is added but no behaviour selects it yet (g0z.30).
+// The castle descriptor is live since g0z.30 (residence.wanted selects it).
 
 const Vec3 = require('vec3')
 const castle = require('./castle')
@@ -103,7 +105,7 @@ const HUT = {
 // owner's; head +x, placed through the south wall from foot.z + 2.
 function houseBed(home, fx) {
   const foot = at(home, fx, 0, 4)
-  return { foot, head: at(home, fx + 1, 0, 4), stage: at(home, fx, 0, 6), facing: 1 }
+  return { foot, head: at(home, fx + 1, 0, 4), stage: at(home, fx, 0, 6), facing: 1, sleep: at(home, 2, 0, 3) }
 }
 
 const HOUSE = {
@@ -132,17 +134,19 @@ const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest'])
 // behind the partition (x12..14 / x16..18, z15..18, feet dy 4); each bed
 // runs south along a wall, staged from the cell beside its foot.
 const C_BEDS = [
-  { foot: [12, 4, 17], head: [12, 4, 18], stage: [13, 4, 16] },
-  { foot: [18, 4, 17], head: [18, 4, 18], stage: [17, 4, 16] },
+  { foot: [12, 4, 17], head: [12, 4, 18], stage: [13, 4, 16], sleep: [13, 4, 18] },
+  { foot: [18, 4, 17], head: [18, 4, 18], stage: [17, 4, 16], sleep: [17, 4, 18] },
 ]
 const C_TABLE = [16, 0, 18] // ground storeroom, beside the plan chest (18,0,18)
 const C_INSIDE = [BP.DOOR.dx, 0, BP.DOOR.dz + 1] // first hall cell behind the gate
 
 // Residence floors, rot 0: every body-interior column (towers excluded —
-// their stairwells are no living space) with a free 2-high feet space on
-// the ground storey (dy 0, terrain floor) or the upper storey (dy 4, on
-// the dy 3 slab: the stairwell over the ground stair has none). Hall,
-// kitchen, storeroom and bedrooms, listed from the plan, not one box.
+// their stairwells are no living space) with a standable feet cell: free
+// 2-high over the terrain (dy 0) or over a plan block (g0z.30: the ground
+// stair steps and the upper storey on the dy 3 slab, so a bot climbing to
+// its bed never reads outside mid-stair; the stairwell over the ground
+// stair has no slab and reads no floor at dy 4). Hall, kitchen,
+// storeroom, stairs and bedrooms, listed from the plan, not one box.
 function castleFloors() {
   const plan = new Map(BP.PLAN.map((c) => [`${c.dx},${c.dy},${c.dz}`, c.kind]))
   const solid = (x, y, z) => COLLIDES.has(plan.get(`${x},${y},${z}`))
@@ -150,9 +154,9 @@ function castleFloors() {
   for (let z = 8; z <= 18; z++) {
     for (let x = 8; x <= 22; x++) {
       if ((x <= 11 || x >= 19) && (z <= 11 || z >= 15)) continue // a corner tower
-      for (const y of [0, 4]) {
+      for (let y = 0; y <= 6; y++) {
         if (solid(x, y, z) || solid(x, y + 1, z)) continue
-        if (y === 4 && plan.get(`${x},3,${z}`) !== 'planks') continue
+        if (y > 0 && !solid(x, y - 1, z)) continue
         out.push({ dx: x, dy: y, dz: z })
       }
     }
@@ -199,13 +203,22 @@ const CASTLE = {
     return { door, outside, inside, facing: rot(home) % 4 }
   },
   beds: (home) => C_BEDS.map((b) => {
-    const [foot, head, stage] = world(home, [b.foot, b.head, b.stage])
-    return { foot, head, stage, facing: dirOf(foot, head) }
+    const [foot, head, stage, sleep] = world(home, [b.foot, b.head, b.stage, b.sleep])
+    return { foot, head, stage, facing: dirOf(foot, head), sleep }
   }),
   lights: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'torch').map((c) => [c.dx, c.dy, c.dz])),
   chest: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'chest').map((c) => [c.dx, c.dy, c.dz])),
   table: (home) => world(home, [C_TABLE])[0],
-  interior: (home, pos) => !!pos && floorSet(home).has(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`),
+  // The feet cell, or the one below it (g0z.30 02: a step-down edge on the
+  // stair floors the feet over the open stairwell for ~70 ms; a jump too).
+  interior: (home, pos) => {
+    if (!pos) return false
+    const x = Math.floor(pos.x)
+    const y = Math.floor(pos.y)
+    const z = Math.floor(pos.z)
+    const set = floorSet(home)
+    return set.has(`${x},${y},${z}`) || set.has(`${x},${y - 1},${z}`)
+  },
   box: (home) => {
     const cells = castle.absPlan(home.site, rot(home), CV).cells
     const min = { x: Infinity, y: Infinity, z: Infinity }
@@ -232,9 +245,9 @@ function of(home) {
 // (site/rot mirror the castle ref so the descriptor reads it like the castle
 // state). The last hut home rides as ctx.hutHome (memory restores it from
 // the homes history) and comes back when the castle is forgotten.
-// ponytail: off until g0z.30 teaches gohome/stay/beds the castle shape;
-// g0z.30 flips it (tests flip module.exports.RESIDENCE_CASTLE).
-const RESIDENCE_CASTLE = false
+// On since g0z.30 (gohome/stay/beds/sleep/table read the castle shape);
+// tests flip module.exports.RESIDENCE_CASTLE.
+const RESIDENCE_CASTLE = true
 
 function castleHome(st) {
   const site = new Vec3(st.site.x, st.site.y, st.site.z)

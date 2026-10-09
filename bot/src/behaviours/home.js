@@ -109,6 +109,27 @@ function insidePos(home) {
   return residence.of(home).entrance(home).inside
 }
 
+// The entrance's outward direction (0 n, 1 e, 2 s, 3 w; hut/house 0) and a
+// body read against it (g0z.30: a rotated castle gate): bp is m into cell c
+// when crossing it heading dir — the doorway arrivals were z-only.
+function facingOf(home) {
+  return residence.of(home).entrance(home).facing | 0
+}
+function beyond(bp, c, dir, m) {
+  if (dir === 0) return bp.z <= c.z + 1 - m
+  if (dir === 1) return bp.x >= c.x + m
+  if (dir === 2) return bp.z >= c.z + m
+  return bp.x <= c.x + 1 - m
+}
+// Whole body past the inside cell's near edge (enter) / out past the
+// outside cell (exit) — one-sided, never standing in the doorway.
+function inPast(home, bp, inn) {
+  return beyond(bp, inn, (facingOf(home) + 2) % 4, 0.3)
+}
+function outPast(home, bp, out) {
+  return beyond(bp, out, facingOf(home), 0.3)
+}
+
 // Residence floors (residence.js interior): for hut/house the floored
 // home.interior box — raw float compares put the back row and east column
 // outside (live jr2.3: a bedroom order at z=4.5 read as outside and walked
@@ -136,6 +157,7 @@ function doorBlock(bot, home) {
 // the A* door reflex since idkcraft-6xno): the free-gap offset for the legs.
 function doorLaneDX(bot, home) {
   try {
+    if (facingOf(home) % 2) return 0 // x-axis gate (g0z.30): the lane legs cross along z only
     return blockLaneDX(doorBlock(bot, home))
   } catch (_) {
     return 0
@@ -154,14 +176,15 @@ function playerAtDoor(bot, home) {
     const door = doorPos(home)
     const cx = door.x + 0.5
     const cz = door.z + 0.5
-    const roomZ = insidePos(home).z
+    const inn = insidePos(home)
+    const inward = (facingOf(home) + 2) % 4
     const players = (bot && bot.players) || {}
     for (const key of Object.keys(players)) {
       if (key === bot.username) continue
       const ent = players[key] && players[key].entity
       const p = ent && ent.position
       if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') continue
-      if (p.z < roomZ && Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
+      if (!beyond(p, inn, inward, 0) && Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true
     }
   } catch (_) { /* unreadable roster: the old rule stands */ }
   return false
@@ -488,6 +511,7 @@ function doorGone(bot, home) {
 // goal.js latches it out for the night after repeats (idkcraft-xhqv).
 function failGoneDoor(bot, ctx, st, home, where) {
   failNoDoor(ctx, st, where)
+  if (home && home.kind === 'castle') return // g0z.30: the gate is the castle step's repair, no house to re-open
   try {
     const di = buildMod.blueprintFor(home).findIndex((c) => c.kind === 'door')
     const skipped = Array.isArray(ctx.buildSkip) && ctx.buildSkip.includes(di)
@@ -635,7 +659,7 @@ function gohomeTick(bot, ctx, target, state) {
     // cannot shut the panel into the bot (revmux 03-review).
     const door = doorPos(home)
     const through = stepThrough(bot, ctx, st, [out, door, inn],
-      (bp) => isInside(bot, home) && bp.z >= inn.z + 0.3, doorLaneDX(bot, home))
+      (bp) => isInside(bot, home) && inPast(home, bp, inn), doorLaneDX(bot, home))
     if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
     else {    return }
@@ -692,7 +716,7 @@ function holdStill(bot, ctx) {
 // monsters near) back off; server-side refusals (occupied, obstructed,
 // timeout) give up tonight and retry tomorrow. A dawn that finds the body
 // still asleep wakes it (missed wake event).
-const SLEEP_REACH = 2 // from the head: inside mineflayer's click box on every facing
+const SLEEP_REACH = 2 // from the head's centre (g0z.30: the corner read lost a castle bed's diagonal arrival)
 const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
 // Night bed (rw4.20): a carried bed with bedroom A empty is laid before the
@@ -700,10 +724,9 @@ const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-t
 // rig HOUSE-BUMP) left the bot holding a red_bed all night. Plain case only:
 // both cells air (build's clear cells dug the bump) on solid ground; a dip
 // or occupier holds as before and the day beds step patches it. Same forced
-// east yaw as beds.js placeTick. Three refusals give up tonight.
+// facing yaw as beds.js placeTick. Three refusals give up tonight.
 const NIGHT_BED_FAILS = 3
 const AIR_CELLS = new Set(['air', 'cave_air', 'void_air'])
-const YAW_EAST = -Math.PI / 2
 function nightBedItem(bot, a, st) {
   if ((st.bedLayFails || 0) >= NIGHT_BED_FAILS) return null
   const bedsMod = require('./beds') // deferred, as cellsOf above
@@ -721,14 +744,14 @@ function layNightBed(bot, ctx, home, a, st, item) {
     try {
       const ground = bot.blockAt(new Vec3(a.foot.x, a.foot.y - 1, a.foot.z))
       await bot.equip(item, 'hand')
-      if (typeof bot.look === 'function') await bot.look(YAW_EAST, 0)
+      if (typeof bot.look === 'function') await bot.look(require('./beds').yawOf(a.facing), 0)
       if (typeof bot._placeBlockWithOptions === 'function') {
         await bot._placeBlockWithOptions(ground, new Vec3(0, 1, 0), { forceLook: 'ignore' })
       } else {
         await bot.placeBlock(ground, new Vec3(0, 1, 0))
       }
       await new Promise((resolve) => setTimeout(resolve, 500)) // the head acks a tick after the foot
-      if (!require('./beds').bedAt(bot, a.foot)) throw new Error('bed did not take')
+      if (!require('./beds').bedAt(bot, a.foot, a.facing)) throw new Error('bed did not take')
       try { home.bedA = new Vec3(a.foot.x, a.foot.y, a.foot.z); delete home.sleptA } catch (_) { /* claim best-effort */ }
       try { bot.chat('my bed is in') } catch (_) { /* chat best-effort */ }
     } catch (err) {
@@ -767,8 +790,8 @@ function sleepTick(bot, ctx, home, st) {
     const bp = botPos(bot)
     if (!bp) return false
     const head = cells.a.head
-    if (Math.hypot(bp.x - head.x, bp.y - head.y, bp.z - head.z) > SLEEP_REACH) {
-      const open = new Vec3(home.site.x + 2, home.site.y, home.site.z + 3)
+    if (Math.hypot(bp.x - (head.x + 0.5), bp.y - head.y, bp.z - (head.z + 0.5)) > SLEEP_REACH) {
+      const open = cells.a.sleep // residence sleep cell (house: the common room; castle: beside the head)
       setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(open.x, open.y, open.z, 1))
       const last = st.sleepAnchor
       if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) {
@@ -813,6 +836,14 @@ function sleepTick(bot, ctx, home, st) {
   } catch (_) {
     return false
   }
+}
+
+// Off the inside stance's storey or 4+ away (a castle bedroom/kitchen; the
+// house rooms are all within 3.6 of it, so they keep the direct legs).
+function farFromInside(bot, inn) {
+  const bp = botPos(bot)
+  if (!bp) return false
+  return Math.abs(bp.y - inn.y) > 1 || Math.hypot(bp.x - (inn.x + 0.5), bp.z - (inn.z + 0.5)) >= 4
 }
 
 function stay(bot, ctx, target, state) {
@@ -874,7 +905,16 @@ function stay(bot, ctx, target, state) {
     }
     return
   }
-  if (st.phase === 'hold') st.phase = 'open'
+  if (st.phase === 'hold') st.phase = farFromInside(bot, inn) ? 'down' : 'open'
+  if (st.phase === 'down') {
+    // g0z.30: woken upstairs (a castle bedroom), the gate is out of click
+    // reach and the sneak legs run straight lines — walk to the inside
+    // stance first (walkTo caps the stall), then open and exit. No-dig, as
+    // the gohome walk (the walk borrow).
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { walk: true }) } catch (_) { /* lease best-effort */ }
+    if (!walkTo(bot, ctx, st, 'stay-down', new goals.GoalNear(inn.x, inn.y, inn.z, 1), nearOut(inn, 1))) return
+    st.phase = 'open'
+  }
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'exit'
@@ -896,7 +936,7 @@ function stay(bot, ctx, target, state) {
     // One-sided like enter: arrival only with the whole body north of the
     // door cell, never standing in the doorway (revmux 03-review).
     const door = doorPos(home)
-    const through = stepThrough(bot, ctx, st, [inn, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
+    const through = stepThrough(bot, ctx, st, [inn, door, out], (bp) => outPast(home, bp, out), doorLaneDX(bot, home))
     if (st.phase === 'failed') {    return } // stepThrough failed the step
     if (through) st.phase = 'close'
     else {    return }
@@ -1571,7 +1611,7 @@ function exitMeet(bot, ctx, home, order) {
   }
   if (order.phase === 'exit') {
     const door = doorPos(home)
-    const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => bp.z <= out.z + 0.7, doorLaneDX(bot, home))
+    const through = stepThrough(bot, ctx, order, [meet, door, out], (bp) => outPast(home, bp, out), doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       const keepBy = order.by
       // Committed unconditionally (not carried): the re-arm proves the legs
@@ -1713,7 +1753,7 @@ function comehome(bot, ctx, target, state) {
     // cannot shut the panel into the bot.
     const door = doorPos(home)
     const through = stepThrough(bot, ctx, order, [out, door, meet],
-      (bp) => isInside(bot, home) && bp.z >= meet.z + 0.3, doorLaneDX(bot, home))
+      (bp) => isInside(bot, home) && inPast(home, bp, meet), doorLaneDX(bot, home))
     if (order.phase === 'failed') {
       failMeet(bot, ctx, 'failed:cannot-reach-home')
       return

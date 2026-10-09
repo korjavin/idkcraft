@@ -151,7 +151,12 @@ const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
 
 // Blueprint by home version (jr2.1): v2 homes build the 7x6 house, anything
 // else (v1, or a home that predates the version mark) the frozen 4x4 plan.
+// A castle residence (g0z.30) has no house plan: nothing to build or
+// repair at castle coords (its holes are the castle step's own repair), so
+// build is infeasible and every plan scan reads empty/complete.
+const NO_PLAN = Object.freeze([])
 function blueprintFor(home) {
+  if (home && home.kind === 'castle') return NO_PLAN
   return home && home.v === 2 ? BLUEPRINT_V2 : BLUEPRINT
 }
 
@@ -244,6 +249,9 @@ function isPlanCell(home, x, y, z) {
   try {
     if (!home || !home.site) return false
     const s = home.site
+    // g0z.30: a castle residence keeps its own plan clear — walls, keep-clear
+    // doorways/stairwells, torches (a station there cuts the path to a bed).
+    if (home.kind === 'castle') return require('../castle').absPlan(s, home.rot | 0, 2).at.has(`${x},${y},${z}`)
     return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' && c.kind !== 'clear' &&
       s.x + c.dx === x && s.y + c.dy === y && s.z + c.dz === z)
   } catch (_) { return false }
@@ -653,6 +661,9 @@ function walkToSite(bot, ctx, p) {
 
 function build(bot, ctx, target, state) {
   if (!ctx.buildSkip) ctx.buildSkip = []
+  // g0z.30: a castle residence has no house plan (blueprintFor) — never
+  // lay hut cells at castle coords.
+  if (ctx.home && ctx.home.kind === 'castle') { failBuild(ctx, 'castle-residence'); return }
   // First build step without a home: default the site to world spawn
   // (site.js siteFor; the owner moves it with 'build here').
   if (!ctx.home) {
