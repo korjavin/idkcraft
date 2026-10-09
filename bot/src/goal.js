@@ -246,7 +246,8 @@ const MENU = {
       // park keeps the veto past the task radius (R2 minor 3).
       if (castleFirst(ctx, 'beds') || castleParkLeash(ctx)) return false
       if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
-      try { return !require('./behaviours/beds').sheepLatched(ctx, bot) } catch (_) { return true }
+      // vmzq.61: an unreachable/unplaceable bed holds on home/bed-count/time, not the facts text.
+      try { const m = require('./behaviours/beds'); return !m.placeHeld(ctx, bot) && !m.sheepLatched(ctx, bot) } catch (_) { return true }
     },
     chat: () => 'on my own: making the beds',
     verb: 'making beds',
@@ -1971,6 +1972,10 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
+      try {
+        const held = require('./behaviours/beds').placeHeld(ctx, bot)
+        if (held) return held.latched ? 'beds: bed unreachable, latched until the home changes' : `beds: bed unreachable, retry in ${Math.ceil(held.left / 1000)}s`
+      } catch (_) { /* wording best-effort */ }
       try { if (require('./behaviours/beds').sheepLatched(ctx, bot)) return 'beds: sheep hunt latched' } catch (_) { /* wording best-effort */ }
       return 'beds: not feasible'
     case 'light': {

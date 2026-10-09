@@ -386,6 +386,54 @@ function latchLive(ctx, bot, now) {
   } catch (_) { return false }
 }
 
+// Unreachable/unplaceable bed hold (idkcraft-vmzq.61): failHolds is keyed
+// on the facts text, which drifts every minute (known/logs/time), so a bed
+// the bot cannot reach was retried ~100 times in 3 h. This hold is keyed
+// on what can change the verdict: the home (site + version), the bed
+// inventory (pack beds + standing beds), or time — 10 min, then 20, and
+// the 3rd strike latches until the home changes. Separate from the no-wool
+// latch (noWool) on purpose. ponytail: chest beds are not in the key (only
+// an async chest open reads them); add when a chest restock should re-arm.
+// ponytail: not persisted (unlike noWool) — a reconnect re-probes at most 3
+// times; persist via memory.js when per-connection churn shows in prod.
+const PLACE_HOLD_MS = 10 * 60 * 1000
+const PLACE_HOLD_MAX_MS = 60 * 60 * 1000
+const PLACE_STRIKES = 3
+
+function homeKey(home) {
+  const s = home && home.site
+  return s && typeof s.x === 'number' ? `${s.x},${s.y},${s.z},v${home.v === 2 ? 2 : 1}` : 'none'
+}
+
+function bedSig(bot, home) {
+  return `${bedItemsInPack(bedMod.packCounts(bot))}:${bedsFact(bot, home)}`
+}
+
+function notePlaceHold(bot, ctx, st, now) {
+  try {
+    const t = typeof now === 'number' ? now : Date.now()
+    const home = homeKey(ctx.home)
+    const sig = bedSig(bot, ctx.home)
+    const cur = st.placeHold
+    const fails = cur && cur.home === home && cur.sig === sig ? (cur.fails || 0) + 1 : 1
+    st.placeHold = { at: t, home, sig, fails }
+  } catch (_) { /* hold best-effort */ }
+}
+
+// Menu gate: null = free; { latched: true } or { left: ms } while held.
+function placeHeld(ctx, bot, now) {
+  try {
+    const h = ctx && ctx.beds && ctx.beds.placeHold
+    if (!h || typeof h !== 'object' || typeof h.at !== 'number') return null
+    if (h.home !== homeKey(ctx.home)) return null
+    if ((h.fails || 0) >= PLACE_STRIKES) return { latched: true }
+    if (h.sig !== bedSig(bot, ctx.home)) return null
+    const win = Math.min(PLACE_HOLD_MS * 2 ** ((h.fails || 1) - 1), PLACE_HOLD_MAX_MS)
+    const left = h.at + win - (typeof now === 'number' ? now : Date.now())
+    return left > 0 ? { left } : null
+  } catch (_) { return null }
+}
+
 // Wool through a self bring order (the did.3 mob rung): the return phase
 // keeps the goods, dusk cancels, the bed step reopens in the morning. A hunt
 // that searched the whole budget is genuinely sheepless (failed:no-wool, the
@@ -647,6 +695,7 @@ function placeTick(bot, ctx, st, placed) {
       st.anchor = { x: bp.x, z: bp.z }
     } else if (++st.stalls >= STALL_TICKS) {
       ctx.stepStatus = 'failed:cant-reach-bed'
+      notePlaceHold(bot, ctx, st)
       return
     }
     return
@@ -728,7 +777,10 @@ function placeTick(bot, ctx, st, placed) {
     } finally {
       ctx.placeInFlight = false
     }
-    if (fails() >= PLACE_REFUSALS) ctx.stepStatus = 'failed:cant-place-bed'
+    if (fails() >= PLACE_REFUSALS) {
+      ctx.stepStatus = 'failed:cant-place-bed'
+      notePlaceHold(bot, ctx, st)
+    }
   })().catch(() => { ctx.placeInFlight = false })
 }
 
@@ -744,6 +796,7 @@ function beds(bot, ctx, target, state) {
   let placed = { a: false, b: false }
   try { placed = adoptBeds(bot, home) } catch (_) { /* unscannable: phases verify */ }
   if (placed.a && placed.b) {
+    delete st.placeHold
     ctx.stepStatus = 'done'
     try { bot.chat('both beds are in') } catch (_) { /* chat best-effort */ }
     return
@@ -769,6 +822,8 @@ module.exports.bedroomBed = bedroomBed
 module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact
 module.exports.sheepLatched = sheepLatched
+module.exports.placeHeld = placeHeld
+module.exports.PLACE_HOLD_MS = PLACE_HOLD_MS
 module.exports.NOWOOL_LATCH = NOWOOL_LATCH
 module.exports.LATCH_MS = LATCH_MS
 module.exports.SIGHT_MIN_MS = SIGHT_MIN_MS
