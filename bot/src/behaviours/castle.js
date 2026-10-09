@@ -855,7 +855,8 @@ function progress(bot, st, cells, ctx) {
   // bridge-refill -> re-dig loop must not read as growth to the clock.
   // ponytail: per-session high-water, a restart re-reads the world.
   const sig = `${st.site.x},${st.site.y},${st.site.z}:${st.rot | 0}:${ver(st)}`
-  if (!ctx.castleDug || ctx.castleDug.sig !== sig) ctx.castleDug = { sig, idx: new Set() }
+  if (!ctx.castleDug || ctx.castleDug.sig !== sig) ctx.castleDug = { sig, idx: new Set(), high: 0, regress: -1 }
+  const miss = []
   for (const c of cells) {
     if (!gauged(c)) continue
     total++
@@ -863,8 +864,15 @@ function progress(bot, st, cells, ctx) {
       if (done(bot, c)) ctx.castleDug.idx.add(c.idx)
       if (ctx.castleDug.idx.has(c.idx)) n++
     } else if (done(bot, c)) n++
+    else miss.push(c)
   }
   st.progress = { done: n, total }
+  // uh28: a drop below the high-water mark names the missing cells, once per drop.
+  const cd = ctx.castleDug
+  if (n >= cd.high) { cd.high = n; cd.regress = -1 } else if (cd.regress !== n) {
+    cd.regress = n
+    console.log(`castle regress ${n} missing=${miss.slice(0, 10).map((c) => `${c.kind}@${c.x},${c.y},${c.z}`).join(' ')}`)
+  }
   if (ctx.castleProgressLog !== n) {
     ctx.castleProgressLog = n
     console.log(`castle ${n}/${total}`)
@@ -1602,6 +1610,7 @@ module.exports.SEARCH_RADIUS = SEARCH_RADIUS
 module.exports.SEARCH_SCANS = SEARCH_SCANS
 module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
+module.exports.progress = progress
 module.exports.usable = usable
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
