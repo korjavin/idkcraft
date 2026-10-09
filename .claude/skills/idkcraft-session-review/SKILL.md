@@ -63,6 +63,6 @@ Compare sessions when useful (before/after a fix): same counts (hard/easy routes
 
 ## 5. Output
 
-- Beads (`bd create -t bug`), one per root cause, in Russian like the recent ones (`bd show idkcraft-gk6`): ЧТО (timestamps UTC + the quoted log lines as evidence), ПОЧЕМУ (code path, file:function), ЧТО СДЕЛАТЬ (smallest fix), ACCEPTANCE (a test in bot/test that fails today). Priority P1 if it breaks follow/safety, P2 otherwise. Check `bd list --status open` first — add a note to an existing bead instead of duplicating.
+- Beads (`bd create -t bug`), one per root cause, in Russian like the recent ones (`bd show idkcraft-gk6`): ЧТО (timestamps UTC + the quoted log lines as evidence), ПОЧЕМУ (code path, file:function), ЧТО СДЕЛАТЬ (smallest fix), ACCEPTANCE (a test in bot/test that fails today). Priority P1 if it breaks follow/safety, P2 otherwise. Check `bd list --status open` first — add a note to an existing bead instead of duplicating. Same user-visible symptom already has ≥2 beads (open, or closed in the last 7 days) → no new point fix: add the evidence to the family's design bead (none yet → file one: root-cause across the earlier PRs plus a `castle-rig.sh`/`stuck-spots.json` scenario that reproduces it, blocking further fixes).
 - A short report back: session window + build, timeline of the owner's commands and bot reactions, root causes with bead ids, numbers (routes, disagreements, latency, deaths, stuck events), and anything you could not explain.
 - Do not write code, commit, push, or touch prod.

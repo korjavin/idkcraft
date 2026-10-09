@@ -167,8 +167,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   entry in `bot/tools/stuck-baseline.json` — one without the other fails the gate or `npm test`.
   `STUCKRUN=<file>` stays optional for review rounds. Manual: `bot/tools/README.md`.
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
-  .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta). Minors are fixed in the same commit
-  and never trigger another round. Max 3 rounds; whatever is still gating is outstanding in the handoff.
+  .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta, one-agent `idkcraft` profile unless one is passed). Minors are fixed in the same commit
+  and never trigger another round. Max 3 rounds (the script refuses a 4th); whatever is still gating is outstanding in the handoff.
 - A livelock/pathing finding raised in two rounds or by both agents is never dropped or downgraded
   without a written reason (the ones that were came back as prod bugs: 3nt.19→ak4, ef3→9sq, 2bh→lzw).
 - Privacy pre-check by hand (must print nothing):

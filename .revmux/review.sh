@@ -40,6 +40,11 @@ if git diff --no-ext-diff "$BASE...HEAD" | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\
 fi
 INFRA='^(docker-compose\.yml|Dockerfile|\.github/|\.env|bot/Dockerfile|laya/Dockerfile|\.revmux/)'
 FILES="$(git diff --name-only "$BASE...HEAD")"
+# Round 2+ reviews a fix delta: one agent is enough (curator 2026-10-09: 87/98 later rounds gated nothing new); cap 3 rounds.
+if [ -n "$PREV" ]; then
+  [ "$(ls -d "$TASKS/$BEAD"/*/ 2>/dev/null | grep -vc "/$RUN/$")" -ge 3 ] && { echo "round cap (3) reached: list the open gating findings as outstanding in the handoff"; exit 1; }
+  [ -n "$PROFILE" ] || PROFILE=idkcraft
+fi
 [ -n "$PROFILE" ] || PROFILE="$(git diff --no-ext-diff "$BASE...HEAD" | pick)"
 SYNTH=""; [ "$PROFILE" = idkcraft ] && SYNTH="--no-synthesis"   # one agent: nothing to merge; risky panel of two keeps synthesis (25% duplicate pairs without it)
 # CI/compose/Dockerfile/env/.revmux-only diff: the tests lens alone (it carries the wiring checks). LENSES= overrides.
