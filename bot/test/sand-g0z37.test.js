@@ -131,7 +131,7 @@ describe('sand rung (g0z.37)', () => {
     assert.equal(ctx.bring, null)
     const sand = bot._items.find((s) => s.name === 'sand')
     assert.ok(sand && sand.count >= 18, `pack: ${JSON.stringify(bot._items)}`)
-    assert.ok(sawReturn || bot.digCalls >= 18)
+    assert.ok(sawReturn, 'ends through the return phase')
   })
 
   it("'bring me sand' becomes a real order (was the ores-and-logs refusal)", () => {
@@ -214,6 +214,12 @@ describe('stockpile pane-ladder keep (g0z.37)', () => {
     const plan = stockpile.depositPlan(bot, { castle: state(), home: null })
     assert.equal(banked(plan, 'sand'), 19, JSON.stringify(plan))
     assert.equal(banked(plan, 'glass'), 4)
+  })
+
+  it('away from the site (unloaded) the keep still holds (revmux 01)', () => {
+    const bot = packBot([{ name: 'sand', count: 18 }], false)
+    bot.blockAt = () => null
+    assert.equal(banked(stockpile.depositPlan(bot, { castle: state(), home: null }), 'sand'), 0)
   })
 
   it('no castle: sand banks', () => {

@@ -413,10 +413,13 @@ function depositPlan(bot, ctx) {
   let castleStoneKeep = castleWoodOpen(ctx) ? STONE_KEEP : null
   // Pane-ladder keep (g0z.37): sand + glass stay packed only while a pane
   // decor cell is open, capped (3 crafts x 6 glass covers the 44 panes);
-  // the rest banks like junk (vmzq.38 must not come back).
+  // the rest banks like junk (vmzq.38 must not come back). Read from afar
+  // too (revmux 01): an unloaded cell reads open and a backing-off cell
+  // counts (now=Infinity) — else a far fetch leg banks the ladder's sand.
   let paneKeep = null
   try {
-    if (ctx && ctx.castle && ctx.castle.site && require('./castle').decorOpen(bot, ctx.castle, Date.now()).some((c) => c.kind === 'pane')) {
+    const far = { blockAt: (p) => bot.blockAt(p) || { name: 'air' } }
+    if (ctx && ctx.castle && ctx.castle.site && require('./castle').decorOpen(far, ctx.castle, Infinity).some((c) => c.kind === 'pane')) {
       paneKeep = { sand: PANE_SAND_KEEP, glass: PANE_GLASS_KEEP }
     }
   } catch (_) { paneKeep = null }
