@@ -24,6 +24,7 @@ const craftItem = require('./craftany')
 const buildMod = require('./build')
 const stockpileMod = require('./stockpile')
 const { canBreak, isInteractRef } = require('./util')
+const residence = require('../residence')
 
 // Two beds of ONE color: 6 wool + 6 planks, single crafts (mixed woods land
 // one bed at a time — a x2 plan would strand on 4 oak + 4 birch).
@@ -43,29 +44,29 @@ const PLANK_NAMES = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', '
 const WITHDRAW_NEED = 6
 const WITHDRAW_STALL_TICKS = 30
 
-// Canonical bedroom cells, site-relative dy 0: A is the bot's (sleep sets the
-// respawn), B the owner's. Single source of the bed geometry (home.js sleep
-// reads it through a deferred require).
+// Canonical bedroom cells { foot, head, stage, facing }: A is the bot's
+// (sleep sets the respawn), B the owner's. The geometry lives in
+// residence.js (g0z.28); home.js sleep reads it through a deferred require.
 function cellsOf(home) {
-  const s = home.site
-  return {
-    a: { foot: new Vec3(s.x + 1, s.y, s.z + 4), head: new Vec3(s.x + 2, s.y, s.z + 4) },
-    b: { foot: new Vec3(s.x + 4, s.y, s.z + 4), head: new Vec3(s.x + 5, s.y, s.z + 4) },
-  }
+  const [a, b] = residence.of(home).beds(home)
+  return { a, b }
 }
 
-// Bedroom footprint test (idkcraft-4nx): the four bed cells of a v2 home.
+// A home with bedrooms (the v2 house; the v1 hut has none).
+function bedded(home) {
+  return !!home && !!home.site && residence.of(home).beds(home).length > 0
+}
+
+// Bedroom footprint test (idkcraft-4nx): the bed cells of the residence.
 // Furniture stations (equip's roadside table, stockpile's chest) must never
 // land here — beds.js fails loud on blocked cells (blocked by X) by design,
 // so the placer avoids them instead of the bed step digging furniture out.
 // v1 homes have no bedrooms: always false.
 function isBedroomCell(home, x, y, z) {
   try {
-    if (!home || !home.site || home.v !== 2) return false
-    const s = home.site
+    if (!bedded(home)) return false
     if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return false
-    if (y !== s.y || z !== s.z + 4) return false
-    return x === s.x + 1 || x === s.x + 2 || x === s.x + 4 || x === s.x + 5
+    return residence.of(home).beds(home).some((b) => [b.foot, b.head].some((c) => c.x === x && c.y === y && c.z === z))
   } catch (_) {
     return false
   }
@@ -151,7 +152,7 @@ function needsFillGround(name) {
 // place pre-check count against this.
 function fillNeed(bot, home) {
   try {
-    if (!home || !home.site || home.v !== 2) return 0
+    if (!bedded(home)) return 0
     const cells = cellsOf(home)
     let n = 0
     for (const k of ['a', 'b']) {
@@ -190,7 +191,7 @@ function fillRef(bot, g) {
 // Whole bed at the canonical cells of bedroom a/b, else null.
 function bedroomBed(bot, home, which) {
   try {
-    if (!home || !home.site || home.v !== 2) return null
+    if (!bedded(home)) return null
     const cells = cellsOf(home)[which]
     if (!cells) return null
     return bedAt(bot, cells.foot)
@@ -206,7 +207,7 @@ function bedroomBed(bot, home, which) {
 function adoptBeds(bot, home) {
   const out = { a: false, b: false }
   try {
-    if (!home || !home.site || home.v !== 2) return out
+    if (!bedded(home)) return out
     const cells = cellsOf(home)
     for (const k of ['a', 'b']) {
       const key = k === 'a' ? 'bedA' : 'bedB'
@@ -237,7 +238,7 @@ function adoptBeds(bot, home) {
 // unclaimed cells scan. Non-v2 homes owe no beds.
 function bedsFact(bot, home) {
   try {
-    if (!home || !home.site || home.v !== 2) return 'both'
+    if (!bedded(home)) return 'both'
     const cells = cellsOf(home)
     const a = bedStands(bot, home, cells, 'a', 'bedA')
     const b = bedStands(bot, home, cells, 'b', 'bedB')
@@ -667,7 +668,7 @@ function placeTick(bot, ctx, st, placed) {
   const cells = cellsOf(ctx.home)
   const foot = cells[which].foot
   const head = cells[which].head
-  const stage = { x: foot.x, y: foot.y, z: foot.z + 2 }
+  const stage = cells[which].stage
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return
   // Patch planks before the walk: a floorless-house dip under this bed needs
@@ -786,7 +787,7 @@ function placeTick(bot, ctx, st, placed) {
 
 function beds(bot, ctx, target, state) {
   const home = ctx && ctx.home
-  if (!home || !home.site || home.v !== 2) {
+  if (!bedded(home)) {
     ctx.stepStatus = 'failed:no-house'
     return
   }
