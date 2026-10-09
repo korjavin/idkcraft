@@ -61,7 +61,7 @@ function totals(bot) {
 // gen (oqul.7): the step identity captured at the op's start; a late
 // failure of a step that is gone drops instead of failing the new one.
 function fail(ctx, item, err, gen) {
-  stepFailed(ctx, `craft-${item}`, gen)
+  if (!stepFailed(ctx, `craft-${item}`, gen)) return // stale: step.js logged the drop
   try {
     console.error(`craft failed item=${item} error=${err && err.message ? err.message : err}`)
   } catch (_) { /* logging best-effort */ }
