@@ -22,13 +22,15 @@ describe('castle progress regress log (uh28)', () => {
       for (let i = 0; i < 12; i++) world.delete(`${i},65,7`)
       castle.progress(bot, st, cells, ctx)
       castle.progress(bot, st, cells, ctx) // same drop: silent
-      world.set('0,65,7', 'stone') // grew, still below high-water: new count logs
+      world.set('0,65,7', 'stone') // grew, still below high-water: silent
+      castle.progress(bot, st, cells, ctx)
+      world.delete('13,65,7') // a fresh drop
       castle.progress(bot, st, cells, ctx)
     } finally { console.log = orig }
     assert.equal(lines[0], 'castle 14/14')
     const reg = lines.filter((l) => l.startsWith('castle regress'))
     assert.equal(reg.length, 2)
     assert.match(reg[0], /^castle regress 2 missing=(stone@\d+,65,7 ?){10}$/)
-    assert.match(reg[1], /^castle regress 3 missing=/)
+    assert.match(reg[1], /^castle regress 2 missing=stone@13,65,7$/)
   })
 })
