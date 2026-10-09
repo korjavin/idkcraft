@@ -2212,7 +2212,7 @@ async function decide(bot, ctx) {
         const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
         if (reason === 'no-cobble' || reason === 'no-fuel') {
           const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal or planks, going to dig'
           // ipn.9: same honest rule as gear's sync announce (the coal
           // promise needs a diggable remembered cell); cobble keeps its
           // line — stone is not a memory resource.
@@ -2225,6 +2225,7 @@ async function decide(bot, ctx) {
             if (ctx.gear.saidNeed !== key) {
               ctx.gear.saidNeed = key
               bot.chat(line)
+              console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
             }
           } catch (_) { /* announce best-effort */ }
           ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
@@ -2660,7 +2661,7 @@ async function decide(bot, ctx) {
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} menu=${menu} facts=${text}`)
+      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
         chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
       } else {
