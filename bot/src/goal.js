@@ -2116,6 +2116,101 @@ function registered(name) {
   }
 }
 
+// Re-decide forces (idkcraft-vmzq.62): every reason decide() re-picks a
+// running step besides start/step-done/step-failed, in one list —
+// characterization only, no behaviour change. kind 'gate': a force decide()
+// evaluates at its existing site, in the existing order (fetch-retry,
+// build-retry and site-retry retire or void their hold as they fire, and
+// gate-opened writes its edge latch, exactly as the inline code did).
+// kind 'word': a facts-text word whose flip opens the gate through
+// ctx.goalText !== text — evaluated only to name the force on the step
+// line, never to decide. fires(prev, facts, ctx, status, bot, text).
+// NOT here (they stay exactly as they are; vmzq.4 retires them against
+// this list): the suppressors (in-flight and night stickiness holds, the
+// stripKnown forage/explore hold, the inside day-mask, the askedKey
+// shortcut) and the prev-specific night/site forces (nightFarWalk,
+// nightNearShelter, siteFarWalk) and the vmzq.5/.21 pins, which name
+// themselves in why=. A death moves no word (keepInventory) — its
+// re-decide rides the night forces and the health word.
+function textWord(text, key) {
+  const m = typeof text === 'string' ? text.match(new RegExp(`(?:^| )${key}=(\\S+)`)) : null
+  return m ? m[1] : null
+}
+const wordFlipped = (keys) => (prev, facts, ctx, status, bot, text) =>
+  !!ctx && typeof ctx.goalText === 'string' && keys.some((k) => textWord(ctx.goalText, k) !== textWord(text, k))
+const FORCES = [
+  // A chain-owned step (retreat/pillar, index.js sets ctx.step outside
+  // decide) never rides the goal shortcuts.
+  { name: 'chain', bead: 'idkcraft-1tj', kind: 'gate', fires: (prev, facts, ctx) => !!(ctx && ctx.retreat && ctx.retreat.action === prev) },
+  // Bounded castlefetch hold: an expired hold retires and forces one pick.
+  {
+    name: 'fetch-retry', bead: 'idkcraft-g0z.4', kind: 'gate',
+    fires: (prev, facts, ctx) => {
+      const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+      if (sf && typeof sf.at === 'number' && Date.now() - sf.at > CASTLEFETCH_RETRY_MS) {
+        delete ctx.stepFail.castlefetch
+        return true
+      }
+      return false
+    },
+  },
+  // Low-hp gate gated->open edge: one fresh pick (writes the edge latch).
+  {
+    name: 'gate-opened', bead: 'idkcraft-vmzq.51', kind: 'gate',
+    fires: (prev, facts, ctx, status, bot) => {
+      const gatedNow = lowHpGated(bot, facts, ctx)
+      const wasGated = ctx ? ctx.lowHpWasGated === true : false
+      if (ctx) ctx.lowHpWasGated = gatedNow
+      return wasGated && !gatedNow
+    },
+  },
+  // Expired build hold: one-shot (retryFired), voids the text/pos key.
+  {
+    name: 'build-retry', bead: 'idkcraft-67z3', kind: 'gate',
+    fires: (prev, facts, ctx) => {
+      const sf = ctx && ctx.stepFail && ctx.stepFail.build
+      if (sf && sf.status !== 'failed:no-site' && typeof sf.at === 'number' && Date.now() - sf.at > BUILD_RETRY_MS && !sf.retryFired) {
+        sf.retryFired = true
+        sf.text = null
+        sf.pos = null
+        return true
+      }
+      return false
+    },
+  },
+  // No-site hold retires when a spawn-anchored site validates now.
+  {
+    name: 'site-retry', bead: 'idkcraft-vmzq.16', kind: 'gate',
+    fires: (prev, facts, ctx, status, bot, text) => {
+      const sf = ctx && ctx.stepFail && ctx.stepFail.build
+      if (sf && sf.status === 'failed:no-site' && sf.text === text && !(ctx && ctx.home && ctx.home.site)) {
+        let site = null
+        try { site = bot && bot.spawnPoint ? siteFor(bot, bot.spawnPoint) : null } catch (_) { site = null }
+        if (site) {
+          delete ctx.stepFail.build
+          return true
+        }
+      }
+      return false
+    },
+  },
+  // Gear yield (done to hand off to the fetchers) never rides the askedKey
+  // shortcut — evaluated at the shortcut only.
+  { name: 'gear-yield', bead: 'idkcraft-ipn.7', kind: 'gate', fires: (prev, facts, ctx, status) => prev === 'gear' && status === 'done' },
+  // Orders/stop/follow handover/bring clear ctx.step outside decide
+  // (resetNightStep): the next decide starts from no step with a text
+  // already standing (a first boot has none).
+  { name: 'order', bead: 'idkcraft-rw4.5', kind: 'word', fires: (prev, facts, ctx) => !prev && !!ctx && typeof ctx.goalText === 'string' },
+  { name: 'time', bead: 'idkcraft-rw4.1', kind: 'word', fires: wordFlipped(['time']) },
+  { name: 'health', bead: 'idkcraft-rw4.6', kind: 'word', fires: wordFlipped(['health']) },
+  { name: 'food', bead: 'idkcraft-rw4.6', kind: 'word', fires: wordFlipped(['food']) },
+  // Castle word flip (the castlefetch->castle handoff and back).
+  { name: 'castle-word', bead: 'idkcraft-g0z.3', kind: 'word', fires: wordFlipped(['castle']) },
+  // Kit words (sword/pickaxe/blocks mid-castle).
+  { name: 'kit', bead: 'idkcraft-rwuu', kind: 'word', fires: wordFlipped(['sword', 'pickaxe', 'blocks']) },
+]
+const FORCE = Object.fromEntries(FORCES.map((f) => [f.name, f]))
+
 // Decision point: re-decide when there is no step, the step finished
 // (done/failed:*), or the facts changed. The model picks through chooseStep
 // at those points only (same dedup as lastStateKey); the return shape stays
@@ -2166,6 +2261,9 @@ async function decide(bot, ctx) {
   const prev = (ctx && ctx.step) || null
   let status = (ctx && ctx.stepStatus) || null
   let finished = isFinished(status)
+  // Force probe (vmzq.62): reads status at call time (the gear translation
+  // below rewrites it).
+  const fires = (name) => FORCE[name].fires(prev, facts, ctx, status, bot, text)
   // Async gear/furnace translation BEFORE the hold bookkeeping (revmux
   // 02-review): the hold must record the translated status - and no hold at
   // all for a yield - or the rename is dead and its test passes without
@@ -2319,18 +2417,12 @@ async function decide(bot, ctx) {
   // would bypass feasibility and the model ask (the stale hold in another
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
-  const chainOwns = ctx && ctx.retreat && ctx.retreat.action === prev
+  const chainOwns = fires('chain')
   // Bounded castlefetch hold (g0z.4): an expired hold retires and forces
   // one fresh pick — with the text standing, the replay paths would keep
   // the step that took over and the owner's chest restock never gets seen.
   let fetchRetry = false
-  try {
-    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-    if (sf && typeof sf.at === 'number' && Date.now() - sf.at > CASTLEFETCH_RETRY_MS) {
-      delete ctx.stepFail.castlefetch
-      fetchRetry = true
-    }
-  } catch (_) { /* retry best-effort */ }
+  try { fetchRetry = fires('fetch-retry') } catch (_) { /* retry best-effort */ }
   // Opened low-hp gate (vmzq.51 verifier P2): the stand-down lifts on a
   // wall clock (timeout, food, healing) that the facts text may never
   // carry — food in the pack is text-invisible — so with steady facts the
@@ -2340,12 +2432,7 @@ async function decide(bot, ctx) {
   // (the edge flips); closing needs no force (the shortcut re-checks
   // feasibility, and the closed gate fails it).
   let gateOpened = false
-  try {
-    const gatedNow = lowHpGated(bot, facts, ctx)
-    const wasGated = ctx ? ctx.lowHpWasGated === true : false
-    if (ctx) ctx.lowHpWasGated = gatedNow
-    gateOpened = wasGated && !gatedNow
-  } catch (_) { gateOpened = false }
+  try { gateOpened = fires('gate-opened') } catch (_) { gateOpened = false }
   // Expired build hold (67z3 verifier P2): an expired hold forces one
   // fresh pick, or steady facts keep the running step past the window.
   // The record stands with its counter (revmux 03 minor): deleting it
@@ -2361,15 +2448,7 @@ async function decide(bot, ctx) {
   // pending-house task identity (task.js) — deleting it at 5 min would
   // null the task and kill the 15-min L1.
   let buildRetry = false
-  try {
-    const sf = ctx && ctx.stepFail && ctx.stepFail.build
-    if (sf && sf.status !== 'failed:no-site' && typeof sf.at === 'number' && Date.now() - sf.at > BUILD_RETRY_MS && !sf.retryFired) {
-      sf.retryFired = true
-      sf.text = null
-      sf.pos = null
-      buildRetry = true
-    }
-  } catch (_) { /* retry best-effort */ }
+  try { buildRetry = fires('build-retry') } catch (_) { /* retry best-effort */ }
   // No-site retry (idkcraft-vmzq.16): the fetchRetry mirror for a homeless
   // build — a failed:no-site hold retires and forces one fresh pick when a
   // site validates NOW (chunks streamed in). With the text standing, the
@@ -2385,17 +2464,7 @@ async function decide(bot, ctx) {
   // retires through the probe, the only arm that ever had news (the probe
   // is spawn-anchored, never the bot).
   let siteRetry = false
-  try {
-    const sf = ctx && ctx.stepFail && ctx.stepFail.build
-    if (sf && sf.status === 'failed:no-site' && sf.text === text && !(ctx && ctx.home && ctx.home.site)) {
-      let site = null
-      try { site = bot && bot.spawnPoint ? siteFor(bot, bot.spawnPoint) : null } catch (_) { site = null }
-      if (site) {
-        delete ctx.stepFail.build
-        siteRetry = true
-      }
-    }
-  } catch (_) { /* retry best-effort */ }
+  try { siteRetry = fires('site-retry') } catch (_) { /* retry best-effort */ }
   // Known-flicker hold (4dse): a running forage/explore leg is never
   // preempted when the ONLY changed fact is known — an animal at the
   // 48-block find edge flips near/none every 1-3 s (prod: 347
@@ -2515,7 +2584,7 @@ async function decide(bot, ctx) {
     // need arrives; no hold is recorded (gear yields are never holds).
     // A latched gohome never rides it either (xhqv): the same text and the
     // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !gateOpened && !buildRetry && !planStep && !commitForce && !(prev === 'gear' && status === 'done') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
+    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !gateOpened && !buildRetry && !planStep && !commitForce && !fires('gear-yield') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
     ctx.askedKey = askKey
     let names = Object.keys(MENU).filter((n) => {
       try {
@@ -2577,6 +2646,16 @@ async function decide(bot, ctx) {
       }
     }
     const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : siteFarWalk ? 'site-far' : 'facts-changed'
+    // Force name for the step line (vmzq.62): the first gate force that
+    // fired, else the first word force; pure here (the gate side effects
+    // already ran at their sites above). Read before ctx.goalText moves.
+    const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'gear-yield': prev === 'gear' && status === 'done' }
+    let force = null
+    for (const f of FORCES) {
+      let hit = false
+      try { hit = f.kind === 'gate' ? !!gateFired[f.name] : !!f.fires(prev, facts, ctx, status, bot, text) } catch (_) { hit = false }
+      if (hit) { force = f.name; break }
+    }
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     if (planApplied || commitApplied) choice.source = 'task-plan'
@@ -2646,7 +2725,7 @@ async function decide(bot, ctx) {
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''} menu=${menu} facts=${text}`)
+      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''}${force ? ` force=${force}` : ''} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
         chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
       } else {
@@ -2659,4 +2738,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
+module.exports = { FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
