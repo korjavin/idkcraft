@@ -565,6 +565,7 @@
     "writers": [
       "src/behaviours/bringitem.js",
       "src/behaviours/craftany.js",
+      "src/behaviours/stockpile.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/craftany.js"
@@ -1474,6 +1475,12 @@
       "src/body.js"
     ],
     "owner": "src/behaviours/home.js"
+  },
+  "shelterReleased": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
   },
   "shelterRun": {
     "writers": [
