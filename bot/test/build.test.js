@@ -1155,6 +1155,28 @@ describe('rw4.19 interior clear cells', () => {
     assert.deepEqual(BLUEPRINT_V2[i], { dx: 3, dy: 0, dz: 1, kind: 'clear' })
   })
 
+  // 6x7.21: the pathfinder's scaffold pillar for a wall cell lands in a clear
+  // cell; dug first it pulled the body off the wall cell, the approach
+  // re-pillared, and the build livelocked (JR-BUILD rig, 300 s TIMEOUT).
+  it('(a) our own block in a clear cell waits until nothing else is owed, then is dug', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    const ci = BLUEPRINT_V2.findIndex((c) => c.kind === 'clear' && c.dx === 3 && c.dy === 0 && c.dz === 1)
+    const ctx = ctxFor(home)
+    ctx.placedByBot = new Set([`${s.x + 3},${s.y},${s.z + 1}`])
+    assert.equal(build.nextCellIdx(bot, home, []), ci, 'no ctx: natural-ground order')
+    const i = build.nextCellIdx(bot, home, [], ctx)
+    assert.notEqual(i, ci)
+    assert.notEqual(BLUEPRINT_V2[i].kind, 'clear')
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    assert.equal(build.nextCellIdx(bot, home, [], ctx), ci, 'the pillar is still dug at the end')
+  })
+
   it('(b) dirt bumps in the doorway and the bedroom are dug, then home done', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
