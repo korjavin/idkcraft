@@ -11,7 +11,7 @@ const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../budget')
 const { gatherFailedHolds } = require('../holds')
 const { countItems } = require('../perception')
-const { say, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
+const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason } = require('./util')
 const Vec3 = require('vec3')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
@@ -471,8 +471,7 @@ function gather(bot, ctx, target, state) {
   if (g.phase === 'pickup') {
     const key = `gather-pickup:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalBlock(g.pos.x, g.pos.y, g.pos.z), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalBlock(g.pos.x, g.pos.y, g.pos.z), key, false)
       return
     }
     // Reached or gave up getting there: the drop is picked up by proximity

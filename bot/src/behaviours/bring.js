@@ -9,7 +9,7 @@ const exploreMod = require('./explore')
 const stuck = require('../stuck')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason } = require('./util')
+const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason } = require('./util')
 const itemMod = require('./bringitem')
 const Vec3 = require('vec3')
 
@@ -1050,8 +1050,7 @@ function walkFood(bot, ctx, o, bp, grounded) {
   const d = animalDist(bp, ent.position)
   if (d !== null && d <= fightMod.SWING_RANGE) { o.phase = 'kill'; return }
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, 2), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, 2), key, false)
   }
   // Stall accounting runs every tick, not just on a settled key: a
   // moving-but-unreachable animal (pen, water) re-keys constantly, and only
@@ -1128,8 +1127,7 @@ function pickupFood(bot, ctx, o, bp, grounded) {
     // GoalBlock, not GoalNear (8gc): Near(1) stops satisfied at the node
     // boundary, up to ~2 from the drops, and the old d<=2 gate then
     // counted a pack the bot never walked onto — wool stayed behind.
-    bot.pathfinder.setGoal(new goals.GoalBlock(dp.x, dp.y, dp.z), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalBlock(dp.x, dp.y, dp.z), key, false)
     o.stalls = 0
     o.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
     return
@@ -1535,8 +1533,7 @@ async function bring(bot, ctx, target, state) {
     if (food) { walkFood(bot, ctx, o, bp, grounded); return }
     const key = `bring:${o.pos.x},${o.pos.y},${o.pos.z}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalNear(o.pos.x, o.pos.y, o.pos.z, 2), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(o.pos.x, o.pos.y, o.pos.z, 2), key, false)
       o.stalls = 0
       o.lastPos = { x: bp.x, y: bp.y, z: bp.z }
       return
@@ -1668,8 +1665,7 @@ async function bring(bot, ctx, target, state) {
     if (food) { pickupFood(bot, ctx, o, bp, grounded); return }
     const key = `bring-pickup:${o.pos.x},${o.pos.y},${o.pos.z}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalBlock(o.pos.x, o.pos.y, o.pos.z), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalBlock(o.pos.x, o.pos.y, o.pos.z), key, false)
       return
     }
     // Reached or gave up getting there: the inventory count is the truth.
@@ -1712,8 +1708,7 @@ async function bring(bot, ctx, target, state) {
     const pp = p.position
     const key = `bring-return:${Math.round(pp.x)},${Math.round(pp.y)},${Math.round(pp.z)}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalNear(pp.x, pp.y, pp.z, RETURN_RANGE), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(pp.x, pp.y, pp.z, RETURN_RANGE), key, false)
     }
     let d = null
     try { d = typeof bp.distanceTo === 'function' ? bp.distanceTo(pp) : Math.hypot(bp.x - pp.x, bp.y - pp.y, bp.z - pp.z) } catch (_) { d = null }

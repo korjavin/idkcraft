@@ -2,6 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
+const { issueGoal } = require('./util')
 
 const FOLLOW_RANGE = 3
 const SEARCH_TIMEOUT_MS = 6000
@@ -19,8 +20,7 @@ function follow(bot, ctx, target, state) {
 
   if (key !== ctx.lastGoalKey) {
     ctx.lastPathNodes = null
-    bot.pathfinder.setGoal(new goals.GoalFollow(target, FOLLOW_RANGE), true)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalFollow(target, FOLLOW_RANGE), key, true)
     ctx.followIssuedAt = now
     ctx.followSeenStuck = 0
     return

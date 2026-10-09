@@ -18,6 +18,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
+const { issueGoal } = require('./util')
 
 // Fixed furnace cells inside the v2 common room (jr2.1): (4,0,1) first,
 // then fallbacks clear of the door path and bedroom approaches. Placed from
@@ -139,8 +140,7 @@ function plankStack(bot) {
 // step instead of idling here forever (equip walkWaits shape).
 function walkTo(bot, ctx, f, key, p, reason) {
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 3), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalNear(p.x, p.y, p.z, 3), key, false)
   }
   f.walkTicks = (f.walkTicks || 0) + 1
   if (f.walkTicks > 20) fail(ctx, reason)

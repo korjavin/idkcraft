@@ -8,7 +8,7 @@ const { goalFacts } = require('../goal')
 const { timeWord } = require('../site')
 const detour = require('../detour')
 const stuck = require('../stuck')
-const { botPos, doorOpen, doorLaneDX: blockLaneDX } = require('./util')
+const { botPos, doorOpen, doorLaneDX: blockLaneDX, issueGoal } = require('./util')
 const body = require('../body')
 const retreatMod = require('./retreat')
 const recover = require('./recover')
@@ -252,8 +252,7 @@ function tryToggle(bot, ctx, st, block) {
 function setGoal(bot, ctx, key, goal) {
   if (ctx.lastGoalKey === key) return
   try {
-    bot.pathfinder.setGoal(goal, false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, goal, key, false)
     // The new plan has no nodes yet: drop the previous behaviour's so the
     // sprint gate fails closed until path_update (follow.js 5vv mirror).
     ctx.lastPathNodes = null

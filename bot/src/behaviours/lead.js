@@ -2,6 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
+const { issueGoal } = require('./util')
 
 // Lead: walk the player to the ore named by 'find me <block>'.
 //
@@ -149,8 +150,7 @@ function lead(bot, ctx, target, state) {
   }
   const key = `lead:${order.pos.x},${order.pos.y},${order.pos.z}`
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalNear(order.pos.x, order.pos.y, order.pos.z, ARRIVE_DIST), key, false)
     order.stuckTicks = 0
     order.workTicks = 0
     if (bot.entity.onGround !== false) savePosition(order, bp, true)
