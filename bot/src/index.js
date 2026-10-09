@@ -358,6 +358,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   let timer = null
   let destroyed = false
+  // Per-tick fast-cadence flag, reset by runTick; the parked/alone blocks set
+  // it and the finally reads it. inFlight serialises ticks, so one per ticker.
+  let reflexFast = false
   function scheduleNext(fast) {
     if (destroyed) return
     if (timer) { clearTimeout(timer); timer = null }
@@ -387,6 +390,90 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   async function runTick(scheduled = false) {
     if (inFlight) { scheduleNext(lastVisible); return { decision: null, calledBrain: false } }
     inFlight = true
+    await tickPrelude()
+    let calledBrain = false
+    // Fast cadence while the reflex swings with nobody online: those ticks
+    // make no brain call, so speeding them up costs nothing.
+    reflexFast = false
+    // Fast cadence while working out of sight (see workAlone below): the
+    // goal arbiter must keep deciding every tick, like a visible player.
+    let workTickFast = false
+    try {
+      if (ctx.paused) return parkedTick()
+      const { target, workAlone } = presence()
+      if (workAlone) workTickFast = true
+      if (!target && !workAlone) return await aloneTick()
+      const state = tickState(target)
+      const guarded = reflexGuards(state, calledBrain)
+      if (guarded) return guarded
+      let decision = null
+      if (ctx.stuck && !urgentFight(state)) return await recoverTick(target, state, calledBrain)
+      const key = stateKey(state)
+      if (lastDecision && key === lastStateKey) {
+        decision = lastDecision
+      } else {
+        decision = await brain.decide(state)
+        calledBrain = true
+        // A stub-fallback means JEV failed; don't cache it or JEV would
+        // never be retried while the player stands still.
+        if (decision.source !== 'stub-fallback') {
+          lastStateKey = key
+          lastDecision = decision
+          ctx.lastDecision = decision // gwvg: status() reads the follow/fight/idle source from here
+        }
+      }
+      if (ctx.paused) {
+        // 'stop' landed during the brain await: discard the stale decision
+        // so one in-flight tick cannot issue a follow goal after the park.
+        stopOnce()
+        const now = Date.now()
+        if (now - lastIdleLog >= IDLE_LOG_MS) {
+          lastIdleLog = now
+          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
+        }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
+      const ordered = await ordersDispatch(target, state, decision, calledBrain)
+      if (ordered) return ordered
+      const { shelterRun, nightGraceHold, intruder, dayDivert, dayNow } = holdFlags(target, state, decision)
+      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) return shelterHold(target, state, decision, calledBrain, dayNow)
+      // 0ay: taking fire from an unreachable hostile (arrows across a gap
+      // drain a bot the FSM idles — prod 11:50: 20 to 6.8 in 18 s standing
+      // still). Alone, close (<=8, the perception fight radius), hurt
+      // within HURT_FRESH_MS: fight ticks divert into the work block so
+      // the retreat leg below runs instead of the give-up shadow-stand.
+      // Orders still own their ticks (no starve, no no-dig leak — same
+      // gate as the atl.12 shelter hold); shelter never diverts.
+      const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
+      const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
+        state.hostile_reachable === false &&
+        typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
+      if (!hurtFresh) ctx.underFireLogged = false
+      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
+        const held = adoptGate(calledBrain)
+        if (held) return held
+        return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold)
+      }
+      applyDecision(decision, target, state)
+      // Non-chain dispatch releases retreat ownership (see goal path).
+      if (!ctx.paused) ctx.retreat = null
+      return { decision, calledBrain }
+    } catch (err) {
+      console.error(`tick error: ${err && err.message ? err.message : err}`)
+      return { decision: null, calledBrain }
+    } finally {
+      inFlight = false
+      // A body in water ticks fast even parked: the breath trigger window
+      // (oxygen 10 → 0 ≈ 7.5 s) is shorter than one 10 s idle tick, so a
+      // slow first check can come after the lungs are already empty
+      // (revmux 01 core-2). Dry parked ticks stay slow.
+      let wetFast = false
+      try { wetFast = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { wetFast = false }
+      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast || wetFast)
+    }
+  }
+
+  async function tickPrelude() {
     // 0ay: tick-over-tick hp drops stamp taking-fire (unreachable archers,
     // poison, anything the FSM cannot see). The retreat trigger below reads
     // the stamp; nothing else does yet. Best-effort, never breaks the tick.
@@ -415,295 +502,465 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // candidates for ANY executor; re-installs after a Movements swap.
     castleMod.guardCastle(bot, ctx)
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
-    let calledBrain = false
-    // Fast cadence while the reflex swings with nobody online: those ticks
-    // make no brain call, so speeding them up costs nothing.
-    let reflexFast = false
-    // Fast cadence while working out of sight (see workAlone below): the
-    // goal arbiter must keep deciding every tick, like a visible player.
-    let workTickFast = false
-    try {
-      if (ctx.paused) {
-        // 'stop' parks the bot: perception + scout keep running while a
-        // player is visible, but the brain is skipped and idle is dispatched
-        // (stop once) — same cost guard as 'no player online'. The only scan
-        // with nobody online is the melee reflex hostile check below.
-        const target = findTarget(bot, followName)
-        lastVisible = !!target
-        if (target) noteSeen()
-        else noteGone()
-        if (target) {
-          const state = buildState(bot, target, lastTargetPos)
-          lastTargetPos = state._lastTargetPos
-          if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
-          if (ctx.scout) ctx.scout.tick()
-          meleeReflex(bot, ctx, state)
-          eatReflex(bot, ctx, state)
-        } else {
-          try {
-            const state = buildState(bot, null)
-            if (meleeReflex(bot, ctx, state)) reflexFast = true
-            eatReflex(bot, ctx, state)
-          } catch (_) { /* facts best-effort */ }
-          lastTargetPos = null
-          lastDecision = null
-          lastStateKey = null
-        }
-        // Parked but not dead: a hissing creeper still moves the body
-        // (fast ticks while fleeing, same as the nobody-online path).
-        const fledParked = fleeReflex(bot, ctx)
-        if (fledParked) reflexFast = true
-        else stopOnce()
-        // Breath while parked (0u9): 'stop' parks the body, it must not
-        // drown it. After stopOnce (its control clear would drop the jump).
-        if (!fledParked && breathReflex(bot, ctx)) reflexFast = true
-        const now = Date.now()
-        if (now - lastIdleLog >= IDLE_LOG_MS) {
-          lastIdleLog = now
-          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
-        }
-        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
-      }
-      const target = findTarget(bot, followName)
-      lastVisible = !!target
-      if (target) noteSeen()
-      else noteGone()
-      // A follow order owns the body the moment its player is visible: drop
-      // work so the goal arbiter below cannot hijack the tick. A transition
-      // out of work also ends any night step at once (same reset as an
-      // order), so a borrowed canDig=false never survives the tick.
-      if (target && followName && ctx.work) { ctx.work = false; resetNightStep() }
-      // Work mode runs without a visible player while anyone is on the
-      // server (roster, not visibility — walking out of render distance is
-      // normal). Falls through to the normal path with target=null:
-      // buildState handles null, and the work check below swaps idle steps.
-      const rosterOnline = bot.players &&
-        Object.keys(bot.players).some((n) => n !== bot.username)
-      autoBrain(rosterOnline)
-      // Alone-explore cap (dxl x atl.1): with nobody online the spiral must
-      // not wander past AUTONOMOUS_EXPLORE_RADIUS — new chunks bloat the
-      // host disk. explore.js defaults an untouched maxRadius to MAX_RADIUS
-      // (the same 256), so only a live wider explore needs clamping.
-      if (!rosterOnline && ctx.autonomous && ctx.explore) ctx.explore.maxRadius = ctx.exploreAloneRadius
-      // A pending follow order beats working alone: the player explicitly
-      // asked the bot to come, so reunion outranks cave work (3a7 keeps work
-      // for an unseen follower; this walks instead once N trips). Pure work
-      // mode with nobody waiting keeps running.
-      const followWaiting = !target && followName && bot.players && bot.players[resolvePlayer(bot, followName)]
-      // A visible player with skipped work resumes it at once (one-shot):
-      // sighting is the normal end of the homing walk, arrival the other.
-      if (target && ctx.resumeWork && !followName) startWork()
-      if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') {
-        // Sighting ends the homing walk: drop the fact AND its still streak,
-        // or it re-raises by=home this same tick (the key flips later).
-        ctx.stuck = null
-        ctx.stuckTicks = 0
-        ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
-        ctx.stuckState = 'MOVING'
-      }
-      if (homeReached()) {
-        // Arrived means the homing goal is met, not stuck: pin the still
-        // streak at zero and drop a stale home fact/latch (2oe).
-        ctx.stuckTicks = 0
-        ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
-        if (!ctx.recovery) ctx.stuckState = 'MOVING'
-        if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
-        if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') ctx.recoverLatch = null
-        // A pending follow order keeps the unseen latch: stand until the
-        // player is visible instead of oscillating work-vs-home.
-        if (!followWaiting) {
-          if (ctx.resumeWork && !followName) startWork()
-          ctx.unseenTicks = 0
-        }
-      } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome && !ctx.gocastle) {
-        ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
-      } else ctx.unseenTicks = 0
-      const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
-      // An active bring-me owns the body like work-alone: the bot fetches up
-      // to 48 blocks out, past entity-tracking range, so the idle branch must
-      // not park it and the homing walk must not steal it mid-order. The
-      // come-home meet rides the same way (jr2.3): the owner waits at home,
-      // out of tracking range while the bot walks.
-      const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked) || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous) && !homing
-      if (workAlone) workTickFast = true
-      if (!target && !workAlone) {
-        // Cost fix: nobody online => no brain call at all, decide idle
-        // locally, stop once, and stay quiet (at most one line per minute).
-        // A hissing creeper still moves the body (fast ticks while fleeing).
-        const fledAlone = fleeReflex(bot, ctx)
-        if (fledAlone) {
-          reflexFast = true
-        } else {
-          // Homing owns the body now: end any night step at once (same
-          // reset as an order), or the walk's borrowed canDig=false leaks
-          // onto the shared Movements until someone comes into view.
-          if (ctx.work && ctx.step === 'gohome') resetNightStep()
-          if (!walkHomeTick()) stopOnce()
-        }
-        // Breath while alone (0u9): an idle bot parked under water drowns
-        // as surely as a digging one. After the stop (its control clear
-        // would drop the jump); the stuck menu waits while it surfaces.
-        const breathedAlone = !fledAlone && breathReflex(bot, ctx)
-        if (breathedAlone) reflexFast = true
-        // Melee reflex at spawn: the brain never runs here, but a hostile
-        // standing on the bot still gets swung at every slow tick.
-        let idleState = null
-        try {
-          idleState = buildState(bot, null)
-          if (meleeReflex(bot, ctx, idleState)) reflexFast = true
-          eatReflex(bot, ctx, idleState)
-        } catch (_) { /* facts best-effort */ }
-        // Sample the stuck machine for the homing walk (2oe): pure local
-        // math, no brain call, so the cost guard holds. A wedged homing
-        // walk raises by=home off the return-spawn key.
-        stuck.update(bot, ctx)
-        // Only the home fact: the idle branch is cost-guarded (no brain
-        // calls with nobody online), so a pre-existing follow/gather
-        // episode pauses while alone and resumes on sighting — while a
-        // homing walk that wedged (2oe) reaches the menu here, same
-        // routing as the target path above. After release the walk
-        // re-issues (release clears lastGoalKey) and the latch admits one
-        // episode per situation.
-        if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState) && !breathedAlone) {
-          try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
-          // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
-          try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
-          const decision = await recover.decide(bot, ctx, idleState, null)
-          if (ctx.paused) {
-            stopOnce()
-            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
-          }
-          applyDecision(decision, null, idleState)
-          return { decision, calledBrain: false }
-        }
-        if (ctx.lead) {
-          ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
-          if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
-            bot.chat(`giving up on ${ctx.lead.name}; following you again`)
-            ctx.lead = null
-            ctx.leadTargetGone = 0
-          }
-        }
-        lastTargetPos = null
-        lastDecision = null
-        lastStateKey = null
-        const now = Date.now()
-        if (now - lastIdleLog >= IDLE_LOG_MS) {
-          lastIdleLog = now
-          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
-        }
-        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
-      }
-      ctx.leadTargetGone = 0
-      if (typeof bot.health === 'number' && bot.health <= 0) {
-        if (ctx.lead) bot.chat('following you again')
-        ctx.lead = null
-      }
-      const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
+  }
+
+  function parkedTick() {
+    // 'stop' parks the bot: perception + scout keep running while a
+    // player is visible, but the brain is skipped and idle is dispatched
+    // (stop once) — same cost guard as 'no player online'. The only scan
+    // with nobody online is the melee reflex hostile check below.
+    const target = findTarget(bot, followName)
+    lastVisible = !!target
+    if (target) noteSeen()
+    else noteGone()
+    if (target) {
+      const state = buildState(bot, target, lastTargetPos)
       lastTargetPos = state._lastTargetPos
-      // Feed fight's give-up latch back to the brain as hostile_reachable.
-      // Keyed on the latched mob itself, not state.hostile: fight pursues the
-      // sticky incumbent (ctx.fightId) while perception ranks nearest, and a
-      // newcomer inside the sticky margin must not read as a stale latch —
-      // clearing there would re-arm pursuit of the unreachable mob forever.
-      if (ctx.fightGivenUpId != null) {
-        const latched = bot.entities ? bot.entities[ctx.fightGivenUpId] : null
-        if (!isFightTarget(latched, bot.entity.position, target && target.position)) {
-          ctx.fightGivenUpId = null // stale: mob gone or no longer a candidate
-          ctx.fightUnreachableTicks = 0
-          state.hostile_reachable = true
-        } else if (latched.position.distanceTo(bot.entity.position) <= BEHAVIOURS.fight.SWING_RANGE) {
-          // Written-off mob in melee reach: report reachable so the brain
-          // answers fight and fight.js swings via its given-up branch (which
-          // clears the latch itself). The latch stays set — clearing here
-          // would re-issue a pursuit goal at a mob already in reach.
-          state.hostile_reachable = true
-        } else if (state.hostile && state.hostile.id === ctx.fightGivenUpId) {
-          ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
-          if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
-            ctx.fightGivenUpId = null
-            ctx.fightUnreachableTicks = 0
-            state.hostile_reachable = true
-          }
-        } else {
-          ctx.fightUnreachableTicks = 0
-        }
-      } else {
-        ctx.fightUnreachableTicks = 0
-      }
-      // every-tick hooks (no body cost) go here
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
       if (ctx.scout) ctx.scout.tick()
       meleeReflex(bot, ctx, state)
       eatReflex(bot, ctx, state)
-      // Safety preempts arbitration (and the lead order below): the brain
-      // never sees creepers, so nothing else would move the body.
-      const fleeDist = fleeReflex(bot, ctx)
-      if (fleeDist !== false) {
-        const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
-        return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
+    } else {
+      try {
+        const state = buildState(bot, null)
+        if (meleeReflex(bot, ctx, state)) reflexFast = true
+        eatReflex(bot, ctx, state)
+      } catch (_) { /* facts best-effort */ }
+      lastTargetPos = null
+      lastDecision = null
+      lastStateKey = null
+    }
+    // Parked but not dead: a hissing creeper still moves the body
+    // (fast ticks while fleeing, same as the nobody-online path).
+    const fledParked = fleeReflex(bot, ctx)
+    if (fledParked) reflexFast = true
+    else stopOnce()
+    // Breath while parked (0u9): 'stop' parks the body, it must not
+    // drown it. After stopOnce (its control clear would drop the jump).
+    if (!fledParked && breathReflex(bot, ctx)) reflexFast = true
+    const now = Date.now()
+    if (now - lastIdleLog >= IDLE_LOG_MS) {
+      lastIdleLog = now
+      console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
+    }
+    return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+  }
+
+  function presence() {
+    const target = findTarget(bot, followName)
+    lastVisible = !!target
+    if (target) noteSeen()
+    else noteGone()
+    // A follow order owns the body the moment its player is visible: drop
+    // work so the goal arbiter below cannot hijack the tick. A transition
+    // out of work also ends any night step at once (same reset as an
+    // order), so a borrowed canDig=false never survives the tick.
+    if (target && followName && ctx.work) { ctx.work = false; resetNightStep() }
+    // Work mode runs without a visible player while anyone is on the
+    // server (roster, not visibility — walking out of render distance is
+    // normal). Falls through to the normal path with target=null:
+    // buildState handles null, and the work check below swaps idle steps.
+    const rosterOnline = bot.players &&
+      Object.keys(bot.players).some((n) => n !== bot.username)
+    autoBrain(rosterOnline)
+    // Alone-explore cap (dxl x atl.1): with nobody online the spiral must
+    // not wander past AUTONOMOUS_EXPLORE_RADIUS — new chunks bloat the
+    // host disk. explore.js defaults an untouched maxRadius to MAX_RADIUS
+    // (the same 256), so only a live wider explore needs clamping.
+    if (!rosterOnline && ctx.autonomous && ctx.explore) ctx.explore.maxRadius = ctx.exploreAloneRadius
+    // A pending follow order beats working alone: the player explicitly
+    // asked the bot to come, so reunion outranks cave work (3a7 keeps work
+    // for an unseen follower; this walks instead once N trips). Pure work
+    // mode with nobody waiting keeps running.
+    const followWaiting = !target && followName && bot.players && bot.players[resolvePlayer(bot, followName)]
+    // A visible player with skipped work resumes it at once (one-shot):
+    // sighting is the normal end of the homing walk, arrival the other.
+    if (target && ctx.resumeWork && !followName) startWork()
+    if (target && !ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') {
+      // Sighting ends the homing walk: drop the fact AND its still streak,
+      // or it re-raises by=home this same tick (the key flips later).
+      ctx.stuck = null
+      ctx.stuckTicks = 0
+      ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
+      ctx.stuckState = 'MOVING'
+    }
+    if (homeReached()) {
+      // Arrived means the homing goal is met, not stuck: pin the still
+      // streak at zero and drop a stale home fact/latch (2oe).
+      ctx.stuckTicks = 0
+      ctx.buriedStills = 0 // vmzq.42 r2: the streak family resets together
+      if (!ctx.recovery) ctx.stuckState = 'MOVING'
+      if (!ctx.recovery && ctx.stuck && ctx.stuck.by === 'home') ctx.stuck = null
+      if (ctx.recoverLatch && ctx.recoverLatch.by === 'home') ctx.recoverLatch = null
+      // A pending follow order keeps the unseen latch: stand until the
+      // player is visible instead of oscillating work-vs-home.
+      if (!followWaiting) {
+        if (ctx.resumeWork && !followName) startWork()
+        ctx.unseenTicks = 0
       }
-      // Drowning owns the body over every order (0u9): a dig 3 blocks down
-      // still kills when the vein sits under a lake.
-      if (breathReflex(bot, ctx)) {
-        const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
-        return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
-      }
-      // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
-      stuck.update(bot, ctx)
-      // Task stall clock (idkcraft-vmzq.2): before recover and the
-      // inShelter/fight short-circuits so recover, fight and shelter time
-      // counts toward the stall at tick cadence (verify 02 body-1).
-      try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
-      let decision = null
-      if (ctx.stuck && !urgentFight(state)) {
-        try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
-        // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
-        try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
-        decision = await recover.decide(bot, ctx, state, target)
-        if (ctx.paused) {
-          // 'stop' landed during the recover await: same stale-decision
-          // guard as after the brain await below.
-          stopOnce()
-          return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
-        }
-        applyDecision(decision, target, state)
-        // Stuck recovery taking the tick ends a retreat episode like any
-        // other non-chain dispatch (same release as the goal path).
-        if (!ctx.paused) ctx.retreat = null
-        return { decision, calledBrain }
-      }
-      const key = stateKey(state)
-      if (lastDecision && key === lastStateKey) {
-        decision = lastDecision
-      } else {
-        decision = await brain.decide(state)
-        calledBrain = true
-        // A stub-fallback means JEV failed; don't cache it or JEV would
-        // never be retried while the player stands still.
-        if (decision.source !== 'stub-fallback') {
-          lastStateKey = key
-          lastDecision = decision
-          ctx.lastDecision = decision // gwvg: status() reads the follow/fight/idle source from here
-        }
-      }
+    } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome && !ctx.gocastle) {
+      ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
+    } else ctx.unseenTicks = 0
+    const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
+    // An active bring-me owns the body like work-alone: the bot fetches up
+    // to 48 blocks out, past entity-tracking range, so the idle branch must
+    // not park it and the homing walk must not steal it mid-order. The
+    // come-home meet rides the same way (jr2.3): the owner waits at home,
+    // out of tracking range while the bot walks.
+    const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked) || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous) && !homing
+    return { target, workAlone }
+  }
+
+  async function aloneTick() {
+    // Cost fix: nobody online => no brain call at all, decide idle
+    // locally, stop once, and stay quiet (at most one line per minute).
+    // A hissing creeper still moves the body (fast ticks while fleeing).
+    const fledAlone = fleeReflex(bot, ctx)
+    if (fledAlone) {
+      reflexFast = true
+    } else {
+      // Homing owns the body now: end any night step at once (same
+      // reset as an order), or the walk's borrowed canDig=false leaks
+      // onto the shared Movements until someone comes into view.
+      if (ctx.work && ctx.step === 'gohome') resetNightStep()
+      if (!walkHomeTick()) stopOnce()
+    }
+    // Breath while alone (0u9): an idle bot parked under water drowns
+    // as surely as a digging one. After the stop (its control clear
+    // would drop the jump); the stuck menu waits while it surfaces.
+    const breathedAlone = !fledAlone && breathReflex(bot, ctx)
+    if (breathedAlone) reflexFast = true
+    // Melee reflex at spawn: the brain never runs here, but a hostile
+    // standing on the bot still gets swung at every slow tick.
+    let idleState = null
+    try {
+      idleState = buildState(bot, null)
+      if (meleeReflex(bot, ctx, idleState)) reflexFast = true
+      eatReflex(bot, ctx, idleState)
+    } catch (_) { /* facts best-effort */ }
+    // Sample the stuck machine for the homing walk (2oe): pure local
+    // math, no brain call, so the cost guard holds. A wedged homing
+    // walk raises by=home off the return-spawn key.
+    stuck.update(bot, ctx)
+    // Only the home fact: the idle branch is cost-guarded (no brain
+    // calls with nobody online), so a pre-existing follow/gather
+    // episode pauses while alone and resumes on sighting — while a
+    // homing walk that wedged (2oe) reaches the menu here, same
+    // routing as the target path above. After release the walk
+    // re-issues (release clears lastGoalKey) and the latch admits one
+    // episode per situation.
+    if (ctx.stuck && ctx.stuck.by === 'home' && !urgentFight(idleState) && !breathedAlone) {
+      try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+      // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
+      try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
+      const decision = await recover.decide(bot, ctx, idleState, null)
       if (ctx.paused) {
-        // 'stop' landed during the brain await: discard the stale decision
-        // so one in-flight tick cannot issue a follow goal after the park.
         stopOnce()
-        const now = Date.now()
-        if (now - lastIdleLog >= IDLE_LOG_MS) {
-          lastIdleLog = now
-          console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
-        }
-        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
       }
-      // Come-home is an explicit player order like lead: it owns the body
-      // above follow/work, except fight which still preempts. Placed before
-      // lead so an armed doorway exit runs ahead of any new order's path.
-      if (ctx.comehome && decision.action !== 'fight') {
+      applyDecision(decision, null, idleState)
+      return { decision, calledBrain: false }
+    }
+    if (ctx.lead) {
+      ctx.leadTargetGone = (ctx.leadTargetGone || 0) + 1
+      if (ctx.leadTargetGone >= TARGET_GONE_TICKS) {
+        bot.chat(`giving up on ${ctx.lead.name}; following you again`)
+        ctx.lead = null
+        ctx.leadTargetGone = 0
+      }
+    }
+    lastTargetPos = null
+    lastDecision = null
+    lastStateKey = null
+    const now = Date.now()
+    if (now - lastIdleLog >= IDLE_LOG_MS) {
+      lastIdleLog = now
+      console.log(`decision source=local-idle action=idle sprint=false dist=none ${pathSuffix()}`)
+    }
+    return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain: false }
+  }
+
+  function tickState(target) {
+    ctx.leadTargetGone = 0
+    if (typeof bot.health === 'number' && bot.health <= 0) {
+      if (ctx.lead) bot.chat('following you again')
+      ctx.lead = null
+    }
+    const state = buildState(bot, target, lastTargetPos, ctx.fightGivenUpId)
+    lastTargetPos = state._lastTargetPos
+    // Feed fight's give-up latch back to the brain as hostile_reachable.
+    // Keyed on the latched mob itself, not state.hostile: fight pursues the
+    // sticky incumbent (ctx.fightId) while perception ranks nearest, and a
+    // newcomer inside the sticky margin must not read as a stale latch —
+    // clearing there would re-arm pursuit of the unreachable mob forever.
+    if (ctx.fightGivenUpId != null) {
+      const latched = bot.entities ? bot.entities[ctx.fightGivenUpId] : null
+      if (!isFightTarget(latched, bot.entity.position, target && target.position)) {
+        ctx.fightGivenUpId = null // stale: mob gone or no longer a candidate
+        ctx.fightUnreachableTicks = 0
+        state.hostile_reachable = true
+      } else if (latched.position.distanceTo(bot.entity.position) <= BEHAVIOURS.fight.SWING_RANGE) {
+        // Written-off mob in melee reach: report reachable so the brain
+        // answers fight and fight.js swings via its given-up branch (which
+        // clears the latch itself). The latch stays set — clearing here
+        // would re-issue a pursuit goal at a mob already in reach.
+        state.hostile_reachable = true
+      } else if (state.hostile && state.hostile.id === ctx.fightGivenUpId) {
+        ctx.fightUnreachableTicks = (ctx.fightUnreachableTicks || 0) + 1
+        if (ctx.fightUnreachableTicks >= FIGHT_REPROBE_TICKS) {
+          ctx.fightGivenUpId = null
+          ctx.fightUnreachableTicks = 0
+          state.hostile_reachable = true
+        }
+      } else {
+        ctx.fightUnreachableTicks = 0
+      }
+    } else {
+      ctx.fightUnreachableTicks = 0
+    }
+    return state
+  }
+
+  function reflexGuards(state, calledBrain) {
+    // every-tick hooks (no body cost) go here
+    if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
+    if (ctx.scout) ctx.scout.tick()
+    meleeReflex(bot, ctx, state)
+    eatReflex(bot, ctx, state)
+    // Safety preempts arbitration (and the lead order below): the brain
+    // never sees creepers, so nothing else would move the body.
+    const fleeDist = fleeReflex(bot, ctx)
+    if (fleeDist !== false) {
+      const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
+      return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
+    }
+    // Drowning owns the body over every order (0u9): a dig 3 blocks down
+    // still kills when the vein sits under a lake.
+    if (breathReflex(bot, ctx)) {
+      const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
+      return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
+    }
+    // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
+    stuck.update(bot, ctx)
+    // Task stall clock (idkcraft-vmzq.2): before recover and the
+    // inShelter/fight short-circuits so recover, fight and shelter time
+    // counts toward the stall at tick cadence (verify 02 body-1).
+    try { taskMod.taskTick(bot, ctx) } catch (_) { /* task clock best-effort */ }
+  }
+
+  async function recoverTick(target, state, calledBrain) {
+    try { greet.cancel(bot) } catch (_) { /* sneak best-effort */ }
+    // Lease: the menu owns pre-decide, so a raise this tick switches before the episode starts.
+    try { body.claimBody(bot, ctx, 'recover') } catch (_) { /* lease best-effort */ }
+    const decision = await recover.decide(bot, ctx, state, target)
+    if (ctx.paused) {
+      // 'stop' landed during the recover await: same stale-decision
+      // guard as after the brain await below.
+      stopOnce()
+      return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+    }
+    applyDecision(decision, target, state)
+    // Stuck recovery taking the tick ends a retreat episode like any
+    // other non-chain dispatch (same release as the goal path).
+    if (!ctx.paused) ctx.retreat = null
+    return { decision, calledBrain }
+  }
+
+  async function ordersDispatch(target, state, decision, calledBrain) {
+    // Come-home is an explicit player order like lead: it owns the body
+    // above follow/work, except fight which still preempts. Placed before
+    // lead so an armed doorway exit runs ahead of any new order's path.
+    if (ctx.comehome && decision.action !== 'fight') {
+      const handler = BEHAVIOURS.comehome
+      if (typeof handler === 'function') handler(bot, ctx, target, state)
+      // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
+      try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
+      const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
+      return { decision: { ...decision, action: 'comehome' }, calledBrain }
+    }
+    if (ctx.gocastle && decision.action !== 'fight') {
+      const handler = BEHAVIOURS.gocastle
+      if (typeof handler === 'function') handler(bot, ctx, target, state)
+      try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { sprint: true }) } catch (_) { /* lease best-effort */ }
+      const castleDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=${decision.source} action=gocastle sprint=${decision.sprint} dist=${castleDist} ${pathSuffix()}`)
+      return { decision: { ...decision, action: 'gocastle' }, calledBrain }
+    }
+    if (ctx.lead && decision.action !== 'fight') {
+      // Lead is an explicit player order: it overrides the brain like
+      // 'stop' does, but fight still preempts (safety beats errands).
+      const handler = BEHAVIOURS.lead
+      if (typeof handler === 'function') handler(bot, ctx, target, state)
+      const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
+      return { decision: { ...decision, action: 'lead' }, calledBrain }
+    }
+    // Bring-me is an explicit player order like lead: it owns the body
+    // above work, except fight which still preempts. Placed after lead
+    // so the newest order wins its ticks.
+    if (ctx.bring && decision.action !== 'fight') {
+      const handler = BEHAVIOURS.bring
+      // Greeting on the way back (v92): snapshot before awaiting — the
+      // toss lands on a microtask and clears ctx.bring before the check.
+      const bringBy = ctx.bring.phase === 'return' ? ctx.bring.by : null
+      if (typeof handler === 'function') await handler(bot, ctx, target, state)
+      if (bringBy) greetCheck({ action: 'bring', by: bringBy })
+      const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
+      return { decision: { ...decision, action: 'bring' }, calledBrain }
+    }
+    // Flat is an explicit player order like lead/bring: it owns the body
+    // above work, except fight which still preempts. Placed after
+    // lead/bring so a short errand preempts the long job tick-by-tick and
+    // the job resumes when the errand ends (only a mode change clears it).
+    // A parked episode (stop) never dispatches: any order that unparks the
+    // body (bring/share/lead) must not resurrect it — only `flat` resumes.
+    if (ctx.flat && !ctx.flat.parked && decision.action !== 'fight') {
+      const handler = BEHAVIOURS.flat
+      if (typeof handler === 'function') handler(bot, ctx, target, state)
+      const flatDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
+      console.log(`decision source=${decision.source} action=flat sprint=${decision.sprint} dist=${flatDist} ${pathSuffix()}`)
+      return { decision: { ...decision, action: 'flat' }, calledBrain }
+    }
+  }
+
+  function holdFlags(target, state, decision) {
+    // Work mode (epic rw4) owns the body like an order: the goal arbiter
+    // picks the step, except fight which still preempts (safety beats work).
+    // Placed after lead so an explicit find-me order wins its ticks.
+    // atl.12 + rw4.10 split: a live night shelter-run holds fight
+    // preemption like shelter — stopping to fight every mob on the way
+    // home is how the bot dies outside (prod: 68% of deaths at night,
+    // 57% gohome-active). gohome stamps ctx.shelterRun on every night
+    // walk tick; while the stamp is fresh the work step below keeps
+    // walking (melee reflex defends) instead of engaging, and a stalled
+    // walk lets it go stale so fight resumes. Nobody-visible only
+    // (player protection still fights), no shelter/lead/bring override:
+    // an explicit order owns fight ticks exactly as before, so a fresh
+    // stamp can neither starve an order nor leak the walk's no-dig into
+    // order pathing. Dormant until rw4.10 lands (the export reads
+    // undefined and no stamp is ever fresh).
+    const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
+    const stampFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
+    if (!stampFresh) ctx.shelterRunLogged = false
+    const shelterRun = ctx.work && !ctx.lead && !ctx.bring && !ctx.inShelter &&
+      decision.action === 'fight' && !target && stampFresh
+    if (shelterRun && !ctx.shelterRunLogged) {
+      console.log('shelter-run: holding fight preemption, walking home')
+      ctx.shelterRunLogged = true
+    }
+    // Post-respawn night grace (idkcraft-lph3): the shelter-run mirror
+    // for a night (re)spawn — fight would win every tick while hostiles
+    // stay adjacent and the shelter never builds (the bed-loop). While
+    // the respawn stamp is fresh the work step below runs first and digs
+    // now (melee reflex defends); a stale stamp resumes fight. Alone
+    // only (!target: player protection still fights), no order override
+    // (comehome/gocastle doorway legs own their ticks, like dayDivert).
+    let graceFresh = false
+    try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
+    if (!graceFresh) { ctx.nightGraceLogged = false; ctx.nightGraceFallbackLogged = false }
+    // vmzq.58 (revmux 01): a shelter release latches while a hostile
+    // fact stands, so the grace hold cannot re-arm the open hold on the
+    // next tick and flip fight/shelter every other tick.
+    if (typeof state.hostile_distance !== 'number') ctx.shelterReleased = false
+    const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter && !ctx.shelterReleased &&
+      decision.action === 'fight' && !target && graceFresh
+    if (nightGraceHold && !ctx.nightGraceLogged) {
+      console.log('night-grace: holding fight preemption, sheltering')
+      ctx.nightGraceLogged = true
+    }
+    // 33vm: a hostile already INSIDE the interior box is fought (prod: six
+    // deaths standing idle in stay with a zombie at 0.7). Scanned, not
+    // state.hostile: the nearest may stand outside the wall. The pin and
+    // the state swap keep fight's sticky target on the intruder.
+    let intruder = null
+    if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
+      const bp = bot.entity && bot.entity.position
+      for (const e of Object.values(bot.entities || {})) {
+        if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
+        if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
+      }
+    }
+    if (ctx.inShelter && !intruder) ctx.intruderFight = false
+    if (intruder) {
+      ctx.fightId = intruder.id
+      state.hostile = intruder
+      // g9cj: no digging through our own walls while chasing it (no-dig stash, body.js).
+      ctx.intruderFight = true
+      try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'shelter') } catch (_) { /* lease best-effort */ }
+    }
+    // rw4.15: shelter is a night concept — by day a sheltered fight tick
+    // falls through to the work block (goal.decide clears inShelter and
+    // the day menu exits) instead of idling before it forever (prod: the
+    // bot sat 2 h in its hole, six dawns missed). Positive-day only: an
+    // unreadable clock keeps the night hold (fail closed, the gohome
+    // stamp precedent). Night unchanged; an intruder still fights (33vm).
+    // Orders keep their ticks: lead/bring (the shelterRun gate) plus an
+    // exiting comehome / gocastle doorway, whose inShelter guard must
+    // survive day fight ticks or the exit paths through the wall (revmux
+    // 01 body-1).
+    let dayNow = false
+    try { dayNow = goal.timeWord(bot) === 'day' } catch (_) { dayNow = false }
+    const dayDivert = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
+      ctx.inShelter && decision.action === 'fight' && !intruder && dayNow
+    // vmzq.58: an armed shelter that never enclosed (ground hold after a
+    // failed pillar and dig-in) idled next to a zombie until it died —
+    // one reflex swing does not kill it. A reachable hostile at melee
+    // range (or one within the fight radius right after a hit) releases
+    // the hold to fight; when it is gone the work tick re-runs the
+    // shelter step. Perched, dug-in and committed-dig holds keep the
+    // no-fight hold (shelterOpen).
+    if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
+      const hd = state.hostile_distance
+      const hurtNow = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < SHELTER_HURT_MS
+      const near = typeof hd === 'number' && state.hostile_reachable !== false &&
+        (hd <= SHELTER_RELEASE_R || (hurtNow && hd <= 8))
+      let open = false
+      try { open = near && homeMod.shelterOpen(ctx) } catch (_) { open = false }
+      if (open) {
+        console.log(`shelter release: hostile at ${hd.toFixed(1)}, hold not enclosed, fighting`)
+        ctx.inShelter = false
+        ctx.shelterReleased = true
+      }
+    }
+    return { shelterRun, nightGraceHold, intruder, dayDivert, dayNow }
+  }
+
+  function shelterHold(target, state, decision, calledBrain, dayNow) {
+    // rw4.18: an exiting comehome doorway keeps its legs on day fight
+    // ticks without an intruder — otherwise the exit stalls all day
+    // while a mob outside holds fight (this idle never runs the
+    // handler, and the order gate above only runs it on non-fight
+    // ticks). jr2.3 holds: fight is never dispatched here, the legs
+    // are doorway direct control (no A*, no pursuit), and the rw4.17
+    // wall guard stays armed. Day is required only to START the exit:
+    // committed legs (exit/close, or the toggle sent — carried
+    // through the wedge re-arm) finish at dusk/night too, else an
+    // exit started before dusk freezes mid-doorway with the door open
+    // until dawn (verifier P2, the revmux 02/03 class). By day an
+    // already-open door also starts (freezing behind it is worse). A
+    // hostile on the out-lane holds the not-started exit shut instead
+    // of opening into it (revmux 01 core-1, the bead's 'не выбегая в
+    // толпу') — including a pre-open door at night, whose legs never
+    // began (revmux 04 body-1); the gate re-checks every tick, so a
+    // cleared lane resumes at once. A gocastle without an exiting
+    // comehome keeps the hold (its walk is A* — from inside it would
+    // path the wall).
+    if (ctx.comehome && ctx.comehome.exiting) {
+      const exitPhase = ctx.comehome && ctx.comehome.phase
+      const exitHome = (ctx.comehome && ctx.comehome.home) || ctx.home
+      const legCommitted = !!(ctx.comehome && ctx.comehome.committed)
+      let doorShut = true
+      let laneClear = false
+      try {
+        doorShut = homeMod.exitDoorShut(bot, exitHome)
+        laneClear = !homeMod.outLaneBlocked(bot, exitHome)
+      } catch (_) { doorShut = true; laneClear = false }
+      const started = exitPhase === 'exit' || exitPhase === 'close' || legCommitted || (dayNow && !doorShut)
+      if (started || (dayNow && laneClear)) {
         const handler = BEHAVIOURS.comehome
         if (typeof handler === 'function') handler(bot, ctx, target, state)
         // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
@@ -712,418 +969,210 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
         return { decision: { ...decision, action: 'comehome' }, calledBrain }
       }
-      if (ctx.gocastle && decision.action !== 'fight') {
-        const handler = BEHAVIOURS.gocastle
+    }
+    // Committed dig-in (vmzq.30, revmux 01 body-1): the descent
+    // suppresses fight, so without this the half-dug pit freezes on
+    // fight ticks — the work block below never runs, digInRun never
+    // advances, and a camping skeleton wins by arrows. Drive the
+    // shelter handler so the dig finishes under melee cover (no
+    // pursuit is dispatched here, same as the hold). Mirrors the
+    // comehome-exit exception above. A phantom descent in progress
+    // (lph3: descended) drives from digs 0 — the walk to the pit
+    // is committed too, or walkers at the perch starve it.
+    if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig &&
+      ((ctx.shelter.dig.digs | 0) > 0 || ctx.shelter.descended)) {
+      try {
+        const handler = BEHAVIOURS.shelter
         if (typeof handler === 'function') handler(bot, ctx, target, state)
-        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { sprint: true }) } catch (_) { /* lease best-effort */ }
-        const castleDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=${decision.source} action=gocastle sprint=${decision.sprint} dist=${castleDist} ${pathSuffix()}`)
-        return { decision: { ...decision, action: 'gocastle' }, calledBrain }
-      }
-      if (ctx.lead && decision.action !== 'fight') {
-        // Lead is an explicit player order: it overrides the brain like
-        // 'stop' does, but fight still preempts (safety beats errands).
-        const handler = BEHAVIOURS.lead
-        if (typeof handler === 'function') handler(bot, ctx, target, state)
-        const leadDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=${decision.source} action=lead sprint=${decision.sprint} dist=${leadDist} ${pathSuffix()}`)
-        return { decision: { ...decision, action: 'lead' }, calledBrain }
-      }
-      // Bring-me is an explicit player order like lead: it owns the body
-      // above work, except fight which still preempts. Placed after lead
-      // so the newest order wins its ticks.
-      if (ctx.bring && decision.action !== 'fight') {
-        const handler = BEHAVIOURS.bring
-        // Greeting on the way back (v92): snapshot before awaiting — the
-        // toss lands on a microtask and clears ctx.bring before the check.
-        const bringBy = ctx.bring.phase === 'return' ? ctx.bring.by : null
-        if (typeof handler === 'function') await handler(bot, ctx, target, state)
-        if (bringBy) greetCheck({ action: 'bring', by: bringBy })
-        const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
-        return { decision: { ...decision, action: 'bring' }, calledBrain }
-      }
-      // Flat is an explicit player order like lead/bring: it owns the body
-      // above work, except fight which still preempts. Placed after
-      // lead/bring so a short errand preempts the long job tick-by-tick and
-      // the job resumes when the errand ends (only a mode change clears it).
-      // A parked episode (stop) never dispatches: any order that unparks the
-      // body (bring/share/lead) must not resurrect it — only `flat` resumes.
-      if (ctx.flat && !ctx.flat.parked && decision.action !== 'fight') {
-        const handler = BEHAVIOURS.flat
-        if (typeof handler === 'function') handler(bot, ctx, target, state)
-        const flatDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-        console.log(`decision source=${decision.source} action=flat sprint=${decision.sprint} dist=${flatDist} ${pathSuffix()}`)
-        return { decision: { ...decision, action: 'flat' }, calledBrain }
-      }
-      // Work mode (epic rw4) owns the body like an order: the goal arbiter
-      // picks the step, except fight which still preempts (safety beats work).
-      // Placed after lead so an explicit find-me order wins its ticks.
-      // atl.12 + rw4.10 split: a live night shelter-run holds fight
-      // preemption like shelter — stopping to fight every mob on the way
-      // home is how the bot dies outside (prod: 68% of deaths at night,
-      // 57% gohome-active). gohome stamps ctx.shelterRun on every night
-      // walk tick; while the stamp is fresh the work step below keeps
-      // walking (melee reflex defends) instead of engaging, and a stalled
-      // walk lets it go stale so fight resumes. Nobody-visible only
-      // (player protection still fights), no shelter/lead/bring override:
-      // an explicit order owns fight ticks exactly as before, so a fresh
-      // stamp can neither starve an order nor leak the walk's no-dig into
-      // order pathing. Dormant until rw4.10 lands (the export reads
-      // undefined and no stamp is ever fresh).
-      const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
-      const stampFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
-      if (!stampFresh) ctx.shelterRunLogged = false
-      const shelterRun = ctx.work && !ctx.lead && !ctx.bring && !ctx.inShelter &&
-        decision.action === 'fight' && !target && stampFresh
-      if (shelterRun && !ctx.shelterRunLogged) {
-        console.log('shelter-run: holding fight preemption, walking home')
-        ctx.shelterRunLogged = true
-      }
-      // Post-respawn night grace (idkcraft-lph3): the shelter-run mirror
-      // for a night (re)spawn — fight would win every tick while hostiles
-      // stay adjacent and the shelter never builds (the bed-loop). While
-      // the respawn stamp is fresh the work step below runs first and digs
-      // now (melee reflex defends); a stale stamp resumes fight. Alone
-      // only (!target: player protection still fights), no order override
-      // (comehome/gocastle doorway legs own their ticks, like dayDivert).
-      let graceFresh = false
-      try { graceFresh = typeof homeMod.nightGrace === 'function' && homeMod.nightGrace(bot, ctx) } catch (_) { graceFresh = false }
-      if (!graceFresh) { ctx.nightGraceLogged = false; ctx.nightGraceFallbackLogged = false }
-      // vmzq.58 (revmux 01): a shelter release latches while a hostile
-      // fact stands, so the grace hold cannot re-arm the open hold on the
-      // next tick and flip fight/shelter every other tick.
-      if (typeof state.hostile_distance !== 'number') ctx.shelterReleased = false
-      const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter && !ctx.shelterReleased &&
-        decision.action === 'fight' && !target && graceFresh
-      if (nightGraceHold && !ctx.nightGraceLogged) {
-        console.log('night-grace: holding fight preemption, sheltering')
-        ctx.nightGraceLogged = true
-      }
-      // 33vm: a hostile already INSIDE the interior box is fought (prod: six
-      // deaths standing idle in stay with a zombie at 0.7). Scanned, not
-      // state.hostile: the nearest may stand outside the wall. The pin and
-      // the state swap keep fight's sticky target on the intruder.
-      let intruder = null
-      if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
-        const bp = bot.entity && bot.entity.position
-        for (const e of Object.values(bot.entities || {})) {
-          if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
-          if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
-        }
-      }
-      if (ctx.inShelter && !intruder) ctx.intruderFight = false
-      if (intruder) {
-        ctx.fightId = intruder.id
-        state.hostile = intruder
-        // g9cj: no digging through our own walls while chasing it (no-dig stash, body.js).
-        ctx.intruderFight = true
-        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'shelter') } catch (_) { /* lease best-effort */ }
-      }
-      // rw4.15: shelter is a night concept — by day a sheltered fight tick
-      // falls through to the work block (goal.decide clears inShelter and
-      // the day menu exits) instead of idling before it forever (prod: the
-      // bot sat 2 h in its hole, six dawns missed). Positive-day only: an
-      // unreadable clock keeps the night hold (fail closed, the gohome
-      // stamp precedent). Night unchanged; an intruder still fights (33vm).
-      // Orders keep their ticks: lead/bring (the shelterRun gate) plus an
-      // exiting comehome / gocastle doorway, whose inShelter guard must
-      // survive day fight ticks or the exit paths through the wall (revmux
-      // 01 body-1).
-      let dayNow = false
-      try { dayNow = goal.timeWord(bot) === 'day' } catch (_) { dayNow = false }
-      const dayDivert = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
-        ctx.inShelter && decision.action === 'fight' && !intruder && dayNow
-      // vmzq.58: an armed shelter that never enclosed (ground hold after a
-      // failed pillar and dig-in) idled next to a zombie until it died —
-      // one reflex swing does not kill it. A reachable hostile at melee
-      // range (or one within the fight radius right after a hit) releases
-      // the hold to fight; when it is gone the work tick re-runs the
-      // shelter step. Perched, dug-in and committed-dig holds keep the
-      // no-fight hold (shelterOpen).
-      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
-        const hd = state.hostile_distance
-        const hurtNow = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < SHELTER_HURT_MS
-        const near = typeof hd === 'number' && state.hostile_reachable !== false &&
-          (hd <= SHELTER_RELEASE_R || (hurtNow && hd <= 8))
-        let open = false
-        try { open = near && homeMod.shelterOpen(ctx) } catch (_) { open = false }
-        if (open) {
-          console.log(`shelter release: hostile at ${hd.toFixed(1)}, hold not enclosed, fighting`)
-          ctx.inShelter = false
-          ctx.shelterReleased = true
-        }
-      }
-      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
-        // rw4.18: an exiting comehome doorway keeps its legs on day fight
-        // ticks without an intruder — otherwise the exit stalls all day
-        // while a mob outside holds fight (this idle never runs the
-        // handler, and the order gate above only runs it on non-fight
-        // ticks). jr2.3 holds: fight is never dispatched here, the legs
-        // are doorway direct control (no A*, no pursuit), and the rw4.17
-        // wall guard stays armed. Day is required only to START the exit:
-        // committed legs (exit/close, or the toggle sent — carried
-        // through the wedge re-arm) finish at dusk/night too, else an
-        // exit started before dusk freezes mid-doorway with the door open
-        // until dawn (verifier P2, the revmux 02/03 class). By day an
-        // already-open door also starts (freezing behind it is worse). A
-        // hostile on the out-lane holds the not-started exit shut instead
-        // of opening into it (revmux 01 core-1, the bead's 'не выбегая в
-        // толпу') — including a pre-open door at night, whose legs never
-        // began (revmux 04 body-1); the gate re-checks every tick, so a
-        // cleared lane resumes at once. A gocastle without an exiting
-        // comehome keeps the hold (its walk is A* — from inside it would
-        // path the wall).
-        if (ctx.comehome && ctx.comehome.exiting) {
-          const exitPhase = ctx.comehome && ctx.comehome.phase
-          const exitHome = (ctx.comehome && ctx.comehome.home) || ctx.home
-          const legCommitted = !!(ctx.comehome && ctx.comehome.committed)
-          let doorShut = true
-          let laneClear = false
-          try {
-            doorShut = homeMod.exitDoorShut(bot, exitHome)
-            laneClear = !homeMod.outLaneBlocked(bot, exitHome)
-          } catch (_) { doorShut = true; laneClear = false }
-          const started = exitPhase === 'exit' || exitPhase === 'close' || legCommitted || (dayNow && !doorShut)
-          if (started || (dayNow && laneClear)) {
-            const handler = BEHAVIOURS.comehome
-            if (typeof handler === 'function') handler(bot, ctx, target, state)
-            // Lease refresh for the meet's shelter leg (sprint needs fresh keys); same owner, no cleanup.
-            try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { sprint: true }) } catch (_) { /* lease best-effort */ }
-            const meetDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-            console.log(`decision source=${decision.source} action=comehome sprint=${decision.sprint} dist=${meetDist} ${pathSuffix()}`)
-            return { decision: { ...decision, action: 'comehome' }, calledBrain }
-          }
-        }
-        // Committed dig-in (vmzq.30, revmux 01 body-1): the descent
-        // suppresses fight, so without this the half-dug pit freezes on
-        // fight ticks — the work block below never runs, digInRun never
-        // advances, and a camping skeleton wins by arrows. Drive the
-        // shelter handler so the dig finishes under melee cover (no
-        // pursuit is dispatched here, same as the hold). Mirrors the
-        // comehome-exit exception above. A phantom descent in progress
-        // (lph3: descended) drives from digs 0 — the walk to the pit
-        // is committed too, or walkers at the perch starve it.
-        if (ctx.step === 'shelter' && ctx.shelter && ctx.shelter.dig &&
-          ((ctx.shelter.dig.digs | 0) > 0 || ctx.shelter.descended)) {
-          try {
-            const handler = BEHAVIOURS.shelter
-            if (typeof handler === 'function') handler(bot, ctx, target, state)
-          } catch (_) { /* drive best-effort: hold below */ }
-          // Descent walk owns the goal (lph3 revmux 03): stopOnce below
-          // would clear the dig-in-walk goal in the same tick, so a
-          // cobble-pillar (or stone-stance) descent with walkers at the
-          // perch never walks. The walk needs its goal live; the hold
-          // still returns idle (no pursuit).
-          if (ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk) {
-            console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
-            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
-          }
-        }
-        // Sheltered for the night: no pursuit through our own wall (the
-        // pathfinder would dig it with canDig). The melee reflex above
-        // still swings at anything that gets inside.
-        stopOnce()
+      } catch (_) { /* drive best-effort: hold below */ }
+      // Descent walk owns the goal (lph3 revmux 03): stopOnce below
+      // would clear the dig-in-walk goal in the same tick, so a
+      // cobble-pillar (or stone-stance) descent with walkers at the
+      // perch never walks. The walk needs its goal live; the hold
+      // still returns idle (no pursuit).
+      if (ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk) {
         console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
         return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
       }
-      // 0ay: taking fire from an unreachable hostile (arrows across a gap
-      // drain a bot the FSM idles — prod 11:50: 20 to 6.8 in 18 s standing
-      // still). Alone, close (<=8, the perception fight radius), hurt
-      // within HURT_FRESH_MS: fight ticks divert into the work block so
-      // the retreat leg below runs instead of the give-up shadow-stand.
-      // Orders still own their ticks (no starve, no no-dig leak — same
-      // gate as the atl.12 shelter hold); shelter never diverts.
-      const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
-      const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
-        state.hostile_reachable === false &&
-        typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
-      if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
-        if (!ctx.home && !ctx.adoptDone) {
-          // Spawn adoption races chunk loading (one shot at join sees an
-          // empty world): hold work until the spawn block is visible, then
-          // adopt before build defaults a fresh site. Readiness needs
-          // positive evidence once a spawn is known; without a spawn yet
-          // (or without a blockAt hook, i.e. unit mocks) adoption no-ops,
-          // so work proceeds and the one shot waits for the spawn below.
-          // im4: a VISIBLE spawn block does not mean the door chunks (12
-          // blocks off) have streamed — the old adopt-once missed forever
-          // (2/5 live-assay bots). Retry while the miss may be streaming,
-          // then give up to build. Retry needs a world that can stream
-          // (all three hooks); hook-less mocks keep the old immediate
-          // path, so unit timing is untouched.
-          const canStream = !!(bot.blockAt && bot.spawnPoint && bot.findBlocks)
-          let ready = true
-          try { if (bot.blockAt && bot.spawnPoint) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
-          if (!ready && (ctx.adoptTries = (ctx.adoptTries || 0) + 1) <= 60) {
-            if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
-            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
-          }
-          let foundEarly = null
-          try {
-            foundEarly = goal.adoptHome(bot)
-          } catch (_) { foundEarly = null }
-          if (foundEarly) {
-            ctx.adoptDone = true
-            // Same resets as setHome below (no ticker handle in this scope).
-            ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
-            try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
-          } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
-            // Give up to build: a mock that never streams, patience out
-            // without readiness, or grace exhausted.
-            ctx.adoptDone = true
-          } else {
-            if (ctx.adoptReadyMisses <= 1) console.log('waiting for home chunks before work')
-            // A returned decision is not dispatched: stop a live goal (e.g.
-            // a follow the owner just revoked with 'go work') or it keeps
-            // driving the body through the grace (revmux 01 minor).
-            try { stopOnce() } catch (_) { /* stop best-effort */ }
-            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
-          }
-        }
-        // Retreat chain (1tj): a vetoed follow at low health with a hostile
-        // on the bot means the FSM idles and the bot dies standing (gat).
-        // 0ay extends it to taking fire from an unreachable hostile (the
-        // underFire divert above): same chain — run/pillar breaks the line
-        // of fire; a miss falls through to goal.decide, i.e. the old
-        // behaviour. The engage log fires only on a dispatched pick, so an
-        // empty menu or a declined chain never claims a retreat.
-        // Retreat hysteresis (idkcraft-vmzq.49): a latched leg holds across
-        // veto flicker — sheltered ticks excepted, like the veto leg,
-        // and a truly clear tick (bands) releases at once.
-        let retreatHeld = false
-        try { retreatHeld = !ctx.inShelter && retreatMod.retreatLatched(ctx) && !retreatMod.retreatClear(bot, state) } catch (_) { retreatHeld = false }
-        if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire || retreatHeld) {
-          const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
-          if (retreat) {
-            if (ctx.paused || !ctx.work) {
-              // 'stop' (or a mode change) landed during the chain await:
-              // same stale-decision guard as after the goal await below.
-              stopOnce()
-              return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
-            }
-            if (underFire && !ctx.underFireLogged) {
-              console.log('taking-fire: unreachable hostile and fresh hurt, retreating')
-              ctx.underFireLogged = true
-            }
-            const rd = { action: retreat.action, sprint: false, source: retreat.source }
-            if (ctx.step !== retreat.action) stepMod.nextStepGen(ctx) // oqul.7
-            ctx.step = retreat.action
-            applyDecision(rd, target, state)
-            return { decision: rd, calledBrain }
-          }
-        }
-        const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
-        // Pre-check (lph3 revmux 02 minor): with no feasible night step,
-        // fall back WITHOUT awaiting goal.decide — the await may brain.ask
-        // (up to the timeout, possibly paid) for a pick we then discard,
-        // and it chats/steps a day job that never runs. Fail open: an
-        // unreadable menu proceeds to the post-check below.
-        if (nightGraceHold) {
-          let nightFeasible = true
-          try {
-            const facts = goal.goalFacts(bot, ctx)
-            nightFeasible = !!(goal.MENU.stay.feasible(facts, bot, ctx) ||
-              goal.MENU.gohome.feasible(facts, bot, ctx) || goal.MENU.shelter.feasible(facts, bot, ctx))
-          } catch (_) { nightFeasible = true }
-          if (!nightFeasible) {
-            if (!ctx.nightGraceFallbackLogged) {
-              console.log('night-grace: no night step feasible, fighting instead')
-              ctx.nightGraceFallbackLogged = true
-            }
-            applyDecision(brainFight, target, state)
-            if (!ctx.paused) ctx.retreat = null
-            return { decision: brainFight, calledBrain }
-          }
-        }
-        decision = await goal.decide(bot, ctx)
+    }
+    // Sheltered for the night: no pursuit through our own wall (the
+    // pathfinder would dig it with canDig). The melee reflex above
+    // still swings at anything that gets inside.
+    stopOnce()
+    console.log(`decision source=${decision.source} action=shelter dist=none ${pathSuffix()}`)
+    return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+  }
+
+  function adoptGate(calledBrain) {
+    if (!ctx.home && !ctx.adoptDone) {
+      // Spawn adoption races chunk loading (one shot at join sees an
+      // empty world): hold work until the spawn block is visible, then
+      // adopt before build defaults a fresh site. Readiness needs
+      // positive evidence once a spawn is known; without a spawn yet
+      // (or without a blockAt hook, i.e. unit mocks) adoption no-ops,
+      // so work proceeds and the one shot waits for the spawn below.
+      // im4: a VISIBLE spawn block does not mean the door chunks (12
+      // blocks off) have streamed — the old adopt-once missed forever
+      // (2/5 live-assay bots). Retry while the miss may be streaming,
+      // then give up to build. Retry needs a world that can stream
+      // (all three hooks); hook-less mocks keep the old immediate
+      // path, so unit timing is untouched.
+      const canStream = !!(bot.blockAt && bot.spawnPoint && bot.findBlocks)
+      let ready = true
+      try { if (bot.blockAt && bot.spawnPoint) ready = !!bot.blockAt(bot.spawnPoint) } catch (_) { ready = true }
+      if (!ready && (ctx.adoptTries = (ctx.adoptTries || 0) + 1) <= 60) {
+        if (ctx.adoptTries <= 1) console.log('waiting for spawn chunks before work')
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
+      let foundEarly = null
+      try {
+        foundEarly = goal.adoptHome(bot)
+      } catch (_) { foundEarly = null }
+      if (foundEarly) {
+        ctx.adoptDone = true
+        // Same resets as setHome below (no ticker handle in this scope).
+        ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+        try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
+        // Give up to build: a mock that never streams, patience out
+        // without readiness, or grace exhausted.
+        ctx.adoptDone = true
+      } else {
+        if (ctx.adoptReadyMisses <= 1) console.log('waiting for home chunks before work')
+        // A returned decision is not dispatched: stop a live goal (e.g.
+        // a follow the owner just revoked with 'go work') or it keeps
+        // driving the body through the grace (revmux 01 minor).
+        try { stopOnce() } catch (_) { /* stop best-effort */ }
+        return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+      }
+    }
+  }
+
+  async function workTick(target, state, decision, calledBrain, underFire, nightGraceHold) {
+    // Retreat chain (1tj): a vetoed follow at low health with a hostile
+    // on the bot means the FSM idles and the bot dies standing (gat).
+    // 0ay extends it to taking fire from an unreachable hostile (the
+    // underFire divert above): same chain — run/pillar breaks the line
+    // of fire; a miss falls through to goal.decide, i.e. the old
+    // behaviour. The engage log fires only on a dispatched pick, so an
+    // empty menu or a declined chain never claims a retreat.
+    // Retreat hysteresis (idkcraft-vmzq.49): a latched leg holds across
+    // veto flicker — sheltered ticks excepted, like the veto leg,
+    // and a truly clear tick (bands) releases at once.
+    let retreatHeld = false
+    try { retreatHeld = !ctx.inShelter && retreatMod.retreatLatched(ctx) && !retreatMod.retreatClear(bot, state) } catch (_) { retreatHeld = false }
+    if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire || retreatHeld) {
+      const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
+      if (retreat) {
         if (ctx.paused || !ctx.work) {
-          // 'stop' (or a mode change) landed during the goal await: same
-          // stale-decision guard as after the brain await above.
+          // 'stop' (or a mode change) landed during the chain await:
+          // same stale-decision guard as after the goal await below.
           stopOnce()
           return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
         }
-        // Night grace holds only for night steps (lph3 revmux 01): with no
-        // home (and no castle) the work block picks a day step — working
-        // the dark with fight suppressed for 60 s. Fall back to the
-        // brain's fight instead; a night step runs the hold as usual.
-        if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter') {
-          if (!ctx.nightGraceFallbackLogged) {
-            console.log(`night-grace: work picked ${decision.action}, fighting instead`)
-            ctx.nightGraceFallbackLogged = true
-          }
-          applyDecision(brainFight, target, state)
-          if (!ctx.paused) ctx.retreat = null
-          return { decision: brainFight, calledBrain }
+        if (underFire && !ctx.underFireLogged) {
+          console.log('taking-fire: unreachable hostile and fresh hurt, retreating')
+          ctx.underFireLogged = true
         }
-        // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
-        try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
-        applyDecision(decision, target, state)
-        // Stale-built revalidation (idkcraft-hlf): an adopt that ran while
-        // one plan cell read missing (mid-build, mid-repair, dark chunk)
-        // froze built=false, and the build menu goes infeasible on an empty
-        // remainder — so the build step that would flip it never runs and
-        // the work flow sits on the site stage forever. Re-check the house
-        // after every work dispatch; a physically complete house flips here
-        // with the same effects as the build step's own done branch (table
-        // claim, save, announce). Skips never count (idkcraft-vmzq.10):
-        // given-up-but-missing cells keep built=false, else this branch
-        // would announce 'home done' over the holes one tick after the
-        // build step honestly failed. Post-apply on purpose: normal
-        // completions still flow through the build behaviour (which flips
-        // first), so only genuinely stuck flags — where build was never
-        // dispatched — ever reach this branch.
-        if (ctx.home && ctx.home.site && !ctx.home.built) {
-          let complete = false
-          try {
-            // A live clear cell (rw4.19) holds the flip: else the re-open
-            // below and this flip would alternate every tick.
-            complete = buildMod.isComplete(bot, ctx.home) && !buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)
-          } catch (_) { complete = false }
-          if (complete) {
-            try {
-              if (!ctx.home.table && buildMod.cellDone(bot, ctx.home, buildMod.blueprintFor(ctx.home)[0])) {
-                const t = buildMod.blueprintFor(ctx.home)[0]
-                ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
-              }
-            } catch (_) { /* claim best-effort */ }
-            ctx.home.built = true
-            try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
-            const s = ctx.home.site
-            try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
-          }
-        } else if (ctx.home && ctx.home.site && ctx.home.built && buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)) {
-          // rw4.19: a house finished over a relief-1 bump (doorway 1 high,
-          // bed foot blocked) re-opens so build digs the interior out.
-          ctx.home.built = false
-          console.log('home: natural ground inside the house, re-opening the build (rw4.19)')
-          try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
-        }
-        // The chain owns ctx.retreat only across its own dispatches: any other
-        // step taking the tick ends the episode, so the next veto re-chains
-        // instead of holding a stale pick (live 1tj: an unfinished flee
-        // survived into rest, then held and pillar was never asked).
-        if (!ctx.paused && ctx.work) ctx.retreat = null
-        return { decision, calledBrain }
+        const rd = { action: retreat.action, sprint: false, source: retreat.source }
+        if (ctx.step !== retreat.action) stepMod.nextStepGen(ctx) // oqul.7
+        ctx.step = retreat.action
+        applyDecision(rd, target, state)
+        return { decision: rd, calledBrain }
       }
-      applyDecision(decision, target, state)
-      // Non-chain dispatch releases retreat ownership (see goal path).
-      if (!ctx.paused) ctx.retreat = null
-      return { decision, calledBrain }
-    } catch (err) {
-      console.error(`tick error: ${err && err.message ? err.message : err}`)
-      return { decision: null, calledBrain }
-    } finally {
-      inFlight = false
-      // A body in water ticks fast even parked: the breath trigger window
-      // (oxygen 10 → 0 ≈ 7.5 s) is shorter than one 10 s idle tick, so a
-      // slow first check can come after the lungs are already empty
-      // (revmux 01 core-2). Dry parked ticks stay slow.
-      let wetFast = false
-      try { wetFast = !!(bot && bot.entity && bot.entity.isInWater === true) } catch (_) { wetFast = false }
-      if (scheduled) scheduleNext(lastVisible || reflexFast || workTickFast || wetFast)
     }
+    const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
+    // Pre-check (lph3 revmux 02 minor): with no feasible night step,
+    // fall back WITHOUT awaiting goal.decide — the await may brain.ask
+    // (up to the timeout, possibly paid) for a pick we then discard,
+    // and it chats/steps a day job that never runs. Fail open: an
+    // unreadable menu proceeds to the post-check below.
+    if (nightGraceHold) {
+      let nightFeasible = true
+      try {
+        const facts = goal.goalFacts(bot, ctx)
+        nightFeasible = !!(goal.MENU.stay.feasible(facts, bot, ctx) ||
+          goal.MENU.gohome.feasible(facts, bot, ctx) || goal.MENU.shelter.feasible(facts, bot, ctx))
+      } catch (_) { nightFeasible = true }
+      if (!nightFeasible) {
+        if (!ctx.nightGraceFallbackLogged) {
+          console.log('night-grace: no night step feasible, fighting instead')
+          ctx.nightGraceFallbackLogged = true
+        }
+        applyDecision(brainFight, target, state)
+        if (!ctx.paused) ctx.retreat = null
+        return { decision: brainFight, calledBrain }
+      }
+    }
+    decision = await goal.decide(bot, ctx)
+    if (ctx.paused || !ctx.work) {
+      // 'stop' (or a mode change) landed during the goal await: same
+      // stale-decision guard as after the brain await above.
+      stopOnce()
+      return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+    }
+    // Night grace holds only for night steps (lph3 revmux 01): with no
+    // home (and no castle) the work block picks a day step — working
+    // the dark with fight suppressed for 60 s. Fall back to the
+    // brain's fight instead; a night step runs the hold as usual.
+    if (nightGraceHold && decision.action !== 'stay' && decision.action !== 'gohome' && decision.action !== 'shelter') {
+      if (!ctx.nightGraceFallbackLogged) {
+        console.log(`night-grace: work picked ${decision.action}, fighting instead`)
+        ctx.nightGraceFallbackLogged = true
+      }
+      applyDecision(brainFight, target, state)
+      if (!ctx.paused) ctx.retreat = null
+      return { decision: brainFight, calledBrain }
+    }
+    // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
+    applyDecision(decision, target, state)
+    // Stale-built revalidation (idkcraft-hlf): an adopt that ran while
+    // one plan cell read missing (mid-build, mid-repair, dark chunk)
+    // froze built=false, and the build menu goes infeasible on an empty
+    // remainder — so the build step that would flip it never runs and
+    // the work flow sits on the site stage forever. Re-check the house
+    // after every work dispatch; a physically complete house flips here
+    // with the same effects as the build step's own done branch (table
+    // claim, save, announce). Skips never count (idkcraft-vmzq.10):
+    // given-up-but-missing cells keep built=false, else this branch
+    // would announce 'home done' over the holes one tick after the
+    // build step honestly failed. Post-apply on purpose: normal
+    // completions still flow through the build behaviour (which flips
+    // first), so only genuinely stuck flags — where build was never
+    // dispatched — ever reach this branch.
+    if (ctx.home && ctx.home.site && !ctx.home.built) {
+      let complete = false
+      try {
+        // A live clear cell (rw4.19) holds the flip: else the re-open
+        // below and this flip would alternate every tick.
+        complete = buildMod.isComplete(bot, ctx.home) && !buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)
+      } catch (_) { complete = false }
+      if (complete) {
+        try {
+          if (!ctx.home.table && buildMod.cellDone(bot, ctx.home, buildMod.blueprintFor(ctx.home)[0])) {
+            const t = buildMod.blueprintFor(ctx.home)[0]
+            ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
+          }
+        } catch (_) { /* claim best-effort */ }
+        ctx.home.built = true
+        try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+        const s = ctx.home.site
+        try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
+      }
+    } else if (ctx.home && ctx.home.site && ctx.home.built && buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)) {
+      // rw4.19: a house finished over a relief-1 bump (doorway 1 high,
+      // bed foot blocked) re-opens so build digs the interior out.
+      ctx.home.built = false
+      console.log('home: natural ground inside the house, re-opening the build (rw4.19)')
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    }
+    // The chain owns ctx.retreat only across its own dispatches: any other
+    // step taking the tick ends the episode, so the next veto re-chains
+    // instead of holding a stale pick (live 1tj: an unfinished flee
+    // survived into rest, then held and pillar was never asked).
+    if (!ctx.paused && ctx.work) ctx.retreat = null
+    return { decision, calledBrain }
   }
 
   // Order methods (setFollow/setBring/...) live in orders.js; the box shares
