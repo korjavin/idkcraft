@@ -589,6 +589,19 @@ describe('reserve corner exits (g0z.26 R3, revmux 02 majors)', () => {
     assert.equal(shy, null, 'peckish without room: explore')
   })
 
+  it('vmzq.64: the reserve corner hunts on low health (regen stalls below food 18)', () => {
+    const cow = { 7: { id: 7, name: 'cow', position: pos(5, 64, 0) } }
+    const full = [...oak5, { name: 'iron_pickaxe', count: 1 }, ...dirt(33)]
+    const plan = (over) => forage.planForage(packBot(full, { entities: cow, ...over }), noChestCtx())
+    const hurt = plan({ food: 12, health: 4 })
+    assert.equal(hurt && hurt.kind, 'food', 'reserved, food 12, health 4: hunt')
+    assert.equal(hurt && hurt.want, 1, 'one kill under the reserve')
+    assert.equal(plan({ food: 12, health: 10 }), null, 'healthy, no room: explore (unchanged)')
+    assert.equal(plan({ food: 19, health: 4 }), null, 'food 19: regen runs, no hunt')
+    assert.equal(plan({ food: 12 }), null, 'unreadable health: hunger rule only')
+    assert.equal(plan({ food: 12, health: NaN }), null, 'NaN health: fail-closed')
+  })
+
   it('M2: shedVictim sheds the smallest junk, never wood, stations or light', () => {
     assert.deepEqual(
       craft.shedVictim([{ name: 'dirt', count: 64 }, { name: 'sand', count: 3 }]),
