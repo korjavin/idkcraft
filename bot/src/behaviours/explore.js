@@ -146,7 +146,9 @@ function pickTarget(visited, anchor, maxRadius, banned) {
 // Target height for the stuck escape (atl.23): the first standable cell
 // from the top of a 32-block window above the bot down, in the target's
 // column. A window that reads solid at its top (surface higher) or no
-// solid at all (unloaded) falls back to the bot's y.
+// solid at all (unloaded) falls back to the bot's y. Pass-through blocks
+// (grass, flowers, snow layer) and tree crowns read as air: a level
+// forest leg must not ask for pillar_up (revmux 01).
 const COLUMN_WINDOW = 32
 function columnTop(bot, t, fallback) {
   try {
@@ -155,7 +157,9 @@ function columnTop(bot, t, fallback) {
     for (let y = top; y >= top - 2 * COLUMN_WINDOW; y--) {
       const b = bot.blockAt(new Vec3(t.x, y, t.z))
       if (!b) return fallback
-      const air = b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air'
+      const n = String(b.name)
+      const air = (b.boundingBox === 'empty' && n !== 'water' && n !== 'lava') || n === 'air' || n === 'cave_air' || n === 'void_air' ||
+        n.endsWith('_leaves') || n.endsWith('_log')
       if (air) sawAir = true
       else return sawAir ? y + 1 : fallback
     }
@@ -200,10 +204,23 @@ function explore(bot, ctx, target, state) {
   if (bp.y < floor) {
     dropDeadLeg(ctx)
     const climbKey = `explore:climb:${floor}`
+    const y = Math.floor(bp.y)
     if (climbKey !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalY(floor), false)
       ctx.lastGoalKey = climbKey
-      console.log(`explore too deep y=${Math.floor(bp.y)} floor=${floor}`)
+      e.climbY = y
+      e.climbStalls = 0
+      console.log(`explore too deep y=${y} floor=${floor}`)
+    } else if (y > e.climbY) {
+      e.climbY = y
+      e.climbStalls = 0
+    } else if ((e.climbStalls = (e.climbStalls || 0) + 1) >= STALL_TICKS) {
+      // No height gained: fail the step with one escape whose goal is
+      // above (goalDy>0 offers the climb primitives) — never loop silently.
+      e.climbStalls = 0
+      clearGoal(bot, ctx)
+      ctx.stepStatus = 'failed:too-deep'
+      stuck.request(bot, ctx, 'explore', { x: Math.floor(bp.x), y: floor, z: Math.floor(bp.z) }, climbKey)
     }
     return
   }

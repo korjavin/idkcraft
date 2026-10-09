@@ -400,4 +400,38 @@ describe('explore depth floor (atl.23)', () => {
     for (let i = 0; i < 12 && !ctx.stuck; i++) explore(bot, ctx, null, null)
     assert.deepEqual(ctx.stuck.goal, { x: 0, y: 71, z: -16 })
   })
+
+  it('grass and a canopy over a level target read as air: goal y is the ground', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => {
+      if (p.y >= 70) return { name: 'air', boundingBox: 'empty' }
+      if (p.y >= 66) return { name: 'oak_leaves', boundingBox: 'block' }
+      if (p.y === 65) return { name: 'oak_log', boundingBox: 'block' }
+      if (p.y === 64) return { name: 'short_grass', boundingBox: 'empty' }
+      return { name: 'grass_block', boundingBox: 'block' }
+    }
+    const ctx = homeCtx()
+    explore(bot, ctx, null, null)
+    for (let i = 0; i < 12 && !ctx.stuck; i++) explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.stuck.goal, { x: 0, y: 64, z: -16 })
+  })
+
+  it('a climb gaining no height fails the step with one escape aimed up', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(5, 30, -5)
+    const ctx = homeCtx()
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      explore(bot, ctx, null, null)
+      for (let i = 0; i < 9; i++) explore(bot, ctx, null, null)
+      assert.equal(ctx.stuck, undefined)
+      bot.entity.position = pos(5, 31, -5) // height gained: budget resets
+      for (let i = 0; i < 10; i++) explore(bot, ctx, null, null) // 1 reset + 9 flat
+      assert.equal(ctx.stuck, undefined)
+      explore(bot, ctx, null, null) // 10th flat tick
+    } finally { console.log = origLog }
+    assert.equal(ctx.stepStatus, 'failed:too-deep')
+    assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 5, y: 48, z: -5 }, key: 'explore:climb:48' })
+  })
 })
