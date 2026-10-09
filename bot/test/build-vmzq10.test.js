@@ -178,6 +178,33 @@ describe('vmzq.10 build fails instead of done over skipped cells', () => {
     assert.ok(bot.chats.some((m) => m === 'home done at 6 64 0'))
   })
 
+  it('6x7.20: a stamped skip that heals lays on the last-pass retry and the house completes', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    bot.placeBlock = async (ref, face) => {
+      const p = ref.position
+      world.set(p.x + face.x, p.y + face.y, p.z + face.z, 'oak_planks')
+    }
+    bot.equip = async () => {}
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const plan = build.blueprintFor(home)
+    const wall = plan.findIndex((c) => c.kind === 'planks' && c.dy === 0)
+    paintHouse(world, home, [wall])
+    const c = plan[wall]
+    bot.entity.position = pos(home.site.x + c.dx + 0.5, 64, home.site.z + c.dz - 1.5) // in reach now
+    // The early verdict was the stand's (unreachable from a pit), stamped by skipCell.
+    const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [wall], buildSkipAt: { [wall]: Date.now() }, buildLastProgressLog: Date.now() }
+    build(bot, ctx, null, null)
+    assert.deepEqual(ctx.buildSkip, [])
+    assert.equal(lines.filter((l) => l.startsWith('build holes: retrying 1')).length, 1)
+    for (let i = 0; i < 6 && ctx.stepStatus !== 'done'; i++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.home.built, true)
+  })
+
   it('prod shape: a dip cell skips no-ref, then the house fails, never done', async () => {
     // Miniature of the prod run: the ground under the table cell is gone
     // (prod: water/dip columns over an unvalidated shore site), so the
@@ -206,6 +233,18 @@ describe('vmzq.10 build fails instead of done over skipped cells', () => {
     assert.ok(skips[0].includes('(no-ref)'), skips[0])
     paintHouse(world, home, [0]) // the rest of the house goes up
     world.set(11, 64, 1, 'air') // …but the skipped table cell stays a hole
+    // 6x7.20: the stamped skip gets one last-pass retry; the server still
+    // refuses the cell (the walls now give a ref, so it is placed and refused)…
+    bot.placeBlock = async () => { throw new Error('refused') }
+    build(bot, ctx, null, null)
+    assert.deepEqual(ctx.buildSkip, [], 'one retry once the rest stands')
+    assert.notEqual(ctx.stepStatus, 'failed:skipped-cells')
+    for (let i = 0; i < 8 && ctx.buildSkip.length === 0; i++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    assert.deepEqual(ctx.buildSkip, [0], 'the refused cell re-skips')
+    // …and the second pass fails: no endless retry.
     build(bot, ctx, null, null)
     assert.equal(ctx.stepStatus, 'failed:skipped-cells')
     assert.equal(ctx.home.built, false)

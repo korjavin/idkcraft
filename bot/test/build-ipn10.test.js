@@ -209,7 +209,8 @@ describe('ipn.10 per-cell attempt budget', () => {
     } finally {
       q.restore()
     }
-    assert.deepEqual(ctx.buildSkip, [stuckIdx], 'three hangs skip the cell')
+    // The only open cell: its skip goes straight into the 6x7.20 last-pass retry.
+    assert.deepEqual(ctx.buildSkipRetry && ctx.buildSkipRetry.done, [stuckIdx], 'three hangs skip the cell')
     assert.ok(q.lines.some((m) => m.includes('flight-hang')), `hang skip logged: ${JSON.stringify(q.lines)}`)
   })
 
