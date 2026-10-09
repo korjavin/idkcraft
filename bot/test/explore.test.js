@@ -434,4 +434,26 @@ describe('explore depth floor (atl.23)', () => {
     assert.equal(ctx.stepStatus, 'failed:too-deep')
     assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 5, y: 48, z: -5 }, key: 'explore:climb:48' })
   })
+
+  it('a failed climb holds at its spot: the spiral walks, no second escape; a borrow keeps the budget', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(5, 30, -5)
+    const ctx = homeCtx()
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      explore(bot, ctx, null, null)
+      for (let i = 0; i < 5; i++) explore(bot, ctx, null, null)
+      ctx.lastGoalKey = 'fight:1' // borrow mid-climb
+      for (let i = 0; i < 6; i++) explore(bot, ctx, null, null) // re-issue + 5 flat = 10
+      assert.equal(ctx.stepStatus, 'failed:too-deep')
+      assert.equal(logs.filter((l) => l.startsWith('explore too deep')).length, 1)
+      ctx.stuck = undefined
+      ctx.stepStatus = 'running'
+      for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
+    } finally { console.log = origLog }
+    assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalXZ')
+    assert.ok(!ctx.stuck || ctx.stuck.key !== 'explore:climb:48', 'no second climb escape at the same spot')
+  })
 })

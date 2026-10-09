@@ -39,6 +39,8 @@ const TASK_SEARCH_RADIUS = 64
 const STALL_TICKS = 10 // no-displacement walk ticks before unreachable
 const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const CHAT_MS = 30000 // departure chat at most this often
+const CLIMB_HOLD_MS = 5 * 60 * 1000 // failed climb: no re-raise at that spot (atl.23)
+const CLIMB_HOLD_DIST = 8 // feet from the failed climb's spot
 
 const DIRS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
 
@@ -200,17 +202,27 @@ function explore(bot, ctx, target, state) {
   // leg drops and the bot climbs; the spiral resumes at bp.y >= floor.
   // ponytail: GoalY(floor) may stop in a cave at floor height; the
   // underground abort is vmzq.59's.
+  // A climb that failed holds at its spot (revmux 02): within
+  // CLIMB_HOLD_DIST of it and CLIMB_HOLD_MS the spiral walks as on master
+  // (its legs fail and consume points) instead of re-raising one escape
+  // per lap at the same block.
   const floor = resources.surfaceFloor(ctx, bp)
-  if (bp.y < floor) {
+  const cf = e.climbFail
+  const held = !!cf && Date.now() - cf.at < CLIMB_HOLD_MS &&
+    Math.hypot(bp.x - cf.x, bp.y - cf.y, bp.z - cf.z) <= CLIMB_HOLD_DIST
+  if (bp.y < floor && !held) {
     dropDeadLeg(ctx)
     const climbKey = `explore:climb:${floor}`
     const y = Math.floor(bp.y)
     if (climbKey !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalY(floor), false)
       ctx.lastGoalKey = climbKey
-      e.climbY = y
-      e.climbStalls = 0
-      console.log(`explore too deep y=${y} floor=${floor}`)
+      if (e.climbKey !== climbKey) { // a borrow taking the body back keeps the budget (68p)
+        e.climbKey = climbKey
+        e.climbY = y
+        e.climbStalls = 0
+        console.log(`explore too deep y=${y} floor=${floor}`)
+      }
     } else if (y > e.climbY) {
       e.climbY = y
       e.climbStalls = 0
@@ -218,12 +230,15 @@ function explore(bot, ctx, target, state) {
       // No height gained: fail the step with one escape whose goal is
       // above (goalDy>0 offers the climb primitives) — never loop silently.
       e.climbStalls = 0
+      e.climbKey = null
+      e.climbFail = { x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
       clearGoal(bot, ctx)
       ctx.stepStatus = 'failed:too-deep'
       stuck.request(bot, ctx, 'explore', { x: Math.floor(bp.x), y: floor, z: Math.floor(bp.z) }, climbKey)
     }
     return
   }
+  e.climbKey = null
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
