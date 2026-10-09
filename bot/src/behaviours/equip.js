@@ -300,6 +300,25 @@ const PLACE_OVER = new Set([
   'tall_dry_grass',
 ])
 
+// Castle residence workbench (g0z.30): a carried table goes to the
+// descriptor's table cell (the storeroom, off every plan cell) while the
+// bot is at its castle — loaded, free, solid floor, not refused before.
+// Elsewhere (or once its walk stalls) the roadside scan below places it.
+function castleTableSpot(bot, ctx, bp, skip) {
+  try {
+    const home = ctx && ctx.home
+    if (!home || home.kind !== 'castle' || !home.site) return null
+    const t = require('../residence').of(home).table(home)
+    if (skip.has(`${t.x},${t.y},${t.z}`) || dist3(bp, t) > FAR_TABLE) return null
+    const cell = bot.blockAt(t)
+    const below = bot.blockAt(new Vec3(t.x, t.y - 1, t.z))
+    if (!cell || !below || !below.position || below.name === 'air') return null
+    if (below.boundingBox != null && below.boundingBox !== 'block') return null
+    if (cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air') return null
+    return { at: new Vec3(t.x, t.y, t.z), below }
+  } catch (_) { return null }
+}
+
 function tableFor(bot, ctx) {
   const nope = (why) => Promise.reject(new Error(why))
   const bp = bot.entity && bot.entity.position
@@ -401,7 +420,24 @@ function tableFor(bot, ctx) {
   let ref = null
   let at = null
   let fallback = null
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  const castleSpot = castleTableSpot(bot, ctx, bp, skip)
+  if (castleSpot) {
+    const k = `${castleSpot.at.x},${castleSpot.at.y},${castleSpot.at.z}`
+    if (dist3(bp, castleSpot.at) > TABLE_REACH) {
+      const key = `equip-castle-table:${k}`
+      if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
+        issueGoal(bot, ctx, new goals.GoalNear(castleSpot.at.x, castleSpot.at.y, castleSpot.at.z, 2), key, false)
+      }
+      st.castleTableWaits = (st.castleTableWaits || 0) + 1
+      if (st.castleTableWaits <= 20) return Promise.resolve(null) // walking in
+      try { skip.add(k) } catch (_) { /* skip best-effort */ } // stalled: roadside from here
+    } else {
+      ref = castleSpot.below
+      at = castleSpot.at
+    }
+    st.castleTableWaits = 0
+  }
+  for (const [dx, dz] of (ref ? [] : [[1, 0], [-1, 0], [0, 1], [0, -1]])) {
     const tried = skip.has(`${bx + dx},${by},${bz + dz}`)
     let below = null
     let cell = null
@@ -484,6 +520,8 @@ function tableFor(bot, ctx) {
       // reads as no station (craft then rebuilds a second table).
       st.tablePos = new Vec3(at.x, at.y, at.z)
       ctx.claimedTable = new Vec3(at.x, at.y, at.z)
+      // The castle residence's own station (no build claims it there).
+      if (castleSpot && ref === castleSpot.below) ctx.home.table = new Vec3(at.x, at.y, at.z)
     } catch (_) { /* claim best-effort */ }
     return { block, pos: at }
   }
