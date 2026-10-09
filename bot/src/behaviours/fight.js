@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget } = require('../perception')
 const follow = require('./follow')
+const { issueGoal } = require('./util')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -55,8 +56,7 @@ function fight(bot, ctx, target, state) {
     return
   }
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalFollow(hostile, 2), true)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalFollow(hostile, 2), key, true)
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
     equipGear(bot)

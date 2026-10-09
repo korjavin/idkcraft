@@ -6,6 +6,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { entrance } = require('./castle')
 const body = require('../body')
+const { issueGoal } = require('./util')
 
 const MOVE_TOLERANCE = 0.5
 const STALL_TICKS = 10
@@ -74,8 +75,7 @@ function holdStill(bot, ctx) {
 function setGoal(bot, ctx, key, goal) {
   if (ctx.lastGoalKey === key) return
   try {
-    bot.pathfinder.setGoal(goal, false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, goal, key, false)
     ctx.lastPathNodes = null
   } catch (_) { /* retry next tick */ }
 }

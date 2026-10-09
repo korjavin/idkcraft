@@ -60,6 +60,7 @@ function generate(old) {
     const owner = prev.owner || writers.slice().sort((a, b) => by[b] - by[a] || a.localeCompare(b))[0]
     out[field] = { writers, owner }
     if (prev.tristate || TRISTATE[field]) out[field].tristate = prev.tristate || TRISTATE[field]
+    if (prev.note) out[field].note = prev.note // hand-written protocol notes survive --write (oqul.8)
   }
   return out
 }
@@ -91,6 +92,7 @@ if (require.main === module && process.argv.includes('--write')) {
 
     it('tri-state fields keep their note', () => {
       for (const f of Object.keys(TRISTATE)) assert.ok(listed[f] && listed[f].tristate, `${f}: tristate note missing`)
+      assert.ok(listed.lastGoalKey && listed.lastGoalKey.note, 'lastGoalKey: writer-pattern note missing (oqul.8)')
     })
 
     it('scan sees the protocol fields (the regex is live)', () => {

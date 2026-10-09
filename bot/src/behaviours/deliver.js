@@ -17,7 +17,7 @@ const follow = require('./follow')
 const bring = require('./bring')
 const stuck = require('../stuck')
 const { countItems } = require('../perception')
-const { say, clearGoal, botPos } = require('./util')
+const { say, clearGoal, issueGoal, botPos } = require('./util')
 
 const DELIVER_RANGE = 3
 const TOSS_RANGE = DELIVER_RANGE + 0.5
@@ -251,8 +251,7 @@ function deliver(bot, ctx, target, state) {
     const key = `deliver-wait:${Math.round(wait.x)},${Math.round(wait.z)}`
     if (key !== ctx.lastGoalKey) {
       const gy = wait.y === null || wait.y === undefined ? bp.y : wait.y
-      bot.pathfinder.setGoal(new goals.GoalNear(wait.x, gy, wait.z, 2), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalNear(wait.x, gy, wait.z, 2), key, false)
     }
   }
   if (!f.saidWaiting) {

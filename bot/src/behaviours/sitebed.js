@@ -17,7 +17,7 @@ const stockpileMod = require('./stockpile')
 const blueprint = require('../castle')
 const castleMod = require('./castle')
 const flatMod = require('./flat')
-const { botPos, isInteractRef } = require('./util')
+const { botPos, isInteractRef, issueGoal } = require('./util')
 
 const BED16 = bedMod.BED_COLORS.map((c) => `${c}_bed`)
 const AIR = new Set(['air', 'cave_air', 'void_air'])
@@ -149,8 +149,7 @@ function siteBedSpot(bot, st, bad) {
 function setGoal(bot, ctx, key, goal) {
   if (ctx.lastGoalKey === key) return
   try {
-    bot.pathfinder.setGoal(goal, false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, goal, key, false)
   } catch (_) { /* retry next tick */ }
 }
 
