@@ -44,7 +44,6 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
-const { COAL_RESERVE } = require('./light')
 const { countItems, wornItems } = require('../perception')
 const { say } = require('./util')
 const metrics = require('../metrics')
@@ -441,7 +440,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   const oreHave = c.ironOre || 0
   if (furnaceBusy) return { state: 'ready', key: 'ready', action: 'smelt' }
   if (oreHave > 0) {
-    if ((c.fuel || 0) <= COAL_RESERVE) return { state: 'want', key: 'want-coal', line: `need coal above the reserve to smelt ${oreHave} ore, going to dig` }
+    // ipn.13: the furnace burns coal to zero, then planks (2 smelt 3 ore).
+    if ((c.fuel || 0) === 0 && (c.planks || 0) < 2) return { state: 'want', key: 'want-coal', line: `need coal or planks to smelt ${oreHave} ore, going to dig` }
     if (!im.furnace) return { state: 'wait', key: 'wait-furnace', line: `waiting on the furnace to smelt ${oreHave} ore` }
     if (!c.furnaceClaim && !c.furnaceItem && (c.cobble || 0) < 8) {
       return { state: 'want', key: 'want-cobble', line: 'need 8 cobble for the furnace, going to dig' }
@@ -1131,6 +1131,9 @@ function announceYield(ctx, g, bot, key, line) {
   if (g.saidNeed !== key) {
     g.saidNeed = key
     say(bot, line)
+    try {
+      console.log(`gear yield key=${key} line=${line}`) // ipn.15: the chat alone never reaches the logs
+    } catch (_) { /* logging best-effort */ }
   }
   ctx.stepStatus = 'done'
 }
@@ -1146,7 +1149,7 @@ function announceYield(ctx, g, bot, key, line) {
 // separate bead. Fail-open: a broken check keeps the old line, never gags.
 const HONEST_WANT = {
   'want-ore': 'need raw iron, none known',
-  'want-coal': 'need coal above the reserve, none known',
+  'want-coal': 'need coal or planks, none known',
 }
 
 function honestLine(bot, ctx, bp, key, line) {
@@ -1195,7 +1198,13 @@ function gear(bot, ctx, target, state) {
     } catch (_) { /* logging best-effort */ }
   }
   if (plan.state === 'hand') {
-    ctx.stepStatus = 'done' // handover steps own it; silent, nothing to say
+    if (g.saidHand !== plan.key) {
+      g.saidHand = plan.key // log once per piece, like the yield latch
+      try {
+        console.log(`gear hand ${plan.name}`)
+      } catch (_) { /* logging best-effort */ }
+    }
+    ctx.stepStatus = 'done' // handover steps own it; silent in chat
     return
   }
   if (plan.state === 'want' || plan.state === 'wait') {
@@ -1239,7 +1248,7 @@ function gear(bot, ctx, target, state) {
       return
     }
     if (reason === 'no-fuel') {
-      announceYield(ctx, g, bot, 'want-coal', honestLine(bot, ctx, bp, 'want-coal', 'need coal above the reserve, going to dig'))
+      announceYield(ctx, g, bot, 'want-coal', honestLine(bot, ctx, bp, 'want-coal', 'need coal or planks, going to dig'))
       return
     }
     fail(ctx, `furnace-${reason}`)

@@ -530,6 +530,22 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
   })
 
+  it('a failed previous step logs its status (ipn.15)', async () => {
+    const bot = goalBot()
+    const ctx = { step: 'stockpile', stepStatus: 'failed:no-chest' }
+    await decide(bot, ctx)
+    const line = goalLines().pop() || ''
+    assert.match(line, / prev=stockpile .*why=step-failed fail=failed:no-chest menu=/)
+  })
+
+  it('a done previous step logs no fail= (ipn.15)', async () => {
+    const bot = goalBot()
+    const ctx = { step: 'stockpile', stepStatus: 'done' }
+    await decide(bot, ctx)
+    const line = goalLines().pop() || ''
+    assert.match(line, /why=step-done menu=/)
+  })
+
   it('step flip back within 10s chats once (f3s call-site pin)', async () => {
     // A->B->A on one ctx: the repeat next: line must be throttled. Reverting
     // the decide() call sites to plain bot.chat fails this test.
@@ -1311,7 +1327,7 @@ describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
     const ctx = settled('failed:no-fuel')
     await decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.chats.includes('need coal above the reserve, none known'), `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(bot.chats.includes('need coal or planks, none known'), `chats: ${JSON.stringify(bot.chats)}`)
     assert.equal(ctx.furnace.result, null)
   })
 
@@ -1321,7 +1337,7 @@ describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
     resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
     await decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.chats.includes('need coal above the reserve, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(bot.chats.includes('need coal or planks, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
   })
 
   it('no-cobble keeps its line: stone is not a memory resource', async () => {
