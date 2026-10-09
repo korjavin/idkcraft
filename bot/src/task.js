@@ -2186,6 +2186,20 @@ function progressReset(state, kind, now) {
   setStallGauge(kind, 0)
 }
 
+// A self bring order whose search started and has budget left (vmzq.63).
+// Mirrors bring.js enterSearch's exhaustion test; the minutes read the
+// wall clock like startedAt does. No search yet = no budget = billed.
+function selfSearching(o) {
+  try {
+    const s = o && o.self && o.phase !== 'return' ? o.searchLegs : null
+    if (!s || s.timedOut || s.capped) return false
+    const b = require('./behaviours/bring').SEARCH_BUDGET
+    return s.legs < b.legs && Date.now() - s.startedAt < b.minutes * 60 * 1000
+  } catch (_) {
+    return false
+  }
+}
+
 // Every clock reset logs its reason (vmzq.21): the run-4 reset path is
 // instrumented before anyone asserts it.
 function logReset(kind, why) {
@@ -2653,6 +2667,20 @@ function taskTick(bot, ctx, now = Date.now()) {
         } catch (_) { /* window best-effort */ }
         return
       }
+      // Self-order search grace (vmzq.63, prod: the beds wool hunt parked
+      // every 61 s, its 5-min/24-leg budget never reached): while a self
+      // hunt's search runs within its own budget the clock stays at 0 —
+      // the budget is the deadline. Exhausted, the return phase or an
+      // owner order (no o.self, legs uncapped) bill as before.
+      if (kind === 'bring' && selfSearching(ctx && ctx.bring)) {
+        state.stallMs = 0
+        state.lastAt = now
+        setStallGauge(kind, 0)
+        if (!state.selfSearch) logReset(kind, 'self-search') // once per run, not per tick
+        state.selfSearch = true
+        return
+      }
+      state.selfSearch = false
       // Travel grace for the bring delivery leg (.22, the .21 shape): the
       // first return-phase run of a stall episode gets one clock reset
       // for the walk to the player — without it every delivery reads as

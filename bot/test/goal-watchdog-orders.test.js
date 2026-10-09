@@ -203,6 +203,52 @@ describe('bring watchdog (acceptance 1, finding 8)', () => {
     assert.equal(goalUnlock(ctx, 'radius'), null)
   })
 
+  // vmzq.63: a self hunt's search owns its budget; the watchdog waits it out.
+  function selfHunt(searchLegs) {
+    const bot = makeBot()
+    const { ctx } = bringCtx(bot, { self: 'beds', name: 'white_wool', want: 3 })
+    ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true, v: 2 }
+    ctx.bring.phase = 'searchwalk'
+    ctx.bring.searchLegs = { legs: 3, startedAt: Date.now(), announced: true, last: 'empty', ...searchLegs }
+    const { calls, brain } = answerBrain('park')
+    ctx.brain = brain
+    return { bot, ctx, calls }
+  }
+
+  it('self hunt searching within budget: 3 flat minutes, no round, no park (vmzq.63)', async () => {
+    const { bot, ctx, calls } = selfHunt({})
+    const o = ctx.bring
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    advance(bot, ctx, t0, 180)
+    await flush()
+    assert.equal(calls.length, 0)
+    assert.equal(wdLogs().length, 0)
+    assert.ok(!(ctx.task.bring.wd && ctx.task.bring.wd.pending))
+    assert.equal(ctx.task.bring.stallMs, 0)
+    assert.equal(ctx.bring, o, 'hunt still set')
+    assert.equal(lines.filter((l) => l === 'goal reset kind=bring why=self-search').length, 1, 'logged once')
+  })
+
+  for (const [label, s] of [['legs spent', { legs: 24 }], ['timed out', { timedOut: true }],
+    ['capped', { capped: true }], ['minutes spent', { startedAt: Date.now() - 6 * 60 * 1000 }]]) {
+    it(`self hunt search exhausted (${label}): flat 61 s fires the round as before (vmzq.63)`, async () => {
+      const { bot, ctx, calls } = selfHunt(s)
+      const t0 = 1000000000000
+      taskMod.taskTick(bot, ctx, t0)
+      let t = t0
+      let guard = 0
+      while (!(ctx.task.bring.wd && ctx.task.bring.wd.pending) && guard++ < 20) {
+        t += 10000
+        taskMod.taskTick(bot, ctx, t)
+      }
+      assert.ok(ctx.task.bring.wd.pending, 'round fired')
+      await flush()
+      assert.equal(calls.length, 1)
+      assert.ok(Object.keys(calls[0].criteria).includes('park'))
+    })
+  }
+
   it('owner bring is NOT offered far options (finding 8: the legs are already uncapped)', async () => {
     const bot = makeBot({ registry: { blocksByName: { oak_log: { id: 17 } } } })
     const { ctx } = bringCtx(bot) // no self: an owner order
