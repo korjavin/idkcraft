@@ -206,6 +206,8 @@ function explore(bot, ctx, target, state) {
   // CLIMB_HOLD_DIST of it and CLIMB_HOLD_MS the spiral walks as on master
   // (its legs fail and consume points) instead of re-raising one escape
   // per lap at the same block.
+  // ponytail: a bot pinned at one spot still re-raises one climb escape
+  // per CLIMB_HOLD_MS; make the per-spot hold sticky if prod shows it.
   const floor = resources.surfaceFloor(ctx, bp)
   const cf = e.climbFail
   const held = !!cf && Date.now() - cf.at < CLIMB_HOLD_MS &&
@@ -217,9 +219,9 @@ function explore(bot, ctx, target, state) {
     if (climbKey !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalY(floor), false)
       ctx.lastGoalKey = climbKey
+      e.climbY = y // progress counts from where the body is now (revmux 03)
       if (e.climbKey !== climbKey) { // a borrow taking the body back keeps the budget (68p)
         e.climbKey = climbKey
-        e.climbY = y
         e.climbStalls = 0
         console.log(`explore too deep y=${y} floor=${floor}`)
       }
