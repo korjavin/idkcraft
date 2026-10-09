@@ -1,0 +1,22 @@
+{
+ "jr2.3 'go work' from the hold exits, shuts, then works": [
+  {"tick":0,"kind":"step","value":null},
+  {"tick":0,"kind":"owner","owner":"idle"},
+  {"tick":0,"kind":"chat","text":"on my own; say 'follow me' to call me"},
+  {"tick":1,"kind":"owner","owner":"comehome"},
+  {"tick":2,"kind":"lastGoalKey","value":"home-door"},
+  {"tick":4,"kind":"stepStatus","value":"running"},
+  {"tick":5,"kind":"owner","owner":"work"},
+  {"tick":5,"kind":"step","value":"beds"},
+  {"tick":5,"kind":"chat","text":"next: making beds (goal-fsm)"}
+ ],
+ "jr2.3 'come home' walk goal issues with digging off": [
+  {"tick":0,"kind":"step","value":null},
+  {"tick":0,"kind":"owner","owner":"idle"},
+  {"tick":0,"kind":"stepStatus","value":"running"},
+  {"tick":0,"kind":"chat","text":"coming home"},
+  {"tick":1,"kind":"owner","owner":"comehome"},
+  {"tick":1,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":1,"x":13,"y":64,"z":19},"dynamic":false,"moves":{"canDig":false}},
+  {"tick":1,"kind":"lastGoalKey","value":"comehome-walk"}
+ ]
+}
