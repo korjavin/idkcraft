@@ -75,9 +75,27 @@ const BURY_NOWOOD = process.env.CASTLE_BURY_NOWOOD === '1'
 // dig-staircase out instead of looping pillar_up. The verdict gets
 // pit=escaped@Ns,resumed@Ms. 0 = off.
 // CASTLE_PIT_REFUSE=0 keeps placements working (control: pillar escape).
+// CASTLE_PIT_GOAL=level (idkcraft-i4wm) forces every stuck episode raised
+// from inside the pit to carry a LEVEL coords goal (30 east at pit-floor
+// height, the c698 shape: dist~30, through the open side). Organic pit
+// episodes are usually high (surface fetch above) or goal-less, which climb
+// out on master too — the forced goal is the only deterministic level-goal
+// repro. Episodes outside the pit stay organic. Replay-only, default off.
+// CASTLE_PIT_SHAPE=corner (idkcraft-i4wm): the hollow is a 3x3 with the
+// settle pos in its northwest corner (walls=2, runway 2+ east and south)
+// instead of the west-column landing. A wall-pressed west-column stance
+// fails its shuffles (Paper rejects touch-moves), which bans via fails on
+// master too.
+// CASTLE_PIT_SHAPE=hall (idkcraft-i4wm): the hollow is a 5x5 centre
+// landing (walls=0, runway 2+ every way) — the prod-like roomy pit where
+// free-stance shuffles displace and the c698 done-loop (no fail accrual,
+// no dig switch) reproduces instead of fail-banning. Same verdict; the
+// staircase digs the hall sides. Replay-only, default off.
 const PIT = Math.max(0, parseInt(process.env.CASTLE_PIT || '0', 10) || 0)
 const PIT_AFTER = Math.max(1, parseInt(process.env.CASTLE_PIT_AFTER || '2', 10) || 2)
 const PIT_REFUSE = process.env.CASTLE_PIT_REFUSE !== '0'
+const PIT_GOAL = process.env.CASTLE_PIT_GOAL || ''
+const PIT_SHAPE = process.env.CASTLE_PIT_SHAPE || ''
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -848,9 +866,18 @@ async function main() {
       if (bx == null) fail('pit', 'follower never settled')
       if (bx < WIN_LO || bx > WIN_HI) fail('pit', 'settle x left the on-pad window')
       // Mass rim (bx-3..bx+3) stays on the flattened pad: WIN_HI+3 <= 274.
-      await rcon(`fill ${bx - 3} ${by - 5} ${bz - 2} ${bx + 3} ${by - 1} ${bz + 2} minecraft:stone`).catch((e) => fail('pit', e.message))
+      if (PIT_SHAPE !== '' && PIT_SHAPE !== 'corner' && PIT_SHAPE !== 'hall') fail('pit-shape', `CASTLE_PIT_SHAPE: want ''|corner|hall, got ${JSON.stringify(PIT_SHAPE)}`)
+      const massFill = PIT_SHAPE === 'hall'
+        ? `fill ${bx - 3} ${by - 5} ${bz - 3} ${bx + 3} ${by - 1} ${bz + 3} minecraft:stone`
+        : `fill ${bx - 3} ${by - 5} ${bz - 2} ${bx + 3} ${by - 1} ${bz + 2} minecraft:stone`
+      await rcon(massFill).catch((e) => fail('pit', e.message))
       await sleep(1000) // space burst rcon (same silent-no-op class as the tps)
-      await rcon(`fill ${bx} ${by - 4} ${bz - 1} ${bx + 2} ${by + 6} ${bz + 1} minecraft:air`).catch((e) => fail('pit', e.message))
+      const hollowFill = PIT_SHAPE === 'hall'
+        ? `fill ${bx - 2} ${by - 4} ${bz - 2} ${bx + 2} ${by + 6} ${bz + 2} minecraft:air`
+        : PIT_SHAPE === 'corner'
+          ? `fill ${bx} ${by - 4} ${bz} ${bx + 2} ${by + 6} ${bz + 2} minecraft:air`
+          : `fill ${bx} ${by - 4} ${bz - 1} ${bx + 2} ${by + 6} ${bz + 1} minecraft:air`
+      await rcon(hollowFill).catch((e) => fail('pit', e.message))
       // Fill-verify (client scan): burst rcon silently no-ops (c698). The
       // mass cell proves the mass applied; the hollow cell is air only if
       // the hollow applied on top of it (the mass would stone it).
@@ -895,6 +922,30 @@ async function main() {
       pitRim = by
       pitCX = bx + 1
       pitCZ = bz
+      if (PIT_GOAL !== '' && PIT_GOAL !== 'level') fail('pit-goal', `CASTLE_PIT_GOAL: want ''|level, got ${JSON.stringify(PIT_GOAL)}`)
+      if (PIT_GOAL === 'level' && !follower._pitGoalInstalled) {
+        // Installed BEFORE the resume like the refuse hook: the first pit
+        // episode must already carry the forced goal. stuck.js raises every
+        // episode through recover.setStuck (property lookup, same module
+        // object in-process), so one wrapper covers all owners; the guides
+        // are bare bots and never raise. The goal is fixed (c698: level,
+        // dist~30, east through the open side) while the body is below the
+        // rim near the pit; outside episodes stay organic.
+        follower._pitGoalInstalled = true
+        const recoverMod = require('../src/behaviours/recover')
+        const rawSetStuck = recoverMod.setStuck
+        recoverMod.setStuck = (ctx, by, goal, key) => {
+          let g = goal
+          try {
+            const p = follower.entity && follower.entity.position
+            if (p && typeof p.y === 'number' && p.y < pitRim &&
+              Math.hypot(p.x - (pitCX + 0.5), p.z - (pitCZ + 0.5)) <= 6) {
+              g = { x: pitCX + 30, y: qy, z: pitCZ }
+            }
+          } catch (_) { /* forcing best-effort */ }
+          return rawSetStuck(ctx, by, g, key)
+        }
+      }
       if (PIT_REFUSE && !follower._pitRefuseInstalled) {
         // Installed BEFORE the resume: a post-resume install gives the bot
         // an unrefused head start and it pillar-towers out (c913: 67->69
@@ -930,7 +981,7 @@ async function main() {
       pitAt = Date.now()
       pitPre = pst.progress && typeof pst.progress.done === 'number' ? pst.progress.done : 0
       const k = sample()
-      origLog(`CASTLE-RIG pit: at ${(pitAt - t0) / 1000 | 0}s ${pitPre}/${(pst.progress && pst.progress.total) ?? '?'} -> open ${PIT}-deep stone pit ${bx} ${qy} ${bz} (rim ${by}), pick+scaffold kit, refuse=${PIT_REFUSE ? 'on' : 'off'}, pack cobble=${k.cobble} dirt=${k.dirt} pick=${k.pick}`)
+      origLog(`CASTLE-RIG pit: at ${(pitAt - t0) / 1000 | 0}s ${pitPre}/${(pst.progress && pst.progress.total) ?? '?'} -> open ${PIT}-deep stone pit ${bx} ${qy} ${bz} (rim ${by}), shape=${PIT_SHAPE || 'square'}, pick+scaffold kit, refuse=${PIT_REFUSE ? 'on' : 'off'}, goal=${PIT_GOAL || 'organic'}, pack cobble=${k.cobble} dirt=${k.dirt} pick=${k.pick}`)
     }
     const s = sample()
     if (buryAt) {

@@ -774,6 +774,7 @@ function recoverFacts(bot, ctx, state, target) {
     combo: !!findCombo(bot),
     wall2: wall2At(bot),
     freeSides: sides.free,
+    shuffleOut: recoverShuffleBanned(ctx, 'sidestep'),
     lavaNear: lavaNearAt(bot),
     playerOnline,
     playerDist: playerDist === null ? null : Math.round(playerDist),
@@ -797,9 +798,12 @@ function recoverText(facts) {
   const dy = facts.goalDy >= 2 ? 'high' : facts.goalDy <= -2 ? 'low' : 'level'
   const dist = facts.goalDist === null ? 'none' : String(facts.goalDist)
   const player = !facts.playerOnline ? 'none' : facts.playerDist === null ? 'far' : facts.playerDist <= NEAR_PLAYER ? 'near' : 'far'
+  // shuf=out rides only the done-banned episodes (i4wm): the model input
+  // and every pinned literal stay byte-identical until the guard fires.
+  const shuf = facts.shuffleOut ? ' shuf=out' : ''
   return `stuck=${stuckBucket(facts.stuckTicks)} goal=${dy} dist=${dist} ` +
     `scaffold=${facts.scaffold} pickaxe=${facts.pickaxe ? 'yes' : 'no'} bucket=${(facts.bucket || 0) >= 2 ? 'yes' : 'no'} water=${facts.water ? 'yes' : 'no'} ` +
-    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} pit=${facts.pit ? 'yes' : 'no'} player=${player} ` +
+    `head=${facts.headBlocked ? 'blocked' : 'free'} walls=${facts.walls} pit=${facts.pit ? 'yes' : 'no'} player=${player}${shuf} ` +
     `resets=${facts.resetsStuck}/${facts.resetsPlaceError} last=${facts.last}`
 }
 
@@ -843,6 +847,17 @@ function recoverFsm(facts, names) {
   // path=success, and sidestep displacement just re-queues the same wedge).
   if (Math.abs(facts.goalDy) <= 1 && pick('hop_step')) return 'hop_step'
   if (pick('sidestep')) return 'sidestep'
+  // Post-shuffle staircase (i4wm): sidestep looped 3 flat dones in a dry
+  // box with a pick on hand, and the level goal gates every climb arm
+  // above. Without this the stub falls through to wait and the pit that
+  // the guard just diagnosed never digs out (the model path is policy-off
+  // alone, so JEV cannot cover it on the rig either). A fail-ban does NOT
+  // open this (fail storms keep the legacy fall-through); water and
+  // pickless boxes keep theirs too. 4jr stands: no level pillar, digging
+  // out only. Reached only past the hop/sidestep lines, so an offerable
+  // hop still mounts first and a just-failed hop escalates here, never
+  // repeats (the done-ban already bars sidestep from the menu itself).
+  if (facts.boxed && !facts.water && facts.pickaxe && facts.shuffleOut && pick('dig_step')) return 'dig_step'
   if (pick('dig_through')) return 'dig_through'
   if (pick('call_player')) return 'call_player'
   return 'wait'
@@ -1995,10 +2010,19 @@ const RECOVER_MENU = {
 // that worked; bans expire after RECOVER_BAN_MS so a one-off race retries
 // instead of wedging a pillar-only pocket forever.
 const RECOVER_BANNABLE = new Set(['pillar_up', 'water_up', 'hop_step', 'sidestep'])
+// Shuffle kinds (idkcraft-i4wm): sidestep/hop_step dones while boxed in at
+// the same floor prove nothing — the c698 loop shuffled 1 block inside a
+// level-goal pit and called it done, so no fail-streak ever accrued and the
+// dig-out switch never engaged. Three consecutive same-anchor same-floor
+// boxed dones ban the kind like three fails do. Both are bannable already,
+// so the ban binds through the existing feasible gates; open ground never
+// counts (a wedge that walks 2 blocks sideways is genuinely free).
+const RECOVER_SHUFFLE = new Set(['sidestep', 'hop_step'])
 function recoverStreakState(ctx) {
   if (!ctx) return null
   if (!ctx.recoverStreaks || typeof ctx.recoverStreaks !== 'object') ctx.recoverStreaks = { anchor: null, fails: {} }
   if (!ctx.recoverStreaks.fails || typeof ctx.recoverStreaks.fails !== 'object') ctx.recoverStreaks.fails = {}
+  if (!ctx.recoverStreaks.dones || typeof ctx.recoverStreaks.dones !== 'object') ctx.recoverStreaks.dones = {}
   return ctx.recoverStreaks
 }
 function recoverStreaksMoved(st, bp) {
@@ -2012,6 +2036,7 @@ function resetRecoverStreaksIfMoved(ctx, bp) {
   if (recoverStreaksMoved(st, bp)) {
     st.anchor = null
     st.fails = {}
+    st.dones = {} // a new situation restarts the shuffle runs too (i4wm)
     st.pageKeys = {} // a new situation re-arms every detector's page
   }
   if (bp && !st.anchor) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
@@ -2052,6 +2077,10 @@ function noteRecoverFail(ctx, bp, action, outcome) {
   const st = recoverStreakState(ctx)
   if (!st || !RECOVER_BANNABLE.has(action)) return
   resetRecoverStreaksIfMoved(ctx, bp)
+  // Failures leave the done runs alone (i4wm): a fail is the absence of
+  // progress, like a flat done — only progress (a climbing/tunneling done,
+  // a floor change, leaving the anchor) breaks the run. A done,done,fail
+  // flap still bans on its third flat done.
   const prev = (st.fails[action] && st.fails[action].n) || 0
   // A refused placement fast-forwards to the ban: the pillar is known
   // broken at this spot, the next pick digs instead of re-jumping.
@@ -2061,21 +2090,66 @@ function noteRecoverFail(ctx, bp, action, outcome) {
     try { console.log(`recover ban action=${action} fails=${n} outcome=${outcome} pos=${fmtPos(bp)}`) } catch (_) { /* log best-effort */ }
   }
 }
-function noteRecoverDone(ctx, bp, action) {
+function noteRecoverDone(ctx, bp, action, boxed) {
   const st = recoverStreakState(ctx)
   if (!st) return
   resetRecoverStreaksIfMoved(ctx, bp)
   if (bp) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
   if (action && st.fails) delete st.fails[action]
+  // Shuffle-done run (i4wm): a boxed same-floor shuffle done extends the
+  // kind's run, anything else restarts or clears it. Open-ground shuffles
+  // never count (the fja wedge genuinely walks free). A climbing/tunneling
+  // done breaks the runs only once OUT of the box (revmux 01 major): a
+  // staircase that stops below the rim (near goal, or REPEATS in a deep
+  // pit) releases done while still boxed, and clearing there would put the
+  // shuffle back on the menu between climb episodes — rise one, shuffle,
+  // fall back, re-ban, forever. Kept runs refresh their clocks (an active
+  // climb is the same situation, not a transient); a stalled one lapses.
+  if (!st.dones || typeof st.dones !== 'object') st.dones = {}
+  if (RECOVER_SHUFFLE.has(action) && bp) {
+    if (boxed) {
+      const prev = st.dones[action]
+      const same = !!prev && typeof prev.floor === 'number' && Math.floor(bp.y) === prev.floor &&
+        typeof prev.x === 'number' && Math.hypot(bp.x - prev.x, bp.y - prev.y, bp.z - prev.z) <= RECOVER_BAN_ANCHOR_DIST
+      const n = same ? prev.n + 1 : 1
+      st.dones[action] = { n, floor: Math.floor(bp.y), x: bp.x, y: bp.y, z: bp.z, at: Date.now() }
+      if ((same ? prev.n : 0) < RECOVER_BAN_FAILS && n >= RECOVER_BAN_FAILS) {
+        try { console.log(`recover ban action=${action} dones=${n} pos=${fmtPos(bp)}`) } catch (_) { /* log best-effort */ }
+      }
+    } else {
+      delete st.dones[action]
+    }
+  } else if (!boxed) {
+    st.dones = {}
+  } else {
+    for (const k of Object.keys(st.dones)) {
+      if (st.dones[k] && typeof st.dones[k] === 'object') st.dones[k].at = Date.now()
+    }
+  }
 }
 function recoverBanned(ctx, action) {
   try {
     const st = ctx && ctx.recoverStreaks
     if (!st || !RECOVER_BANNABLE.has(action)) return false
-    const f = st.fails && st.fails[action]
-    if (!f || (f.n || 0) < RECOVER_BAN_FAILS) return false
-    if (typeof f.at !== 'number' || Date.now() - f.at > RECOVER_BAN_MS) return false
-    return true
+    if (recoverStreakFresh(st.fails && st.fails[action])) return true
+    return recoverStreakFresh(st.dones && st.dones[action]) // three flat boxed shuffles (i4wm)
+  } catch (_) { return false }
+}
+function recoverStreakFresh(e) {
+  return !!e && (e.n || 0) >= RECOVER_BAN_FAILS &&
+    typeof e.at === 'number' && Date.now() - e.at <= RECOVER_BAN_MS
+}
+// Done-ban only (i4wm): sidestep's shuffle run hit 3, regardless of its
+// fail streak. Gates the post-shuffle staircase arm below — and only that:
+// a fail-ban keeps the legacy fall-through (dig_through/wait/call), so
+// fail-storm spots behave exactly as before. Oracle-safe by construction:
+// one shuffle done ends its episode, so 3 dones need 3+ episodes and every
+// stuck spot caps at 2 (DUGPIT-VALIDATE at 1).
+function recoverShuffleBanned(ctx, action) {
+  try {
+    const st = ctx && ctx.recoverStreaks
+    if (!st || !RECOVER_SHUFFLE.has(action)) return false
+    return recoverStreakFresh(st.dones && st.dones[action])
   } catch (_) { return false }
 }
 
@@ -2227,10 +2301,14 @@ function repeatPaged(ctx, bp) {
 // an escape worked; gave-up = budget spent, target stays dropped.
 function release(bot, ctx, how) {
   const rec = ctx.recovery || {}
+  // Boxed-in read once: the shuffle-done guard and the latch skip share it
+  // (i4wm hoist — a pure read moved up, no behaviour change).
+  let boxed = false
+  try { boxed = boxedIn(bot) } catch (_) { boxed = false }
   // A done episode re-anchors the cross-episode memory and clears the kind
   // that worked; gave-ups keep their streaks for the next episode (vmzq.47).
   if (how === 'done') {
-    try { noteRecoverDone(ctx, botPos(bot), rec.action) } catch (_) { /* bans best-effort */ }
+    try { noteRecoverDone(ctx, botPos(bot), rec.action, boxed) } catch (_) { /* bans best-effort */ }
   }
   // drop-goal (kl19) ends like a gave-up for the owner, minus the pit mark/page
   const gaveUp = how === 'gave-up' || how === 'drop-goal'
@@ -2302,8 +2380,6 @@ function release(bot, ctx, how) {
   // cross-episode bans bound the re-fire loop instead (menus shrink; the
   // online page fires once per situation per detector, the nobody-online
   // page stays throttled by repeatPaged).
-  let boxed = false
-  try { boxed = boxedIn(bot) } catch (_) { boxed = false }
   if (!boxed && (by === 'follow' || by === 'roam' || by === 'gather' || by === 'home' || by === 'lead' || (by === 'no-displacement' && gaveUp))) {
     const sk = (ctx.stuck && ctx.stuck.key) || by
     const sg = ctx.stuck && ctx.stuck.goal
@@ -2492,6 +2568,25 @@ async function decide(bot, ctx, state, target) {
       }
       const chainCap = (RECOVER_MENU[prev] && RECOVER_MENU[prev].chainCap) || REPEATS
       if (closer && rec.repeats < chainCap && RECOVER_MENU[prev].repeatable(fresh)) {
+        // A boxed chain is one situation (i4wm r3): follow the streak anchor
+        // along it, or the per-tick move-reset (stuck.js, which also runs
+        // mid-episode) reads a 4-block staircase as leaving and wipes the
+        // done-runs mid-chain — the release-time keep then has nothing to
+        // keep and the shuffle returns between climb episodes (revmux 02
+        // major). Page stamps re-arm only past 3 blocks from the old anchor
+        // (revmux 03 minor — an unconditional clear would re-page every
+        // episode); unboxed chains keep legacy wipes (an escaping climb is
+        // a fresh start outside).
+        if (fresh && fresh.boxed) {
+          try {
+            const st = recoverStreakState(ctx)
+            const bp = botPos(bot)
+            if (st && bp) {
+              if (recoverStreaksMoved(st, bp)) st.pageKeys = {}
+              st.anchor = { x: bp.x, y: bp.y, z: bp.z }
+            }
+          } catch (_) { /* bans best-effort */ }
+        }
         rec.lastDy = fresh.goalDy
         rec.status = 'running'
         rec.st = null
@@ -2578,9 +2673,11 @@ module.exports = {
   RECOVER_BAN_FAILS,
   RECOVER_BAN_ANCHOR_DIST,
   RECOVER_BAN_MS,
+  RECOVER_SHUFFLE,
   noteRecoverFail,
   noteRecoverDone,
   recoverBanned,
+  recoverShuffleBanned,
   resetRecoverStreaksIfMoved,
   WAIT_TICKS,
   DISPLACE_TIMEOUT_TICKS,
