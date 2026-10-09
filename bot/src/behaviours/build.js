@@ -24,7 +24,7 @@
 //        on the block below like a bed. Done means SOLID ground (dirt
 //        counts), so flat sites place nothing and only dips take a plank.
 //   y=0..1 interior clear (rw4.19): natural ground left inside the rooms
-//        (a relief-1 bump) is dug out before the first wall plank.
+//        (a relief-1 bump) is dug out first, before the table.
 //
 // Both plans are in LAY ORDER: table first (crafting precedes walls — the
 // door is crafted at the table while it still stands on open ground), then
@@ -129,9 +129,11 @@ const BLUEPRINT_V2 = (() => {
   // dirt bump at feet level inside the house survived the build — the
   // doorway was 1 high (gohome never got in) and the bed foot read 'blocked
   // by dirt'. Every interior-box cell (x1..5, y0..1, z1..4 = home.interior)
-  // except the partition posts and the table cell is dug free of natural
-  // ground. APPENDED so persisted skip indices stay put; v2Order visits them
-  // before the first wall plank (open site, before the door).
+  // except the partition posts and the table cell (their own plan cells)
+  // is dug free of natural ground. APPENDED so persisted skip indices stay
+  // put; v2Order visits them first (open site, long before the door).
+  // ponytail: dirt in a post/table/wall cell still refuses its placement
+  // (pre-existing); widen the occupier dig if a site ever shows it.
   const part = new Set(['1,3', '3,3', '5,3', '3,4'])
   for (let dz = 1; dz <= 4; dz++) {
     for (const dy of [1, 0]) {
@@ -289,10 +291,15 @@ function cellDone(bot, home, cell) {
 // still reads complete. Doorway/interior plank cells are not holes (8si):
 // the invariant forbids placing there, so a correctly empty one reads
 // complete — a corrupt plan entry must skip, not brick the house.
+//
+// Clear cells (rw4.19) are best effort: build digs them first, but a
+// refused one (skipped) never holds the structure back from done — the
+// house stays usable as before the fix. clearOwed re-opens a built house.
 function isComplete(bot, home) {
   try {
     const plan = blueprintFor(home)
     for (const cell of plan) {
+      if (cell.kind === 'clear') continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellDone(bot, home, cell)) return false
     }
@@ -327,9 +334,21 @@ function v2Order(plan) {
   const clear = idx.filter((i) => plan[i].kind === 'clear')
   const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear')
   const door = rest.findIndex((i) => plan[i].kind === 'door')
-  const wall = rest.findIndex((i) => plan[i].kind === 'planks')
-  if (door < 0 || wall < 0) return idx
-  return [...rest.slice(0, wall), ...clear, ...rest.slice(wall, door), ...part, ...rest.slice(door)]
+  return door < 0 ? idx : [...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
+}
+
+// A built house with natural ground in a live clear cell (rw4.19 revmux 01
+// major): homes saved built=true before the clear cells existed (the prod
+// relief-1 house) never re-enter build, so the index.js revalidation
+// re-opens them through this. Skipped cells do not count — a refused dig
+// leaves the house built until the 1h skip retry.
+function clearOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site || home.v !== 2) return false
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    return blueprintFor(home).some((c, i) => c.kind === 'clear' && !skip.has(i) &&
+      cellLoaded(bot, home, c) && !cellDone(bot, home, c))
+  } catch (_) { return false }
 }
 
 // Remaining loose planks to lay (door/table need items, not planks). Without
@@ -964,6 +983,7 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
+module.exports.clearOwed = clearOwed
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
