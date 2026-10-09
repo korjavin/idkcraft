@@ -25,7 +25,7 @@ const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
 const detour = require('../detour')
-const { say, clearGoal, botPos, denyReason, logDeny, solidBelow, protectedReason } = require('./util')
+const { say, clearGoal, issueGoal, botPos, denyReason, logDeny, solidBelow, protectedReason } = require('./util')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -721,8 +721,7 @@ function forage(bot, ctx, target, state) {
       if (d !== null && d <= fightMod.SWING_RANGE) { f.phase = 'kill'; f.foodStreak = 0; return }
       const key = `forage-hunt:${Math.round(ent.position.x)},${Math.round(ent.position.y)},${Math.round(ent.position.z)}`
       if (key !== ctx.lastGoalKey) {
-        bot.pathfinder.setGoal(new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), false)
-        ctx.lastGoalKey = key
+        issueGoal(bot, ctx, new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), key, false)
         // No stall reset and no early return here: a grazing animal moves
         // every tick, which used to zero the counter (then skip counting
         // entirely) forever. Stalls reset only on the bot's own displacement
@@ -768,8 +767,7 @@ function forage(bot, ctx, target, state) {
       if (!dp) { f.phase = 'find'; return }
       const key = `forage-food-pickup:${Math.round(dp.x)},${Math.round(dp.y)},${Math.round(dp.z)}`
       if (key !== ctx.lastGoalKey) {
-        bot.pathfinder.setGoal(new goals.GoalNear(dp.x, dp.y, dp.z, 1), false)
-        ctx.lastGoalKey = key
+        issueGoal(bot, ctx, new goals.GoalNear(dp.x, dp.y, dp.z, 1), key, false)
         f.stalls = 0
         f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
         return
@@ -824,8 +822,7 @@ function forage(bot, ctx, target, state) {
       const goal = onVia
         ? new goals.GoalNearXZ(aim.x, aim.z, WALK_RANGE)
         : new goals.GoalNear(aim.x, aim.y, aim.z, WALK_RANGE)
-      bot.pathfinder.setGoal(goal, false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, goal, key, false)
       // Consume the previous goal's verdict: only a noPath/timeout that
       // arrives AFTER this issue strikes (same attribution follow.js uses
       // for its terminal statuses, without touching its counters).
@@ -972,8 +969,7 @@ function forage(bot, ctx, target, state) {
     const p = t.pos
     const key = `forage-pickup:${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`
     if (key !== ctx.lastGoalKey) {
-      bot.pathfinder.setGoal(new goals.GoalBlock(p.x, p.y, p.z), false)
-      ctx.lastGoalKey = key
+      issueGoal(bot, ctx, new goals.GoalBlock(p.x, p.y, p.z), key, false)
       return
     }
     try { resources.forget(ctx, p.x, p.y, p.z) } catch (_) { /* dug: drop the cell */ }

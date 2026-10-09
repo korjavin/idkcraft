@@ -9,6 +9,7 @@ const { findCreeper, snapHostiles } = require('./perception')
 const body = require('./body')
 const metrics = require('./metrics')
 const fightMod = require('./behaviours/fight')
+const { issueGoal } = require('./behaviours/util')
 
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -540,8 +541,7 @@ function fleeReflex(bot, ctx) {
   // Re-issue on a new creeper or a stalled executor (the creeper chases, so a
   // finished away-goal is stale); never tear down a running climb-out.
   if (key !== ctx.lastGoalKey || !moving) {
-    bot.pathfinder.setGoal(new goals.GoalNear(nx, bp.y, nz, 1), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalNear(nx, bp.y, nz, 1), key, false)
   }
   if (ctx.fleeTargetId !== creeper.id) {
     ctx.fleeTargetId = creeper.id

@@ -10,6 +10,7 @@
 // (by/key) derives from the live goal key.
 const { goals } = require('mineflayer-pathfinder')
 const recover = require('./behaviours/recover')
+const { issueGoal } = require('./behaviours/util')
 
 const MOVE_TOLERANCE = 0.5 // the single displacement tolerance, every stall budget
 const STUCK_RESETS_ENTRY = 2 // fast entry: 'stuck' resets with no displacement
@@ -127,8 +128,7 @@ function walkHomeTick(bot, ctx) {
   if (!sp || !bp) return false
   const key = `return-spawn:${sp.x},${sp.y},${sp.z}`
   if (key !== ctx.lastGoalKey) {
-    bot.pathfinder.setGoal(new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), false)
-    ctx.lastGoalKey = key
+    issueGoal(bot, ctx, new goals.GoalNear(sp.x, sp.y, sp.z, RETURN_HOME_RANGE), key, false)
     console.log(`returning to spawn dist=${Math.round(Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z))}`)
   }
   return true
