@@ -144,7 +144,7 @@ function demand(bot, ctx) {
   // matter how the facts text moves — known=near/none flips released the
   // text-keyed goal hold every few seconds (g0z.12 rig churn).
   const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../goal').CASTLEFETCH_RETRY_MS) return null
+  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS) return null
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
   let kind = null
@@ -1068,7 +1068,7 @@ function castlefetch(bot, ctx, target, state) {
     // A full load already on hand means the craft failed for another
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.
-    if (countItems(bot, (n) => n.endsWith('_log')) >= require('../goal').NEED_LOGS) {
+    if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }

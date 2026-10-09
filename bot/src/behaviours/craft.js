@@ -2,7 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
-const { NEED_LOGS } = require('../goal')
+const { NEED_LOGS } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 

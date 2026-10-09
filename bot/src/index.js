@@ -28,7 +28,7 @@ const metrics = require('./metrics')
 const fightMod = require('./behaviours/fight')
 const retreatMod = require('./behaviours/retreat')
 const bringMod = require('./behaviours/bring')
-const flatMod = require('./behaviours/flat')
+require('./behaviours/flat') // ponytail: kept for load order only (the table moved to behaviours/index.js)
 const homeMod = require('./behaviours/home')
 const buildMod = require('./behaviours/build')
 const castleMod = require('./behaviours/castle')
@@ -36,47 +36,8 @@ const goal = require('./goal')
 const memory = require('./memory')
 const taskMod = require('./task')
 const recover = require('./behaviours/recover')
-const BEHAVIOURS = {
-  fight: fightMod,
-  follow: require('./behaviours/follow'),
-  roam: require('./behaviours/roam'),
-  lead: require('./behaviours/lead'),
-  gather: require('./behaviours/gather'),
-  bring: bringMod,
-  flat: flatMod,
-  craft: require('./behaviours/craft'),
-  equip: require('./behaviours/equip'),
-  rest: require('./behaviours/rest'),
-  gohome: homeMod.gohome,
-  stay: homeMod.stay,
-  shelter: homeMod.shelter,
-  comehome: homeMod.comehome,
-  gocastle: require('./behaviours/gocastle'),
-  build: require('./behaviours/build'),
-  castle: castleMod,
-  castlefetch: require('./behaviours/castlefetch'),
-  sitebed: require('./behaviours/sitebed'),
-  beds: require('./behaviours/beds'),
-  light: require('./behaviours/light'),
-  explore: require('./behaviours/explore'),
-  forage: require('./behaviours/forage'),
-  deliver: require('./behaviours/deliver'),
-  stockpile: require('./behaviours/stockpile'),
-  gear: require('./behaviours/gear'),
-  retreat: retreatMod.retreat,
-  pillar: retreatMod.pillar,
-  // Recovery primitives (ef3): one BEHAVIOURS line each, like goal steps.
-  pillar_up: (bot, ctx) => recover.run(bot, ctx),
-  dig_up: (bot, ctx) => recover.run(bot, ctx),
-  water_up: (bot, ctx) => recover.run(bot, ctx),
-  dig_pillar: (bot, ctx) => recover.run(bot, ctx),
-  dig_step: (bot, ctx) => recover.run(bot, ctx),
-  hop_step: (bot, ctx) => recover.run(bot, ctx),
-  sidestep: (bot, ctx) => recover.run(bot, ctx),
-  dig_through: (bot, ctx) => recover.run(bot, ctx),
-  wait: (bot, ctx) => recover.run(bot, ctx),
-  call_player: (bot, ctx) => recover.run(bot, ctx),
-}
+// The table lives in behaviours/index.js (oqul.3); same object re-exported.
+const { BEHAVIOURS } = require('./behaviours/index')
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
 // up every 10 s just to re-scan the player list is plenty.

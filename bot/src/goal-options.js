@@ -201,7 +201,7 @@ function packFull(bot, ctx) {
 
 function registered(name) {
   try {
-    const table = require('./index').BEHAVIOURS
+    const table = require('./behaviours/index').BEHAVIOURS
     return !!table && typeof table[name] === 'function'
   } catch (_) {
     return false
