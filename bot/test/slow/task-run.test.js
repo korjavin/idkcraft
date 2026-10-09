@@ -448,12 +448,14 @@ describe('task-run.sh (idkcraft-vmzq.1)', () => {
   })
 
   it('a house done over unhealed skips is PARTIAL, exit 1', async () => {
+    let T // stamped once, at the first fetch: a second boundary between the mc and bot fetches must not put the skip after done (6x7.19)
     const r = await harness({ task: 'house', name: 'partial' }, {
       puppet: { replies: { 'follow me': [UNSEEN_AT], 'autonomous on': ['autonomous on — stays'], 'build here': [BUILD_HERE_ACK] } },
       logs: (q) => {
         if (q.includes('stats count')) return [{ n: '1' }]
-        if (q.includes('idkcraft-mc')) return [{ _time: nowIsoSec(), _msg: HOUSE_PROGRESS }, { _time: nowIsoSec(), _msg: HOUSE_DONE }]
-        return [{ _time: nowIsoSec(), _msg: HOUSE_SKIP }, { _time: nowIsoSec(), _msg: 'decision source=goal-fsm action=build' }]
+        T ??= nowIsoSec()
+        if (q.includes('idkcraft-mc')) return [{ _time: T, _msg: HOUSE_PROGRESS }, { _time: T, _msg: HOUSE_DONE }]
+        return [{ _time: T, _msg: HOUSE_SKIP }, { _time: T, _msg: 'decision source=goal-fsm action=build' }]
       },
     })
     assert.equal(r.code, 1, `${r.stdout}\n${r.stderr}`)
