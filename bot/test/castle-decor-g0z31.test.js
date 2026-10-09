@@ -740,6 +740,14 @@ describe('castle pane ladder (g0z.38)', () => {
     assert.deepEqual(calls.furnace[0], { input: 'sand', output: 'glass' })
   })
 
+  it('a stale settled sand outcome never ends a new smelt (revmux 02)', async () => {
+    const { bot, ctx, calls } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    ctx.furnace = { job: { input: 'sand', output: 'glass' }, settled: true, result: 'failed:no-fuel' }
+    await run(bot, ctx, () => calls.furnace.length)
+    assert.equal(calls.furnace.length, 1)
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
   it('6 glass on hand, the craft fails: failed:castlefetch-craft-pane, no sand order', async () => {
     const { bot, ctx } = ladderBot({ items: [{ name: 'glass', count: 6 }] })
     await run(bot, ctx, () => ctx.stepStatus)
