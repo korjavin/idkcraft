@@ -340,6 +340,12 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "castleBankSaid": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
   "castleBlockedSaid": {
     "writers": [
       "src/behaviours/castle.js"

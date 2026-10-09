@@ -1416,8 +1416,9 @@ function stockpileSite(bot, ctx, bp) {
         return
       }
       if (res.status === 'error') {
-        if (bankAt) ctx.castleBankFull = true // no loop on a lid that will not open
-        else ctx.siteChestFullAt = Date.now()
+        // A lid that will not open says nothing about fullness: the bank
+        // stays armed, failHolds parks the step (revmux 01 major).
+        if (!bankAt) ctx.siteChestFullAt = Date.now()
         fail(ctx, 'deposit')
         return
       }
@@ -1425,8 +1426,12 @@ function stockpileSite(bot, ctx, bp) {
         ctx.siteChestFullAt = null
         ctx.siteExpanded = false
         clearPackFullHold(ctx)
-        if (bankAt) say(bot, `castle done at ${st.site.x} ${st.site.y} ${st.site.z}, ${banked} items banked in the castle chest`)
-        else say(bot, `stockpiled ${names.join(', ')}`)
+        // The summary once per session (revmux 01 minor): later banks are
+        // plain stockpile lines, not a fresh completion event.
+        if (bankAt && !ctx.castleBankSaid) {
+          ctx.castleBankSaid = true
+          say(bot, `castle done at ${st.site.x} ${st.site.y} ${st.site.z}, ${banked} items banked in the castle chest`)
+        } else say(bot, `stockpiled ${names.join(', ')}`)
       }
       if (bankAt && before > 0 && banked === 0) {
         ctx.castleBankFull = true

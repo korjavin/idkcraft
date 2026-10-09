@@ -38,13 +38,13 @@ function prodPack() {
 }
 
 // chestCap: deposits the chest takes before it throws (full).
-function mockBot({ inv = prodPack(), at = pos(CHEST.x + 1.5, CHEST.y, CHEST.z + 0.5), chestAt = true, chestCap = Infinity } = {}) {
+function mockBot({ inv = prodPack(), at = pos(CHEST.x + 1.5, CHEST.y, CHEST.z + 0.5), chestAt = true, chestCap = Infinity, openErr = false } = {}) {
   const chest = {}
   let taken = 0
   const said = []
   const pathfinder = { goals: [], setGoal(g) { this.goals.push(g) }, isMoving: () => false }
   const itemsByName = new Proxy({}, { get: (_, n) => (typeof n === 'string' ? { id: idOf(n) } : undefined) })
-  return {
+  const bot = {
     inv, chest, said, pathfinder,
     entity: { position: at },
     registry: { blocksByName: { chest: { id: 7 } }, itemsByName },
@@ -56,24 +56,28 @@ function mockBot({ inv = prodPack(), at = pos(CHEST.x + 1.5, CHEST.y, CHEST.z + 
     },
     findBlocks: () => [],
     chat: (m) => said.push(m),
-    openChest: async () => ({
-      close() {},
-      async deposit(type, _meta, count) {
-        if (taken >= chestCap) throw new Error('full')
-        let left = count
-        for (const i of inv) {
-          if (left <= 0) break
-          if (i.type !== type || !(i.count > 0)) continue
-          const k = Math.min(i.count, left)
-          i.count -= k
-          left -= k
-          const name = i.name
-          chest[name] = (chest[name] || 0) + k
-        }
-        taken++
-      },
-    }),
+    openChest: async () => {
+      if (openErr) throw new Error('lag')
+      return chestWindow
+    },
   }
+  const chestWindow = {
+    close() {},
+    async deposit(type, _meta, count) {
+      if (taken >= chestCap) throw new Error('full')
+      let left = count
+      for (const i of inv) {
+        if (left <= 0) break
+        if (i.type !== type || !(i.count > 0)) continue
+        const k = Math.min(i.count, left)
+        i.count -= k
+        left -= k
+        chest[i.name] = (chest[i.name] || 0) + k
+      }
+      taken++
+    },
+  }
+  return bot
 }
 
 function doneCtx(over = {}) {
@@ -139,6 +143,25 @@ describe('g0z.27 castle bank', () => {
     assert.equal(stockpile.castleBankAt(mockBot(), doneCtx({ castle: { ...doneCtx().castle, parked: true } })), null)
     assert.equal(stockpile.castleBankAt(mockBot({ at: pos(300, 65, 300) }), doneCtx()), null)
     assert.equal(stockpile.castleBankAt(mockBot({ chestAt: false }), doneCtx()), null)
+  })
+
+  it('a chest that will not open fails the leg but keeps the bank armed', async () => {
+    const bot = mockBot({ openErr: true })
+    const ctx = doneCtx()
+    await bankRun(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:deposit')
+    assert.ok(stockpile.castleBankAt(bot, ctx), 'still armed')
+  })
+
+  it('the castle done summary is said once; a later bank is a plain stockpile line', async () => {
+    const bot = mockBot()
+    const ctx = doneCtx()
+    await bankRun(bot, ctx)
+    bot.inv.push({ name: 'oak_log', count: 20, type: idOf('oak_log') })
+    ctx.lastGoalKey = null
+    await bankRun(bot, ctx)
+    assert.equal(bot.said.filter((m) => m.startsWith('castle done')).length, 1)
+    assert.ok(bot.said.some((m) => m.startsWith('stockpiled ') && m.includes('oak_log')), `${bot.said}`)
   })
 
   it('a near built home keeps the home chest', () => {
