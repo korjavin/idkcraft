@@ -21,6 +21,7 @@ const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
+const residence = require('./residence')
 const { failReason, isFinished, nextStepGen } = require('./step')
 
 // House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
@@ -1397,19 +1398,15 @@ function goalFacts(bot, ctx) {
     const hh = ctx && ctx.home
     if (hh && hh.site) unlit = require('./behaviours/light').countUnlit(bot, hh, ctx.lightSkip)
   } catch (_) { /* unscannable reads as lit: light yields, nothing churns */ }
-  // ctx.home.interior contract (set by bead .4): { min: {x,y,z}, max: {x,y,z} }.
+  // Residence floors (g0z.28 residence.interior; hut/house: the floored
+  // ctx.home.interior box). One predicate with home.isInside (revmux
+  // jr2.3-02): a raw float read the back row outside while the helper read
+  // it inside — gohome then finished 'done' and was re-picked all night.
   let inside = 'no'
   try {
     const bp = bot && bot.entity && bot.entity.position
-    const interior = ctx && ctx.home && ctx.home.interior
-    // Floored like home.isInside (revmux jr2.3-02): the box holds
-    // inclusive block coords, and a raw float reads the back row outside
-    // while the helper reads it inside — gohome then finishes 'done' and
-    // is re-picked every tick all night.
-    if (bp && interior && interior.min && interior.max &&
-      Math.floor(bp.x) >= interior.min.x && Math.floor(bp.x) <= interior.max.x &&
-      Math.floor(bp.y) >= interior.min.y && Math.floor(bp.y) <= interior.max.y &&
-      Math.floor(bp.z) >= interior.min.z && Math.floor(bp.z) <= interior.max.z) inside = 'yes'
+    const home = ctx && ctx.home
+    if (bp && home && residence.of(home).interior(home, bp)) inside = 'yes'
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the
   // craft step rebuilds a table from planks every time equip places one.

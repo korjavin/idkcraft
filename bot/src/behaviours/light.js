@@ -26,6 +26,8 @@ const buildMod = require('./build')
 const { denyReason, logDeny } = require('./util')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
+const residence = require('../residence')
+const { LIGHT_SPOTS, LIGHT_SPOTS_V2 } = residence
 
 const COAL_RESERVE = 4 // fuel floor: smelting's share, never torched
 const PLACE_RANGE = 4
@@ -51,40 +53,17 @@ const SMELT_RESEND_TICKS = 5 // idle-far ticks between furnace goal re-sends
 // rule below guards it (and the table, and the doorway) anyway. The dark
 // 2x2 interior is NOT covered: lighting it needs going inside (door
 // phases live in home.js) — follow-up bead, not this step.
-const LIGHT_SPOTS = [
-  { dx: 1, dz: -2 },
-  { dx: -2, dz: -2 }, { dx: 4, dz: -2 },
-  { dx: -2, dz: 1 }, { dx: 5, dz: -1 },
-  { dx: -2, dz: 4 }, { dx: 4, dz: 4 },
-  { dx: 1, dz: 5 },
-  // Roof staging: a GoalPlaceBlock aimed 3 above the feet makes the
-  // pathfinder dig itself into a hole (live assay: stuck at -62
-  // forever), so the approach walks to plain ground in place reach
-  // (3.7) and the place flow runs from there.
-  { dx: 1, dy: 3, dz: 1, stage: { dx: 0, dz: -1 } },
-  // Interior: the torch goes through the doorway from the staged ground
-  // (no entry, no door phases). The door cell itself is never taken.
-  { dx: 2, dz: 2, stage: { dx: 1, dz: -1 }, interior: true },
-]
-
+//
 // v2 house (jr2.1): door-front first, a ring around the 7x6 shell, the roof
 // (staged from the door-front ground, 3.6 in place reach), then one common
 // room torch through the doorway (2.8 in reach — it lights the bedrooms
 // through the partition openings, level 8+ at the far bed cells).
-const LIGHT_SPOTS_V2 = [
-  { dx: 3, dz: -2 },
-  { dx: -2, dz: -2 }, { dx: 8, dz: -2 },
-  { dx: -2, dz: 1 }, { dx: 8, dz: 1 },
-  { dx: -2, dz: 4 }, { dx: 8, dz: 4 },
-  { dx: 3, dz: 7 },
-  { dx: 3, dy: 3, dz: 1, stage: { dx: 3, dz: -1 } },
-  { dx: 1, dz: 1, stage: { dx: 3, dz: -1 }, interior: true },
-]
+// Both plans live in residence.js (g0z.28) — the hut/house descriptors.
 
 // Spot plan by home version: v2 homes light the 7x6 ring, anything else
 // (v1, or a home that predates the version mark) the frozen 4x4 ring.
 function spotsFor(home) {
-  return home && home.v === 2 ? LIGHT_SPOTS_V2 : LIGHT_SPOTS
+  return residence.of(home).lights(home)
 }
 
 function spotAbs(home, spot) {
