@@ -410,6 +410,7 @@ function matches(kind, name) {
   if (kind === 'torch') return name === 'torch' || name === 'wall_torch'
   if (kind === 'fence') return name.endsWith('_fence')
   if (kind === 'chest') return name === 'chest'
+  if (kind === 'pane') return name === 'glass_pane' || name.endsWith('_stained_glass_pane')
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -431,15 +432,47 @@ function absPlan(site, rot, version) {
   return absCache
 }
 
+// Decor layer (idkcraft-g0z.31): cosmetics laid after phase 'complete',
+// never counted in progress, never blocking completion — the PLAN stays
+// frozen (a prod castle reads 1722/1722). Rot-0 local cells like PLAN;
+// 'pane' fills every v2 window opening: an outer-line keep-clear cell
+// except the gate's upper doorway (tower doorways and the stairwells sit
+// off the outer line). Off-plan idx DECOR_BASE+ (prep 1000000+, litter
+// 2000000+) so the blocked map and strikes reuse their keys.
+const DECOR_BASE = 3000000
+const DECOR = {
+  2: BLUEPRINTS[2].PLAN
+    .filter((c) => c.kind === 'air' && outerLine(c.dx, c.dz) && !(c.dx === FULL_DOOR.dx && c.dz === FULL_DOOR.dz))
+    .map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, kind: 'pane' })),
+}
+
+let decorCache = null
+function decorPlan(site, rot, version) {
+  const bp = blueprintOf(version)
+  const key = `${site.x},${site.y},${site.z},${rot | 0},v${bp.version}`
+  if (decorCache && decorCache.key === key) return decorCache
+  const cells = rotatePlan(DECOR[bp.version] || [], rot | 0, bp.version).map((c, i) => ({
+    x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx: DECOR_BASE + i,
+  }))
+  const at = new Map()
+  for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
+  decorCache = { key, cells, at }
+  return decorCache
+}
+
 // Protection (g0z.2 revision): a laid castle block — a positive cell whose
 // world block matches its kind — is never dug by any executor. Planned
 // air/dig cells and wrong occupants (grass in a wall cell) stay open.
+// A laid decor cell (g0z.31: a pane in a window) is protected the same way.
 function protects(state, pos, name) {
   try {
     const site = state && state.site
     if (!site || typeof site.x !== 'number' || !pos) return false
-    const c = absPlan(site, state.rot, state.blueprintVersion).at.get(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`)
-    return !!c && isPlaceTarget(c.kind) && matches(c.kind, name)
+    const k = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
+    const c = absPlan(site, state.rot, state.blueprintVersion).at.get(k)
+    if (!!c && isPlaceTarget(c.kind) && matches(c.kind, name)) return true
+    const d = decorPlan(site, state.rot, state.blueprintVersion).at.get(k)
+    return !!d && matches(d.kind, name)
   } catch (_) { return false }
 }
 
@@ -501,6 +534,9 @@ module.exports = {
   STONE_ITEMS,
   isStone,
   absPlan,
+  DECOR,
+  DECOR_BASE,
+  decorPlan,
   protects,
   groundCell,
   inFootprint,
