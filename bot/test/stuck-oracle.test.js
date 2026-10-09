@@ -550,6 +550,7 @@ describe('raise-house (idkcraft-6x7.8)', () => {
         assert.equal(cells.get(k), 'dirt', k)
         continue
       }
+      if (c.kind === 'clear') { assert.equal(cells.get(k), 'air', k); continue } // rw4.19
       const want = c.kind === 'table' ? 'crafting_table' : c.kind === 'door' ? 'oak_door[facing=north,half=lower,hinge=left]' : 'oak_planks'
       assert.equal(cells.get(k), want, k)
     }

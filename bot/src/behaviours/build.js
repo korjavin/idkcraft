@@ -23,6 +23,8 @@
 //        (1,4),(2,4),(4,4),(5,4) plus the doorway (3,0) — the door hangs
 //        on the block below like a bed. Done means SOLID ground (dirt
 //        counts), so flat sites place nothing and only dips take a plank.
+//   y=0..1 interior clear (rw4.19): natural ground left inside the rooms
+//        (a relief-1 bump) is dug out first, before the table.
 //
 // Both plans are in LAY ORDER: table first (crafting precedes walls — the
 // door is crafted at the table while it still stands on open ground), then
@@ -36,7 +38,7 @@
 // sends the bot back to gather/craft for the next batch.
 
 const Vec3 = require('vec3')
-const { denyReason, logDeny, isInteractRef } = require('./util')
+const { denyReason, logDeny, isInteractRef, NATURAL_SOLID } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 
@@ -121,6 +123,24 @@ const BLUEPRINT_V2 = (() => {
   for (const dy of [0, 1]) {
     for (const [dx, dz] of [[1, 3], [3, 3], [5, 3], [3, 4]]) {
       plan.push({ dx, dy, dz, kind: 'planks' })
+    }
+  }
+  // Interior clear (idkcraft-rw4.19): the site check accepts relief 1, so a
+  // dirt bump at feet level inside the house survived the build — the
+  // doorway was 1 high (gohome never got in) and the bed foot read 'blocked
+  // by dirt'. Every interior-box cell (x1..5, y0..1, z1..4 = home.interior)
+  // except the partition posts and the table cell (their own plan cells)
+  // is dug free of natural ground. APPENDED so persisted skip indices stay
+  // put; v2Order visits them first (open site, long before the door).
+  // ponytail: dirt in a post/table/wall cell still refuses its placement
+  // (pre-existing); widen the occupier dig if a site ever shows it.
+  const part = new Set(['1,3', '3,3', '5,3', '3,4'])
+  for (let dz = 1; dz <= 4; dz++) {
+    for (const dy of [1, 0]) {
+      for (let dx = 1; dx <= 5; dx++) {
+        if (part.has(`${dx},${dz}`) || (dx === 5 && dy === 0 && dz === 1)) continue
+        plan.push({ dx, dy, dz, kind: 'clear' })
+      }
     }
   }
   return plan
@@ -224,7 +244,7 @@ function isPlanCell(home, x, y, z) {
   try {
     if (!home || !home.site) return false
     const s = home.site
-    return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' &&
+    return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' && c.kind !== 'clear' &&
       s.x + c.dx === x && s.y + c.dy === y && s.z + c.dz === z)
   } catch (_) { return false }
 }
@@ -255,6 +275,9 @@ function cellDone(bot, home, cell) {
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (cell.kind === 'fill') return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+  // Clear (rw4.19): only natural ground with collision is a leftover; air,
+  // flora and anything we put there (beds, chest, furnace, table) is done.
+  if (cell.kind === 'clear') return !(NATURAL_SOLID.has(name) && hasCollision(bot, cellAbs(home, cell)))
   return name.endsWith('_planks')
 }
 
@@ -268,10 +291,15 @@ function cellDone(bot, home, cell) {
 // still reads complete. Doorway/interior plank cells are not holes (8si):
 // the invariant forbids placing there, so a correctly empty one reads
 // complete — a corrupt plan entry must skip, not brick the house.
+//
+// Clear cells (rw4.19) are best effort: build digs them first, but a
+// refused one (skipped) never holds the structure back from done — the
+// house stays usable as before the fix. clearOwed re-opens a built house.
 function isComplete(bot, home) {
   try {
     const plan = blueprintFor(home)
     for (const cell of plan) {
+      if (cell.kind === 'clear') continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellDone(bot, home, cell)) return false
     }
@@ -303,9 +331,24 @@ function v2Order(plan) {
   const isPartition = (c) => c.kind === 'planks' && c.dy <= 1 && c.dz >= 3 && c.dz <= 4 && c.dx >= 1 && c.dx <= 5
   const idx = [...plan.keys()]
   const part = idx.filter((i) => isPartition(plan[i]))
-  const rest = idx.filter((i) => !isPartition(plan[i]))
+  const clear = idx.filter((i) => plan[i].kind === 'clear')
+  const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear')
   const door = rest.findIndex((i) => plan[i].kind === 'door')
-  return door < 0 ? idx : [...rest.slice(0, door), ...part, ...rest.slice(door)]
+  return door < 0 ? idx : [...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
+}
+
+// A built house with natural ground in a live clear cell (rw4.19 revmux 01
+// major): homes saved built=true before the clear cells existed (the prod
+// relief-1 house) never re-enter build, so the index.js revalidation
+// re-opens them through this. Skipped cells do not count — a refused dig
+// leaves the house built until the 1h skip retry.
+function clearOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site || home.v !== 2) return false
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    return blueprintFor(home).some((c, i) => c.kind === 'clear' && !skip.has(i) &&
+      cellLoaded(bot, home, c) && !cellDone(bot, home, c))
+  } catch (_) { return false }
 }
 
 // Remaining loose planks to lay (door/table need items, not planks). Without
@@ -751,8 +794,8 @@ function build(bot, ctx, target, state) {
     try { bot.chat(`building ${total - wrong}/${total}`) } catch (_) { /* chat best-effort */ }
   }
 
-  const item = findItem(bot, wantItem(cell))
-  if (!item) {
+  const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
+  if (!item && cell.kind !== 'clear') {
     failBuild(ctx, 'no-planks')
     return
   }
@@ -775,7 +818,9 @@ function build(bot, ctx, target, state) {
     try {
       bot.pathfinder.setGoal(cell.kind === 'door' && ctx.home.v === 2
         ? new goals.GoalNearXZ(p.x, p.z - 2, 1)
-        : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
+        : cell.kind === 'clear' // a dig, not a place: no face, no LOS (dig 'auto')
+          ? new goals.GoalNear(p.x, p.y, p.z, PLACE_RANGE - 1)
+          : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }
     return
   }
@@ -815,6 +860,10 @@ function build(bot, ctx, target, state) {
     ctx.buildFarFails = 0
   } catch (_) { /* unverifiable: attempt anyway */ }
   if (cellDone(bot, ctx.home, cell)) return // lagged double-place guard
+  if (cell.kind === 'clear') {
+    digClear(bot, ctx, idx, p)
+    return
+  }
   let ref
   if (cell.kind === 'door') {
     // Doors hang on the block below, face up.
@@ -890,6 +939,36 @@ function build(bot, ctx, target, state) {
   })().catch(() => { ctx.placeInFlight = false; ctx.buildFlightSince = null })
 }
 
+// Clear-cell dig (rw4.19). The house-footprint rule (e5ba) guards natural
+// ground in the box as floor/support; an interior cell at feet level or
+// above is neither, so the deny check runs without the home — the trap,
+// gravity, breath, bed and castle rules still apply. A refusal counts like
+// a placement refusal: three skip the cell (never an endless dig).
+function digClear(bot, ctx, idx, p) {
+  ctx.placeInFlight = true
+  ctx.buildFlightSince = Date.now()
+  const flightIdx = idx
+  ;(async () => {
+    try {
+      const b = bot.blockAt(p)
+      const deny = b ? denyReason(bot, b, { ...ctx, home: null }) : 'unreadable'
+      if (deny) {
+        if (b) logDeny(b, deny)
+        throw new Error(deny)
+      }
+      await bot.dig(b)
+      if (ctx.buildFailIdx === flightIdx) ctx.buildFails = 0
+    } catch (err) {
+      if (ctx.buildFailIdx !== flightIdx) return // stale verdict (ipn.10)
+      ctx.buildFails = (ctx.buildFails || 0) + 1
+      if (ctx.buildFails >= 3) skipCell(ctx, idx, p, (err && err.message) || 'clear-refused')
+    } finally {
+      ctx.placeInFlight = false
+      ctx.buildFlightSince = null
+    }
+  })().catch(() => { ctx.placeInFlight = false; ctx.buildFlightSince = null })
+}
+
 module.exports = build
 module.exports.findRef = findRef
 module.exports.isReplaceable = isReplaceable
@@ -904,6 +983,7 @@ module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
+module.exports.clearOwed = clearOwed
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
