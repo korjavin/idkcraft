@@ -97,6 +97,22 @@ describe('vmzq.4 commitment: a text move alone never re-asks', () => {
   })
 })
 
+describe('vmzq.4 commitment: rest never finishes', () => {
+  it('a model rest over a work answer is re-asked on every text move (revmux 01)', async () => {
+    const b = mkBot()
+    useMenu((n) => n === 'beds' || n === 'explore')
+    let answer = 'rest'
+    const brain = model(() => answer)
+    const ctx = { brain }
+    await decide(b, ctx)
+    assert.equal(ctx.step, 'rest')
+    answer = 'explore'
+    logs(b, 3)
+    assert.equal((await decide(b, ctx)).action, 'explore')
+    assert.equal(brain.asks, 2)
+  })
+})
+
 describe('vmzq.4 commitment: forces still cut through', () => {
   it('dusk forces gohome (time word)', async () => {
     const b = mkBot()

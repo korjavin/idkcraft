@@ -2252,6 +2252,9 @@ function textForce(prev, facts, bot, ctx, status, text) {
   if (!pick || pick.step !== prev || pick.source === 'task-plan' || typeof pick.fsm !== 'string') return true
   const names = menuNames(facts, bot, ctx, text)
   if (!names.includes(prev) || goalFsm(facts, names) !== pick.fsm) return true
+  // rest never finishes (rest.js roams, no done/failed): a model rest over
+  // a work answer is re-asked on every move, the old rule (revmux 01).
+  if (prev === 'rest' && pick.fsm !== 'rest') return true
   ctx.heldText = seen
   return false
 }
