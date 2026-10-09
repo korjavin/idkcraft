@@ -716,7 +716,17 @@ function holdStill(bot, ctx) {
 // monsters near) back off; server-side refusals (occupied, obstructed,
 // timeout) give up tonight and retry tomorrow. A dawn that finds the body
 // still asleep wakes it (missed wake event).
-const SLEEP_REACH = 2 // from the head's centre (g0z.30: the corner read lost a castle bed's diagonal arrival)
+const SLEEP_REACH = 2 // from the head block (its nearest face), see headGap
+// Body to the head block's nearest x/z face (idkcraft-6x7.22). The old
+// corner read lost a castle bed's diagonal arrival (g0z.30); g0z.30's
+// centre read lost the house: the stay-bed GoalNear(sleep, 1) arrives on
+// the far row of the common room (2.1 from the centre) and stalled into
+// sleepGiveUp all night (rig HOUSE-NIGHT/BUMP). The face read is <= both.
+function headGap(bp, head) {
+  const dx = Math.max(head.x - bp.x, 0, bp.x - (head.x + 1))
+  const dz = Math.max(head.z - bp.z, 0, bp.z - (head.z + 1))
+  return Math.hypot(dx, bp.y - head.y, dz)
+}
 const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
 // Night bed (rw4.20): a carried bed with bedroom A empty is laid before the
@@ -790,7 +800,7 @@ function sleepTick(bot, ctx, home, st) {
     const bp = botPos(bot)
     if (!bp) return false
     const head = cells.a.head
-    if (Math.hypot(bp.x - (head.x + 0.5), bp.y - head.y, bp.z - (head.z + 0.5)) > SLEEP_REACH) {
+    if (headGap(bp, head) > SLEEP_REACH) {
       const open = cells.a.sleep // residence sleep cell (house: the common room; castle: beside the head)
       setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(open.x, open.y, open.z, 1))
       const last = st.sleepAnchor
