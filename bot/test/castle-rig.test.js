@@ -210,41 +210,73 @@ describe('castle-rig.sh --night and interrupt cleanup (idkcraft-ek69)', () => {
     assert.ok(script.includes('CASTLE_NIGHT="$NIGHT"'), 'night not exported to the replay')
   })
 
-  it('kill -INT mid-boot reaps the server child, rm -f its container, drops the lock', async () => {
+  // Fake rig: docker `run` stays alive like the Paper client (pid in
+  // run.pid), rcon answers `ok` when up (else the rig sits in its boot
+  // wait), a fake `node` replays NODE_MODE (hang: pid in node.pid; exit2).
+  const fakeRig = ({ rconUp, nodeMode = 'hang' }) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-int-'))
     const bin = path.join(tmp, 'bin')
     fs.mkdirSync(bin)
-    const calls = path.join(tmp, 'docker.calls')
-    const runPid = path.join(tmp, 'run.pid')
-    // Fake docker: `run` stays alive like the Paper client, rcon never answers
-    // (the rig sits in its boot wait), every call is logged.
+    const f = { tmp, calls: path.join(tmp, 'docker.calls'), runPid: path.join(tmp, 'run.pid'), nodePid: path.join(tmp, 'node.pid'), lock: path.join(tmp, 'lock') }
     fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
-echo "$*" >> "${calls}"
+echo "$*" >> "${f.calls}"
 case "$1" in
-  run) echo $$ > "${runPid}"; exec sleep 300 ;;
-  exec) exit 1 ;;
+  run) echo $$ > "${f.runPid}"; exec sleep 300 ;;
+  exec) ${rconUp ? 'echo ok; exit 0' : 'exit 1'} ;;
 esac
 exit 0
 `, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'node'), nodeMode === 'hang'
+      ? `#!/bin/sh\necho $$ > "${f.nodePid}"\nexec sleep 300\n`
+      : '#!/bin/sh\necho "replay env failure"\nexit 2\n', { mode: 0o755 })
     fs.writeFileSync(path.join(tmp, 'START.sh'), 'exec docker run --rm --name idk-replay -e EULA=TRUE -p 25571:25565 img\n', { mode: 0o755 })
     fs.mkdirSync(path.join(tmp, 'replay-data', 'paper-base', 'world'), { recursive: true })
     fs.mkdirSync(path.join(tmp, 'w', 'world'), { recursive: true })
     execFileSync('tar', ['-cf', path.join(tmp, 'world.tar'), '-C', path.join(tmp, 'w'), 'world'])
-    const lock = path.join(tmp, 'lock')
-    const child = spawn('sh', [sh, '1'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: tmp, CASTLE_LOCK: lock, CASTLE_RIG_ID: 'q', RIG_PLANNER: 'stub' } })
-    let out = ''
-    child.stdout.on('data', (d) => { out += d })
-    const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
-    for (let i = 0; i < 300 && !fs.existsSync(runPid); i++) await new Promise((r) => setTimeout(r, 100))
-    assert.ok(fs.existsSync(runPid), `server child never started: ${out}`)
-    const srv = Number(fs.readFileSync(runPid, 'utf8'))
-    child.kill('SIGINT')
-    const code = await exited
-    assert.equal(code, 130, out)
-    assert.match(out, /interrupted/)
-    assert.throws(() => process.kill(srv, 0), 'server child still alive')
-    assert.ok(fs.readFileSync(calls, 'utf8').includes('rm -f idk-castle-q'), 'own container not removed')
-    assert.ok(!fs.existsSync(`${lock}-q`), 'lock left behind')
+    const child = spawn('sh', [sh, '1'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: tmp, CASTLE_LOCK: f.lock, CASTLE_RIG_ID: 'q', RIG_PLANNER: 'stub', CASTLE_OUT: path.join(tmp, 'out.json') } })
+    f.out = ''
+    child.stdout.on('data', (d) => { f.out += d })
+    f.exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
+    f.child = child
+    return f
+  }
+  const waitFile = async (p) => {
+    for (let i = 0; i < 300 && !fs.existsSync(p); i++) await new Promise((r) => setTimeout(r, 100))
+    assert.ok(fs.existsSync(p), `never appeared: ${p}`)
+    return Number(fs.readFileSync(p, 'utf8'))
+  }
+  const assertReaped = (f, pids) => {
+    for (const pid of pids) assert.throws(() => process.kill(pid, 0), `pid ${pid} still alive`)
+    assert.ok(fs.readFileSync(f.calls, 'utf8').includes('rm -f idk-castle-q'), 'own container not removed')
+    assert.ok(!fs.existsSync(`${f.lock}-q`), 'lock left behind')
+  }
+
+  it('kill -INT mid-boot reaps the server child, rm -f its container, drops the lock', async () => {
+    const f = fakeRig({ rconUp: false })
+    const srv = await waitFile(f.runPid)
+    f.child.kill('SIGINT')
+    assert.equal(await f.exited, 130, f.out)
+    assert.match(f.out, /interrupted/)
+    assertReaped(f, [srv])
+  })
+
+  it('kill -INT mid-window returns at once and reaps the replay too', async () => {
+    const f = fakeRig({ rconUp: true })
+    const srv = await waitFile(f.runPid)
+    const node = await waitFile(f.nodePid)
+    const t = Date.now()
+    f.child.kill('SIGINT')
+    assert.equal(await f.exited, 130, f.out)
+    assert.ok(Date.now() - t < 20000, 'trap waited for the replay')
+    assertReaped(f, [srv, node])
+  })
+
+  it('a replay exit 2 still reaches the caller as 2 (cycles.sh branches on it)', async () => {
+    const f = fakeRig({ rconUp: true, nodeMode: 'exit2' })
+    const srv = await waitFile(f.runPid)
+    assert.equal(await f.exited, 2, f.out)
+    assert.match(f.out, /replay env failure/)
+    assertReaped(f, [srv])
   })
 })
 
