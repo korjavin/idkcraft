@@ -524,6 +524,7 @@ function cobbleTick(bot, ctx, f, target, state, dry) {
     return
   }
   digTick(bot, ctx, f)
+  if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')) ctx.castleFetchDry = 'pane' // the decor word rotates (dry() shape)
 }
 
 // One furnace tick per castlefetch tick (g0z.36 contract: the job is set
