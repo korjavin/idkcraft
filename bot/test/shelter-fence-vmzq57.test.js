@@ -6,7 +6,12 @@
 // the body ON the fence post (9,65,14); the castle read 1720/1722 later.
 // Reproduction: the exact world (every plan cell laid, natural ground at
 // y<=64, the moat dug), the pillar refused, the full shelter episode run,
-// every break and place recorded — then the plan is re-read.
+// every break and place recorded — then the plan is re-read. It did not
+// reproduce: the post fails the dig-in as undiggable, the walk lands
+// outside the ring, and digInVeto's protectedReason branch guards the
+// castle ground (mutating it fails both cases). Scope: the shelter's own
+// episode only — gohome, the morning recover and other executors are
+// not modelled here (their digs go through denyReason / guardCastle).
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -34,7 +39,8 @@ function castleWorld(at, opts = {}) {
   const nameAt = (x, y, z) => {
     const k = key(x, y, z)
     if (world.has(k)) return world.get(k)
-    return y <= 64 ? (y === 64 ? 'grass_block' : 'dirt') : 'air'
+    if (y > 64) return 'air'
+    return (opts.ground && opts.ground(x, y, z)) || (y === 64 ? 'grass_block' : 'dirt')
   }
   const breaks = []
   const places = []
@@ -123,6 +129,7 @@ describe('vmzq.57 shelter on the castle fence corner (9,66,14)', () => {
     const logs = await episode(w.bot, ctx)
     assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-error')), JSON.stringify(logs))
     assert.deepEqual(w.intact(), [], `castle cells lost: ${JSON.stringify({ breaks: w.breaks, logs })}`)
+    assert.ok(w.breaks.length > 0 && logs.includes('shelter dig-in done'), 'a pit was dug (not vacuous)')
     for (const b of w.breaks) {
       assert.ok(!castleData.inFootprint(CASTLE, b) && !castleData.groundCell(CASTLE, b), `dig in the castle: ${JSON.stringify(b)}`)
     }
@@ -141,5 +148,20 @@ describe('vmzq.57 shelter on the castle fence corner (9,66,14)', () => {
     for (const b of w.breaks) {
       assert.ok(!castleData.inFootprint(CASTLE, b) && !castleData.groundCell(CASTLE, b), `dig in the castle: ${JSON.stringify({ b, logs })}`)
     }
+  })
+
+  it('no diggable column in reach (stone all round): holds without digging a plan cell', async () => {
+    const w = castleWorld({ x: 9.5, y: 66, z: 14.5 }, {
+      refuse: (d) => castleData.inFootprint(CASTLE, d),
+      ground: () => 'stone',
+    })
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
+    const logs = await episode(w.bot, ctx)
+    assert.ok(logs.includes('shelter dig-in failed:undiggable:oak_fence'), JSON.stringify(logs))
+    assert.deepEqual(w.breaks, [], 'no dig at all')
+    assert.deepEqual(w.intact(), [])
+    assert.equal(ctx.shelter.pillared, true, 'holds, never marches')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.inShelter, false, 'castle ground: exposed hold, fight preempts (vmzq.48)')
   })
 })
