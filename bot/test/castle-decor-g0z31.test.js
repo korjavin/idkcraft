@@ -394,6 +394,22 @@ describe('castle gate banners (g0z.32)', () => {
     assert.equal(bot.calls.gather + crafted, 0)
   })
 
+  it('no panes anywhere, banners in the chest: the dry pane leg hands the word to banner (revmux 01)', async () => {
+    const bot = castleBot({ items: [], chest: [{ name: 'white_banner', count: 2 }] })
+    bot.registry.itemsByName.white_banner = {}
+    const ctx = { castle: completeState() }
+    fetch.deps.craftItem = () => ({ done: false })
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
+    for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-pane'; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-pane')
+    assert.equal(castleMod.menuFact(bot, ctx), 'banner-none')
+    ctx.stepStatus = 'running'
+    ctx.castleFetch = null
+    for (let i = 0; i < 40 && !bot.calls.withdraw.length; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.deepEqual(bot.calls.withdraw, [['white_banner', 2]])
+    assert.equal(castleMod.menuFact(bot, ctx), 'banner-batch')
+  })
+
   it('chest banners are withdrawn; the stockpile keeps them packed', async () => {
     const bot = castleBot({ items: [], chest: [{ name: 'white_banner', count: 3 }] })
     bot.registry.itemsByName.white_banner = {}

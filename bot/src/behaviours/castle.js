@@ -798,10 +798,13 @@ function menuFact(bot, ctx, now = Date.now()) {
       if (st.phase === 'complete') {
         // Decor (g0z.31): on site, open decor cells ask for their kind; the
         // castle stays 'complete' (off site it reads 'done', above). A held
-        // kind words first (g0z.32), else the first open cell's (panes).
+        // kind words first (g0z.32), else the first open cell's (panes) —
+        // skipping the kind whose chest fetch last came up dry, so an empty
+        // pane stock never locks the chest banners out (revmux 01).
         const open = decorOpen(bot, st, now)
         if (open.length > 0) {
-          const kind = (open.find((c) => usable(bot, c.kind, ctx) > 0) || open[0]).kind
+          const dry = ctx && ctx.castleFetchDry
+          const kind = (open.find((c) => usable(bot, c.kind, ctx) > 0) || open.find((c) => c.kind !== dry) || open[0]).kind
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)

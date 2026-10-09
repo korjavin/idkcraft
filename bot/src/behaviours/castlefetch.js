@@ -1084,6 +1084,7 @@ function castlefetch(bot, ctx, target, state) {
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
   }
+  ctx.castleFetchDry = d.kind // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, pane/banner without chest stock
 }
 
