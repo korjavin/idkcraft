@@ -221,9 +221,9 @@ function nearPos(bot, p, reach) {
 
 function edibles() {
   try {
-    const set = require('../index').EDIBLE_FOODS
+    const set = require('../reflexes').EDIBLE_FOODS
     if (set && typeof set.has === 'function') return set
-  } catch (_) { /* index not loaded (unit tests): fall back below */ }
+  } catch (_) { /* reflexes not loaded: fall back below */ }
   return new Set(['bread', 'apple', 'carrot', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken'])
 }
 
