@@ -231,6 +231,7 @@ function castleChest(bot, st) {
 
 function finish(bot, ctx, status) {
   const f = ctx.castleFetch
+  if (status === 'done') ctx.castleFetchDry = null // a leg that got stock retires the dry mark
   if (f && f.spend) {
     let delta = '?'
     try {
