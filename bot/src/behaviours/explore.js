@@ -41,6 +41,11 @@ const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const CHAT_MS = 30000 // departure chat at most this often
 const CLIMB_HOLD_MS = 5 * 60 * 1000 // failed climb: no re-raise at that spot (atl.23)
 const CLIMB_HOLD_DIST = 8 // feet from the failed climb's spot
+// Idle alone (vmzq.59, owner default Q1=yes): nobody online and no owner
+// bring — the spiral stays within TASK_SEARCH_RADIUS of the anchor (prod:
+// 150-200 block legs from a complete castle, 3 cave deaths in 7 min), and
+// a roofed body more than ALONE_DEPTH under the anchor surface climbs.
+const ALONE_DEPTH = 8
 
 const DIRS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest']
 
@@ -110,6 +115,40 @@ function taskActive(ctx) {
     if (home && home.site && typeof home.site.x === 'number' && home.built === false) return true
   } catch (_) { /* no house verdict */ }
   return false
+}
+// Nobody online but the bot (the leave logic's roster test) and no owner
+// bring order: idle alone.
+function aloneIdle(bot, ctx) {
+  try {
+    if (ownerBring(ctx)) return false
+    return !(bot && bot.players && Object.keys(bot.players).some((n) => n !== bot.username))
+  } catch (_) { return false }
+}
+// Surface height of the anchor: home site, else world spawn. Null: none.
+function anchorY(bot, ctx) {
+  try {
+    const s = ctx && ctx.home && ctx.home.site
+    if (s && typeof s.y === 'number') return s.y
+    const sp = bot && bot.spawnPoint
+    if (sp && typeof sp.y === 'number') return sp.y
+  } catch (_) { /* no height */ }
+  return null
+}
+// Spiral cap for a fresh pick, and for the pending-leg check when alone.
+function capOf(bot, ctx, e) {
+  // Task bound (vmzq.18): own side work caps the spiral at the site;
+  // owner bring orders walk the full spiral (R3a). Idle alone (vmzq.59)
+  // takes the same bound.
+  // (.22) an explore-far unlock lifts the cap to the outer disk for the
+  // window only; the radius clamps to 256 around the stable anchor.
+  let cap = e.maxRadius
+  try { if ((taskActive(ctx) && !ownerBring(ctx)) || aloneIdle(bot, ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+  try {
+    const { goalUnlock } = require('../goal-unlock')
+    const r = goalUnlock(ctx, 'radius')
+    if (typeof r === 'number' && r > cap) cap = Math.min(e.maxRadius, r)
+  } catch (_) { /* default cap */ }
+  return cap
 }
 function anchorOf(bot, ctx) {
   try {
@@ -201,14 +240,23 @@ function explore(bot, ctx, target, state) {
   // ran into caves (prod: 3 deaths at y -50 in 7 min). Under the floor the
   // leg drops and the bot climbs; the spiral resumes at bp.y >= floor.
   // ponytail: GoalY(floor) may stop in a cave at floor height; the
-  // underground abort is vmzq.59's.
+  // idle-alone floor below (vmzq.59) is the same ceiling.
   // A climb that failed holds at its spot (revmux 02): within
   // CLIMB_HOLD_DIST of it and CLIMB_HOLD_MS the spiral walks as on master
   // (its legs fail and consume points) instead of re-raising one escape
   // per lap at the same block.
   // ponytail: a bot pinned at one spot still re-raises one climb escape
   // per CLIMB_HOLD_MS; make the per-spot hold sticky if prod shows it.
-  const floor = resources.surfaceFloor(ctx, bp)
+  let floor = resources.surfaceFloor(ctx, bp)
+  // Underground alone (vmzq.59): roofed and ALONE_DEPTH under the anchor
+  // surface raises the floor; a climb already on that floor keeps it, so
+  // an overhang flicker cannot reset the climb budget every tick.
+  const ay = aloneIdle(bot, ctx) ? anchorY(bot, ctx) : null
+  if (ay !== null) {
+    const af = Math.floor(ay) - ALONE_DEPTH
+    if (af > floor && bp.y < af &&
+      (e.climbKey === `explore:climb:${af}` || require('./gocastle').climbNeeded(bot, bp))) floor = af
+  }
   const cf = e.climbFail
   const held = !!cf && Date.now() - cf.at < CLIMB_HOLD_MS &&
     Math.hypot(bp.x - cf.x, bp.y - cf.y, bp.z - cf.z) <= CLIMB_HOLD_DIST
@@ -242,19 +290,16 @@ function explore(bot, ctx, target, state) {
   }
   e.climbKey = null
 
+  if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
+  // A far leg picked while someone was online is cancelled once the bot is
+  // alone (Codex note): the cap is otherwise read only at pick time.
+  if (e.target && aloneIdle(bot, ctx) && Math.hypot(e.target.x - anchor.x, e.target.z - anchor.z) > capOf(bot, ctx, e)) {
+    clearGoal(bot, ctx)
+    e.target = null
+    e.issuedKey = null
+  }
   if (!e.target) {
-    if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
-    // Task bound (vmzq.18): own side work caps the spiral at the site;
-    // owner bring orders walk the full spiral (R3a).
-    // (.22) an explore-far unlock lifts the cap to the outer disk for the
-    // window only; the radius clamps to 256 around the stable anchor.
-    let cap = e.maxRadius
-    try { if (taskActive(ctx) && !ownerBring(ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
-    try {
-      const { goalUnlock } = require('../goal-unlock')
-      const r = goalUnlock(ctx, 'radius')
-      if (typeof r === 'number' && r > cap) cap = Math.min(e.maxRadius, r)
-    } catch (_) { /* default cap */ }
+    const cap = capOf(bot, ctx, e)
     const t = pickTarget(e.visited, anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
