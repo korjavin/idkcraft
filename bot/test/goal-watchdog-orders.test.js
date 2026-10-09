@@ -231,9 +231,11 @@ describe('bring watchdog (acceptance 1, finding 8)', () => {
   })
 
   for (const [label, s] of [['legs spent', { legs: 24 }], ['timed out', { timedOut: true }],
-    ['capped', { capped: true }], ['minutes spent', { startedAt: Date.now() - 6 * 60 * 1000 }]]) {
-    it(`self hunt search exhausted (${label}): flat 61 s fires the round as before (vmzq.63)`, async () => {
+    ['capped', { capped: true }], ['minutes spent', { startedAt: Date.now() - 6 * 60 * 1000 }],
+    ['return phase, budget left', {}]]) {
+    it(`self hunt outside the search grace (${label}): flat 61 s fires the round as before (vmzq.63)`, async () => {
       const { bot, ctx, calls } = selfHunt(s)
+      if (label.startsWith('return')) ctx.bring.phase = 'return' // the walk home bills (travel grace's job)
       const t0 = 1000000000000
       taskMod.taskTick(bot, ctx, t0)
       let t = t0
@@ -246,6 +248,7 @@ describe('bring watchdog (acceptance 1, finding 8)', () => {
       await flush()
       assert.equal(calls.length, 1)
       assert.ok(Object.keys(calls[0].criteria).includes('park'))
+      assert.ok(!lines.some((l) => l.endsWith('why=self-search')))
     })
   }
 
