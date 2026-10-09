@@ -104,13 +104,11 @@ describe('memory follow/castle tri-state (characterization)', () => {
     assert.equal(ctx.followName, undefined, 'restore leaves an unset name')
   })
 
-  it('followName undefined (unrestored) drops the stored name when other memory writes', () => {
-    // Pinned as is: the doc's follow is undefined, the write is non-empty
-    // (home), so JSON drops the key — only the empty-snapshot skip guards it.
+  it('followName undefined (unrestored) keeps the stored name when other memory writes', () => {
     const { wrote, disk, ctx } = roundTrip({})
     assert.equal(wrote, true)
-    assert.equal('follow' in disk, false)
-    assert.equal(ctx.followName, undefined)
+    assert.equal(disk.follow, 'Steve')
+    assert.equal(ctx.followName, 'Steve')
   })
 
   it('castle record replaces the stored castle', () => {

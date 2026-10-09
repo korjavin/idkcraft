@@ -481,6 +481,8 @@ function save(bot, ctx, file, now) {
     // Castle: undefined keeps the same world's record, null drops it — and
     // a drop is information like a follow revoke.
     const prevCastle = prev && prev.v === VERSION && prev.world === doc.world ? castleOf(prev.castle) : null
+    // Same-world gate as the castle: restore ignores another world's name.
+    if (doc.follow === undefined && prevFollow && prev.v === VERSION && prev.world === doc.world) doc.follow = prevFollow
     if (doc.castle === undefined && prevCastle) doc.castle = prevCastle
     if (empty && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null)) return false
     tmp = `${f}.tmp-${process.pid}`
