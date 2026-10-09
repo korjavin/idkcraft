@@ -365,3 +365,95 @@ describe('explore pit escape through the ticker (core-1)', () => {
     }
   })
 })
+
+describe('explore depth floor (atl.23)', () => {
+  it('under the floor: drops the leg, climbs with GoalY, not done; above: GoalXZ resumes', () => {
+    const bot = mockBot()
+    const ctx = homeCtx() // home y 64 -> floor 48
+    explore(bot, ctx, null, null) // leg to (0,-16) issued at the surface
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalXZ')
+    bot.entity.position = pos(5, -40, -5)
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      explore(bot, ctx, null, null)
+      explore(bot, ctx, null, null) // same climb: no re-issue
+    } finally { console.log = origLog }
+    assert.equal(bot.calls.goals.length, 2)
+    assert.equal(bot.calls.goals[1].constructor.name, 'GoalY')
+    assert.equal(bot.calls.goals[1].y, 48)
+    assert.equal(ctx.explore.target, null)
+    assert.notEqual(ctx.stepStatus, 'done')
+    assert.deepEqual(logs, ['explore too deep y=-40 floor=48'])
+    bot.entity.position = pos(5, 48, -5)
+    explore(bot, ctx, null, null)
+    assert.equal(bot.calls.goals[2].constructor.name, 'GoalXZ')
+    assert.ok(ctx.explore.target)
+  })
+
+  it('stall escape carries the target column height, not the bot y', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => ({ name: p.y > 70 ? 'air' : 'stone' })
+    const ctx = homeCtx()
+    explore(bot, ctx, null, null)
+    for (let i = 0; i < 12 && !ctx.stuck; i++) explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.stuck.goal, { x: 0, y: 71, z: -16 })
+  })
+
+  it('grass and a canopy over a level target read as air: goal y is the ground', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => {
+      if (p.y >= 70) return { name: 'air', boundingBox: 'empty' }
+      if (p.y >= 66) return { name: 'oak_leaves', boundingBox: 'block' }
+      if (p.y === 65) return { name: 'oak_log', boundingBox: 'block' }
+      if (p.y === 64) return { name: 'short_grass', boundingBox: 'empty' }
+      return { name: 'grass_block', boundingBox: 'block' }
+    }
+    const ctx = homeCtx()
+    explore(bot, ctx, null, null)
+    for (let i = 0; i < 12 && !ctx.stuck; i++) explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.stuck.goal, { x: 0, y: 64, z: -16 })
+  })
+
+  it('a climb gaining no height fails the step with one escape aimed up', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(5, 30, -5)
+    const ctx = homeCtx()
+    const origLog = console.log
+    console.log = () => {}
+    try {
+      explore(bot, ctx, null, null)
+      for (let i = 0; i < 9; i++) explore(bot, ctx, null, null)
+      assert.equal(ctx.stuck, undefined)
+      bot.entity.position = pos(5, 31, -5) // height gained: budget resets
+      for (let i = 0; i < 10; i++) explore(bot, ctx, null, null) // 1 reset + 9 flat
+      assert.equal(ctx.stuck, undefined)
+      explore(bot, ctx, null, null) // 10th flat tick
+    } finally { console.log = origLog }
+    assert.equal(ctx.stepStatus, 'failed:too-deep')
+    assert.deepEqual(ctx.stuck, { by: 'explore', goal: { x: 5, y: 48, z: -5 }, key: 'explore:climb:48' })
+  })
+
+  it('a failed climb holds at its spot: the spiral walks, no second escape; a borrow keeps the budget', () => {
+    const bot = mockBot()
+    bot.entity.position = pos(5, 30, -5)
+    const ctx = homeCtx()
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      explore(bot, ctx, null, null)
+      for (let i = 0; i < 5; i++) explore(bot, ctx, null, null)
+      ctx.lastGoalKey = 'fight:1' // borrow mid-climb
+      for (let i = 0; i < 6; i++) explore(bot, ctx, null, null) // re-issue + 5 flat = 10
+      assert.equal(ctx.stepStatus, 'failed:too-deep')
+      assert.equal(logs.filter((l) => l.startsWith('explore too deep')).length, 1)
+      ctx.stuck = undefined
+      ctx.stepStatus = 'running'
+      for (let i = 0; i < 12; i++) explore(bot, ctx, null, null)
+    } finally { console.log = origLog }
+    assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalXZ')
+    assert.ok(!ctx.stuck || ctx.stuck.key !== 'explore:climb:48', 'no second climb escape at the same spot')
+  })
+})

@@ -189,6 +189,138 @@ describe('castle-rig.sh rig lock', () => {
   })
 })
 
+describe('castle-rig.sh --night and interrupt cleanup (idkcraft-ek69)', () => {
+  const { spawnSync, spawn, execFileSync } = require('node:child_process')
+  const os = require('node:os')
+  const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+
+  it('parses --night first, rejects stray args, skips the day lock', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-night-'))
+    const run = (args, env = {}) => spawnSync('sh', [sh, ...args], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    assert.match(run(['--night', '6']).stdout, /no START.sh/)
+    assert.match(run(['--night']).stdout, /no START.sh/)
+    const late = run(['6', '--night'])
+    assert.equal(late.status, 2)
+    assert.match(late.stdout, /usage: castle-rig.sh \[--night\] \[mins\]/)
+    const bad = run([], { CASTLE_NIGHT: 'yes' })
+    assert.equal(bad.status, 2)
+    assert.match(bad.stdout, /CASTLE_NIGHT: want 0\|1/)
+    const script = fs.readFileSync(sh, 'utf8')
+    assert.ok(script.includes('if [ "$NIGHT" = 1 ]; then'), 'night does not bypass the day lock')
+    assert.ok(script.includes('CASTLE_NIGHT="$NIGHT"'), 'night not exported to the replay')
+  })
+
+  // Fake rig: docker `run` stays alive like the Paper client (pid in
+  // run.pid), rcon answers `ok` when up (else the rig sits in its boot
+  // wait), a fake `node` replays NODE_MODE (hang: pid in node.pid; exit2).
+  const fakeRig = ({ rconUp, nodeMode = 'hang' }) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-int-'))
+    const bin = path.join(tmp, 'bin')
+    fs.mkdirSync(bin)
+    const f = { tmp, calls: path.join(tmp, 'docker.calls'), runPid: path.join(tmp, 'run.pid'), nodePid: path.join(tmp, 'node.pid'), lock: path.join(tmp, 'lock') }
+    fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
+echo "$*" >> "${f.calls}"
+case "$1" in
+  run) echo $$ > "${f.runPid}"; exec sleep 300 ;;
+  exec) ${rconUp ? 'echo ok; exit 0' : 'exit 1'} ;;
+esac
+exit 0
+`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'node'), nodeMode === 'hang'
+      ? `#!/bin/sh\necho $$ > "${f.nodePid}"\nexec sleep 300\n`
+      : '#!/bin/sh\necho "replay env failure"\nexit 2\n', { mode: 0o755 })
+    fs.writeFileSync(path.join(tmp, 'START.sh'), 'exec docker run --rm --name idk-replay -e EULA=TRUE -p 25571:25565 img\n', { mode: 0o755 })
+    fs.mkdirSync(path.join(tmp, 'replay-data', 'paper-base', 'world'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, 'w', 'world'), { recursive: true })
+    execFileSync('tar', ['-cf', path.join(tmp, 'world.tar'), '-C', path.join(tmp, 'w'), 'world'])
+    const child = spawn('sh', [sh, '1'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: tmp, CASTLE_LOCK: f.lock, CASTLE_RIG_ID: 'q', RIG_PLANNER: 'stub', CASTLE_OUT: path.join(tmp, 'out.json') } })
+    f.out = ''
+    child.stdout.on('data', (d) => { f.out += d })
+    f.exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
+    f.child = child
+    return f
+  }
+  const waitFile = async (p) => {
+    for (let i = 0; i < 300 && !fs.existsSync(p); i++) await new Promise((r) => setTimeout(r, 100))
+    assert.ok(fs.existsSync(p), `never appeared: ${p}`)
+    return Number(fs.readFileSync(p, 'utf8'))
+  }
+  const assertReaped = (f, pids) => {
+    for (const pid of pids) assert.throws(() => process.kill(pid, 0), `pid ${pid} still alive`)
+    assert.ok(fs.readFileSync(f.calls, 'utf8').includes('rm -f idk-castle-q'), 'own container not removed')
+    assert.ok(!fs.existsSync(`${f.lock}-q`), 'lock left behind')
+  }
+
+  it('kill -INT mid-boot reaps the server child, rm -f its container, drops the lock', async () => {
+    const f = fakeRig({ rconUp: false })
+    const srv = await waitFile(f.runPid)
+    f.child.kill('SIGINT')
+    assert.equal(await f.exited, 130, f.out)
+    assert.match(f.out, /interrupted/)
+    assertReaped(f, [srv])
+  })
+
+  it('kill -INT mid-window returns at once and reaps the replay too', async () => {
+    const f = fakeRig({ rconUp: true })
+    const srv = await waitFile(f.runPid)
+    const node = await waitFile(f.nodePid)
+    const t = Date.now()
+    f.child.kill('SIGINT')
+    assert.equal(await f.exited, 130, f.out)
+    assert.ok(Date.now() - t < 20000, 'trap waited for the replay')
+    assertReaped(f, [srv, node])
+  })
+
+  it('a replay exit 2 still reaches the caller as 2 (cycles.sh branches on it)', async () => {
+    const f = fakeRig({ rconUp: true, nodeMode: 'exit2' })
+    const srv = await waitFile(f.runPid)
+    assert.equal(await f.exited, 2, f.out)
+    assert.match(f.out, /replay env failure/)
+    assertReaped(f, [srv])
+  })
+})
+
+describe('castle-replay.js night driver (idkcraft-ek69)', () => {
+  const { createNightDriver, classify, seen, resetSeen } = require('../tools/castle-replay')
+
+  it('ignores setup crossings, runs each night, prints one verdict per dawn', async () => {
+    resetSeen()
+    const cmds = []
+    const lines = []
+    let deaths = 0
+    const d = createNightDriver({ cmd: async (c) => { cmds.push(c); return 'ok' }, who: 'Bot', deaths: () => deaths, log: (l) => lines.push(l) })
+    await d.onEvent({ event: 'nightfall' }) // before the window: stays peaceful
+    assert.deepEqual(cmds, [])
+    await d.open()
+    assert.deepEqual(cmds, ['time set 0'])
+    classify('goal step=castle prev=none source=x fsm=castle why=y menu=castle facts=z')
+    await d.onEvent({ event: 'nightfall' })
+    assert.deepEqual(cmds.slice(1), ['difficulty easy', 'execute at Bot run summon phantom ~ ~16 ~', 'execute at Bot run summon phantom ~ ~16 ~'])
+    classify('goal step=shelter prev=castle source=x fsm=shelter why=y menu=shelter facts=z')
+    deaths = 1
+    await d.onEvent({ event: 'dawn' })
+    assert.equal(cmds[cmds.length - 1], 'difficulty peaceful')
+    assert.deepEqual(d.nights[0], { night: 1, deaths: 1, sheltered: true, steps: ['castle', 'shelter'], partial: false })
+    assert.ok(lines.includes('CASTLE-RIG night 1: deaths=1, sheltered=yes, steps=castle,shelter'))
+    // Second night ends with the window: partial, worked through.
+    classify('goal step=castle prev=shelter source=x fsm=castle why=y menu=castle facts=z')
+    await d.onEvent({ event: 'nightfall' })
+    deaths = 3
+    d.finish()
+    assert.deepEqual(d.nights[1], { night: 2, deaths: 2, sheltered: false, steps: ['castle'], partial: true })
+    assert.equal(d.tag(), ', nights=2, sheltered=1/2, night-deaths=3')
+    assert.equal(seen.nightSteps, null)
+  })
+
+  it('a failed rcon logs loud and never throws', async () => {
+    const lines = []
+    const d = createNightDriver({ cmd: async () => { throw new Error('boom') }, who: 'Bot', deaths: () => 0, log: (l) => lines.push(l) })
+    await d.open()
+    assert.ok(lines.some((l) => l.includes('night-rcon FAILED [time set 0]: boom')))
+    assert.equal(d.tag(), ', nights=0')
+  })
+})
+
 describe('cycles.sh loop', () => {
   const { spawnSync } = require('node:child_process')
   const sh = path.join(__dirname, '..', 'tools', 'cycles.sh')

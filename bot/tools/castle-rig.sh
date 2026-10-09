@@ -3,8 +3,11 @@
 # a disposable world copy, boot Paper, flatten a pad, order `build castle`
 # with an empty kit, run N minutes, print ONE verdict line:
 #   castle <laid>/<total> in <min> min, flips=<n>, deaths=<n>, top-steps=<...>, top-fail=<...>
-# Usage: sh castle-rig.sh [mins]   (default 6; CASTLE_MINS also works;
-#   gate runs pass 30+ explicitly)
+# Usage: sh castle-rig.sh [--night] [mins]   (default 6; CASTLE_MINS also
+#   works; gate runs pass 30+ explicitly). --night (idkcraft-ek69, or
+#   CASTLE_NIGHT=1) runs the natural cycle from time 0 at window open: easy
+#   + 2 phantoms over the bot each nightfall, peaceful each dawn, one
+#   `CASTLE-RIG night <n>:` verdict per night (deaths, sheltered).
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b c"),
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
@@ -39,6 +42,9 @@
 #   CASTLE_VIEW_DISTANCE/CASTLE_SIM_DISTANCE (default 6/4).
 # Exit: 0 = measured (even 0 laid — the line says so),
 #   2 = environment/setup failure, 130 = interrupted (never a pass).
+# INT/TERM/EXIT (idkcraft-ek69) kill every descendant (server client, node,
+# tee), docker rm -f this slot's container and drop the lock: the next run
+# on the slot starts without manual cleanup.
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf); a
 # sha move fails the run (exit 2) so runs stay comparable. Acceleration
 # caveat: the bot ticks on wall-clock seconds, so a faster game clock gives
@@ -94,6 +100,10 @@ elif [ "$RIG_ID" = auto ]; then
   echo "RIG_LOCK_HELD=1 needs a concrete CASTLE_RIG_ID, not auto"; exit 2
 fi
 case "$RIG_ID" in ''|[a-z]) ;; *) echo "CASTLE_RIG_ID must be one letter a-z, 0 or auto (got '$RIG_ID')"; exit 2 ;; esac
+NIGHT="${CASTLE_NIGHT:-0}"
+if [ "${1:-}" = --night ]; then NIGHT=1; shift; fi
+[ $# -le 1 ] || { echo "usage: castle-rig.sh [--night] [mins] (got: $*)"; exit 2; }
+case "$NIGHT" in 0|1) ;; *) echo "CASTLE_NIGHT: want 0|1, got '$NIGHT'"; exit 2 ;; esac
 MINS="${1:-${CASTLE_MINS:-6}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
@@ -186,13 +196,19 @@ GITSHA="$(git -C "$TREE" rev-parse --short HEAD 2>/dev/null || echo '?')"
 LOG="/tmp/castle-run-${RIG_ID:-0}.log"
 : > "$LOG"
 FIFO="/tmp/castle-stdin-$$.fifo"
+RCFILE="/tmp/castle-rig-rc-$$"
 SRVPID=
+kill_tree() { # $1 = pid: its descendants first, then itself (TERM — background jobs ignore INT)
+  for _c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$_c"; done
+  kill "$1" >/dev/null 2>&1 || true
+}
 teardown() {
-  docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
-  if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
+  for _c in $(pgrep -P $$ 2>/dev/null); do kill_tree "$_c"; done
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  if [ -n "$SRVPID" ]; then wait "$SRVPID" 2>/dev/null || true; fi
   SRVPID=
   exec 9<&- || true
-  rm -f "$FIFO" || true
+  rm -f "$FIFO" "$RCFILE" || true
 }
 on_exit() {
   rc=$?
@@ -243,7 +259,9 @@ boot() {
   rcon_assert "gamerule advance_weather false"
   rcon_assert "gamerule keep_inventory true"
   rcon_assert "weather clear"
-  if [ "${CASTLE_DAYLOCK:-1}" != 0 ]; then
+  if [ "$NIGHT" = 1 ]; then
+    echo "night: natural cycle, time 0 at window open, easy + 2 phantoms each nightfall, peaceful each dawn"
+  elif [ "${CASTLE_DAYLOCK:-1}" != 0 ]; then
     if _out=$(docker exec "$CONTAINER" rcon-cli "gamerule advance_time false" 2>&1) && \
        case "$_out" in *Incorrect*|*Unknown*|*incomplete*) false ;; *) true ;; esac; then
       echo "anti-noise [gamerule advance_time false]: $(printf '%s' "$_out" | head -n 1)"
@@ -273,7 +291,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED"
+export CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in
@@ -286,8 +304,11 @@ export BOT_MEMORY_FILE="${BOT_MEMORY_FILE:-/tmp/castle-mem-${RIG_ID:-0}.json}"
 rm -f "$BOT_MEMORY_FILE"
 cd "$HERE/.."
 # Tee: the verdict must survive on disk even if the caller only keeps a
-# tail (or the pipe dies with the run). pipefail keeps node's exit code.
+# tail (or the pipe dies with the run). Node's exit code rides RCFILE.
+# Background + wait (idkcraft-ek69): a foreground pipeline would hold a
+# trapped INT until node exits; wait returns at once and the trap reaps.
 RIGOUT="/tmp/castle-rig-out-${RIG_ID:-0}.log"
 : > "$RIGOUT"
-set -o pipefail 2>/dev/null || true
-node tools/castle-replay.js 2>&1 | tee -a "$RIGOUT"
+{ node tools/castle-replay.js 2>&1; echo $? > "$RCFILE"; } | tee -a "$RIGOUT" &
+wait $! || true
+exit "$(cat "$RCFILE" 2>/dev/null || echo 2)"
