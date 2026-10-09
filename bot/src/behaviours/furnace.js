@@ -56,8 +56,16 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// A caller's job (castle glass, g0z.38) reports on ctx.furnace.result only:
+// its window cycle settles async, after the caller's driveLeg restored the
+// caller's own stepStatus — a write there would end the caller's step.
+function ownStatus(ctx) {
+  const f = ctx && ctx.furnace
+  return !f || !f.job || f.job.input === IRON_JOB.input
+}
+
 function fail(ctx, reason) {
-  ctx.stepStatus = `failed:${reason}`
+  if (ownStatus(ctx)) ctx.stepStatus = `failed:${reason}`
   // Slice-C contract: the outcome stays readable on ctx.furnace.result
   // (gear wraps stepStatus, which furnace would otherwise end).
   try {
@@ -327,7 +335,7 @@ function finishSmelt(bot, ctx, f, status) {
       const what = f.job && f.job.output !== IRON_JOB.output ? f.job.output : 'iron'
       try { console.log(`smelted ${f.smelted} ${what}`) } catch (_) { /* log best-effort */ }
     }
-    ctx.stepStatus = 'done'
+    if (ownStatus(ctx)) ctx.stepStatus = 'done'
     try { f.result = 'done' } catch (_) { /* flag best-effort */ }
   } else {
     fail(ctx, status)

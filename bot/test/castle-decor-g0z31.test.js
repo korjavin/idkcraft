@@ -2,7 +2,7 @@
 
 // idkcraft-g0z.31: the castle decor layer — glass panes in every v2 window
 // opening, laid after phase 'complete', never counted in progress,
-// chest-supplied only (no sand/smelt pipeline).
+// chest first, then the sand ladder (g0z.38).
 
 const { describe, it, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
@@ -253,17 +253,18 @@ describe('castle decor behaviour (g0z.31)', () => {
     assert.equal(bot.calls.digs.length + bot.calls.places.length, 0)
   })
 
-  it('no panes anywhere: pane-none, the chest source runs, the leg fails no-pane (no gather)', async () => {
+  it('no panes anywhere: pane-none, the chest source runs, then the sand ladder opens a self order (no gather)', async () => {
     const bot = castleBot({ items: [], chest: [] })
     const ctx = { castle: completeState() }
     assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
     fetch.deps.gather = () => { bot.calls.gather++ }
     fetch.deps.craftItem = () => ({ done: false })
-    for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-pane'; i++) {
+    for (let i = 0; i < 40 && !ctx.bring; i++) {
       fetch(bot, ctx)
       await settle(); await settle()
     }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-pane')
+    assert.equal(ctx.bring.name, 'sand')
+    assert.equal(ctx.stepStatus, undefined)
     assert.equal(bot.calls.gather, 0)
     assert.equal(ctx.castle.phase, 'complete')
   })
@@ -416,8 +417,11 @@ describe('castle gate banners (g0z.32)', () => {
     const ctx = { castle: completeState() }
     fetch.deps.craftItem = () => ({ done: false })
     assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
-    for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-pane'; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-pane')
+    // g0z.38: the pane leg's sand order comes back empty (refused).
+    for (let i = 0; i < 40 && !ctx.bring; i++) { fetch(bot, ctx); await settle(); await settle() }
+    ctx.bring = null
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-sand')
     assert.equal(castleMod.menuFact(bot, ctx), 'banner-none')
     ctx.stepStatus = 'running'
     ctx.castleFetch = null
@@ -580,5 +584,197 @@ describe('castle banners self-source (g0z.35)', () => {
     const f = {}
     fetch.selfOrder({}, f, { searchLegs: { legs: 3 } })
     assert.deepEqual(fetch.selfOrderBack(f), { exhausted: false })
+  })
+})
+
+// idkcraft-g0z.38: the pane ladder — empty chest -> self sand order -> fuel
+// -> the castle furnace (sand -> glass) -> 16 panes; each rung fails honestly.
+describe('castle pane ladder (g0z.38)', () => {
+  const real = { ...fetch.deps }
+  afterEach(() => { Object.assign(fetch.deps, real) })
+  function ladderBot({ items = [], chest = [], night = false } = {}) {
+    const bot = castleBot({ items, chest })
+    for (const n of ['oak_planks', 'oak_log', 'sand', 'glass']) bot.registry.itemsByName[n] = {}
+    if (night) bot.time.timeOfDay = 13000
+    const calls = { crafts: [], gather: 0, furnace: [] }
+    fetch.deps.craftItem = (b, c, names, n) => { calls.crafts.push([names, n]); return { done: false } }
+    fetch.deps.gather = () => { calls.gather++ }
+    fetch.deps.driveFurnace = (b, c) => { calls.furnace.push(c.furnaceJob); c.furnaceJob = null; return null }
+    return { bot, ctx: { castle: completeState() }, calls, items }
+  }
+  const run = async (bot, ctx, until, n = 40) => {
+    for (let i = 0; i < n && !until(); i++) { fetch(bot, ctx); await settle(); await settle() }
+  }
+  const count = (items, name) => items.filter((i) => i.name === name).reduce((a, i) => a + i.count, 0)
+
+  it('0 glass / 0 sand by day: a castle self sand order for 18; it holds while open; a refuse fails no-sand', async () => {
+    const { bot, ctx, calls } = ladderBot()
+    await run(bot, ctx, () => ctx.bring)
+    const o = ctx.bring
+    assert.equal(o.kind, 'block')
+    assert.equal(o.name, 'sand')
+    assert.equal(o.drop, 'sand')
+    assert.equal(o.want, 18)
+    assert.equal(o.self, 'castle')
+    assert.equal(ctx.castleFetch.hunt, o)
+    for (let i = 0; i < 5; i++) fetch(bot, ctx)
+    assert.equal(ctx.bring, o)
+    assert.equal(ctx.stepStatus, undefined)
+    // goal: the self order keeps the step (castleFetchGo on the short demand).
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    const facts = { castle: castleMod.menuFact(bot, ctx), time: 'day' }
+    assert.equal(facts.castle, 'pane-none')
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), true)
+    ctx.stepStatus = undefined
+    ctx.bring = null // bring refused (search exhausted), nothing dug
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-sand')
+    assert.equal(ctx.castleFetchDry, 'pane')
+    assert.equal(calls.gather, 0)
+    assert.equal(calls.furnace.length, 0)
+  })
+
+  it('18 sand + 3 coal: the furnace job is set before every tick; done -> craft 16 panes -> the castle lays them', async () => {
+    const { bot, ctx, calls, items } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    let ticks = 0
+    fetch.deps.driveFurnace = (b, c) => {
+      calls.furnace.push(c.furnaceJob)
+      c.furnaceJob = null
+      if (++ticks < 4) return null
+      items.splice(items.findIndex((i) => i.name === 'sand'), 1)
+      items.push({ name: 'glass', count: 18 })
+      return 'done'
+    }
+    fetch.deps.craftItem = (b, c, names, n) => {
+      calls.crafts.push([names, n])
+      const g = items.find((i) => i.name === 'glass')
+      if (!g || g.count < 6) return { done: false }
+      g.count -= 6
+      items.push({ name: 'glass_pane', count: 16 })
+      return { done: true }
+    }
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.bring, undefined)
+    assert.equal(calls.furnace.length, 4)
+    for (const j of calls.furnace) assert.deepEqual(j, { input: 'sand', output: 'glass' })
+    assert.equal(ctx.furnaceJob, null)
+    assert.deepEqual(calls.crafts.at(-1), [['glass_pane'], 16])
+    assert.equal(count(items, 'glass_pane'), 16)
+    assert.equal(count(items, 'glass'), 12)
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-batch')
+    const cells = blueprint.absPlan(SITE, 0, 2).cells
+    castleMod.progress(bot, ctx.castle, cells, ctx)
+    const before = { ...ctx.castle.progress }
+    for (let i = 0; i < 200 && bot.calls.places.length < 16; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    assert.equal(bot.calls.places.length, 16)
+    castleMod.progress(bot, ctx.castle, cells, ctx)
+    assert.deepEqual(ctx.castle.progress, before)
+    assert.equal(before.done, before.total)
+    assert.equal(ctx.castle.phase, 'complete')
+  })
+
+  it('18 sand, no fuel: 2 logs craft planks; 0 logs gather; 14 logs and the plank craft fails -> no-fuel', async () => {
+    let t = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'oak_log', count: 2 }] })
+    t.calls.crafts.length = 0
+    fetch.deps.craftItem = (b, c, names, n) => { t.calls.crafts.push([names, n]); return names.includes('oak_planks') ? 'running' : { done: false } }
+    await run(t.bot, t.ctx, () => t.calls.crafts.some(([n]) => n.includes('oak_planks')))
+    assert.deepEqual(t.calls.crafts.at(-1), [['oak_planks'], 4])
+    assert.equal(t.calls.furnace.length, 0)
+
+    t = ladderBot({ items: [{ name: 'sand', count: 18 }] })
+    await run(t.bot, t.ctx, () => t.calls.gather)
+    assert.equal(t.calls.gather, 1)
+    assert.equal(t.ctx.bring, undefined)
+    assert.equal(t.calls.furnace.length, 0)
+
+    t = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'oak_log', count: 14 }] })
+    await run(t.bot, t.ctx, () => t.ctx.stepStatus)
+    assert.equal(t.ctx.stepStatus, 'failed:castlefetch-no-fuel')
+    assert.equal(t.calls.gather, 0)
+  })
+
+  for (const why of ['no-fuel', 'furnace-unreachable']) {
+    it(`the furnace fails ${why}: failed:castlefetch-smelt-${why}, the job cleared`, async () => {
+      const { bot, ctx, calls } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'oak_planks', count: 12 }] })
+      fetch.deps.driveFurnace = (b, c) => { calls.furnace.push(c.furnaceJob); return calls.furnace.length < 2 ? null : `failed:${why}` }
+      await run(bot, ctx, () => ctx.stepStatus)
+      assert.equal(ctx.stepStatus, `failed:castlefetch-smelt-${why}`)
+      assert.equal(ctx.furnaceJob, null)
+      assert.equal(ctx.castleFetchDry, 'pane')
+    })
+  }
+
+  it('the real furnace settles async (revmux 01): the settled sand run is read back, then crafted', async () => {
+    const { bot, ctx, calls, items } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    // gear.driveFurnace shape: null while the window op is in flight; the
+    // outcome lands on ctx.furnace after the call returned.
+    fetch.deps.driveFurnace = (b, c) => {
+      calls.furnace.push(c.furnaceJob)
+      c.furnaceJob = null
+      c.furnace = { job: { input: 'sand', output: 'glass' }, settled: false, result: null }
+      if (calls.furnace.length === 2) {
+        setImmediate(() => {
+          items.splice(items.findIndex((i) => i.name === 'sand'), 1)
+          items.push({ name: 'glass', count: 18 })
+          c.furnace.settled = true
+          c.furnace.result = 'done'
+        })
+      }
+      return null
+    }
+    fetch.deps.craftItem = (b, c, names, n) => { calls.crafts.push([names, n]); return items.some((i) => i.name === 'glass') ? 'running' : { done: false } }
+    await run(bot, ctx, () => items.some((i) => i.name === 'glass') && calls.crafts.length > 1)
+    assert.equal(calls.furnace.length, 2, 'the settled run is consumed, never re-driven')
+    assert.equal(ctx.furnace.result, null)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.deepEqual(calls.crafts.at(-1), [['glass_pane'], 16])
+  })
+
+  it('a preempted smelt resumes on the next leg instead of reordering sand (revmux 01)', async () => {
+    const { bot, ctx, calls } = ladderBot()
+    ctx.furnace = { job: { input: 'sand', output: 'glass' }, settled: false, result: null }
+    await run(bot, ctx, () => calls.furnace.length)
+    assert.equal(ctx.bring, undefined)
+    assert.deepEqual(calls.furnace[0], { input: 'sand', output: 'glass' })
+  })
+
+  it('a stale settled sand outcome never ends a new smelt (revmux 02)', async () => {
+    const { bot, ctx, calls } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    ctx.furnace = { job: { input: 'sand', output: 'glass' }, settled: true, result: 'failed:no-fuel' }
+    await run(bot, ctx, () => calls.furnace.length)
+    assert.equal(calls.furnace.length, 1)
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('6 glass on hand, the craft fails: failed:castlefetch-craft-pane, no sand order', async () => {
+    const { bot, ctx } = ladderBot({ items: [{ name: 'glass', count: 6 }] })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-pane')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('chest with 18 sand: withdrawn before any order opens', async () => {
+    const { bot, ctx, calls } = ladderBot({ items: [{ name: 'coal', count: 3 }], chest: [{ name: 'sand', count: 18 }] })
+    await run(bot, ctx, () => calls.furnace.length)
+    assert.deepEqual(bot.calls.withdraw, [['sand', 18]])
+    assert.equal(ctx.bring, undefined)
+    assert.equal(calls.furnace.length, 1)
+  })
+
+  it('night: no order opened; the leg fails no-sand', async () => {
+    const { bot, ctx } = ladderBot({ night: true })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-sand')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('a full pack fails pack-full before any order (the craft shed would toss the sand)', async () => {
+    const items = Array.from({ length: 35 }, (_, i) => ({ name: `junk${i}`, count: 1 }))
+    const { bot, ctx } = ladderBot({ items })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-pack-full')
+    assert.equal(ctx.bring, undefined)
   })
 })

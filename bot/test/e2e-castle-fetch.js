@@ -8,6 +8,10 @@
 // floor torch from a chest the owner stood on the castle site.
 //   MC_HOST=localhost MC_PORT=25565 MC_CONTAINER=idk-mc node test/e2e-castle-fetch.js
 // Hold the shared rig lock around it (CLAUDE.md / bot/tools/README.md).
+// The pane sand ladder (g0z.38: sand order -> fuel -> furnace -> panes) is
+// not covered here; its live scenario is the castle rig:
+//   CASTLE_SEED=complete CASTLE_KIT=empty CASTLE_SAND=1 sh bot/tools/castle-rig.sh 60
+// (verdict panes=<laid>/44, castle still complete).
 const mineflayer = require('mineflayer')
 const os = require('node:os')
 const fs = require('node:fs')
