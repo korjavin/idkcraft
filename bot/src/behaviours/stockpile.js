@@ -53,6 +53,9 @@ const LOG_KEEP = 14
 // as surplus stone beyond castle need. No shared import (stockpile must
 // not require castlefetch — the demand cycle); the numbers mirror.
 const STONE_KEEP = 88
+// Pane ladder (g0z.37): 18 sand -> 18 glass -> 3 crafts x 16 panes >= 44.
+const PANE_SAND_KEEP = 18
+const PANE_GLASS_KEEP = 18
 function castleWoodOpen(ctx) {
   try {
     return !!(ctx && ctx.castle && ctx.castle.phase !== 'complete' && ctx.home && ctx.home.built)
@@ -408,6 +411,15 @@ function depositPlan(bot, ctx) {
   const castleWoodKeep = castleWoodOpen(ctx) ? { planks: PLANK_KEEP, logs: LOG_KEEP } : null
   // Stone ceiling pool (vmzq.39): one counter across variants, same gate.
   let castleStoneKeep = castleWoodOpen(ctx) ? STONE_KEEP : null
+  // Pane-ladder keep (g0z.37): sand + glass stay packed only while a pane
+  // decor cell is open, capped (3 crafts x 6 glass covers the 44 panes);
+  // the rest banks like junk (vmzq.38 must not come back).
+  let paneKeep = null
+  try {
+    if (ctx && ctx.castle && ctx.castle.site && require('./castle').decorOpen(bot, ctx.castle, Date.now()).some((c) => c.kind === 'pane')) {
+      paneKeep = { sand: PANE_SAND_KEEP, glass: PANE_GLASS_KEEP }
+    }
+  } catch (_) { paneKeep = null }
   // Keep-first counters for bankable keeps (vmzq.39): name -> kept so far.
   const kept = {}
   let li = 0
@@ -445,6 +457,13 @@ function depositPlan(bot, ctx) {
     // Decor panes (g0z.31) and banners (g0z.32) are castle stock even past 'complete': banking
     // them into the castle chest would loop with castlefetch's withdraw.
     if (ctx && ctx.castle && castleMaterial(i.name) && (i.name.endsWith('glass_pane') || i.name.endsWith('_banner'))) continue
+    if (paneKeep && (i.name === 'sand' || i.name === 'red_sand' || i.name === 'glass')) {
+      const key = i.name === 'glass' ? 'glass' : 'sand'
+      const k = Math.min(paneKeep[key], n)
+      paneKeep[key] -= k
+      n -= k
+      if (n <= 0) continue
+    }
     if (castleOpen && castleMaterial(i.name)) {
       if (!castleWoodKeep) continue
       if (i.name.endsWith('_planks') || i.name.endsWith('_log')) {
