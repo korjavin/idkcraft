@@ -1056,3 +1056,18 @@ describe('6xno home owns its door (revmux 01 major-2)', () => {
     assert.equal(ctx.doorOpened.size, 0, 'reflex still tracks the home door')
   })
 })
+
+describe('rw4.20 gohome yields to build when the house re-opens', () => {
+  it('a re-opened house (built=false) mid-walk ends the step done, no fail, no goal', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 } })
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running')
+    ctx.home.built = false // index.js clearOwed re-open (rw4.19)
+    const goals = bot.calls.goals.length
+    home.gohome(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.gohome, null)
+    assert.equal(bot.calls.goals.length, goals, 'no new walk')
+  })
+})
