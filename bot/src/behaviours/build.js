@@ -963,12 +963,14 @@ function build(bot, ctx, target, state) {
       // step's station table landed in the doorway and read as 'landed'
       // forever — every refusal forgiven, no skip, the body wedged into a
       // recover page. A stray table in a non-table cell clears like flora
-      // (denyReason still guards a player's table); any other wrong-kind
-      // occupier counts as a refusal.
+      // (denyReason still guards a player's table), and so does our own
+      // block from this session (6x7.23: the pathfinder's scaffold dirt in
+      // a wall cell refused 3x, the retry re-skipped it, the house failed
+      // skipped-cells); any other wrong-kind occupier counts as a refusal.
       if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
-        (occupier === 'crafting_table' && cell.kind !== 'table'))) {
+        (occupier === 'crafting_table' && cell.kind !== 'table') || isOwnPlaced(ctx, bot.blockAt(p)))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
         const clearDeny = cell && denyReason(bot, cell, ctx)

@@ -653,6 +653,69 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.deepEqual(ctx.buildSkip, [doorIdx], 'refusals count: the cell skips instead of looping')
   })
 
+  // idkcraft-6x7.23 (JR-BUILD-FRESH batch aff7ffe): the pathfinder's own
+  // scaffold dirt sat in an upper wall cell; every place refused 'dirt',
+  // the cell skipped, the once-retry re-skipped it and the house failed
+  // skipped-cells. Our own block in a wall cell is cleared like the table.
+  function scaffoldInWall(own) {
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const plan = build.blueprintFor(home)
+    const idx = plan.findIndex((c) => c.kind === 'planks' && c.dy === 2 && c.dz === 0 && c.dx === 1)
+    const c = plan[idx]
+    const world = makeWorld()
+    paintHouse(world, home, [idx])
+    world.set(c.dx, 64 + c.dy, c.dz, 'dirt')
+    const bot = mockBot(world, {
+      items: [{ name: 'oak_planks', count: 64 }],
+      at: pos(c.dx + 0.5, 64, -1.5),
+      place: async (ref, face) => {
+        const rp = ref.position
+        const t = { x: rp.x + face.x, y: rp.y + face.y, z: rp.z + face.z }
+        const cur = world.get(t.x, t.y, t.z) || 'air'
+        if (cur !== 'air') throw new Error(`Server refused to place ${bot.held}: the block is still ${cur}`)
+        world.set(t.x, t.y, t.z, bot.held)
+      },
+    })
+    const ctx = {
+      home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now(),
+      placedByBot: own ? new Set([`${c.dx},${64 + c.dy},${c.dz}`]) : new Set(),
+    }
+    return { idx, c, world, bot, ctx }
+  }
+
+  it('our own scaffold dirt in a wall cell is dug and the plank lands (6x7.23)', async () => {
+    const { idx, c, world, bot, ctx } = scaffoldInWall(true)
+    assert.ok(idx >= 0)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 10 && world.get(c.dx, 64 + c.dy, c.dz) !== 'oak_planks'; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, ['dirt'], 'the scaffold is dug')
+    assert.equal(world.get(c.dx, 64 + c.dy, c.dz), 'oak_planks')
+    assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  it('dirt in a wall cell that is not ours is never dug: the cell skips after 3 (6x7.23)', async () => {
+    const { idx, c, world, bot, ctx } = scaffoldInWall(false)
+    const q = quiet()
+    try {
+      for (let t = 0; t < 20 && ctx.buildSkip.length === 0; t++) {
+        build(bot, ctx, null, null)
+        await settle()
+      }
+    } finally {
+      q.restore()
+    }
+    assert.deepEqual(bot.calls.digs, [])
+    assert.equal(world.get(c.dx, 64 + c.dy, c.dz), 'dirt')
+    assert.deepEqual(ctx.buildSkip, [idx])
+  })
+
   it('the v2 door is approached from the doorstep side, never from inside', () => {
     // After the partition the body stands inside; a door set from in there
     // seals it in (the pathfinder never opens doors).
