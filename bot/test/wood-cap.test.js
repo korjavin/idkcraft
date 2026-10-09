@@ -147,7 +147,7 @@ describe('wood ceiling: menu gates (idkcraft-g0z.26)', () => {
     assert.equal(forage.planForage(capped, memCtx([{ x: 2, y: 64, z: 0, name: 'oak_log' }])), null, 'capped: no wood plan')
     const mixed = memCtx([
       { x: 2, y: 64, z: 0, name: 'oak_log' },
-      { x: 100, y: 60, z: 0, name: 'iron_ore' },
+      { x: 60, y: 60, z: 0, name: 'iron_ore' },
     ])
     const oreBot = packBot([{ name: 'oak_planks', count: 70 }, { name: 'stone_pickaxe', count: 1 }])
     assert.equal(forage.planForage(oreBot, mixed).name, 'iron_ore', 'capped: ore still plans')
@@ -359,7 +359,7 @@ describe('reserved slot (g0z.26 R2, revmux 01 major)', () => {
   it('planForage prefers quest wood over ore when chestless and plankless', () => {
     const cells = [
       { x: 2, y: 64, z: 0, name: 'iron_ore' },
-      { x: 100, y: 64, z: 0, name: 'oak_log' },
+      { x: 60, y: 64, z: 0, name: 'oak_log' },
     ]
     const questCtx = memCtx(cells)
     delete questCtx.home.chest
@@ -374,7 +374,7 @@ describe('reserved slot (g0z.26 R2, revmux 01 major)', () => {
   it('planForage prefers the plank-matching wood on the quest', () => {
     const cells = [
       { x: 2, y: 64, z: 0, name: 'birch_log' },
-      { x: 100, y: 64, z: 0, name: 'oak_log' },
+      { x: 60, y: 64, z: 0, name: 'oak_log' },
     ]
     const ctx = memCtx(cells)
     delete ctx.home.chest
