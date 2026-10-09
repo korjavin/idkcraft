@@ -69,6 +69,23 @@ describe('vmzq.55 castle gauge counts the moat dig cells', () => {
     assert.deepEqual(castle.progressByKind(bot, ctx.castle).moat, { done: 1, total: 326 })
   })
 
+  it('a refilled moat cell keeps its count: refill -> re-dig is not growth', () => {
+    const { cells, w } = world()
+    const dig = cells.find((c) => c.kind === 'dig')
+    const bot = botOf(w)
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 2, phase: 'body', blocked: {} } }
+    let now = 1e9
+    w.set(k(dig.x, dig.y, dig.z), 'air')
+    quiet(() => castle.menuFact(bot, ctx, now))
+    const dug = ctx.castle.progress.done
+    for (const name of ['cobblestone', 'air']) {
+      w.set(k(dig.x, dig.y, dig.z), name)
+      now += castle.FULL_RESCAN_MS
+      quiet(() => castle.menuFact(bot, ctx, now))
+      assert.equal(ctx.castle.progress.done, dug, name)
+    }
+  })
+
   it('a keep-clear air cell does not move the gauge', () => {
     const { cells, w } = world()
     const air = cells.find((c) => c.kind === 'air')

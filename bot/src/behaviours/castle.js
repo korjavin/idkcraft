@@ -851,10 +851,18 @@ function progressByKind(bot, st) {
 function progress(bot, st, cells, ctx) {
   let n = 0
   let total = 0
+  // A dig cell counts once dug, refilled or not (revmux 01 minor): a
+  // bridge-refill -> re-dig loop must not read as growth to the clock.
+  // ponytail: per-session high-water, a restart re-reads the world.
+  const sig = `${st.site.x},${st.site.y},${st.site.z}:${st.rot | 0}:${ver(st)}`
+  if (!ctx.castleDug || ctx.castleDug.sig !== sig) ctx.castleDug = { sig, idx: new Set() }
   for (const c of cells) {
     if (!gauged(c)) continue
     total++
-    if (done(bot, c)) n++
+    if (c.kind === 'dig') {
+      if (done(bot, c)) ctx.castleDug.idx.add(c.idx)
+      if (ctx.castleDug.idx.has(c.idx)) n++
+    } else if (done(bot, c)) n++
   }
   st.progress = { done: n, total }
   if (ctx.castleProgressLog !== n) {
