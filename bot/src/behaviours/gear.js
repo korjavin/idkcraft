@@ -1326,6 +1326,8 @@ function gear(bot, ctx, target, state) {
 
 module.exports = gear
 module.exports.RUNGS = RUNGS
+module.exports.driveLeg = driveLeg // g0z.36: castlefetch runs a furnace tick in its own leg
+module.exports.driveFurnace = driveFurnace
 module.exports.OWNER_WANT = OWNER_WANT
 module.exports.deriveNext = deriveNext
 module.exports.reconcile = reconcile

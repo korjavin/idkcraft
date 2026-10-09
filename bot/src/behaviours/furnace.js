@@ -19,18 +19,16 @@ const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const { issueGoal } = require('./util')
+const residence = require('../residence')
 
-// Fixed furnace cells inside the v2 common room (jr2.1): (4,0,1) first,
-// then fallbacks clear of the door path and bedroom approaches. Placed from
-// outside through the wall (the light.js interior-torch shape, live-verified
-// on the rig); a standing furnace at any of them adopts on sight, so a
-// restart never duplicates the station (memory drops the claim).
-const FURNACE_SPOTS = [
-  { dx: 4, dy: 0, dz: 1 },
-  { dx: 1, dy: 0, dz: 2 },
-  { dx: 2, dy: 0, dz: 1 },
-  { dx: 1, dy: 0, dz: 1 },
-]
+// The house's fixed indoor cells (jr2.1) live with the residence
+// descriptor now (g0z.36); re-exported for the light.js precedent.
+const FURNACE_SPOTS = residence.FURNACE_SPOTS
+
+// Default smelt job (g0z.36): raw iron -> ingots. A caller sets
+// ctx.furnaceJob = { input, output } before the first tick of a run
+// (castle glass: sand -> glass); freshRun copies it.
+const IRON_JOB = { input: 'raw_iron', output: 'iron_ingot' }
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
 const ORE_PER_FUEL = 8 // one coal smelts eight ore
@@ -62,8 +60,10 @@ function fail(ctx, reason) {
   } catch (_) { /* flag best-effort */ }
 }
 
-function freshRun() {
-  return { phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, tookOnce: false, win: null, settled: false, result: null }
+function freshRun(ctx) {
+  const j = ctx && ctx.furnaceJob
+  const job = j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output } : IRON_JOB
+  return { job, phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, tookOnce: false, win: null, settled: false, result: null }
 }
 
 // Verified crafting table (craft pattern): the claim plus a live block
@@ -72,7 +72,11 @@ function tableBlock(bot, ctx) {
   try {
     // First verified-standing (h9z): a ghost home claim must not shadow
     // the standing roadside table (craft.js pattern).
-    for (const tablePos of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
+    // A castle home has no claim: its storeroom table is the descriptor's
+    // cell (equip castleTableSpot precedent, g0z.36).
+    const home = ctx && ctx.home
+    const castleTable = home && home.kind === 'castle' && home.site ? residence.of(home).table(home) : null
+    for (const tablePos of [(home && home.table), (ctx && ctx.claimedTable), castleTable]) {
       if (!tablePos || typeof tablePos.x !== 'number') continue
       // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
       const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
@@ -82,9 +86,15 @@ function tableBlock(bot, ctx) {
   } catch (_) { return null }
 }
 
+// The residence's fixed furnace cells (site-relative), [] = roadside (hut).
+function homeSpots(home) {
+  if (!home || !home.site || typeof home.site.x !== 'number') return []
+  try { return residence.of(home).furnace(home) || [] } catch (_) { return [] }
+}
+
 // Verified furnace claim, else null. A ghost (verified non-furnace) is
 // retracted so the phases rebuild; null reads unloaded, never gone. On a
-// v2 home with no claim a standing furnace at a fixed indoor spot adopts
+// v2 house or a castle with no claim a standing furnace at a fixed indoor spot adopts
 // on sight (memory drops the claim, so every restart re-adopts instead of
 // duplicating the station — the chest precedent).
 function furnaceSpot(bot, ctx) {
@@ -92,16 +102,14 @@ function furnaceSpot(bot, ctx) {
     const home = ctx && ctx.home
     const spot = home && home.furnace
     if (!spot || typeof spot.x !== 'number') {
-      if (home && home.v === 2 && home.site && typeof home.site.x === 'number') {
-        for (const sp of FURNACE_SPOTS) {
-          let b = null
-          try {
-            b = bot.blockAt && bot.blockAt(new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz))
-          } catch (_) { b = null }
-          if (b && b.name === 'furnace') {
-            home.furnace = new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz)
-            return home.furnace
-          }
+      for (const sp of homeSpots(home)) {
+        let b = null
+        try {
+          b = bot.blockAt && bot.blockAt(new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz))
+        } catch (_) { b = null }
+        if (b && b.name === 'furnace') {
+          home.furnace = new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz)
+          return home.furnace
         }
       }
       return null
@@ -195,7 +203,7 @@ function doPlaceV2(bot, ctx, f) {
     } catch (_) { return null }
   }
   let spot = null
-  for (const sp of FURNACE_SPOTS) {
+  for (const sp of homeSpots(home)) {
     const x = site.x + sp.dx
     const y = site.y + sp.dy
     const z = site.z + sp.dz
@@ -253,7 +261,7 @@ function placeAt(bot, ctx, item, ref, at) {
 // Place the furnace beside the body (equip roadside-table pattern): first
 // free neighbour with solid ground. Claims only a verified block.
 function doPlace(bot, ctx, f) {
-  if (ctx && ctx.home && ctx.home.v === 2) { doPlaceV2(bot, ctx, f); return }
+  if (ctx && homeSpots(ctx.home).length > 0) { doPlaceV2(bot, ctx, f); return }
   let item = null
   try {
     const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -309,7 +317,9 @@ function finishSmelt(bot, ctx, f, status) {
   try { f.settled = true } catch (_) { /* flag best-effort */ }
   if (status === 'done') {
     if ((f.smelted || 0) > 0) {
-      try { console.log(`smelted ${f.smelted} iron`) } catch (_) { /* log best-effort */ }
+      // The iron line stays byte-identical (prod log greps it).
+      const what = f.job && f.job.output !== IRON_JOB.output ? f.job.output : 'iron'
+      try { console.log(`smelted ${f.smelted} ${what}`) } catch (_) { /* log best-effort */ }
     }
     ctx.stepStatus = 'done'
     try { f.result = 'done' } catch (_) { /* flag best-effort */ }
@@ -351,7 +361,8 @@ function doSmelt(bot, ctx, f, spot) {
       } else {
         f.idleTicks = 0
       }
-      const invOre = invCount(bot, 'raw_iron')
+      const input = (f.job || IRON_JOB).input
+      const invOre = invCount(bot, input)
       const invCoal = invCount(bot, 'coal')
       const invChar = invCount(bot, 'charcoal')
       // Planks are the third fuel kind (ipn.13): a slot already holding
@@ -373,7 +384,7 @@ function doSmelt(bot, ctx, f, spot) {
         ? Math.max(0, Math.min(64 - fuelN, fuelPieces(invOre + inN, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)) // one 64 slot: 97+ ore outgrows it
         : Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
       if (oreLoad > 0) {
-        const id = craftMod.itemId(bot, 'raw_iron')
+        const id = craftMod.itemId(bot, input)
         if (id == null) throw new Error('no-ore-id')
         await win.putInput(id, null, oreLoad)
       }
@@ -444,7 +455,7 @@ function furnace(bot, ctx, target, state) {
   if (!bp) return
   // A settled run never resumes spent: the next pick starts fresh
   // counters (core-4: equip's resetRunCounters shape).
-  if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun()
+  if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun(ctx)
   const f = ctx.furnace
   const spot = furnaceSpot(bot, ctx)
   if (!spot) {
