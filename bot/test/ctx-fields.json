@@ -23,12 +23,6 @@
     ],
     "owner": "src/index.js"
   },
-  "askedKey": {
-    "writers": [
-      "src/goal.js"
-    ],
-    "owner": "src/goal.js"
-  },
   "autonomous": {
     "writers": [
       "src/index.js",
@@ -970,6 +964,12 @@
       "src/memory.js"
     ],
     "owner": "src/behaviours/deliver.js"
+  },
+  "heldText": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
   },
   "home": {
     "writers": [

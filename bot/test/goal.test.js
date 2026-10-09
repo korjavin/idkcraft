@@ -747,9 +747,14 @@ describe('decide decision point', () => {
     bot._items = undefined
     bot.inventory = { items: () => [{ name: 'oak_log', count: 3 }] } // logs 0 -> 3
     lines.length = 0
+    const pick = ctx.stepPick
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'gather') // craft feasible but unregistered: gather runs now that rw4.2 registered it
-    assert.ok(ctx.goalText.includes('logs=few'))
+    // vmzq.4 commitment: the move keeps the FSM answer, so the running
+    // gather is held (no re-pick), the moved text remembered once.
+    assert.equal(ctx.stepPick, pick)
+    assert.ok(ctx.heldText.includes('logs=few'))
+    assert.ok(ctx.goalText.includes('logs=none'))
   })
 
   it('table in inventory does not unlock craft: build lays it', async () => {
