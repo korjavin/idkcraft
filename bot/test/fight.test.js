@@ -78,7 +78,8 @@ describe('perception hostile facts', () => {
       bot.entities = { 1: mob }
       const state = buildState(bot, playerEntity(10), null)
       assert.equal(state.nearby_hostiles, 1, name)
-      assert.equal(state.hostile, mob, name)
+      // 5iap: guardians are counted but not melee-chase targets
+      assert.equal(state.hostile, name.endsWith('guardian') ? null : mob, name)
     }
     const bot = mockBot()
     bot.entities = { 1: mobEntity(1, 'villager', 3) }
@@ -139,6 +140,8 @@ describe('perception hostile facts', () => {
     const zombie = mobEntity(1, 'zombie', 2)
     assert.equal(isFightTarget(zombie, botPos, null), true)
     assert.equal(isFightTarget(mobEntity(9, 'creeper', 2), botPos, null), false)
+    assert.equal(isFightTarget(mobEntity(10, 'guardian', 2), botPos, null), false)
+    assert.equal(isFightTarget(mobEntity(11, 'elder_guardian', 2), botPos, null), false)
     assert.equal(isFightTarget({ id: 7, type: 'player', name: 'Steve', position: pos(2, 64, 0) }, botPos, null), false)
     assert.equal(isFightTarget({ id: 7, type: 'player', name: 'zombie', position: pos(2, 64, 0) }, botPos, null), false)
     assert.equal(isFightTarget({ id: 3, type: 'mob', name: 'pig', position: pos(2, 64, 0) }, botPos, null), false)
