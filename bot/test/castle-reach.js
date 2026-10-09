@@ -169,4 +169,4 @@ function checkPlan(bp, isTarget, upTo = bp.PLAN.length) {
   return { ok: true, checked, grid: g, stances }
 }
 
-module.exports = { checkPlan, checkCell, makeGrid, apply, flood, standable, RANGE }
+module.exports = { checkPlan, checkCell, makeGrid, apply, flood, standable, losClear, RANGE, REF_DIRS }

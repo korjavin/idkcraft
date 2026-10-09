@@ -268,6 +268,14 @@ S6-LEAD by the lost order (`reached`).
   sites on the flat roof of JR-BUILD's standing house (-144 75 -77) instead
   of the measured ground site, and the roof build TIMED OUT once (stuck 31).
   Pristine reads air + grass in the volume, so the fill is a no-op alone.
+  Its first-run fails (idkcraft-6x7.20, batch 10abbe1 stuck 8 TIMEOUT; also
+  seen in single runs) were not rig noise: a wall-base cell skipped
+  `unreachable` while the body sat in its own scaffold-dig pit, the cells
+  above it followed `no-ref`, and the 1h skip re-probe outlived the 30-min
+  window (with every other cell placed, the build menu gate read the hole
+  as given up and never re-picked build). Since 6x7.20 each stamped skip
+  gets one last-pass retry once the rest stands, in the build step and in
+  the gate (`build holes: retrying N`); the ceiling is unchanged.
 - Q0H-PIT is a `come home` to a rig-built house (`house: [x, y, z]`,
   idkcraft-6x7.8): the snapshot holds no adoptable house near the pit
   (measured: doors stand but the table cell + quorum reject every one),

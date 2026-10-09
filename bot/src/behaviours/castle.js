@@ -50,6 +50,7 @@ const ITEM = {
   fence: (n) => n.endsWith('_fence') && n !== 'nether_brick_fence', // g0z.4 sourcing; g0z.11 plans it
   frame: (n) => n.endsWith('_log'), // v2 Fachwerk beams (castle.matches)
   chest: (n) => n === 'chest', // v2 storeroom chest
+  pane: (n) => blueprint.matches('pane', n), // g0z.31 decor: window panes (chest-supplied)
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -302,8 +303,9 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)]
-    // Off-plan entries (prep, litter) live until they expire (g0z.14).
+    const c = cells[Number(i)] || decorOf(st, Number(i))
+    // Off-plan entries (prep, litter) live until they expire (g0z.14);
+    // decor entries (g0z.31) live until laid, so a bad pane cell retires.
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
@@ -684,7 +686,10 @@ const BATCH = 16
 // torch (g0z.17, revmux 02): any torch is a batch — torches lay last, and a
 // torch-some word with no coal would hold the moat, fence and door; the
 // castle lays what it holds and the 0-torch cells step aside (torchOwed).
-const BATCH_OF = { frame: 14, torch: 1 }
+// pane (g0z.31, revmux 01): any pane is a batch, like torch — the source
+// is the chest only, so a sub-batch remainder could never grow and would
+// never be laid; castlefetch runs on pane-none only.
+const BATCH_OF = { frame: 14, torch: 1, pane: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
@@ -788,6 +793,15 @@ function menuFact(bot, ctx, now = Date.now()) {
         }
         sayHoles(bot, ctx, st, holesOf(bot, st, r.cells), now)
         return 'blocked'
+      }
+      if (st.phase === 'complete') {
+        // Decor (g0z.31): on site, open window cells ask for panes; the
+        // castle stays 'complete' (off site it reads 'done', above).
+        const left = decorOpen(bot, st, now).length
+        if (left > 0) {
+          ctx.castleWord = { kind: 'pane', left }
+          return stockWord(bot, 'pane', left)
+        }
       }
       word = st.phase === 'complete' ? 'done' : 'finish'
     }
@@ -998,7 +1012,10 @@ function placeCell(bot, ctx, st, c, item, now) {
   const ent = c.kind === 'door' ? entrance(st) : null
   if (approach(bot, ctx, c, () => ent
     ? new goals.GoalBlock(ent.x, ent.y, ent.z)
-    : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE }))) return
+    // Decor (g0z.31): 10 of 44 v2 windows hide every neighbour face from
+    // the walkable stances behind a stair step; the server checks the click
+    // distance only, so a pane approach drops LOS (far() still gates reach).
+    : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE, LOS: !(c.idx >= blueprint.DECOR_BASE) }))) return
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
@@ -1487,6 +1504,20 @@ function work(bot, ctx, st, c, now, status) {
   else digCell(bot, ctx, st, c, now)
 }
 
+// Decor cells (g0z.31) workable now: undone, open (air — an owner's block
+// in a window is his choice, never dug), not backing off or retired.
+function decorOf(st, idx) {
+  if (!(idx >= blueprint.DECOR_BASE)) return null
+  return blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).cells[idx - blueprint.DECOR_BASE] || null
+}
+function decorOpen(bot, st, now) {
+  const bl = st.blocked || {}
+  return blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).cells.filter((c) => {
+    const b = bl[bkey(st, c.idx)]
+    return AIR.has(nameAt(bot, c)) && !(b && (b.retired || b.until > now))
+  })
+}
+
 // A searched site (g0z.19) is announced again once the body stands on it.
 function arrive(bot, st) {
   const bp = bodyPos(bot)
@@ -1563,6 +1594,12 @@ function castle(bot, ctx) {
       const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
       if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     }
+    // Decor (g0z.31): a complete castle lays its panes through the same
+    // placeCell; phase stays 'complete' (residence/stockpile read it).
+    if (st.phase === 'complete' && usable(bot, 'pane', ctx) > 0) {
+      const dc = decorOpen(bot, st, now)[0]
+      if (dc) { work(bot, ctx, st, dc, now, 'decorating'); return }
+    }
     // Holes stay on the status past completion (sayHoles set it above),
     // so 'castle' keeps reporting the gaps, not just 'complete'.
     if (!holes.length) st.status = 'complete'
@@ -1587,8 +1624,10 @@ module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
 // Castle material for the stockpile reserve. With the castle state, only
 // the kinds its plan uses (g0z.12: a v1 castle never hoards logs/chests).
 module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.entries(ITEM).some(([kind, want]) =>
-  want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN)))
+  want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN) ||
+    (kind === 'pane' && !!blueprint.DECOR[blueprint.blueprintOf(st.blueprintVersion).version])))
 module.exports.menuFact = menuFact
+module.exports.decorOpen = decorOpen
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
 module.exports.siteEval = siteEval

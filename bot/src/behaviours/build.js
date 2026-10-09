@@ -593,6 +593,32 @@ function pruneBuildSkips(ctx, now) {
   } catch (_) { /* prune best-effort */ }
 }
 
+// Last-pass retry (idkcraft-6x7.20): a skip judges the body's stand at the
+// time, not the cell — JR-BUILD-FRESH skipped two wall-base cells
+// 'unreachable' while the body sat in its own scaffold-dig pit, the four
+// cells above them followed as 'no-ref', and the house held those holes
+// past the 30-min window (the 1h re-probe never came). Once everything
+// else stands, each stamped skip gets ONE more try at this site; a cell
+// that refuses again stays skipped until the 1h re-probe. Unstamped skips
+// (restored pre-stamp, hand-set) keep the pruneBuildSkips rule: never.
+function retrySkipsOnce(ctx) {
+  try {
+    const s = ctx.home && ctx.home.site
+    if (!s || !Array.isArray(ctx.buildSkip)) return false
+    const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt : {}
+    const key = `${s.x},${s.y},${s.z},v${ctx.home.v === 2 ? 2 : 1}`
+    if (!ctx.buildSkipRetry || ctx.buildSkipRetry.key !== key) ctx.buildSkipRetry = { key, done: [] }
+    const done = ctx.buildSkipRetry.done
+    const again = ctx.buildSkip.filter((i) => typeof at[i] === 'number' && !done.includes(i))
+    if (again.length === 0) return false
+    done.push(...again)
+    ctx.buildSkip = ctx.buildSkip.filter((i) => !again.includes(i))
+    for (const i of again) delete at[i]
+    console.log(`build holes: retrying ${again.length} skipped cells once`)
+    return true
+  } catch (_) { return false }
+}
+
 // A release latch born while this cell was current (not the one seen at
 // cell start), anchored near it, after build itself saw the stall build up
 // on this cell (d7i): the detector counts 30 still ticks before it raises,
@@ -658,6 +684,7 @@ function build(bot, ctx, target, state) {
     }
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
+    ctx.buildSkipRetry = null
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1
@@ -696,6 +723,7 @@ function build(bot, ctx, target, state) {
     // 1h skip retry re-probes; structural cells re-skip and fail again
     // instead of fossilizing a false 'home done'.
     if (!isComplete(bot, ctx.home)) {
+      if (retrySkipsOnce(ctx)) return
       const n = Array.isArray(ctx.buildSkip) ? ctx.buildSkip.length : 0
       if (ctx.stepStatus !== 'failed:skipped-cells') {
         console.log(`build holes remain: ${n} skipped cells still missing`)
@@ -1014,6 +1042,7 @@ module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
 module.exports.pruneBuildSkips = pruneBuildSkips
+module.exports.retrySkipsOnce = retrySkipsOnce
 module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS
 module.exports.PLACE_RANGE = PLACE_RANGE
 module.exports.PLACE_REACH = PLACE_REACH

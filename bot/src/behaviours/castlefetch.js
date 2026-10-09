@@ -30,14 +30,16 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // none/some word always has work: the word and the target never disagree.
 // frame (g0z.12): one gather load — gather stops at NEED_LOGS, so a bigger
 // target could never be met from the world (castle BATCH_OF.frame matches).
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1 }
+// pane (g0z.31): CHEST-ONLY — panes, else glass crafted 6 -> 16; no sand
+// hunt, no smelt: an empty chest fails the leg into the retry hold.
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16 }
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
 const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
@@ -123,6 +125,7 @@ function chestNames(bot, kind) {
   if (kind === 'torch') return [['torch']]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest']]
+  if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass']]
   return []
 }
 
@@ -132,6 +135,7 @@ function craftNames(bot, kind) {
   if (kind === 'fence') return itemNames(bot, isFence)
   if (kind === 'torch') return ['torch']
   if (kind === 'chest') return ['chest'] // 8 planks at a table (craftany crafts planks from logs)
+  if (kind === 'pane') return ['glass_pane'] // 6 glass -> 16 at a table
   return []
 }
 
@@ -314,10 +318,12 @@ function chestTick(bot, ctx, f, d) {
     let need = d.short
     for (const names of chestNames(bot, d.kind)) {
       if (need <= 0 || names.length === 0) break
-      // Planks' second list is logs: one log is four planks.
+      // Planks' second list is logs: one log is four planks; panes' is
+      // glass: six glass are sixteen panes (one craft).
       const logs = d.kind === 'planks' && names.some((n) => n.endsWith('_log'))
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : need, at)
-      need -= (r && r.got ? r.got : 0) * (logs ? 4 : 1)
+      const glass = d.kind === 'pane' && names[0] === 'glass'
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : 1)
     }
   }, CHEST_TIMEOUT_MS)
   return true
@@ -1076,7 +1082,7 @@ function castlefetch(bot, ctx, target, state) {
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
   }
-  finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal
+  finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, pane without chest stock
 }
 
 module.exports = castlefetch

@@ -442,6 +442,9 @@ function depositPlan(bot, ctx) {
     // Wood is capped (g0z.26) and stone is capped (vmzq.39): the first KEEP
     // stays, the rest banks through the keeps below (bed/gear only keep
     // more, never less — bounded).
+    // Decor panes (g0z.31) are castle stock even past 'complete': banking
+    // them into the castle chest would loop with castlefetch's withdraw.
+    if (ctx && ctx.castle && castleMaterial(i.name) && i.name.endsWith('glass_pane')) continue
     if (castleOpen && castleMaterial(i.name)) {
       if (!castleWoodKeep) continue
       if (i.name.endsWith('_planks') || i.name.endsWith('_log')) {

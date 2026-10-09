@@ -293,6 +293,13 @@
     ],
     "owner": "src/behaviours/build.js"
   },
+  "buildSkipRetry": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
   "buildStallTicks": {
     "writers": [
       "src/behaviours/build.js"
