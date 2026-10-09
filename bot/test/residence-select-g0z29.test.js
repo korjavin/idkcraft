@@ -71,8 +71,9 @@ describe('g0z.29 memory schema', () => {
     for (const rot of [0, 1, 2, 3]) {
       for (const bv of [1, 2]) {
         const hut = hutAt(10, 64, 20)
-        const castleHome = residence.castleHome(castleSt({ rot, blueprintVersion: bv }))
-        writeDoc(file, [hut, JSON.parse(JSON.stringify(castleHome))])
+        const st = castleSt({ rot, blueprintVersion: bv })
+        const castleHome = residence.castleHome(st)
+        writeDoc(file, [hut, JSON.parse(JSON.stringify(castleHome))], st)
         const ctx = {}
         assert.ok(memory.restore(botAt(), ctx, file))
         assert.equal(ctx.home.kind, 'castle')
@@ -167,6 +168,26 @@ describe('g0z.29 selection', () => {
     lone.t.setCastle(null)
     assert.equal(lone.t.selectResidence(), true)
     assert.equal(lone.ctx.home, null)
+    // A new order, then a restart: the forgotten castle record lingers in
+    // the history but is not restored as the home (01-review major).
+    lone.t.setCastle(castleSt({ site: { x: 500, y: 64, z: 500 }, phase: 'prep' }))
+    const later = coldStart()
+    assert.equal(later.ctx.home, undefined)
+    assert.equal(later.t.selectResidence(), false)
+  })
+
+  it("an owner 'build here' after the castle switch stands, across a restart (01-review major)", () => {
+    writeDoc(file, [hutAt(10, 64, 20)], castleSt())
+    const { t, ctx } = coldStart()
+    assert.equal(t.selectResidence(), true)
+    assert.equal(ctx.castle.residence, true)
+    t.setHome(hutAt(40, 64, 40), { fresh: true })
+    assert.equal(t.selectResidence(), false)
+    assert.equal(ctx.home.site.x, 40)
+    const again = coldStart()
+    assert.equal(again.ctx.castle.residence, true)
+    assert.equal(again.ctx.home.site.x, 40)
+    assert.equal(again.t.selectResidence(), false)
   })
 
   it('park, unloaded chunks and a new order keep the selection', () => {

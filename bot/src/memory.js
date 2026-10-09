@@ -249,6 +249,9 @@ function castleOf(c) {
       if (pb) out.planb = pb
     } catch (_) { /* park best-effort */ }
     if (Number.isInteger(c.blueprintVersion)) out.blueprintVersion = c.blueprintVersion
+    // Adopted as the residence once (g0z.29): never re-selected over a home
+    // the owner chose later.
+    if (c.residence === true) out.residence = true
     // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side
     // (null = unprobed). A restart resumes the same frame instead of
     // re-probing dug floors as ground and walking the trench down.
@@ -568,7 +571,19 @@ function restore(bot, ctx, file, now) {
       }
     }
     if (Array.isArray(doc.homes) && doc.homes.length) {
-      const h = homeOf(doc.homes[doc.homes.length - 1])
+      // The hut to fall back to when a castle residence is forgotten
+      // (g0z.29): the newest non-castle home of the history.
+      for (let i = doc.homes.length - 1; i >= 0; i--) {
+        const hh = homeOf(doc.homes[i])
+        if (hh && hh.kind !== 'castle') { ctx.hutHome = hh; break }
+      }
+      let h = homeOf(doc.homes[doc.homes.length - 1])
+      // A castle home lives only while its castle does: after a forget the
+      // record lingers in the history (save keeps every home), and must
+      // not come back as the residence over a new order (01-review).
+      const c = ctx.castle
+      if (h && h.kind === 'castle' && !(c && c.site && c.site.x === h.castle.site.x && c.site.y === h.castle.site.y &&
+          c.site.z === h.castle.site.z && c.rot === h.castle.rot)) h = ctx.hutHome || null
       if (h) {
         ctx.home = h
         // The record's skips are this home's (ipn.10): a deploy mid-build
@@ -578,12 +593,6 @@ function restore(bot, ctx, file, now) {
           ctx.buildSkipAt = skipAtOf(h.skipAt, ctx.buildSkip)
         } catch (_) { /* skip best-effort */ }
         out.homes = Math.min(doc.homes.length, HOMES_MAX)
-      }
-      // The hut to fall back to when a castle residence is forgotten
-      // (g0z.29): the newest non-castle home of the history.
-      for (let i = doc.homes.length - 1; i >= 0; i--) {
-        const hh = homeOf(doc.homes[i])
-        if (hh && hh.kind !== 'castle') { ctx.hutHome = hh; break }
       }
     }
     if (Array.isArray(doc.resources) && doc.resources.length) {

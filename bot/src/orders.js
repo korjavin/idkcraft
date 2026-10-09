@@ -684,6 +684,7 @@ function createOrders(box) {
       const label = (h) => (h && h.site ? `${h.kind || (h.v === 2 ? 'house' : 'hut')}@${h.site.x},${h.site.y},${h.site.z}` : 'none')
       console.log(`residence ${label(ctx.home)} -> ${label(want)}`)
       if (ctx.home && ctx.home.kind !== 'castle') ctx.hutHome = ctx.home
+      if (want && want.kind === 'castle' && ctx.castle) ctx.castle.residence = true // saved by setHome below
       // Home-keyed caches: the night step (gohome/stay/shelter), beds,
       // light and stockpile scratch, home-text fail holds; setHome does
       // the build skips/fails, the meet, the task goal and the save.
