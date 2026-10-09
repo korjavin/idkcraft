@@ -2421,6 +2421,63 @@ describe('equip wet-dig guard (idkcraft-dj3)', () => {
     }
   })
 
+  it('oqul.7: a late timeout after a same-name re-pick drops too (gen, not name)', async () => {
+    // stop/order/death then equip again: ctx.step reads 'equip' both times,
+    // so the dj3 name guard alone let the old dig fail the new run.
+    const { mock } = require('node:test')
+    const stepMod = require('../src/step')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const bot = mockBot({
+        items: [...KIT],
+        ids: IDS,
+        recipes: {},
+        findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+        digImpl: () => new Promise(() => {}), // hung driver
+      })
+      const ctx = { ...freshCtx(), step: 'equip' }
+      equip(bot, ctx, null, {}) // dig starts under equip
+      stepMod.nextStepGen(ctx) // stop, then decide re-picks equip
+      ctx.stepStatus = 'running'
+      const log = console.log
+      console.log = () => {}
+      try {
+        mock.timers.tick(10001)
+        await flush()
+        await flush()
+      } finally { console.log = log }
+      assert.equal(ctx.stepStatus, 'running', 'the new equip run is not failed')
+      assert.deepEqual(bot.errs, [], 'no late failure logged')
+      assert.equal(ctx.equipDigInFlight, false, 'the flag still releases')
+      bot.restoreError()
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('oqul.7 normal: a timeout of the current equip run still fails it', async () => {
+    const { mock } = require('node:test')
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const bot = mockBot({
+        items: [...KIT],
+        ids: IDS,
+        recipes: {},
+        findBlocksImpl: () => [{ x: 1, y: 63, z: 0, name: 'dirt' }],
+        digImpl: () => new Promise(() => {}), // hung driver
+      })
+      const ctx = { ...freshCtx(), step: 'equip' }
+      equip(bot, ctx, null, {})
+      mock.timers.tick(10001)
+      await flush()
+      await flush()
+      assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+      bot.restoreError()
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
   it('each dig logs its target', async () => {
     const bot = mockBot({
       items: [...KIT],
